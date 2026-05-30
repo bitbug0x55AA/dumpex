@@ -3073,6 +3073,43 @@ def _json_safe(obj):
     return str(obj)
 
 
+
+# ── Plain-text output (--txt) ─────────────────────────────────────────────────
+# Wraps sys.stdout so every print() is written to both the terminal and a file.
+# ANSI colour codes are stripped from the file copy to keep it clean.
+
+import io
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
+
+class _TeeWriter:
+    """
+    Transparent stdout wrapper that tees to a plain-text file.
+
+    - Terminal stream: unchanged (colours preserved)
+    - File stream:     ANSI escape codes stripped, UTF-8 encoded
+
+    Activated by setting sys.stdout = _TeeWriter(file_handle, original_stdout).
+    Deactivated by restoring sys.stdout = original_stdout.
+    """
+
+    def __init__(self, fh: io.TextIOWrapper, original):
+        self._fh       = fh          # plain-text file
+        self._original = original    # real terminal stdout
+
+    def write(self, text: str) -> int:
+        self._original.write(text)
+        self._fh.write(_ANSI_RE.sub('', text))
+        return len(text)
+
+    def flush(self):
+        self._original.flush()
+        self._fh.flush()
+
+    # Delegate everything else (isatty, fileno, etc.) to the real stdout
+    def __getattr__(self, name):
+        return getattr(self._original, name)
+
 class StructuredOutput:
     """
     Accumulates structured results from command functions and serialises
@@ -3110,13 +3147,12 @@ class StructuredOutput:
         doc.update(_json_safe(self._sections))
         return json.dumps(doc, indent=2, ensure_ascii=False)
 
-    def write_json(self, path: str):
+    def write_json(self, path: str, cmd_label: str = ""):
         p = Path(path)
-        # If the caller passed a directory-style path (trailing separator, or an
-        # already-existing directory), synthesise a timestamped filename inside it.
         if str(path).endswith(('/', '\\')) or p.is_dir():
-            ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-            p  = p / f"dumpex_{ts}_results.json"
+            ts    = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+            label = f"_{cmd_label}" if cmd_label else ""
+            p     = p / f"dumpex_{ts}{label}.json"
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as fh:
             fh.write(self.to_json())
@@ -3124,7 +3160,7 @@ class StructuredOutput:
 
     # ── CSV ──────────────────────────────────────────────────────────────
 
-    def write_csv(self, path: str):
+    def write_csv(self, path: str, cmd_label: str = ""):
         """
         Write structured output as CSV.
 
@@ -3132,14 +3168,14 @@ class StructuredOutput:
 
         Directory mode  (path has no .csv extension, e.g. "output/")
             One file per logical table:
-            dumpex_<section>_<table>.csv
+            dumpex_<cmd_label>_<section>_<table>.csv
 
-        Single-file mode  (path ends with .csv, e.g. ``result.csv``)
+        Single-file mode  (path ends with .csv, e.g. "result.csv")
             All tables written into a single CSV file, separated by a blank
-            row and a ``## section / table`` header line so they remain
-            human-readable and importable into Excel as separate ranges.
+            row and a "## section / table" header line.
         """
-        p = Path(path)
+        p     = Path(path)
+        label = f"{cmd_label}_" if cmd_label else ""
 
         # ── Single-file mode ─────────────────────────────────────────────
         if p.suffix.lower() == ".csv":
@@ -3151,13 +3187,12 @@ class StructuredOutput:
                     for table_name, rows in tables.items():
                         if not rows:
                             continue
-                        # Section header (Excel-friendly comment row)
                         fh.write(f"## {section} / {table_name}\n")
                         writer = csv.DictWriter(fh, fieldnames=rows[0].keys(),
                                                extrasaction="ignore")
                         writer.writeheader()
                         writer.writerows(rows)
-                        fh.write("\n")   # blank separator between tables
+                        fh.write("\n")
                         total_rows += len(rows)
             print(DIM(f"  [·] CSV  written → {p}  ({total_rows} row(s) across all tables)"))
             return
@@ -3169,7 +3204,7 @@ class StructuredOutput:
             for table_name, rows in tables.items():
                 if not rows:
                     continue
-                fname = p / f"dumpex_{section}_{table_name}.csv"
+                fname = p / f"dumpex_{label}{section}_{table_name}.csv"
                 with open(fname, "w", newline="", encoding="utf-8") as fh:
                     writer = csv.DictWriter(fh, fieldnames=rows[0].keys(),
                                            extrasaction="ignore")
@@ -3336,10 +3371,51 @@ def main():
                         help='Write structured results to FILE as JSON  (e.g. results.json)')
     parser.add_argument('--csv',        metavar='PATH',      default=None,
                         help='Write CSV output: FILE.csv → single combined file  |  DIR\\ → one file per table')
+    parser.add_argument('--txt',        metavar='FILE',      default=None,
+                        help='Write plain-text copy of all console output to FILE (ANSI colours stripped)')
     parser.add_argument('--report-tid',  metavar='TID',  help='Anchor report to this Thread ID (hex or decimal)')
     parser.add_argument('--report-addr',   metavar='ADDR',   help='Anchor report to this memory address (hex)')
     parser.add_argument('--report-string', metavar='STRING', help='Search all memory for string, report on each hit region')
     args = parser.parse_args()
+
+    # ── Derive a short label describing the command being run ─────────────
+    # Used in auto-generated filenames when the caller passes a directory.
+    # Examples:  hunt_all   modules   sysinfo   report_string
+    # Must be derived before the --txt tee block so the filename can use it.
+    def _cmd_label() -> str:
+        if args.hunt:
+            return f"hunt_{args.hunt.replace('-', '_')}"
+        if args.modules:    return "modules"
+        if args.threads:    return "threads"
+        if args.pid:        return "pid"
+        if args.sysinfo:    return "sysinfo"
+        if args.peb:        return "peb"
+        if args.list:       return "list"
+        if args.report:
+            sub = (f"tid_{args.report_tid}"     if args.report_tid else
+                   f"addr_{args.report_addr}"   if args.report_addr else
+                   "string"                     if args.report_string else "report")
+            return sub
+        if args.strings:    return f"strings_{args.strings}"
+        if args.extract:    return f"extract_{args.extract}"
+        if args.diff:       return "diff"
+        return "dumpex"
+    cmd_label = _cmd_label()
+
+    # ── Plain-text tee ────────────────────────────────────────────────────
+    _tee_fh     = None
+    _tee_stdout = None
+    if args.txt:
+        txt_path = Path(args.txt)
+        if str(args.txt).endswith(('/', '\\')) or txt_path.is_dir():
+            ts       = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+            label    = f"_{cmd_label}" if cmd_label else ""
+            txt_path = txt_path / f"dumpex_{ts}{label}.txt"
+        txt_path.parent.mkdir(parents=True, exist_ok=True)
+        _tee_fh     = open(txt_path, 'w', encoding='utf-8')
+        _tee_stdout = sys.stdout
+        sys.stdout  = _TeeWriter(_tee_fh, _tee_stdout)
+
     mf   = open_dump(args.dumpfile)
 
     # Structured output collector — populated by commands that support it
@@ -3391,11 +3467,17 @@ def main():
     if out:
         if out._sections:
             if args.json:
-                out.write_json(args.json)
+                out.write_json(args.json, cmd_label=cmd_label)
             if args.csv:
-                out.write_csv(args.csv)
+                out.write_csv(args.csv,  cmd_label=cmd_label)
         else:
             print(DIM("  [~] --json/--csv: this command does not produce structured output."))
+
+    # ── Finalise plain-text output ────────────────────────────────────────
+    if _tee_fh is not None:
+        sys.stdout = _tee_stdout          # restore real stdout first
+        _tee_fh.close()
+        print(DIM(f"  [·] TXT  written → {args.txt}"))
 
 
 if __name__ == "__main__":
