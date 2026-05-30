@@ -191,8 +191,13 @@ To add new detection coverage, edit `rules.yaml` — no code changes required.
 | `--verbose` | Show all regions including routine ones |
 | `--yara-dir DIR` | Directory of `.yar` rule files for `--hunt yara` |
 
----
+## Disclaimer
+This tool is designed strictly for educational purposes, authorized digital forensics, and incident response operations. The author is not responsible for any misuse or damage caused by the application of this tool.
+
+## Author
+Developed by Juana (Tao Fan) 
+* Cyber Security Analyst specializing in DFIR, Threat Hunting, Operational Malware Analysis, and Detection Engineering.
+* Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229)
 
 ## License
-
-[MIT](LICENSE)
+This project is licensed under the MIT License.
