@@ -40,6 +40,9 @@ import sys
 import os
 import struct
 import binascii
+import json
+import csv
+import datetime
 from pathlib import Path
 
 try:
@@ -425,23 +428,23 @@ def _version_str(vi) -> str:
 
 def cmd_modules(mf):
     mods = get_modules(mf)
+    rows = []
 
     for m in sorted(mods, key=lambda x: x.baseaddress):
         name     = m.name or "(unnamed)"
         basename = os.path.basename(name)
 
-        ts_raw  = getattr(m, "timestamp", 0) or 0
-        ts_str  = _pe_timestamp_to_str(ts_raw)
-        ver_str = _version_str(getattr(m, "versioninfo", None))
+        ts_raw   = getattr(m, "timestamp", 0) or 0
+        ts_str   = _pe_timestamp_to_str(ts_raw)
+        ver_str  = _version_str(getattr(m, "versioninfo", None))
         checksum = getattr(m, "checksum", 0) or 0
 
-        # Anomaly flags
-        flags = []
+        plain_flags, colored_flags = [], []
         if not m.name:
-            flags.append(RED("[NO NAME]"))
-        if ts_raw and ts_raw < 315532800:   # before 1980-01-01
-            flags.append(YELLOW("[OLD TIMESTAMP]"))
-        flag_str = "  " + " ".join(flags) if flags else ""
+            plain_flags.append("NO_NAME");      colored_flags.append(RED("[NO NAME]"))
+        if ts_raw and ts_raw < 315532800:
+            plain_flags.append("OLD_TIMESTAMP"); colored_flags.append(YELLOW("[OLD TIMESTAMP]"))
+        flag_str = "  " + " ".join(colored_flags) if colored_flags else ""
 
         print(f"\n  {BOLD(basename)}{flag_str}")
         print(f"  {'Full path':<18} {DIM(name)}")
@@ -452,7 +455,21 @@ def cmd_modules(mf):
         if checksum:
             print(f"  {'Checksum':<18} 0x{checksum:08x}")
 
+        rows.append({
+            "name":          basename,
+            "full_path":     m.name or "",
+            "base_address":  f"0x{m.baseaddress:016x}",
+            "end_address":   f"0x{m.endaddress:016x}",
+            "size":          m.size,
+            "size_hex":      f"0x{m.size:x}",
+            "compiled_utc":  ts_str,
+            "file_version":  ver_str or "",
+            "checksum":      f"0x{checksum:08x}" if checksum else "",
+            "anomaly_flags": "|".join(plain_flags),
+        })
+
     print(f"\n{GREEN(f'[+] {len(mods)} module(s).')}")
+    return rows
 
 
 def _filetime_to_str(ft: int) -> str:
@@ -491,32 +508,26 @@ def _dumpflags_str(flags) -> str:
 
 
 def cmd_threads(mf):
-    import datetime
-
     threads  = {t.ThreadId: t for t in (mf.threads.threads if mf.threads else [])}
     infos    = get_thread_infos(mf)
     modules  = get_modules(mf)
-
-    # Determine whether timing data is available (CreateTime != 0 for any thread)
     has_times = any(getattr(ti, "CreateTime", 0) for ti in infos)
+    rows      = []
 
     for ti in infos:
         sa     = ti.StartAddress or 0
         mod    = addr_to_module(sa, modules)
         backed = DIM(os.path.basename(mod.name)) if mod else RED("⚠  NOT IN ANY MODULE")
 
-        # ── Flags / status ────────────────────────────────────────────────
         flag_tag    = _dumpflags_str(getattr(ti, "DumpFlags", None))
         exit_status = getattr(ti, "ExitStatus", None)
         exited      = flag_tag == "[EXITED]"
 
-        # ── Times ─────────────────────────────────────────────────────────
         create_time = _filetime_to_str(getattr(ti, "CreateTime", 0))
         exit_time   = _filetime_to_str(getattr(ti, "ExitTime",   0))
         kernel_time = getattr(ti, "KernelTime", 0)
         user_time   = getattr(ti, "UserTime",   0)
 
-        # ── Render ────────────────────────────────────────────────────────
         tid_str = f"0x{ti.ThreadId:x}"
         if flag_tag == "[DUMPER]":
             tid_str = CYAN(tid_str) + f" {CYAN(flag_tag)}"
@@ -540,10 +551,23 @@ def cmd_threads(mf):
         print(f"  {'KernelTime':<16} {kernel_time}")
         print(f"  {'UserTime':<16} {user_time}")
 
+        rows.append({
+            "tid":            f"0x{ti.ThreadId:x}",
+            "start_address":  f"0x{sa:x}",
+            "backing_module": os.path.basename(mod.name) if mod else "",
+            "flags":          flag_tag,
+            "create_time":    create_time if has_times else "",
+            "exit_time":      exit_time   if (has_times and exited) else "",
+            "exit_status":    f"0x{exit_status:x}" if exit_status is not None else "",
+            "kernel_time":    kernel_time,
+            "user_time":      user_time,
+        })
+
     if not has_times:
         print(f"\n  {DIM('[~] CreateTime/ExitTime not available — dump was produced without ThreadInfoList stream.')}")
 
     print(f"\n{GREEN(f'[+] {len(infos)} thread(s).')}")
+    return rows
 
 
 def _hunt_rwx(mf: MinidumpFile) -> list:
@@ -741,11 +765,43 @@ def cmd_sysinfo(mf: MinidumpFile):
     # ── Dump metadata ────────────────────────────────────────────────────
     print(f"\n  {BOLD('Dump File')}")
     print(f"    {'File':<22} {os.path.basename(mf.filename)}")
+    thread_count = len(mf.threads.threads) if mf.threads else 0
+    module_count = len(mf.modules.modules) if mf.modules else 0
     if mf.threads:
-        print(f"    {'Threads in dump':<22} {len(mf.threads.threads)}")
+        print(f"    {'Threads in dump':<22} {thread_count}")
     if mf.modules:
-        print(f"    {'Modules in dump':<22} {len(mf.modules.modules)}")
+        print(f"    {'Modules in dump':<22} {module_count}")
     print()
+
+    proc_start = None
+    if mi and mi.ProcessCreateTime:
+        try:
+            proc_start = datetime.datetime.fromtimestamp(
+                mi.ProcessCreateTime, tz=datetime.timezone.utc
+            ).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except Exception:
+            proc_start = str(mi.ProcessCreateTime)
+
+    pid_val = mi.ProcessId if mi and mi.ProcessId else None
+    return {
+        "dump_file":         os.path.basename(mf.filename),
+        "hostname":          hostname,
+        "username":          username,
+        "os":                (si.OperatingSystem or "") if si else "",
+        "os_version":        (f"{si.MajorVersion}.{si.MinorVersion}.{si.BuildNumber}"
+                              if si and all(x is not None for x in
+                              [si.MajorVersion, si.MinorVersion, si.BuildNumber]) else ""),
+        "architecture":      (si.ProcessorArchitecture.name if si and si.ProcessorArchitecture else ""),
+        "product_type":      (si.ProductType.name if si and si.ProductType else ""),
+        "pid":               pid_val,
+        "pid_hex":           f"0x{pid_val:x}" if pid_val else "",
+        "process_start_utc": proc_start or "",
+        "image_path":        (peb.image_path or "") if peb else "",
+        "command_line":      (peb.command_line or "") if peb else "",
+        "processors":        (si.NumberOfProcessors if si else ""),
+        "threads_in_dump":   thread_count,
+        "modules_in_dump":   module_count,
+    }
 
 
 def cmd_pid(mf: MinidumpFile):
@@ -819,6 +875,14 @@ def cmd_pid(mf: MinidumpFile):
         print(f"  {RED('[!] Could not determine PID — dump may lack MiscInfo, thread list, and exception stream.')}")
 
     print()
+    return {
+        "pid":          pid,
+        "pid_hex":      f"0x{pid:x}" if pid is not None else "",
+        "source":       source or "",
+        "thread_count": len(threads),
+        "exc_tid":      f"0x{exc_tid:x}" if exc_tid else "",
+        "warnings":     warnings,
+    }
 
 
 def _get_region_at(addr: int, regions: list):
@@ -2038,7 +2102,18 @@ def _cs_parse_tlv(data: bytes) -> dict:
             elif ftype == 2 and flen == 4:
                 value = struct.unpack('>I', raw)[0]
             elif ftype == 3:
-                value = raw.rstrip(b'\x00').decode('utf-8', errors='replace')
+                stripped = raw.rstrip(b'\x00')
+                # Attempt clean UTF-8 decode; if the result contains non-printable
+                # characters (common for inject payloads, transforms, stubs, etc.)
+                # display as hex instead of mangled replacement characters.
+                try:
+                    candidate = stripped.decode('utf-8')
+                    is_printable = all(
+                        c.isprintable() or c in '\t\r\n' for c in candidate
+                    )
+                    value = candidate if is_printable else stripped.hex()
+                except UnicodeDecodeError:
+                    value = stripped.hex()
         except Exception:
             value = raw
 
@@ -2660,9 +2735,55 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     if run_pipe:
         results["pipe"]       = _hunt_pipe(mf, verbose=verbose)
     if run_cs_beacon:
-        results["cs-beacon"]  = _hunt_cs_beacon(mf, verbose=verbose)
+        if ttp == "all":
+            # In --hunt all, only run the full memory scan when at least one
+            # prior TTP module found suspicious activity.  A clean process with
+            # no injection/hollowing/stomping/pipe signals is unlikely to host a
+            # beacon; skipping avoids noisy output and saves scan time.
+            prior_score = sum(
+                results.get(k, {}).get("score", 0)
+                for k in ("injection", "hollowing", "stomping", "pipe")
+            )
+            if prior_score > 0:
+                results["cs-beacon"] = _hunt_cs_beacon(mf, verbose=verbose)
+            else:
+                results["cs-beacon"] = {"configs": [], "score": 0, "_skipped": True}
+        else:
+            results["cs-beacon"] = _hunt_cs_beacon(mf, verbose=verbose)
     if run_yara:
         results["yara"]       = _hunt_yara(mf, rules_dir=yara_dir, verbose=verbose)
+
+    # ── Sanitize for JSON serialization ───────────────────────────────────
+    # CS beacon: convert int-keyed field dicts + bytes
+    if "cs-beacon" in results:
+        safe_cfgs = []
+        for cfg in results["cs-beacon"].get("configs", []):
+            safe_fields = {}
+            for fid, rec in cfg.get("fields", {}).items():
+                raw = rec.get("raw", b"")
+                safe_fields[str(fid)] = {
+                    "name":  rec.get("name", ""),
+                    "type":  rec.get("type", ""),
+                    "raw":   raw.hex() if isinstance(raw, bytes) else str(raw),
+                    "value": (rec["value"].hex()
+                              if isinstance(rec.get("value"), bytes)
+                              else rec.get("value")),
+                }
+            safe_cfgs.append({
+                "va":          cfg["va"],
+                "file_offset": cfg["file_offset"],
+                "xor_key":     cfg["xor_key"],
+                "cs_version":  cfg["cs_version"],
+                "fields":      safe_fields,
+            })
+        results["cs-beacon"]["configs"] = safe_cfgs
+
+    # YARA: bytes → hex in matched string data
+    if "yara" in results:
+        for match in results["yara"].get("matches", []):
+            for sv in match.get("strings", []):
+                if isinstance(sv.get("data"), bytes):
+                    sv["data"] = sv["data"].hex()
 
     # Summary card for --hunt all
     if ttp == "all" and "yara" not in results:
@@ -2683,7 +2804,10 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         any_hit = False
         for key, (name, score, max_score) in labels.items():
             if score == 0:
-                verdict = GREEN("CLEAN")
+                if key == "cs-beacon" and results.get("cs-beacon", {}).get("_skipped"):
+                    verdict = DIM("DEFERRED  (no prior TTP signals; use --hunt cs-beacon to force)")
+                else:
+                    verdict = GREEN("CLEAN")
             elif key == "cs-beacon":
                 verdict = RED(f"BEACON CONFIG FOUND ({score} config(s))")
                 any_hit = True
@@ -2705,6 +2829,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         else:
             print(YELLOW("  Overall: One or more TTPs detected. Run --report for deep-dive."))
         print()
+
+    return results
 
 # ── Diff engine ───────────────────────────────────────────────────────────────
 
@@ -2908,6 +3034,266 @@ def cmd_diff(mf_a, path_b, mode, verbose=False):
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
+# ── Structured output (--json / --csv) ───────────────────────────────────────
+# EZ-Tools-style: JSON writes a single nested file; CSV writes one file per
+# logical table to a directory, named  dumpex_<command>_<table>.csv
+
+def _json_safe(obj):
+    """
+    Recursively convert an object into a JSON-serializable form.
+      bytes         → lowercase hex string
+      set/frozenset → sorted list
+      re.Pattern    → pattern string
+      enum-like     → .name
+      dict/list/tuple → recurse
+      str/int/float/bool/None → passed through unchanged
+      everything else → str(obj)   ← explicit fallback, never crashes
+    """
+    if isinstance(obj, bytes):
+        return obj.hex()
+    if isinstance(obj, (set, frozenset)):
+        return sorted(str(x) for x in obj)
+    if isinstance(obj, re.Pattern):
+        return obj.pattern
+    if isinstance(obj, dict):
+        return {str(k): _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_json_safe(i) for i in obj]
+    # Enum-like objects (minidump protection/state flags, etc.)
+    if not isinstance(obj, (str, int, float, bool, type(None))) and hasattr(obj, 'name'):
+        try:
+            return obj.name
+        except Exception:
+            pass
+    # Primitive JSON types pass through unchanged
+    if isinstance(obj, (str, int, float, bool, type(None))):
+        return obj
+    # Catch-all: minidump objects (MinidumpMemoryInfo, MinidumpModule, etc.),
+    # ctypes structs, and any other non-serializable type → string representation
+    return str(obj)
+
+
+class StructuredOutput:
+    """
+    Accumulates structured results from command functions and serialises
+    them to JSON or CSV on demand.
+
+    Usage
+    -----
+    out = StructuredOutput(dump_path)
+    out.add("modules",  cmd_modules(mf))
+    out.add("hunt",     cmd_hunt(mf, ...))
+    out.write_json("results.json")
+    out.write_csv("output/")
+    """
+
+    TOOL    = "dumpex"
+
+    def __init__(self, dump_path: str, mf=None):
+        self._meta = {
+            "tool":       self.TOOL,
+            "dump_file":  os.path.basename(dump_path),
+            "dump_path":  os.path.abspath(dump_path),
+            "timestamp":  datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
+        self._sections: dict = {}
+        self._mf = mf   # MinidumpFile reference for VA → file-offset lookups
+
+    def add(self, key: str, data):
+        """Store a section (overwrites if key already exists)."""
+        self._sections[key] = data
+
+    # ── JSON ─────────────────────────────────────────────────────────────
+
+    def to_json(self) -> str:
+        doc = {"meta": self._meta}
+        doc.update(_json_safe(self._sections))
+        return json.dumps(doc, indent=2, ensure_ascii=False)
+
+    def write_json(self, path: str):
+        p = Path(path)
+        # If the caller passed a directory-style path (trailing separator, or an
+        # already-existing directory), synthesise a timestamped filename inside it.
+        if str(path).endswith(('/', '\\')) or p.is_dir():
+            ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+            p  = p / f"dumpex_{ts}_results.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(self.to_json())
+        print(DIM(f"  [·] JSON written → {p}"))
+
+    # ── CSV ──────────────────────────────────────────────────────────────
+
+    def write_csv(self, path: str):
+        """
+        Write structured output as CSV.
+
+        Two modes, auto-detected from the path argument:
+
+        Directory mode  (path has no .csv extension, e.g. "output/")
+            One file per logical table:
+            dumpex_<section>_<table>.csv
+
+        Single-file mode  (path ends with .csv, e.g. ``result.csv``)
+            All tables written into a single CSV file, separated by a blank
+            row and a ``## section / table`` header line so they remain
+            human-readable and importable into Excel as separate ranges.
+        """
+        p = Path(path)
+
+        # ── Single-file mode ─────────────────────────────────────────────
+        if p.suffix.lower() == ".csv":
+            p.parent.mkdir(parents=True, exist_ok=True)
+            total_rows = 0
+            with open(p, "w", newline="", encoding="utf-8") as fh:
+                for section, data in self._sections.items():
+                    tables = self._section_to_tables(section, data)
+                    for table_name, rows in tables.items():
+                        if not rows:
+                            continue
+                        # Section header (Excel-friendly comment row)
+                        fh.write(f"## {section} / {table_name}\n")
+                        writer = csv.DictWriter(fh, fieldnames=rows[0].keys(),
+                                               extrasaction="ignore")
+                        writer.writeheader()
+                        writer.writerows(rows)
+                        fh.write("\n")   # blank separator between tables
+                        total_rows += len(rows)
+            print(DIM(f"  [·] CSV  written → {p}  ({total_rows} row(s) across all tables)"))
+            return
+
+        # ── Directory mode ───────────────────────────────────────────────
+        p.mkdir(parents=True, exist_ok=True)
+        for section, data in self._sections.items():
+            tables = self._section_to_tables(section, data)
+            for table_name, rows in tables.items():
+                if not rows:
+                    continue
+                fname = p / f"dumpex_{section}_{table_name}.csv"
+                with open(fname, "w", newline="", encoding="utf-8") as fh:
+                    writer = csv.DictWriter(fh, fieldnames=rows[0].keys(),
+                                           extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(rows)
+                print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s))"))
+
+    def _section_to_tables(self, section: str, data) -> dict:
+        """
+        Convert a section's data into {table_name: [row_dict, ...]} for CSV.
+        Each section type has its own flattening logic.
+        """
+        if section == "modules" and isinstance(data, list):
+            return {"modules": data}
+
+        if section == "threads" and isinstance(data, list):
+            return {"threads": data}
+
+        if section in ("sysinfo", "pid") and isinstance(data, dict):
+            rows = [{"field": k, "value": v} for k, v in data.items()
+                    if not isinstance(v, (dict, list))]
+            return {section: rows}
+
+        if section == "hunt" and isinstance(data, dict):
+            summary_rows  = []
+            findings_rows = []
+
+            for ttp, findings in data.items():
+                if not isinstance(findings, dict):
+                    continue
+                score     = findings.get("score", 0)
+                max_score = {"injection": 3, "hollowing": 4, "stomping": 2,
+                             "pipe": 4, "cs-beacon": 1, "yara": 3}.get(ttp, "?")
+                verdict   = ("CLEAN"           if score == 0 else
+                             "HIGH CONFIDENCE" if isinstance(max_score, int) and score >= max_score - 1
+                             else "POSSIBLE")
+                summary_rows.append({
+                    "ttp": ttp, "score": score,
+                    "max_score": max_score, "verdict": verdict,
+                })
+
+                # CS beacon configs
+                for cfg in findings.get("configs", []):
+                    fields = cfg.get("fields", {})
+                    c2_raw = ""
+                    if "8" in fields:
+                        c2_raw = fields["8"].get("value", "") or ""
+                    c2_host, c2_uri = (c2_raw.split(",", 1) if "," in c2_raw
+                                       else (c2_raw, ""))
+                    findings_rows.append({
+                        "ttp":            ttp,
+                        "finding_type":   "cs_beacon_config",
+                        "va_process":     f"0x{cfg.get('va', 0):016x}",
+                        "file_offset":    f"0x{cfg.get('file_offset', 0):x}",
+                        "cs_version":     cfg.get("cs_version", ""),
+                        "xor_key":        f"0x{cfg.get('xor_key', 0):02x}",
+                        "beacon_type":    fields.get("1", {}).get("value", ""),
+                        "c2_host":        c2_host.strip(),
+                        "c2_uri":         c2_uri.strip(),
+                        "port":           fields.get("2", {}).get("value", ""),
+                        "useragent":      (fields.get("9", {}).get("value") or "").strip("\x00"),
+                        "pipename":       (fields.get("15", {}).get("value") or "").strip("\x00"),
+                        "license_id":     fields.get("37", {}).get("value", ""),
+                        "sleep_ms":       fields.get("3", {}).get("value", ""),
+                        "jitter_pct":     fields.get("5", {}).get("value", ""),
+                        "details":        "",
+                    })
+
+                # YARA matches
+                for match in findings.get("matches", []):
+                    rule   = match.get("rule", "")
+                    rfile  = match.get("file", "")
+                    mitre  = (match.get("meta") or {}).get("mitre", "")
+                    n_str  = len(match.get("strings", []))
+                    seg_va = match.get("seg_va", 0)
+                    seg_fo = match.get("seg_fo", 0)
+                    findings_rows.append({
+                        "ttp":          ttp,
+                        "finding_type": "yara_match",
+                        "va_process":   f"0x{seg_va:016x}",
+                        "file_offset":  f"0x{seg_fo:x}",
+                        "cs_version":   "",
+                        "xor_key":      "",
+                        "beacon_type":  "",
+                        "c2_host":      "",
+                        "c2_uri":       "",
+                        "port":         "",
+                        "useragent":    "",
+                        "pipename":     "",
+                        "license_id":   "",
+                        "sleep_ms":     "",
+                        "jitter_pct":   "",
+                        "details":      f"rule={rule};file={rfile};mitre={mitre};strings={n_str}",
+                    })
+
+                # Pipe findings
+                for r, off, name in findings.get("private_pipes", []):
+                    abs_va = r.BaseAddress + off
+                    fo     = (va_to_file_offset(self._mf, abs_va) or 0) if self._mf else 0
+                    findings_rows.append({
+                        "ttp":          ttp,
+                        "finding_type": "suspicious_pipe",
+                        "va_process":   f"0x{abs_va:016x}",
+                        "file_offset":  f"0x{fo:x}" if fo else "",
+                        "cs_version":   "", "xor_key":   "", "beacon_type": "",
+                        "c2_host":      "", "c2_uri":     "", "port":        "",
+                        "useragent":    "", "pipename":   name.strip(),
+                        "license_id":   "", "sleep_ms":   "", "jitter_pct":  "",
+                        "details":      prot_str(r.Protect),
+                    })
+
+            tables = {"summary": summary_rows}
+            if findings_rows:
+                tables["findings"] = findings_rows
+            return tables
+
+        # Fallback: try list-of-dicts as-is
+        if isinstance(data, list) and data and isinstance(data[0], dict):
+            return {section: data}
+
+        return {}
+
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="dumpex",
@@ -2946,18 +3332,34 @@ def main():
     parser.add_argument('--verbose',    action='store_true', help='Show all regions including routine ones')
     parser.add_argument('--yara-dir',   metavar='DIR',       default=None,
                         help='Directory of .yar rule files for --hunt yara (default: ./rules/yara/)')
+    parser.add_argument('--json',       metavar='FILE',      default=None,
+                        help='Write structured results to FILE as JSON  (e.g. results.json)')
+    parser.add_argument('--csv',        metavar='PATH',      default=None,
+                        help='Write CSV output: FILE.csv → single combined file  |  DIR\\ → one file per table')
     parser.add_argument('--report-tid',  metavar='TID',  help='Anchor report to this Thread ID (hex or decimal)')
     parser.add_argument('--report-addr',   metavar='ADDR',   help='Anchor report to this memory address (hex)')
     parser.add_argument('--report-string', metavar='STRING', help='Search all memory for string, report on each hit region')
     args = parser.parse_args()
     mf   = open_dump(args.dumpfile)
 
+    # Structured output collector — populated by commands that support it
+    need_structured = bool(args.json or args.csv)
+    out = StructuredOutput(args.dumpfile, mf) if need_structured else None
+
     if   args.list:         cmd_list(mf, args.filter)
-    elif args.modules:      cmd_modules(mf)
-    elif args.threads:      cmd_threads(mf)
+    elif args.modules:
+        data = cmd_modules(mf)
+        if out: out.add("modules", data)
+    elif args.threads:
+        data = cmd_threads(mf)
+        if out: out.add("threads", data)
     elif args.peb:          cmd_peb(mf)
-    elif args.pid:          cmd_pid(mf)
-    elif args.sysinfo:      cmd_sysinfo(mf)
+    elif args.pid:
+        data = cmd_pid(mf)
+        if out: out.add("pid", data)
+    elif args.sysinfo:
+        data = cmd_sysinfo(mf)
+        if out: out.add("sysinfo", data)
     elif args.report:
         if not args.report_tid and not args.report_addr and not args.report_string:
             print(RED("[!] --report requires at least one of: --report-tid, --report-addr, --report-string"))
@@ -2968,8 +3370,9 @@ def main():
                   report_string=args.report_string,
                   extract_to=args.output,
                   min_len=args.min_len)
-    elif args.hunt:         cmd_hunt(mf, args.hunt, verbose=args.verbose,
-                                      yara_dir=args.yara_dir)
+    elif args.hunt:
+        data = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir)
+        if out and data: out.add("hunt", data)
     elif args.diff:         cmd_diff(mf, args.diff, args.diff_mode, verbose=args.verbose)
 
     elif args.extract:
@@ -2983,6 +3386,16 @@ def main():
         _req = parse_hex_or_int(args.size) if args.size else None
         size = _resolve_size(mf, addr, _req)
         cmd_strings(mf, addr, size, args.min_len, args.grep, args.encoding, auto_size=_req is None)
+
+    # ── Write structured output ────────────────────────────────────────────
+    if out:
+        if out._sections:
+            if args.json:
+                out.write_json(args.json)
+            if args.csv:
+                out.write_csv(args.csv)
+        else:
+            print(DIM("  [~] --json/--csv: this command does not produce structured output."))
 
 
 if __name__ == "__main__":
