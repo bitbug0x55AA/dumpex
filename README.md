@@ -1,13 +1,13 @@
 # dumpex
 
-**dumpex** is a command-line DFIR/CTF triage tool for analyzing Windows minidump (`.DMP`) files. It parses minidump structures to surface system information, memory layout, loaded modules, and thread state — and includes a TTP detection engine to hunt for signs of process injection, module stomping, C2 named pipes, and Cobalt Strike beacons.
+**dumpex** is a command-line DFIR/CTF triage tool for analyzing Windows minidump (`.DMP`) files. It parses minidump structures to surface system information, memory layout, loaded modules, and thread state — and includes a TTP detection engine to hunt for signs of process injection, module stomping, C2 named pipes, Cobalt Strike beacons, and encoded/obfuscated payloads.
 
 ---
 
 ## Features
 
 - **Recon** — Extract system info, PID, PEB, loaded modules, threads, and memory regions from a dump
-- **TTP Hunting** — Detect process injection, process hollowing, module stomping, named pipe C2, and Cobalt Strike beacon artifacts
+- **TTP Hunting** — Detect process injection, process hollowing, module stomping, named pipe C2, Cobalt Strike beacon artifacts, and encoded/obfuscated payloads
 - **Alert Triage** — Generate focused reports anchored to a thread ID, memory address, or string match
 - **Diff** — Compare two dumps to identify new/removed modules, threads, and memory regions (including RWX changes)
 - **Extraction** — Dump raw bytes or extract strings from a specific memory region, with regex filtering
@@ -92,11 +92,15 @@ python -m dumpex dump.DMP --hunt pipe
 # Detect Cobalt Strike beacon artifacts
 python -m dumpex dump.DMP --hunt cs-beacon --verbose
 
-# Run all TTP checks
-python -m dumpex dump.DMP --hunt all --verbose
+# Detect encoded or obfuscated payloads (Base64, XOR, GZIP, high entropy)
+python -m dumpex dump.DMP --hunt encoding
+python -m dumpex dump.DMP --hunt encoding --verbose
 
 # Run YARA rules against dump memory
 python -m dumpex dump.DMP --hunt yara --yara-dir ./rules/yara/
+
+# Run all TTP checks
+python -m dumpex dump.DMP --hunt all --verbose
 ```
 
 ### Alert Triage
@@ -187,9 +191,11 @@ YARA rules are loaded from `rules/yara/`. Drop any `.yar` file into that directo
 | Proxy: Internal Proxy | T1090.001 | CS SMB Beacon peer-to-peer pipe |
 | Remote Services: SMB/Windows Admin Shares | T1021.002 | PsExec, PAExec, RemCom, svcctl pipes |
 | Exploitation for Privilege Escalation | T1068 | PrintNightmare / Spooler pipe (DserNamePipe) |
-| Obfuscated Files or Information | T1027 | CS beacon XOR-encoded config (keys 0x69 / 0x2E) |
+| Obfuscated Files or Information | T1027 | CS beacon XOR-encoded config; single-byte XOR payload detection |
+| Obfuscated Files or Information: HTML Smuggling | T1027.006 | Base64-encoded payloads in memory |
 | Encrypted Channel: Asymmetric Cryptography | T1573.002 | CS beacon RSA public key ASN.1 header |
 | Impair Defenses: Execution Guardrails | T1622 | CS 64-bit sleep mask deobfuscation routine |
+| Deobfuscate/Decode Files or Information | T1140 | Shannon entropy scan; GZIP/ZLIB compressed payload detection |
 
 ---
 
@@ -203,7 +209,7 @@ YARA rules are loaded from `rules/yara/`. Drop any `.yar` file into that directo
 | `--peb` | Show PEB info |
 | `--pid` | Show recorded process ID |
 | `--sysinfo` | Show OS, host, process, and CPU summary |
-| `--hunt TTP` | TTP detection: `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `all` |
+| `--hunt TTP` | TTP detection: `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `encoding`, `all` |
 | `--report` | Generate triage report (requires `--report-tid`, `--report-addr`, or `--report-string`) |
 | `--diff DUMP2` | Diff against a second dump file |
 | `--diff-mode` | Scope of diff: `modules`, `threads`, `memory`, `all` (default: `all`) |
