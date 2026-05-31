@@ -1,0 +1,38 @@
+name: Build Release EXE
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. v2.0.0)'
+        required: true
+      prerelease:
+        description: 'Mark as pre-release?'
+        type: boolean
+        default: false
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install pyinstaller minidump pyyaml yara-python
+
+      - name: Build EXE
+        run: pyinstaller --onefile dumpex.py --name dumpex --add-data "rules;rules"
+
+      - name: Create Release and Upload EXE
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.version }}
+          name: Dumpex ${{ github.event.inputs.version }}
+          prerelease: ${{ github.event.inputs.prerelease }}
+          files: dist/dumpex.exe
