@@ -11,10 +11,11 @@ from dumpex.hunt.stomping   import _hunt_stomping
 from dumpex.hunt.pipe       import _hunt_pipe
 from dumpex.hunt.cs_beacon  import _hunt_cs_beacon
 from dumpex.hunt.yara_hunt  import _hunt_yara
+from dumpex.hunt.encoding   import _hunt_encoding
 
 def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None):
     """Run TTP-specific detection playbooks."""
-    valid = {"injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "all"}
+    valid = {"injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "encoding", "all"}
     if ttp not in valid:
         print(RED(f"[!] Unknown TTP '{ttp}'. Choose from: {', '.join(sorted(valid))}"))
         sys.exit(1)
@@ -25,6 +26,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     run_pipe       = ttp in ("pipe",       "all")
     run_cs_beacon  = ttp in ("cs-beacon",  "all")
     run_yara       = ttp in ("yara",       "all")
+    run_encoding   = ttp in ("encoding",   "all")
 
     results = {}
 
@@ -54,6 +56,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             results["cs-beacon"] = _hunt_cs_beacon(mf, verbose=verbose)
     if run_yara:
         results["yara"]       = _hunt_yara(mf, rules_dir=yara_dir, verbose=verbose)
+    if run_encoding:
+        results["encoding"]   = _hunt_encoding(mf, verbose=verbose)
 
     # ── Sanitize for JSON serialization ───────────────────────────────────
     # CS beacon: convert int-keyed field dicts + bytes
@@ -90,6 +94,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # Summary card for --hunt all
     if ttp == "all" and "yara" not in results:
         results["yara"] = {"matches": [], "score": 0, "rules_hit": []}
+    if ttp == "all" and "encoding" not in results:
+        results["encoding"] = {"score": 0}
 
     if ttp == "all":
         print(BOLD("══════════════════════════════════════════"))
@@ -102,6 +108,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       4),
             "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],  1),
             "yara":      ("YARA Rules",                 results["yara"]["score"],       3),
+            "encoding":  ("Encoded / Obfuscated",       results["encoding"]["score"],   5),
         }
         any_hit = False
         for key, (name, score, max_score) in labels.items():

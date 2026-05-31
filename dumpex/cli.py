@@ -41,7 +41,7 @@ def main():
     mode.add_argument("--sysinfo",      action="store_true", help="Show OS, host, process and CPU summary")
     mode.add_argument("--diff",         metavar="DUMP2",     help="Diff against a second .DMP file")
     mode.add_argument("--report",        action="store_true", help="Generate triage report anchored to a TID, address, or string")
-    mode.add_argument("--hunt",          metavar="TTP",       help="TTP detection: injection | hollowing | stomping | pipe | cs-beacon | yara | all")
+    mode.add_argument("--hunt",          metavar="TTP",       help="TTP detection: injection | hollowing | stomping | pipe | cs-beacon | yara | encoding | all")
 
     # Shared
     parser.add_argument("-s", "--size",      metavar="SIZE",   help="Region size in hex")
