@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dumpex"
+version = "2.0.0"
+description = "Minidump memory extractor and DFIR triage tool"
+requires-python = ">=3.10"
+dependencies = [
+    "minidump",
+]
+
+[project.optional-dependencies]
+full = [
+    "pyyaml",
+    "yara-python",
+]
+
+[project.scripts]
+dumpex = "dumpex.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dumpex*"]
