@@ -46,7 +46,7 @@ DECODE_SCAN_MAX           =  2 * 1024 * 1024   # Base64 / XOR / GZIP: skip regio
 XOR_SCAN_MAX              = 512 * 1024         # max region for XOR brute-force
 XOR_SAMPLE_SIZE           = 4096               # bytes sampled before full decode
 XOR_SCORE_MIN             = 0.68               # printable ratio to accept a key
-B64_MIN_LEN               = 48                 # minimum Base64 string length
+B64_MIN_LEN               = 80                 # minimum Base64 string length
 
 
 def _is_system_dll(module) -> bool:
@@ -199,7 +199,12 @@ def _scan_base64(data: bytes, region_base: int):
             continue
         if len(decoded) < 16:
             continue
-        yield m.start(), raw, decoded, _classify_decoded(decoded)
+        # Skip decoded content that is purely binary with no IOC strings —
+        # short random data commonly matches the Base64 alphabet by chance
+        cls = _classify_decoded(decoded)
+        if cls['type'] == 'binary' and not cls['ioc_strings']:
+            continue
+        yield m.start(), raw, decoded, cls
 
 
 # ── Layer 3: XOR single-byte brute-force ─────────────────────────────────
@@ -226,14 +231,16 @@ def _scan_xor(data: bytes, region_base: int):
             text = decoded_sample.decode('ascii', errors='replace')
             if _IOC_PAT.search(text) or any(
                 kw in text.lower() for kw in
-                ('http', 'pipe', 'cmd', 'shellcode', 'beacon', 'mz', 'rundll')
+                ('http', 'pipe', 'cmd', 'shellcode', 'beacon', 'rundll')
             ):
                 candidates.append((key, score))
 
     for key, _ in sorted(candidates, key=lambda x: -x[1])[:5]:
         decoded = bytes(b ^ key for b in data)
         cls = _classify_decoded(decoded)
-        if cls['type'] not in ('binary',):
+        # Only yield if there is something actionable: PE, shellcode, or IOC strings
+        # PLAINTEXT without IOC strings is almost always noise from low-entropy regions
+        if cls['is_pe'] or cls['is_shellcode'] or cls['ioc_strings']:
             yield key, decoded, cls
 
 
