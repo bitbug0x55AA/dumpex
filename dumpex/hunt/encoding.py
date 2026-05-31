@@ -69,6 +69,45 @@ _IOC_PAT = re.compile(
     re.IGNORECASE,
 )
 
+def _is_plausible_ip(ip_str: str) -> bool:
+    """
+    Return True if the IP string looks like a real C2 address.
+    Filters out:
+      - IPs where every octet is a single digit (< 10) — version numbers,
+        sequential patterns like 9.8.6.9 / 1.2.3.4 match the regex but are
+        almost never real C2 addresses
+      - Private / loopback / link-local / reserved ranges
+      - Out-of-range octets
+    """
+    host = ip_str.split(':')[0]   # strip port if present
+    parts = host.split('.')
+    if len(parts) != 4:
+        return False
+    try:
+        octets = [int(p) for p in parts]
+    except ValueError:
+        return False
+    if not all(0 <= o <= 255 for o in octets):
+        return False
+    # All single-digit octets → version number / coord pattern, not a real IP
+    if all(o < 10 for o in octets):
+        return False
+    # Loopback / unspecified
+    if octets[0] in (0, 127):
+        return False
+    # Link-local (169.254.x.x)
+    if octets[0] == 169 and octets[1] == 254:
+        return False
+    # RFC 1918 private ranges
+    if octets[0] == 10:
+        return False
+    if octets[0] == 172 and 16 <= octets[1] <= 31:
+        return False
+    if octets[0] == 192 and octets[1] == 168:
+        return False
+    return True
+
+
 _B64_PAT = re.compile(
     rb'(?:[A-Za-z0-9+/]{4}){12,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?'
     rb'|(?:[A-Za-z0-9\-_]{4}){12,}(?:[A-Za-z0-9\-_]{2}==|[A-Za-z0-9\-_]{3}=)?'
@@ -133,7 +172,9 @@ def _classify_decoded(data: bytes) -> dict:
     ratio = printable / len(sample)
     if ratio > 0.85:
         text = data[:8192].decode('ascii', errors='replace')
-        iocs = _IOC_PAT.findall(text)
+        raw_iocs = _IOC_PAT.findall(text)
+        iocs = [s for s in raw_iocs
+                if not re.match(r'^\d+\.\d+\.\d+\.\d+', s) or _is_plausible_ip(s)]
         if iocs:
             result.update({'type': 'ioc_text', 'ioc_strings': iocs[:10]})
         else:
