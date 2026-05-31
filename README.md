@@ -12,22 +12,23 @@
 - **Diff** — Compare two dumps to identify new/removed modules, threads, and memory regions (including RWX changes)
 - **Extraction** — Dump raw bytes or extract strings from a specific memory region, with regex filtering
 - **Rule-driven** — Detection patterns are externalized in `rules.yaml`; extend coverage without modifying code
+- **Structured Output** — Export results as JSON, CSV, or plain-text for downstream tooling and reporting
 
 ---
 
 ## Requirements
 
-- Python 3.8+
+- Python 3.10+
 - [`minidump`](https://github.com/skelsec/minidump) library
 
 ```bash
 pip install minidump
 ```
 
-Optional (for YARA scanning):
+Optional (for YAML rule files and YARA scanning):
 
 ```bash
-pip install yara-python
+pip install pyyaml yara-python
 ```
 
 ---
@@ -37,10 +38,14 @@ pip install yara-python
 ```bash
 git clone https://github.com/bitbug0x55AA/dumpex.git
 cd dumpex
-pip install minidump
+pip install -e .
 ```
 
-No build step required. Run directly with `python dumpex.py`.
+For full functionality including YAML rules and YARA scanning:
+
+```bash
+pip install -e ".[full]"
+```
 
 ---
 
@@ -50,93 +55,110 @@ No build step required. Run directly with `python dumpex.py`.
 
 ```bash
 # OS, host, process and CPU summary
-python dumpex.py dump.DMP --sysinfo
+python -m dumpex dump.DMP --sysinfo
 
 # Process ID recorded in the dump
-python dumpex.py dump.DMP --pid
+python -m dumpex dump.DMP --pid
 
 # PEB (Process Environment Block) information
-python dumpex.py dump.DMP --peb
+python -m dumpex dump.DMP --peb
 
 # List loaded modules
-python dumpex.py dump.DMP --modules
+python -m dumpex dump.DMP --modules
 
 # List threads with analysis
-python dumpex.py dump.DMP --threads
+python -m dumpex dump.DMP --threads
 
 # List all memory regions, optionally filtered by protection
-python dumpex.py dump.DMP --list
-python dumpex.py dump.DMP --list --filter PAGE_EXECUTE
+python -m dumpex dump.DMP --list
+python -m dumpex dump.DMP --list --filter PAGE_EXECUTE
 ```
 
 ### TTP Hunting
 
 ```bash
 # Detect process injection (RWX regions, unbacked executable memory)
-python dumpex.py dump.DMP --hunt injection
+python -m dumpex dump.DMP --hunt injection
 
 # Detect process hollowing indicators
-python dumpex.py dump.DMP --hunt hollowing
+python -m dumpex dump.DMP --hunt hollowing
 
 # Detect module stomping (IOC strings inside legitimate DLL memory)
-python dumpex.py dump.DMP --hunt stomping
+python -m dumpex dump.DMP --hunt stomping
 
 # Detect suspicious named pipes (C2 frameworks, lateral movement tools)
-python dumpex.py dump.DMP --hunt pipe
+python -m dumpex dump.DMP --hunt pipe
 
 # Detect Cobalt Strike beacon artifacts
-python dumpex.py dump.DMP --hunt cs-beacon --verbose
+python -m dumpex dump.DMP --hunt cs-beacon --verbose
 
 # Run all TTP checks
-python dumpex.py dump.DMP --hunt all --verbose
+python -m dumpex dump.DMP --hunt all --verbose
 
 # Run YARA rules against dump memory
-python dumpex.py dump.DMP --hunt yara --yara-dir ./rules/yara/
+python -m dumpex dump.DMP --hunt yara --yara-dir ./rules/yara/
 ```
 
 ### Alert Triage
 
 ```bash
 # Report anchored to a thread ID
-python dumpex.py dump.DMP --report --report-tid 0x3a8
+python -m dumpex dump.DMP --report --report-tid 0x3a8
 
 # Report anchored to a memory address
-python dumpex.py dump.DMP --report --report-addr 0xb120870000
+python -m dumpex dump.DMP --report --report-addr 0xb120870000
 
 # Search all memory for a string and report on each hit region
-python dumpex.py dump.DMP --report --report-string "192.168.1.1"
+python -m dumpex dump.DMP --report --report-string "192.168.1.1"
 ```
 
 ### Diff (Two Dumps)
 
 ```bash
 # Full diff (modules, threads, memory)
-python dumpex.py before.DMP --diff after.DMP
+python -m dumpex before.DMP --diff after.DMP
 
 # Diff specific categories
-python dumpex.py before.DMP --diff after.DMP --diff-mode modules
-python dumpex.py before.DMP --diff after.DMP --diff-mode threads
-python dumpex.py before.DMP --diff after.DMP --diff-mode memory
+python -m dumpex before.DMP --diff after.DMP --diff-mode modules
+python -m dumpex before.DMP --diff after.DMP --diff-mode threads
+python -m dumpex before.DMP --diff after.DMP --diff-mode memory
 ```
 
 ### Extraction
 
 ```bash
 # Extract raw bytes from a memory region to a file
-python dumpex.py dump.DMP --extract 0x3a0000 --size 0x4e000 -o out.bin
+python -m dumpex dump.DMP --extract 0x3a0000 --size 0x4e000 -o out.bin
 
 # Extract strings from a region with optional regex filter
-python dumpex.py dump.DMP --strings 0x3a0000 --size 0x4e000 --grep "http|cmd"
+python -m dumpex dump.DMP --strings 0x3a0000 --size 0x4e000 --grep "http|cmd"
 
 # Extract Unicode strings with minimum length of 4
-python dumpex.py dump.DMP --strings 0x3a0000 --encoding unicode --min-len 4
+python -m dumpex dump.DMP --strings 0x3a0000 --encoding unicode --min-len 4
+```
+
+### Structured Output
+
+```bash
+# Export results as JSON
+python -m dumpex dump.DMP --hunt all --json results.json
+
+# Export results as CSV (single file or directory)
+python -m dumpex dump.DMP --modules --csv modules.csv
+python -m dumpex dump.DMP --hunt all --csv ./output/
+
+# Save a plain-text copy of all console output
+python -m dumpex dump.DMP --hunt all --txt report.txt
+
+# Combine output formats
+python -m dumpex dump.DMP --hunt all --json results.json --csv ./output/ --txt report.txt
 ```
 
 ---
 
 ## Detection Rules (`rules.yaml`)
 
-TTP detection is driven by `rules.yaml`, loaded from the same directory as `dumpex.py` (or the current working directory as fallback). Built-in defaults are used if the file is not found, so the tool always runs standalone.
+TTP detection is driven by `rules.yaml`, loaded from `rules/rules.yaml` relative to the package directory (or the current working directory as fallback). Built-in defaults are used if the file is not found, so the tool always runs standalone.
 
 The rule file controls:
 
@@ -151,18 +173,23 @@ The rule file controls:
 
 To add new detection coverage, edit `rules.yaml` — no code changes required.
 
+YARA rules are loaded from `rules/yara/`. Drop any `.yar` file into that directory to extend scanning coverage.
+
 ---
 
 ## MITRE ATT&CK Coverage
 
 | Technique | ID | Detection |
 |---|---|---|
+| Process Injection | T1055 | RWX memory regions, unbacked executable memory, hidden PE headers |
+| Process Hollowing | T1055.012 | Image base memory type, MZ header, module list mismatch |
 | Inter-Process Communication: Named Pipes | T1559.001 | Cobalt Strike postex, msagent, status, beacon pipes |
 | Proxy: Internal Proxy | T1090.001 | CS SMB Beacon peer-to-peer pipe |
 | Remote Services: SMB/Windows Admin Shares | T1021.002 | PsExec, PAExec, RemCom, svcctl pipes |
 | Exploitation for Privilege Escalation | T1068 | PrintNightmare / Spooler pipe (DserNamePipe) |
-| Process Injection | T1055 | RWX memory regions, unbacked executable memory |
-| Process Hollowing | T1055.012 | Hollowing indicators in module/memory layout |
+| Obfuscated Files or Information | T1027 | CS beacon XOR-encoded config (keys 0x69 / 0x2E) |
+| Encrypted Channel: Asymmetric Cryptography | T1573.002 | CS beacon RSA public key ASN.1 header |
+| Impair Defenses: Execution Guardrails | T1622 | CS 64-bit sleep mask deobfuscation routine |
 
 ---
 
@@ -190,14 +217,26 @@ To add new detection coverage, edit `rules.yaml` — no code changes required.
 | `--encoding` | String encoding: `ascii`, `unicode`, `both` (default: `both`) |
 | `--verbose` | Show all regions including routine ones |
 | `--yara-dir DIR` | Directory of `.yar` rule files for `--hunt yara` |
+| `--json FILE` | Write structured results to FILE as JSON |
+| `--csv PATH` | Write CSV output: `FILE.csv` → single combined file, `DIR\` → one file per table |
+| `--txt FILE` | Write plain-text copy of console output (ANSI colours stripped) |
+
+---
 
 ## Disclaimer
+
 This tool is designed strictly for educational purposes, authorized digital forensics, and incident response operations. The author is not responsible for any misuse or damage caused by the application of this tool.
 
+---
+
 ## Author
-Developed by Juana (Tao Fan) 
-* Cyber Security Analyst specializing in DFIR, Threat Hunting, Operational Malware Analysis, and Detection Engineering.
-* Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229)
+
+Developed by Juana (Tao Fan)
+- Cyber Security Analyst specializing in DFIR, Threat Hunting, Operational Malware Analysis, and Detection Engineering.
+- Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229)
+
+---
 
 ## License
+
 This project is licensed under the MIT License.
