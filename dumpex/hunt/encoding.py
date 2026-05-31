@@ -341,7 +341,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         'score': 0,
     }
 
-    _print_hunt_header("Encoded / Obfuscated Payload Detection")
+    _print_hunt_header("Obfuscation Detection")
 
     # ── Layer 1: Entropy ──────────────────────────────────────────────────
     print(DIM("  [*] Layer 1: Shannon entropy scan …"))

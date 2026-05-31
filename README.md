@@ -93,8 +93,8 @@ python -m dumpex dump.DMP --hunt pipe
 python -m dumpex dump.DMP --hunt cs-beacon --verbose
 
 # Detect encoded or obfuscated payloads (Base64, XOR, GZIP, high entropy)
-python -m dumpex dump.DMP --hunt encoding
-python -m dumpex dump.DMP --hunt encoding --verbose
+python -m dumpex dump.DMP --hunt obfuscation
+python -m dumpex dump.DMP --hunt obfuscation --verbose
 
 # Run YARA rules against dump memory
 python -m dumpex dump.DMP --hunt yara --yara-dir ./rules/yara/
@@ -209,7 +209,7 @@ YARA rules are loaded from `rules/yara/`. Drop any `.yar` file into that directo
 | `--peb` | Show PEB info |
 | `--pid` | Show recorded process ID |
 | `--sysinfo` | Show OS, host, process, and CPU summary |
-| `--hunt TTP` | TTP detection: `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `encoding`, `all` |
+| `--hunt TTP` | TTP detection: `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `obfuscation`, `all` |
 | `--report` | Generate triage report (requires `--report-tid`, `--report-addr`, or `--report-string`) |
 | `--diff DUMP2` | Diff against a second dump file |
 | `--diff-mode` | Scope of diff: `modules`, `threads`, `memory`, `all` (default: `all`) |
