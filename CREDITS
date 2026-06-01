@@ -1,0 +1,78 @@
+CREDITS
+=======
+
+Dumpex — Windows Minidump Analysis & DFIR Triage Tool
+Copyright (c) 2026 Juana Fan (Tao Fan)
+
+
+This project incorporates work from the following sources. Full attribution details are also available in README.md § Acknowledgements.
+
+
+────────────────────────────────────────────────────────────────────────────────
+Didier Stevens — 1768.py
+────────────────────────────────────────────────────────────────────────────────
+
+  Description : Cobalt Strike beacon configuration analyser
+  Author      : Didier Stevens <https://blog.didierstevens.com/>
+  URL         : https://github.com/DidierStevens/DidierStevensSuite
+  License     : Public Domain
+                "Source code put in the public domain by Didier Stevens,
+                 no Copyright"
+
+  Used in     : dumpex/hunt/cs_beacon.py
+                rules/yara/cs_indicators.yar (CS_Beacon_Config_XOR69,
+                CS_Beacon_Config_XOR2E)
+
+  Nature of use:
+    The beacon config detection algorithm, TLV field parser, Malleable C2 instruction decoder, config field identifier table, beacon/proxy type lookup tables, CS version estimator, and config sanity check logic in cs_beacon.py are adapted from the corresponding functions in 1768.py. The XOR-encoded signature byte patterns in cs_indicators.yar are derived from the same work.
+
+
+────────────────────────────────────────────────────────────────────────────────
+Elastic Security
+────────────────────────────────────────────────────────────────────────────────
+
+  Description : Public research on detecting Cobalt Strike with memory
+                signatures, including Sleep Mask deobfuscation byte patterns
+  Author      : Elastic Security
+  URL         : https://www.elastic.co/blog/detecting-cobalt-strike-with-memory-signatures
+  License     : Published as public security research
+
+  Used in     : rules/yara/cs_indicators.yar (CS_SleepMask_64bit,
+                CS_SleepMask_32bit)
+
+  Nature of use:
+    The byte sequences in the CS_SleepMask_64bit and CS_SleepMask_32bit YARA rules are based on signatures published in the referenced blog post.
+
+
+────────────────────────────────────────────────────────────────────────────────
+NVISO Labs
+────────────────────────────────────────────────────────────────────────────────
+
+  Description : Public research series on Cobalt Strike beacon memory
+                structures and config extraction
+  Author      : NVISO Labs
+  URL         : https://blog.nviso.eu/
+  License     : Published as public security research
+
+  Used in     : dumpex/hunt/cs_beacon.py (contextual reference)
+
+  Nature of use:
+    The NVISO Labs blog series informed the overall design approach for Cobalt Strike beacon config extraction in cs_beacon.py. No code or signatures were directly copied.
+
+
+────────────────────────────────────────────────────────────────────────────────
+Stephen Fewer — ReflectiveDLLInjection
+────────────────────────────────────────────────────────────────────────────────
+
+  Description : Reflective DLL injection proof-of-concept; source of the
+                well-known LoadLibraryA and GetProcAddress hash constants
+                used in reflective loaders
+  Author      : Stephen Fewer
+  URL         : https://github.com/stephenfewer/ReflectiveDLLInjection
+  License     : Public Domain
+
+  Used in     : rules/yara/suspicious_memory.yar
+                (Reflective_Loader_Signature)
+
+  Nature of use:
+    The hash constant values (0x4EC20EEC for LoadLibraryA, 0x7CB89778 for GetProcAddress) used in the Reflective_Loader_Signature YARA rule are derived from the public ReflectiveDLLInjection implementation.
