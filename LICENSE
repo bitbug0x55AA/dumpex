@@ -19,3 +19,48 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+────────────────────────────────────────────────────────────────────────────────
+THIRD-PARTY NOTICES
+────────────────────────────────────────────────────────────────────────────────
+
+This software incorporates or is derived from work by third parties, as described below. The original licenses and notices are reproduced here in compliance with their terms and as a courtesy to their authors.
+
+
+1. 1768.py by Didier Stevens
+   ─────────────────────────
+   Files affected:
+     dumpex/hunt/cs_beacon.py
+     rules/yara/cs_indicators.yar
+
+   Original notice:
+     "Source code put in the public domain by Didier Stevens, no Copyright 
+     https://DidierStevens.com 
+     Use at your own risk"
+
+   The Cobalt Strike beacon config scanning algorithm in cs_beacon.py, including the TLV parser, field identifier table, Malleable C2 instruction decoder, version estimator, and sanity check, is adapted from 1768.py. The XOR-encoded config signature patterns in cs_indicators.yar are derived from the same work.
+
+
+2. Elastic Security — Cobalt Strike Memory Signatures
+   ────────────────────────────────────────────────────
+   Files affected:
+     rules/yara/cs_indicators.yar (CS_SleepMask_64bit, CS_SleepMask_32bit)
+
+   Original publication:
+     "Detecting Cobalt Strike with Memory Signatures"
+     https://www.elastic.co/blog/detecting-cobalt-strike-with-memory-signatures
+     Published as public security research by Elastic Security.
+
+   The Sleep Mask deobfuscation byte patterns in the YARA rules above are based on signatures described in this public research post.
+
+
+3. Stephen Fewer — ReflectiveDLLInjection
+   ────────────────────────────────────────
+   Files affected:
+     rules/yara/suspicious_memory.yar (Reflective_Loader_Signature)
+
+   Original notice:
+     Source placed in the public domain by Stephen Fewer.
+     https://github.com/stephenfewer/ReflectiveDLLInjection
+
+   The hash constants used in the Reflective_Loader_Signature YARA rule originate from the public ReflectiveDLLInjection proof-of-concept.
