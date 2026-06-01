@@ -235,9 +235,9 @@ Dumpex builds on the work of several researchers and organizations in the public
 
 ---
 
-### Didier Stevens — 1768.py
+### Didier Stevens — 1768.py and cs-analyze-processdump.py
 
-The Cobalt Strike beacon configuration scanner in [`dumpex/hunt/cs_beacon.py`](dumpex/hunt/cs_beacon.py) is an adaptation of **1768.py** by [Didier Stevens](https://blog.didierstevens.com/).
+The Cobalt Strike beacon configuration scanner in [`dumpex/hunt/cs_beacon.py`](dumpex/hunt/cs_beacon.py) is an adaptation of **1768.py** by [Didier Stevens](https://blog.didierstevens.com/). While [`dumpex/hunt/encoding.py (Layer 0 — _scan_sleep_mask and helpers)`](dumpex/hunt/encoding.py) is from his **cs-analyze-processdump.py**.
 
 Specifically derived from 1768.py:
 
@@ -251,7 +251,7 @@ Specifically derived from 1768.py:
 
 The YARA signatures `CS_Beacon_Config_XOR69` and `CS_Beacon_Config_XOR2E` in [`rules/yara/cs_indicators.yar`](rules/yara/cs_indicators.yar) are also derived from the same work.
 
-> Didier Stevens, *1768.py — Analyse Cobalt Strike beacons*  
+> Didier Stevens, *1768.py and cs-analyze-processdump.py — Analyse Cobalt Strike beacons*  
 > <https://blog.didierstevens.com/programs/cobalt-strike-tools/>  
 > Source code placed in the **public domain** by the author.
 

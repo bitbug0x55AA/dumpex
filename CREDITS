@@ -23,7 +23,7 @@ Didier Stevens — 1768.py
                 rules/yara/cs_indicators.yar (CS_Beacon_Config_XOR69,
                 CS_Beacon_Config_XOR2E)
   Used in     : dumpex/hunt/encoding.py (Layer 0 — _scan_sleep_mask and helpers)
-                [cs-analyze-processdump.py, not only 1768.py]
+                [cs-analyze-processdump.py and 1768.py]
 
   Nature of use:
     The beacon config detection algorithm, TLV field parser, Malleable C2 instruction decoder, config field identifier table, beacon/proxy type lookup tables, CS version estimator, and config sanity check logic in cs_beacon.py are adapted from the corresponding functions in 1768.py. The XOR-encoded signature byte patterns in cs_indicators.yar are derived from the same work.
