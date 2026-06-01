@@ -229,6 +229,69 @@ YARA rules are loaded from `rules/yara/`. Drop any `.yar` file into that directo
 
 ---
 
+## Acknowledgements
+
+Dumpex builds on the work of several researchers and organizations in the public security community. Their contributions are gratefully acknowledged below.
+
+---
+
+### Didier Stevens — 1768.py
+
+The Cobalt Strike beacon configuration scanner in [`dumpex/hunt/cs_beacon.py`](dumpex/hunt/cs_beacon.py) is an adaptation of **1768.py** by [Didier Stevens](https://blog.didierstevens.com/).
+
+Specifically derived from 1768.py:
+
+- XOR-encoded config block detection algorithm (`AnalyzeEmbeddedPEFileSub`)
+- TLV config field parser (`AnalyzeEmbeddedPEFileSub2`)
+- Malleable C2 instruction stream decoder (`DecodeInstructions`)
+- Config field identifier table (`dConfigIdentifiers`)
+- Beacon type and proxy type lookup tables (`LookupConfigValue`)
+- CS version estimation from max field ID (`DetermineCSVersionFromConfig`)
+- Config sanity check logic (`SanityCheckExtractedConfig`)
+
+The YARA signatures `CS_Beacon_Config_XOR69` and `CS_Beacon_Config_XOR2E` in [`rules/yara/cs_indicators.yar`](rules/yara/cs_indicators.yar) are also derived from the same work.
+
+> Didier Stevens, *1768.py — Analyse Cobalt Strike beacons*  
+> <https://blog.didierstevens.com/programs/cobalt-strike-tools/>  
+> Source code placed in the **public domain** by the author.
+
+---
+
+### Elastic Security
+
+The YARA rules `CS_SleepMask_64bit` and `CS_SleepMask_32bit` in [`rules/yara/cs_indicators.yar`](rules/yara/cs_indicators.yar) are based on byte signatures published by **Elastic Security**.
+
+> Elastic Security, *Detecting Cobalt Strike with Memory Signatures*  
+> <https://www.elastic.co/blog/detecting-cobalt-strike-with-memory-signatures>  
+> Published as public security research.
+
+---
+
+### NVISO Labs
+
+The contextual understanding of Cobalt Strike beacon memory layout and config extraction that informed the design of `cs_beacon.py` draws on the public research series published by **NVISO Labs**.
+
+> NVISO Labs, *Cobalt Strike: Memory Dumps* blog series  
+> <https://blog.nviso.eu/>  
+> Published as public security research.
+
+---
+
+### Stephen Fewer — ReflectiveDLLInjection
+
+The hash constants used in the `Reflective_Loader_Signature` YARA rule in [`rules/yara/suspicious_memory.yar`](rules/yara/suspicious_memory.yar) are derived from the **ReflectiveDLLInjection** project by Stephen Fewer.
+
+> Stephen Fewer, *ReflectiveDLLInjection*  
+> <https://github.com/stephenfewer/ReflectiveDLLInjection>  
+> Source code placed in the **public domain** by the author.
+
+---
+
+*All referenced works are used for defensive, educational, and incident response
+purposes, consistent with the intent of their original authors.*
+
+---
+
 ## Disclaimer
 
 This tool is designed strictly for educational purposes, authorized digital forensics, and incident response operations. The author is not responsible for any misuse or damage caused by the application of this tool.
