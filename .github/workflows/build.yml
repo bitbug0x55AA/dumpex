@@ -24,7 +24,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install pyinstaller minidump pyyaml yara-python
+        run: pip install pyinstaller minidump pyyaml yara-python colorama
 
       - name: Build EXE
         run: pyinstaller --onefile dumpex.py --name dumpex --add-data "rules;rules"
