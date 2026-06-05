@@ -16,6 +16,25 @@
 
 ---
 
+## Investigative Context
+
+dumpex is the **minidump analysis layer** in a broader DFIR investigation stack. It fills a specific gap that full-memory tools (Volatility, MemProcFS) and log-based platforms (Splunk, Sysmon) do not cover:
+
+| Evidence Source | Tool | What It Answers |
+|---|---|---|
+| Full RAM image | Volatility 3 / MemProcFS | What was running across the entire system |
+| Windows Event Logs | Splunk + Sysmon | What happened, when, and from where |
+| **Process .DMP file** | **dumpex** | **What was in a specific process's memory at capture time** |
+
+Minidumps are produced in a wider range of scenarios than full memory images — EDR-triggered captures, Windows Error Reporting (WER), crash dumps, and attacker-generated dumps via `MiniDumpWriteDump`. When a full RAM image is not available, a process `.DMP` is often the only memory artifact.
+
+For a complete investigation workflow showing how dumpex integrates with Volatility, Sysmon, and Splunk across the full incident response lifecycle:
+
+→ **[DFIR Investigation Playbooks](https://github.com/bitbug0x55AA/dfir-playbooks)**  
+   See: [`3.2.06 Minidump Analysis Workflow`](https://github.com/bitbug0x55AA/dfir-playbooks/blob/main/03_DFIR_Analysis/3.2_Investigation_Workflow/3.2.06_Minidump_Analysis.md) — when to use dumpex, how it connects to Sysmon alerts, and how to pivot from memory findings back to log-based investigation.
+
+---
+
 ## Requirements
 
 - Python 3.10+
@@ -300,9 +319,9 @@ This tool is designed strictly for educational purposes, authorized digital fore
 
 ## Author
 
-Developed by Juana (Tao Fan)
-- Cyber Security Analyst specializing in DFIR, Threat Hunting, Operational Malware Analysis, and Detection Engineering.
-- Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229)
+Developed by Juana (Tao Fan)  
+Cyber Security Analyst specializing in DFIR, Threat Hunting, Operational Malware Analysis, and Detection Engineering.  
+Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229)
 
 ---
 
