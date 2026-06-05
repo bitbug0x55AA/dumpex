@@ -30,8 +30,8 @@ Minidumps are produced in a wider range of scenarios than full memory images —
 
 For a complete investigation workflow showing how dumpex integrates with Volatility, Sysmon, and Splunk across the full incident response lifecycle:
 
-→ **[DFIR Investigation Playbooks](https://github.com/bitbug0x55AA/dfir-playbooks)**  
-   See: [`3.2.06 Minidump Analysis Workflow`](https://github.com/bitbug0x55AA/dfir-playbooks/blob/main/03_DFIR_Analysis/3.2_Investigation_Workflow/3.2.06_Minidump_Analysis.md) — when to use dumpex, how it connects to Sysmon alerts, and how to pivot from memory findings back to log-based investigation.
+→ **[Blue Team Hunting Field Notes](https://github.com/bitbug0x55AA/Blue_Team_Hunting_Field_Notes/tree/main)**  
+   See: [`3.2.06 Minidump Analysis Workflow`](https://github.com/bitbug0x55AA/Blue_Team_Hunting_Field_Notes/blob/main/03_DFIR_Analysis/3.2_Investigation_Workflow/3.2.06_Minidump_Analysis.md) — when to use dumpex, how it connects to Sysmon alerts, and how to pivot from memory findings back to log-based investigation.
 
 ---
 
