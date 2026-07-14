@@ -51,35 +51,58 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     pe_hits = _hunt_hidden_pe(mf)
     threads = _hunt_unbacked_threads(mf)
 
-    injected_pe_regions = {r.BaseAddress for r, known in pe_hits if not known}
+    hidden_pe_regions   = [r for r, known in pe_hits if not known]
+    injected_pe_regions = {r.BaseAddress for r in hidden_pe_regions}
     rwx_bases           = {r.BaseAddress for r in rwx}
 
-    # Cross-correlate: regions that are BOTH RWX and contain a hidden PE
-    rwx_and_pe = rwx_bases & injected_pe_regions
-
-    # Threads whose start addr falls inside a RWX region
-    def in_rwx(addr):
-        for r in rwx:
+    def in_region(addr, region_list):
+        for r in region_list:
             if r.BaseAddress <= addr < r.BaseAddress + r.RegionSize:
                 return r
         return None
 
-    threads_in_rwx = [(ti, in_rwx(ti.StartAddress or 0)) for ti in threads
-                      if in_rwx(ti.StartAddress or 0)]
+    # Cross-correlate: regions that are BOTH RWX and contain a hidden PE
+    # (same memory region carrying two signals — not "one RWX region here,
+    # one unrelated MZ somewhere else").
+    rwx_and_pe = rwx_bases & injected_pe_regions
 
-    # Score (independent signals)
-    score = 0
-    if rwx:            score += 1
-    if injected_pe_regions: score += 1
-    if threads:        score += 1
+    # Threads whose start addr falls inside a RWX region / a hidden-PE region
+    # (execution correlation — the thread is actually running inside the
+    # flagged region, not just coincidentally unbacked elsewhere).
+    threads_in_rwx       = [(ti, r) for ti in threads
+                             if (r := in_region(ti.StartAddress or 0, rwx))]
+    threads_in_hidden_pe = [(ti, r) for ti in threads
+                             if (r := in_region(ti.StartAddress or 0, hidden_pe_regions))]
+
+    # Strongest possible evidence: a thread executing inside a region that
+    # is simultaneously RWX *and* hosts a hidden PE — all three signals
+    # converge on the same memory region.
+    full_correlation = [(ti, r) for ti, r in threads_in_rwx
+                         if r.BaseAddress in rwx_and_pe]
+
+    region_correlated = bool(rwx_and_pe) or bool(threads_in_rwx) or bool(threads_in_hidden_pe)
+
+    # Score requires correlation, not just co-occurrence: three unrelated
+    # signals scattered across memory with no shared region and no thread
+    # executing inside any of them stay at "possible", not "high confidence".
+    if not (rwx or injected_pe_regions or threads):
+        score = 0
+    elif full_correlation:
+        score = 3
+    elif region_correlated:
+        score = 2
+    else:
+        score = 1
 
     findings = {
-        "rwx":        rwx,
-        "hidden_pe":  [(r, k) for r, k in pe_hits if not k],
-        "threads":    threads,
-        "rwx_and_pe": rwx_and_pe,
+        "rwx":            rwx,
+        "hidden_pe":      [(r, k) for r, k in pe_hits if not k],
+        "threads":        threads,
+        "rwx_and_pe":     rwx_and_pe,
         "threads_in_rwx": threads_in_rwx,
-        "score":      score,
+        "threads_in_hidden_pe": threads_in_hidden_pe,
+        "full_correlation": full_correlation,
+        "score":          score,
     }
 
     # ── Output ────────────────────────────────────────────────────────
@@ -136,23 +159,38 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     else:
         _print_check("Unbacked threads", GREEN("CLEAN — all threads backed by known modules"))
 
-    # Check 4: Correlation bonus
+    # Check 4: Correlation (this is what actually drives the score — see below)
     if rwx_and_pe:
         addrs = ", ".join(f"0x{a:x}" for a in rwx_and_pe)
-        _print_check("RWX + hidden PE overlap", RED("SUSPICIOUS — high confidence injection"),
+        _print_check("RWX + hidden PE, same region", RED("SUSPICIOUS — region-level correlation"),
                      f"Regions with both signals: {addrs}")
-    if threads_in_rwx:
-        for ti, r in threads_in_rwx:
-            _print_check("Thread executing inside RWX region",
-                         RED("SUSPICIOUS — active shellcode execution"),
+    for ti, r in threads_in_rwx:
+        _print_check("Thread executing inside RWX region",
+                     RED("SUSPICIOUS — execution correlation"),
+                     f"TID=0x{ti.ThreadId:x} in region 0x{r.BaseAddress:x}")
+    for ti, r in threads_in_hidden_pe:
+        _print_check("Thread executing inside hidden PE region",
+                     RED("SUSPICIOUS — execution correlation"),
+                     f"TID=0x{ti.ThreadId:x} in region 0x{r.BaseAddress:x}")
+    if full_correlation:
+        for ti, r in full_correlation:
+            _print_check("Thread executing inside RWX+hidden-PE region",
+                         RED("HIGH CONFIDENCE — all signals converge on one region"),
                          f"TID=0x{ti.ThreadId:x} in region 0x{r.BaseAddress:x}")
 
-    # Verdict
+    # Verdict — driven by correlation, not by how many independent checks
+    # happened to fire somewhere in the address space. Signals that never
+    # share a region and are never executed by an unbacked thread stay at
+    # "possible", even if all three checks tripped individually.
     verdict = (RED("HIGH CONFIDENCE INJECTION") if score >= 3 else
                YELLOW("LIKELY INJECTION") if score == 2 else
                YELLOW("POSSIBLE INJECTION") if score == 1 else
                GREEN("CLEAN"))
-    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/3 independent signals)\n")
+    basis = ("no correlated signals" if score == 0 else
+              "uncorrelated signals only — no shared region, no execution overlap" if score == 1 else
+              "same-region or execution correlation found" if score == 2 else
+              "thread executing in a region where RWX + hidden PE overlap")
+    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  (score {score}/3 — {basis})\n")
 
     if not verbose and (rwx or hidden or threads):
         print(DIM("  Use --verbose to list individual addresses.\n"))
