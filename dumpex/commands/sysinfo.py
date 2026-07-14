@@ -5,6 +5,24 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import get_modules, get_thread_infos, va_to_file_offset
 
+def _os_display_name(si) -> str:
+    """
+    Return a corrected OS name for `si`, fixing the upstream minidump
+    library's guess_os(): its build-number table predates Windows 11, so it
+    falls through to the generic "MajorVersion==10, MinorVersion==0,
+    ProductType==WORKSTATION" branch and always reports "Windows 10" —
+    even though Windows 11 keeps the same 10.0.x NT version and is only
+    distinguishable by BuildNumber >= 22000.
+    """
+    os_name = si.OperatingSystem or "Windows (unknown version)"
+    ptype   = si.ProductType.name if si.ProductType else None
+    if (os_name == "Windows 10" and si.MajorVersion == 10 and si.MinorVersion == 0
+            and ptype == "VER_NT_WORKSTATION"
+            and isinstance(si.BuildNumber, int) and si.BuildNumber >= 22000):
+        return "Windows 11"
+    return os_name
+
+
 def cmd_sysinfo(mf: MinidumpFile):
     import datetime
 
@@ -29,7 +47,7 @@ def cmd_sysinfo(mf: MinidumpFile):
     # ── OS ──────────────────────────────────────────────────────────────
     print(f"\n  {BOLD('Operating System')}")
     if si:
-        os_name = si.OperatingSystem or "Windows (unknown version)"
+        os_name = _os_display_name(si)
         build   = si.BuildNumber if si.BuildNumber is not None else "?"
         major   = si.MajorVersion if si.MajorVersion is not None else "?"
         minor   = si.MinorVersion if si.MinorVersion is not None else "?"
@@ -108,7 +126,7 @@ def cmd_sysinfo(mf: MinidumpFile):
         "dump_file":         os.path.basename(mf.filename),
         "hostname":          hostname,
         "username":          username,
-        "os":                (si.OperatingSystem or "") if si else "",
+        "os":                (_os_display_name(si) if si else ""),
         "os_version":        (f"{si.MajorVersion}.{si.MinorVersion}.{si.BuildNumber}"
                               if si and all(x is not None for x in
                               [si.MajorVersion, si.MinorVersion, si.BuildNumber]) else ""),
