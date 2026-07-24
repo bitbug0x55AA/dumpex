@@ -16,6 +16,10 @@ def cmd_threads(mf):
         mod    = addr_to_module(sa, modules)
         backed = DIM(os.path.basename(mod.name)) if mod else RED("⚠  NOT IN ANY MODULE")
 
+        raw           = threads.get(ti.ThreadId)
+        suspend_count = getattr(raw, "SuspendCount", None) if raw else None
+        teb           = getattr(raw, "Teb", None) if raw else None
+
         flag_tag    = _dumpflags_str(getattr(ti, "DumpFlags", None))
         exit_status = getattr(ti, "ExitStatus", None)
         exited      = flag_tag == "[EXITED]"
@@ -35,6 +39,12 @@ def cmd_threads(mf):
 
         print(f"\n  {BOLD('TID')}              {tid_str}")
         print(f"  {'StartAddress':<16} 0x{sa:x}  ← {backed}")
+        if suspend_count is not None:
+            susp_str = (RED(f"{suspend_count}  ⚠ SUSPENDED — evasion/injection indicator")
+                        if suspend_count > 0 else str(suspend_count))
+            print(f"  {'SuspendCount':<16} {susp_str}")
+        if teb:
+            print(f"  {'TEB':<16} 0x{teb:x}")
         if has_times:
             print(f"  {'Created':<16} {create_time}")
             if exited:
@@ -58,6 +68,8 @@ def cmd_threads(mf):
             "exit_status":    f"0x{exit_status:x}" if exit_status is not None else "",
             "kernel_time":    kernel_time,
             "user_time":      user_time,
+            "suspend_count":  suspend_count if suspend_count is not None else "",
+            "teb":            f"0x{teb:x}" if teb else "",
         })
 
     if not has_times:

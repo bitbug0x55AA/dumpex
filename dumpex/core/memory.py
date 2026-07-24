@@ -10,7 +10,7 @@ except ImportError:
     print("[!] minidump not installed. Run: pip install minidump")
     sys.exit(1)
 
-from dumpex.ui.colors import RED, DIM
+from dumpex.ui.colors import RED, DIM, YELLOW, GREEN
 
 SYSTEM_RANGE = 0x7FF000000000
 
