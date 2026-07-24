@@ -9,6 +9,10 @@ from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt.cs_beacon import CS_MAX_SEG_SCAN
 
+YARA_MATCH_TIMEOUT      = 30    # seconds, per (segment, rule-file) match() call
+YARA_MAX_STRINGS_PER_MATCH = 50 # cap annotated string instances kept per match
+YARA_MAX_TOTAL_HITS     = 2000  # hard cap on collected hits across the whole scan
+
 def _load_yara_rules(rules_dir: str) -> list:
     """
     Compile every .yar / .yara file in rules_dir independently.
@@ -125,9 +129,13 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     all_hits     = []
     skipped      = 0
     scanned      = 0
+    timed_out    = 0
+    truncated    = False   # hit YARA_MAX_TOTAL_HITS before finishing the scan
     triggered_rules = set()   # for deduped score
 
     for seg in segs:
+        if truncated:
+            break
         if seg.size > CS_MAX_SEG_SCAN:
             skipped += 1
             continue
@@ -139,20 +147,37 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
 
         for fname, compiled in rule_files:
             try:
-                matches = compiled.match(data=data)
-            except Exception:
+                # timeout bounds a single (segment, rule-file) match() call —
+                # a pathological rule/input combination (e.g. rules with
+                # heavy regex backtracking) must not be able to hang the scan.
+                matches = compiled.match(data=data, timeout=YARA_MATCH_TIMEOUT)
+            except Exception as e:
+                # yara-python raises yara.TimeoutError specifically; match on
+                # the exception class name rather than message text, which
+                # isn't a stable contract across yara-python versions.
+                if "timeout" in type(e).__name__.lower():
+                    timed_out += 1
                 continue
 
             for match in matches:
+                if len(all_hits) >= YARA_MAX_TOTAL_HITS:
+                    truncated = True
+                    break
                 triggered_rules.add(match.rule)
 
-                # Annotate each matched string with its absolute VA + file offset
+                # Annotate each matched string with its absolute VA + file offset,
+                # capped so one match with pathologically many instances can't
+                # blow up memory/output.
                 annotated_strings = []
                 for s in match.strings:
+                    if len(annotated_strings) >= YARA_MAX_STRINGS_PER_MATCH:
+                        break
                     # yara-python ≥4.3: s is a yara.StringMatch with .instances
                     # yara-python <4.3:  s is a tuple (offset, name, data)
                     if hasattr(s, 'instances'):
                         for inst in s.instances:
+                            if len(annotated_strings) >= YARA_MAX_STRINGS_PER_MATCH:
+                                break
                             off     = inst.offset
                             matched = inst.matched_data
                             abs_va  = seg.start_virtual_address + off
@@ -186,16 +211,26 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     "seg_size": seg.size,
                     "strings":  annotated_strings,
                 })
+            if truncated:
+                break
 
     scan_note = f" ({skipped} segment(s) >50 MB skipped)" if skipped else ""
+    if timed_out:
+        scan_note += f" ({timed_out} match() call(s) timed out after {YARA_MATCH_TIMEOUT}s)"
+    if truncated:
+        scan_note += f" — TRUNCATED at {YARA_MAX_TOTAL_HITS} hits, scan did not complete"
     print(DIM(f"  [*] Scan complete — {scanned} segment(s) scanned{scan_note}."))
 
     # ── Nothing found ─────────────────────────────────────────────────
     if not all_hits:
         print()
-        if skipped:
+        if skipped or timed_out:
+            reason = ", ".join(filter(None, [
+                f"{skipped} oversized segment(s) skipped" if skipped else "",
+                f"{timed_out} match() call(s) timed out" if timed_out else "",
+            ]))
             findings["status"] = INCONCLUSIVE
-            _print_check("YARA rules", _status_text(INCONCLUSIVE, f"{skipped} oversized segment(s) skipped"))
+            _print_check("YARA rules", _status_text(INCONCLUSIVE, reason))
         else:
             findings["status"] = NOT_DETECTED_IN_SCANNED_SCOPE
             _print_check("YARA rules", GREEN("CLEAN — no rules matched"))
@@ -281,6 +316,12 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                YELLOW(f"MEDIUM — {score} distinct rule(s) matched") if score >= 1 else
                GREEN("CLEAN"))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score} rule(s))\n")
+    if truncated or timed_out:
+        print(YELLOW(f"  [~] Scan did not fully complete "
+                      f"({'hit result cap' if truncated else ''}"
+                      f"{' + ' if truncated and timed_out else ''}"
+                      f"{f'{timed_out} timeout(s)' if timed_out else ''}) — "
+                      f"there may be more matches than shown.\n"))
 
     if not verbose and has_verbose_overflow:
         print(DIM("  Use --verbose to expand all region and string match details.\n"))

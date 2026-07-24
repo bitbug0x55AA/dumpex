@@ -70,6 +70,20 @@ SLEEP_MASK_MIN_ACBD        = 20.0      # min average consecutive byte difference
 SLEEP_MASK_MAX_CANDIDATES  = 10        # max candidates to try per region
 SLEEP_MASK_REGION_MAX      = 10 * 1024 * 1024   # skip regions > 10 MB
 SLEEP_MASK_VALIDATION_MARKER = b'sha256\x00'    # always present in beacon memory
+SLEEP_MASK_MAX_WINDOWS      = 200_000  # hard cap on windows counted per region, across
+                                        # all key_size alignment offsets. Without this, a
+                                        # ~10MB region produces ~10M dict entries (one per
+                                        # non-overlapping window) — real sleep-mask keys
+                                        # repeat densely enough that even sampling well
+                                        # below that still surfaces them as the top
+                                        # candidate, so this bounds memory/CPU without
+                                        # meaningfully hurting detection.
+
+DECOMPRESS_MAX_OUTPUT = 8 * 1024 * 1024   # cap decompressed output per candidate; a small
+                                           # compressed blob can expand enormously (zip
+                                           # bomb), and input-size limits alone don't bound
+                                           # output size — 8MB is far more than needed to
+                                           # classify content (PE header, IOC strings, etc).
 
 
 def _is_system_dll(module) -> bool:
@@ -247,7 +261,8 @@ def _sm_avg_consec_diff(key: bytes) -> float:
 def _sm_recover_candidates(data: bytes,
                             key_size: int   = SLEEP_MASK_KEY_SIZE,
                             min_repeat: int = SLEEP_MASK_MIN_REPEAT,
-                            max_candidates: int = SLEEP_MASK_MAX_CANDIDATES) -> list:
+                            max_candidates: int = SLEEP_MASK_MAX_CANDIDATES,
+                            max_windows: int = SLEEP_MASK_MAX_WINDOWS) -> list:
     """
     Recover candidate sleep mask XOR keys from a memory region via frequency
     analysis on overlapping key-sized windows.
@@ -262,15 +277,30 @@ def _sm_recover_candidates(data: bytes,
          different rotations.
       4. Return top max_candidates by occurrence count.
 
+    Windows examined per offset are capped at max_windows // key_size: for a
+    region large enough to exceed that, positions are strided evenly across
+    the whole region (not just the head) rather than counting every single
+    window — a real sleep-mask key repeats densely enough that sampling
+    still surfaces it as the top candidate, while bounding memory/CPU on a
+    huge or adversarially large region (unbounded, a 10MB region produces
+    ~10M dict entries here).
+
     Returns list of (key_bytes, occurrence_count).
     """
     key_counts: dict = {}
+    windows_per_offset_budget = max(1, max_windows // key_size)
     for offset in range(key_size):
+        available = (len(data) - offset) // key_size
+        if available <= 0:
+            continue
+        step = max(1, available // windows_per_offset_budget)
         pos = 0
-        while pos + offset + key_size <= len(data):
+        examined = 0
+        while pos + offset + key_size <= len(data) and examined < windows_per_offset_budget:
             window = data[pos + offset: pos + offset + key_size]
             key_counts[window] = key_counts.get(window, 0) + 1
-            pos += key_size
+            pos += key_size * step
+            examined += 1
 
     candidates = []
     seen_normalized: set = set()
@@ -476,6 +506,19 @@ def _scan_xor(data: bytes, region_base: int):
 # LAYER 4 — GZIP / ZLIB
 # ══════════════════════════════════════════════════════════════════════════
 
+def _bounded_decompress(payload: bytes, wbits: int) -> bytes:
+    """
+    Decompress with a hard output-size cap. zlib.decompress() has no such
+    cap — a small, even accidentally-truncated, compressed blob can expand
+    to gigabytes (zip bomb), and the input-size limit callers apply
+    upstream doesn't bound that. decompressobj().decompress(data,
+    max_length=N) stops after N output bytes, which is all classification
+    needs (PE header / IOC strings live in the first few KB anyway).
+    """
+    d = zlib.decompressobj(wbits)
+    return d.decompress(payload, DECOMPRESS_MAX_OUTPUT)
+
+
 def _scan_compressed(data: bytes, region_base: int):
     start = 0
     while True:
@@ -483,7 +526,7 @@ def _scan_compressed(data: bytes, region_base: int):
         if idx == -1:
             break
         try:
-            decoded = zlib.decompress(data[idx:], wbits=47)
+            decoded = _bounded_decompress(data[idx:], wbits=47)
             if len(decoded) >= 64:
                 yield idx, 'gzip', decoded, _classify_decoded(decoded)
         except Exception:
@@ -497,7 +540,7 @@ def _scan_compressed(data: bytes, region_base: int):
             if idx == -1:
                 break
             try:
-                decoded = zlib.decompress(data[idx:])
+                decoded = _bounded_decompress(data[idx:], wbits=zlib.MAX_WBITS)
                 if len(decoded) >= 64:
                     yield idx, 'zlib', decoded, _classify_decoded(decoded)
             except Exception:

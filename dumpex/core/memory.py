@@ -130,10 +130,23 @@ def addr_label(mf: MinidumpFile, va: int, region_base=None, indent: int = 2) -> 
     return "\n".join(lines)
 
 
+MAX_REGION_READ = 256 * 1024 * 1024   # hard ceiling for an AUTO-sized single read
+                                       # (--extract/--strings/--report without an
+                                       # explicit --size). A region's declared
+                                       # RegionSize comes straight from the dump file
+                                       # and isn't otherwise validated — a corrupted or
+                                       # crafted dump could claim a huge size and force
+                                       # an equally huge single read/allocation nobody
+                                       # asked for. An explicit --size is deliberate
+                                       # user intent and is NOT clamped here.
+
+
 def _resolve_size(mf: MinidumpFile, addr: int, requested_size: int | None) -> int:
     """
     If the user didn't specify --size, look up the memory region that contains
-    addr and return its actual size (capped at the region boundary).
+    addr and return its actual size (capped at the region boundary and at
+    MAX_REGION_READ). An explicit requested_size is returned as-is — that's
+    the user's own choice, not an auto-derived value that needs a safety net.
     Falls back to 0x10000 if the region cannot be found.
     """
     if requested_size is not None:
@@ -141,7 +154,7 @@ def _resolve_size(mf: MinidumpFile, addr: int, requested_size: int | None) -> in
     for r in get_memory_regions(mf):
         if r.BaseAddress <= addr < r.BaseAddress + r.RegionSize:
             actual = r.RegionSize - (addr - r.BaseAddress)
-            return actual
+            return min(actual, MAX_REGION_READ)
     return 0x10000  # fallback if region not in memory info
 
 

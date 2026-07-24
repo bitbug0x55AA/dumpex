@@ -6,7 +6,7 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
-    read_region, parse_hex_or_int, INDICATOR_DIMS,
+    read_region, parse_hex_or_int, INDICATOR_DIMS, MAX_REGION_READ,
     _get_region_at, _extract_strings_from_data,
     _hexdump_context, _verdict, _search_string_in_memory)
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
@@ -336,11 +336,15 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
     if region is not None:
         print(BOLD("[ 4 ] STRINGS IN REGION"))
         print("─" * 50)
-        print(DIM(f"  Scanning {region.RegionSize // 1024} KB  "
+        read_size = min(region.RegionSize, MAX_REGION_READ)
+        print(DIM(f"  Scanning {read_size // 1024} KB  "
                   f"(ASCII + UTF-16LE, min_len={min_len})"))
+        if read_size < region.RegionSize:
+            print(YELLOW(f"  [~] Region is {region.RegionSize // 1024} KB — "
+                         f"clamped to {MAX_REGION_READ // (1024*1024)} MB for this scan"))
         print()
         try:
-            data    = read_region(mf, region.BaseAddress, region.RegionSize)
+            data    = read_region(mf, region.BaseAddress, read_size)
             strings = _extract_strings_from_data(data, min_len=min_len)
 
             ioc_hits = [(off, enc, s) for off, enc, s in strings
@@ -400,7 +404,12 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
     if extract_to and region is not None:
         print()
         try:
-            data = read_region(mf, region.BaseAddress, region.RegionSize)
+            read_size = min(region.RegionSize, MAX_REGION_READ)
+            if read_size < region.RegionSize:
+                print(YELLOW(f"  [~] Region is {region.RegionSize // 1024} KB — "
+                             f"clamped to {MAX_REGION_READ // (1024*1024)} MB "
+                             f"(use --extract with an explicit --size for more)"))
+            data = read_region(mf, region.BaseAddress, read_size)
             Path(extract_to).write_bytes(data)
             print(GREEN(f"[+] Region extracted → {extract_to}  ({len(data)} bytes)"))
         except Exception as e:
