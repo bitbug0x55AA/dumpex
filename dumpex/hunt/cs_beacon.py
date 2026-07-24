@@ -3,7 +3,7 @@ import os
 import struct
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.core.memory import va_to_file_offset
+from dumpex.core.memory import va_to_file_offset, get_memory_regions, _get_region_at, prot_str
 from dumpex.hunt._ui import _print_hunt_header, _print_check
 
 CS_BEACON_SIGNATURE  = b'\x00\x01\x00\x01\x00\x02'   # plaintext TLV start
@@ -289,12 +289,21 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
       4. Extract and display: beacon type, C2 server/port/URI, User-Agent,
          pipe name, license ID, sleep/jitter, SpawnTo, Malleable C2 profile
          transforms, process injection settings, SSH/DNS transport fields.
-      5. Report VA (process address) + file offset (.dmp byte position) for
-         each hit, consistent with Dumpex address labeling conventions.
+      5. Report VA (process address) + file offset (.dmp byte position) +
+         enclosing memory region (base/size/protection) for each hit,
+         consistent with Dumpex address labeling conventions.
 
     Address note:
       hit VA         = segment.start_virtual_address + offset_within_segment
       hit file offset = segment.start_file_address   + offset_within_segment
+
+      hit VA is a byte-precise address, not a region. Memory64ListStream
+      (the segment table this scan walks) and MemoryInfoListStream (the
+      VAD-style region table with Protect/State, used by --hunt injection
+      for its RWX / hidden-PE region correlation) are independent streams.
+      Resolving hit VA -> enclosing region base here is what lets a beacon
+      config hit be cross-referenced against injection's region-based
+      findings (same region_base means "same memory region").
     """
     _print_hunt_header("Cobalt Strike Beacon Config")
     findings = {'configs': [], 'score': 0}
@@ -309,6 +318,7 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         print(YELLOW("  [~] No memory segments in dump — cannot scan for beacon config.\n"))
         return findings
 
+    regions = get_memory_regions(mf)
     skipped, hits = 0, []
     reader = mf.get_reader()
 
@@ -348,9 +358,17 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         key_desc = {0x69: "0x69 'i'  (CS3 encoding)",
                     0x2e: "0x2E '.'  (CS4 encoding)"}.get(xor_key, f'0x{xor_key:02x}')
 
+        region = _get_region_at(hit_va, regions)
+
         print(RED(f"  [!] Beacon config #{idx}  ──────────────────────────────────────────────"))
         print(f"  {'VA (process)':<26} 0x{hit_va:016x}  {DIM('← virtual address in target process')}")
         print(f"  {'File offset (.dmp)':<26} 0x{hit_fo:016x}  {DIM('← byte offset inside .dmp file')}")
+        if region is not None:
+            print(f"  {'Region base (VA)':<26} 0x{region.BaseAddress:016x}  {DIM('← for cross-referencing with --hunt injection')}")
+            print(f"  {'Region size':<26} 0x{region.RegionSize:x}")
+            print(f"  {'Region protect':<26} {prot_str(region.Protect)}")
+        else:
+            print(f"  {'Region base (VA)':<26} {DIM('(not covered by MemoryInfoListStream)')}")
         print(f"  {'XOR key':<26} {key_desc}")
         print(f"  {'CS version (estimated)':<26} {YELLOW(cs_ver)}")
         print()
@@ -493,6 +511,9 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         print()
         findings['configs'].append({
             'va': hit_va, 'file_offset': hit_fo,
+            'region_base':    region.BaseAddress if region is not None else None,
+            'region_size':    region.RegionSize  if region is not None else None,
+            'region_protect': prot_str(region.Protect) if region is not None else None,
             'xor_key': xor_key, 'cs_version': cs_ver, 'fields': fields,
         })
 

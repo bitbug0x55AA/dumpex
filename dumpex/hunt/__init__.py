@@ -76,11 +76,14 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
                               else rec.get("value")),
                 }
             safe_cfgs.append({
-                "va":          cfg["va"],
-                "file_offset": cfg["file_offset"],
-                "xor_key":     cfg["xor_key"],
-                "cs_version":  cfg["cs_version"],
-                "fields":      safe_fields,
+                "va":              cfg["va"],
+                "file_offset":     cfg["file_offset"],
+                "region_base":     cfg.get("region_base"),
+                "region_size":     cfg.get("region_size"),
+                "region_protect":  cfg.get("region_protect"),
+                "xor_key":         cfg["xor_key"],
+                "cs_version":      cfg["cs_version"],
+                "fields":          safe_fields,
             })
         results["cs-beacon"]["configs"] = safe_cfgs
 
