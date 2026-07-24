@@ -9,7 +9,8 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     read_region, parse_hex_or_int, INDICATOR_DIMS, MAX_REGION_READ,
     _get_region_at, _extract_strings_from_data,
     _hexdump_context, _verdict, _search_string_in_memory)
-from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
+from dumpex.rules_pkg.loader import get_rules
+from dumpex.core.pe_utils import _duration_100ns_to_str
 
 def _get_region_at(addr: int, regions: list):
     """Find the memory region containing addr."""
@@ -99,6 +100,8 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
 def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None,
               report_string: str = None, extract_to: str = None, min_len: int = 6):
     """\n    Alert triage card: given a TID, address, or string from an EDR alert / TI feed,\n    correlate thread, memory, and string evidence into a structured verdict.\n    Verdict uses MECE dimensions — each dimension scored at most once.\n\n    --report-string: search all memory for the string, then run triage on each\n                    matching region. Useful when the anchor is a C2 IP, domain,\n                    or known malware string from threat intelligence.\n    """
+    SUSPICIOUS_PROTS = get_rules()["suspicious_protections"]
+
     # ── String search mode: find regions, then triage each one ───────
     if report_string and not report_addr:
         modules_list = get_modules(mf)
@@ -226,8 +229,8 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
             mod = addr_to_module(sa, modules)
             print(f"  {'TID':<22} 0x{thread_info.ThreadId:x}")
             print(f"  {'Start Address':<22} 0x{sa:x}")
-            print(f"  {'Kernel Time':<22} {thread_info.KernelTime}")
-            print(f"  {'User Time':<22} {thread_info.UserTime}")
+            print(f"  {'Kernel Time':<22} {_duration_100ns_to_str(thread_info.KernelTime)}")
+            print(f"  {'User Time':<22} {_duration_100ns_to_str(thread_info.UserTime)}")
             if mod:
                 print(f"  {'Backed By':<22} {GREEN(mod.name)}")
                 print(f"  {'Module Range':<22} 0x{mod.baseaddress:x} — 0x{mod.endaddress:x}")

@@ -107,19 +107,48 @@ def _find_rules_file() -> Path | None:
     Search for the TTP rules file.
 
     Search order (first match wins):
-      <script_dir>/rules/rules.yaml   <- canonical new layout
+      <_MEIPASS>/rules/rules.yaml     <- PyInstaller onefile: --add-data
+                                          extracts to sys._MEIPASS, not next
+                                          to the exe (sys.argv[0]), so this
+                                          must be checked separately
+      <package>/rules_pkg/data/rules.yaml
+                                       <- bundled inside the dumpex package
+                                          itself (package_data in
+                                          pyproject.toml) — this is what
+                                          makes `pip install dumpex` work
+                                          without the rules/ directory
+                                          living next to the script
+      <script_dir>/rules/rules.yaml   <- canonical dev layout (repo checkout)
       <cwd>/rules/rules.yaml
       <script_dir>/rules.yaml         <- legacy flat layout (backwards compat)
       <cwd>/rules.yaml
       (same pattern for .yml and .json variants)
+
+    The first three "packaged" locations exist because sys.argv[0] and cwd
+    are both dev-environment assumptions: a `pip install`-ed dumpex has no
+    rules/ next to whatever script invoked it, and a PyInstaller --onefile
+    build extracts --add-data content to a temp dir that isn't
+    dirname(sys.argv[0]) either.
     """
+    candidates = []
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "rules")
+
+    candidates.append(Path(__file__).resolve().parent / "data")
+
     script_dir = Path(sys.argv[0]).resolve().parent
     cwd        = Path.cwd()
     for base in (script_dir, cwd):
+        candidates.append(base / "rules")
+        candidates.append(base)
+
+    for base in candidates:
         for name in ("rules.yaml", "rules.yml", "rules.json"):
-            for p in (base / "rules" / name, base / name):
-                if p.is_file():
-                    return p
+            p = base / name
+            if p.is_file():
+                return p
     return None
 
 

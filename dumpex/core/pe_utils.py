@@ -62,6 +62,23 @@ def _filetime_to_str(ft: int) -> str:
         return f"0x{ft:x}"
 
 
+def _duration_100ns_to_str(units) -> str:
+    """
+    Convert a duration expressed in 100-nanosecond intervals — as
+    documented for MINIDUMP_THREAD_INFO.KernelTime/UserTime (CPU time
+    consumed, NOT a point-in-time timestamp — unlike CreateTime/ExitTime,
+    which use the same 100ns unit but as a FILETIME epoch offset) — into a
+    human-readable duration string. Printing the raw integer with no unit
+    is misleading: it looks like it could be ms or a counter.
+    """
+    if not units:
+        return "0s"
+    try:
+        return f"{units / 10_000_000:.3f}s  ({units} × 100ns)"
+    except Exception:
+        return str(units)
+
+
 def _dumpflags_str(flags) -> str:
     """Return a compact label for MINIDUMP_THREAD_INFO DumpFlags."""
     if flags is None:

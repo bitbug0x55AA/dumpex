@@ -24,3 +24,10 @@ dumpex = "dumpex.cli:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["dumpex*"]
+
+[tool.setuptools.package-data]
+# Bundled TTP rule defaults / YARA rules, so `pip install dumpex` works
+# without a rules/ directory living next to whatever script invoked it.
+# dumpex/rules_pkg/loader.py and dumpex/hunt/yara_hunt.py both search this
+# location as a fallback after dev-tree paths (script dir / cwd).
+"dumpex.rules_pkg" = ["data/rules.yaml", "data/yara/*.yar"]

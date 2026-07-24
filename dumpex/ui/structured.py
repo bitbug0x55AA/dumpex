@@ -203,7 +203,8 @@ class StructuredOutput:
                     continue
                 score     = findings.get("score", 0)
                 max_score = {"injection": 3, "hollowing": 4, "stomping": 2,
-                             "pipe": 3, "cs-beacon": 1, "yara": 3}.get(ttp, "?")
+                             "pipe": 3, "cs-beacon": 1, "yara": 3,
+                             "obfuscation": 5}.get(ttp, "?")
                 verdict   = ("CLEAN"           if score == 0 else
                              "HIGH CONFIDENCE" if isinstance(max_score, int) and score >= max_score - 1
                              else "POSSIBLE")
@@ -265,6 +266,83 @@ class StructuredOutput:
                         "jitter_pct":   "",
                         "details":      f"rule={rule};file={rfile};mitre={mitre};strings={n_str}",
                     })
+
+                # Shared blank row template — every finding_type below only
+                # fills in the columns relevant to it; "details" carries
+                # whatever doesn't have a dedicated column.
+                def _blank_row(finding_type, va=0, fo=None, details=""):
+                    return {
+                        "ttp": ttp, "finding_type": finding_type,
+                        "va_process":  f"0x{va:016x}" if va else "",
+                        "file_offset": f"0x{fo:x}" if fo else "",
+                        "cs_version": "", "xor_key": "", "beacon_type": "",
+                        "c2_host": "", "c2_uri": "", "port": "",
+                        "useragent": "", "pipename": "", "license_id": "",
+                        "sleep_ms": "", "jitter_pct": "", "details": details,
+                    }
+
+                # Injection findings. Guarded by ttp (not just dict-key
+                # presence): "hidden_pe" is also a key in obfuscation's
+                # findings dict, but with a different tuple shape — keying
+                # off ttp avoids unpacking the wrong shape from the wrong TTP.
+                if ttp == "injection":
+                    for r in findings.get("rwx", []):
+                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
+                        findings_rows.append(_blank_row(
+                            "injection_rwx_region", r.BaseAddress, fo,
+                            f"RegionSize=0x{r.RegionSize:x}; Protect={prot_str(r.Protect)}"))
+                    for r, known in findings.get("hidden_pe", []):
+                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
+                        findings_rows.append(_blank_row(
+                            "injection_hidden_pe", r.BaseAddress, fo,
+                            f"in_module_list={known}"))
+                    for ti in findings.get("threads", []):
+                        sa = ti.StartAddress or 0
+                        fo = (va_to_file_offset(self._mf, sa) if self._mf else None)
+                        findings_rows.append(_blank_row(
+                            "injection_unbacked_thread", sa, fo,
+                            f"TID=0x{ti.ThreadId:x}"))
+
+                # Hollowing: no per-item collection exists on the findings
+                # dict (score-only checks) — summary_rows already carries
+                # the score/verdict, nothing further to flatten per-item.
+
+                # Stomping findings
+                if ttp == "stomping":
+                    for r, mod in findings.get("rwx_image", []):
+                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
+                        modname = os.path.basename(mod.name) if mod else "(unknown module)"
+                        findings_rows.append(_blank_row(
+                            "stomping_rwx_image", r.BaseAddress, fo,
+                            f"module={modname}; Protect={prot_str(r.Protect)}"))
+                    for r, mod, hits, is_non_wl in findings.get("ioc_image", []):
+                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
+                        modname = os.path.basename(mod.name) if mod else "(unknown module)"
+                        findings_rows.append(_blank_row(
+                            "stomping_ioc_in_module", r.BaseAddress, fo,
+                            f"module={modname}; ioc_count={len(hits)}"))
+
+                # Obfuscation (encoding.py) findings
+                if ttp == "obfuscation":
+                    for hit in findings.get("sleep_mask", []):
+                        r  = hit.get("region")
+                        va = r.BaseAddress if r else 0
+                        fo = (va_to_file_offset(self._mf, va) if self._mf and va else None)
+                        key = hit.get("key")
+                        key_str = key.hex() if isinstance(key, (bytes, bytearray)) else str(key)
+                        findings_rows.append(_blank_row(
+                            "obfuscation_sleep_mask", va, fo, f"key=0x{key_str}"))
+                    for r, ent, threshold in findings.get("entropy", []):
+                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
+                        findings_rows.append(_blank_row(
+                            "obfuscation_high_entropy", r.BaseAddress, fo,
+                            f"entropy={ent:.3f}; threshold={threshold}"))
+                    for enc, r, off, decoded in findings.get("hidden_pe", []):
+                        abs_va = r.BaseAddress + off
+                        fo = (va_to_file_offset(self._mf, abs_va) if self._mf else None)
+                        findings_rows.append(_blank_row(
+                            "obfuscation_hidden_pe", abs_va, fo,
+                            f"encoding={enc}; decoded_len={len(decoded)}"))
 
                 # Pipe findings
                 for r, off, name in findings.get("private_pipes", []):

@@ -81,13 +81,23 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
 
     # ── Resolve rules directory ───────────────────────────────────────
     if rules_dir is None:
+        # sys.argv[0] and cwd are dev-environment assumptions — a pip-
+        # installed dumpex has no rules/ next to whatever invoked it, and a
+        # PyInstaller --onefile build extracts --add-data to sys._MEIPASS,
+        # not dirname(sys.argv[0]). Check the packaged locations first.
         script_dir = Path(sys.argv[0]).resolve().parent
-        for candidate in (
-            script_dir / "rules" / "yara",   # canonical
+        search = []
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            search.append(Path(meipass) / "rules" / "yara")
+        search.append(Path(__file__).resolve().parent.parent / "rules_pkg" / "data" / "yara")
+        search += [
+            script_dir / "rules" / "yara",   # canonical dev layout
             Path.cwd()  / "rules" / "yara",
             script_dir / "yara-rules",        # legacy
             Path.cwd()  / "yara-rules",
-        ):
+        ]
+        for candidate in search:
             if candidate.is_dir():
                 rules_dir = str(candidate)
                 break
