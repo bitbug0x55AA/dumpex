@@ -170,11 +170,16 @@ def _load_rules() -> dict:
 
 
 def get_rules() -> dict:
-    """Return the compiled rule set, loading it on first call."""
-    global _RULES_CACHE, SUSPICIOUS_PROTS
+    """
+    Return the compiled rule set, loading it on first call.
+
+    Callers must read rule values from this dict (e.g.
+    get_rules()["suspicious_protections"]) rather than importing a
+    module-level name — `from module import NAME` binds a snapshot at
+    import time, so any name reassigned later (e.g. after loading a
+    custom rules.yaml) would silently stay stale in the importing module.
+    """
+    global _RULES_CACHE
     if _RULES_CACHE is None:
         _RULES_CACHE = _load_rules()
-        # Keep module-level SUSPICIOUS_PROTS in sync with the loaded rules
-        # so all call-sites that reference it directly stay correct.
-        SUSPICIOUS_PROTS = _RULES_CACHE["suspicious_protections"]
     return _RULES_CACHE

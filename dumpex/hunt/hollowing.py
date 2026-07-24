@@ -3,7 +3,7 @@ import os
 import re
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
+from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str, read_region)
 from dumpex.hunt._ui import _print_hunt_header, _print_check
@@ -15,6 +15,7 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
     peb     = mf.peb
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
+    SUSPICIOUS_PROTS = get_rules()["suspicious_protections"]
 
     findings = {"checks": [], "score": 0}
 

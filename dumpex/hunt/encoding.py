@@ -41,7 +41,7 @@ from collections import Counter
 from minidump.minidumpfile import MinidumpFile
 
 from dumpex.ui.colors   import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
+from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (
     get_modules, get_memory_regions, addr_to_module,
     va_to_file_offset, prot_str, read_region, _extract_strings_from_data,
@@ -387,7 +387,7 @@ def _scan_sleep_mask(regions, modules, mf) -> list:
 # LAYER 1 — Shannon entropy
 # ══════════════════════════════════════════════════════════════════════════
 
-def _scan_entropy(regions, modules, mf):
+def _scan_entropy(regions, modules, mf, susp_prots):
     hits = []
     for r in regions:
         if prot_str(r.State) != 'MEM_COMMIT':
@@ -407,7 +407,7 @@ def _scan_entropy(regions, modules, mf):
 
         ent = _shannon_entropy(data)
         p      = prot_str(r.Protect)
-        is_rwx = any(s in p for s in SUSPICIOUS_PROTS)
+        is_rwx = any(s in p for s in susp_prots)
         threshold = ENTROPY_RWX_THRESHOLD if is_rwx else ENTROPY_PRIVATE_THRESHOLD
 
         if ent >= threshold:
@@ -528,6 +528,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
+    SUSPICIOUS_PROTS = get_rules()["suspicious_protections"]
 
     findings = {
         'sleep_mask': [],   # Layer 0: (hit_dict, ...)
@@ -585,7 +586,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Layer 1: Entropy ──────────────────────────────────────────────────
     print(DIM("  [*] Layer 1: Shannon entropy scan …"))
-    entropy_hits = _scan_entropy(regions, modules, mf)
+    entropy_hits = _scan_entropy(regions, modules, mf, SUSPICIOUS_PROTS)
 
     if entropy_hits:
         detail = f"{len(entropy_hits)} high-entropy MEM_PRIVATE region(s)"

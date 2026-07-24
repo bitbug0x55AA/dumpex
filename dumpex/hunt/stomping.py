@@ -2,7 +2,7 @@
 import os
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.rules_pkg.loader import get_rules, SUSPICIOUS_PROTS
+from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str,
     read_region, _extract_ioc_strings)
@@ -28,6 +28,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     STOMPING_WHITELIST  = _r["stomping_whitelist"]
     STOMPING_IOC        = _r["stomping_ioc_patterns"]
     STOMPING_NET_IOC    = _r["stomping_net_ioc_patterns"]
+    SUSPICIOUS_PROTS    = _r["suspicious_protections"]
 
     _print_hunt_header("Module Stomping")
 

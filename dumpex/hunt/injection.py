@@ -2,7 +2,7 @@
 import os
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
+from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
     read_region, SYSTEM_RANGE)
@@ -10,11 +10,12 @@ from dumpex.hunt._ui import _print_hunt_header, _print_check
 
 def _hunt_rwx(mf: MinidumpFile) -> list:
     """Return list of RWX regions. Internal — used by --hunt injection."""
+    susp_prots = get_rules()["suspicious_protections"]
     regions = get_memory_regions(mf)
     hits = []
     for r in regions:
         p = prot_str(r.Protect)
-        if any(s in p for s in SUSPICIOUS_PROTS):
+        if any(s in p for s in susp_prots):
             hits.append(r)
     return hits
 

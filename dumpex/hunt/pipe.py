@@ -3,7 +3,7 @@ import os
 import re
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.rules_pkg.loader import get_rules, SUSPICIOUS_PROTS
+from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
     read_region, _extract_strings_from_data)
@@ -39,6 +39,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     _r                    = get_rules()
     KNOWN_FRAMEWORK_PIPES = _r["framework_pipes"]
     C2_PAT                = _r["pipe_c2_context_patterns"]
+    SUSPICIOUS_PROTS      = _r["suspicious_protections"]
 
     findings = {
         "private_pipes":   [],   # (region, offset, name)
