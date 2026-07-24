@@ -46,7 +46,8 @@ from dumpex.core.memory import (
     get_modules, get_memory_regions, addr_to_module,
     va_to_file_offset, prot_str, read_region, _extract_strings_from_data,
 )
-from dumpex.hunt._ui    import _print_hunt_header, _print_check
+from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
 from dumpex.hunt.injection import _hunt_hidden_pe   # reuse for PE re-check
 
 # ── Tunables ──────────────────────────────────────────────────────────────
@@ -529,6 +530,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
     SUSPICIOUS_PROTS = get_rules()["suspicious_protections"]
+    mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
 
     findings = {
         'sleep_mask': [],   # Layer 0: (hit_dict, ...)
@@ -772,11 +774,18 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         findings['score'] += 1
 
     # ── Verdict ───────────────────────────────────────────────────────────
-    score   = findings['score']
-    verdict = (RED("HIGH CONFIDENCE — active payload obfuscation")    if score >= 3 else
-               YELLOW("LIKELY — encoding/obfuscation present")        if score >= 2 else
-               YELLOW("POSSIBLE — one obfuscation indicator")         if score == 1 else
-               GREEN("CLEAN — no encoding or obfuscation detected"))
+    score  = findings['score']
+    status = (NOT_EVALUATED if not mem_info_available else
+              DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE)
+    findings['status'] = status
+
+    if not mem_info_available:
+        verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
+    else:
+        verdict = (RED("HIGH CONFIDENCE — active payload obfuscation")    if score >= 3 else
+                   YELLOW("LIKELY — encoding/obfuscation present")        if score >= 2 else
+                   YELLOW("POSSIBLE — one obfuscation indicator")         if score == 1 else
+                   GREEN("CLEAN — no encoding or obfuscation detected"))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/6 checks flagged)\n")
 
     if not verbose and any([sleep_mask_hits, b64_unique, xor_unique,

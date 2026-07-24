@@ -6,7 +6,8 @@ from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str, read_region)
-from dumpex.hunt._ui import _print_hunt_header, _print_check
+from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 
 
 
@@ -22,7 +23,9 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
     _print_hunt_header("Process Hollowing")
 
     if not peb:
+        findings["status"] = NOT_EVALUATED
         print(RED("  [!] PEB not available — cannot run hollowing check.\n"))
+        print(f"  {BOLD('[ VERDICT ]')}  {_status_text(NOT_EVALUATED, 'PEB stream missing from this dump')}\n")
         return findings
 
     image_base = peb.image_base_address
@@ -70,10 +73,10 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
             _print_check("MZ header at image base",
                          GREEN("CLEAN — MZ present"),
                          f"Header bytes: {header[:8].hex()}")
-        elif header[:2] == b'':
+        elif not header or header == b'\x00' * len(header):
             _print_check("MZ header at image base",
                          RED("SUSPICIOUS — MZ zeroed out (header wiping)"),
-                         f"First bytes: {header[:8].hex()}")
+                         f"First bytes: {header[:8].hex() if header else '(empty read)'}")
             findings["score"] += 1
         else:
             _print_check("MZ header at image base",
@@ -118,10 +121,22 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # Verdict
     score = findings["score"]
+    incomplete = base_region is None
+    if incomplete:
+        status = INCONCLUSIVE
+    else:
+        status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
+    findings["status"] = status
+
+    if incomplete:
+        print(YELLOW("  [~] Image base page not captured in this dump — "
+                      "memory-type and RWX checks could not run.\n"))
+
     verdict = (RED("HIGH CONFIDENCE HOLLOWING") if score >= 3 else
                YELLOW("LIKELY HOLLOWING") if score == 2 else
                YELLOW("POSSIBLE HOLLOWING") if score == 1 else
-               GREEN("CLEAN — no hollowing indicators"))
+               GREEN("CLEAN — no hollowing indicators") if status == NOT_DETECTED_IN_SCANNED_SCOPE else
+               _status_text(INCONCLUSIVE, "image base region not captured"))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/4 checks flagged)\n")
     return findings
 

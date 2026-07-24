@@ -4,7 +4,7 @@ import sys
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.core.memory import va_to_file_offset, prot_str
-from dumpex.hunt._ui import _print_hunt_header, _print_check
+from dumpex.hunt._ui import _status_text, NOT_EVALUATED, INCONCLUSIVE
 from dumpex.hunt.injection  import _hunt_injection
 from dumpex.hunt.hollowing  import _hunt_hollowing
 from dumpex.hunt.stomping   import _hunt_stomping
@@ -39,21 +39,12 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     if run_pipe:
         results["pipe"]       = _hunt_pipe(mf, verbose=verbose)
     if run_cs_beacon:
-        if ttp == "all":
-            # In --hunt all, only run the full memory scan when at least one
-            # prior TTP module found suspicious activity.  A clean process with
-            # no injection/hollowing/stomping/pipe signals is unlikely to host a
-            # beacon; skipping avoids noisy output and saves scan time.
-            prior_score = sum(
-                results.get(k, {}).get("score", 0)
-                for k in ("injection", "hollowing", "stomping", "pipe")
-            )
-            if prior_score > 0:
-                results["cs-beacon"] = _hunt_cs_beacon(mf, verbose=verbose)
-            else:
-                results["cs-beacon"] = {"configs": [], "score": 0, "_skipped": True}
-        else:
-            results["cs-beacon"] = _hunt_cs_beacon(mf, verbose=verbose)
+        # --hunt all always runs the full memory scan now — skipping it when
+        # prior TTPs scored 0 meant a beacon could be present in a dump with
+        # no injection/hollowing/stomping/pipe indicators (e.g. a beacon
+        # sitting in ordinary-looking memory) and --hunt all would still
+        # report "No TTP indicators found" without ever having looked.
+        results["cs-beacon"] = _hunt_cs_beacon(mf, verbose=verbose)
     if run_yara:
         results["yara"]       = _hunt_yara(mf, rules_dir=yara_dir, verbose=verbose)
     if run_obfuscation:
@@ -96,9 +87,9 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
 
     # Summary card for --hunt all
     if ttp == "all" and "yara" not in results:
-        results["yara"] = {"matches": [], "score": 0, "rules_hit": []}
+        results["yara"] = {"matches": [], "score": 0, "rules_hit": [], "status": NOT_EVALUATED}
     if ttp == "all" and "obfuscation" not in results:
-        results["obfuscation"] = {"score": 0}
+        results["obfuscation"] = {"score": 0, "status": NOT_EVALUATED}
 
     if ttp == "all":
         print(BOLD("══════════════════════════════════════════"))
@@ -113,20 +104,26 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             "yara":      ("YARA Rules",                 results["yara"]["score"],       3),
             "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   5),
         }
-        any_hit = False
+        any_hit           = False
+        any_not_evaluated = False
+        any_inconclusive  = False
         for key, (name, score, max_score) in labels.items():
-            if score == 0:
-                if key == "cs-beacon" and results.get("cs-beacon", {}).get("_skipped"):
-                    verdict = DIM("DEFERRED  (no prior TTP signals; use --hunt cs-beacon to force)")
-                else:
-                    verdict = GREEN("CLEAN")
-            elif key == "cs-beacon":
+            status = results.get(key, {}).get("status")
+            if status == NOT_EVALUATED:
+                verdict = _status_text(NOT_EVALUATED)
+                any_not_evaluated = True
+            elif status == INCONCLUSIVE:
+                verdict = _status_text(INCONCLUSIVE)
+                any_inconclusive = True
+            elif key == "cs-beacon" and score > 0:
                 verdict = RED(f"BEACON CONFIG FOUND ({score} config(s))")
                 any_hit = True
-            elif key == "yara":
+            elif key == "yara" and score > 0:
                 rules_hit = results["yara"].get("rules_hit", [])
                 verdict = RED(f"RULES MATCHED: {', '.join(rules_hit[:4])}{'…' if len(rules_hit) > 4 else ''}")
                 any_hit = True
+            elif score == 0:
+                verdict = GREEN("CLEAN")
             elif score >= max_score - 1:
                 verdict = RED("HIGH CONFIDENCE")
                 any_hit = True
@@ -136,10 +133,14 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             suffix = (f"  ({score}/{max_score})" if key not in ("cs-beacon", "yara") else "")
             print(f"  {name:<25} {verdict}{suffix}")
         print()
-        if not any_hit:
-            print(GREEN("  Overall: No TTP indicators found in this dump."))
-        else:
+        if any_hit:
             print(YELLOW("  Overall: One or more TTPs detected. Run --report for deep-dive."))
+        elif any_not_evaluated or any_inconclusive:
+            print(YELLOW("  Overall: No TTPs detected in what was scanned, but coverage is "
+                          "incomplete — one or more checks were NOT EVALUATED or INCONCLUSIVE "
+                          "(see per-TTP status above). This is not a clean bill of health."))
+        else:
+            print(GREEN("  Overall: No TTP indicators found in this dump."))
         print()
 
     return results

@@ -5,7 +5,8 @@ from pathlib import Path
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
 from dumpex.core.memory import get_modules, addr_to_module, va_to_file_offset
-from dumpex.hunt._ui import _print_hunt_header, _print_check
+from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt.cs_beacon import CS_MAX_SEG_SCAN
 
 def _load_yara_rules(rules_dir: str) -> list:
@@ -59,7 +60,11 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
       3. ./yara-rules/   (legacy layout, backwards compat)
     """
     _print_hunt_header("YARA Memory Scan")
-    findings = {"matches": [], "score": 0}
+    findings = {"matches": [], "score": 0, "status": NOT_EVALUATED}
+
+    def _not_evaluated(reason: str) -> dict:
+        print(f"  {BOLD('[ VERDICT ]')}  {_status_text(NOT_EVALUATED, reason)}\n")
+        return findings
 
     # ── Locate and import yara-python ─────────────────────────────────
     try:
@@ -68,7 +73,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         print(YELLOW("  [~] yara-python is not installed."))
         print(DIM ("      Install with: pip install yara-python"))
         print()
-        return findings
+        return _not_evaluated("yara-python not installed")
 
     # ── Resolve rules directory ───────────────────────────────────────
     if rules_dir is None:
@@ -87,14 +92,14 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         print(YELLOW(f"  [~] No YARA rules directory found."))
         print(DIM (f"      Expected: ./rules/yara/  (or pass --yara-dir PATH)"))
         print()
-        return findings
+        return _not_evaluated("no YARA rules directory found")
 
     # ── Load rule files ───────────────────────────────────────────────
     rule_files = _load_yara_rules(rules_dir)
     if not rule_files:
         print(YELLOW(f"  [~] No .yar / .yara files found in {rules_dir}"))
         print()
-        return findings
+        return _not_evaluated(f"no .yar/.yara files in {rules_dir}")
 
     print(DIM(f"  [*] Loaded {len(rule_files)} rule file(s) from {rules_dir}"))
 
@@ -108,7 +113,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     if not segs:
         print(YELLOW("  [~] No memory segments in dump — cannot scan."))
         print()
-        return findings
+        return _not_evaluated("Memory64ListStream missing from this dump")
 
     modules = get_modules(mf)
     reader  = mf.get_reader()
@@ -188,7 +193,12 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     # ── Nothing found ─────────────────────────────────────────────────
     if not all_hits:
         print()
-        _print_check("YARA rules", GREEN("CLEAN — no rules matched"))
+        if skipped:
+            findings["status"] = INCONCLUSIVE
+            _print_check("YARA rules", _status_text(INCONCLUSIVE, f"{skipped} oversized segment(s) skipped"))
+        else:
+            findings["status"] = NOT_DETECTED_IN_SCANNED_SCOPE
+            _print_check("YARA rules", GREEN("CLEAN — no rules matched"))
         return findings
 
     # ── Group hits by rule; build _print_check detail strings ─────────
@@ -265,6 +275,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     findings["matches"]   = all_hits
     findings["score"]     = score
     findings["rules_hit"] = sorted(triggered_rules)
+    findings["status"]    = DETECTED
 
     verdict = (RED(f"HIGH — {score} distinct rule(s) matched")      if score >= 3 else
                YELLOW(f"MEDIUM — {score} distinct rule(s) matched") if score >= 1 else

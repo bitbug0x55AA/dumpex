@@ -6,7 +6,8 @@ from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str,
     read_region, _extract_ioc_strings)
-from dumpex.hunt._ui import _print_hunt_header, _print_check
+from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
 
 def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
@@ -22,6 +23,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
+    mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
 
     findings = {"rwx_image": [], "ioc_image": [], "score": 0}
     _r               = get_rules()
@@ -125,9 +127,16 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
                      GREEN("CLEAN — no IOC patterns in executable module memory"))
 
     score = findings["score"]
-    verdict = (RED("HIGH CONFIDENCE STOMPING") if score >= 2 else
-               YELLOW("POSSIBLE STOMPING") if score == 1 else
-               GREEN("CLEAN — no stomping indicators"))
+    status = (NOT_EVALUATED if not mem_info_available else
+              DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE)
+    findings["status"] = status
+
+    if not mem_info_available:
+        verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
+    else:
+        verdict = (RED("HIGH CONFIDENCE STOMPING") if score >= 2 else
+                   YELLOW("POSSIBLE STOMPING") if score == 1 else
+                   GREEN("CLEAN — no stomping indicators"))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2 checks flagged)\n")
 
     if not verbose and ioc_hits:

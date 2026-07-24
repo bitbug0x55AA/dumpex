@@ -6,7 +6,8 @@ from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
     read_region, SYSTEM_RANGE)
-from dumpex.hunt._ui import _print_hunt_header, _print_check
+from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
+    _scan_status, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
 
 def _hunt_rwx(mf: MinidumpFile) -> list:
     """Return list of RWX regions. Internal — used by --hunt injection."""
@@ -52,6 +53,19 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     pe_hits = _hunt_hidden_pe(mf)
     threads = _hunt_unbacked_threads(mf)
 
+    # RWX/hidden-PE need MemoryInfoListStream; unbacked-thread needs
+    # ThreadInfoListStream. Either can be absent from a dump (both are
+    # optional MiniDumpWriteDump capture flags) — a scan with no data to
+    # look at must not be reported the same as a scan that looked and found
+    # nothing.
+    coverage = {
+        "memory_info_stream": bool(mf.memory_info and mf.memory_info.infos),
+        "thread_info_stream": bool(mf.thread_info and mf.thread_info.infos),
+        "module_list_stream": bool(mf.modules and mf.modules.modules),
+    }
+    evaluated = coverage["memory_info_stream"] or coverage["thread_info_stream"]
+    complete  = coverage["memory_info_stream"] and coverage["thread_info_stream"]
+
     hidden_pe_regions   = [r for r, known in pe_hits if not known]
     injected_pe_regions = {r.BaseAddress for r in hidden_pe_regions}
     rwx_bases           = {r.BaseAddress for r in rwx}
@@ -95,6 +109,8 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     else:
         score = 1
 
+    status = _scan_status(evaluated=evaluated, detected=score > 0, complete=complete)
+
     findings = {
         "rwx":            rwx,
         "hidden_pe":      [(r, k) for r, k in pe_hits if not k],
@@ -104,6 +120,8 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         "threads_in_hidden_pe": threads_in_hidden_pe,
         "full_correlation": full_correlation,
         "score":          score,
+        "status":         status,
+        "coverage":       coverage,
     }
 
     # ── Output ────────────────────────────────────────────────────────
@@ -179,14 +197,24 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
                          RED("HIGH CONFIDENCE — all signals converge on one region"),
                          f"TID=0x{ti.ThreadId:x} in region 0x{r.BaseAddress:x}")
 
+    if not coverage["memory_info_stream"]:
+        print(YELLOW("  [~] MemoryInfoListStream not in this dump — RWX / hidden-PE checks could not run.\n"))
+    if not coverage["thread_info_stream"]:
+        print(YELLOW("  [~] ThreadInfoListStream not in this dump — unbacked-thread check could not run.\n"))
+
     # Verdict — driven by correlation, not by how many independent checks
     # happened to fire somewhere in the address space. Signals that never
     # share a region and are never executed by an unbacked thread stay at
     # "possible", even if all three checks tripped individually.
+    if status == NOT_EVALUATED:
+        print(f"  {BOLD('[ VERDICT ]')}  {_status_text(status, 'no required stream present in this dump')}\n")
+        return findings
+
     verdict = (RED("HIGH CONFIDENCE INJECTION") if score >= 3 else
                YELLOW("LIKELY INJECTION") if score == 2 else
                YELLOW("POSSIBLE INJECTION") if score == 1 else
-               GREEN("CLEAN"))
+               GREEN("CLEAN") if status == NOT_DETECTED_IN_SCANNED_SCOPE else
+               YELLOW("INCONCLUSIVE — partial stream coverage"))
     basis = ("no correlated signals" if score == 0 else
               "uncorrelated signals only — no shared region, no execution overlap" if score == 1 else
               "same-region or execution correlation found" if score == 2 else

@@ -4,7 +4,8 @@ import struct
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
 from dumpex.core.memory import va_to_file_offset, get_memory_regions, _get_region_at, prot_str
-from dumpex.hunt._ui import _print_hunt_header, _print_check
+from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 
 CS_BEACON_SIGNATURE  = b'\x00\x01\x00\x01\x00\x02'   # plaintext TLV start
 CS_SIG_XOR69         = b'ihihik'                       # above ^ 0x69
@@ -315,7 +316,9 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         segs = mf.memory_segments.memory_segments
 
     if not segs:
+        findings['status'] = NOT_EVALUATED
         print(YELLOW("  [~] No memory segments in dump — cannot scan for beacon config.\n"))
+        print(f"  {BOLD('[ VERDICT ]')}  {_status_text(NOT_EVALUATED, 'Memory64ListStream missing from this dump')}\n")
         return findings
 
     regions = get_memory_regions(mf)
@@ -345,12 +348,19 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
     print(DIM(f"  [*] Scan complete{scan_note}."))
 
     if not hits:
-        _print_check("Cobalt Strike beacon config",
-                     GREEN("CLEAN — no beacon config found in memory"))
+        if skipped:
+            findings['status'] = INCONCLUSIVE
+            _print_check("Cobalt Strike beacon config",
+                         _status_text(INCONCLUSIVE, f"{skipped} oversized segment(s) skipped"))
+        else:
+            findings['status'] = NOT_DETECTED_IN_SCANNED_SCOPE
+            _print_check("Cobalt Strike beacon config",
+                         GREEN("CLEAN — no beacon config found in memory"))
         print()
         return findings
 
-    findings['score'] = len(hits)
+    findings['score']  = len(hits)
+    findings['status'] = DETECTED
     print()
 
     for idx, (xor_key, hit_va, hit_fo, fields) in enumerate(hits, 1):

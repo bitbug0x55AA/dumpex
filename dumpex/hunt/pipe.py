@@ -7,7 +7,8 @@ from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
     read_region, _extract_strings_from_data)
-from dumpex.hunt._ui import _print_hunt_header, _print_check
+from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
 
 def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
@@ -24,6 +25,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
     infos   = get_thread_infos(mf)
+    mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
 
     # Pipe name patterns
     # Match pipe names in both ASCII and UTF-16LE.
@@ -248,10 +250,17 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Verdict ───────────────────────────────────────────────────────
     score = findings["score"]
-    verdict = (RED("HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT") if score >= 3 else
-               YELLOW("LIKELY C2 PIPE")                           if score == 2 else
-               YELLOW("POSSIBLE C2 PIPE")                         if score == 1 else
-               GREEN("CLEAN — no named pipe C2 indicators"))
+    status = (NOT_EVALUATED if not mem_info_available else
+              DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE)
+    findings["status"] = status
+
+    if not mem_info_available:
+        verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
+    else:
+        verdict = (RED("HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT") if score >= 3 else
+                   YELLOW("LIKELY C2 PIPE")                           if score == 2 else
+                   YELLOW("POSSIBLE C2 PIPE")                         if score == 1 else
+                   GREEN("CLEAN — no named pipe C2 indicators"))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/4 checks flagged)\n")
 
     if not verbose and private_pipes:
