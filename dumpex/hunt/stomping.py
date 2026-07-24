@@ -78,10 +78,27 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     _WEAK_IOC_TERMS = {"virtualalloc", "writeprocessmemory",
                        "createremotethread", "wsasocket", "base64"}
 
-    def _is_weak_only(hits) -> bool:
-        matched  = {s.lower() for _, _, s in hits}
-        non_weak = [m for m in matched if not any(t in m for t in _WEAK_IOC_TERMS)]
-        return not non_weak
+    def _classify_ioc_hits(strings, patterns) -> list:
+        """
+        Classify each individual regex match (token) as weak or strong —
+        NOT the whole printable string it was found in. A single extracted
+        string containing both a weak, ubiquitous API name (VirtualAlloc)
+        and a genuinely strong IOC (powershell) previously got judged as a
+        single unit: any weak term anywhere in the string made the whole
+        string "weak-only" and dropped the co-located strong token along
+        with it (e.g. "...VirtualAlloc...powershell..." lost "powershell"
+        entirely). Matching per-token keeps that strong hit regardless of
+        what else shares the same string.
+        Returns list of (offset, enc, token, is_weak).
+        """
+        hits = []
+        for off, enc, s in strings:
+            for pat in patterns:
+                for m in pat.finditer(s):
+                    token = m.group(0)
+                    hits.append((off + m.start(), enc, token,
+                                 token.casefold() in _WEAK_IOC_TERMS))
+        return hits
 
     ioc_skipped_size = 0
     ioc_read_failed  = 0
@@ -111,20 +128,18 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
         strings = _extract_ioc_strings(data, r.BaseAddress)
 
         # Apply appropriate pattern based on whitelist status
-        if is_wl:
-            # Whitelisted: only flag the truly unusual IOCs, not network strings
-            hits = [(off, enc, s) for off, enc, s in strings
-                    if STOMPING_IOC.search(s)]
-        else:
-            # Non-whitelisted: flag both general IOCs and network patterns
-            hits = [(off, enc, s) for off, enc, s in strings
-                    if STOMPING_IOC.search(s) or STOMPING_NET_IOC.search(s)]
+        patterns = ([STOMPING_IOC] if is_wl else   # whitelisted: only the
+                                                     # truly unusual IOCs,
+                                                     # not network strings
+                    [STOMPING_IOC, STOMPING_NET_IOC])
+        hits = _classify_ioc_hits(strings, patterns)
 
         if not hits:
             if is_wl:
                 skipped_wl.append(mod_name)
             continue
-        if _is_weak_only(hits):
+        strong_hits = [h for h in hits if not h[3]]
+        if not strong_hits:
             weak_only_skipped.append((r, mod, hits))
             continue
         ioc_hits.append((r, mod, hits, not is_wl))
@@ -142,13 +157,15 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
         if verbose:
             for r, mod, hits in weak_only_skipped:
                 name = os.path.basename(mod.name) if mod else "(unknown)"
-                terms = sorted({s for _, _, s in hits})
+                terms = sorted({tok for _, _, tok, _ in hits})
                 print(f"      0x{r.BaseAddress:x}  [{name}]  {', '.join(terms)}")
         print()
 
     if ioc_hits:
-        total = sum(len(h) for _, _, h, _ in ioc_hits)
-        detail = f"{total} IOC string(s) across {len(ioc_hits)} module region(s)"
+        n_strong = sum(sum(1 for h in hits if not h[3]) for _, _, hits, _ in ioc_hits)
+        n_weak   = sum(sum(1 for h in hits if h[3]) for _, _, hits, _ in ioc_hits)
+        detail = (f"{n_strong} strong + {n_weak} weak IOC token(s) "
+                  f"across {len(ioc_hits)} module region(s)")
         _print_check("IOC strings in module code regions",
                      RED("SUSPICIOUS — malicious strings inside legitimate module memory"),
                      detail)
@@ -156,8 +173,12 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
             for r, mod, hits, _ in ioc_hits:
                 name = os.path.basename(mod.name) if mod else "(unknown)"
                 print(f"    {YELLOW(f'Region 0x{r.BaseAddress:x}  [{name}]')}")
-                for off, enc, s in hits[:10]:
-                    print(f"      0x{r.BaseAddress+off:x}  [{enc}]  {s}")
+                # Strong hits are the confirmed signal; weak ones are shown
+                # too (an investigator should still see them) but tagged so
+                # they aren't mistaken for independent corroborating evidence.
+                for off, enc, tok, is_weak in hits[:10]:
+                    tag = DIM(" (weak/common API — not scored alone)") if is_weak else ""
+                    print(f"      0x{r.BaseAddress+off:x}  [{enc}]  {tok}{tag}")
                 if len(hits) > 10:
                     print(DIM(f"      ... and {len(hits)-10} more"))
                 print()

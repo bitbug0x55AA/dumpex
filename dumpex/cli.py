@@ -1,16 +1,13 @@
 """Command-line entry point."""
 import sys
 import argparse
-import datetime
-from pathlib import Path
 from minidump.minidumpfile import MinidumpFile
 
 from dumpex.ui.colors import RED, DIM, BOLD
 from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.ui.structured import StructuredOutput, _ANSI_RE
-from dumpex.core.safe_io import (check_not_dump_path, check_overwrite,
-    AtomicTextTee)
+from dumpex.core.safe_io import check_not_dump_path, AtomicTextTee, resolve_output_target
 
 from dumpex.commands.list_cmd import cmd_list
 from dumpex.commands.modules  import cmd_modules
@@ -117,14 +114,7 @@ def main():
     _tee        = None
     _tee_stdout = None
     if args.txt:
-        txt_path = Path(args.txt)
-        is_dir_target = str(args.txt).endswith(('/', '\\')) or txt_path.is_dir()
-        if is_dir_target:
-            ts       = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-            label    = f"_{cmd_label}" if cmd_label else ""
-            txt_path = txt_path / f"dumpex_{ts}{label}.txt"
-        else:
-            check_overwrite(txt_path, args.force, "--txt output")
+        txt_path    = resolve_output_target(args.txt, ".txt", cmd_label, args.dumpfile, args.force)
         _tee        = AtomicTextTee(txt_path, sys.stdout, _ANSI_RE)
         _tee_stdout = sys.stdout
         sys.stdout  = _tee
@@ -136,18 +126,13 @@ def main():
         need_structured = bool(args.json or args.csv)
         out = StructuredOutput(args.dumpfile, mf) if need_structured else None
 
-        # Both --json and --csv support a directory target (an existing
-        # directory is the normal case there, not a collision to refuse —
-        # write_json/write_csv auto-generate a timestamped filename inside
-        # it). Only a concrete file target is checked here; mirrors the
-        # is_dir_target logic in StructuredOutput.write_json/write_csv.
-        json_is_dir_target = args.json and (str(args.json).endswith(('/', '\\')) or Path(args.json).is_dir())
-        if args.json and not json_is_dir_target:
-            check_overwrite(args.json, args.force, "--json output")
-        if args.csv and args.csv.lower().endswith(".csv"):
-            check_overwrite(args.csv, args.force, "--csv output")
-        if args.output:
-            check_overwrite(args.output, args.force, "--output file")
+        # --json/--csv path resolution (existing-file / dump-path / dir-mode
+        # collision handling) is owned entirely by StructuredOutput.write_json
+        # / write_csv (via resolve_output_target) — not duplicated here, since
+        # check_overwrite now reserves the path (O_CREAT|O_EXCL): calling it
+        # twice on the same target would make the second call fail spuriously
+        # against its own first reservation. Likewise --output is checked
+        # exactly once, inside cmd_extract/cmd_report right before the write.
 
         _run(args, mf, out, cmd_label)
     except BaseException:

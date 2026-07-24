@@ -2,6 +2,7 @@
 import re
 import sys
 import json
+import importlib.resources
 from pathlib import Path
 from dumpex.ui.colors import DIM, YELLOW
 
@@ -102,53 +103,110 @@ def _compile_rules(raw: dict) -> dict:
     return r
 
 
-def _find_rules_file() -> Path | None:
+_RULE_FILE_NAMES = (("rules.yaml", ".yaml"), ("rules.yml", ".yml"), ("rules.json", ".json"))
+
+
+class _RuleSource:
     """
-    Search for the TTP rules file.
-
-    Search order (first match wins):
-      <_MEIPASS>/rules/rules.yaml     <- PyInstaller onefile: --add-data
-                                          extracts to sys._MEIPASS, not next
-                                          to the exe (sys.argv[0]), so this
-                                          must be checked separately
-      <package>/rules_pkg/data/rules.yaml
-                                       <- bundled inside the dumpex package
-                                          itself (package_data in
-                                          pyproject.toml) — this is what
-                                          makes `pip install dumpex` work
-                                          without the rules/ directory
-                                          living next to the script
-      <script_dir>/rules/rules.yaml   <- canonical dev layout (repo checkout)
-      <cwd>/rules/rules.yaml
-      <script_dir>/rules.yaml         <- legacy flat layout (backwards compat)
-      <cwd>/rules.yaml
-      (same pattern for .yml and .json variants)
-
-    The first three "packaged" locations exist because sys.argv[0] and cwd
-    are both dev-environment assumptions: a `pip install`-ed dumpex has no
-    rules/ next to whatever script invoked it, and a PyInstaller --onefile
-    build extracts --add-data content to a temp dir that isn't
-    dirname(sys.argv[0]) either.
+    Uniform handle for a candidate rules file, whether it lives at a plain
+    filesystem path or inside the installed package via importlib.resources
+    (which is not necessarily a real filesystem path — e.g. a zip-safe
+    install — so callers must go through read_text() rather than open()).
     """
-    candidates = []
+    __slots__ = ("display", "suffix", "_read_text")
 
+    def __init__(self, display: str, suffix: str, read_text):
+        self.display = display
+        self.suffix  = suffix
+        self._read_text = read_text
+
+    def read_text(self) -> str:
+        return self._read_text()
+
+
+def _fs_source(directory: Path) -> "_RuleSource | None":
+    """Look for rules.yaml/.yml/.json directly inside `directory` on a real filesystem path."""
+    for name, suffix in _RULE_FILE_NAMES:
+        candidate = directory / name
+        if candidate.is_file():
+            return _RuleSource(str(candidate), suffix,
+                                lambda c=candidate: c.read_text(encoding="utf-8"))
+    return None
+
+
+def _packaged_source() -> "_RuleSource | None":
+    """
+    Locate rules.yaml/.yml/.json bundled inside dumpex.rules_pkg/data — the
+    single copy shipped in the wheel (see pyproject.toml package-data) —
+    via importlib.resources rather than a __file__-relative path. This is
+    what actually makes `pip install dumpex` work standalone with no
+    rules/ directory anywhere near the invoking script, and it keeps
+    working even for a zip-safe/zipapp install where __file__ isn't a real
+    filesystem path at all (a plain `Path(__file__).parent` lookup would
+    silently find nothing there).
+    """
+    try:
+        data_dir = importlib.resources.files("dumpex.rules_pkg").joinpath("data")
+    except (ModuleNotFoundError, FileNotFoundError, NotADirectoryError):
+        return None
+    for name, suffix in _RULE_FILE_NAMES:
+        candidate = data_dir.joinpath(name)
+        try:
+            if candidate.is_file():
+                return _RuleSource(f"<dumpex.rules_pkg>/data/{name}", suffix,
+                                    lambda c=candidate: c.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+    return None
+
+
+def _find_rules_source() -> "_RuleSource | None":
+    """
+    Search for the TTP rules file. First match wins.
+
+      1. <_MEIPASS>/rules/rules.yaml        PyInstaller onefile: --add-data
+                                             extracts to sys._MEIPASS, not
+                                             next to the exe (sys.argv[0]).
+      2. dumpex.rules_pkg/data/rules.yaml   Bundled inside the installed
+                                             package itself — see
+                                             _packaged_source(). This is the
+                                             single canonical copy of the
+                                             default ruleset; it is NOT
+                                             duplicated anywhere else in
+                                             the repo, so there is nothing
+                                             else to drift out of sync
+                                             with it.
+      3. <script_dir>/rules/rules.yaml,     Explicit user override: drop a
+         <cwd>/rules/rules.yaml             custom rules.yaml next to the
+                                             dumpex binary or in the
+                                             working directory to change
+                                             TTP rules without touching the
+                                             installed package.
+      4. <script_dir>/rules.yaml,           Legacy flat layout (back-compat).
+         <cwd>/rules.yaml
+
+    (.yml and .json are also tried at each filesystem location, in that order.)
+    """
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
-        candidates.append(Path(meipass) / "rules")
+        src = _fs_source(Path(meipass) / "rules")
+        if src is not None:
+            return src
 
-    candidates.append(Path(__file__).resolve().parent / "data")
+    src = _packaged_source()
+    if src is not None:
+        return src
 
     script_dir = Path(sys.argv[0]).resolve().parent
     cwd        = Path.cwd()
     for base in (script_dir, cwd):
-        candidates.append(base / "rules")
-        candidates.append(base)
-
-    for base in candidates:
-        for name in ("rules.yaml", "rules.yml", "rules.json"):
-            p = base / name
-            if p.is_file():
-                return p
+        src = _fs_source(base / "rules")
+        if src is not None:
+            return src
+    for base in (script_dir, cwd):
+        src = _fs_source(base)
+        if src is not None:
+            return src
     return None
 
 
@@ -164,35 +222,32 @@ def _load_rules() -> dict:
     Errors (missing file, parse failure, schema mismatch) are printed as
     warnings and cause automatic fallback to the next source.
     """
-    path = _find_rules_file()
+    source = _find_rules_source()
 
-    if path is not None:
+    if source is not None:
         try:
-            if path.suffix in (".yaml", ".yml"):
+            if source.suffix in (".yaml", ".yml"):
                 try:
                     import yaml
-                    with open(path, "r", encoding="utf-8") as fh:
-                        raw = yaml.safe_load(fh)
+                    raw = yaml.safe_load(source.read_text())
                 except ImportError:
-                    print(DIM(f"  [~] pyyaml not installed — cannot read {path.name}; "
+                    print(DIM(f"  [~] pyyaml not installed — cannot read {source.display}; "
                               f"install with: pip install pyyaml"))
                     raw = None
             else:
-                import json
-                with open(path, "r", encoding="utf-8") as fh:
-                    raw = json.load(fh)
+                raw = json.loads(source.read_text())
 
             if raw is not None:
                 version = raw.get("version", 1)
                 if version != 1:
-                    print(YELLOW(f"  [~] {path.name}: unknown schema version {version}, "
+                    print(YELLOW(f"  [~] {source.display}: unknown schema version {version}, "
                                  f"proceeding anyway"))
                 rules = _compile_rules(raw)
-                print(DIM(f"  [·] Rules loaded from {path}"))
+                print(DIM(f"  [·] Rules loaded from {source.display}"))
                 return rules
 
         except Exception as e:
-            print(YELLOW(f"  [~] Could not load {path}: {e} — using built-in defaults"))
+            print(YELLOW(f"  [~] Could not load {source.display}: {e} — using built-in defaults"))
 
     return _compile_rules({k: list(v) if isinstance(v, set) else v
                            for k, v in _DEFAULT_RULES.items()})

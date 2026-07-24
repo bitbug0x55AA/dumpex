@@ -14,6 +14,7 @@ import os
 import sys
 import hashlib
 import tempfile
+import datetime
 from pathlib import Path
 
 from dumpex.ui.colors import RED, DIM, GREEN
@@ -45,13 +46,112 @@ def check_not_dump_path(out_path, dump_path, label: str):
         sys.exit(1)
 
 
+def _reserve_exclusive(path: Path) -> bool:
+    """
+    Atomically claim `path` iff nothing exists there yet (O_CREAT|O_EXCL).
+
+    A plain `Path.exists()` check followed by a later write has a TOCTOU
+    window: two concurrent dumpex runs (or two runs racing on the same
+    output path) can both observe "free" and then both write, one silently
+    clobbering the other. Creating the file here — even though its content
+    is only filled in later via atomic_write_* — closes that window for the
+    lifetime of the reservation.
+    """
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    os.close(fd)
+    return True
+
+
 def check_overwrite(out_path, force: bool, label: str):
-    """Refuse to clobber an existing file unless --force was passed."""
+    """
+    Refuse to clobber an existing file unless --force was passed.
+
+    When not forcing, this reserves out_path via O_CREAT|O_EXCL rather than
+    just checking existence (see _reserve_exclusive) — the empty file this
+    leaves behind is safe for the caller's subsequent atomic_write_* to
+    replace via os.replace().
+    """
     p = Path(out_path)
-    if p.exists() and not force:
+    if force:
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if not _reserve_exclusive(p):
         print(RED(f"[!] {label} already exists: {out_path}"))
         print(DIM(f"    Pass --force to overwrite."))
         sys.exit(1)
+
+
+def reserve_unique_path(directory, stem: str, suffix: str, force: bool = False,
+                         max_attempts: int = 1000) -> Path:
+    """
+    Reserve a unique filename `{stem}{suffix}` (or `{stem}_NNN{suffix}` on
+    collision) inside `directory`, for auto-generated output targets
+    (directory mode for --txt/--json/--csv).
+
+    A fixed-timestamp stem is not guaranteed unique — two runs within the
+    same wall-clock second, or two hunts against the same dump, would
+    otherwise produce the identical filename and one write would silently
+    clobber the other. Instead of trusting `Path.exists()` (itself a TOCTOU
+    race), each candidate is claimed with O_CREAT|O_EXCL and the first one
+    that succeeds is returned already reserved.
+
+    force=True skips the collision search entirely and returns the bare
+    `{stem}{suffix}` path unreserved — the caller intends to overwrite
+    whatever (if anything) is already there.
+    """
+    d = Path(directory)
+    d.mkdir(parents=True, exist_ok=True)
+    if force:
+        return d / f"{stem}{suffix}"
+
+    candidate = d / f"{stem}{suffix}"
+    if _reserve_exclusive(candidate):
+        return candidate
+    for i in range(1, max_attempts):
+        candidate = d / f"{stem}_{i:03d}{suffix}"
+        if _reserve_exclusive(candidate):
+            return candidate
+    raise RuntimeError(
+        f"could not reserve a unique output filename under {d} "
+        f"(tried {max_attempts} names starting with '{stem}{suffix}')")
+
+
+def resolve_output_target(requested_path, suffix: str, cmd_label: str,
+                           dump_path, force: bool) -> Path:
+    """
+    Single entry point for resolving a --txt/--json/--csv(single-file)
+    output argument into a concrete, safely-claimed path. Every caller that
+    accepts a directory-or-file output argument must go through this
+    (or reserve_unique_path directly, for the multi-file --csv directory
+    case where table names aren't known until after the scan) rather than
+    hand-rolling its own exists()/mkdir()/timestamp logic — see the P1
+    "directory-mode output can silently overwrite files" finding.
+
+    Behaviour:
+      1. Refuse if the resolved target is the input dump file itself.
+         Unconditional — --force does not lift this.
+      2. Directory target (path ends in a separator, or already exists as
+         a directory): auto-generate `dumpex_<utc-timestamp>_<cmd_label>`
+         and reserve a collision-free name for it (reserve_unique_path).
+      3. File target: reserve the exact path unless --force (check_overwrite).
+
+    Returns the resolved Path; exits the process on any refusal, consistent
+    with check_overwrite/check_not_dump_path.
+    """
+    p = Path(requested_path)
+    is_dir_target = str(requested_path).endswith(('/', '\\')) or p.is_dir()
+    if is_dir_target:
+        check_not_dump_path(p, dump_path, f"output directory ({suffix})")
+        ts    = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+        label = f"_{cmd_label}" if cmd_label else ""
+        return reserve_unique_path(p, f"dumpex_{ts}{label}", suffix, force=force)
+
+    check_not_dump_path(p, dump_path, f"{suffix} output")
+    check_overwrite(p, force, f"{suffix} output")
+    return p
 
 
 def atomic_write_bytes(out_path, data: bytes) -> str:

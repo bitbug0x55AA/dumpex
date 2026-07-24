@@ -34,6 +34,7 @@ consistent with the rest of Dumpex.
 
 import re
 import math
+import time
 import zlib
 import struct
 import os
@@ -48,6 +49,7 @@ from dumpex.core.memory import (
 )
 from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
+from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt.injection import _hunt_hidden_pe   # reuse for PE re-check
 
 # ── Tunables ──────────────────────────────────────────────────────────────
@@ -59,13 +61,21 @@ XOR_SCAN_MAX              = 512 * 1024         # max region for single-byte XOR 
 XOR_SAMPLE_SIZE           = 4096               # bytes sampled before full decode
 XOR_SCORE_MIN             = 0.68               # printable ratio to accept a key
 B64_MIN_LEN               = 80                 # minimum Base64 string length
-COMPRESS_MAX_CANDIDATES   = 200                # cap decompress attempts per signature
-                                        # per region — a 2-byte magic sequence has no
-                                        # error-correction, so a region with many
-                                        # coincidental (or adversarially placed)
-                                        # occurrences could otherwise trigger unbounded
-                                        # decompressobj() attempts even though each one
-                                        # individually is output-capped
+
+# Layers 2 (Base64) and 4 (GZIP/ZLIB) share ONE ScanBudget across the whole
+# hunt (all regions combined) rather than each region getting its own
+# independent "≤200 attempts per signature" allowance — a dump with many
+# qualifying regions could otherwise turn a per-region cap into unbounded
+# total decode attempts and retained memory. See dumpex/hunt/_budget.py.
+ENCODING_BUDGET_MAX_ATTEMPTS  = 2000              # total decode/decompress
+                                                   # attempts, whole hunt
+ENCODING_BUDGET_MAX_RETAINED  = 32 * 1024 * 1024  # cumulative decoded bytes
+                                                   # kept in findings, whole hunt
+ENCODING_BUDGET_MAX_HITS      = 500               # cumulative hits retained
+ENCODING_BUDGET_TIME_SECONDS  = 60.0              # wall-clock cap, layers 2-4 combined
+ENCODING_PREVIEW_BYTES        = 4096              # bytes kept once the retained-bytes
+                                                   # budget is tight, instead of the
+                                                   # full decoded content
 
 # ── Sleep Mask tunables (mirroring cs-analyze-processdump.py defaults) ────
 SLEEP_MASK_KEY_SIZE        = 13        # XOR key length used by default CS sleep mask
@@ -511,11 +521,15 @@ def _scan_entropy(regions, modules, mf, susp_prots):
 # LAYER 2 — Base64
 # ══════════════════════════════════════════════════════════════════════════
 
-def _scan_base64(data: bytes, region_base: int):
+def _scan_base64(data: bytes, region_base: int, budget: ScanBudget):
     for m in _B64_PAT.finditer(data):
+        if budget.exhausted():
+            return
         raw = m.group(0)
         if len(raw) < B64_MIN_LEN:
             continue
+        if not budget.note_attempt():
+            return
         try:
             normalised = raw.replace(b'-', b'+').replace(b'_', b'/')
             pad = len(normalised) % 4
@@ -526,10 +540,14 @@ def _scan_base64(data: bytes, region_base: int):
             continue
         if len(decoded) < 16:
             continue
+        if not budget.seen_content(decoded):
+            continue   # identical payload already seen elsewhere in this hunt
         cls = _classify_decoded(decoded)
         if cls['type'] == 'binary' and not cls['ioc_strings']:
             continue
-        yield m.start(), raw, decoded, cls
+        budget.note_bytes_read(len(decoded))
+        kept = decoded if budget.note_retained(len(decoded)) else decoded[:ENCODING_PREVIEW_BYTES]
+        yield m.start(), raw, kept, cls
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -542,7 +560,12 @@ def _score_xor_key(data: bytes, key: int) -> float:
     return printable / len(decoded)
 
 
-def _scan_xor(data: bytes, region_base: int):
+def _scan_xor(data: bytes, region_base: int, budget: ScanBudget):
+    # The key-scoring pass below is already tightly bounded (exactly 255
+    # keys scored against a fixed 4KB sample, only for MEM_PRIVATE regions
+    # <= XOR_SCAN_MAX) — it doesn't draw on the shared decode/decompress
+    # attempt budget, only on the retained-bytes/dedup accounting shared
+    # with the other layers once a candidate actually decodes.
     sample = data[:XOR_SAMPLE_SIZE]
     candidates = []
     for key in range(1, 256):
@@ -557,10 +580,16 @@ def _scan_xor(data: bytes, region_base: int):
                 candidates.append((key, score))
 
     for key, _ in sorted(candidates, key=lambda x: -x[1])[:5]:
+        if budget.exhausted():
+            return
         decoded = bytes(b ^ key for b in data)
+        if not budget.seen_content(decoded):
+            continue
         cls = _classify_decoded(decoded)
         if cls['is_pe'] or cls['is_shellcode'] or cls['ioc_strings']:
-            yield key, decoded, cls
+            budget.note_bytes_read(len(decoded))
+            kept = decoded if budget.note_retained(len(decoded)) else decoded[:ENCODING_PREVIEW_BYTES]
+            yield key, kept, cls
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -580,32 +609,56 @@ def _bounded_decompress(payload: bytes, wbits: int) -> bytes:
     return d.decompress(payload, DECOMPRESS_MAX_OUTPUT)
 
 
-def _scan_compressed(data: bytes, region_base: int):
-    start, tried = 0, 0
-    while tried < COMPRESS_MAX_CANDIDATES:
+def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget):
+    """
+    Scan for GZIP/ZLIB magic bytes and attempt decompression at each one.
+
+    Decompress attempts are bounded by the shared, whole-hunt `budget`
+    (ENCODING_BUDGET_MAX_ATTEMPTS) rather than a fixed count per signature
+    per region — a 2-byte magic sequence has no error-correction, so a
+    region with many coincidental (or adversarially placed) occurrences
+    could otherwise trigger unbounded decompressobj() attempts across a
+    dump with many such regions, even though each individual attempt is
+    itself output-capped (_bounded_decompress). Successful decodes are
+    deduplicated by content hash and only retained up to
+    ENCODING_BUDGET_MAX_RETAINED cumulative bytes — past that, a bounded
+    preview is kept instead of the full decoded payload.
+    """
+    start = 0
+    while True:
+        if budget.exhausted():
+            return
         idx = data.find(_GZIP_SIG, start)
         if idx == -1:
             break
-        tried += 1
+        if not budget.note_attempt():
+            return
         try:
             decoded = _bounded_decompress(data[idx:], wbits=47)
-            if len(decoded) >= 64:
-                yield idx, 'gzip', decoded, _classify_decoded(decoded)
+            if len(decoded) >= 64 and budget.seen_content(decoded):
+                budget.note_bytes_read(len(decoded))
+                kept = decoded if budget.note_retained(len(decoded)) else decoded[:ENCODING_PREVIEW_BYTES]
+                yield idx, 'gzip', kept, _classify_decoded(decoded)
         except Exception:
             pass
         start = idx + 1
 
     for sig in _ZLIB_SIGS:
-        start, tried = 0, 0
-        while tried < COMPRESS_MAX_CANDIDATES:
+        start = 0
+        while True:
+            if budget.exhausted():
+                return
             idx = data.find(sig, start)
             if idx == -1:
                 break
-            tried += 1
+            if not budget.note_attempt():
+                return
             try:
                 decoded = _bounded_decompress(data[idx:], wbits=zlib.MAX_WBITS)
-                if len(decoded) >= 64:
-                    yield idx, 'zlib', decoded, _classify_decoded(decoded)
+                if len(decoded) >= 64 and budget.seen_content(decoded):
+                    budget.note_bytes_read(len(decoded))
+                    kept = decoded if budget.note_retained(len(decoded)) else decoded[:ENCODING_PREVIEW_BYTES]
+                    yield idx, 'zlib', kept, _classify_decoded(decoded)
             except Exception:
                 pass
             start = idx + 1
@@ -729,7 +782,20 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     decode_size_skipped = 0
     decode_read_failed  = 0
 
+    # One budget shared across every region for the rest of this hunt (see
+    # dumpex/hunt/_budget.py) — bounds total decode/decompress attempts and
+    # retained bytes across the WHOLE scan, not per-region.
+    decode_budget = ScanBudget(
+        max_bytes_read=ENCODING_BUDGET_MAX_RETAINED * 4,
+        max_attempts=ENCODING_BUDGET_MAX_ATTEMPTS,
+        max_retained_bytes=ENCODING_BUDGET_MAX_RETAINED,
+        max_hits=ENCODING_BUDGET_MAX_HITS,
+        deadline=time.monotonic() + ENCODING_BUDGET_TIME_SECONDS,
+    )
+
     for r in regions:
+        if decode_budget.exhausted():
+            break
         if prot_str(r.State) != 'MEM_COMMIT':
             continue
         if prot_str(r.Type) not in ('MEM_PRIVATE', 'MEM_IMAGE'):
@@ -747,21 +813,25 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             continue
         decode_scanned += 1
 
-        for off, raw, decoded, cls in _scan_base64(data, r.BaseAddress):
+        for off, raw, decoded, cls in _scan_base64(data, r.BaseAddress, decode_budget):
+            decode_budget.note_hit()
             b64_hits.append((r, off, cls, raw, decoded))
             if cls['is_pe']:
                 pe_hits.append(('base64', r, off, decoded))
 
         if (prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= XOR_SCAN_MAX):
-            for key, decoded, cls in _scan_xor(data, r.BaseAddress):
+            for key, decoded, cls in _scan_xor(data, r.BaseAddress, decode_budget):
+                decode_budget.note_hit()
                 xor_hits.append((r, key, cls, decoded))
                 if cls['is_pe']:
                     pe_hits.append(('xor', r, 0, decoded))
 
-        for off, algo, decoded, cls in _scan_compressed(data, r.BaseAddress):
-            cmp_hits.append((r, off, algo, cls, decoded))
-            if cls['is_pe']:
-                pe_hits.append((algo, r, off, decoded))
+        if not decode_budget.exhausted():
+            for off, algo, decoded, cls in _scan_compressed(data, r.BaseAddress, decode_budget):
+                decode_budget.note_hit()
+                cmp_hits.append((r, off, algo, cls, decoded))
+                if cls['is_pe']:
+                    pe_hits.append((algo, r, off, decoded))
 
     # ── Report Base64 ─────────────────────────────────────────────────────
     seen_b64 = set()
@@ -902,7 +972,9 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     fully_skipped = mem_info_available and bool(regions) and not any_region_scanned
     total_size_skipped = sleep_mask_size_skipped + entropy_size_skipped + decode_size_skipped
     total_read_failed  = sleep_mask_read_failed + entropy_read_failed + decode_read_failed
-    coverage_gap = bool(total_size_skipped or total_read_failed)
+    budget_exhausted = decode_budget.exhausted()
+    findings['budget_exhausted'] = budget_exhausted
+    coverage_gap = bool(total_size_skipped or total_read_failed or budget_exhausted)
 
     if not mem_info_available:
         status = NOT_EVALUATED
@@ -922,6 +994,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         reason = ", ".join(filter(None, [
             f"{total_size_skipped} oversized region(s) skipped" if total_size_skipped else "",
             f"{total_read_failed} region(s) failed to read" if total_read_failed else "",
+            f"decode budget exhausted ({decode_budget.exhausted_reason})" if budget_exhausted else "",
         ]))
         verdict = _status_text(INCONCLUSIVE, reason)
     else:

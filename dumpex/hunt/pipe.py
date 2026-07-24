@@ -60,13 +60,18 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     # ── Collect all pipe name occurrences ────────────────────────────
     private_pipes = []   # (region, offset, decoded_name)
     image_pipes   = []   # (region, mod_name, decoded_name)
-    region_data   = {}   # region.BaseAddress -> bytes, but ONLY for regions
-                          # that actually contain a private pipe name — this
-                          # is what Check 2 looks up, so caching every
-                          # scanned region here (not just the small subset
-                          # with a hit) would let region_data grow unbounded
-                          # across a dump with many regions, each individually
-                          # under PIPE_SCAN_MAX but large in aggregate.
+    region_c2_strings = {}   # region.BaseAddress -> [C2_PAT-matching strings]
+                              # ONLY for regions with a private pipe name.
+                              # Check 2 only ever needs these short matched
+                              # strings, not the region's raw bytes — caching
+                              # the full `data` here (as a prior version did)
+                              # let that cache grow unbounded across a dump
+                              # with many pipe-bearing regions, each
+                              # individually under PIPE_SCAN_MAX but large in
+                              # aggregate. Extracting the C2 strings inline,
+                              # right here while `data` is in scope, means
+                              # the full region bytes are never retained past
+                              # this loop iteration.
     skipped_size  = 0
     read_failed   = 0
 
@@ -140,7 +145,13 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 private_pipes.append((r, m.start(), name))
 
         if len(private_pipes) > pipes_before:
-            region_data[r.BaseAddress] = data
+            # Extract the (short) C2-context strings now, while `data` is
+            # still in scope, instead of caching the raw bytes for a later
+            # pass — this is the only piece of the region Check 2 needs.
+            strings = _extract_strings_from_data(data, min_len=6)
+            c2_strings = [s for _, _, s in strings if C2_PAT.search(s)]
+            if c2_strings:
+                region_c2_strings[r.BaseAddress] = c2_strings
 
     # Deduplicate private pipes by (region_base, name)
     seen_private = set()
@@ -187,19 +198,15 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                   f"({', '.join(mod_names)}) — expected, skipped\n"))
 
     # ── Check 2: C2 artifacts near private pipe names ─────────────────
-    # Reuses the data already read for Check 1 (region_data cache) instead
-    # of reading every private-pipe-bearing region from the dump a second
-    # time — each such region was already fully read once above.
+    # Uses the C2-context strings already extracted inline in the main loop
+    # above (region_c2_strings) — no re-read of the region and no retained
+    # copy of its raw bytes, only the short strings that actually matched.
     c2_hits = []
     for r, off, pipe_name in private_pipes:
-        data = region_data.get(r.BaseAddress)
-        if data is None:
+        c2_strings = region_c2_strings.get(r.BaseAddress)
+        if not c2_strings:
             continue
-        # Scan strings in the whole region for C2 patterns
-        strings = _extract_strings_from_data(data, min_len=6)
-        c2_strings = [s for _, _, s in strings if C2_PAT.search(s)]
-        if c2_strings:
-            c2_hits.append((r, pipe_name.strip(), c2_strings))
+        c2_hits.append((r, pipe_name.strip(), c2_strings))
 
     if c2_hits:
         detail = f"{len(c2_hits)} region(s) with pipe name + C2 artifacts"

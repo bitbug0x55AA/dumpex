@@ -1,10 +1,14 @@
 """YARA memory scanner."""
 import os
 import sys
+import atexit
+import contextlib
+import importlib.resources
 from pathlib import Path
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.core.memory import get_modules, addr_to_module, va_to_file_offset
+from dumpex.core.memory import (get_modules, get_memory_regions, addr_to_module,
+    va_to_file_offset, prot_str, _get_region_at)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt.cs_beacon import CS_MAX_SEG_SCAN
@@ -13,16 +17,58 @@ YARA_MATCH_TIMEOUT      = 30    # seconds, per (segment, rule-file) match() call
 YARA_MAX_STRINGS_PER_MATCH = 50 # cap annotated string instances kept per match
 YARA_MAX_TOTAL_HITS     = 2000  # hard cap on collected hits across the whole scan
 
-def _load_yara_rules(rules_dir: str) -> list:
+_packaged_yara_ctx_stack = None   # lazily-created; closed at process exit via atexit
+
+
+def _packaged_yara_rules_dir() -> "str | None":
+    """
+    Return the on-disk directory path of the packaged YARA rules
+    (dumpex/rules_pkg/data/yara — the single copy shipped in the wheel, see
+    pyproject.toml package-data), or None if not present.
+
+    Resolved via importlib.resources rather than a __file__-relative path,
+    so this is what actually keeps YARA scanning working for a `pip
+    install dumpex` wheel with no rules/ directory anywhere near the
+    invoking script — including a zip-safe/zipapp install, where __file__
+    isn't a real filesystem path at all. importlib.resources.as_file() is a
+    zero-cost passthrough when the package is already unpacked on disk (the
+    normal case), and only materializes to a temp directory when it isn't;
+    either way the returned path is real and glob()-able.
+    """
+    global _packaged_yara_ctx_stack
+    try:
+        traversable = importlib.resources.files("dumpex.rules_pkg").joinpath("data", "yara")
+    except (ModuleNotFoundError, FileNotFoundError, NotADirectoryError):
+        return None
+    try:
+        if not traversable.is_dir():
+            return None
+    except Exception:
+        return None
+    if _packaged_yara_ctx_stack is None:
+        _packaged_yara_ctx_stack = contextlib.ExitStack()
+        atexit.register(_packaged_yara_ctx_stack.close)
+    path = _packaged_yara_ctx_stack.enter_context(importlib.resources.as_file(traversable))
+    return str(path)
+
+def _load_yara_rules(rules_dir: str) -> tuple:
     """
     Compile every .yar / .yara file in rules_dir independently.
 
-    Returns list of (filename, compiled_rules).
-    Compiling per-file means a syntax error in one file doesn't
-    prevent the rest from running.
+    Returns (loaded, compile_failed):
+      loaded         — list of (filename, compiled_rules)
+      compile_failed — count of files that could not be compiled at all
+
+    Compiling per-file means a syntax error in one file doesn't prevent the
+    rest from running — but a file that never compiled also never
+    contributed any rule to the scan, so it must count against scan
+    coverage rather than just print a warning and vanish: a dump that would
+    have matched that broken rule file's signatures must not come back
+    NOT_DETECTED_IN_SCANNED_SCOPE as if the file's rules had actually run.
     """
     import yara, glob
     loaded = []
+    compile_failed = 0
     patterns = [
         os.path.join(rules_dir, "*.yar"),
         os.path.join(rules_dir, "*.yara"),
@@ -35,9 +81,11 @@ def _load_yara_rules(rules_dir: str) -> list:
                 loaded.append((fname, compiled))
             except yara.SyntaxError as e:
                 print(YELLOW(f"  [~] YARA syntax error in {fname}: {e}"))
+                compile_failed += 1
             except Exception as e:
                 print(YELLOW(f"  [~] Could not load {fname}: {e}"))
-    return loaded
+                compile_failed += 1
+    return loaded, compile_failed
 
 
 def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
@@ -84,23 +132,27 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         # sys.argv[0] and cwd are dev-environment assumptions — a pip-
         # installed dumpex has no rules/ next to whatever invoked it, and a
         # PyInstaller --onefile build extracts --add-data to sys._MEIPASS,
-        # not dirname(sys.argv[0]). Check the packaged locations first.
+        # not dirname(sys.argv[0]). Check the packaged location (bundled
+        # inside dumpex.rules_pkg — the single copy shipped in the wheel,
+        # see pyproject.toml package-data) right after that, ahead of any
+        # dev-tree/user-override directory.
         script_dir = Path(sys.argv[0]).resolve().parent
-        search = []
         meipass = getattr(sys, "_MEIPASS", None)
-        if meipass:
-            search.append(Path(meipass) / "rules" / "yara")
-        search.append(Path(__file__).resolve().parent.parent / "rules_pkg" / "data" / "yara")
-        search += [
-            script_dir / "rules" / "yara",   # canonical dev layout
-            Path.cwd()  / "rules" / "yara",
-            script_dir / "yara-rules",        # legacy
-            Path.cwd()  / "yara-rules",
-        ]
-        for candidate in search:
-            if candidate.is_dir():
-                rules_dir = str(candidate)
-                break
+        if meipass and (Path(meipass) / "rules" / "yara").is_dir():
+            rules_dir = str(Path(meipass) / "rules" / "yara")
+        else:
+            rules_dir = _packaged_yara_rules_dir()
+
+        if rules_dir is None:
+            for candidate in (
+                script_dir / "rules" / "yara",   # explicit user override
+                Path.cwd()  / "rules" / "yara",
+                script_dir / "yara-rules",        # legacy
+                Path.cwd()  / "yara-rules",
+            ):
+                if candidate.is_dir():
+                    rules_dir = str(candidate)
+                    break
 
     if rules_dir is None or not os.path.isdir(rules_dir):
         print(YELLOW(f"  [~] No YARA rules directory found."))
@@ -109,13 +161,20 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         return _not_evaluated("no YARA rules directory found")
 
     # ── Load rule files ───────────────────────────────────────────────
-    rule_files = _load_yara_rules(rules_dir)
+    rule_files, compile_failed = _load_yara_rules(rules_dir)
     if not rule_files:
         print(YELLOW(f"  [~] No .yar / .yara files found in {rules_dir}"))
+        if compile_failed:
+            print(YELLOW(f"      ({compile_failed} file(s) present but failed to compile)"))
         print()
+        if compile_failed:
+            return _not_evaluated(f"all {compile_failed} rule file(s) in {rules_dir} failed to compile")
         return _not_evaluated(f"no .yar/.yara files in {rules_dir}")
 
     print(DIM(f"  [*] Loaded {len(rule_files)} rule file(s) from {rules_dir}"))
+    if compile_failed:
+        print(YELLOW(f"  [~] {compile_failed} rule file(s) failed to compile — "
+                      f"scan coverage is reduced, not just a warning\n"))
 
     # ── Collect memory segments ───────────────────────────────────────
     segs = []
@@ -129,7 +188,16 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         print()
         return _not_evaluated("Memory64ListStream missing from this dump")
 
+    # Two independent context sources used to judge whether a
+    # PE_In_Private_Memory hit is really in private memory or just a
+    # legitimately loaded module: ModuleList (name/base/size per module) and
+    # MemoryInfo (per-region Type/Protect/State, including MEM_IMAGE vs
+    # MEM_PRIVATE). Either one alone lets us classify a hit; only when BOTH
+    # are absent from this dump can the address not be judged at all.
+    modules_available  = bool(mf.modules and mf.modules.modules)
+    mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
     modules = get_modules(mf)
+    regions = get_memory_regions(mf)
     reader  = mf.get_reader()
 
     print(DIM(f"  [*] Scanning {len(segs)} segment(s) …\n"))
@@ -141,10 +209,22 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     read_failed  = 0
     scanned      = 0
     timed_out    = 0
+    match_failed = 0   # non-timeout exception from compiled.match() — the
+                       # (segment, rule-file) pair was never actually
+                       # evaluated and must not be indistinguishable from
+                       # "evaluated, no match"
     truncated    = False   # hit YARA_MAX_TOTAL_HITS before finishing the scan
     suppressed_module_pe = 0   # PE_In_Private_Memory hits suppressed because
                                # the match address resolved to a known module
-    triggered_rules = set()   # for deduped score
+                               # or a MEM_IMAGE region
+    context_unverified   = 0   # PE_In_Private_Memory hits that could not be
+                               # classified at all: neither ModuleList nor
+                               # MemoryInfo is present in this dump, so there
+                               # is no way to tell a legitimate module header
+                               # from a genuinely private-memory PE
+    triggered_rules  = set()   # rule names with at least one confidently
+                                # classified hit — drives score/DETECTED
+    unverified_rules = set()   # rule names whose hits were ALL context_unverified
 
     for seg in segs:
         if truncated:
@@ -170,9 +250,17 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
             except Exception as e:
                 # yara-python raises yara.TimeoutError specifically; match on
                 # the exception class name rather than message text, which
-                # isn't a stable contract across yara-python versions.
+                # isn't a stable contract across yara-python versions. Any
+                # OTHER exception (a crafted/corrupt segment tripping a YARA
+                # internal error, a module error, etc.) must still be
+                # accounted for — silently `continue`-ing here previously
+                # left this (segment, rule-file) pair unrepresented in any
+                # counter, so a scan that hit nothing else came back CLEAN
+                # even though this pair was never actually evaluated.
                 if "timeout" in type(e).__name__.lower():
                     timed_out += 1
+                else:
+                    match_failed += 1
                 continue
 
             for match in matches:
@@ -180,20 +268,43 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     truncated = True
                     break
 
-                # PE_In_Private_Memory's own rule description says it's only
-                # meaningful applied to MEM_PRIVATE/unregistered memory
-                # (condition is just "$mz at 0 and $pe" — no memory-type
-                # awareness at all, since YARA matches raw segment bytes
-                # with no such context). Left unfiltered, it fires on every
-                # legitimately loaded module's MZ/PE header too, since the
-                # match is always at the scanned segment's own base address.
-                # Suppress it specifically when that address resolves to a
-                # known module.
-                if match.rule == "PE_In_Private_Memory" and addr_to_module(seg.start_virtual_address, modules):
-                    suppressed_module_pe += 1
-                    continue
+                hit_context_unverified = False
+                if match.rule == "PE_In_Private_Memory":
+                    # PE_In_Private_Memory's own rule description says it's
+                    # only meaningful applied to MEM_PRIVATE/unregistered
+                    # memory (condition is just "$mz at 0 and $pe" — no
+                    # memory-type awareness at all, since YARA matches raw
+                    # segment bytes with no such context). Left unfiltered,
+                    # it fires on every legitimately loaded module's MZ/PE
+                    # header too, since the match is always at the scanned
+                    # segment's own base address. Suppress it when that
+                    # address resolves to a known module OR the backing
+                    # region is MEM_IMAGE — either signal alone is enough;
+                    # depending on ModuleList alone missed normal images
+                    # whenever that optional stream wasn't captured.
+                    addr    = seg.start_virtual_address
+                    module  = addr_to_module(addr, modules) if modules_available else None
+                    region  = _get_region_at(addr, regions) if mem_info_available else None
+                    is_known_image = module is not None
+                    is_mem_image   = region is not None and "MEM_IMAGE" in prot_str(region.Type)
 
-                triggered_rules.add(match.rule)
+                    if is_known_image or is_mem_image:
+                        suppressed_module_pe += 1
+                        continue
+
+                    if not modules_available and not mem_info_available:
+                        # Neither context source exists in this dump — the
+                        # address cannot be classified as module vs. private
+                        # memory at all. Still record the hit (an
+                        # investigator should see it) but it must not, by
+                        # itself, stand as a confirmed detection.
+                        context_unverified += 1
+                        hit_context_unverified = True
+
+                if hit_context_unverified:
+                    unverified_rules.add(match.rule)
+                else:
+                    triggered_rules.add(match.rule)
 
                 # Annotate each matched string with its absolute VA + file offset,
                 # capped so one match with pathologically many instances can't
@@ -240,6 +351,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     "seg_fo":   seg.start_file_address,
                     "seg_size": seg.size,
                     "strings":  annotated_strings,
+                    "context_unverified": hit_context_unverified,
                 })
             if truncated:
                 break
@@ -249,6 +361,8 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         scan_note += f" ({read_failed} segment(s) failed to read)"
     if timed_out:
         scan_note += f" ({timed_out} match() call(s) timed out after {YARA_MATCH_TIMEOUT}s)"
+    if match_failed:
+        scan_note += f" ({match_failed} match() call(s) failed)"
     if truncated:
         scan_note += f" — TRUNCATED at {YARA_MAX_TOTAL_HITS} hits, scan did not complete"
     print(DIM(f"  [*] Scan complete — {scanned} segment(s) scanned{scan_note}."))
@@ -256,19 +370,34 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         print(DIM(f"  [·] {suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
                   f"MZ/PE header belonged to a known, legitimately loaded module.\n"))
 
+    coverage = {
+        "rule_files_compiled": compile_failed == 0,
+        "segments_read":       read_failed == 0,
+        "segments_size_ok":    skipped == 0,
+        "matches_completed":   match_failed == 0 and timed_out == 0,
+        "hit_cap_not_reached": not truncated,
+    }
+    findings["coverage"] = coverage
+    any_gap = not all(coverage.values())
+
     # ── Nothing found ─────────────────────────────────────────────────
     if not all_hits:
         print()
-        if skipped or read_failed or timed_out:
+        if any_gap:
             reason = ", ".join(filter(None, [
+                f"{compile_failed} rule file(s) failed to compile" if compile_failed else "",
                 f"{skipped} oversized segment(s) skipped" if skipped else "",
                 f"{read_failed} segment(s) failed to read" if read_failed else "",
                 f"{timed_out} match() call(s) timed out" if timed_out else "",
+                f"{match_failed} match() call(s) failed" if match_failed else "",
+                f"hit cap reached" if truncated else "",
             ]))
             findings["status"] = INCONCLUSIVE
+            findings["scan_complete"] = False
             _print_check("YARA rules", _status_text(INCONCLUSIVE, reason))
         else:
             findings["status"] = NOT_DETECTED_IN_SCANNED_SCOPE
+            findings["scan_complete"] = True
             _print_check("YARA rules", GREEN("CLEAN — no rules matched"))
         return findings
 
@@ -335,29 +464,64 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                 detail    += f"  … +{overflow} more"
                 has_verbose_overflow = True
 
+        # A rule whose EVERY hit is context_unverified (PE_In_Private_Memory
+        # with no ModuleList and no MemoryInfo to classify it against)
+        # cannot be reported as a confirmed detection — it's shown for
+        # visibility but with a distinct, non-alarming status.
+        rule_is_unverified = all(h.get("context_unverified") for h in hits)
+        status_label = (YELLOW("CONTEXT UNVERIFIED — no ModuleList/MemoryInfo to classify")
+                         if rule_is_unverified else RED("SUSPICIOUS"))
         _print_check(
             f"Rule: {rule_name}  {DIM('(' + rfile + ')')}",
-            RED("SUSPICIOUS"),
+            status_label,
             detail,
         )
 
+    if suppressed_module_pe:
+        print(DIM(f"  [·] {suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
+                  f"resolved to a known module or a MEM_IMAGE region.\n"))
+    if context_unverified:
+        print(YELLOW(f"  [~] {context_unverified} PE_In_Private_Memory match(es) could not be "
+                      f"classified — this dump has neither ModuleList nor MemoryInfo, so "
+                      f"module-backed vs. private memory cannot be told apart.\n"))
+
     # ── Verdict ───────────────────────────────────────────────────────
+    # score/DETECTED are driven only by confidently classified hits
+    # (triggered_rules); rules whose only evidence is context_unverified
+    # don't get to unilaterally declare DETECTED — see INCONCLUSIVE branch.
     score = len(triggered_rules)
     findings["matches"]   = all_hits
     findings["score"]     = score
     findings["rules_hit"] = sorted(triggered_rules)
-    findings["status"]    = DETECTED
 
-    verdict = (RED(f"HIGH — {score} distinct rule(s) matched")      if score >= 3 else
-               YELLOW(f"MEDIUM — {score} distinct rule(s) matched") if score >= 1 else
-               GREEN("CLEAN"))
-    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score} rule(s))\n")
-    if truncated or timed_out:
+    if triggered_rules:
+        findings["status"]        = DETECTED
+        findings["scan_complete"] = not any_gap   # keep DETECTED even with
+                                                   # partial coverage, but say so
+        verdict = (RED(f"HIGH — {score} distinct rule(s) matched")      if score >= 3 else
+                   YELLOW(f"MEDIUM — {score} distinct rule(s) matched") if score >= 1 else
+                   GREEN("CLEAN"))
+        print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score} rule(s))\n")
+    else:
+        # Only unverified hits (and/or coverage gaps) — a negative can't be
+        # trusted and a positive can't be confirmed either.
+        findings["status"]        = INCONCLUSIVE
+        findings["scan_complete"] = False
+        reason = (f"{len(unverified_rules)} rule(s) matched but could not be classified "
+                  f"(context_unverified)" if unverified_rules else
+                  "coverage incomplete, see above")
+        print(f"  {BOLD('[ VERDICT ]')}  {_status_text(INCONCLUSIVE, reason)}\n")
+
+    if truncated or timed_out or match_failed or compile_failed:
         print(YELLOW(f"  [~] Scan did not fully complete "
                       f"({'hit result cap' if truncated else ''}"
-                      f"{' + ' if truncated and timed_out else ''}"
-                      f"{f'{timed_out} timeout(s)' if timed_out else ''}) — "
-                      f"there may be more matches than shown.\n"))
+                      f"{' + ' if truncated and (timed_out or match_failed or compile_failed) else ''}"
+                      f"{f'{timed_out} timeout(s)' if timed_out else ''}"
+                      f"{' + ' if timed_out and (match_failed or compile_failed) else ''}"
+                      f"{f'{match_failed} match failure(s)' if match_failed else ''}"
+                      f"{' + ' if match_failed and compile_failed else ''}"
+                      f"{f'{compile_failed} rule file(s) failed to compile' if compile_failed else ''}"
+                      f") — there may be more matches than shown.\n"))
 
     if not verbose and has_verbose_overflow:
         print(DIM("  Use --verbose to expand all region and string match details.\n"))

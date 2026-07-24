@@ -11,7 +11,8 @@ import datetime
 from pathlib import Path
 from dumpex.ui.colors import DIM
 from dumpex.core.memory import va_to_file_offset, prot_str
-from dumpex.core.safe_io import check_overwrite, atomic_write_text
+from dumpex.core.safe_io import (check_not_dump_path, atomic_write_text,
+    reserve_unique_path, resolve_output_target)
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -89,14 +90,7 @@ class StructuredOutput:
         return json.dumps(doc, indent=2, ensure_ascii=False)
 
     def write_json(self, path: str, cmd_label: str = "", force: bool = False):
-        p = Path(path)
-        is_dir_target = str(path).endswith(('/', '\\')) or p.is_dir()
-        if is_dir_target:
-            ts    = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-            label = f"_{cmd_label}" if cmd_label else ""
-            p     = p / f"dumpex_{ts}{label}.json"
-        else:
-            check_overwrite(p, force, "--json output")
+        p = resolve_output_target(path, ".json", cmd_label, self._meta["dump_path"], force)
         summary = atomic_write_text(p, self.to_json())
         print(DIM(f"  [·] JSON written → {p}  ({summary})"))
 
@@ -116,15 +110,18 @@ class StructuredOutput:
             All tables written into a single CSV file, separated by a blank
             row and a "## section / table" header line.
 
-        Both modes write atomically (temp file + rename) and refuse to
-        clobber an existing file unless force=True.
+        Both modes write atomically (temp file + rename). Single-file mode
+        refuses to clobber an existing file unless force=True; directory
+        mode instead auto-picks a fresh, collision-free filename per table
+        (dumpex_..._001.csv, _002.csv, ...) so a same-second re-run can
+        never silently overwrite a prior table — see reserve_unique_path.
         """
-        p     = Path(path)
+        p_in  = Path(path)
         label = f"{cmd_label}_" if cmd_label else ""
 
         # ── Single-file mode ─────────────────────────────────────────────
-        if p.suffix.lower() == ".csv":
-            check_overwrite(p, force, "--csv output")
+        if p_in.suffix.lower() == ".csv":
+            p = resolve_output_target(path, ".csv", cmd_label, self._meta["dump_path"], force)
             buf = io.StringIO()
             total_rows = 0
             for section, data in self._sections.items():
@@ -144,14 +141,15 @@ class StructuredOutput:
             return
 
         # ── Directory mode ───────────────────────────────────────────────
-        p.mkdir(parents=True, exist_ok=True)
+        check_not_dump_path(p_in, self._meta["dump_path"], "--csv output directory")
+        p_in.mkdir(parents=True, exist_ok=True)
         for section, data in self._sections.items():
             tables = self._section_to_tables(section, data)
             for table_name, rows in tables.items():
                 if not rows:
                     continue
-                fname = p / f"dumpex_{label}{section}_{table_name}.csv"
-                check_overwrite(fname, force, f"CSV table output ({fname.name})")
+                stem  = f"dumpex_{label}{section}_{table_name}"
+                fname = reserve_unique_path(p_in, stem, ".csv", force=force)
                 buf = io.StringIO()
                 writer = csv.DictWriter(buf, fieldnames=rows[0].keys(),
                                        extrasaction="ignore")
@@ -328,10 +326,12 @@ class StructuredOutput:
                             f"module={modname}; Protect={prot_str(r.Protect)}"))
                     for r, mod, hits, is_non_wl in findings.get("ioc_image", []):
                         fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
-                        modname = os.path.basename(mod.name) if mod else "(unknown module)"
+                        modname  = os.path.basename(mod.name) if mod else "(unknown module)"
+                        n_strong = sum(1 for h in hits if not h[3])
+                        n_weak   = sum(1 for h in hits if h[3])
                         findings_rows.append(_blank_row(
                             "stomping_ioc_in_module", r.BaseAddress, fo,
-                            f"module={modname}; ioc_count={len(hits)}"))
+                            f"module={modname}; strong={n_strong}; weak={n_weak}"))
 
                 # Obfuscation (encoding.py) findings
                 if ttp == "obfuscation":
