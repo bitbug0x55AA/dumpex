@@ -1,6 +1,7 @@
 """--extract and --strings commands."""
 import re
 import sys
+from pathlib import Path
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import read_region
 

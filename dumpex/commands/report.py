@@ -1,6 +1,7 @@
 """--report command."""
 import os
 import re
+from pathlib import Path
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import (get_modules, get_memory_regions,
