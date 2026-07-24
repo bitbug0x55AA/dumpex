@@ -21,31 +21,37 @@ def _hunt_rwx(mf: MinidumpFile) -> list:
     return hits
 
 
-def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> list:
+def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tuple:
     """
-    Return list of (region, in_module_list) for MZ headers. Internal.
+    Return (list of (region, in_module_list) for MZ headers, read_failed_count).
 
     If ModuleListStream isn't present, module_list_available is False and
     this returns [] rather than flagging every MZ header as "hidden": an
     empty modules list doesn't mean "nothing here is a known module" — it
     means we have no way to tell. Producing a hit for every legitimate
     loaded PE header would be pure false-positive noise, not a finding.
+
+    A region whose 2-byte header read fails is not the same as a region
+    that was read and doesn't start with 'MZ' — it was never actually
+    looked at, so it's tracked separately rather than silently dropped.
     """
     if not module_list_available:
-        return []
+        return [], 0
     modules    = get_modules(mf)
     known_bases = {m.baseaddress for m in modules}
     hits = []
+    read_failed = 0
     for r in get_memory_regions(mf):
         if prot_str(r.State) != "MEM_COMMIT":
             continue
         try:
             data = read_region(mf, r.BaseAddress, min(2, r.RegionSize))
         except Exception:
+            read_failed += 1
             continue
         if data[:2] == b'MZ':
             hits.append((r, r.BaseAddress in known_bases))
-    return hits
+    return hits, read_failed
 
 
 def _hunt_unbacked_threads(mf: MinidumpFile, module_list_available: bool = True) -> list:
@@ -79,12 +85,12 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     modules = get_modules(mf)
     rwx     = _hunt_rwx(mf)
-    pe_hits = _hunt_hidden_pe(mf, module_list_available=coverage["module_list_stream"])
+    pe_hits, pe_read_failed = _hunt_hidden_pe(mf, module_list_available=coverage["module_list_stream"])
     threads = _hunt_unbacked_threads(mf, module_list_available=coverage["module_list_stream"])
 
     evaluated = coverage["memory_info_stream"] or coverage["thread_info_stream"]
     complete  = (coverage["memory_info_stream"] and coverage["thread_info_stream"]
-                 and coverage["module_list_stream"])
+                 and coverage["module_list_stream"] and pe_read_failed == 0)
 
     hidden_pe_regions   = [r for r, known in pe_hits if not known]
     injected_pe_regions = {r.BaseAddress for r in hidden_pe_regions}
@@ -142,6 +148,7 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         "score":          score,
         "status":         status,
         "coverage":       coverage,
+        "pe_read_failed": pe_read_failed,
     }
 
     # ── Output ────────────────────────────────────────────────────────
@@ -225,6 +232,9 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         print(YELLOW("  [~] ModuleListStream not in this dump — hidden-PE and unbacked-thread checks "
                       "were skipped rather than guessed (an empty module list would otherwise make "
                       "every PE look hidden and every thread look unbacked).\n"))
+    if pe_read_failed:
+        print(YELLOW(f"  [~] {pe_read_failed} region(s) could not be read while checking for "
+                      f"hidden PE headers — coverage is incomplete.\n"))
 
     # Verdict — driven by correlation, not by how many independent checks
     # happened to fire somewhere in the address space. Signals that never

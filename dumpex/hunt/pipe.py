@@ -60,9 +60,15 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     # ── Collect all pipe name occurrences ────────────────────────────
     private_pipes = []   # (region, offset, decoded_name)
     image_pipes   = []   # (region, mod_name, decoded_name)
-    region_data   = {}   # region.BaseAddress -> bytes, cached so Check 2
-                          # doesn't re-read every private-pipe region again
+    region_data   = {}   # region.BaseAddress -> bytes, but ONLY for regions
+                          # that actually contain a private pipe name — this
+                          # is what Check 2 looks up, so caching every
+                          # scanned region here (not just the small subset
+                          # with a hit) would let region_data grow unbounded
+                          # across a dump with many regions, each individually
+                          # under PIPE_SCAN_MAX but large in aggregate.
     skipped_size  = 0
+    read_failed   = 0
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
@@ -76,8 +82,9 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
+            read_failed += 1
             continue
-        region_data[r.BaseAddress] = data
+        pipes_before = len(private_pipes)
 
         def _extract_pipe_name(data, m, is_utf16):
             end = m.end()
@@ -131,6 +138,9 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 image_pipes.append((r, os.path.basename(mod.name), name))
             else:
                 private_pipes.append((r, m.start(), name))
+
+        if len(private_pipes) > pipes_before:
+            region_data[r.BaseAddress] = data
 
     # Deduplicate private pipes by (region_base, name)
     seen_private = set()
@@ -270,7 +280,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     score = findings["score"]
     if not mem_info_available:
         status = NOT_EVALUATED
-    elif score == 0 and skipped_size:
+    elif score == 0 and (skipped_size or read_failed):
         status = INCONCLUSIVE
     else:
         status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
@@ -279,7 +289,11 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     if not mem_info_available:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
     elif status == INCONCLUSIVE:
-        verdict = _status_text(INCONCLUSIVE, f"{skipped_size} oversized region(s) skipped")
+        reason = ", ".join(filter(None, [
+            f"{skipped_size} oversized region(s) skipped" if skipped_size else "",
+            f"{read_failed} region(s) failed to read" if read_failed else "",
+        ]))
+        verdict = _status_text(INCONCLUSIVE, reason)
     else:
         verdict = (RED("HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT") if score >= 3 else
                    YELLOW("LIKELY C2 PIPE")                           if score == 2 else

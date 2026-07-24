@@ -13,89 +13,12 @@ from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.pe_utils import _duration_100ns_to_str
 from dumpex.core.safe_io import check_not_dump_path, check_overwrite, atomic_write_bytes
 
-def _get_region_at(addr: int, regions: list):
-    """Find the memory region containing addr."""
-    for r in regions:
-        if r.BaseAddress <= addr < r.BaseAddress + r.RegionSize:
-            return r
-    return None
-
-
-def _extract_strings_from_data(data: bytes, min_len: int = 6) -> list:
-    """\n    Extract ASCII and UTF-16LE strings.\n    Returns list of (offset, enc, string).\n    UTF-16LE covers Windows API names, registry paths, and wide-char C2\n    configs that pure ASCII scans miss entirely.\n    """
-    results = []
-    pat_ascii = rb'[ -~]{' + str(min_len).encode() + rb',}'
-    results += [(m.start(), "ASCII", m.group().decode("ascii", errors="replace"))
-                for m in re.finditer(pat_ascii, data)]
-    pat_uni = rb'(?:[ -~]\x00){' + str(min_len).encode() + rb',}'
-    results += [(m.start(), "UTF16", m.group().decode("utf-16-le", errors="replace"))
-                for m in re.finditer(pat_uni, data)]
-    results.sort(key=lambda x: x[0])
-    return results
-
-
-def _hexdump_context(data: bytes, offset: int, region_base: int,
-                     before: int = 128, after: int = 128) -> str:
-    """\n    Hex+ASCII mixed dump of bytes surrounding offset within data.\n    Used for context-aware IOC display (e.g. UA string near C2 IP/port).\n    """
-    start     = max(0, offset - before)
-    end       = min(len(data), offset + after)
-    chunk     = data[start:end]
-    hit_rel   = offset - start
-
-    lines = []
-    for i in range(0, len(chunk), 16):
-        row     = chunk[i:i+16]
-        addr    = region_base + start + i
-        hex_col = " ".join(f"{b:02x}" for b in row).ljust(48)
-        asc_col = "".join(chr(b) if 32 <= b < 127 else "." for b in row)
-        if i <= hit_rel < i + 16:
-            lines.append(f"    {YELLOW(f'0x{addr:016x}')}  {YELLOW(hex_col)}  {YELLOW(asc_col)}")
-        else:
-            lines.append(f"    {DIM(f'0x{addr:016x}')}  {hex_col}  {DIM(asc_col)}")
-    return "\n".join(lines)
-
-
-def _verdict(dims: dict) -> str:
-    score = len(dims)
-    if score == 0:
-        return GREEN("CLEAN — no suspicious indicators found")
-    if score == 1:
-        return YELLOW("SUSPICIOUS — 1 independent indicator")
-    if score == 2:
-        return YELLOW("LIKELY MALICIOUS — 2 independent indicators")
-    return RED(f"HIGH CONFIDENCE MALICIOUS — {score} independent indicators")
-
-
-def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
-    """\n    Search all committed memory regions for needle (ASCII and UTF-16LE).\n    Returns list of (region, offset, encoding) tuples, one per hit region\n    (deduplicated by region base so we report each region once).\n    """
-    regions  = get_memory_regions(mf)
-    hits     = []
-    seen     = set()
-    needle_b = needle.encode("ascii", errors="replace")
-    needle_w = needle.encode("utf-16-le")
-
-    for r in regions:
-        if prot_str(r.State) != "MEM_COMMIT":
-            continue
-        if r.BaseAddress in seen:
-            continue
-        try:
-            data = read_region(mf, r.BaseAddress, r.RegionSize)
-        except Exception:
-            continue
-
-        off_a = data.find(needle_b)
-        if off_a != -1:
-            hits.append((r, off_a, "ASCII"))
-            seen.add(r.BaseAddress)
-            continue
-
-        off_w = data.find(needle_w)
-        if off_w != -1:
-            hits.append((r, off_w, "UTF16"))
-            seen.add(r.BaseAddress)
-
-    return hits
+# _get_region_at, _extract_strings_from_data, _hexdump_context, _verdict,
+# and _search_string_in_memory all come from the core.memory import above.
+# They used to be duplicated here (a leftover that shadowed the imports —
+# meaning fixes made to the shared core.memory versions, like
+# _search_string_in_memory's MAX_REGION_READ cap, silently never applied
+# to --report-string). Do not redefine them locally again.
 
 
 def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None,

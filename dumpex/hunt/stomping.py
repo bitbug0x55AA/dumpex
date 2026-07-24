@@ -7,7 +7,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str,
     read_region, _extract_ioc_strings)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
-    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 
 def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
@@ -62,26 +62,29 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     print(f"  {DIM('[*] Scanning executable MEM_IMAGE regions for IOC strings...')}\n")
     ioc_hits    = []
     skipped_wl  = []
-    weak_only_skipped = []   # regions whose only "hit" was a single common API name
+    weak_only_skipped = []   # regions whose hits were entirely common API names
 
     # Some rules.yaml IOC patterns are legitimate, commonly-imported WinAPI
     # names (VirtualAlloc, WriteProcessMemory, CreateRemoteThread, WSASocket)
     # or a generic term (base64) — any non-trivial DLL that happens to call
     # one of these has it in its import table or string table for entirely
-    # benign reasons. A single such match alone is not evidence a module was
-    # modified; it only counts here alongside a second, distinct match (weak
-    # or strong) — matching the same "don't score isolated weak evidence as
-    # if it were independent" principle applied elsewhere in this hunt suite.
+    # benign reasons. Multiple of these together are still not independent
+    # corroborating evidence: VirtualAlloc + WriteProcessMemory routinely
+    # co-occur in the import tables of many ordinary, unmodified programs
+    # (debuggers, AV, admin tools) — the two aren't uncorrelated events the
+    # way two genuinely distinct suspicious terms would be, so counting
+    # "2+ distinct weak terms" as sufficient just moves the false-positive
+    # bar rather than raising it. Only a match outside this weak set counts.
     _WEAK_IOC_TERMS = {"virtualalloc", "writeprocessmemory",
                        "createremotethread", "wsasocket", "base64"}
 
     def _is_weak_only(hits) -> bool:
         matched  = {s.lower() for _, _, s in hits}
         non_weak = [m for m in matched if not any(t in m for t in _WEAK_IOC_TERMS)]
-        if non_weak:
-            return False   # something beyond a weak term matched — not weak-only
-        distinct_weak_terms = {t for t in _WEAK_IOC_TERMS if any(t in m for m in matched)}
-        return len(distinct_weak_terms) < 2
+        return not non_weak
+
+    ioc_skipped_size = 0
+    ioc_read_failed  = 0
 
     for r in regions:
         mtype = prot_str(r.Type)
@@ -92,6 +95,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
         if "EXECUTE" not in p:
             continue
         if r.RegionSize > 0x500000:
+            ioc_skipped_size += 1
             continue
 
         mod      = addr_to_module(r.BaseAddress, modules)
@@ -100,28 +104,30 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
 
         try:
             data    = read_region(mf, r.BaseAddress, r.RegionSize)
-            strings = _extract_ioc_strings(data, r.BaseAddress)
-
-            # Apply appropriate pattern based on whitelist status
-            if is_wl:
-                # Whitelisted: only flag the truly unusual IOCs, not network strings
-                hits = [(off, enc, s) for off, enc, s in strings
-                        if STOMPING_IOC.search(s)]
-            else:
-                # Non-whitelisted: flag both general IOCs and network patterns
-                hits = [(off, enc, s) for off, enc, s in strings
-                        if STOMPING_IOC.search(s) or STOMPING_NET_IOC.search(s)]
-
-            if not hits:
-                if is_wl:
-                    skipped_wl.append(mod_name)
-                continue
-            if _is_weak_only(hits):
-                weak_only_skipped.append((r, mod, hits))
-                continue
-            ioc_hits.append((r, mod, hits, not is_wl))
         except Exception:
+            ioc_read_failed += 1
             continue
+
+        strings = _extract_ioc_strings(data, r.BaseAddress)
+
+        # Apply appropriate pattern based on whitelist status
+        if is_wl:
+            # Whitelisted: only flag the truly unusual IOCs, not network strings
+            hits = [(off, enc, s) for off, enc, s in strings
+                    if STOMPING_IOC.search(s)]
+        else:
+            # Non-whitelisted: flag both general IOCs and network patterns
+            hits = [(off, enc, s) for off, enc, s in strings
+                    if STOMPING_IOC.search(s) or STOMPING_NET_IOC.search(s)]
+
+        if not hits:
+            if is_wl:
+                skipped_wl.append(mod_name)
+            continue
+        if _is_weak_only(hits):
+            weak_only_skipped.append((r, mod, hits))
+            continue
+        ioc_hits.append((r, mod, hits, not is_wl))
 
     if skipped_wl:
         unique_wl = sorted(set(skipped_wl))
@@ -179,12 +185,23 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     findings["score"] = score
     findings["correlated_regions"] = correlated_bases
 
-    status = (NOT_EVALUATED if not mem_info_available else
-              DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE)
+    coverage_gap = bool(ioc_skipped_size or ioc_read_failed)
+    if not mem_info_available:
+        status = NOT_EVALUATED
+    elif score == 0 and coverage_gap:
+        status = INCONCLUSIVE
+    else:
+        status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
 
     if not mem_info_available:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
+    elif status == INCONCLUSIVE:
+        reason = ", ".join(filter(None, [
+            f"{ioc_skipped_size} oversized region(s) skipped" if ioc_skipped_size else "",
+            f"{ioc_read_failed} region(s) failed to read" if ioc_read_failed else "",
+        ]))
+        verdict = _status_text(INCONCLUSIVE, reason)
     elif correlated_bases:
         addrs = ", ".join(f"0x{a:x}" for a in correlated_bases)
         print(RED(f"  [!] Same region carries BOTH signals: {addrs}\n"))

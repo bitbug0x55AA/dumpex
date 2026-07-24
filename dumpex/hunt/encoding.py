@@ -400,7 +400,7 @@ def _sm_validate_and_decode(data: bytes, candidates: list,
 
 def _scan_sleep_mask(regions, modules, mf) -> tuple:
     """
-    Returns (hits, scanned_count).
+    Returns (hits, scanned_count, size_skipped_count, read_failed_count).
     Layer 0: scan PAGE_READWRITE MEM_PRIVATE regions for CS Sleep Mask
     XOR encoding and attempt key recovery + decode.
 
@@ -421,10 +421,14 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
           'cls'     : dict,           # _classify_decoded() result
         }
     """
-    hits    = []
-    scanned = 0   # regions actually read+analyzed, past all filters —
-                  # distinguishes "0 candidate regions existed" from
-                  # "candidates existed but every one was too big/wrong type"
+    hits        = []
+    scanned     = 0   # regions actually read+analyzed, past all filters —
+                       # distinguishes "0 candidate regions existed" from
+                       # "candidates existed but every one was too big/wrong type"
+    size_skipped = 0   # otherwise-eligible region skipped only for exceeding
+                        # SLEEP_MASK_REGION_MAX — a real coverage gap, unlike
+                        # a region that structurally doesn't match this layer
+    read_failed  = 0
     for r in regions:
         if prot_str(r.State)   != 'MEM_COMMIT':
             continue
@@ -432,16 +436,18 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
             continue
         if prot_str(r.Protect) != 'PAGE_READWRITE':
             continue
-        if r.RegionSize > SLEEP_MASK_REGION_MAX:
-            continue
         if r.RegionSize < SLEEP_MASK_KEY_SIZE * SLEEP_MASK_MIN_REPEAT:
             continue   # region too small to ever contain enough key repetitions
         if addr_to_module(r.BaseAddress, modules):
             continue   # module-backed region — not the beacon's private heap
+        if r.RegionSize > SLEEP_MASK_REGION_MAX:
+            size_skipped += 1
+            continue
 
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
+            read_failed += 1
             continue
         scanned += 1
 
@@ -460,7 +466,7 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
                 'cls':     cls,
             })
 
-    return hits, scanned
+    return hits, scanned, size_skipped, read_failed
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -468,20 +474,24 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
 # ══════════════════════════════════════════════════════════════════════════
 
 def _scan_entropy(regions, modules, mf, susp_prots):
-    hits    = []
-    scanned = 0
+    hits        = []
+    scanned     = 0
+    size_skipped = 0
+    read_failed  = 0
     for r in regions:
         if prot_str(r.State) != 'MEM_COMMIT':
             continue
         if prot_str(r.Type) != 'MEM_PRIVATE':
             continue
-        if r.RegionSize > ENTROPY_SCAN_MAX:
-            continue
         if addr_to_module(r.BaseAddress, modules):
+            continue
+        if r.RegionSize > ENTROPY_SCAN_MAX:
+            size_skipped += 1
             continue
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
+            read_failed += 1
             continue
         if len(data) < 256:
             continue
@@ -494,7 +504,7 @@ def _scan_entropy(regions, modules, mf, susp_prots):
 
         if ent >= threshold:
             hits.append((r, ent, threshold))
-    return hits, scanned
+    return hits, scanned, size_skipped, read_failed
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -642,7 +652,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Layer 0: CS Sleep Mask XOR ────────────────────────────────────────
     print(DIM("  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …"))
-    sleep_mask_hits, sleep_mask_scanned = _scan_sleep_mask(regions, modules, mf)
+    sleep_mask_hits, sleep_mask_scanned, sleep_mask_size_skipped, sleep_mask_read_failed = \
+        _scan_sleep_mask(regions, modules, mf)
 
     if sleep_mask_hits:
         detail = f"{len(sleep_mask_hits)} region(s) with confirmed CS Sleep Mask encoding"
@@ -684,7 +695,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Layer 1: Entropy ──────────────────────────────────────────────────
     print(DIM("  [*] Layer 1: Shannon entropy scan …"))
-    entropy_hits, entropy_scanned = _scan_entropy(regions, modules, mf, SUSPICIOUS_PROTS)
+    entropy_hits, entropy_scanned, entropy_size_skipped, entropy_read_failed = \
+        _scan_entropy(regions, modules, mf, SUSPICIOUS_PROTS)
 
     if entropy_hits:
         detail = f"{len(entropy_hits)} high-entropy MEM_PRIVATE region(s)"
@@ -713,21 +725,25 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     print(DIM("  [*] Layers 2-4: Base64 / XOR / GZIP scan …"))
 
     b64_hits, xor_hits, cmp_hits, pe_hits = [], [], [], []
-    decode_scanned = 0
+    decode_scanned      = 0
+    decode_size_skipped = 0
+    decode_read_failed  = 0
 
     for r in regions:
         if prot_str(r.State) != 'MEM_COMMIT':
             continue
         if prot_str(r.Type) not in ('MEM_PRIVATE', 'MEM_IMAGE'):
             continue
-        if r.RegionSize > DECODE_SCAN_MAX:
-            continue
         mod = addr_to_module(r.BaseAddress, modules)
         if prot_str(r.Type) == 'MEM_IMAGE' and _is_system_dll(mod):
+            continue
+        if r.RegionSize > DECODE_SCAN_MAX:
+            decode_size_skipped += 1
             continue
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
+            decode_read_failed += 1
             continue
         decode_scanned += 1
 
@@ -878,13 +894,19 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     # available) while every single one gets filtered out by every layer
     # (e.g. a dump with only huge regions), meaning nothing was actually
     # read despite MemoryInfoListStream being present. A negative result
-    # in that case is not the same claim as "scanned and clean".
+    # in that case is not the same claim as "scanned and clean". This must
+    # catch partial gaps too, not just the all-skipped extreme: one region
+    # scanned fine and a second one skipped/unreadable is still an
+    # incomplete scope, even though *something* got scanned.
     any_region_scanned = bool(sleep_mask_scanned or entropy_scanned or decode_scanned)
     fully_skipped = mem_info_available and bool(regions) and not any_region_scanned
+    total_size_skipped = sleep_mask_size_skipped + entropy_size_skipped + decode_size_skipped
+    total_read_failed  = sleep_mask_read_failed + entropy_read_failed + decode_read_failed
+    coverage_gap = bool(total_size_skipped or total_read_failed)
 
     if not mem_info_available:
         status = NOT_EVALUATED
-    elif fully_skipped:
+    elif fully_skipped or (score == 0 and coverage_gap):
         status = INCONCLUSIVE
     else:
         status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
@@ -896,6 +918,12 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         verdict = _status_text(INCONCLUSIVE,
             f"all {len(regions)} region(s) filtered out by every layer's size/type limits "
             f"— nothing was actually scanned")
+    elif status == INCONCLUSIVE:
+        reason = ", ".join(filter(None, [
+            f"{total_size_skipped} oversized region(s) skipped" if total_size_skipped else "",
+            f"{total_read_failed} region(s) failed to read" if total_read_failed else "",
+        ]))
+        verdict = _status_text(INCONCLUSIVE, reason)
     else:
         verdict = (RED("HIGH CONFIDENCE — active payload obfuscation")    if score >= 3 else
                    YELLOW("LIKELY — encoding/obfuscation present")        if score >= 2 else

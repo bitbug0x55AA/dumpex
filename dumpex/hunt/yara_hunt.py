@@ -142,6 +142,8 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     scanned      = 0
     timed_out    = 0
     truncated    = False   # hit YARA_MAX_TOTAL_HITS before finishing the scan
+    suppressed_module_pe = 0   # PE_In_Private_Memory hits suppressed because
+                               # the match address resolved to a known module
     triggered_rules = set()   # for deduped score
 
     for seg in segs:
@@ -177,6 +179,20 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                 if len(all_hits) >= YARA_MAX_TOTAL_HITS:
                     truncated = True
                     break
+
+                # PE_In_Private_Memory's own rule description says it's only
+                # meaningful applied to MEM_PRIVATE/unregistered memory
+                # (condition is just "$mz at 0 and $pe" — no memory-type
+                # awareness at all, since YARA matches raw segment bytes
+                # with no such context). Left unfiltered, it fires on every
+                # legitimately loaded module's MZ/PE header too, since the
+                # match is always at the scanned segment's own base address.
+                # Suppress it specifically when that address resolves to a
+                # known module.
+                if match.rule == "PE_In_Private_Memory" and addr_to_module(seg.start_virtual_address, modules):
+                    suppressed_module_pe += 1
+                    continue
+
                 triggered_rules.add(match.rule)
 
                 # Annotate each matched string with its absolute VA + file offset,
@@ -236,6 +252,9 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     if truncated:
         scan_note += f" — TRUNCATED at {YARA_MAX_TOTAL_HITS} hits, scan did not complete"
     print(DIM(f"  [*] Scan complete — {scanned} segment(s) scanned{scan_note}."))
+    if suppressed_module_pe:
+        print(DIM(f"  [·] {suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
+                  f"MZ/PE header belonged to a known, legitimately loaded module.\n"))
 
     # ── Nothing found ─────────────────────────────────────────────────
     if not all_hits:

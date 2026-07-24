@@ -136,7 +136,13 @@ def main():
         need_structured = bool(args.json or args.csv)
         out = StructuredOutput(args.dumpfile, mf) if need_structured else None
 
-        if args.json:
+        # Both --json and --csv support a directory target (an existing
+        # directory is the normal case there, not a collision to refuse —
+        # write_json/write_csv auto-generate a timestamped filename inside
+        # it). Only a concrete file target is checked here; mirrors the
+        # is_dir_target logic in StructuredOutput.write_json/write_csv.
+        json_is_dir_target = args.json and (str(args.json).endswith(('/', '\\')) or Path(args.json).is_dir())
+        if args.json and not json_is_dir_target:
             check_overwrite(args.json, args.force, "--json output")
         if args.csv and args.csv.lower().endswith(".csv"):
             check_overwrite(args.csv, args.force, "--csv output")
