@@ -99,7 +99,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             "injection": ("Process Injection",          results["injection"]["score"],  3),
             "hollowing": ("Process Hollowing",          results["hollowing"]["score"],  4),
             "stomping":  ("Module Stomping",            results["stomping"]["score"],   2),
-            "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       4),
+            "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       3),
             "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],  1),
             "yara":      ("YARA Rules",                 results["yara"]["score"],       3),
             "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   5),

@@ -196,7 +196,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         _print_check("C2 artifacts near pipe names",
                      GREEN("CLEAN — no C2 patterns found near private pipe names"))
 
-    # ── Check 3: Known framework patterns with attribution ───────────
+    # ── Check 3: Known framework patterns — attribution only, not scored ──
+    # This re-classifies the exact same strings Check 1 already counted
+    # (a framework match can only happen on a name already in
+    # private_pipes) — it tells you WHICH framework a pipe name looks
+    # like, it isn't a second independent piece of evidence. Counting it
+    # as its own +1 double-counts one observation as two signals.
     framework_hits = []  # (region, full_pipe_name, framework, technique, mitre_id)
     for r, off, name in private_pipes:
         clean = name.strip()
@@ -212,11 +217,11 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             detail += f"\n          Framework: {framework}"
             detail += f"\n          Technique: {technique}"
             detail += f"\n          MITRE    : {mitre}"
-        _print_check("Known C2 framework pipe naming pattern",
-                     RED(f"SUSPICIOUS — {framework_hits[0][2]} pipe pattern identified"),
+        _print_check("Known C2 framework pipe naming pattern (attribution)",
+                     YELLOW(f"NOTABLE — matches known {framework_hits[0][2]} pipe naming, "
+                            f"not scored separately from Check 1"),
                      detail)
         findings["framework_pipes"] = framework_hits
-        findings["score"] += 1
     else:
         _print_check("Known C2 framework pipe naming pattern",
                      DIM("CLEAN — no known framework patterns (note: custom names evade this check)"))
@@ -261,7 +266,8 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                    YELLOW("LIKELY C2 PIPE")                           if score == 2 else
                    YELLOW("POSSIBLE C2 PIPE")                         if score == 1 else
                    GREEN("CLEAN — no named pipe C2 indicators"))
-    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/4 checks flagged)\n")
+    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/3 checks flagged — "
+          f"framework attribution is informational, not separately scored)\n")
 
     if not verbose and private_pipes:
         print(DIM("  Use --verbose to expand pipe names, C2 strings, and thread details.\n"))

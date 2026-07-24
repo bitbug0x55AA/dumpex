@@ -126,18 +126,42 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
         _print_check("IOC strings in module code regions",
                      GREEN("CLEAN — no IOC patterns in executable module memory"))
 
-    score = findings["score"]
+    # Check 1 (RWX MEM_IMAGE) and Check 2 (IOC strings in EXECUTE MEM_IMAGE)
+    # scan independently — Check 2 only requires "EXECUTE" in the protection
+    # string, not RWX, so it can fire on a completely different, unrelated
+    # module region than Check 1. Two unrelated facts about two unrelated
+    # regions must not combine into HIGH CONFIDENCE; only escalate when the
+    # *same* region shows both signals. This also keeps findings["score"]
+    # itself correlation-aware, since --hunt all's generic aggregate table
+    # reads score/max_score directly and would otherwise call a single
+    # uncorrelated check "HIGH CONFIDENCE" too.
+    rwx_bases       = {r.BaseAddress for r, _ in rwx_image}
+    ioc_bases       = {r.BaseAddress for r, _, _, _ in ioc_hits}
+    correlated_bases = rwx_bases & ioc_bases
+
+    raw_hits = int(bool(rwx_image)) + int(bool(ioc_hits))
+    score = 2 if correlated_bases else (1 if raw_hits else 0)
+    findings["score"] = score
+    findings["correlated_regions"] = correlated_bases
+
     status = (NOT_EVALUATED if not mem_info_available else
               DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE)
     findings["status"] = status
 
     if not mem_info_available:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
+    elif correlated_bases:
+        addrs = ", ".join(f"0x{a:x}" for a in correlated_bases)
+        print(RED(f"  [!] Same region carries BOTH signals: {addrs}\n"))
+        verdict = RED("HIGH CONFIDENCE STOMPING — RWX and IOC strings in the same region")
+    elif raw_hits >= 2:
+        verdict = YELLOW("POSSIBLE STOMPING — RWX and IOC strings found, but in different, "
+                          "unrelated regions (not correlated)")
+    elif raw_hits == 1:
+        verdict = YELLOW("POSSIBLE STOMPING")
     else:
-        verdict = (RED("HIGH CONFIDENCE STOMPING") if score >= 2 else
-                   YELLOW("POSSIBLE STOMPING") if score == 1 else
-                   GREEN("CLEAN — no stomping indicators"))
-    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2 checks flagged)\n")
+        verdict = GREEN("CLEAN — no stomping indicators")
+    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2 checks flagged, {raw_hits} raw signal(s))\n")
 
     if not verbose and ioc_hits:
         print(DIM("  Use --verbose to list matched strings per region.\n"))

@@ -203,7 +203,7 @@ class StructuredOutput:
                     continue
                 score     = findings.get("score", 0)
                 max_score = {"injection": 3, "hollowing": 4, "stomping": 2,
-                             "pipe": 4, "cs-beacon": 1, "yara": 3}.get(ttp, "?")
+                             "pipe": 3, "cs-beacon": 1, "yara": 3}.get(ttp, "?")
                 verdict   = ("CLEAN"           if score == 0 else
                              "HIGH CONFIDENCE" if isinstance(max_score, int) and score >= max_score - 1
                              else "POSSIBLE")

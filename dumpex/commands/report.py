@@ -144,14 +144,24 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
             print(DIM("  [·] All hits are in known system modules — no actionable regions to triage."))
             return
 
-        # Run full triage only on private/unregistered hits
+        # Run full triage only on private/unregistered hits.
+        # report_tid is deliberately NOT forwarded here: each string hit is
+        # an independent region, and this TID has no established relationship
+        # to any specific one of them. Carrying it into every recursive
+        # sub-report would merge one unrelated thread fact into N unrelated
+        # regions' verdicts — the same "unrelated evidence combined into one
+        # confidence score" bug this function must not reintroduce.
+        if report_tid:
+            print(DIM(f"  [·] --report-tid 0x{report_tid} was also given, but a TID has no "
+                      f"established relationship to any specific string hit region — "
+                      f"it is not carried into the per-region triage below.\n"))
         for i, (r, off, enc) in enumerate(private_hits, 1):
             if len(private_hits) > 1:
                 print(BOLD(f"{'═'*55}"))
                 print(BOLD(f"  Triaging hit {i}/{len(private_hits)} — region 0x{r.BaseAddress:x}"))
                 print(BOLD(f"{'═'*55}"))
             cmd_report(mf,
-                      report_tid=report_tid,
+                      report_tid=None,
                       report_addr=hex(r.BaseAddress),
                       report_string=None,   # prevent recursion
                       extract_to=extract_to,
@@ -193,6 +203,16 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
     print()
 
     # ── 1. Thread analysis ────────────────────────────────────────────
+    # tid_unbacked_detail is held back rather than written straight into
+    # dims: if the caller also gave an independent --report-addr, this
+    # thread's own StartAddress has no established relationship to that
+    # address until section 2 resolves a region and we can check whether
+    # this thread actually executes inside it. Merging it unconditionally
+    # would combine two unrelated facts (an unrelated unbacked thread +
+    # an unrelated flagged region) into one MECE verdict.
+    tid_unbacked_detail = None
+    tid_start_addr      = None
+    addr_was_independent = addr_int is not None
     if tid_int is not None:
         print(BOLD("[ 1 ] THREAD ANALYSIS"))
         print("─" * 50)
@@ -202,6 +222,7 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
             print(DIM("      Thread may have exited before dump was taken."))
         else:
             sa  = thread_info.StartAddress or 0
+            tid_start_addr = sa
             mod = addr_to_module(sa, modules)
             print(f"  {'TID':<22} 0x{thread_info.ThreadId:x}")
             print(f"  {'Start Address':<22} 0x{sa:x}")
@@ -212,7 +233,7 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
                 print(f"  {'Module Range':<22} 0x{mod.baseaddress:x} — 0x{mod.endaddress:x}")
             else:
                 print(f"  {'Backed By':<22} {RED('NOT IN ANY MODULE ⚠')}")
-                dims['unbacked_thread'] = (
+                tid_unbacked_detail = (
                     f"TID 0x{thread_info.ThreadId:x} start addr 0x{sa:x} "
                     f"has no module backing"
                 )
@@ -268,6 +289,26 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
             except Exception:
                 pass
         print()
+
+    # ── Reconcile TID evidence against the resolved region ─────────────
+    # Only fold the TID's own "unbacked thread" fact into the combined
+    # verdict when it is actually about the same location as the region
+    # analyzed above — either the region address itself came from this
+    # TID's StartAddress (no independent --report-addr was given), or the
+    # TID's StartAddress happens to fall inside the independently-resolved
+    # region. Otherwise it is two unrelated facts about two unrelated
+    # locations and must not be combined into one confidence score.
+    if tid_unbacked_detail is not None:
+        tid_correlated = (not addr_was_independent) or (
+            region is not None and tid_start_addr is not None and
+            region.BaseAddress <= tid_start_addr < region.BaseAddress + region.RegionSize
+        )
+        if tid_correlated:
+            dims['unbacked_thread'] = tid_unbacked_detail
+        else:
+            print(YELLOW(f"  [~] TID's unbacked-thread status is NOT correlated with the region "
+                          f"at 0x{target_addr:x} (different, unrelated location) — "
+                          f"excluded from the combined verdict below.\n"))
 
     # ── 3. Other threads in same region ──────────────────────────────
     if region is not None:
