@@ -181,7 +181,7 @@ python -m dumpex dump.DMP --hunt all --json results.json --csv ./output/ --txt r
 
 ## Detection Rules (`rules.yaml`)
 
-TTP detection is driven by `rules.yaml`, loaded from `rules/rules.yaml` relative to the package directory (or the current working directory as fallback). Built-in defaults are used if the file is not found, so the tool always runs standalone.
+TTP detection is driven by `rules.yaml`, bundled inside the package at `dumpex/rules_pkg/data/rules.yaml` — this is what `pip install dumpex` ships, so the tool works standalone with no extra files. Drop a custom `rules.yaml` into a `rules/` folder next to the `dumpex` binary or in the current working directory to override it without touching the installed package. Built-in defaults are used if no file is found at all.
 
 The rule file controls:
 
@@ -196,7 +196,7 @@ The rule file controls:
 
 To add new detection coverage, edit `rules.yaml` — no code changes required.
 
-YARA rules are loaded from `rules/yara/`. Drop any `.yar` file into that directory to extend scanning coverage.
+YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Drop any `.yar` file into a `rules/yara/` folder next to the `dumpex` binary or in the current working directory (or pass `--yara-dir PATH`) to extend scanning coverage without touching the installed package.
 
 ---
 
@@ -268,7 +268,7 @@ Specifically derived from 1768.py:
 - CS version estimation from max field ID (`DetermineCSVersionFromConfig`)
 - Config sanity check logic (`SanityCheckExtractedConfig`)
 
-The YARA signatures `CS_Beacon_Config_XOR69` and `CS_Beacon_Config_XOR2E` in [`rules/yara/cs_indicators.yar`](rules/yara/cs_indicators.yar) are also derived from the same work.
+The YARA signatures `CS_Beacon_Config_XOR69` and `CS_Beacon_Config_XOR2E` in [`dumpex/rules_pkg/data/yara/cs_indicators.yar`](dumpex/rules_pkg/data/yara/cs_indicators.yar) are also derived from the same work.
 
 > Didier Stevens, *1768.py and cs-analyze-processdump.py — Analyse Cobalt Strike beacons*  
 > <https://blog.didierstevens.com/programs/cobalt-strike-tools/>  
@@ -278,7 +278,7 @@ The YARA signatures `CS_Beacon_Config_XOR69` and `CS_Beacon_Config_XOR2E` in [`r
 
 ### Elastic Security
 
-The YARA rules `CS_SleepMask_64bit` and `CS_SleepMask_32bit` in [`rules/yara/cs_indicators.yar`](rules/yara/cs_indicators.yar) are based on byte signatures published by **Elastic Security**.
+The YARA rules `CS_SleepMask_64bit` and `CS_SleepMask_32bit` in [`dumpex/rules_pkg/data/yara/cs_indicators.yar`](dumpex/rules_pkg/data/yara/cs_indicators.yar) are based on byte signatures published by **Elastic Security**.
 
 > Elastic Security, *Detecting Cobalt Strike with Memory Signatures*  
 > <https://www.elastic.co/blog/detecting-cobalt-strike-with-memory-signatures>  
@@ -298,7 +298,7 @@ The contextual understanding of Cobalt Strike beacon memory layout and config ex
 
 ### Stephen Fewer — ReflectiveDLLInjection
 
-The hash constants used in the `Reflective_Loader_Signature` YARA rule in [`rules/yara/suspicious_memory.yar`](rules/yara/suspicious_memory.yar) are derived from the **ReflectiveDLLInjection** project by Stephen Fewer.
+The hash constants used in the `Reflective_Loader_Signature` YARA rule in [`dumpex/rules_pkg/data/yara/suspicious_memory.yar`](dumpex/rules_pkg/data/yara/suspicious_memory.yar) are derived from the **ReflectiveDLLInjection** project by Stephen Fewer.
 
 > Stephen Fewer, *ReflectiveDLLInjection*  
 > <https://github.com/stephenfewer/ReflectiveDLLInjection>  
