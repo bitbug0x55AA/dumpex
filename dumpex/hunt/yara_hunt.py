@@ -138,6 +138,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     # all_hits: list of dicts, one per YARA match instance
     all_hits     = []
     skipped      = 0
+    read_failed  = 0
     scanned      = 0
     timed_out    = 0
     truncated    = False   # hit YARA_MAX_TOTAL_HITS before finishing the scan
@@ -152,6 +153,9 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         try:
             data = reader.read(seg.start_virtual_address, seg.size)
         except Exception:
+            # A segment that fails to read was never actually scanned — it
+            # must not be silently indistinguishable from "scanned, clean".
+            read_failed += 1
             continue
         scanned += 1
 
@@ -225,6 +229,8 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                 break
 
     scan_note = f" ({skipped} segment(s) >50 MB skipped)" if skipped else ""
+    if read_failed:
+        scan_note += f" ({read_failed} segment(s) failed to read)"
     if timed_out:
         scan_note += f" ({timed_out} match() call(s) timed out after {YARA_MATCH_TIMEOUT}s)"
     if truncated:
@@ -234,9 +240,10 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     # ── Nothing found ─────────────────────────────────────────────────
     if not all_hits:
         print()
-        if skipped or timed_out:
+        if skipped or read_failed or timed_out:
             reason = ", ".join(filter(None, [
                 f"{skipped} oversized segment(s) skipped" if skipped else "",
+                f"{read_failed} segment(s) failed to read" if read_failed else "",
                 f"{timed_out} match() call(s) timed out" if timed_out else "",
             ]))
             findings["status"] = INCONCLUSIVE

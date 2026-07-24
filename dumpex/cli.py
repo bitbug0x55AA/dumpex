@@ -8,7 +8,9 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, DIM, BOLD
 from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
 from dumpex.rules_pkg.loader import get_rules
-from dumpex.ui.structured import StructuredOutput, _TeeWriter
+from dumpex.ui.structured import StructuredOutput, _ANSI_RE
+from dumpex.core.safe_io import (check_not_dump_path, check_overwrite,
+    AtomicTextTee)
 
 from dumpex.commands.list_cmd import cmd_list
 from dumpex.commands.modules  import cmd_modules
@@ -67,7 +69,21 @@ def main():
     parser.add_argument('--report-tid',  metavar='TID',  help='Anchor report to this Thread ID (hex or decimal)')
     parser.add_argument('--report-addr',   metavar='ADDR',   help='Anchor report to this memory address (hex)')
     parser.add_argument('--report-string', metavar='STRING', help='Search all memory for string, report on each hit region')
+    parser.add_argument('--force',      action='store_true',
+                        help='Allow overwriting an existing output file (--txt/--output/--json/--csv). '
+                             'Never allowed for the input dump file itself.')
     args = parser.parse_args()
+
+    # ── Output-path safety ──────────────────────────────────────────────────
+    # Checked before the dump is opened or any output file is touched: a
+    # MinidumpFile keeps reading from the file handle on demand for the life
+    # of the process (not a one-time upfront slurp), so there is no point in
+    # program execution where overwriting the dump path becomes "safe" —
+    # this is a hard, unconditional refusal, not something --force can lift.
+    for out_arg, label in ((args.txt, "--txt"), (args.output, "--output"),
+                            (args.json, "--json"), (args.csv, "--csv")):
+        if out_arg:
+            check_not_dump_path(out_arg, args.dumpfile, label)
 
     # ── Derive a short label describing the command being run ─────────────
     # Used in auto-generated filenames when the caller passes a directory.
@@ -94,25 +110,53 @@ def main():
     cmd_label = _cmd_label()
 
     # ── Plain-text tee ────────────────────────────────────────────────────
-    _tee_fh     = None
+    # Streams to a temp file for the whole run; only renamed onto the final
+    # path in the finally-block below, once (and only if) the run completes.
+    # A crash or Ctrl-C partway through leaves the target path untouched
+    # rather than holding a truncated, silently-incomplete "report".
+    _tee        = None
     _tee_stdout = None
     if args.txt:
         txt_path = Path(args.txt)
-        if str(args.txt).endswith(('/', '\\')) or txt_path.is_dir():
+        is_dir_target = str(args.txt).endswith(('/', '\\')) or txt_path.is_dir()
+        if is_dir_target:
             ts       = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
             label    = f"_{cmd_label}" if cmd_label else ""
             txt_path = txt_path / f"dumpex_{ts}{label}.txt"
-        txt_path.parent.mkdir(parents=True, exist_ok=True)
-        _tee_fh     = open(txt_path, 'w', encoding='utf-8')
+        else:
+            check_overwrite(txt_path, args.force, "--txt output")
+        _tee        = AtomicTextTee(txt_path, sys.stdout, _ANSI_RE)
         _tee_stdout = sys.stdout
-        sys.stdout  = _TeeWriter(_tee_fh, _tee_stdout)
+        sys.stdout  = _tee
 
-    mf   = open_dump(args.dumpfile)
+    try:
+        mf   = open_dump(args.dumpfile)
 
-    # Structured output collector — populated by commands that support it
-    need_structured = bool(args.json or args.csv)
-    out = StructuredOutput(args.dumpfile, mf) if need_structured else None
+        # Structured output collector — populated by commands that support it
+        need_structured = bool(args.json or args.csv)
+        out = StructuredOutput(args.dumpfile, mf) if need_structured else None
 
+        if args.json:
+            check_overwrite(args.json, args.force, "--json output")
+        if args.csv and args.csv.lower().endswith(".csv"):
+            check_overwrite(args.csv, args.force, "--csv output")
+        if args.output:
+            check_overwrite(args.output, args.force, "--output file")
+
+        _run(args, mf, out, cmd_label)
+    except BaseException:
+        if _tee is not None:
+            _tee.abandon()
+            sys.stdout = _tee_stdout
+        raise
+    else:
+        if _tee is not None:
+            sys.stdout = _tee_stdout
+            summary = _tee.finalize()
+            print(DIM(f"  [·] TXT  written → {txt_path}  ({summary})"))
+
+
+def _run(args, mf, out, cmd_label):
     if   args.list:         cmd_list(mf, args.filter)
     elif args.modules:
         data = cmd_modules(mf)
@@ -136,7 +180,8 @@ def main():
                   report_addr=args.report_addr,
                   report_string=args.report_string,
                   extract_to=args.output,
-                  min_len=args.min_len)
+                  min_len=args.min_len,
+                  force=args.force)
     elif args.hunt:
         data = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir)
         if out and data: out.add("hunt", data)
@@ -146,7 +191,7 @@ def main():
         addr = parse_hex_or_int(args.extract)
         _req = parse_hex_or_int(args.size) if args.size else None
         size = _resolve_size(mf, addr, _req)
-        cmd_extract(mf, addr, size, args.output, auto_size=_req is None)
+        cmd_extract(mf, addr, size, args.output, auto_size=_req is None, force=args.force)
 
     elif args.strings:
         addr = parse_hex_or_int(args.strings)
@@ -158,15 +203,9 @@ def main():
     if out:
         if out._sections:
             if args.json:
-                out.write_json(args.json, cmd_label=cmd_label)
+                out.write_json(args.json, cmd_label=cmd_label, force=args.force)
             if args.csv:
-                out.write_csv(args.csv,  cmd_label=cmd_label)
+                out.write_csv(args.csv,  cmd_label=cmd_label, force=args.force)
         else:
             print(DIM("  [~] --json/--csv: this command does not produce structured output."))
-
-    # ── Finalise plain-text output ────────────────────────────────────────
-    if _tee_fh is not None:
-        sys.stdout = _tee_stdout          # restore real stdout first
-        _tee_fh.close()
-        print(DIM(f"  [·] TXT  written → {args.txt}"))
 

@@ -1,4 +1,6 @@
-"""Structured output: JSON / CSV / TXT (tee)."""
+"""Structured output: JSON / CSV. Plain-text tee lives in core/safe_io.py
+(AtomicTextTee) — kept there because it shares atomic-write plumbing with
+the rest of the output-safety helpers."""
 import io
 import re
 import os
@@ -9,36 +11,9 @@ import datetime
 from pathlib import Path
 from dumpex.ui.colors import DIM
 from dumpex.core.memory import va_to_file_offset, prot_str
+from dumpex.core.safe_io import check_overwrite, atomic_write_text
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
-
-class _TeeWriter:
-    """
-    Transparent stdout wrapper that tees to a plain-text file.
-
-    - Terminal stream: unchanged (colours preserved)
-    - File stream:     ANSI escape codes stripped, UTF-8 encoded
-
-    Activated by setting sys.stdout = _TeeWriter(file_handle, original_stdout).
-    Deactivated by restoring sys.stdout = original_stdout.
-    """
-
-    def __init__(self, fh: io.TextIOWrapper, original):
-        self._fh       = fh          # plain-text file
-        self._original = original    # real terminal stdout
-
-    def write(self, text: str) -> int:
-        self._original.write(text)
-        self._fh.write(_ANSI_RE.sub('', text))
-        return len(text)
-
-    def flush(self):
-        self._original.flush()
-        self._fh.flush()
-
-    # Delegate everything else (isatty, fileno, etc.) to the real stdout
-    def __getattr__(self, name):
-        return getattr(self._original, name)
 
 
 def _json_safe(obj):
@@ -113,20 +88,21 @@ class StructuredOutput:
         doc.update(_json_safe(self._sections))
         return json.dumps(doc, indent=2, ensure_ascii=False)
 
-    def write_json(self, path: str, cmd_label: str = ""):
+    def write_json(self, path: str, cmd_label: str = "", force: bool = False):
         p = Path(path)
-        if str(path).endswith(('/', '\\')) or p.is_dir():
+        is_dir_target = str(path).endswith(('/', '\\')) or p.is_dir()
+        if is_dir_target:
             ts    = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
             label = f"_{cmd_label}" if cmd_label else ""
             p     = p / f"dumpex_{ts}{label}.json"
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w", encoding="utf-8") as fh:
-            fh.write(self.to_json())
-        print(DIM(f"  [·] JSON written → {p}"))
+        else:
+            check_overwrite(p, force, "--json output")
+        summary = atomic_write_text(p, self.to_json())
+        print(DIM(f"  [·] JSON written → {p}  ({summary})"))
 
     # ── CSV ──────────────────────────────────────────────────────────────
 
-    def write_csv(self, path: str, cmd_label: str = ""):
+    def write_csv(self, path: str, cmd_label: str = "", force: bool = False):
         """
         Write structured output as CSV.
 
@@ -139,28 +115,32 @@ class StructuredOutput:
         Single-file mode  (path ends with .csv, e.g. "result.csv")
             All tables written into a single CSV file, separated by a blank
             row and a "## section / table" header line.
+
+        Both modes write atomically (temp file + rename) and refuse to
+        clobber an existing file unless force=True.
         """
         p     = Path(path)
         label = f"{cmd_label}_" if cmd_label else ""
 
         # ── Single-file mode ─────────────────────────────────────────────
         if p.suffix.lower() == ".csv":
-            p.parent.mkdir(parents=True, exist_ok=True)
+            check_overwrite(p, force, "--csv output")
+            buf = io.StringIO()
             total_rows = 0
-            with open(p, "w", newline="", encoding="utf-8") as fh:
-                for section, data in self._sections.items():
-                    tables = self._section_to_tables(section, data)
-                    for table_name, rows in tables.items():
-                        if not rows:
-                            continue
-                        fh.write(f"## {section} / {table_name}\n")
-                        writer = csv.DictWriter(fh, fieldnames=rows[0].keys(),
-                                               extrasaction="ignore")
-                        writer.writeheader()
-                        writer.writerows(rows)
-                        fh.write("\n")
-                        total_rows += len(rows)
-            print(DIM(f"  [·] CSV  written → {p}  ({total_rows} row(s) across all tables)"))
+            for section, data in self._sections.items():
+                tables = self._section_to_tables(section, data)
+                for table_name, rows in tables.items():
+                    if not rows:
+                        continue
+                    buf.write(f"## {section} / {table_name}\n")
+                    writer = csv.DictWriter(buf, fieldnames=rows[0].keys(),
+                                           extrasaction="ignore")
+                    writer.writeheader()
+                    writer.writerows(rows)
+                    buf.write("\n")
+                    total_rows += len(rows)
+            summary = atomic_write_text(p, buf.getvalue(), encoding="utf-8")
+            print(DIM(f"  [·] CSV  written → {p}  ({total_rows} row(s) across all tables, {summary})"))
             return
 
         # ── Directory mode ───────────────────────────────────────────────
@@ -171,12 +151,14 @@ class StructuredOutput:
                 if not rows:
                     continue
                 fname = p / f"dumpex_{label}{section}_{table_name}.csv"
-                with open(fname, "w", newline="", encoding="utf-8") as fh:
-                    writer = csv.DictWriter(fh, fieldnames=rows[0].keys(),
-                                           extrasaction="ignore")
-                    writer.writeheader()
-                    writer.writerows(rows)
-                print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s))"))
+                check_overwrite(fname, force, f"CSV table output ({fname.name})")
+                buf = io.StringIO()
+                writer = csv.DictWriter(buf, fieldnames=rows[0].keys(),
+                                       extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(rows)
+                summary = atomic_write_text(fname, buf.getvalue(), encoding="utf-8")
+                print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s), {summary})"))
 
     def _section_to_tables(self, section: str, data) -> dict:
         """
@@ -202,15 +184,44 @@ class StructuredOutput:
                 if not isinstance(findings, dict):
                     continue
                 score     = findings.get("score", 0)
+                status    = findings.get("status", "")
                 max_score = {"injection": 3, "hollowing": 4, "stomping": 2,
                              "pipe": 3, "cs-beacon": 1, "yara": 3,
                              "obfuscation": 5}.get(ttp, "?")
-                verdict   = ("CLEAN"           if score == 0 else
-                             "HIGH CONFIDENCE" if isinstance(max_score, int) and score >= max_score - 1
-                             else "POSSIBLE")
+
+                # Verdict must be driven by status, not score alone: a
+                # NOT_EVALUATED scanner (dependency/stream missing) or an
+                # INCONCLUSIVE one (partial coverage — segments skipped,
+                # unreadable, timed out) both report score=0, and score==0
+                # alone reading as "CLEAN" is exactly the false-negative
+                # this status model exists to prevent — a downstream SIEM/
+                # SOAR consuming this CSV has no other signal to catch it.
+                if status == "NOT_EVALUATED":
+                    verdict           = "NOT_EVALUATED"
+                    coverage_complete = False
+                elif status == "INCONCLUSIVE":
+                    verdict           = "INCONCLUSIVE"
+                    coverage_complete = False
+                else:
+                    coverage_complete = True
+                    verdict = ("CLEAN"           if score == 0 else
+                               "HIGH CONFIDENCE" if isinstance(max_score, int) and score >= max_score - 1
+                               else "POSSIBLE")
+
+                coverage = findings.get("coverage") or {}
+                if not coverage_complete:
+                    missing = [k for k, v in coverage.items() if not v]
+                    coverage_reason = (f"missing: {', '.join(missing)}" if missing else
+                                        "not evaluated" if status == "NOT_EVALUATED" else
+                                        "partial coverage")
+                else:
+                    coverage_reason = ""
+
                 summary_rows.append({
-                    "ttp": ttp, "score": score,
-                    "max_score": max_score, "verdict": verdict,
+                    "ttp": ttp, "score": score, "max_score": max_score,
+                    "status": status, "verdict": verdict,
+                    "coverage_complete": coverage_complete,
+                    "coverage_reason": coverage_reason,
                 })
 
                 # CS beacon configs

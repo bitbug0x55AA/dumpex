@@ -4,8 +4,9 @@ import sys
 from pathlib import Path
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import read_region
+from dumpex.core.safe_io import atomic_write_bytes, check_overwrite
 
-def cmd_extract(mf, addr, size, output, auto_size=False):
+def cmd_extract(mf, addr, size, output, auto_size=False, force=False):
     auto_note = DIM(" (auto from region)") if auto_size else ""
     print(f"[*] Reading 0x{size:x}{auto_note} bytes from 0x{addr:x} ...")
     try:
@@ -16,9 +17,13 @@ def cmd_extract(mf, addr, size, output, auto_size=False):
     if data[:2] == b'MZ':
         print(YELLOW("[!] MZ header detected — this looks like an injected PE!"))
 
+    # output may be auto-generated from addr (no --output given), so this
+    # is the first point the final path is known — check here even though
+    # an explicit --output was already checked earlier, before the read.
     out = output or f"region_0x{addr:x}.bin"
-    Path(out).write_bytes(data)
-    print(GREEN(f"[+] Saved {len(data)} bytes → {out}"))
+    check_overwrite(out, force, "--extract output")
+    summary = atomic_write_bytes(out, data)
+    print(GREEN(f"[+] Saved → {out}  ({summary})"))
 
 
 def cmd_strings(mf, addr, size, min_len, grep, encoding, auto_size=False):

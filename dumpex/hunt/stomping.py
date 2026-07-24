@@ -62,6 +62,26 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
     print(f"  {DIM('[*] Scanning executable MEM_IMAGE regions for IOC strings...')}\n")
     ioc_hits    = []
     skipped_wl  = []
+    weak_only_skipped = []   # regions whose only "hit" was a single common API name
+
+    # Some rules.yaml IOC patterns are legitimate, commonly-imported WinAPI
+    # names (VirtualAlloc, WriteProcessMemory, CreateRemoteThread, WSASocket)
+    # or a generic term (base64) — any non-trivial DLL that happens to call
+    # one of these has it in its import table or string table for entirely
+    # benign reasons. A single such match alone is not evidence a module was
+    # modified; it only counts here alongside a second, distinct match (weak
+    # or strong) — matching the same "don't score isolated weak evidence as
+    # if it were independent" principle applied elsewhere in this hunt suite.
+    _WEAK_IOC_TERMS = {"virtualalloc", "writeprocessmemory",
+                       "createremotethread", "wsasocket", "base64"}
+
+    def _is_weak_only(hits) -> bool:
+        matched  = {s.lower() for _, _, s in hits}
+        non_weak = [m for m in matched if not any(t in m for t in _WEAK_IOC_TERMS)]
+        if non_weak:
+            return False   # something beyond a weak term matched — not weak-only
+        distinct_weak_terms = {t for t in _WEAK_IOC_TERMS if any(t in m for m in matched)}
+        return len(distinct_weak_terms) < 2
 
     for r in regions:
         mtype = prot_str(r.Type)
@@ -87,22 +107,37 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False) -> dict:
                 # Whitelisted: only flag the truly unusual IOCs, not network strings
                 hits = [(off, enc, s) for off, enc, s in strings
                         if STOMPING_IOC.search(s)]
-                if hits:
-                    ioc_hits.append((r, mod, hits, False))
-                else:
-                    skipped_wl.append(mod_name)
             else:
                 # Non-whitelisted: flag both general IOCs and network patterns
                 hits = [(off, enc, s) for off, enc, s in strings
                         if STOMPING_IOC.search(s) or STOMPING_NET_IOC.search(s)]
-                if hits:
-                    ioc_hits.append((r, mod, hits, True))
+
+            if not hits:
+                if is_wl:
+                    skipped_wl.append(mod_name)
+                continue
+            if _is_weak_only(hits):
+                weak_only_skipped.append((r, mod, hits))
+                continue
+            ioc_hits.append((r, mod, hits, not is_wl))
         except Exception:
             continue
 
     if skipped_wl:
         unique_wl = sorted(set(skipped_wl))
         print(f"  {DIM(f'[·] Whitelisted network DLLs skipped (network strings expected): {chr(44).join(unique_wl)}')}")
+        print()
+
+    if weak_only_skipped:
+        print(DIM(f"  [·] {len(weak_only_skipped)} region(s) matched only a single common "
+                  f"API name (e.g. VirtualAlloc/WriteProcessMemory/CreateRemoteThread/"
+                  f"WSASocket) — not scored on its own, since any DLL calling that API "
+                  f"has it in its import table legitimately:"))
+        if verbose:
+            for r, mod, hits in weak_only_skipped:
+                name = os.path.basename(mod.name) if mod else "(unknown)"
+                terms = sorted({s for _, _, s in hits})
+                print(f"      0x{r.BaseAddress:x}  [{name}]  {', '.join(terms)}")
         print()
 
     if ioc_hits:

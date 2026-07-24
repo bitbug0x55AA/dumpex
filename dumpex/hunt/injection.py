@@ -21,8 +21,18 @@ def _hunt_rwx(mf: MinidumpFile) -> list:
     return hits
 
 
-def _hunt_hidden_pe(mf: MinidumpFile) -> list:
-    """Return list of (region, in_module_list) for MZ headers. Internal."""
+def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> list:
+    """
+    Return list of (region, in_module_list) for MZ headers. Internal.
+
+    If ModuleListStream isn't present, module_list_available is False and
+    this returns [] rather than flagging every MZ header as "hidden": an
+    empty modules list doesn't mean "nothing here is a known module" — it
+    means we have no way to tell. Producing a hit for every legitimate
+    loaded PE header would be pure false-positive noise, not a finding.
+    """
+    if not module_list_available:
+        return []
     modules    = get_modules(mf)
     known_bases = {m.baseaddress for m in modules}
     hits = []
@@ -38,8 +48,16 @@ def _hunt_hidden_pe(mf: MinidumpFile) -> list:
     return hits
 
 
-def _hunt_unbacked_threads(mf: MinidumpFile) -> list:
-    """Return list of ThreadInfo with no module backing. Internal."""
+def _hunt_unbacked_threads(mf: MinidumpFile, module_list_available: bool = True) -> list:
+    """
+    Return list of ThreadInfo with no module backing. Internal.
+
+    Same reasoning as _hunt_hidden_pe: without ModuleListStream, every
+    thread would look "unbacked" regardless of whether it actually is —
+    that's an absence-of-data artifact, not evidence of injection.
+    """
+    if not module_list_available:
+        return []
     modules = get_modules(mf)
     infos   = get_thread_infos(mf)
     return [ti for ti in infos
@@ -48,23 +66,25 @@ def _hunt_unbacked_threads(mf: MinidumpFile) -> list:
 
 def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     """\n    Detect classic process injection via cross-correlation of three signals.\n    Each signal alone can be noise; overlap between them raises confidence.\n    Returns dict of findings for use in --hunt all summary.\n    """
-    modules = get_modules(mf)
-    rwx     = _hunt_rwx(mf)
-    pe_hits = _hunt_hidden_pe(mf)
-    threads = _hunt_unbacked_threads(mf)
-
     # RWX/hidden-PE need MemoryInfoListStream; unbacked-thread needs
-    # ThreadInfoListStream. Either can be absent from a dump (both are
-    # optional MiniDumpWriteDump capture flags) — a scan with no data to
-    # look at must not be reported the same as a scan that looked and found
-    # nothing.
+    # ThreadInfoListStream; hidden-PE and unbacked-thread BOTH additionally
+    # need ModuleListStream to tell known from unknown — computed first so
+    # _hunt_hidden_pe/_hunt_unbacked_threads can refuse to guess when it's
+    # missing, rather than treating every PE/thread as suspicious by default.
     coverage = {
         "memory_info_stream": bool(mf.memory_info and mf.memory_info.infos),
         "thread_info_stream": bool(mf.thread_info and mf.thread_info.infos),
         "module_list_stream": bool(mf.modules and mf.modules.modules),
     }
+
+    modules = get_modules(mf)
+    rwx     = _hunt_rwx(mf)
+    pe_hits = _hunt_hidden_pe(mf, module_list_available=coverage["module_list_stream"])
+    threads = _hunt_unbacked_threads(mf, module_list_available=coverage["module_list_stream"])
+
     evaluated = coverage["memory_info_stream"] or coverage["thread_info_stream"]
-    complete  = coverage["memory_info_stream"] and coverage["thread_info_stream"]
+    complete  = (coverage["memory_info_stream"] and coverage["thread_info_stream"]
+                 and coverage["module_list_stream"])
 
     hidden_pe_regions   = [r for r, known in pe_hits if not known]
     injected_pe_regions = {r.BaseAddress for r in hidden_pe_regions}
@@ -201,6 +221,10 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         print(YELLOW("  [~] MemoryInfoListStream not in this dump — RWX / hidden-PE checks could not run.\n"))
     if not coverage["thread_info_stream"]:
         print(YELLOW("  [~] ThreadInfoListStream not in this dump — unbacked-thread check could not run.\n"))
+    if not coverage["module_list_stream"] and (coverage["memory_info_stream"] or coverage["thread_info_stream"]):
+        print(YELLOW("  [~] ModuleListStream not in this dump — hidden-PE and unbacked-thread checks "
+                      "were skipped rather than guessed (an empty module list would otherwise make "
+                      "every PE look hidden and every thread look unbacked).\n"))
 
     # Verdict — driven by correlation, not by how many independent checks
     # happened to fire somewhere in the address space. Signals that never

@@ -220,7 +220,19 @@ def _verdict(dims: dict) -> str:
     return RED(f"HIGH CONFIDENCE MALICIOUS — {score} independent indicators")
 
 def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
-    """\n    Search all committed memory regions for needle (ASCII and UTF-16LE).\n    Returns list of (region, offset, encoding) tuples, one per hit region\n    (deduplicated by region base so we report each region once).\n    """
+    """
+    Search all committed memory regions for needle (ASCII and UTF-16LE).
+    Returns list of (region, offset, encoding) tuples, one per hit region
+    (deduplicated by region base so we report each region once).
+
+    Each region's read is capped at MAX_REGION_READ: this is a
+    search-everything operation over every committed region in the dump
+    (unlike a single --extract/--strings target), so without a per-region
+    cap a dump with one huge region could force a single read the size of
+    that region with no ceiling at all. A match past that cap in any one
+    region would be missed — an accepted tradeoff against turning a
+    string search into an unbounded read.
+    """
     regions  = get_memory_regions(mf)
     hits     = []
     seen     = set()
@@ -233,7 +245,7 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
         if r.BaseAddress in seen:
             continue
         try:
-            data = read_region(mf, r.BaseAddress, r.RegionSize)
+            data = read_region(mf, r.BaseAddress, min(r.RegionSize, MAX_REGION_READ))
         except Exception:
             continue
 

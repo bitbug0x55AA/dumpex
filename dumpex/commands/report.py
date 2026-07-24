@@ -11,6 +11,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     _hexdump_context, _verdict, _search_string_in_memory)
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.pe_utils import _duration_100ns_to_str
+from dumpex.core.safe_io import check_not_dump_path, check_overwrite, atomic_write_bytes
 
 def _get_region_at(addr: int, regions: list):
     """Find the memory region containing addr."""
@@ -98,7 +99,8 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
 
 
 def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None,
-              report_string: str = None, extract_to: str = None, min_len: int = 6):
+              report_string: str = None, extract_to: str = None, min_len: int = 6,
+              force: bool = False):
     """\n    Alert triage card: given a TID, address, or string from an EDR alert / TI feed,\n    correlate thread, memory, and string evidence into a structured verdict.\n    Verdict uses MECE dimensions — each dimension scored at most once.\n\n    --report-string: search all memory for the string, then run triage on each\n                    matching region. Useful when the anchor is a C2 IP, domain,\n                    or known malware string from threat intelligence.\n    """
     SUSPICIOUS_PROTS = get_rules()["suspicious_protections"]
 
@@ -163,12 +165,22 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
                 print(BOLD(f"{'═'*55}"))
                 print(BOLD(f"  Triaging hit {i}/{len(private_hits)} — region 0x{r.BaseAddress:x}"))
                 print(BOLD(f"{'═'*55}"))
+            # Multiple hit regions must not all extract to the same literal
+            # path — that would mean each subsequent region either silently
+            # clobbers the previous one's extract, or (with the new
+            # overwrite guard) aborts the whole triage on the 2nd hit.
+            # Disambiguate per region instead.
+            this_extract_to = extract_to
+            if extract_to and len(private_hits) > 1:
+                ep = Path(extract_to)
+                this_extract_to = str(ep.with_name(f"{ep.stem}_0x{r.BaseAddress:x}{ep.suffix}"))
             cmd_report(mf,
                       report_tid=None,
                       report_addr=hex(r.BaseAddress),
                       report_string=None,   # prevent recursion
-                      extract_to=extract_to,
-                      min_len=min_len)
+                      extract_to=this_extract_to,
+                      min_len=min_len,
+                      force=force)
         return
 
     modules = get_modules(mf)
@@ -407,14 +419,16 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
     if extract_to and region is not None:
         print()
         try:
+            check_not_dump_path(extract_to, mf.filename, "--output")
+            check_overwrite(extract_to, force, "--output file")
             read_size = min(region.RegionSize, MAX_REGION_READ)
             if read_size < region.RegionSize:
                 print(YELLOW(f"  [~] Region is {region.RegionSize // 1024} KB — "
                              f"clamped to {MAX_REGION_READ // (1024*1024)} MB "
                              f"(use --extract with an explicit --size for more)"))
             data = read_region(mf, region.BaseAddress, read_size)
-            Path(extract_to).write_bytes(data)
-            print(GREEN(f"[+] Region extracted → {extract_to}  ({len(data)} bytes)"))
+            summary = atomic_write_bytes(extract_to, data)
+            print(GREEN(f"[+] Region extracted → {extract_to}  ({summary})"))
         except Exception as e:
             print(RED(f"[!] Extract failed: {e}"))
     print()

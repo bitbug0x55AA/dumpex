@@ -322,7 +322,7 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         return findings
 
     regions = get_memory_regions(mf)
-    skipped, hits = 0, []
+    skipped, read_failed, hits = 0, 0, []
     reader = mf.get_reader()
 
     print(DIM(f"  [*] Scanning {len(segs)} segment(s) for beacon signature …"))
@@ -334,6 +334,11 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         try:
             data = reader.read(seg.start_virtual_address, seg.size)
         except Exception:
+            # A read failure means this segment was never actually looked
+            # at — it must not be silently indistinguishable from "read
+            # fine, no hit". Tracked separately from size-based skips so a
+            # negative result can say exactly what coverage gap exists.
+            read_failed += 1
             continue
 
         for xor_key, hit_va, hit_fo, cfg_bytes in _cs_scan_segment(
@@ -345,13 +350,19 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
                 hits.append((xor_key, hit_va, hit_fo, fields))
 
     scan_note = f" ({skipped} segment(s) >50 MB skipped)" if skipped else ""
+    if read_failed:
+        scan_note += f" ({read_failed} segment(s) failed to read)"
     print(DIM(f"  [*] Scan complete{scan_note}."))
 
     if not hits:
-        if skipped:
+        if skipped or read_failed:
+            reason = ", ".join(filter(None, [
+                f"{skipped} oversized segment(s) skipped" if skipped else "",
+                f"{read_failed} segment(s) failed to read" if read_failed else "",
+            ]))
             findings['status'] = INCONCLUSIVE
             _print_check("Cobalt Strike beacon config",
-                         _status_text(INCONCLUSIVE, f"{skipped} oversized segment(s) skipped"))
+                         _status_text(INCONCLUSIVE, reason))
         else:
             findings['status'] = NOT_DETECTED_IN_SCANNED_SCOPE
             _print_check("Cobalt Strike beacon config",

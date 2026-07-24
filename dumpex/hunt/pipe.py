@@ -8,7 +8,11 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
     read_region, _extract_strings_from_data)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
-    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
+    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
+
+PIPE_SCAN_MAX = 8 * 1024 * 1024   # skip regions > 8MB; pipe names / C2 context
+                                   # are short strings, no need to read huge
+                                   # regions in full to find them
 
 def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
@@ -56,9 +60,15 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     # ── Collect all pipe name occurrences ────────────────────────────
     private_pipes = []   # (region, offset, decoded_name)
     image_pipes   = []   # (region, mod_name, decoded_name)
+    region_data   = {}   # region.BaseAddress -> bytes, cached so Check 2
+                          # doesn't re-read every private-pipe region again
+    skipped_size  = 0
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
+            continue
+        if r.RegionSize > PIPE_SCAN_MAX:
+            skipped_size += 1
             continue
         mtype = prot_str(r.Type)
         mod   = addr_to_module(r.BaseAddress, modules)
@@ -67,6 +77,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
             continue
+        region_data[r.BaseAddress] = data
 
         def _extract_pipe_name(data, m, is_utf16):
             end = m.end()
@@ -166,11 +177,13 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                   f"({', '.join(mod_names)}) — expected, skipped\n"))
 
     # ── Check 2: C2 artifacts near private pipe names ─────────────────
+    # Reuses the data already read for Check 1 (region_data cache) instead
+    # of reading every private-pipe-bearing region from the dump a second
+    # time — each such region was already fully read once above.
     c2_hits = []
     for r, off, pipe_name in private_pipes:
-        try:
-            data = read_region(mf, r.BaseAddress, r.RegionSize)
-        except Exception:
+        data = region_data.get(r.BaseAddress)
+        if data is None:
             continue
         # Scan strings in the whole region for C2 patterns
         strings = _extract_strings_from_data(data, min_len=6)
@@ -255,12 +268,18 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Verdict ───────────────────────────────────────────────────────
     score = findings["score"]
-    status = (NOT_EVALUATED if not mem_info_available else
-              DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE)
+    if not mem_info_available:
+        status = NOT_EVALUATED
+    elif score == 0 and skipped_size:
+        status = INCONCLUSIVE
+    else:
+        status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
 
     if not mem_info_available:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
+    elif status == INCONCLUSIVE:
+        verdict = _status_text(INCONCLUSIVE, f"{skipped_size} oversized region(s) skipped")
     else:
         verdict = (RED("HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT") if score >= 3 else
                    YELLOW("LIKELY C2 PIPE")                           if score == 2 else
