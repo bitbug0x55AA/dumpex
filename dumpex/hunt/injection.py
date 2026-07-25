@@ -46,7 +46,8 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str, read_region)
 from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
-    _scan_status, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
+    NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
+from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
     verdict_level)
@@ -298,7 +299,7 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     else:
         score = 1
 
-    status = _scan_status(evaluated=evaluated, detected=score > 0, complete=complete)
+    status = derive_status(evaluated, score > 0, complete)
 
     # ── Findings (facts / inference / confidence / rationale / limitations) ──
     findings_list = []
@@ -479,9 +480,7 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         coverage_reasons.append(f"{coverage['contexts_missing']}/{coverage['threads_total']} "
                                  f"thread(s) had no parsed CONTEXT — live-execution correlation "
                                  f"ran, but not for every thread")
-    coverage_status = ("not_evaluated" if not evaluated else
-                        "partial" if not complete else
-                        "complete")
+    coverage_status = derive_coverage_status(evaluated, complete)
 
     findings = {
         "rwx":                  rwx,

@@ -34,6 +34,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str, read_region)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
+from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
@@ -847,26 +848,15 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         coverage_reasons.append(f"pipe-name scan budget exhausted ({pipe_name_budget.exhausted_reason})")
 
     evaluated = mem_info_available or handle_stream_available
-    if not evaluated:
-        coverage_status = "not_evaluated"
-    elif not handle_stream_available or skipped_size or read_failed or budget_exhausted:
-        coverage_status = "partial"
-    else:
-        coverage_status = "complete"
+    # The PRIMARY (scored) check may not have run at all (no
+    # HandleDataStream) or ran incompletely — a negative score here must
+    # not be read the same as "checked and clean".
+    complete  = not (not handle_stream_available or skipped_size or read_failed or budget_exhausted)
+    coverage_status = derive_coverage_status(evaluated, complete)
     findings["coverage_status"]  = coverage_status
     findings["coverage_reasons"] = coverage_reasons
 
-    if coverage_status == "not_evaluated":
-        status = NOT_EVALUATED
-    elif score > 0:
-        status = DETECTED
-    elif coverage_status == "partial":
-        # The PRIMARY (scored) check may not have run at all (no
-        # HandleDataStream) or ran incompletely — a negative score here
-        # must not be read the same as "checked and clean".
-        status = INCONCLUSIVE
-    else:
-        status = NOT_DETECTED_IN_SCANNED_SCOPE
+    status = derive_status(evaluated, score > 0, complete)
     findings["status"] = status
     findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings["confidence"] = overall_confidence(findings_list, score)

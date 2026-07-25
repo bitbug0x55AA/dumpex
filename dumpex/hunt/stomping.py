@@ -76,6 +76,7 @@ from dumpex.core.pe_utils import (parse_pe_header, expected_protection_name,
     section_protection_deviates, apply_base_relocations)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
+from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
     verdict_level)
@@ -599,6 +600,9 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
     ioc_hits    = []
     skipped_wl  = []
     weak_only_skipped = []
+    ioc_read_failed = 0   # region matched the scan filters but couldn't be read —
+                           # unscored lead only, but still worth surfacing rather
+                           # than silently under-reporting IOC hits
 
     _WEAK_IOC_TERMS = {"virtualalloc", "writeprocessmemory",
                        "createremotethread", "wsasocket", "base64"}
@@ -631,6 +635,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         try:
             data    = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
+            ioc_read_failed += 1
             continue
 
         strings = _extract_ioc_strings(data, r.BaseAddress)
@@ -675,10 +680,14 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                        "score; see stomping.verified_content_change for the only signal "
                        "that scores.",
             limitations=["Not corroborated by any structural (section/protection) evidence "
-                         "on its own."],
+                         "on its own."] + ([f"{ioc_read_failed} otherwise-eligible region(s) "
+                         f"could not be read and were not scanned for IOC strings."]
+                         if ioc_read_failed else []),
             tag=TAG_LEAD,
         ))
         detail = f"{n_strong} strong + {n_weak} weak IOC token(s) across {len(ioc_hits)} module region(s) — LEAD ONLY, not scored"
+        if ioc_read_failed:
+            detail += f"  ({ioc_read_failed} region(s) failed to read, not scanned)"
         if verbose:
             for r, mod, hits, _ in ioc_hits:
                 name = _module_basename(mod) if mod else "(unknown)"
@@ -689,8 +698,13 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         _print_check("IOC strings in module code regions (lead)",
                      YELLOW("LEAD — not scored, see structural checks above"), detail)
     else:
+        detail = (f"{ioc_read_failed} region(s) failed to read and were not scanned"
+                  if ioc_read_failed else "")
         _print_check("IOC strings in module code regions",
-                     GREEN("CLEAN — no IOC patterns in executable module memory"))
+                     GREEN("CLEAN — no IOC patterns in executable module memory")
+                     if not ioc_read_failed else
+                     YELLOW("INCOMPLETE — some regions could not be read"),
+                     detail)
 
     # ── Print detection/lead findings ─────────────────────────────────────
     for f in findings_list:
@@ -748,24 +762,14 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                                      f"relocation normalization that could not be completed "
                                      f"(unsupported machine type or malformed relocation table)")
 
-    if not (mem_info_available and module_list_available):
-        coverage_status = "not_evaluated"
-    elif read_failed or parse_failed or not content_complete:
-        coverage_status = "partial"
-    else:
-        coverage_status = "complete"
+    evaluated = mem_info_available and module_list_available
+    complete  = not (read_failed or parse_failed or not content_complete)
+    coverage_status = derive_coverage_status(evaluated, complete)
     findings["coverage_status"]  = coverage_status
     findings["coverage_reasons"] = coverage_reasons
     findings["coverage_counts"]  = coverage_counts
 
-    if coverage_status == "not_evaluated":
-        status = NOT_EVALUATED
-    elif score > 0:
-        status = DETECTED
-    elif coverage_status == "partial":
-        status = INCONCLUSIVE
-    else:
-        status = NOT_DETECTED_IN_SCANNED_SCOPE
+    status = derive_status(evaluated, score > 0, complete)
     findings["status"] = status
     findings["confidence"] = overall_confidence(findings_list, score)
     findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)

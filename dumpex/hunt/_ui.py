@@ -57,14 +57,9 @@ def _status_text(status: str, reason: str = "") -> str:
     return color(f"{label} — {reason}" if reason else label)
 
 
-def _scan_status(evaluated: bool, detected: bool, complete: bool = True) -> str:
-    """
-    Reduce (did this module actually get to scan, was coverage complete,
-    did it find something) into one of the four states above.
-    """
-    if not evaluated:
-        return NOT_EVALUATED
-    if not complete and not detected:
-        return INCONCLUSIVE
-    return DETECTED if detected else NOT_DETECTED_IN_SCANNED_SCOPE
+# The (evaluated, detected, complete) -> status reduction itself now lives
+# in dumpex.hunt._coverage (derive_status/derive_coverage_status) — every
+# phase-two hunter shares that single implementation rather than each
+# re-deriving the same rule locally. This module stays focused on print
+# helpers and the status/coverage string constants those functions return.
 

@@ -340,6 +340,55 @@ def test_verdict_level_not_evaluated_when_streams_missing():
     assert f["verdict_level"] == "not_evaluated"
 
 
+# ── a read failure in the (unscored) IOC-string lead scan must be counted, ─
+# not silently dropped -- it can't affect score/status (that lead never
+# scores), but it must still be visible rather than quietly under-reporting
+# IOC hits.
+
+def test_ioc_lead_scan_read_failure_is_counted(capsys):
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base)
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    section_region = Region(module_base + section["vaddr"], module_base, section["vsize"],
+                             "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE")
+    # A second MEM_IMAGE/executable region the IOC-string lead scan will
+    # also try to read (that scan iterates ALL regions, not just declared
+    # sections) -- its read is made to fail.
+    unreadable_base = module_base + 0x100000
+    unreadable_region = Region(unreadable_base, module_base, 0x1000,
+                                "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE")
+    regions = [section_region, unreadable_region]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+
+    base_reader = mem_reader({module_base: header, module_base + section["vaddr"]: mem_text})
+
+    def flaky_reader(mf, addr, size):
+        if addr == unreadable_base:
+            raise OSError("simulated unreadable region")
+        return base_reader(mf, addr, size)
+
+    stomping.read_region = flaky_reader
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(ref_file)
+        f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+
+    # The scored signal is unaffected -- this is purely about the
+    # unscored IOC-string lead's own coverage visibility.
+    assert f["score"] == 0
+    assert f["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
+
+    # The read failure must be surfaced, not silently dropped like a plain
+    # `except Exception: continue` would (that was the actual bug: this
+    # region's read failure previously vanished with no trace anywhere).
+    out = capsys.readouterr().out
+    assert "1 region(s) failed to read" in out
+
+
 # ── Bonus: genuine-detection paths must still work (no false negatives) ───
 
 def test_verified_change_scores_1_then_2_with_rip():

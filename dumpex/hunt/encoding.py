@@ -50,6 +50,7 @@ from dumpex.core.memory import (
 from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
+from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
@@ -1211,23 +1212,12 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     if budget_exhausted:
         coverage_reasons.append(f"decode budget exhausted ({decode_budget.exhausted_reason})")
 
-    if not mem_info_available:
-        coverage_status = "not_evaluated"
-    elif fully_skipped or coverage_gap:
-        coverage_status = "partial"
-    else:
-        coverage_status = "complete"
+    complete = not (fully_skipped or coverage_gap)
+    coverage_status = derive_coverage_status(mem_info_available, complete)
     findings['coverage_status']  = coverage_status
     findings['coverage_reasons'] = coverage_reasons
 
-    if coverage_status == "not_evaluated":
-        status = NOT_EVALUATED
-    elif score > 0:
-        status = DETECTED
-    elif coverage_status == "partial":
-        status = INCONCLUSIVE
-    else:
-        status = NOT_DETECTED_IN_SCANNED_SCOPE
+    status = derive_status(mem_info_available, score > 0, complete)
     findings['status'] = status
     findings['verdict_level'] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings['confidence'] = overall_confidence(findings_list, score)

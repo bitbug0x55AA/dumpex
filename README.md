@@ -280,6 +280,18 @@ knows there could be more they haven't seen. Without `--ref-dir` at all,
 `score` is always `0` and `status` is `INCONCLUSIVE` (never a bare
 "clean") — the one scored signal in this hunter simply never ran.
 
+`status` and `coverage_status` are both reduced from the same rule for
+every phase-two hunter (`dumpex/hunt/_coverage.py`'s `derive_status()` /
+`derive_coverage_status()`), not re-derived separately by each one:
+no required data source at all → `NOT_EVALUATED`; a nonzero score →
+`DETECTED` regardless of coverage elsewhere; a zero score with incomplete
+coverage → `INCONCLUSIVE`; a zero score with complete coverage →
+`NOT_DETECTED_IN_SCANNED_SCOPE`. Each hunter still tracks its own
+domain-specific coverage counters and reasons (a stomping reference-file
+mismatch and a pipe scan-budget exhaustion are different kinds of gaps),
+but the final status/coverage_status reduction is one shared
+implementation.
+
 Every finding also carries a `verdict_level` (`clean` / `possible` /
 `likely` / `high`, plus `inconclusive` / `not_evaluated` mirroring
 `status`) that the hunter itself computes from its own score and status;
@@ -362,7 +374,7 @@ Layout:
 
 | Path | Scope |
 |---|---|
-| `tests/unit/` | Pure function-level tests (PE parsing, relocation normalization) — no hunter or minidump object graph involved |
+| `tests/unit/` | Pure function-level tests (PE parsing, relocation normalization, the shared coverage/status reduction rule) — no hunter or minidump object graph involved |
 | `tests/hunt/` | Per-hunter tests (`dumpex.hunt.*`) driven through synthetic `FakeMF` minidump objects |
 | `tests/integration/` | Cross-module output-path tests (CSV/JSON summary rows faithfully reflecting a hunter's own `verdict_level`/`confidence`/`coverage_status`) |
 | `tests/fixtures/` | Shared synthetic-PE/minidump builders (`fakes.py`) used by all of the above |
