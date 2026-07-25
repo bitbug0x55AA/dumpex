@@ -55,6 +55,7 @@ def test_verdict_level_consistent_across_hunters():
         ("stomping",  1, "likely"),   ("stomping",  2, "high"),
         ("pipe",      1, "possible"), ("pipe",      2, "likely"),   ("pipe", 3, "high"),
         ("obfuscation", 1, "likely"), ("obfuscation", 2, "high"),
+        ("cs-beacon", 1, "likely"),   ("cs-beacon", 2, "high"),
     ]
     for ttp, score, expected_level in cases:
         mock = {

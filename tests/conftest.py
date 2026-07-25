@@ -23,24 +23,28 @@ if _REPO_ROOT not in sys.path:
 from dumpex.core.memory import get_thread_contexts as _real_get_thread_contexts
 import dumpex.hunt.stomping as stomping
 import dumpex.hunt.pipe as pipemod
+import dumpex.hunt.cs_beacon as cs_beacon
+
+_THREAD_CONTEXT_MODULES = (stomping, pipemod, cs_beacon)
 
 
 @pytest.fixture(autouse=True)
 def _reset_thread_context_monkeypatches():
     """
-    hunt/stomping.py and hunt/pipe.py both hold get_thread_contexts as a
-    plain module attribute (imported from dumpex.core.memory) rather than
-    always calling through the module, specifically so tests can
-    monkeypatch it to inject a synthetic RIP/EIP. That attribute persists
-    at module scope for the rest of the process — a test that patches it
-    and doesn't clean up would leak a stale thread context into every
-    later test that happens to run after it, regardless of file or
-    execution order (a real bug hit during phase-two development). This
-    fixture resets both to the real implementation before AND after every
-    test, so no test's outcome can depend on what ran before it.
+    hunt/stomping.py, hunt/pipe.py, and hunt/cs_beacon.py all hold
+    get_thread_contexts as a plain module attribute (imported from
+    dumpex.core.memory) rather than always calling through the module,
+    specifically so tests can monkeypatch it to inject a synthetic
+    RIP/EIP. That attribute persists at module scope for the rest of the
+    process — a test that patches it and doesn't clean up would leak a
+    stale thread context into every later test that happens to run after
+    it, regardless of file or execution order (a real bug hit during
+    phase-two development). This fixture resets all of them to the real
+    implementation before AND after every test, so no test's outcome can
+    depend on what ran before it.
     """
-    stomping.get_thread_contexts = _real_get_thread_contexts
-    pipemod.get_thread_contexts = _real_get_thread_contexts
+    for mod in _THREAD_CONTEXT_MODULES:
+        mod.get_thread_contexts = _real_get_thread_contexts
     yield
-    stomping.get_thread_contexts = _real_get_thread_contexts
-    pipemod.get_thread_contexts = _real_get_thread_contexts
+    for mod in _THREAD_CONTEXT_MODULES:
+        mod.get_thread_contexts = _real_get_thread_contexts

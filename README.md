@@ -308,6 +308,49 @@ YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass
 
 ---
 
+## Cobalt Strike Beacon Detection
+
+`--hunt cs-beacon` shares the same evidence model as the hunters above
+(`score` / `max_score` / `status` / `verdict_level` / `confidence` /
+`coverage_status` / `coverage_reasons` / `findings`) rather than scoring
+on raw config count:
+
+- **score 0** — no structurally-valid config found (TLV wire format
+  parsed, a recognized `BeaconType`, and an ASN.1-shaped public key all
+  have to line up).
+- **score 1** (`verdict_level: likely`) — at least one structurally-valid
+  config found, with no independent memory-context corroboration.
+  **Finding more configs does not raise this** — how many were found is
+  reported as a fact (`config_count`), not folded into confidence. A
+  decoded config surviving in memory is itself strong evidence (hard to
+  produce by chance), which is why score 1 already maps to `likely`
+  rather than `possible`.
+- **score 2** (`verdict_level: high`) — additionally corroborated by
+  memory context independent of the config bytes themselves: either the
+  enclosing region is executable, private memory (not an inert data-only
+  mapping), or a thread's *current* RIP/EIP executes somewhere within the
+  same allocation as the config hit.
+
+Deliberately **not** reported: a `DORMANT`/`INITIALIZED`/`LIVE` activity
+label. A decoded config proves a beacon payload existed in this process's
+memory — it says nothing about whether it was maintaining live network
+callbacks at dump time, and static memory content alone can't establish
+that. The estimated CS version (`cs_version`, from the highest recognized
+config field ID) is explicitly labeled as an estimate
+(`cs_version_note`), not a fingerprinted/confirmed build.
+
+`MemoryInfoListStream` is only needed for the score 1→2 corroboration
+check and per-hit region display — its absence never blocks config
+detection (score 1 is still reachable), but it does make
+`coverage_status: partial` (`status: INCONCLUSIVE` if no config was
+found either), since the corroboration check couldn't be verified.
+
+The existing `configs` list (per-hit VA, file offset, region, XOR key,
+version estimate, parsed TLV fields) is kept exactly as before for
+existing consumers — everything above is additive.
+
+---
+
 ## MITRE ATT&CK Coverage
 
 | Technique | ID | Detection |

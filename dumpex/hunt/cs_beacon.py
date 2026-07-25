@@ -1,11 +1,53 @@
-"""Cobalt Strike beacon config scanner (adapted from 1768.py by Didier Stevens)."""
+"""Cobalt Strike beacon config scanner (adapted from 1768.py by Didier Stevens).
+
+Phase-three detection model
+────────────────────────────
+Brought onto the same evidence semantics as the phase-two hunters
+(injection/stomping/pipe/obfuscation): explicit score/max_score/status/
+verdict_level/confidence/coverage_status/coverage_reasons/findings,
+instead of the config-count-as-score model this hunter used previously.
+The `configs` field (per-hit raw data: VA, file offset, region, XOR key,
+version estimate, parsed TLV fields) is kept as-is for existing
+consumers — everything below is additive.
+
+  score 0 — no structurally-valid (sanity-checked TLV, known BeaconType,
+            ASN.1-shaped public key) config found in what was scanned.
+  score 1 — at least one structurally-valid config found, with no
+            independent memory-context corroboration. Finding MORE
+            configs (even at distinct addresses) does NOT raise this —
+            config count is a fact reported alongside the finding, not a
+            confidence input. A beacon config surviving in memory is
+            itself strong, hard-to-fake evidence (the TLV structure,
+            field types, and a plausible ASN.1 public key all having to
+            line up by chance is vanishingly unlikely) — this is why
+            score 1 already maps to "likely", not "possible".
+  score 2 — additionally corroborated by memory context independent of
+            the config bytes themselves: either the enclosing region is
+            executable, private memory (not an inert data-only mapping),
+            or a thread's CURRENT RIP/EIP executes somewhere within the
+            same allocation as the config hit — i.e. this isn't just an
+            orphaned copy sitting in unused/freed memory.
+
+Deliberately NOT reported: a DORMANT/INITIALIZED/LIVE activity label.
+A decoded config proves a beacon payload exists (or existed) in this
+process's memory — it says nothing about whether it is CURRENTLY
+maintaining network callbacks at dump time, and claiming otherwise from
+static memory content alone would be exactly the kind of over-attribution
+this schema exists to avoid. CS version is an ESTIMATE from the highest
+recognized field ID (see _cs_guess_version) and is reported as such, not
+as a fingerprinted/confirmed build.
+"""
 import os
 import struct
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
-from dumpex.core.memory import va_to_file_offset, get_memory_regions, _get_region_at, prot_str
+from dumpex.core.memory import (va_to_file_offset, get_memory_regions, _get_region_at,
+    get_thread_contexts, prot_str)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
-    DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
+    NOT_EVALUATED, INCONCLUSIVE)
+from dumpex.hunt._coverage import derive_status, derive_coverage_status
+from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_DETECTION, overall_confidence, verdict_level)
 
 CS_BEACON_SIGNATURE  = b'\x00\x01\x00\x01\x00\x02'   # plaintext TLV start
 CS_SIG_XOR69         = b'ihihik'                       # above ^ 0x69
@@ -107,6 +149,20 @@ CS_INJECT_PERMS = {
     0x80: 'PAGE_EXECUTE_WRITECOPY',
 }
 
+# score -> verdict_level, owned by this hunter (see _finding.verdict_level).
+# A structurally-valid config (score 1) already reflects strong evidence —
+# see the module docstring — so it maps to "likely", not "possible".
+_VERDICT_LEVEL_BY_SCORE = {1: "likely", 2: "high"}
+
+# Independent memory-context corroboration for a config hit (score 1 -> 2):
+# a config's own bytes are inert DATA, so a beacon that is actually loaded
+# and running typically has the config sitting in a private allocation
+# that ALSO carries executable memory (the decrypted/decompressed payload)
+# — as opposed to a bare, isolated copy of just the config bytes.
+CS_SUSPICIOUS_PRIVATE_PROTECTIONS = frozenset({
+    'PAGE_EXECUTE_READWRITE', 'PAGE_EXECUTE_READ', 'PAGE_EXECUTE',
+    'PAGE_EXECUTE_WRITECOPY',
+})
 
 
 def _cs_xor_bytes(data: bytes, key: int) -> bytes:
@@ -278,6 +334,44 @@ def _cs_sanity_check(fields: dict) -> bool:
     return fields[0x0007]['raw'].hex().startswith('308')
 
 
+def _cs_context_corroborates(hit_region, regions: list, thread_contexts: list) -> "tuple[bool, list]":
+    """
+    Independent memory-context corroboration for a single config hit —
+    the score 1 -> 2 tier. Returns (corroborated, reasons).
+
+    Two signals, either is sufficient:
+      1. The config's enclosing MemoryInfo region is executable, private
+         memory — a bare config copy sitting in ordinary (non-executable)
+         data memory doesn't get this; a beacon with its payload actually
+         mapped alongside its config does.
+      2. A thread's CURRENT RIP/EIP (get_thread_contexts — the live
+         register state at dump time, not just a thread's start address)
+         executes somewhere within the SAME allocation as the hit —
+         checked by AllocationBase, not the narrower single MemoryInfo
+         sub-region, since one VirtualAlloc can be split into multiple
+         sub-regions with different protections (mirrors how
+         hunt/injection.py groups RWX+PE hits by allocation).
+
+    hit_region may be None (VA not covered by MemoryInfoListStream) —
+    both signals are then unavailable and this returns (False, []).
+    """
+    if hit_region is None:
+        return False, []
+    reasons = []
+    if (prot_str(hit_region.Type) == 'MEM_PRIVATE'
+            and prot_str(hit_region.Protect) in CS_SUSPICIOUS_PRIVATE_PROTECTIONS):
+        reasons.append(f"enclosing region 0x{hit_region.BaseAddress:x} is executable, "
+                        f"private memory ({prot_str(hit_region.Protect)})")
+    alloc_base = hit_region.AllocationBase
+    for tc in thread_contexts:
+        r = _get_region_at(tc["ip"], regions)
+        if r is not None and r.AllocationBase == alloc_base:
+            reasons.append(f"thread {tc['ThreadId']} current {tc['ip_reg']}=0x{tc['ip']:x} "
+                            f"executes within the same allocation (0x{alloc_base:x})")
+            break
+    return bool(reasons), reasons
+
+
 def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
     Scan all captured memory segments for Cobalt Strike beacon configurations.
@@ -307,7 +401,8 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
       findings (same region_base means "same memory region").
     """
     _print_hunt_header("Cobalt Strike Beacon Config")
-    findings = {'configs': [], 'score': 0}
+    findings = {'configs': [], 'score': 0, 'max_score': 2}
+    findings_list = []   # Finding objects -> findings["findings"]
 
     segs = []
     if mf.memory_segments_64 and mf.memory_segments_64.memory_segments:
@@ -317,11 +412,24 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     if not segs:
         findings['status'] = NOT_EVALUATED
+        findings['coverage_status'] = 'not_evaluated'
+        findings['coverage_reasons'] = ['Memory64ListStream missing from this dump']
+        findings['verdict_level'] = verdict_level(0, _VERDICT_LEVEL_BY_SCORE, status=NOT_EVALUATED)
+        findings['confidence'] = overall_confidence([], 0)
+        findings['findings'] = []
         print(YELLOW("  [~] No memory segments in dump — cannot scan for beacon config.\n"))
         print(f"  {BOLD('[ VERDICT ]')}  {_status_text(NOT_EVALUATED, 'Memory64ListStream missing from this dump')}\n")
         return findings
 
+    # MemoryInfoListStream is only used for CONTEXT (region base/protect for
+    # display, and the score 1 -> 2 corroboration check below) — its
+    # absence must not block config DETECTION (a structurally-valid config
+    # still scores at least 1), but it does mean the corroboration check
+    # could not run to completion, which coverage_status must reflect
+    # rather than silently claiming a fully-verified result.
+    mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
     regions = get_memory_regions(mf)
+    thread_contexts = get_thread_contexts(mf)
     skipped, read_failed, hits = 0, 0, []
     reader = mf.get_reader()
 
@@ -354,32 +462,78 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         scan_note += f" ({read_failed} segment(s) failed to read)"
     print(DIM(f"  [*] Scan complete{scan_note}."))
 
+    # Coverage is uniform across the DETECTED/clean/INCONCLUSIVE outcomes
+    # below — the same rule every phase-two hunter uses: MemoryInfoListStream
+    # absence always makes coverage partial, since it's the region-context
+    # corroboration check's own data source, regardless of whether this
+    # scan happens to end up finding a config or not.
+    complete = not (skipped or read_failed) and mem_info_available
+    coverage_reasons = []
+    if skipped:
+        coverage_reasons.append(f"{skipped} oversized segment(s) (>50 MB) skipped")
+    if read_failed:
+        coverage_reasons.append(f"{read_failed} segment(s) failed to read")
+    if not mem_info_available:
+        coverage_reasons.append("MemoryInfoListStream missing from this dump — region/"
+                                 "execution-context corroboration for any config hit "
+                                 "could not be verified")
+    findings['coverage_status']  = derive_coverage_status(True, complete)
+    findings['coverage_reasons'] = coverage_reasons
+
     if not hits:
-        if skipped or read_failed:
-            reason = ", ".join(filter(None, [
-                f"{skipped} oversized segment(s) skipped" if skipped else "",
-                f"{read_failed} segment(s) failed to read" if read_failed else "",
-            ]))
-            findings['status'] = INCONCLUSIVE
+        status = derive_status(True, False, complete)
+        findings['status'] = status
+        findings['verdict_level'] = verdict_level(0, _VERDICT_LEVEL_BY_SCORE, status=status)
+        findings_list.append(Finding(
+            check="cs_beacon.no_structural_config",
+            facts=[f"{len(segs)} memory segment(s) scanned"
+                   + (f" ({', '.join(coverage_reasons)})" if coverage_reasons else "")],
+            inference="No structurally-valid (sanity-checked TLV, known BeaconType, "
+                       "ASN.1-shaped public key) Cobalt Strike beacon configuration found "
+                       "in what was scanned.",
+            confidence=CONFIDENCE_LOW,
+            rationale="Absence of a decodable config is weak evidence of absence — an "
+                       "unscanned/skipped/unreadable segment, an unsupported XOR scheme, or "
+                       "a config that never touched memory captured in this dump would all "
+                       "look identical to this.",
+            limitations=(["Coverage was incomplete — see coverage_reasons."] if not complete else []),
+            tag=TAG_OBSERVATION,
+        ))
+        findings['findings']   = [f.to_dict() for f in findings_list]
+        findings['confidence'] = overall_confidence(findings_list, 0)
+        if status == INCONCLUSIVE:
             _print_check("Cobalt Strike beacon config",
-                         _status_text(INCONCLUSIVE, reason))
+                         _status_text(INCONCLUSIVE, "; ".join(coverage_reasons) or "partial coverage"))
         else:
-            findings['status'] = NOT_DETECTED_IN_SCANNED_SCOPE
             _print_check("Cobalt Strike beacon config",
                          GREEN("CLEAN — no beacon config found in memory"))
         print()
         return findings
 
-    findings['score']  = len(hits)
-    findings['status'] = DETECTED
+    # ── Score: structural validity alone is 1 ("likely" — see module ──────
+    # docstring for why); independent memory-context corroboration on AT
+    # LEAST ONE hit raises it to 2. Deliberately NOT len(hits) — additional
+    # (even distinct-address) config copies are a fact reported in
+    # config_count, not a confidence multiplier.
+    hit_records = []
+    any_corroborated = False
+    for xor_key, hit_va, hit_fo, fields in hits:
+        region = _get_region_at(hit_va, regions)
+        corroborated, corrob_reasons = _cs_context_corroborates(region, regions, thread_contexts)
+        any_corroborated = any_corroborated or corroborated
+        hit_records.append((xor_key, hit_va, hit_fo, fields, region, corroborated, corrob_reasons))
+
+    score = 2 if any_corroborated else 1
+    findings['score']         = score
+    findings['config_count']  = len(hits)
+    status = derive_status(True, True, complete)
+    findings['status'] = status
     print()
 
-    for idx, (xor_key, hit_va, hit_fo, fields) in enumerate(hits, 1):
+    for idx, (xor_key, hit_va, hit_fo, fields, region, corroborated, corrob_reasons) in enumerate(hit_records, 1):
         cs_ver   = _cs_guess_version(fields)
         key_desc = {0x69: "0x69 'i'  (CS3 encoding)",
                     0x2e: "0x2E '.'  (CS4 encoding)"}.get(xor_key, f'0x{xor_key:02x}')
-
-        region = _get_region_at(hit_va, regions)
 
         print(RED(f"  [!] Beacon config #{idx}  ──────────────────────────────────────────────"))
         print(f"  {'VA (process)':<26} 0x{hit_va:016x}  {DIM('← virtual address in target process')}")
@@ -392,6 +546,10 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
             print(f"  {'Region base (VA)':<26} {DIM('(not covered by MemoryInfoListStream)')}")
         print(f"  {'XOR key':<26} {key_desc}")
         print(f"  {'CS version (estimated)':<26} {YELLOW(cs_ver)}")
+        if corroborated:
+            print(f"  {'Context corroboration':<26} {RED('YES')}  — {'; '.join(corrob_reasons)}")
+        else:
+            print(f"  {'Context corroboration':<26} {DIM('none')}  — structural validity only")
         print()
 
         f = fields
@@ -535,11 +693,47 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
             'region_base':    region.BaseAddress if region is not None else None,
             'region_size':    region.RegionSize  if region is not None else None,
             'region_protect': prot_str(region.Protect) if region is not None else None,
-            'xor_key': xor_key, 'cs_version': cs_ver, 'fields': fields,
+            'xor_key': xor_key, 'cs_version': cs_ver,
+            'cs_version_note': 'estimated from highest recognized field ID — not a '
+                                'fingerprinted/confirmed build',
+            'context_corroborated': corroborated,
+            'fields': fields,
         })
 
+        facts = [f"VA=0x{hit_va:x} file_offset=0x{hit_fo:x} xor_key=0x{xor_key:02x} "
+                 f"cs_version_estimated={cs_ver} field_count={len(fields)}"]
+        facts.append(f"region=0x{region.BaseAddress:x} size=0x{region.RegionSize:x} "
+                      f"protect={prot_str(region.Protect)}"
+                      if region is not None else
+                      "enclosing region not covered by MemoryInfoListStream")
+        findings_list.append(Finding(
+            check="cs_beacon.structural_config",
+            facts=facts,
+            inference="Structurally-valid Cobalt Strike beacon configuration (TLV wire "
+                       "format parsed, known BeaconType, ASN.1-shaped public key) found at "
+                       "this address.",
+            confidence=CONFIDENCE_HIGH if corroborated else CONFIDENCE_MEDIUM,
+            rationale=("Corroborated by independent memory context: " + "; ".join(corrob_reasons)
+                       if corroborated else
+                       "The config's own structural validity — TLV wire format, known field "
+                       "types, a recognized BeaconType, and an ASN.1-shaped public key all "
+                       "lining up — is itself hard to produce by chance, but no independent "
+                       "memory-context corroboration (executable private region, or a thread "
+                       "executing within the same allocation) was found for this hit."),
+            limitations=(["Region/execution-context corroboration could not be verified — "
+                          "MemoryInfoListStream missing from this dump."]
+                         if not mem_info_available else []),
+            tag=TAG_DETECTION,
+        ))
+
+    findings['findings']       = [f.to_dict() for f in findings_list]
+    findings['confidence']     = overall_confidence(findings_list, score)
+    findings['verdict_level']  = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
+
+    corrob_note = ("  (context-corroborated)" if any_corroborated else
+                   "  (structural validity only — no independent memory-context corroboration)")
     print(f"  {BOLD('[ VERDICT ]')}  "
-          f"{RED(f'COBALT STRIKE — {len(hits)} beacon config(s) found in memory')}\n")
+          f"{RED(f'COBALT STRIKE — {len(hits)} beacon config(s) found in memory')}{corrob_note}\n")
     if not verbose:
         print(DIM("  Use --verbose to dump all config fields.\n"))
 

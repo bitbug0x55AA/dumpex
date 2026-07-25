@@ -309,8 +309,8 @@ class StructuredOutput:
             finding_detail_rows = []   # facts/inference/confidence/rationale/limitations
                                         # — one row per dumpex.hunt._finding.Finding,
                                         # populated from findings["findings"] wherever a
-                                        # hunt module reports it (injection/stomping/
-                                        # pipe/obfuscation as of phase two)
+                                        # hunt module reports it (injection/stomping/pipe/
+                                        # obfuscation/cs-beacon as of phase three)
 
             for ttp, findings in data.items():
                 if ttp.startswith("_"):
@@ -321,16 +321,17 @@ class StructuredOutput:
                 status    = findings.get("status", "")
                 max_score = findings.get("max_score") or {
                              "injection": 3, "hollowing": 4, "stomping": 2,
-                             "pipe": 3, "cs-beacon": 1, "yara": 3,
+                             "pipe": 3, "cs-beacon": 2, "yara": 3,
                              "obfuscation": 2}.get(ttp, "?")
 
-                # Phase-two hunters (injection/stomping/pipe/obfuscation)
-                # report their own "verdict_level" (clean/possible/likely/
-                # high), "confidence" (none/low/medium/high), and
-                # "coverage_status" (complete/partial/not_evaluated), all
-                # computed independently of score — hunters not yet
-                # upgraded (hollowing/cs-beacon/yara) don't have these and
-                # fall back to the legacy score/max_score heuristic below.
+                # Phase-two/three hunters (injection/stomping/pipe/
+                # obfuscation/cs-beacon) report their own "verdict_level"
+                # (clean/possible/likely/high), "confidence" (none/low/
+                # medium/high), and "coverage_status" (complete/partial/
+                # not_evaluated), all computed independently of score —
+                # hunters not yet upgraded (hollowing/yara) don't have
+                # these and fall back to the legacy score/max_score
+                # heuristic below.
                 hunter_verdict_level   = findings.get("verdict_level")
                 hunter_confidence      = findings.get("confidence")
                 hunter_coverage_status = findings.get("coverage_status")

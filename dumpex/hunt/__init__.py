@@ -106,7 +106,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             "hollowing": ("Process Hollowing",          results["hollowing"]["score"],  4),
             "stomping":  ("Module Stomping",            results["stomping"]["score"],   2),
             "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       3),
-            "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],  1),
+            "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],
+                          results["cs-beacon"].get("max_score", 2)),
             "yara":      ("YARA Rules",                 results["yara"]["score"],       3),
             "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   2),
         }
@@ -124,9 +125,6 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             elif status == INCONCLUSIVE:
                 verdict = _status_text(INCONCLUSIVE)
                 any_inconclusive = True
-            elif key == "cs-beacon" and score > 0:
-                verdict = RED(f"BEACON CONFIG FOUND ({score} config(s))")
-                any_hit = True
             elif key == "yara" and score > 0:
                 rules_hit = results["yara"].get("rules_hit", [])
                 verdict = RED(f"RULES MATCHED: {', '.join(rules_hit[:4])}{'…' if len(rules_hit) > 4 else ''}")
@@ -151,7 +149,9 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
                 any_hit = True
             if hunt_result.get("coverage_status") == "partial" and status not in (NOT_EVALUATED, INCONCLUSIVE):
                 verdict += YELLOW("  [partial coverage]")
-            suffix = (f"  ({score}/{max_score})" if key not in ("cs-beacon", "yara") else "")
+            suffix = (f"  ({score}/{max_score})" if key != "yara" else "")
+            if key == "cs-beacon" and hunt_result.get("config_count"):
+                suffix += f"  [{hunt_result['config_count']} config(s)]"
             print(f"  {name:<25} {verdict}{suffix}")
         print()
         if any_hit:

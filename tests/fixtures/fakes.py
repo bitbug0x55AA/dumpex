@@ -76,6 +76,31 @@ class FakeStream:
         setattr(self, attr, items)
 
 
+class Segment:
+    """Stand-in for a Memory64ListStream entry (dumpex.hunt.cs_beacon walks these)."""
+    def __init__(self, start_virtual_address, start_file_address, size):
+        self.start_virtual_address = start_virtual_address
+        self.start_file_address    = start_file_address
+        self.size                  = size
+
+
+class FakeReader:
+    """
+    Stand-in for MinidumpFile.get_reader()'s return value — cs_beacon.py
+    calls reader.read(va, size) directly (unlike the rest of the hunt
+    modules, which go through core.memory.read_region).
+    """
+    def __init__(self, read_map):
+        self._read_map = read_map
+
+    def read(self, addr, size):
+        for base, data in self._read_map.items():
+            if base <= addr < base + len(data):
+                off = addr - base
+                return data[off:off + size]
+        return b''
+
+
 class FakeMF:
     """
     Stand-in MinidumpFile. Every stream defaults to None (== "not present
@@ -90,6 +115,10 @@ class FakeMF:
     handles                = None
     memory_segments_64      = None
     memory_segments          = None
+    _reader                   = None
+
+    def get_reader(self):
+        return self._reader
 
 
 def build_pe_header(sections, machine=0x8664, timestamp=0x12345678,
@@ -163,3 +192,26 @@ def matching_module_and_ref(module_base=0x7ff600000000, timestamp=0x11111111,
     ref_file += b'\x00' * (section["rawptr"] - len(ref_file))
     ref_file += text_bytes
     return header, text_bytes, bytes(ref_file), section
+
+
+def cs_beacon_config_bytes(xor_key: int = 0x69) -> bytes:
+    """
+    Build a minimal, XOR-encoded CS beacon config TLV blob that passes
+    dumpex.hunt.cs_beacon's _cs_scan_segment/_cs_parse_tlv/_cs_sanity_check:
+      - field 0x0001 (BeaconType) = 0 ("HTTP", a recognized value)
+      - field 0x0007 (PublicKey) raw bytes starting with an ASN.1 SEQUENCE
+        tag (0x30) + long-form length byte (0x8_), satisfying the
+        hex-starts-with-"308" sanity check
+    The plaintext's first 6 bytes are exactly CS_BEACON_SIGNATURE by
+    construction (field_id=1, type=1, length=2), so XOR-encoding the
+    whole blob with `xor_key` embeds the corresponding pre-XOR marker
+    (CS_SIG_XOR69/CS_SIG_XOR2E) at its start.
+    """
+    def _tlv(fid, ftype, raw):
+        return struct.pack('>HHH', fid, ftype, len(raw)) + raw
+
+    beacon_type_field = _tlv(0x0001, 1, struct.pack('>H', 0))
+    pubkey_raw = bytes([0x30, 0x81]) + b'\x00' * 20
+    pubkey_field = _tlv(0x0007, 3, pubkey_raw)
+    plaintext = beacon_type_field + pubkey_field
+    return bytes(b ^ (xor_key & 0xff) for b in plaintext)
