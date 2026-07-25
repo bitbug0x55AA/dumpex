@@ -2,6 +2,8 @@
 
 **dumpex** is a command-line DFIR/CTF triage tool for analyzing Windows minidump (`.DMP`) files. It parses minidump structures to surface system information, memory layout, loaded modules, and thread state — and includes a TTP detection engine to hunt for signs of process injection, module stomping, C2 named pipes, Cobalt Strike beacons, and encoded/obfuscated payloads.
 
+**Triaging `--hunt` output?** See [`docs/SOC_QUICKSTART.md`](docs/SOC_QUICKSTART.md) — how to read `status`/`coverage_status`/`verdict_level`/`confidence`, what `DETECTED`+`partial` vs `INCONCLUSIVE` vs `NOT_EVALUATED` actually mean for disposition, and each hunter's evidence requirements and limits.
+
 ---
 
 ## Features
@@ -405,6 +407,9 @@ existing consumers — everything above is additive.
 ---
 
 ## JSON Evidence Metadata
+
+See also [`docs/SOC_QUICKSTART.md`](docs/SOC_QUICKSTART.md#evidence-handling-hashes-reproducing-a-run)
+for how to use this in case-tracking workflows.
 
 `--json` output carries a top-level `meta` object alongside the existing
 per-command result sections (`modules`, `hunt`, `sysinfo`, ...) — those
