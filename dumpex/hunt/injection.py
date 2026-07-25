@@ -500,7 +500,7 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         "coverage_status":      coverage_status,
         "coverage_reasons":     coverage_reasons,
         "confidence":           overall_confidence(findings_list, score),
-        "verdict_level":        verdict_level(score, _VERDICT_LEVEL_BY_SCORE),
+        "verdict_level":        verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status),
         "pe_read_failed":       pe_read_failed,
         "findings":             [f.to_dict() for f in findings_list],
     }

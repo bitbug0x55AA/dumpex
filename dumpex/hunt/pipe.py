@@ -819,7 +819,6 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     findings["score"] = score
     findings["max_score"] = 3
-    findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE)
 
     c2_exhausted   = c2_budget.exhausted()
     name_exhausted = pipe_name_budget.exhausted()
@@ -869,6 +868,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     else:
         status = NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
+    findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings["confidence"] = overall_confidence(findings_list, score)
 
     if not evaluated:

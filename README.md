@@ -234,10 +234,32 @@ comparing, the reference file's bytes are **relocation-normalized**: if
 the module loaded at a different address than its preferred `ImageBase`
 (ASLR, or a base collision), the same delta the Windows loader applied at
 load time is applied to the on-disk copy, so an unmodified-but-relocated
-section reads as identical rather than "changed". IAT/delay-import
-ranges and hotpatch trampolines are **not** specifically excluded; see the
+section reads as identical rather than "changed". Only `IMAGE_REL_BASED_
+HIGHLOW`/`DIR64` fixups on **x86/x64** (`I386`/`AMD64`) modules are
+applied — the two types real x86/x64 linkers emit. On any other machine
+type (ARM/ARM64/…), or if the relocation table itself is missing/malformed,
+normalization is explicitly reported as **unavailable/malformed** rather
+than silently skipped: when a nonzero relocation delta is actually needed
+and normalization can't be completed, the comparison is aborted for that
+section (counted under `coverage_counts.relocation_failed`) instead of
+diffing raw, un-normalized bytes — doing so would misreport every
+relocation-touched instruction as "modified". Similarly, a live-memory
+read shorter than the section's declared `SizeOfRawData` is never
+silently compared over just the bytes that happened to be readable — it's
+counted under `coverage_counts.short_reads`, a coverage gap, not a clean
+result. IAT/delay-import ranges and hotpatch trampolines are **not**
+specifically excluded from the diff itself; see the
 `stomping.verified_content_change` finding's `limitations` for that
 residual caveat.
+
+A verified diff with **no** corroborating live execution in the changed
+range (score 1) is reported as a neutral **"VERIFIED MODULE CODE
+MODIFICATION"**, not "stomping" — that same signature is also what a
+legitimate hotpatch or EDR inline hook produces, and attributing it to
+malicious stomping from a content diff alone would overstate what's
+actually known. The "stomping" framing (and `verdict_level: high`) is
+reserved for score 2, where a thread's own current RIP/EIP is executing
+inside one of the changed byte ranges.
 
 ### Coverage semantics: `DETECTED` with `coverage_status: partial`
 
@@ -254,11 +276,16 @@ knows there could be more they haven't seen. Without `--ref-dir` at all,
 "clean") — the one scored signal in this hunter simply never ran.
 
 Every finding also carries a `verdict_level` (`clean` / `possible` /
-`likely` / `high`) that the hunter itself computes from its own score;
+`likely` / `high`, plus `inconclusive` / `not_evaluated` mirroring
+`status`) that the hunter itself computes from its own score and status;
 this is the single value console output, `--json`, and `--csv` all read
 directly (uppercased) — none of them re-derive a verdict from `score` or
 `confidence` independently, so the same finding can't show different
-tiers in different output formats.
+tiers in different output formats. `verdict_level` is never `clean` when
+`status` is `INCONCLUSIVE` or `NOT_EVALUATED` — a scanner that didn't run,
+or ran over incomplete coverage, hasn't earned "clean", and reporting it
+as such would tell an analyst a scope was verified benign when it was
+actually never (or only partly) checked.
 
 YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass `--yara-dir PATH` for an explicit directory of `.yar` files to extend scanning coverage without touching the installed package — same as `--rules-file`, there is no automatic cwd/script-dir scan.
 

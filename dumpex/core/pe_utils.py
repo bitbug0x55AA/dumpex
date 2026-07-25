@@ -1,6 +1,7 @@
 """PE / FILETIME formatting utilities."""
 import struct
 import datetime
+from dataclasses import dataclass, field
 from dumpex.ui.colors import RED, YELLOW, DIM
 
 # ── PE structural validation ─────────────────────────────────────────────
@@ -266,6 +267,62 @@ IMAGE_REL_BASED_ABSOLUTE = 0    # padding entry, not a real fixup
 IMAGE_REL_BASED_HIGHLOW  = 3    # 32-bit fixup
 IMAGE_REL_BASED_DIR64    = 10   # 64-bit fixup
 
+# The HIGHLOW/DIR64 handling below is a COMPLETE normalization only for
+# these two machine types: x86 and x64 linkers exclusively use HIGHLOW/
+# DIR64 (plus ABSOLUTE padding) for base relocations. ARM/ARM64 binaries
+# use additional, differently-encoded relocation types (MOVW/MOVT pairs,
+# Thumb variants, ADRP/ADD instruction-embedded fixups) that this function
+# does not decode — walking the table and applying only the entries that
+# happen to look like HIGHLOW/DIR64 would leave the rest un-normalized and
+# silently understate how different two truly-relocated ARM images are.
+# Any relocation requirement (delta != 0) on an unlisted machine type is
+# therefore refused outright (status="unavailable"), not partially done.
+_RELOCATION_SUPPORTED_MACHINES = {0x014c, 0x8664}   # I386, AMD64
+
+
+@dataclass
+class RelocationResult:
+    """
+    Result of apply_base_relocations() — deliberately NOT a bare bytes
+    return, so a caller can tell "normalization succeeded" apart from
+    "normalization was skipped/failed and these bytes are UNCHANGED from
+    the input" without inspecting the bytes themselves. Treating the
+    latter as if it were the former was a real bug: a corrupt or
+    unavailable relocation table produced ordinary-looking (unmodified)
+    output bytes, which a caller comparing them against memory would
+    trust as a validly-normalized comparison when it never was one.
+
+    status:
+      "applied"     — delta != 0 and the relocation table was walked to
+                       completion; `data` has fixups applied.
+      "not_needed"  — delta == 0 (module loaded at its preferred base);
+                       `data` is returned unchanged, which is correct.
+      "unavailable" — delta != 0 but there was no BASERELOC directory to
+                       use (absent/empty), or the machine type isn't one
+                       this function fully supports (see
+                       _RELOCATION_SUPPORTED_MACHINES). `data` is
+                       UNCHANGED — a comparison against it is NOT a
+                       normalized comparison.
+      "malformed"   — delta != 0, a BASERELOC directory exists, but the
+                       table itself (or an entry's target RVA) was
+                       truncated/out-of-bounds partway through. `data`
+                       reflects whatever was successfully applied before
+                       the corruption was hit — the caller MUST NOT trust
+                       it as a complete normalization; treat exactly like
+                       "unavailable".
+    applied_count: number of HIGHLOW/DIR64 fixups actually applied.
+    unsupported_types: sorted list of relocation type values encountered
+      that were neither ABSOLUTE (padding, expected) nor HIGHLOW/DIR64 —
+      informational; their presence does NOT by itself change `status`
+      away from "applied", since the recognized fixups were still
+      correctly applied, but it does mean some addresses in the compared
+      range may remain un-normalized.
+    """
+    data: bytes
+    status: str
+    applied_count: int = 0
+    unsupported_types: list = field(default_factory=list)
+
 
 def _rva_to_file_offset(sections: list, rva: int) -> "int|None":
     """Translate a Relative Virtual Address to a byte offset inside the PE FILE, via the section table."""
@@ -276,7 +333,7 @@ def _rva_to_file_offset(sections: list, rva: int) -> "int|None":
     return None
 
 
-def apply_base_relocations(data: bytes, pe: dict, delta: int) -> bytes:
+def apply_base_relocations(data: bytes, pe: dict, delta: int) -> RelocationResult:
     """
     Apply a load-time base-relocation delta to a COPY of `data` (a PE FILE
     image — i.e. `data` is indexed by FILE offset, the same indexing
@@ -285,63 +342,81 @@ def apply_base_relocations(data: bytes, pe: dict, delta: int) -> bytes:
     relocated by `delta` = actual_load_base - preferred_image_base
     (pe['image_base'], from parsing `data`'s own header).
 
-    Only relocation types mainstream Windows linkers actually emit for
-    x86/x64 are applied: IMAGE_REL_BASED_HIGHLOW (32-bit fixups) and
-    IMAGE_REL_BASED_DIR64 (64-bit fixups). IMAGE_REL_BASED_ABSOLUTE is
-    block-alignment padding, not a real fixup, and is skipped; any other
-    type is left untouched (arm/mips-specific types this hunter has no
-    reason to encounter on x86/x64 dumps).
+    Only relocation types mainstream Windows x86/x64 linkers emit are
+    applied: IMAGE_REL_BASED_HIGHLOW (32-bit fixups) and
+    IMAGE_REL_BASED_DIR64 (64-bit fixups); IMAGE_REL_BASED_ABSOLUTE is
+    block-alignment padding, not a real fixup, and is skipped. See
+    RelocationResult and _RELOCATION_SUPPORTED_MACHINES for exactly when
+    that is (and is not) a complete normalization.
 
-    Never raises and never mutates `data` — returns an unmodified copy
-    (not the same object) if delta == 0, if the BASERELOC directory is
-    absent/empty, or if the relocation table is malformed/truncated. A
-    missing or corrupt relocation table means fixups couldn't be
-    normalized — callers should treat that as reduced confidence in the
-    resulting diff, not as a hard failure.
+    Never raises and never mutates `data` — always returns a
+    RelocationResult wrapping a copy (not the same object).
     """
     out = bytearray(data)
     if delta == 0:
-        return bytes(out)
+        return RelocationResult(data=bytes(out), status="not_needed")
+
+    if pe.get('machine') not in _RELOCATION_SUPPORTED_MACHINES:
+        return RelocationResult(data=bytes(out), status="unavailable")
 
     dirs = pe.get('data_directories') or []
     if len(dirs) <= IMAGE_DIRECTORY_ENTRY_BASERELOC:
-        return bytes(out)
+        return RelocationResult(data=bytes(out), status="unavailable")
     reloc_rva, reloc_size = dirs[IMAGE_DIRECTORY_ENTRY_BASERELOC]
     if not reloc_rva or not reloc_size:
-        return bytes(out)
+        return RelocationResult(data=bytes(out), status="unavailable")
 
     reloc_file_off = _rva_to_file_offset(pe['sections'], reloc_rva)
     if reloc_file_off is None or reloc_file_off + reloc_size > len(data):
-        return bytes(out)
+        return RelocationResult(data=bytes(out), status="malformed")
 
     pos, end = reloc_file_off, reloc_file_off + reloc_size
+    applied_count = 0
+    unsupported_types: set = set()
+    malformed = False
     while pos + 8 <= end:
         try:
             block_rva, block_size = struct.unpack_from('<II', data, pos)
         except struct.error:
+            malformed = True
             break
         if block_size < 8 or pos + block_size > end:
+            malformed = True
             break
         entry_count = (block_size - 8) // 2
         for i in range(entry_count):
             entry_off = pos + 8 + i * 2
             if entry_off + 2 > len(data):
+                malformed = True
                 break
             entry = struct.unpack_from('<H', data, entry_off)[0]
             rtype, page_off = entry >> 12, entry & 0xFFF
+            if rtype == IMAGE_REL_BASED_ABSOLUTE:
+                continue
             target_file_off = _rva_to_file_offset(pe['sections'], block_rva + page_off)
             if target_file_off is None:
+                malformed = True
                 continue
             if rtype == IMAGE_REL_BASED_HIGHLOW and target_file_off + 4 <= len(out):
                 val = struct.unpack_from('<I', out, target_file_off)[0]
                 struct.pack_into('<I', out, target_file_off, (val + delta) & 0xFFFFFFFF)
+                applied_count += 1
             elif rtype == IMAGE_REL_BASED_DIR64 and target_file_off + 8 <= len(out):
                 val = struct.unpack_from('<Q', out, target_file_off)[0]
                 struct.pack_into('<Q', out, target_file_off, (val + delta) & 0xFFFFFFFFFFFFFFFF)
-            # IMAGE_REL_BASED_ABSOLUTE and any other type: no-op.
+                applied_count += 1
+            else:
+                unsupported_types.add(rtype)
+        if malformed:
+            break
         pos += block_size
 
-    return bytes(out)
+    return RelocationResult(
+        data=bytes(out),
+        status="malformed" if malformed else "applied",
+        applied_count=applied_count,
+        unsupported_types=sorted(unsupported_types),
+    )
 
 def _pe_timestamp_to_str(ts: int) -> str:
     """

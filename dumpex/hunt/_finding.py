@@ -126,15 +126,28 @@ def overall_confidence(findings: list, score: int) -> str:
     return max((f.confidence for f in detections), key=lambda c: _CONFIDENCE_ORDER.get(c, -1))
 
 
-VERDICT_CLEAN    = "clean"
-VERDICT_POSSIBLE = "possible"
-VERDICT_LIKELY   = "likely"
-VERDICT_HIGH     = "high"
+VERDICT_CLEAN         = "clean"
+VERDICT_POSSIBLE      = "possible"
+VERDICT_LIKELY        = "likely"
+VERDICT_HIGH          = "high"
+VERDICT_INCONCLUSIVE  = "inconclusive"
+VERDICT_NOT_EVALUATED = "not_evaluated"
+
+# Statuses (from hunt/_ui.py) that must NOT collapse into "clean" just
+# because score <= 0 — "clean" specifically means "looked, complete
+# coverage, found nothing", which is a different claim than "didn't look"
+# or "looked but coverage was incomplete". Kept as string literals here
+# (rather than importing hunt/_ui.py) to avoid a dependency cycle —
+# hunt/_ui.py is a leaf print-helper module, but the two constants below
+# are exactly the NOT_EVALUATED/INCONCLUSIVE values it defines.
+_STATUS_NOT_EVALUATED = "NOT_EVALUATED"
+_STATUS_INCONCLUSIVE  = "INCONCLUSIVE"
 
 
-def verdict_level(score: int, level_by_score: dict) -> str:
+def verdict_level(score: int, level_by_score: dict, status: str = None) -> str:
     """
-    Map a hunter's integer score to "clean"/"possible"/"likely"/"high"
+    Map a hunter's integer score (and its top-level scan status) to
+    "clean"/"possible"/"likely"/"high"/"inconclusive"/"not_evaluated"
     using an EXPLICIT, hunter-supplied {score: level} table — never
     derived generically from score/max_score arithmetic. Different
     hunters have different max scores and different evidentiary weight
@@ -149,8 +162,22 @@ def verdict_level(score: int, level_by_score: dict) -> str:
     this field directly (`findings["verdict_level"].upper()`) rather than
     re-deriving it from score or confidence.
 
-    score <= 0 always maps to "clean", regardless of the table.
+    `status` should be the hunter's own findings["status"] (DETECTED /
+    NOT_DETECTED_IN_SCANNED_SCOPE / INCONCLUSIVE / NOT_EVALUATED). When
+    it's NOT_EVALUATED or INCONCLUSIVE, that takes priority over the
+    score <= 0 -> "clean" default: a hunter that never ran, or that ran
+    over incomplete coverage, has not earned "clean" — printing "clean"
+    there previously told an analyst a scope was verified benign when it
+    was actually never (or only partly) checked. `status` is optional and
+    defaults to None for callers that haven't been updated yet, in which
+    case behavior is unchanged (score <= 0 -> "clean").
+
+    Otherwise: score <= 0 maps to "clean"; score > 0 looks up the table.
     """
+    if status == _STATUS_NOT_EVALUATED:
+        return VERDICT_NOT_EVALUATED
+    if status == _STATUS_INCONCLUSIVE:
+        return VERDICT_INCONCLUSIVE
     if score <= 0:
         return VERDICT_CLEAN
     return level_by_score.get(score, VERDICT_POSSIBLE)

@@ -83,7 +83,13 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
 # score -> verdict_level, owned by this hunter (see _finding.verdict_level).
 # No "3": this hunter's max score is 2 (verified change, optionally
 # corroborated by live RIP/EIP — there's no third independent signal).
-_VERDICT_LEVEL_BY_SCORE = {1: "likely", 2: "high"}
+_VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "high"}
+# score==1 (verified content diff, no RIP corroboration) maps to "possible"
+# rather than "likely" — see the DETECTED verdict text below for why: an
+# uncorroborated diff is equally consistent with a benign hotpatch/EDR
+# hook, so "likely [stomping]" would over-attribute intent from a table
+# that's meant to be a plain display transform of the score, not a second
+# place to encode that judgment call.
 
 PE_VALIDATE_READ_MAX = 4096   # bytes read from each module base to parse its
                                # own header + section table (see injection.py)
@@ -252,30 +258,52 @@ def _diff_section_on_disk(ref_path: str, mem_pe: dict, module_base: int, section
     if not identity_ok:
         return {"identity_ok": False, "identity_reason": identity_reason,
                 "diff_ranges": [], "ranges_truncated": False, "compared_len": 0,
-                "disk_sha256": "", "mem_sha256": ""}
+                "relocation_failed": False, "disk_sha256": "", "mem_sha256": ""}
 
     # Relocation-normalize: the reference file's bytes reflect its
     # PREFERRED ImageBase; the in-memory module is loaded at module_base,
     # which can differ (ASLR). Applying that delta to the on-disk copy
     # before comparing means an unmodified-but-relocated section reads as
-    # identical, not "changed".
+    # identical, not "changed". If a delta is actually needed and the
+    # normalization couldn't be completed (unsupported machine type, a
+    # malformed/truncated relocation table, ...), comparing the raw bytes
+    # would misreport every relocation-touched instruction as "modified" —
+    # a false detection, not a coverage gap we can quietly paper over. So
+    # a failed normalization must abort the comparison outright rather
+    # than fall through to a byte diff against un-normalized data.
     delta = module_base - disk_pe['image_base']
-    disk_data = apply_base_relocations(disk_data, disk_pe, delta)
-
-    start  = section["pointer_to_raw_data"]
-    length = min(section["size_of_raw_data"], len(mem_bytes))
-    if length <= 0 or start + length > len(disk_data):
+    reloc = apply_base_relocations(disk_data, disk_pe, delta)
+    if delta != 0 and reloc.status != "applied":
         return {"identity_ok": True, "identity_reason": "", "diff_ranges": [],
-                "ranges_truncated": False, "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+                "ranges_truncated": False, "compared_len": 0,
+                "relocation_failed": True, "relocation_status": reloc.status,
+                "disk_sha256": "", "mem_sha256": ""}
+    disk_data = reloc.data
 
-    disk_slice = disk_data[start:start + length]
-    mem_slice  = mem_bytes[:length]
+    # size_of_raw_data (falling back to virtual_size, matching the length
+    # the caller used to bound its own memory read) is the authoritative
+    # expected comparison length. A live-memory read that came back
+    # shorter than this is a coverage gap — comparing only the bytes that
+    # happened to be readable would silently shrink the comparison window
+    # and could report "no diff" over a section that was never fully
+    # examined.
+    expected_len = section["size_of_raw_data"] or section["virtual_size"]
+    start = section["pointer_to_raw_data"]
+    if (expected_len <= 0 or len(mem_bytes) < expected_len
+            or start + expected_len > len(disk_data)):
+        return {"identity_ok": True, "identity_reason": "", "diff_ranges": [],
+                "ranges_truncated": False, "compared_len": 0,
+                "relocation_failed": False, "disk_sha256": "", "mem_sha256": ""}
+
+    disk_slice = disk_data[start:start + expected_len]
+    mem_slice  = mem_bytes[:expected_len]
     all_ranges = _diff_byte_ranges(disk_slice, mem_slice)
     return {
         "identity_ok": True, "identity_reason": "",
         "diff_ranges":      all_ranges,
         "ranges_truncated": len(all_ranges) >= MAX_DIFF_RANGES_SCAN,
-        "compared_len":     length,
+        "compared_len":     expected_len,
+        "relocation_failed": False,
         "disk_sha256":      hashlib.sha256(disk_slice).hexdigest(),
         "mem_sha256":       hashlib.sha256(mem_slice).hexdigest(),
     }
@@ -320,6 +348,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         "reference_read_failed":  0,   # matching-name file found, but couldn't be read/parsed
         "memory_read_failed":     0,   # couldn't read the section's live memory bytes
         "short_reads":            0,   # read succeeded but nothing usable could be compared
+        "relocation_failed":      0,   # delta != 0 but normalization couldn't be completed
     }
 
     protection_leads = []   # dicts: module, section, region, expected, actual
@@ -394,6 +423,9 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                 if not diff["identity_ok"]:
                     coverage_counts["reference_mismatch"] += 1
                     identity_skipped.append((m, section, diff["identity_reason"]))
+                    continue
+                if diff.get("relocation_failed"):
+                    coverage_counts["relocation_failed"] += 1
                     continue
                 if diff["compared_len"] == 0:
                     coverage_counts["short_reads"] += 1
@@ -679,6 +711,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
             coverage_counts["reference_read_failed"],
             coverage_counts["memory_read_failed"],
             coverage_counts["short_reads"],
+            coverage_counts["relocation_failed"],
         ])
     )
 
@@ -710,6 +743,10 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         if coverage_counts["short_reads"]:
             coverage_reasons.append(f"{coverage_counts['short_reads']} section(s) had nothing "
                                      f"comparable to read")
+        if coverage_counts["relocation_failed"]:
+            coverage_reasons.append(f"{coverage_counts['relocation_failed']} section(s) needed "
+                                     f"relocation normalization that could not be completed "
+                                     f"(unsupported machine type or malformed relocation table)")
 
     if not (mem_info_available and module_list_available):
         coverage_status = "not_evaluated"
@@ -731,15 +768,26 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         status = NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
     findings["confidence"] = overall_confidence(findings_list, score)
-    findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE)
+    findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings["findings"] = [f.to_dict() for f in findings_list]
 
     if status == NOT_EVALUATED:
         verdict = _status_text(NOT_EVALUATED, "; ".join(coverage_reasons) or "required streams missing")
     elif status == DETECTED:
+        # score==1 is a verified, relocation-normalized byte difference with
+        # NO corroborating live execution in the changed range — that is
+        # also exactly what a legitimate hotpatch/EDR-hook trampoline
+        # produces (see limitations above), so it is reported as a neutral,
+        # factual "modification confirmed" rather than "STOMPING", which
+        # would over-attribute malicious intent from content-diff alone.
+        # The "stomping" framing is reserved for score==2, where a thread's
+        # own RIP/EIP is executing inside the changed bytes.
         verdict = (RED("HIGH CONFIDENCE STOMPING — verified content change, RIP/EIP inside "
                        "the changed range") if score == 2 else
-                   YELLOW("LIKELY STOMPING — verified content change against reference file"))
+                   YELLOW("VERIFIED MODULE CODE MODIFICATION — content differs from reference "
+                          "file, but no observed thread executes inside the changed range "
+                          "(uncorroborated; consistent with hotpatch/EDR-hook activity as well "
+                          "as stomping)"))
     elif status == INCONCLUSIVE:
         verdict = _status_text(INCONCLUSIVE, "; ".join(coverage_reasons) or "partial coverage")
     else:

@@ -1178,7 +1178,6 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     score = int(bool(sleep_mask_hits)) + int(bool(all_pe_hits))
     findings['score'] = score
     findings['max_score'] = 2
-    findings['verdict_level'] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE)
     # Every layer has its own size/type filters (SLEEP_MASK_REGION_MAX,
     # ENTROPY_SCAN_MAX, DECODE_SCAN_MAX) — regions can exist (mem_info
     # available) while every single one gets filtered out by every layer
@@ -1230,6 +1229,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     else:
         status = NOT_DETECTED_IN_SCANNED_SCOPE
     findings['status'] = status
+    findings['verdict_level'] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings['confidence'] = overall_confidence(findings_list, score)
     findings['findings'] = [f.to_dict() for f in findings_list]
 
