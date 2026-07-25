@@ -237,12 +237,17 @@ load time is applied to the on-disk copy, so an unmodified-but-relocated
 section reads as identical rather than "changed". Only `IMAGE_REL_BASED_
 HIGHLOW`/`DIR64` fixups on **x86/x64** (`I386`/`AMD64`) modules are
 applied — the two types real x86/x64 linkers emit. On any other machine
-type (ARM/ARM64/…), or if the relocation table itself is missing/malformed,
-normalization is explicitly reported as **unavailable/malformed** rather
-than silently skipped: when a nonzero relocation delta is actually needed
-and normalization can't be completed, the comparison is aborted for that
-section (counted under `coverage_counts.relocation_failed`) instead of
-diffing raw, un-normalized bytes — doing so would misreport every
+type (ARM/ARM64/…), if the relocation table itself is missing/malformed,
+if an entry uses a fixup type other than `ABSOLUTE`/`HIGHLOW`/`DIR64`
+(unrecognized/unsupported), or if an entry's target RVA falls in a
+section's virtual-only tail — `VirtualSize` extending past
+`SizeOfRawData`, e.g. a zero-padded region the loader fills at load time
+with no corresponding on-disk bytes — normalization is explicitly
+reported as **unavailable/malformed** rather than silently skipped or
+partially applied: when a nonzero relocation delta is actually needed and
+normalization can't be completed *in full*, the comparison is aborted for
+that section (counted under `coverage_counts.relocation_failed`) instead
+of diffing raw, un-normalized bytes — doing so would misreport every
 relocation-touched instruction as "modified". Similarly, a live-memory
 read shorter than the section's declared `SizeOfRawData` is never
 silently compared over just the bytes that happened to be readable — it's

@@ -305,18 +305,22 @@ class RelocationResult:
                        normalized comparison.
       "malformed"   — delta != 0, a BASERELOC directory exists, but the
                        table itself (or an entry's target RVA) was
-                       truncated/out-of-bounds partway through. `data`
-                       reflects whatever was successfully applied before
-                       the corruption was hit — the caller MUST NOT trust
-                       it as a complete normalization; treat exactly like
-                       "unavailable".
+                       truncated/out-of-bounds partway through, OR an
+                       entry used a relocation type this function doesn't
+                       decode (neither ABSOLUTE/HIGHLOW/DIR64 — see
+                       unsupported_types below). `data` reflects whatever
+                       was successfully applied before the problem was
+                       hit — the caller MUST NOT trust it as a complete
+                       normalization; treat exactly like "unavailable".
     applied_count: number of HIGHLOW/DIR64 fixups actually applied.
     unsupported_types: sorted list of relocation type values encountered
-      that were neither ABSOLUTE (padding, expected) nor HIGHLOW/DIR64 —
-      informational; their presence does NOT by itself change `status`
-      away from "applied", since the recognized fixups were still
-      correctly applied, but it does mean some addresses in the compared
-      range may remain un-normalized.
+      that were neither ABSOLUTE (padding, expected) nor HIGHLOW/DIR64.
+      Any entry of this kind means the table could NOT be fully decoded,
+      so it always forces status="malformed" too (an un-normalized
+      address left in `data` would otherwise look identical to a
+      correctly-normalized one to a byte-diffing caller) — this field is
+      purely diagnostic detail about WHICH type broke the walk, not a
+      softer outcome than "malformed".
     """
     data: bytes
     status: str
@@ -324,12 +328,40 @@ class RelocationResult:
     unsupported_types: list = field(default_factory=list)
 
 
-def _rva_to_file_offset(sections: list, rva: int) -> "int|None":
-    """Translate a Relative Virtual Address to a byte offset inside the PE FILE, via the section table."""
+def _rva_to_file_offset(sections: list, rva: int, width: int = 0) -> "int|None":
+    """
+    Translate a Relative Virtual Address to a byte offset inside the PE
+    FILE, via the section table.
+
+    Only RVAs inside a section's actual ON-DISK raw-data extent
+    (virtual_address .. +size_of_raw_data) are translatable. A section's
+    virtual_size can extend past its size_of_raw_data — e.g. a
+    zero-padded .bss-like tail the LOADER fills in at load time — and
+    that virtual-only tail has no corresponding file bytes at all.
+    Matching against virtual_size (the old behavior) would map an RVA in
+    that tail to pointer_to_raw_data + (rva - virtual_address), a file
+    offset with no real relationship to the RVA: it either lands past
+    this section's actual raw data (silently aliasing a neighboring
+    section's bytes or padding) or, for a small enough offset, happens to
+    look like a plausible-but-wrong location. Either way it is not "the
+    file offset this RVA corresponds to", so such an RVA must translate
+    to None (unmapped), not a wrong-but-in-range answer.
+
+    `width`, if given, additionally requires the whole [rva, rva+width)
+    span to fit inside the raw-data extent, not just the starting byte —
+    used for both a fixup's 4/8-byte target and the reloc directory's own
+    span, so a target straddling the raw-data boundary is rejected rather
+    than partially translated.
+    """
     for s in sections:
-        span = max(s['virtual_size'], s['size_of_raw_data'])
-        if s['virtual_address'] <= rva < s['virtual_address'] + span:
-            return s['pointer_to_raw_data'] + (rva - s['virtual_address'])
+        raw_size = s['size_of_raw_data']
+        if raw_size <= 0:
+            continue
+        if s['virtual_address'] <= rva < s['virtual_address'] + raw_size:
+            offset_in_section = rva - s['virtual_address']
+            if width and offset_in_section + width > raw_size:
+                return None
+            return s['pointer_to_raw_data'] + offset_in_section
     return None
 
 
@@ -366,7 +398,7 @@ def apply_base_relocations(data: bytes, pe: dict, delta: int) -> RelocationResul
     if not reloc_rva or not reloc_size:
         return RelocationResult(data=bytes(out), status="unavailable")
 
-    reloc_file_off = _rva_to_file_offset(pe['sections'], reloc_rva)
+    reloc_file_off = _rva_to_file_offset(pe['sections'], reloc_rva, width=reloc_size)
     if reloc_file_off is None or reloc_file_off + reloc_size > len(data):
         return RelocationResult(data=bytes(out), status="malformed")
 
@@ -393,20 +425,30 @@ def apply_base_relocations(data: bytes, pe: dict, delta: int) -> RelocationResul
             rtype, page_off = entry >> 12, entry & 0xFFF
             if rtype == IMAGE_REL_BASED_ABSOLUTE:
                 continue
-            target_file_off = _rva_to_file_offset(pe['sections'], block_rva + page_off)
-            if target_file_off is None:
+            if rtype not in (IMAGE_REL_BASED_HIGHLOW, IMAGE_REL_BASED_DIR64):
+                # An unrecognized fixup type means this table is NOT fully
+                # normalizable — silently skipping it (old behavior: kept
+                # status="applied" with the type merely noted in
+                # unsupported_types) left that address un-normalized while
+                # still telling the caller the comparison was trustworthy.
+                # That is exactly the same failure mode as an unsupported
+                # machine type: mark the whole normalization malformed
+                # rather than partially done.
+                unsupported_types.add(rtype)
                 malformed = True
                 continue
-            if rtype == IMAGE_REL_BASED_HIGHLOW and target_file_off + 4 <= len(out):
+            width = 4 if rtype == IMAGE_REL_BASED_HIGHLOW else 8
+            target_file_off = _rva_to_file_offset(pe['sections'], block_rva + page_off, width=width)
+            if target_file_off is None or target_file_off + width > len(out):
+                malformed = True
+                continue
+            if rtype == IMAGE_REL_BASED_HIGHLOW:
                 val = struct.unpack_from('<I', out, target_file_off)[0]
                 struct.pack_into('<I', out, target_file_off, (val + delta) & 0xFFFFFFFF)
-                applied_count += 1
-            elif rtype == IMAGE_REL_BASED_DIR64 and target_file_off + 8 <= len(out):
+            else:
                 val = struct.unpack_from('<Q', out, target_file_off)[0]
                 struct.pack_into('<Q', out, target_file_off, (val + delta) & 0xFFFFFFFFFFFFFFFF)
-                applied_count += 1
-            else:
-                unsupported_types.add(rtype)
+            applied_count += 1
         if malformed:
             break
         pos += block_size
