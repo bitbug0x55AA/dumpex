@@ -173,13 +173,23 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     def _extract_pipe_name(data, m, is_utf16, max_chars=PIPE_NAME_MAX_CHARS):
         """
         Walk forward from the \\pipe\\ match to find the full printable
-        run (needed for an accurate sha256/original_length even when that
-        run is huge), but DECODE/RETAIN at most max_chars of it as the
-        preview — a 1 MiB printable run following the match must not
-        become a 1 MiB "pipe name" string kept in findings. Building the
-        raw byte slice to hash/measure it is transient (freed once this
-        call returns); only the bounded preview + digest + length survive.
-        Returns (preview, sha256_hex, original_length_bytes).
+        run (needed for an accurate sha256/length even when that run is
+        huge), but DECODE/RETAIN at most max_chars of it as the preview —
+        a 1 MiB printable run following the match must not become a
+        1 MiB "pipe name" string kept in findings. Building the raw byte
+        slice to hash/measure it is transient (freed once this call
+        returns); only the bounded preview + digest + length survive.
+
+        `truncated` is computed here by comparing raw BYTES against
+        preview_src BYTES — both in the same unit, before any decoding —
+        rather than leaving callers to compare a decoded preview's
+        CHARACTER count against a byte length. For UTF-16LE (2 bytes per
+        char), comparing len(decoded preview) against len(raw bytes)
+        reports "truncated" for every non-empty name even when nothing
+        was actually cut.
+
+        Returns a dict: {"preview", "sha256", "original_length",
+        "truncated", "encoding"}.
         """
         end = m.end()
         if is_utf16:
@@ -197,6 +207,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 preview = preview_src.decode("utf-16-le", errors="replace")
             except Exception:
                 preview = repr(preview_src)
+            encoding = "utf16le"
         else:
             while end < len(data) and 32 <= data[end] < 127:
                 end += 1
@@ -206,7 +217,14 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 preview = preview_src.decode("ascii", errors="replace")
             except Exception:
                 preview = repr(preview_src)
-        return preview, hashlib.sha256(raw).hexdigest(), len(raw)
+            encoding = "ascii"
+        return {
+            "preview":          preview,
+            "sha256":           hashlib.sha256(raw).hexdigest(),
+            "original_length":  len(raw),
+            "truncated":        len(raw) > len(preview_src),
+            "encoding":         encoding,
+        }
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
@@ -250,11 +268,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 if pipe_name_budget.exhausted():
                     break
                 region_matches += 1
-                preview, digest, orig_len = _extract_pipe_name(data, m, is_utf16)
-                if not pipe_name_budget.take_hit(len(preview)):
+                info = _extract_pipe_name(data, m, is_utf16)
+                if not pipe_name_budget.take_hit(len(info["preview"])):
                     break
-                hit = {"region": r, "offset": m.start(), "name": preview,
-                       "sha256": digest, "original_length": orig_len}
+                hit = {"region": r, "offset": m.start(), "name": info["preview"],
+                       "sha256": info["sha256"], "original_length": info["original_length"],
+                       "truncated": info["truncated"], "encoding": info["encoding"]}
                 if "MEM_IMAGE" in mtype and _is_system_dll(mod):
                     image_pipes.append({**hit, "module": os.path.basename(mod.name)})
                 else:
@@ -317,8 +336,8 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                     backer = YELLOW(f" [image: {os.path.basename(mod_r.name)}]")
                 else:
                     backer = DIM(" [private/unregistered]")
-                truncated = f"  [truncated, full length {hit['original_length']}]" \
-                    if hit["original_length"] > len(name) else ""
+                truncated = f"  [truncated, full length {hit['original_length']} bytes]" \
+                    if hit.get("truncated") else ""
                 detail += (f"\n          VA (process)   0x{abs_va:016x}{rwx}{backer}"
                            f"\n          File offset    {fo_str}"
                            f"\n          Region base    0x{r.BaseAddress:016x}"

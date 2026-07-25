@@ -118,6 +118,64 @@ _DEFAULT_RULES = {
 }
 
 
+_LIST_OF_STR_FIELDS = (
+    "suspicious_protections", "stomping_whitelist",
+    "stomping_ioc_patterns", "stomping_net_ioc_patterns",
+    "pipe_c2_context_patterns",
+)
+_FRAMEWORK_PIPE_STR_FIELDS = ("pattern", "framework", "technique", "mitre")
+_KNOWN_TOP_LEVEL_FIELDS = frozenset({"version", "framework_pipes", *_LIST_OF_STR_FIELDS})
+
+
+def _validate_rules_schema(raw: dict) -> None:
+    """
+    Validate rules.yaml/.json structure BEFORE _compile_rules() ever runs.
+
+    _compile_rules() trusts its input's shape completely — a patterns
+    field given as a bare string instead of a list (e.g.
+    `pipe_c2_context_patterns: "http"`) doesn't raise: `"|".join(f"(?:{p})"
+    for p in patterns)` happily iterates the STRING's individual
+    characters as separate one-char patterns
+    ("(?:h)|(?:t)|(?:t)|(?:p)"), compiling into a rule set that runs
+    without error but matches almost anything — a silent false-positive
+    flood, not a crash that would get noticed.
+
+    Raises ValueError with a specific, actionable message on the first
+    violation found. Unknown top-level fields are rejected too, so a
+    typo'd field name (e.g. `pipe_c2_context_pattern` singular) fails
+    loudly instead of being silently ignored in favor of the built-in
+    default for the (correctly-spelled, but absent) field.
+    """
+    unknown = set(raw.keys()) - _KNOWN_TOP_LEVEL_FIELDS
+    if unknown:
+        raise ValueError(f"unknown top-level field(s): {', '.join(sorted(unknown))}")
+
+    if "version" in raw and not isinstance(raw["version"], int):
+        raise ValueError("'version' must be an integer")
+
+    for field in _LIST_OF_STR_FIELDS:
+        if field not in raw:
+            continue
+        value = raw[field]
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            raise ValueError(f"'{field}' must be a list of strings")
+
+    if "framework_pipes" in raw:
+        pipes = raw["framework_pipes"]
+        if not isinstance(pipes, list) or not all(isinstance(p, dict) for p in pipes):
+            raise ValueError("'framework_pipes' must be a list of objects")
+        for i, entry in enumerate(pipes):
+            if not isinstance(entry.get("pattern"), str):
+                raise ValueError(f"'framework_pipes[{i}].pattern' must be a string")
+            for key in ("framework", "technique", "mitre"):
+                if key in entry and not isinstance(entry[key], str):
+                    raise ValueError(f"'framework_pipes[{i}].{key}' must be a string")
+            unknown_keys = set(entry.keys()) - set(_FRAMEWORK_PIPE_STR_FIELDS)
+            if unknown_keys:
+                raise ValueError(f"'framework_pipes[{i}]' has unknown field(s): "
+                                 f"{', '.join(sorted(unknown_keys))}")
+
+
 def _compile_rules(raw: dict) -> dict:
     """
     Post-process a loaded rule dict: compile regex strings into re.Pattern objects,
@@ -295,6 +353,12 @@ def _load_explicit_rules() -> dict:
         sys.exit(1)
 
     try:
+        _validate_rules_schema(raw)
+    except ValueError as e:
+        print(RED(f"[!] --rules-file {path}: invalid schema: {e}"))
+        sys.exit(1)
+
+    try:
         rules = _compile_rules(raw)
     except Exception as e:
         print(RED(f"[!] --rules-file {path}: failed to compile rules: {e}"))
@@ -348,6 +412,8 @@ def _load_rules() -> dict:
                 if version != 1:
                     print(YELLOW(f"  [~] {source.display}: unknown schema version {version}, "
                                  f"proceeding anyway"))
+                _validate_rules_schema(raw)   # raises ValueError -> caught below,
+                                               # falls back to built-in defaults
                 rules = _compile_rules(raw)
                 digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
                 _LAST_SOURCE_INFO = {"path": source.display, "sha256": digest,

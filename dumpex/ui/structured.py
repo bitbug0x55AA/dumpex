@@ -366,7 +366,7 @@ class StructuredOutput:
                     abs_va = r.BaseAddress + off
                     fo     = (va_to_file_offset(self._mf, abs_va) or 0) if self._mf else 0
                     pipename = name.strip()
-                    if hit.get("original_length", len(name)) > len(name):
+                    if hit.get("truncated"):
                         pipename += f" [truncated, sha256={hit['sha256'][:16]}…]"
                     findings_rows.append({
                         "ttp":          ttp,
