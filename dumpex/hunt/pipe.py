@@ -36,7 +36,7 @@ from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence)
 
 PIPE_SCAN_MAX = 8 * 1024 * 1024   # skip regions > 8MB; pipe names / C2 context
                                    # are short strings, no need to read huge
@@ -69,7 +69,53 @@ _UTF16_RUN_PAT = re.compile(rb'(?:[ -~]\x00){%d,}' % _MIN_RUN_LEN)
 
 # Handle ObjectName patterns identifying a named-pipe kernel object.
 _HANDLE_PIPE_PAT = re.compile(r'\\Device\\NamedPipe\\|\\pipe\\', re.IGNORECASE)
-_HANDLE_PIPE_SHORTNAME_PAT = re.compile(r'(?:NamedPipe|pipe)\\(.+)$', re.IGNORECASE)
+
+# Known prefix forms a pipe reference can appear under — a kernel handle's
+# ObjectName ("\Device\NamedPipe\foo"), a Win32 device-namespace string
+# ("\\.\pipe\foo"), an NT-namespace string ("\??\pipe\foo"), or the bare
+# ("\pipe\foo") form the byte-pattern scan matches.
+#
+# "\.\pipe\foo" (single leading backslash) is ALSO listed even though the
+# genuine Win32 string is "\\.\pipe\foo" (two leading backslashes): the
+# byte-pattern regex's "\\.\\pipe\\" alternative only anchors on ONE
+# literal backslash before the "." (its second character class is "any
+# byte", which the following literal backslash of the double-backslash
+# prefix happens to satisfy) — so PIPE_PAT_ASCII/UTF16 always match
+# starting one byte INTO a genuine "\\.\pipe\" string, and every preview
+# built from that match (_extract_pipe_name) is missing the first
+# backslash. Without this second entry, canonicalizing a string-scan hit
+# never strips anything for that form and silently fails to line up with
+# a handle's full "\Device\NamedPipe\foo" name.
+_CANONICAL_PIPE_PREFIXES = (
+    "\\device\\namedpipe\\",
+    "\\\\.\\pipe\\",
+    "\\.\\pipe\\",
+    "\\??\\pipe\\",
+    "\\pipe\\",
+)
+
+
+def canonical_pipe_name(name: str) -> str:
+    """
+    Strip any known pipe-namespace prefix and casefold, so the SAME pipe
+    referenced via a kernel handle ("\\Device\\NamedPipe\\foo"), a Win32
+    string ("\\\\.\\pipe\\foo"), or an NT-namespace string ("\\??\\pipe\\foo")
+    all normalize to the identical "foo" for comparison.
+
+    Callers MUST compare two canonical names for EXACT equality, never
+    substring containment ("a in b or b in a") — substring containment
+    means any pipe name that happens to be a prefix/suffix of another
+    (e.g. "lsass" inside "lsass-rpc", or an empty/near-empty canonical
+    name after a malformed match) silently links two UNRELATED pipes,
+    which previously let a coincidental short-name match manufacture a
+    handle+string "corroboration" that was never actually about the same
+    pipe.
+    """
+    n = (name or "").strip().casefold()
+    for prefix in _CANONICAL_PIPE_PREFIXES:
+        if n.startswith(prefix):
+            return n[len(prefix):]
+    return n
 
 
 def _iter_printable_runs(data: bytes):
@@ -130,11 +176,6 @@ def _is_pipe_handle(h) -> bool:
     return bool(_HANDLE_PIPE_PAT.search(h.ObjectName))
 
 
-def _handle_pipe_shortname(object_name: str) -> str:
-    m = _HANDLE_PIPE_SHORTNAME_PAT.search(object_name)
-    return (m.group(1) if m else object_name).strip().lower()
-
-
 def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
     Detect Named Pipe C2 / Lateral Movement channels.
@@ -160,7 +201,13 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     thread_contexts = get_thread_contexts(mf)
     handles = get_handles(mf)
     mem_info_available    = bool(mf.memory_info and mf.memory_info.infos)
-    handle_stream_available = bool(mf.handles and mf.handles.handles)
+    # Stream PRESENCE, not "the handle list happens to be non-empty" — a
+    # dump captured with MiniDumpWithHandleData can legitimately show a
+    # process holding zero pipe handles (or, in principle, zero handles at
+    # all); that is a checked-and-clean result, not "the stream is
+    # missing". Only `mf.handles is None` means the stream itself wasn't
+    # captured, and only THAT should report "NOT AVAILABLE".
+    handle_stream_available = mf.handles is not None
 
     # Pipe name patterns
     # Match pipe names in both ASCII and UTF-16LE.
@@ -176,7 +223,6 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     _r                    = get_rules()
     KNOWN_FRAMEWORK_PIPES = _r["framework_pipes"]
     C2_PAT                = _r["pipe_c2_context_patterns"]
-    SUSPICIOUS_PROTS      = _r["suspicious_protections"]
 
     findings = {
         "handle_pipes":    [],   # [{"handle", "framework_match"}, ...]
@@ -199,11 +245,10 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 return (framework, technique, mitre)
         return None
 
-    handle_classified = []   # {"handle", "shortname", "framework_match"}
+    handle_classified = []   # {"handle", "canonical_name", "framework_match"}
     for h in handle_pipe_hits:
-        shortname = _handle_pipe_shortname(h.ObjectName)
         handle_classified.append({
-            "handle": h, "shortname": shortname,
+            "handle": h, "canonical_name": canonical_pipe_name(h.ObjectName),
             "framework_match": _framework_match(h.ObjectName),
         })
 
@@ -513,16 +558,24 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         c2_hits.append((hit["region"], hit["name"].strip(), records))
     findings["c2_context"] = c2_hits
 
-    def _string_hit_for_handle(shortname: str):
+    def _string_hit_for_handle(canonical_name: str):
+        """
+        EXACT match on canonicalized names only — see canonical_pipe_name()
+        docstring for why substring containment ("a in b or b in a") is
+        wrong here: it lets an unrelated pipe whose name happens to be a
+        prefix/suffix of another (or an empty canonical name from a
+        malformed match) manufacture a false "same pipe" link.
+        """
+        if not canonical_name:
+            return None
         for hit in private_pipes:
-            name = hit["name"].strip().lower()
-            if shortname and (shortname in name or name in shortname):
+            if canonical_pipe_name(hit["name"]) == canonical_name:
                 return hit
         return None
 
     corroborated_handles = []   # (handle_classified_entry, string_hit, c2_records, exec_hit)
     for hc in handle_classified:
-        sh = _string_hit_for_handle(hc["shortname"])
+        sh = _string_hit_for_handle(hc["canonical_name"])
         if sh is None:
             continue
         c2_records = region_c2_records.get(sh["region"].BaseAddress)
@@ -553,20 +606,30 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 f += (f"  live_rip=TID:0x{obj['ThreadId']:x}@{obj['ip_reg']}" if kind == "rip"
                       else f"  unbacked_thread_start=TID:0x{obj.ThreadId:x}")
             facts.append(f)
+        # HIGH only when at least one corroborated handle has BOTH C2
+        # context AND execution evidence at once (the score=3 case below) —
+        # a Finding's confidence must track what actually justified it, not
+        # be uniformly HIGH regardless of whether one or both signals fired.
+        full_corroboration = any(c2 and ex for _, _, c2, ex in corroborated_handles)
         findings_list.append(Finding(
             check="pipe.corroboration",
             facts=facts,
             inference=f"{len(corroborated_handles)} open pipe handle(s) are corroborated "
                        f"by C2-style context and/or active/unbacked-thread execution in "
                        f"the memory region backing a matching pipe-name string.",
-            confidence=CONFIDENCE_HIGH,
-            rationale="Combines an OS-confirmed open handle with independent memory "
-                       "evidence (C2 artifacts and/or execution) in the SAME region as "
-                       "that pipe's name string — the strongest correlation this hunter "
-                       "can produce.",
-            limitations=["Name correlation between a handle's ObjectName and a string "
-                         "scan hit is a best-effort substring match, not a guaranteed "
-                         "same-object link."],
+            confidence=CONFIDENCE_HIGH if full_corroboration else CONFIDENCE_MEDIUM,
+            rationale=("Combines an OS-confirmed open handle with BOTH independent memory "
+                       "signals (C2 artifacts AND execution) in the SAME region as that "
+                       "pipe's name string — the strongest correlation this hunter can "
+                       "produce." if full_corroboration else
+                       "Combines an OS-confirmed open handle with ONE independent memory "
+                       "signal (C2 artifacts or execution, not both) in the same region as "
+                       "that pipe's name string."),
+            limitations=["Name correlation between a handle's ObjectName and a string scan "
+                         "hit uses exact match on the canonicalized pipe name (prefix "
+                         "stripped, casefolded) — still not a cryptographic guarantee both "
+                         "refer to the identical kernel object if the process has multiple "
+                         "same-named pipe instances."],
             tag=TAG_DETECTION,
         ))
         for hc, sh, c2_records, exec_hit in corroborated_handles:
@@ -645,23 +708,34 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             f.print()
 
     # ── Score / Verdict ───────────────────────────────────────────────────
+    # 0 — string leads / a generic open handle only.
     # 1 — a handle-confirmed pipe matches a known C2/lateral-movement
-    #     framework naming convention (OS-confirmed usage + specific name).
-    # 2 — that framework-matched handle is additionally corroborated by
-    #     C2-style context OR execution evidence in a matching region.
+    #     framework naming convention (OS-confirmed usage + specific name),
+    #     even with no further corroboration.
+    # 2 — ANY handle-confirmed pipe (framework-matched or not) is
+    #     corroborated by C2-style context OR execution evidence in the
+    #     region backing a same-named string occurrence.
     # 3 — corroborated by BOTH C2 context AND execution evidence at once.
+    #
+    # Deliberately NOT gated on framework_match for tiers 2-3: a
+    # same-named handle actively corroborated by C2 context or live
+    # execution is strong evidence on its own (an OS-confirmed handle
+    # PLUS independent memory evidence in the same region), and requiring
+    # a framework-name match on top of that would silently downgrade a
+    # genuinely corroborated custom/non-framework pipe to a Finding the
+    # score doesn't reflect — exactly the Finding/verdict mismatch this
+    # scoring model exists to avoid.
     score = 0
-    corroborated_ids = {id(hc) for hc, _, _, _ in corroborated_handles}
     if framework_handle_hits:
         score = 1
-    if any(id(hc) in corroborated_ids for hc in framework_handle_hits):
-        score = 2
     for hc, sh, c2_records, exec_hit in corroborated_handles:
-        if hc["framework_match"] and c2_records and exec_hit:
-            score = 3
-            break
+        if c2_records and exec_hit:
+            score = max(score, 3)
+        elif c2_records or exec_hit:
+            score = max(score, 2)
 
     findings["score"] = score
+    findings["max_score"] = 3
 
     c2_exhausted   = c2_budget.exhausted()
     name_exhausted = pipe_name_budget.exhausted()
@@ -670,18 +744,48 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     findings["scan_complete"] = not (budget_exhausted or skipped_size or read_failed)
     findings["findings"] = [f.to_dict() for f in findings_list]
 
+    # Coverage is tracked independently of status/score, so "DETECTED but
+    # coverage was partial" stays representable rather than a nonzero
+    # score silently implying every region/handle was checked.
+    coverage_reasons = []
+    if not mem_info_available:
+        coverage_reasons.append("MemoryInfoListStream missing from this dump")
+    if not handle_stream_available:
+        coverage_reasons.append("HandleDataStream missing from this dump (needs "
+                                 "MiniDumpWithHandleData) — the primary, scored "
+                                 "pipe-handle check could not run")
+    if skipped_size:
+        coverage_reasons.append(f"{skipped_size} oversized region(s) skipped")
+    if read_failed:
+        coverage_reasons.append(f"{read_failed} region(s) failed to read")
+    if c2_exhausted:
+        coverage_reasons.append(f"C2-context scan budget exhausted ({c2_budget.exhausted_reason})")
+    if name_exhausted:
+        coverage_reasons.append(f"pipe-name scan budget exhausted ({pipe_name_budget.exhausted_reason})")
+
     evaluated = mem_info_available or handle_stream_available
     if not evaluated:
+        coverage_status = "not_evaluated"
+    elif not handle_stream_available or skipped_size or read_failed or budget_exhausted:
+        coverage_status = "partial"
+    else:
+        coverage_status = "complete"
+    findings["coverage_status"]  = coverage_status
+    findings["coverage_reasons"] = coverage_reasons
+
+    if coverage_status == "not_evaluated":
         status = NOT_EVALUATED
-    elif not handle_stream_available:
-        # The PRIMARY (scored) check literally could not run — a negative
-        # score here must not be read the same as "checked and clean".
-        status = INCONCLUSIVE
-    elif score == 0 and (skipped_size or read_failed or budget_exhausted):
+    elif score > 0:
+        status = DETECTED
+    elif coverage_status == "partial":
+        # The PRIMARY (scored) check may not have run at all (no
+        # HandleDataStream) or ran incompletely — a negative score here
+        # must not be read the same as "checked and clean".
         status = INCONCLUSIVE
     else:
-        status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
+        status = NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
+    findings["confidence"] = overall_confidence(findings_list, score)
 
     if not evaluated:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream and HandleDataStream both missing from this dump")

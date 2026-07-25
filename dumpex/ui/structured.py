@@ -193,9 +193,19 @@ class StructuredOutput:
                     continue
                 score     = findings.get("score", 0)
                 status    = findings.get("status", "")
-                max_score = {"injection": 3, "hollowing": 4, "stomping": 2,
+                max_score = findings.get("max_score") or {
+                             "injection": 3, "hollowing": 4, "stomping": 2,
                              "pipe": 3, "cs-beacon": 1, "yara": 3,
-                             "obfuscation": 3}.get(ttp, "?")
+                             "obfuscation": 2}.get(ttp, "?")
+
+                # Phase-two hunters (injection/stomping/pipe/obfuscation)
+                # report their own "confidence" (none/low/medium/high) and
+                # "coverage_status" (complete/partial/not_evaluated),
+                # computed independently of score — hunters not yet
+                # upgraded (hollowing/cs-beacon/yara) don't have these and
+                # fall back to the legacy score/max_score heuristics below.
+                hunter_confidence      = findings.get("confidence")
+                hunter_coverage_status = findings.get("coverage_status")
 
                 # Verdict must be driven by status, not score alone: a
                 # NOT_EVALUATED scanner (dependency/stream missing) or an
@@ -211,23 +221,49 @@ class StructuredOutput:
                     verdict           = "INCONCLUSIVE"
                     coverage_complete = False
                 else:
-                    coverage_complete = True
-                    verdict = ("CLEAN"           if score == 0 else
-                               "HIGH CONFIDENCE" if isinstance(max_score, int) and score >= max_score - 1
-                               else "POSSIBLE")
+                    # status is DETECTED or NOT_DETECTED_IN_SCANNED_SCOPE
+                    # here — but a phase-two hunter's OWN coverage_status
+                    # can still be "partial" even when it found something
+                    # (DETECTED): a nonzero score must not silently imply
+                    # complete coverage just because status won the race
+                    # against a coverage gap (see stomping.py/pipe.py/
+                    # encoding.py/injection.py "DETECTED but partial"
+                    # handling).
+                    coverage_complete = (hunter_coverage_status != "partial"
+                                          if hunter_coverage_status is not None else True)
+                    if hunter_confidence is not None:
+                        # Use the hunter's OWN confidence, never
+                        # `score >= max_score - 1` — that arithmetic
+                        # previously turned a single MEDIUM-confidence
+                        # lead (e.g. stomping's uncorroborated verified
+                        # diff, 1/2) into a CSV "HIGH CONFIDENCE" row for
+                        # several hunters, independent of how weak the
+                        # underlying evidence actually was.
+                        verdict = ("CLEAN" if score == 0 else
+                                   "HIGH CONFIDENCE" if hunter_confidence == "high" else
+                                   "POSSIBLE")
+                    else:
+                        verdict = ("CLEAN"           if score == 0 else
+                                   "HIGH CONFIDENCE" if isinstance(max_score, int) and score >= max_score - 1
+                                   else "POSSIBLE")
 
                 coverage = findings.get("coverage") or {}
+                coverage_reasons_list = findings.get("coverage_reasons")
                 if not coverage_complete:
-                    missing = [k for k, v in coverage.items() if not v]
-                    coverage_reason = (f"missing: {', '.join(missing)}" if missing else
-                                        "not evaluated" if status == "NOT_EVALUATED" else
-                                        "partial coverage")
+                    if coverage_reasons_list:
+                        coverage_reason = "; ".join(coverage_reasons_list)
+                    else:
+                        missing = [k for k, v in coverage.items() if not v]
+                        coverage_reason = (f"missing: {', '.join(missing)}" if missing else
+                                            "not evaluated" if status == "NOT_EVALUATED" else
+                                            "partial coverage")
                 else:
                     coverage_reason = ""
 
                 summary_rows.append({
                     "ttp": ttp, "score": score, "max_score": max_score,
                     "status": status, "verdict": verdict,
+                    "confidence": hunter_confidence or "",
                     "coverage_complete": coverage_complete,
                     "coverage_reason": coverage_reason,
                 })

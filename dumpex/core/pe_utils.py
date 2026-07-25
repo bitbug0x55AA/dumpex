@@ -70,6 +70,7 @@ def parse_pe_header(data: bytes) -> dict:
     result = {
         'valid': False, 'has_mz': False, 'has_pe_sig': False,
         'e_lfanew': None, 'machine': None, 'machine_name': None,
+        'time_date_stamp': None,
         'is_pe32_plus': None, 'number_of_sections': None,
         'size_of_image': None, 'address_of_entry_point': None,
         'image_base': None, 'sections': [], 'reason': '',
@@ -98,13 +99,14 @@ def parse_pe_header(data: bytes) -> dict:
 
     coff_off = e_lfanew + 4
     try:
-        machine, num_sections, _ts, _symtab, _numsym, opt_hdr_size, _chars = \
+        machine, num_sections, time_date_stamp, _symtab, _numsym, opt_hdr_size, _chars = \
             struct.unpack_from('<HHIIIHH', data, coff_off)
     except struct.error:
         result['reason'] = 'truncated COFF file header'
         return result
     result['machine'] = machine
     result['machine_name'] = _KNOWN_MACHINES.get(machine)
+    result['time_date_stamp'] = time_date_stamp
     result['number_of_sections'] = num_sections
 
     if machine not in _KNOWN_MACHINES:
@@ -186,31 +188,46 @@ def expected_protection_name(is_readable: bool, is_writable: bool, is_executable
     return 'PAGE_NOACCESS'
 
 
-def section_protection_exceeds_declared(actual_protect_name: str, section: dict) -> bool:
-    """
-    True when LIVE memory protection grants write access to a section the
-    on-disk PE header declares executable but NOT writable — the
-    structural signature of module stomping (code overwritten post-load)
-    or unusual runtime patching, independent of any string content.
 
-    Deliberately narrow, matching the same false-positive concerns already
-    documented elsewhere in this codebase for RWX/IOC heuristics:
-      - Sections the header itself marks writable (.data, .bss) routinely
-        show PAGE_READWRITE live; that is expected, not a signal, so only
-        sections with is_writable == False are considered at all.
-      - A read-only DATA section commonly gets promoted to PAGE_READWRITE
-        (or PAGE_WRITECOPY, resolving to PAGE_READWRITE after the first
-        write) once the loader patches relocations/IAT entries — normal
-        loader behavior, not stomping. Restricting this check to
-        is_executable == True sections excludes that entire class: a
-        loader has no legitimate reason to make an executable section
-        writable after mapping it.
+# Live protection states a declared executable-but-not-writable ("RX")
+# section can legitimately carry with NO loader intervention beyond
+# normal mapping. PAGE_EXECUTE_WRITECOPY belongs here — Windows commonly
+# maps RX image sections copy-on-write (so the loader/debugger CAN patch
+# a byte, e.g. for a breakpoint or hot-patch prologue, without corrupting
+# the shared mapping other processes use) even when nothing was ever
+# actually written. A prior version of this check matched any protection
+# NAME containing the substring "WRITE", which made PAGE_EXECUTE_WRITECOPY
+# indistinguishable from PAGE_EXECUTE_READWRITE and flagged every
+# completely ordinary, unmodified DLL as "stomped".
+NORMAL_IMAGE_PROTECTIONS = frozenset({
+    "PAGE_EXECUTE",
+    "PAGE_EXECUTE_READ",
+    "PAGE_EXECUTE_WRITECOPY",
+})
+
+
+def section_protection_deviates(actual_protect_name: str, section: dict) -> bool:
+    """
+    True when LIVE memory protection on a section the on-disk PE header
+    declares executable-but-not-writable is something OTHER than the
+    normal, unmodified-mapping set (NORMAL_IMAGE_PROTECTIONS) — most
+    notably PAGE_EXECUTE_READWRITE, which grants direct write access with
+    no copy-on-write semantics and has no legitimate reason to exist on a
+    section the loader mapped read/execute-only.
+
+    This is deliberately a WEAKER, structural-only signal than "this
+    section was stomped": PAGE_EXECUTE_WRITECOPY is explicitly excluded
+    (see NORMAL_IMAGE_PROTECTIONS) because it is normal, unmodified-loader
+    behavior, not evidence of anything. A True result here is a LEAD —
+    "this section's protection differs from what an untouched mapping
+    would show" — not proof the section's CONTENT actually changed.
+    Callers must corroborate with verified content evidence (an on-disk
+    reference diff, or similar) before treating this as a detection.
     """
     if not section['is_executable'] or section['is_writable']:
         return False
     name = actual_protect_name or ''
-    return 'WRITE' in name  # PAGE_READWRITE / PAGE_EXECUTE_READWRITE /
-                             # PAGE_WRITECOPY / PAGE_EXECUTE_WRITECOPY
+    return name not in NORMAL_IMAGE_PROTECTIONS
 
 def _pe_timestamp_to_str(ts: int) -> str:
     """

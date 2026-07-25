@@ -112,13 +112,15 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       3),
             "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],  1),
             "yara":      ("YARA Rules",                 results["yara"]["score"],       3),
-            "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   3),
+            "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   2),
         }
         any_hit           = False
         any_not_evaluated = False
         any_inconclusive  = False
         for key, (name, score, max_score) in labels.items():
-            status = results.get(key, {}).get("status")
+            hunt_result = results.get(key, {})
+            status      = hunt_result.get("status")
+            confidence  = hunt_result.get("confidence")   # phase-two hunters only
             if status == NOT_EVALUATED:
                 verdict = _status_text(NOT_EVALUATED)
                 any_not_evaluated = True
@@ -134,12 +136,21 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
                 any_hit = True
             elif score == 0:
                 verdict = GREEN("CLEAN")
+            elif confidence is not None:
+                # Hunter-supplied confidence, not score/max_score
+                # arithmetic — see structured.py for why `score >=
+                # max_score - 1` previously inflated a single
+                # medium-confidence lead into "HIGH CONFIDENCE".
+                verdict = RED("HIGH CONFIDENCE") if confidence == "high" else YELLOW("POSSIBLE")
+                any_hit = True
             elif score >= max_score - 1:
                 verdict = RED("HIGH CONFIDENCE")
                 any_hit = True
             else:
                 verdict = YELLOW("POSSIBLE")
                 any_hit = True
+            if hunt_result.get("coverage_status") == "partial" and status not in (NOT_EVALUATED, INCONCLUSIVE):
+                verdict += YELLOW("  [partial coverage]")
             suffix = (f"  ({score}/{max_score})" if key not in ("cs-beacon", "yara") else "")
             print(f"  {name:<25} {verdict}{suffix}")
         print()

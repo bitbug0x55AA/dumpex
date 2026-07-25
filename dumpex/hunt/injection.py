@@ -41,7 +41,6 @@ to anything else" (low confidence) is explicit, not implied by wording.
 import os
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
-from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, get_thread_contexts, group_regions_by_allocation,
     addr_to_module, va_to_file_offset, prot_str, read_region)
@@ -49,7 +48,7 @@ from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     _scan_status, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence)
 
 # Bytes read per MZ-prefixed candidate for structural PE validation — large
 # enough for the DOS/COFF/optional headers plus a section table of typical
@@ -60,14 +59,31 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
 PE_VALIDATE_READ_MAX = 4096
 
 
+def _is_suspicious_rwx(protect: str, mtype: str) -> bool:
+    """
+    PAGE_EXECUTE_READWRITE is always suspicious — no legitimate loader
+    grants direct, non-copy-on-write write access to executable memory.
+
+    PAGE_EXECUTE_WRITECOPY is different: on a MEM_IMAGE-backed region it
+    is Windows' NORMAL, unmodified-mapping copy-on-write protection for
+    executable sections (see core.pe_utils.NORMAL_IMAGE_PROTECTIONS) —
+    flagging it there makes every ordinary, untouched DLL "suspicious".
+    On anything NOT image-backed (MEM_PRIVATE/MEM_MAPPED), WRITECOPY has
+    no such benign explanation and is still worth flagging.
+    """
+    if protect == "PAGE_EXECUTE_READWRITE":
+        return True
+    if protect == "PAGE_EXECUTE_WRITECOPY":
+        return mtype != "MEM_IMAGE"
+    return False
+
+
 def _hunt_rwx(mf: MinidumpFile) -> list:
     """Return list of RWX regions. Internal — used by --hunt injection."""
-    susp_prots = get_rules()["suspicious_protections"]
     regions = get_memory_regions(mf)
     hits = []
     for r in regions:
-        p = prot_str(r.Protect)
-        if any(s in p for s in susp_prots):
+        if _is_suspicious_rwx(prot_str(r.Protect), prot_str(r.Type)):
             hits.append(r)
     return hits
 
@@ -93,13 +109,25 @@ def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tup
     """
     if not module_list_available:
         return [], 0
-    modules    = get_modules(mf)
-    known_bases = {m.baseaddress for m in modules}
+    modules = get_modules(mf)
     hits = []
     read_failed = 0
     for r in get_memory_regions(mf):
         if prot_str(r.State) != "MEM_COMMIT":
             continue
+        # Membership is a RANGE check (addr_to_module), not "does this
+        # region's BaseAddress exactly equal a module's base" — a prior
+        # version used `r.BaseAddress in {m.baseaddress for m in modules}`,
+        # which only matches a module's very first page. Any OTHER region
+        # belonging to that same module (e.g. a resource section carrying
+        # an embedded PE/icon/update payload, or any sub-region a
+        # VirtualProtect call split off) has a BaseAddress that is never
+        # any module's baseaddress, so it was always misclassified as
+        # "unregistered" regardless of being entirely inside a known,
+        # legitimately loaded module.
+        owner = addr_to_module(r.BaseAddress, modules)
+        if prot_str(r.Type) == "MEM_IMAGE" and owner is not None:
+            continue   # inside a known module — not a hidden-PE candidate at all
         try:
             prefix = read_region(mf, r.BaseAddress, min(2, r.RegionSize))
         except Exception:
@@ -113,7 +141,11 @@ def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tup
             deep = prefix   # fall back to what we already have; parse_pe_header
                              # will report a truncation reason on 2 bytes
         pe = parse_pe_header(deep)
-        hits.append({"region": r, "in_module_list": r.BaseAddress in known_bases, "pe": pe})
+        # owner is already known from the range check above for MEM_IMAGE
+        # regions; a non-image region can still fall inside a module's
+        # declared [baseaddress, endaddress) span in principle, so the
+        # same range check is used uniformly rather than re-deriving it.
+        hits.append({"region": r, "in_module_list": owner is not None, "pe": pe})
     return hits, read_failed
 
 
@@ -406,6 +438,26 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
             tag=TAG_LEAD,
         ))
 
+    # Coverage tracked independently of status/score — see stomping.py /
+    # pipe.py for why: a nonzero score must not silently imply every
+    # region/thread was checked.
+    coverage_reasons = []
+    if not coverage["memory_info_stream"]:
+        coverage_reasons.append("MemoryInfoListStream missing from this dump")
+    if not coverage["thread_info_stream"]:
+        coverage_reasons.append("ThreadInfoListStream missing from this dump")
+    if not coverage["module_list_stream"]:
+        coverage_reasons.append("ModuleListStream missing from this dump")
+    if pe_read_failed:
+        coverage_reasons.append(f"{pe_read_failed} region(s) failed to read while checking "
+                                 f"for hidden PE headers")
+    if not coverage["thread_context"]:
+        coverage_reasons.append("No per-thread CONTEXT (RIP/EIP) available — live-execution "
+                                 "correlation could not run")
+    coverage_status = ("not_evaluated" if not evaluated else
+                        "partial" if not complete else
+                        "complete")
+
     findings = {
         "rwx":                  rwx,
         "hidden_pe_validated":  validated_pe_hits,
@@ -417,8 +469,12 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         "rip_full_correlation": rip_full_correlation,
         "start_hits":           start_hits,
         "score":                score,
+        "max_score":            3,
         "status":               status,
         "coverage":             coverage,
+        "coverage_status":      coverage_status,
+        "coverage_reasons":     coverage_reasons,
+        "confidence":           overall_confidence(findings_list, score),
         "pe_read_failed":       pe_read_failed,
         "findings":             [f.to_dict() for f in findings_list],
     }

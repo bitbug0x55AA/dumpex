@@ -92,3 +92,35 @@ class Finding:
 def confidence_at_least(confidence: str, minimum: str) -> bool:
     """True if `confidence` is at or above `minimum` on the LOW<MEDIUM<HIGH order."""
     return _CONFIDENCE_ORDER.get(confidence, -1) >= _CONFIDENCE_ORDER.get(minimum, 99)
+
+
+CONFIDENCE_NONE = "none"
+
+
+def overall_confidence(findings: list, score: int) -> str:
+    """
+    Reduce a hunter's list of Finding objects (plus its own score) to a
+    single top-level confidence for CSV/JSON summary consumers —
+    "none"/"low"/"medium"/"high" — WITHOUT inflating it from the score
+    alone (a prior pattern, `score >= max_score - 1`, silently turned a
+    single medium-confidence structural lead into a "HIGH CONFIDENCE" CSV
+    row for several hunters).
+
+    score == 0            -> "none": nothing scored, regardless of what
+                              leads/observations were reported alongside.
+    score  > 0             -> the highest confidence among this hunter's
+                              own tag=TAG_DETECTION findings, since those
+                              are what actually justified the nonzero
+                              score. If a hunter incremented its score
+                              without attaching a corresponding
+                              TAG_DETECTION Finding (a hunter-side bug),
+                              this deliberately falls back to "low" rather
+                              than guessing "high" — silently overstating
+                              confidence is the worse failure mode.
+    """
+    if score <= 0:
+        return CONFIDENCE_NONE
+    detections = [f for f in findings if f.tag == TAG_DETECTION]
+    if not detections:
+        return CONFIDENCE_LOW
+    return max((f.confidence for f in detections), key=lambda c: _CONFIDENCE_ORDER.get(c, -1))

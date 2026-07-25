@@ -1,4 +1,5 @@
 """Command-line entry point."""
+import os
 import sys
 import argparse
 from minidump.minidumpfile import MinidumpFile
@@ -79,6 +80,14 @@ def main():
                         help='Allow overwriting an existing output file (--txt/--output/--json/--csv). '
                              'Never allowed for the input dump file itself.')
     args = parser.parse_args()
+
+    # --ref-dir is only meaningful for --hunt stomping, but validated
+    # unconditionally and up front — a silently-ignored typo'd/missing
+    # path would otherwise make the on-disk content-diff check quietly
+    # never run, with no indication why (the tool would just report
+    # "no --ref-dir supplied" for a path the user DID supply).
+    if args.ref_dir and not os.path.isdir(args.ref_dir):
+        parser.error(f"--ref-dir {args.ref_dir!r} is not an existing directory")
 
     # Explicit rules.yaml override (--rules-file), if any — must be set
     # before anything calls get_rules() (every hunt module that reads TTP

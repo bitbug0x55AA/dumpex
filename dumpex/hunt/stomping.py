@@ -1,40 +1,58 @@
 """Module stomping hunter.
 
-Phase-two detection model
-──────────────────────────
-The primary, scored signal is now a **disk-declared vs. live-memory
-section diff**, not string matching:
+Phase-two detection model (revised after review)
+──────────────────────────────────────────────────
+Detection requires a VERIFIED content change, not merely an unusual
+protection state — an unusual protection state alone is demoted to a
+lead:
 
   1. Parse each loaded module's OWN PE header out of process memory (the
      header describes how the module was laid out ON DISK — section
      names, sizes, and Characteristics flags — and survives a stomp that
-     only overwrites a section's code, since stomping tooling has no
-     reason to touch the header).
-  2. For every section the header marks EXECUTABLE but NOT WRITABLE
-     (dumpex.core.pe_utils.section_protection_exceeds_declared), find the
-     MemoryInfo region(s) actually covering that section's VA range and
-     compare their LIVE protection against what the header declares.
-     A declared read+execute-only section that is live writable has been
-     reprotected after mapping — the structural signature of stomping
-     (write the payload, the loader/injector had to make it writable
-     first) — independent of any string content.
-  3. If a thread's CURRENT RIP/EIP (core.memory.get_thread_contexts) sits
-     inside a mismatched section, that is corroborating live-execution
-     evidence, same principle as hunt/injection.py.
-  4. Optionally, when --ref-dir points at a directory containing a
-     reference copy of the module (analyst-supplied — this tool has no
-     access to the original system's disk), a genuine on-disk-vs-memory
-     byte diff is computed per section via sha256, as a second,
-     independent corroborating signal.
+     only overwrites a section's code).
+  2. For every section the header marks EXECUTABLE but NOT WRITABLE,
+     compare its LIVE memory protection against
+     core.pe_utils.NORMAL_IMAGE_PROTECTIONS. A deviation (most notably
+     PAGE_EXECUTE_READWRITE) is reported as a LEAD ONLY —
+     PAGE_EXECUTE_WRITECOPY is normal, unmodified-loader copy-on-write
+     behavior for an untouched section (see core.pe_utils docstring), and
+     an attacker can VirtualProtect a section back to RX after stomping
+     it and before a dump is captured — so protection state alone proves
+     nothing about content either way, in either direction.
+  3. The ONLY path to a nonzero score is a VERIFIED on-disk-vs-memory
+     byte diff against an analyst-supplied reference file (--ref-dir):
+       - the reference file's own identity (Machine / SizeOfImage /
+         TimeDateStamp, all read from ITS OWN PE header) must match the
+         in-memory module's header, or the comparison is skipped and
+         reported as a coverage gap — diffing against a different
+         build/version of a same-named file is worse than not diffing at
+         all, since ordinary version differences would masquerade as
+         "stomped" content.
+       - the diff reports the actual differing (offset, length) byte
+         ranges, not just a whole-section match/mismatch hash.
+       - score 1: verified byte differences exist against an
+         identity-matched reference.
+         score 2: a thread's CURRENT RIP/EIP (core.memory.
+         get_thread_contexts) lands inside one of the actually-differing
+         byte ranges — not merely "somewhere in the section".
 
-The original string-based IOC scan (Cobalt Strike / mimikatz / etc.
-keywords found inside executable module memory) is retained because it is
-still a useful lead for an analyst, but it is explicitly demoted: it
-never contributes to `score` on its own and is reported at LOW confidence
-as an observation/lead, per phase-two policy (strings are cheap to plant
-or coincidentally match and must not drive a verdict by themselves).
+Known, explicitly documented limitation: this does NOT apply relocation
+normalization or exclude IAT/delay-import/hotpatch regions before
+diffing (that needs parsing the module's relocation table and import
+directory, which this hunter does not do). Restricting the diff to
+EXECUTABLE sections already excludes the IAT/import tables for typical
+PE layouts (they live in non-executable sections), but a legitimate
+hotpatch trampoline or a relocated absolute-address fixup inside .text
+can still produce a genuine, non-malicious byte difference — see the
+`stomping.verified_content_change` Finding's `limitations` for this
+caveat on every reported diff.
+
+The string-based IOC scan is retained as an unscored, low-confidence
+lead — see hunt/_finding.py for why raw string matches never drive a
+verdict on their own in phase two.
 """
 import os
+import ntpath
 import hashlib
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
@@ -43,11 +61,11 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_contexts, addr_to_module, prot_str,
     read_region, _extract_ioc_strings)
 from dumpex.core.pe_utils import (parse_pe_header, expected_protection_name,
-    section_protection_exceeds_declared)
+    section_protection_deviates)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence)
 
 PE_VALIDATE_READ_MAX = 4096   # bytes read from each module base to parse its
                                # own header + section table (see injection.py)
@@ -55,6 +73,23 @@ PE_VALIDATE_READ_MAX = 4096   # bytes read from each module base to parse its
 REF_FILE_MAX_READ = 64 * 1024 * 1024   # cap on a --ref-dir reference file read;
                                         # legitimate DLLs/EXEs are far smaller,
                                         # this just bounds a pathological input
+
+MAX_DIFF_RANGES = 20   # cap on the number of distinct differing byte ranges
+                        # recorded per section — a section with more than
+                        # this many separate diffs is already unambiguously
+                        # different; no need to enumerate every last one
+
+
+def _module_basename(module) -> str:
+    """
+    Module paths recorded in a minidump are from the ORIGINAL Windows
+    system (e.g. 'C:\\Windows\\System32\\foo.dll'). os.path.basename only
+    splits on '/' when running on a POSIX analysis host, so it returns the
+    whole backslash-separated string unchanged there — ntpath.basename
+    always applies Windows path rules regardless of the host OS this
+    tool itself runs on.
+    """
+    return ntpath.basename(module.name or "") if module.name else ""
 
 
 def _regions_covering(start: int, end: int, regions: list) -> list:
@@ -76,7 +111,7 @@ def _find_reference_file(module, ref_dir: str):
     attempted at all, only a basename match inside the analyst-supplied
     directory. Returns a path or None.
     """
-    base = os.path.basename(module.name or "")
+    base = _module_basename(module)
     if not base or not ref_dir:
         return None
     candidate = os.path.join(ref_dir, base)
@@ -91,42 +126,114 @@ def _find_reference_file(module, ref_dir: str):
     return None
 
 
-def _diff_section_on_disk(ref_path: str, section: dict, mem_bytes: bytes) -> "dict|None":
+def _reference_identity_matches(mem_pe: dict, disk_pe: dict) -> "tuple[bool, str]":
+    """
+    Compare the in-memory module's OWN header facts against the reference
+    file's OWN header facts. All three fields are read directly from each
+    side's PE header (never assumed) — this is a coarse but cheap-and-
+    effective guard against diffing a same-named-but-different build,
+    which would otherwise report ordinary version differences (different
+    compiler output, different Windows update) as "stomped".
+
+    Does NOT check the PDB GUID/Age (CodeView debug directory) — that
+    would need parsing the Debug Data Directory, which this hunter
+    doesn't currently do. Machine + SizeOfImage + TimeDateStamp already
+    catches the overwhelming majority of "wrong file/version" cases; a
+    reference file that happens to share all three with a genuinely
+    different build is not something this check can catch, and is called
+    out in the Finding's limitations.
+    """
+    if mem_pe['machine'] != disk_pe['machine']:
+        return False, (f"Machine mismatch (memory=0x{mem_pe['machine']:x}, "
+                        f"reference=0x{disk_pe['machine']:x})")
+    if mem_pe['size_of_image'] != disk_pe['size_of_image']:
+        return False, (f"SizeOfImage mismatch (memory=0x{mem_pe['size_of_image']:x}, "
+                        f"reference=0x{disk_pe['size_of_image']:x}) — likely a different build")
+    if mem_pe['time_date_stamp'] != disk_pe['time_date_stamp']:
+        return False, (f"TimeDateStamp mismatch (memory=0x{mem_pe['time_date_stamp']:x}, "
+                        f"reference=0x{disk_pe['time_date_stamp']:x}) — reference file is a "
+                        f"different build/version")
+    return True, ""
+
+
+def _diff_byte_ranges(a: bytes, b: bytes, max_ranges: int = MAX_DIFF_RANGES) -> list:
+    """
+    Return contiguous (offset, length) ranges where `a` and `b` differ,
+    over their shared length — actual changed-byte locations, not just a
+    single whole-buffer match/mismatch boolean or hash.
+    """
+    ranges = []
+    n = min(len(a), len(b))
+    i = 0
+    while i < n and len(ranges) < max_ranges:
+        if a[i] != b[i]:
+            start = i
+            while i < n and a[i] != b[i]:
+                i += 1
+            ranges.append((start, i - start))
+        else:
+            i += 1
+    return ranges
+
+
+def _diff_section_on_disk(ref_path: str, mem_pe: dict, section: dict, mem_bytes: bytes) -> "dict|None":
     """
     Compare a section's on-disk raw bytes (from the analyst-supplied
-    reference file) against the corresponding live memory bytes via
-    sha256. Returns {"match": bool, "disk_sha256":, "mem_sha256":,
-    "compared_len":} or None if the section's on-disk range couldn't be
-    read at all (truncated/missing reference file).
+    reference file) against the corresponding live memory bytes.
+
+    Returns None only if the reference file itself couldn't be read at
+    all. Otherwise returns:
+      {"identity_ok": bool, "identity_reason": str,
+       "diff_ranges": [(offset, length), ...], "compared_len": int,
+       "disk_sha256": str, "mem_sha256": str}
+    identity_ok False means the comparison was skipped (version/identity
+    mismatch or an invalid reference header) — diff_ranges is empty in
+    that case, and callers must treat this as a coverage gap, not "clean".
     """
     try:
         size = os.path.getsize(ref_path)
         if size > REF_FILE_MAX_READ:
-            return None
+            return {"identity_ok": False,
+                    "identity_reason": f"reference file exceeds {REF_FILE_MAX_READ} byte cap",
+                    "diff_ranges": [], "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
         with open(ref_path, "rb") as fh:
             disk_data = fh.read()
     except OSError:
         return None
 
-    start = section["pointer_to_raw_data"]
+    disk_pe = parse_pe_header(disk_data)
+    if not disk_pe["valid"]:
+        return {"identity_ok": False,
+                "identity_reason": f"reference file PE header invalid ({disk_pe['reason']})",
+                "diff_ranges": [], "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+
+    identity_ok, identity_reason = _reference_identity_matches(mem_pe, disk_pe)
+    if not identity_ok:
+        return {"identity_ok": False, "identity_reason": identity_reason,
+                "diff_ranges": [], "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+
+    start  = section["pointer_to_raw_data"]
     length = min(section["size_of_raw_data"], len(mem_bytes))
     if length <= 0 or start + length > len(disk_data):
-        return None
+        return {"identity_ok": True, "identity_reason": "", "diff_ranges": [],
+                "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+
     disk_slice = disk_data[start:start + length]
     mem_slice  = mem_bytes[:length]
     return {
-        "match":        disk_slice == mem_slice,
+        "identity_ok": True, "identity_reason": "",
+        "diff_ranges":  _diff_byte_ranges(disk_slice, mem_slice),
+        "compared_len": length,
         "disk_sha256":  hashlib.sha256(disk_slice).hexdigest(),
         "mem_sha256":   hashlib.sha256(mem_slice).hexdigest(),
-        "compared_len": length,
     }
 
 
 def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None) -> dict:
     """
-    Detect Module Stomping via disk-declared-vs-live-memory section
-    comparison (primary, scored) plus an optional on-disk byte diff and a
-    demoted string-IOC lead (both informational). See module docstring.
+    Detect Module Stomping via a verified on-disk-vs-memory content diff
+    (primary, scored — requires --ref-dir), a demoted protection-deviation
+    lead, and a demoted string-IOC lead. See module docstring.
     """
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
@@ -134,20 +241,23 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
     mem_info_available    = bool(mf.memory_info and mf.memory_info.infos)
     module_list_available = bool(mf.modules and mf.modules.modules)
 
-    findings = {"section_mismatches": [], "ioc_image": [], "score": 0}
+    findings = {"protection_leads": [], "verified_changes": [], "score": 0, "max_score": 2}
     _r               = get_rules()
     STOMPING_WHITELIST  = _r["stomping_whitelist"]
     STOMPING_IOC        = _r["stomping_ioc_patterns"]
     STOMPING_NET_IOC    = _r["stomping_net_ioc_patterns"]
-    SUSPICIOUS_PROTS    = _r["suspicious_protections"]
 
     _print_hunt_header("Module Stomping")
 
     findings_list = []
 
-    # ── Check 1 (primary, scored): per-section disk-declared vs live-memory ──
-    mismatches       = []   # dicts: module, section, region, expected, actual, rip_hit, disk_diff
-    parse_failed     = []   # modules whose own header didn't structurally validate
+    # ── Per-module: protection-deviation lead + optional verified content diff ──
+    protection_leads = []   # dicts: module, section, region, expected, actual
+    verified_changes = []   # dicts: module, section, diff_ranges, compared_len,
+                             #        rip_in_changed_range, disk_sha256, mem_sha256
+    identity_skipped  = []  # (module, section, reason) — ref file found but version/identity mismatched
+    ref_missing       = []  # module — ref_dir given, no matching reference file found
+    parse_failed     = []   # (module, pe) — module's own header didn't structurally validate
     read_failed      = 0
     modules_scanned  = 0
 
@@ -163,11 +273,13 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
             if not pe["valid"]:
                 # A loaded, known module whose own header fails structural
                 # validation is itself unusual (the loader required a valid
-                # header to map it) — worth a low-confidence note, but not
-                # scored: could just be a header partially paged out at
-                # dump time.
+                # header to map it) — a genuine coverage gap: this module
+                # could not be checked for stomping at all.
                 parse_failed.append((m, pe))
                 continue
+
+            ref_path = _find_reference_file(m, ref_dir) if ref_dir else None
+            module_ref_missing_noted = False
 
             for section in pe["sections"]:
                 if not section["is_executable"] or section["is_writable"]:
@@ -175,103 +287,194 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                 va_start = m.baseaddress + section["virtual_address"]
                 va_end   = va_start + max(section["virtual_size"], section["size_of_raw_data"], 1)
                 covering = _regions_covering(va_start, va_end, regions)
+
+                # Protection-deviation LEAD — informational, never scored
+                # (see module docstring for why WRITECOPY is excluded and
+                # why deviation alone still isn't proof either way).
                 for region in covering:
                     if prot_str(region.State) != "MEM_COMMIT":
                         continue
                     actual = prot_str(region.Protect)
-                    if not section_protection_exceeds_declared(actual, section):
+                    if section_protection_deviates(actual, section):
+                        protection_leads.append({
+                            "module": m, "section": section, "region": region,
+                            "expected": expected_protection_name(section["is_readable"],
+                                                                   section["is_writable"], section["is_executable"]),
+                            "actual": actual,
+                        })
+
+                # Verified content diff — the ONLY path to a nonzero score.
+                if ref_dir:
+                    if ref_path is None:
+                        if not module_ref_missing_noted:
+                            ref_missing.append(m)
+                            module_ref_missing_noted = True
                         continue
+                    try:
+                        mem_bytes = read_region(mf, va_start,
+                            min(section["size_of_raw_data"] or section["virtual_size"], va_end - va_start))
+                    except Exception:
+                        continue
+                    if not mem_bytes:
+                        continue
+                    diff = _diff_section_on_disk(ref_path, pe, section, mem_bytes)
+                    if diff is None:
+                        continue   # reference file unreadable — not a version mismatch, just I/O
+                    if not diff["identity_ok"]:
+                        identity_skipped.append((m, section, diff["identity_reason"]))
+                        continue
+                    if diff["diff_ranges"]:
+                        rip_in_changed = False
+                        for off, length in diff["diff_ranges"]:
+                            change_va = va_start + off
+                            if any(change_va <= tc["ip"] < change_va + length for tc in thread_contexts):
+                                rip_in_changed = True
+                                break
+                        verified_changes.append({
+                            "module": m, "section": section, "va_start": va_start,
+                            "diff_ranges": diff["diff_ranges"], "compared_len": diff["compared_len"],
+                            "rip_in_changed_range": rip_in_changed,
+                            "disk_sha256": diff["disk_sha256"], "mem_sha256": diff["mem_sha256"],
+                        })
 
-                    rip_hit = next((tc for tc in thread_contexts
-                                     if va_start <= tc["ip"] < va_end), None)
+    findings["protection_leads"] = protection_leads
+    findings["verified_changes"] = verified_changes
 
-                    disk_diff = None
-                    if ref_dir:
-                        ref_path = _find_reference_file(m, ref_dir)
-                        if ref_path:
-                            try:
-                                mem_bytes = read_region(mf, va_start,
-                                    min(section["size_of_raw_data"] or section["virtual_size"], region.RegionSize))
-                            except Exception:
-                                mem_bytes = b""
-                            if mem_bytes:
-                                disk_diff = _diff_section_on_disk(ref_path, section, mem_bytes)
-
-                    mismatches.append({
-                        "module": m, "section": section, "region": region,
-                        "expected": expected_protection_name(section["is_readable"],
-                                                               section["is_writable"], section["is_executable"]),
-                        "actual": actual, "rip_hit": rip_hit, "disk_diff": disk_diff,
-                    })
-
-    if mismatches:
+    # ── Finding: protection-deviation lead (never scored) ────────────────
+    if protection_leads:
         facts = []
-        for hit in mismatches[:20]:
+        for hit in protection_leads[:20]:
             m, sec, r = hit["module"], hit["section"], hit["region"]
-            name = os.path.basename(m.name) if m.name else "(unnamed module)"
-            f = (f"module={name} section={sec['name']!r} VA=0x{r.BaseAddress:x} "
-                 f"declared={hit['expected']} actual={hit['actual']} page_type={prot_str(r.Type)}")
-            if hit["rip_hit"]:
-                f += f"  [LIVE: TID=0x{hit['rip_hit']['ThreadId']:x} {hit['rip_hit']['ip_reg']} inside section]"
-            if hit["disk_diff"] is not None:
-                f += f"  [on-disk diff: match={hit['disk_diff']['match']}]"
-            facts.append(f)
-        if len(mismatches) > 20:
-            facts.append(f"... and {len(mismatches)-20} more")
-
-        any_rip      = any(h["rip_hit"] for h in mismatches)
-        any_disk_bad = any(h["disk_diff"] is not None and not h["disk_diff"]["match"] for h in mismatches)
-        corroborated = any_rip or any_disk_bad
-        conf = CONFIDENCE_HIGH if corroborated else CONFIDENCE_MEDIUM
-
+            name = _module_basename(m) or "(unnamed module)"
+            facts.append(f"module={name} section={sec['name']!r} VA=0x{r.BaseAddress:x} "
+                         f"declared={hit['expected']} actual={hit['actual']} page_type={prot_str(r.Type)}")
+        if len(protection_leads) > 20:
+            facts.append(f"... and {len(protection_leads)-20} more")
         findings_list.append(Finding(
-            check="stomping.section_protection_mismatch",
+            check="stomping.protection_deviation_lead",
             facts=facts,
-            inference=(f"{len(mismatches)} module section(s) that the module's OWN on-disk-"
-                       f"declared PE header marks executable-but-not-writable are LIVE "
-                       f"writable in memory — protection was changed after the loader "
-                       f"mapped the module."),
-            confidence=conf,
-            rationale=("Corroborated: " + ", ".join(filter(None, [
-                           "a thread's current RIP/EIP executes inside the mismatched section" if any_rip else "",
-                           "on-disk reference bytes differ from live memory for the mismatched section" if any_disk_bad else "",
-                       ])) if corroborated else
-                       "Structural mismatch only — no live execution observed inside the "
-                       "affected section and no on-disk reference was available (or it matched) "
-                       "to confirm content actually changed. A loader/EDR hook or debugger "
-                       "could in rare cases also alter section protection without stomping "
-                       "content, so this alone is treated as MEDIUM, not HIGH."),
-            limitations=(["No --ref-dir reference file supplied — on-disk byte-level "
-                          "confirmation was not attempted."] if not ref_dir else []) +
-                        (["Byte-level on-disk diff can reflect legitimate relocation/IAT "
-                          "patching for some code layouts, not only stomping — treat as "
-                          "corroboration, not standalone proof."] if any_disk_bad else []),
-            tag=TAG_DETECTION if corroborated else TAG_LEAD,
+            inference=f"{len(protection_leads)} module section(s) declared executable-but-"
+                       f"not-writable show LIVE protection other than the normal, "
+                       f"unmodified-mapping set (PAGE_EXECUTE_WRITECOPY excluded — that is "
+                       f"routine loader behavior).",
+            confidence=CONFIDENCE_MEDIUM,
+            rationale="An unusual protection state is a structural fact, but proves nothing "
+                       "about content by itself: an attacker can VirtualProtect a section "
+                       "back to RX after stomping it and before a dump is captured, and a "
+                       "debugger/EDR hook can transiently reprotect memory for entirely "
+                       "benign reasons. This is reported as a LEAD and does NOT contribute "
+                       "to the stomping score — only a verified content diff "
+                       "(stomping.verified_content_change, requires --ref-dir) does.",
+            limitations=["Protection state alone cannot confirm or rule out that section "
+                         "content actually changed."],
+            tag=TAG_LEAD,
         ))
-        findings["section_mismatches"] = mismatches
-        findings["score"] = 2 if corroborated else 1
     else:
         findings_list.append(Finding(
-            check="stomping.section_protection_mismatch",
-            facts=[f"{modules_scanned} module(s) checked, {read_failed} unreadable"],
-            inference="No module section that is declared executable-but-not-writable in "
-                       "its own on-disk PE header shows live writable protection.",
-            confidence=CONFIDENCE_HIGH if (mem_info_available and module_list_available and read_failed == 0) else CONFIDENCE_LOW,
-            rationale="Structural check ran to completion across all resolvable module "
-                       "sections with no mismatch found." if read_failed == 0 else
-                       f"{read_failed} module(s) could not be read — coverage is incomplete.",
-            limitations=[] if read_failed == 0 else [f"{read_failed} module header read(s) failed."],
+            check="stomping.protection_deviation_lead",
+            facts=[f"{modules_scanned} module(s) checked"],
+            inference="No module section declared executable-but-not-writable shows a "
+                       "live protection state outside the normal set.",
+            confidence=CONFIDENCE_LOW,
+            rationale="Absence of a protection anomaly is weak evidence of absence — "
+                       "stomping via careful VirtualProtect bookkeeping (reprotect to RX "
+                       "before the dump) would not show up here at all.",
+            limitations=[],
             tag=TAG_OBSERVATION,
         ))
 
-    if parse_failed and verbose:
-        print(DIM(f"  [·] {len(parse_failed)} known module(s) failed PE header structural "
-                  f"validation at their own base address (possibly paged-out headers at "
-                  f"dump time) — not scored, see stomping.module_header_invalid.\n"))
-        for m, pe in parse_failed[:10]:
-            name = os.path.basename(m.name) if m.name else "(unnamed)"
-            print(DIM(f"      {name}  0x{m.baseaddress:x}  reason={pe['reason']}"))
-        print()
+    # ── Finding: verified content change (the only scored signal) ────────
+    if verified_changes:
+        facts = []
+        for vc in verified_changes[:15]:
+            m, sec = vc["module"], vc["section"]
+            name = _module_basename(m) or "(unnamed module)"
+            ranges_str = ", ".join(f"+0x{off:x}(len 0x{length:x})" for off, length in vc["diff_ranges"][:5])
+            if len(vc["diff_ranges"]) > 5:
+                ranges_str += f", ... +{len(vc['diff_ranges'])-5} more range(s)"
+            live = "  [LIVE RIP/EIP inside changed range]" if vc["rip_in_changed_range"] else ""
+            facts.append(f"module={name} section={sec['name']!r} VA=0x{vc['va_start']:x} "
+                         f"compared={vc['compared_len']} bytes changed_ranges=[{ranges_str}] "
+                         f"disk_sha256={vc['disk_sha256'][:16]}… mem_sha256={vc['mem_sha256'][:16]}…{live}")
+        if len(verified_changes) > 15:
+            facts.append(f"... and {len(verified_changes)-15} more")
+        any_rip = any(vc["rip_in_changed_range"] for vc in verified_changes)
+        findings_list.append(Finding(
+            check="stomping.verified_content_change",
+            facts=facts,
+            inference=f"{len(verified_changes)} module section(s) have byte-level content "
+                       f"differences from an identity-matched (Machine/SizeOfImage/"
+                       f"TimeDateStamp) reference file supplied via --ref-dir.",
+            confidence=CONFIDENCE_HIGH if any_rip else CONFIDENCE_MEDIUM,
+            rationale=("A thread's current RIP/EIP executes inside one of the actually-"
+                       "changed byte ranges — the strongest evidence this hunter can "
+                       "produce." if any_rip else
+                       "Verified byte-level difference against an identity-matched "
+                       "reference, but no observed thread is currently executing inside "
+                       "the changed range(s)."),
+            limitations=["Relocation entries and IAT/delay-import patching are NOT "
+                         "normalized before this diff — a legitimate hotpatch trampoline "
+                         "or an absolute-address fixup inside an executable section can "
+                         "produce a genuine, non-malicious difference. Restricting the diff "
+                         "to executable sections already excludes the import tables "
+                         "themselves for typical PE layouts, but does not eliminate this "
+                         "risk entirely.",
+                         "PDB GUID/Age (CodeView debug directory) is not checked as part of "
+                         "reference-identity matching — Machine/SizeOfImage/TimeDateStamp "
+                         "matching all three is a strong but not perfect guarantee the "
+                         "reference is the exact same build."],
+            tag=TAG_DETECTION,
+        ))
+
+    if identity_skipped:
+        facts = [f"module={_module_basename(m) or '(unnamed)'} section={sec['name']!r} reason={reason}"
+                 for m, sec, reason in identity_skipped[:15]]
+        if len(identity_skipped) > 15:
+            facts.append(f"... and {len(identity_skipped)-15} more")
+        findings_list.append(Finding(
+            check="stomping.reference_identity_mismatch",
+            facts=facts,
+            inference=f"{len(identity_skipped)} section(s) had a matching-basename reference "
+                       f"file under --ref-dir, but its own header identity did not match the "
+                       f"in-memory module — comparison was skipped rather than risk a false "
+                       f"positive from diffing against a different build.",
+            confidence=CONFIDENCE_LOW,
+            rationale="A same-named file that is actually a different build/version/patch "
+                       "level would show ordinary compiler-output differences that are not "
+                       "stomping — skipping is the safe choice, but it also means this "
+                       "section could not be verified at all.",
+            limitations=["Coverage gap: supply a reference file matching the exact build "
+                         "(Machine/SizeOfImage/TimeDateStamp) to verify these sections."],
+            tag=TAG_OBSERVATION,
+        ))
+
+    if parse_failed:
+        facts = [f"module={_module_basename(m) or '(unnamed)'} base=0x{m.baseaddress:x} reason={pe['reason']}"
+                 for m, pe in parse_failed[:15]]
+        if len(parse_failed) > 15:
+            facts.append(f"... and {len(parse_failed)-15} more")
+        findings_list.append(Finding(
+            check="stomping.module_header_invalid",
+            facts=facts,
+            inference=f"{len(parse_failed)} known module(s) failed PE header structural "
+                       f"validation at their own recorded base address.",
+            confidence=CONFIDENCE_LOW,
+            rationale="A loaded module's own header failing to parse is itself unusual "
+                       "(the loader required a valid header to map it) — could be a "
+                       "partially-paged-out header at dump time, or could itself be "
+                       "evidence of tampering. Either way, these modules could NOT be "
+                       "checked for stomping at all — this is a coverage gap, not a "
+                       "negative result.",
+            limitations=["These modules are excluded from both the protection-deviation "
+                         "lead and the verified-content-change check."],
+            tag=TAG_OBSERVATION,
+        ))
+
+    # ── Score ──────────────────────────────────────────────────────────
+    score = 0
+    if verified_changes:
+        score = 2 if any(vc["rip_in_changed_range"] for vc in verified_changes) else 1
+    findings["score"] = score
 
     # ── Check 2 (demoted lead, NOT scored): string IOC scan ─────────────
     print(f"  {DIM('[*] Scanning executable MEM_IMAGE regions for IOC strings (lead only)...')}\n")
@@ -304,7 +507,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
             continue
 
         mod      = addr_to_module(r.BaseAddress, modules)
-        mod_name = os.path.basename(mod.name).lower() if mod else ""
+        mod_name = (_module_basename(mod).lower() if mod else "")
         is_wl    = mod_name in STOMPING_WHITELIST
 
         try:
@@ -336,7 +539,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         n_weak   = sum(sum(1 for h in hits if h[3]) for _, _, hits, _ in ioc_hits)
         facts = []
         for r, mod, hits, _ in ioc_hits[:15]:
-            name = os.path.basename(mod.name) if mod else "(unknown)"
+            name = _module_basename(mod) if mod else "(unknown)"
             terms = sorted({tok for _, _, tok, _ in hits})[:8]
             facts.append(f"module={name} VA=0x{r.BaseAddress:x} terms={', '.join(terms)}")
         if len(ioc_hits) > 15:
@@ -351,8 +554,8 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                        "region — it is trivial to plant, coincidentally match tool/API "
                        "names, or survive from unrelated benign code. This is reported as "
                        "an investigative lead only and does NOT contribute to the stomping "
-                       "score; see stomping.section_protection_mismatch for the structural, "
-                       "scored signal.",
+                       "score; see stomping.verified_content_change for the only signal "
+                       "that scores.",
             limitations=["Not corroborated by any structural (section/protection) evidence "
                          "on its own."],
             tag=TAG_LEAD,
@@ -360,56 +563,87 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         detail = f"{n_strong} strong + {n_weak} weak IOC token(s) across {len(ioc_hits)} module region(s) — LEAD ONLY, not scored"
         if verbose:
             for r, mod, hits, _ in ioc_hits:
-                name = os.path.basename(mod.name) if mod else "(unknown)"
+                name = _module_basename(mod) if mod else "(unknown)"
                 detail += f"\n          {name}  0x{r.BaseAddress:x}"
                 for off, enc, tok, is_weak in hits[:10]:
                     tag = DIM(" (weak/common API)") if is_weak else ""
                     detail += f"\n            0x{r.BaseAddress+off:x}  [{enc}]  {tok}{tag}"
         _print_check("IOC strings in module code regions (lead)",
-                     YELLOW("LEAD — not scored, see structural check above"), detail)
+                     YELLOW("LEAD — not scored, see structural checks above"), detail)
     else:
         _print_check("IOC strings in module code regions",
                      GREEN("CLEAN — no IOC patterns in executable module memory"))
 
-    # ── Print primary structural finding(s) ──────────────────────────────
+    # ── Print detection/lead findings ─────────────────────────────────────
     for f in findings_list:
         f.print()
 
-    # ── Verdict ───────────────────────────────────────────────────────────
-    score = findings["score"]
-    findings["status"] = None
-    findings["findings"] = [f.to_dict() for f in findings_list]
+    # ── Coverage — independent of score/status, so "DETECTED but coverage
+    # was partial" is representable rather than DETECTED silently implying
+    # a complete scan. ─────────────────────────────────────────────────────
+    coverage_reasons = []
+    if not mem_info_available:
+        coverage_reasons.append("MemoryInfoListStream missing from this dump")
+    if not module_list_available:
+        coverage_reasons.append("ModuleListStream missing from this dump")
+    if read_failed:
+        coverage_reasons.append(f"{read_failed} module header read(s) failed")
+    if parse_failed:
+        coverage_reasons.append(f"{len(parse_failed)} module header(s) failed PE structural validation")
+    if identity_skipped:
+        coverage_reasons.append(f"{len(identity_skipped)} section(s) had a reference file that "
+                                 f"didn't match the in-memory module's build identity")
+    if ref_dir and ref_missing:
+        coverage_reasons.append(f"{len(ref_missing)} module(s) with a protection-deviation lead "
+                                 f"had no matching reference file under --ref-dir")
+    if not ref_dir:
+        coverage_reasons.append("--ref-dir not supplied — verified content-diff (the only "
+                                 "scored signal) could not be attempted for any module")
 
-    if not mem_info_available or not module_list_available:
+    if not (mem_info_available and module_list_available):
+        coverage_status = "not_evaluated"
+    elif read_failed or parse_failed:
+        coverage_status = "partial"
+    else:
+        coverage_status = "complete"
+    findings["coverage_status"]  = coverage_status
+    findings["coverage_reasons"] = coverage_reasons
+
+    if coverage_status == "not_evaluated":
         status = NOT_EVALUATED
-    elif score == 0 and read_failed:
+    elif score > 0:
+        status = DETECTED
+    elif coverage_status == "partial":
         status = INCONCLUSIVE
     else:
-        status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
+        status = NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
+    findings["confidence"] = overall_confidence(findings_list, score)
+    findings["findings"] = [f.to_dict() for f in findings_list]
 
-    if not mem_info_available or not module_list_available:
-        missing = ", ".join(filter(None, [
-            "MemoryInfoListStream" if not mem_info_available else "",
-            "ModuleListStream" if not module_list_available else "",
-        ]))
-        verdict = _status_text(NOT_EVALUATED, f"{missing} missing from this dump")
+    if status == NOT_EVALUATED:
+        verdict = _status_text(NOT_EVALUATED, "; ".join(coverage_reasons) or "required streams missing")
+    elif status == DETECTED:
+        verdict = (RED("HIGH CONFIDENCE STOMPING — verified content change, RIP/EIP inside "
+                       "the changed range") if score == 2 else
+                   YELLOW("LIKELY STOMPING — verified content change against reference file"))
     elif status == INCONCLUSIVE:
-        verdict = _status_text(INCONCLUSIVE, f"{read_failed} module(s) failed to read")
-    elif score == 2:
-        verdict = RED("HIGH CONFIDENCE STOMPING — section protection mismatch corroborated "
-                       "by live execution and/or on-disk reference diff")
-    elif score == 1:
-        verdict = YELLOW("POSSIBLE STOMPING — section protection mismatch found, uncorroborated")
+        verdict = _status_text(INCONCLUSIVE, "; ".join(
+            r for r in coverage_reasons if not r.startswith("--ref-dir")) or "partial coverage")
     else:
-        verdict = GREEN("CLEAN — no stomping indicators")
-    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2, structural check only — "
-          f"string IOC lead above is informational and not counted)\n")
+        verdict = GREEN("CLEAN — no verified stomping indicators")
+    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2, requires --ref-dir; "
+          f"protection-deviation and string-IOC leads above are informational and not counted)\n")
 
-    if not verbose and mismatches:
-        print(DIM("  Use --verbose to list every mismatched section.\n"))
+    if status == DETECTED and coverage_status == "partial":
+        print(YELLOW(f"  [~] Coverage incomplete despite a detection: {'; '.join(coverage_reasons)} "
+                      f"— additional stomped modules may exist beyond what could be checked.\n"))
+
+    if not verbose and verified_changes:
+        print(DIM("  Use --verbose to list every verified change in detail.\n"))
     if not ref_dir:
-        print(DIM("  [·] --ref-dir not supplied — on-disk byte-level section diff was not "
-                  "attempted (structural protection-mismatch check does not need it).\n"))
+        print(DIM("  [·] --ref-dir not supplied — verified content-diff was not attempted; "
+                  "the protection-deviation lead above cannot by itself produce a nonzero "
+                  "score.\n"))
 
     return findings
