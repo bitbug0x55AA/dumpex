@@ -58,6 +58,11 @@ def main():
     parser.add_argument('--yara-dir',   metavar='DIR',       default=None,
                         help='Directory of .yar rule files for --hunt yara '
                              '(default: packaged rules; no automatic cwd/script-dir scan)')
+    parser.add_argument('--ref-dir',    metavar='DIR',       default=None,
+                        help='Directory of analyst-supplied reference module files '
+                             '(matched by basename) for --hunt stomping\'s optional '
+                             'on-disk-vs-memory section byte diff. Not required — the '
+                             'structural section-protection-mismatch check runs without it.')
     parser.add_argument('--rules-file', metavar='FILE',      default=None,
                         help='Explicit rules.yaml/.yml/.json for TTP detection '
                              '(default: packaged rules; no automatic cwd/script-dir scan)')
@@ -184,7 +189,8 @@ def _run(args, mf, out, cmd_label):
                   min_len=args.min_len,
                   force=args.force)
     elif args.hunt:
-        data = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir)
+        data = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
+                        ref_dir=args.ref_dir)
         if out and data: out.add("hunt", data)
     elif args.diff:         cmd_diff(mf, args.diff, args.diff_mode, verbose=args.verbose)
 

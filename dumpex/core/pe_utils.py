@@ -1,6 +1,216 @@
 """PE / FILETIME formatting utilities."""
+import struct
 import datetime
 from dumpex.ui.colors import RED, YELLOW, DIM
+
+# ── PE structural validation ─────────────────────────────────────────────
+# Used by hunt/injection.py (structural "is this really a PE header" check,
+# replacing a bare MZ-prefix scan) and hunt/stomping.py (section table for
+# disk-declared-vs-live-memory comparison). Deliberately hand-rolled rather
+# than depending on pefile: only the handful of fixed-offset fields these
+# two hunts actually need, parsed defensively (never raises) since the
+# input is untrusted process memory that may be truncated, corrupted, or
+# adversarially crafted to look almost-but-not-quite like a PE.
+
+IMAGE_SCN_MEM_EXECUTE = 0x20000000
+IMAGE_SCN_MEM_READ    = 0x40000000
+IMAGE_SCN_MEM_WRITE   = 0x80000000
+
+# COFF Machine field values worth recognizing — an unrecognized value is
+# itself evidence against "this is a genuine PE header" (a real linker
+# never emits anything else here).
+_KNOWN_MACHINES = {
+    0x014c: "I386", 0x0200: "IA64", 0x01c0: "ARM", 0x01c4: "ARMNT",
+    0x8664: "AMD64", 0xaa64: "ARM64", 0x0ebc: "EBC",
+}
+
+_MAX_SECTIONS = 96   # PE spec allows up to 96 sections; anything beyond
+                      # that in a section-table walk is corrupt/adversarial
+
+
+def parse_pe_header(data: bytes) -> dict:
+    """
+    Structurally validate a PE image starting at `data[0]` (presumed MZ).
+    Never raises — malformed/truncated input just yields valid=False with
+    whatever partial facts were recoverable plus a `reason` string.
+
+    This is deliberately stricter than "starts with MZ": it walks the DOS
+    header, the PE signature, the COFF file header (Machine /
+    NumberOfSections sanity-checked against known values), the optional
+    header (PE32 vs PE32+ Magic), and the full section table. A region
+    that merely happens to contain the two bytes 'MZ' — coincidentally or
+    as a decoy — fails here and is reported as such, rather than being
+    counted as a confirmed hidden/injected PE module.
+
+    Returns a dict:
+      valid                    bool  — True only if header + FULL section
+                                        table parsed successfully
+      has_mz, has_pe_sig       bool
+      e_lfanew                int | None
+      machine                 int | None   (raw COFF Machine value)
+      machine_name            str  | None  (None if unrecognized)
+      is_pe32_plus             bool | None (PE32+ vs PE32 optional header)
+      number_of_sections       int | None
+      size_of_image            int | None
+      address_of_entry_point   int | None  (RVA)
+      image_base               int | None  (as declared in the header —
+                                        NOT necessarily where it's actually
+                                        mapped; compare against the actual
+                                        region VA at the call site)
+      sections                 list[dict]  — see below
+      reason                   str   — why valid is False (empty if valid)
+
+    Each section dict: {name, virtual_address, virtual_size,
+    pointer_to_raw_data, size_of_raw_data, characteristics,
+    is_executable, is_writable, is_readable} — the last three decoded
+    from `characteristics` (IMAGE_SCN_MEM_EXECUTE/WRITE/READ) since every
+    caller needs them and re-decoding the bitmask at each call site would
+    just be repeated, easy-to-typo bit-math.
+    """
+    result = {
+        'valid': False, 'has_mz': False, 'has_pe_sig': False,
+        'e_lfanew': None, 'machine': None, 'machine_name': None,
+        'is_pe32_plus': None, 'number_of_sections': None,
+        'size_of_image': None, 'address_of_entry_point': None,
+        'image_base': None, 'sections': [], 'reason': '',
+    }
+    if len(data) < 0x40 or data[:2] != b'MZ':
+        result['reason'] = 'no MZ signature'
+        return result
+    result['has_mz'] = True
+
+    try:
+        e_lfanew = struct.unpack_from('<I', data, 0x3C)[0]
+    except struct.error:
+        result['reason'] = 'truncated DOS header (no e_lfanew)'
+        return result
+    result['e_lfanew'] = e_lfanew
+
+    # e_lfanew is attacker/loader controlled in principle; bound it to a
+    # plausible range before trusting it as an offset into `data`.
+    if e_lfanew < 4 or e_lfanew > 0x1000 or e_lfanew + 24 > len(data):
+        result['reason'] = f'e_lfanew out of plausible range (0x{e_lfanew:x})'
+        return result
+    if data[e_lfanew:e_lfanew + 4] != b'PE\x00\x00':
+        result['reason'] = 'no PE\\0\\0 signature at e_lfanew'
+        return result
+    result['has_pe_sig'] = True
+
+    coff_off = e_lfanew + 4
+    try:
+        machine, num_sections, _ts, _symtab, _numsym, opt_hdr_size, _chars = \
+            struct.unpack_from('<HHIIIHH', data, coff_off)
+    except struct.error:
+        result['reason'] = 'truncated COFF file header'
+        return result
+    result['machine'] = machine
+    result['machine_name'] = _KNOWN_MACHINES.get(machine)
+    result['number_of_sections'] = num_sections
+
+    if machine not in _KNOWN_MACHINES:
+        result['reason'] = f'unrecognized Machine field (0x{machine:04x})'
+        return result
+    if num_sections == 0 or num_sections > _MAX_SECTIONS:
+        result['reason'] = f'implausible NumberOfSections ({num_sections})'
+        return result
+
+    opt_off = coff_off + 20
+    if opt_off + 2 > len(data):
+        result['reason'] = 'truncated optional header'
+        return result
+    magic = struct.unpack_from('<H', data, opt_off)[0]
+
+    if magic == 0x10b:      # PE32
+        result['is_pe32_plus'] = False
+        ep_off, base_off, base_size, size_off = opt_off + 16, opt_off + 28, 4, opt_off + 56
+    elif magic == 0x20b:    # PE32+
+        result['is_pe32_plus'] = True
+        ep_off, base_off, base_size, size_off = opt_off + 16, opt_off + 24, 8, opt_off + 56
+    else:
+        result['reason'] = f'invalid optional header Magic (0x{magic:04x})'
+        return result
+
+    if ep_off + 4 > len(data) or base_off + base_size > len(data) or size_off + 4 > len(data):
+        result['reason'] = 'truncated optional header (fixed fields)'
+        return result
+
+    result['address_of_entry_point'] = struct.unpack_from('<I', data, ep_off)[0]
+    result['image_base'] = (struct.unpack_from('<I', data, base_off)[0] if base_size == 4
+                             else struct.unpack_from('<Q', data, base_off)[0])
+    result['size_of_image'] = struct.unpack_from('<I', data, size_off)[0]
+
+    sec_off = coff_off + 20 + opt_hdr_size
+    sections = []
+    for i in range(num_sections):
+        base = sec_off + i * 40
+        if base + 40 > len(data):
+            break
+        name = data[base:base + 8].rstrip(b'\x00').decode('latin1', errors='replace')
+        vsize, vaddr, rawsize, rawptr = struct.unpack_from('<IIII', data, base + 8)
+        characteristics = struct.unpack_from('<I', data, base + 36)[0]
+        sections.append({
+            'name': name, 'virtual_address': vaddr, 'virtual_size': vsize,
+            'pointer_to_raw_data': rawptr, 'size_of_raw_data': rawsize,
+            'characteristics': characteristics,
+            'is_executable': bool(characteristics & IMAGE_SCN_MEM_EXECUTE),
+            'is_writable':   bool(characteristics & IMAGE_SCN_MEM_WRITE),
+            'is_readable':   bool(characteristics & IMAGE_SCN_MEM_READ),
+        })
+    result['sections'] = sections
+
+    # A structurally valid PE needs the FULL declared section table
+    # recoverable, not just the fixed-size headers before it — a truncated
+    # read (data cut off mid-table) is a partial parse, not a validated one.
+    if len(sections) == num_sections:
+        result['valid'] = True
+    elif not result['reason']:
+        result['reason'] = f'section table truncated ({len(sections)}/{num_sections} recovered)'
+
+    return result
+
+
+def expected_protection_name(is_readable: bool, is_writable: bool, is_executable: bool) -> str:
+    """Map a PE section's declared R/W/X characteristics onto the Windows
+    page-protection constant a freshly, unmodified-loaded section would
+    carry (before any COW promotion)."""
+    if is_executable and is_writable:
+        return 'PAGE_EXECUTE_READWRITE'
+    if is_executable and is_readable:
+        return 'PAGE_EXECUTE_READ'
+    if is_executable:
+        return 'PAGE_EXECUTE'
+    if is_writable:
+        return 'PAGE_READWRITE'
+    if is_readable:
+        return 'PAGE_READONLY'
+    return 'PAGE_NOACCESS'
+
+
+def section_protection_exceeds_declared(actual_protect_name: str, section: dict) -> bool:
+    """
+    True when LIVE memory protection grants write access to a section the
+    on-disk PE header declares executable but NOT writable — the
+    structural signature of module stomping (code overwritten post-load)
+    or unusual runtime patching, independent of any string content.
+
+    Deliberately narrow, matching the same false-positive concerns already
+    documented elsewhere in this codebase for RWX/IOC heuristics:
+      - Sections the header itself marks writable (.data, .bss) routinely
+        show PAGE_READWRITE live; that is expected, not a signal, so only
+        sections with is_writable == False are considered at all.
+      - A read-only DATA section commonly gets promoted to PAGE_READWRITE
+        (or PAGE_WRITECOPY, resolving to PAGE_READWRITE after the first
+        write) once the loader patches relocations/IAT entries — normal
+        loader behavior, not stomping. Restricting this check to
+        is_executable == True sections excludes that entire class: a
+        loader has no legitimate reason to make an executable section
+        writable after mapping it.
+    """
+    if not section['is_executable'] or section['is_writable']:
+        return False
+    name = actual_protect_name or ''
+    return 'WRITE' in name  # PAGE_READWRITE / PAGE_EXECUTE_READWRITE /
+                             # PAGE_WRITECOPY / PAGE_EXECUTE_WRITECOPY
 
 def _pe_timestamp_to_str(ts: int) -> str:
     """

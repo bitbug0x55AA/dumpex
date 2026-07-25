@@ -54,6 +54,84 @@ def get_memory_regions(mf: MinidumpFile) -> list:
     return []
 
 
+def get_thread_contexts(mf: MinidumpFile) -> list:
+    """
+    Return the CURRENT instruction pointer per thread, as recorded in
+    ThreadListStream's per-thread CONTEXT/WOW64_CONTEXT at the moment the
+    dump was taken — this is the register state actually in flight, unlike
+    ThreadInfoListStream.StartAddress (where the thread BEGAN, which tells
+    you nothing about where it is executing right now).
+
+    minidump.MinidumpFile.parse() already parses each thread's context
+    into thread.ContextObject during open_dump() (__parse_thread_context);
+    this just extracts the one field hunt modules need in a uniform shape,
+    handling both native x64 (CONTEXT.Rip) and WOW64 32-bit-on-64-bit
+    (WOW64_CONTEXT.Eip) — distinguished via hasattr, NOT via "is the value
+    zero", since a genuinely-zero RIP/EIP is indistinguishable from
+    "attribute absent" once read through getattr(..., default=0).
+
+    Returns list of {"ThreadId": int, "ip": int, "ip_reg": "RIP"|"EIP",
+    "is_wow64": bool} — one entry per thread whose context was actually
+    parsed. A thread with no ContextObject (context stream missing/
+    unparseable for that thread) is silently omitted, not defaulted to 0 —
+    callers must treat "not in this list" as "no live IP available", not
+    "IP is 0".
+    """
+    out = []
+    if not (mf.threads and mf.threads.threads):
+        return out
+    for th in mf.threads.threads:
+        ctx = getattr(th, 'ContextObject', None)
+        if ctx is None:
+            continue
+        if hasattr(ctx, 'Rip'):
+            out.append({"ThreadId": th.ThreadId, "ip": ctx.Rip, "ip_reg": "RIP", "is_wow64": False})
+        elif hasattr(ctx, 'Eip'):
+            out.append({"ThreadId": th.ThreadId, "ip": ctx.Eip, "ip_reg": "EIP", "is_wow64": True})
+    return out
+
+
+def group_regions_by_allocation(regions: list) -> dict:
+    """
+    Group MemoryInfo regions by AllocationBase — the address a single
+    VirtualAlloc/VirtualAllocEx call originally reserved. A single
+    allocation is routinely split into multiple MemoryInfo entries with
+    different BaseAddress/Protect/State (e.g. a header page, a RW-then-
+    reprotected-to-RX code page, a guard page) after VirtualProtect calls;
+    correlating suspicious signals by AllocationBase catches this — two
+    regions that are RWX and "hidden PE" respectively but sit at DIFFERENT
+    BaseAddress within the SAME allocation are still one suspicious
+    allocation, not two unrelated ones.
+
+    Returns {AllocationBase: [region, ...]}, insertion order preserved
+    within each group.
+    """
+    groups: dict = {}
+    for r in regions:
+        groups.setdefault(r.AllocationBase, []).append(r)
+    return groups
+
+
+def get_handles(mf: MinidumpFile) -> list:
+    """
+    Return HandleDataStream descriptors, or [] if the dump doesn't carry
+    one (MiniDumpWithHandleData wasn't set when the dump was captured —
+    common for a plain MiniDumpWithFullMemory dump). Each descriptor has
+    .Handle, .TypeName (e.g. "File", "Event", "Mutant"), .ObjectName (the
+    kernel object name, e.g. "\\Device\\NamedPipe\\mypipe" for a pipe
+    handle), .GrantedAccess, .HandleCount, .PointerCount.
+
+    This is the actual OS-level record of "this process holds an open
+    handle to this named kernel object" — independent of and much
+    stronger than finding the bytes "\\pipe\\something" sitting in memory,
+    which proves only that the bytes exist somewhere, not that anything
+    ever opened a pipe by that name.
+    """
+    if mf.handles and mf.handles.handles:
+        return mf.handles.handles
+    return []
+
+
 def module_name_only(full_path: str) -> str:
     """Extract just the filename from a full module path."""
     return os.path.basename(full_path).lower() if full_path else ""

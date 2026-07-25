@@ -14,7 +14,8 @@ from dumpex.hunt.yara_hunt  import _hunt_yara
 from dumpex.hunt.encoding   import _hunt_encoding
 from dumpex.rules_pkg.loader import get_rules_source_info
 
-def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None):
+def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None,
+             ref_dir: str = None):
     """Run TTP-specific detection playbooks."""
     valid = {"injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation", "all"}
     if ttp not in valid:
@@ -36,7 +37,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     if run_hollowing:
         results["hollowing"]  = _hunt_hollowing(mf, verbose=verbose)
     if run_stomping:
-        results["stomping"]   = _hunt_stomping(mf,  verbose=verbose)
+        results["stomping"]   = _hunt_stomping(mf,  verbose=verbose, ref_dir=ref_dir)
     if run_pipe:
         results["pipe"]       = _hunt_pipe(mf, verbose=verbose)
     if run_cs_beacon:
@@ -111,7 +112,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       3),
             "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],  1),
             "yara":      ("YARA Rules",                 results["yara"]["score"],       3),
-            "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   5),
+            "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   3),
         }
         any_hit           = False
         any_not_evaluated = False

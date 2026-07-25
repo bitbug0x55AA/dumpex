@@ -180,6 +180,11 @@ class StructuredOutput:
         if section == "hunt" and isinstance(data, dict):
             summary_rows  = []
             findings_rows = []
+            finding_detail_rows = []   # facts/inference/confidence/rationale/limitations
+                                        # — one row per dumpex.hunt._finding.Finding,
+                                        # populated from findings["findings"] wherever a
+                                        # hunt module reports it (injection/stomping/
+                                        # pipe/obfuscation as of phase two)
 
             for ttp, findings in data.items():
                 if ttp.startswith("_"):
@@ -190,7 +195,7 @@ class StructuredOutput:
                 status    = findings.get("status", "")
                 max_score = {"injection": 3, "hollowing": 4, "stomping": 2,
                              "pipe": 3, "cs-beacon": 1, "yara": 3,
-                             "obfuscation": 5}.get(ttp, "?")
+                             "obfuscation": 3}.get(ttp, "?")
 
                 # Verdict must be driven by status, not score alone: a
                 # NOT_EVALUATED scanner (dependency/stream missing) or an
@@ -296,26 +301,43 @@ class StructuredOutput:
                     }
 
                 # Injection findings. Guarded by ttp (not just dict-key
-                # presence): "hidden_pe" is also a key in obfuscation's
-                # findings dict, but with a different tuple shape — keying
-                # off ttp avoids unpacking the wrong shape from the wrong TTP.
+                # presence): "hidden_pe_validated" is injection-specific —
+                # obfuscation's "hidden_pe" key has a different tuple shape
+                # entirely, so keying off ttp avoids unpacking the wrong
+                # shape from the wrong TTP.
                 if ttp == "injection":
                     for r in findings.get("rwx", []):
                         fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
                         findings_rows.append(_blank_row(
                             "injection_rwx_region", r.BaseAddress, fo,
-                            f"RegionSize=0x{r.RegionSize:x}; Protect={prot_str(r.Protect)}"))
-                    for r, known in findings.get("hidden_pe", []):
+                            f"AllocationBase=0x{r.AllocationBase:x}; RegionSize=0x{r.RegionSize:x}; "
+                            f"Protect={prot_str(r.Protect)}"))
+                    for h in findings.get("hidden_pe_validated", []):
+                        r, pe = h["region"], h["pe"]
                         fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
                         findings_rows.append(_blank_row(
-                            "injection_hidden_pe", r.BaseAddress, fo,
-                            f"in_module_list={known}"))
+                            "injection_hidden_pe_validated", r.BaseAddress, fo,
+                            f"AllocationBase=0x{r.AllocationBase:x}; machine={pe['machine_name']}; "
+                            f"sections={pe['number_of_sections']}"))
+                    for h in findings.get("hidden_pe_unvalidated", []):
+                        r, pe = h["region"], h["pe"]
+                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
+                        findings_rows.append(_blank_row(
+                            "injection_mz_prefix_unvalidated", r.BaseAddress, fo,
+                            f"reason={pe['reason']}"))
                     for ti in findings.get("threads", []):
                         sa = ti.StartAddress or 0
                         fo = (va_to_file_offset(self._mf, sa) if self._mf else None)
                         findings_rows.append(_blank_row(
-                            "injection_unbacked_thread", sa, fo,
+                            "injection_unbacked_thread_startaddr", sa, fo,
                             f"TID=0x{ti.ThreadId:x}"))
+                    for tc, r in findings.get("rip_hits", []):
+                        fo = (va_to_file_offset(self._mf, tc["ip"]) if self._mf else None)
+                        full = r.AllocationBase in set(findings.get("rwx_and_pe_alloc_bases", []))
+                        findings_rows.append(_blank_row(
+                            "injection_rip_in_suspicious_allocation", tc["ip"], fo,
+                            f"TID=0x{tc['ThreadId']:x}; {tc['ip_reg']}; "
+                            f"AllocationBase=0x{r.AllocationBase:x}; full_correlation={full}"))
 
                 # Hollowing: no per-item collection exists on the findings
                 # dict (score-only checks) — summary_rows already carries
@@ -323,20 +345,17 @@ class StructuredOutput:
 
                 # Stomping findings
                 if ttp == "stomping":
-                    for r, mod in findings.get("rwx_image", []):
+                    for m in findings.get("section_mismatches", []):
+                        module, sec, r = m["module"], m["section"], m["region"]
                         fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
-                        modname = os.path.basename(mod.name) if mod else "(unknown module)"
+                        modname = os.path.basename(module.name) if module.name else "(unnamed module)"
+                        disk_diff = m.get("disk_diff")
                         findings_rows.append(_blank_row(
-                            "stomping_rwx_image", r.BaseAddress, fo,
-                            f"module={modname}; Protect={prot_str(r.Protect)}"))
-                    for r, mod, hits, is_non_wl in findings.get("ioc_image", []):
-                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
-                        modname  = os.path.basename(mod.name) if mod else "(unknown module)"
-                        n_strong = sum(1 for h in hits if not h[3])
-                        n_weak   = sum(1 for h in hits if h[3])
-                        findings_rows.append(_blank_row(
-                            "stomping_ioc_in_module", r.BaseAddress, fo,
-                            f"module={modname}; strong={n_strong}; weak={n_weak}"))
+                            "stomping_section_protection_mismatch", r.BaseAddress, fo,
+                            f"module={modname}; section={sec['name']!r}; "
+                            f"declared={m['expected']}; actual={m['actual']}; "
+                            f"live_rip={'yes' if m.get('rip_hit') else 'no'}; "
+                            f"disk_diff_match={disk_diff['match'] if disk_diff else 'n/a'}"))
 
                 # Obfuscation (encoding.py) findings
                 if ttp == "obfuscation":
@@ -347,20 +366,39 @@ class StructuredOutput:
                         key = hit.get("key")
                         key_str = key.hex() if isinstance(key, (bytes, bytearray)) else str(key)
                         findings_rows.append(_blank_row(
-                            "obfuscation_sleep_mask", va, fo, f"key=0x{key_str}"))
+                            "obfuscation_sleep_mask_confirmed", va, fo, f"key=0x{key_str}"))
                     for r, ent, threshold in findings.get("entropy", []):
                         fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
                         findings_rows.append(_blank_row(
-                            "obfuscation_high_entropy", r.BaseAddress, fo,
+                            "obfuscation_entropy_observation", r.BaseAddress, fo,
                             f"entropy={ent:.3f}; threshold={threshold}"))
                     for enc, r, off, decoded in findings.get("hidden_pe", []):
                         abs_va = r.BaseAddress + off
                         fo = (va_to_file_offset(self._mf, abs_va) if self._mf else None)
                         findings_rows.append(_blank_row(
-                            "obfuscation_hidden_pe", abs_va, fo,
+                            "obfuscation_structural_pe_payload", abs_va, fo,
+                            f"encoding={enc}; decoded_len={len(decoded)}"))
+                    for enc, r, off, decoded in findings.get("hidden_shellcode", []):
+                        abs_va = r.BaseAddress + off
+                        fo = (va_to_file_offset(self._mf, abs_va) if self._mf else None)
+                        findings_rows.append(_blank_row(
+                            "obfuscation_structural_shellcode_payload", abs_va, fo,
                             f"encoding={enc}; decoded_len={len(decoded)}"))
 
                 # Pipe findings
+                for hc in findings.get("handle_pipes", []):
+                    h = hc["handle"]
+                    fm = hc.get("framework_match")
+                    findings_rows.append({
+                        "ttp":          ttp,
+                        "finding_type": "pipe_open_handle",
+                        "va_process":   "", "file_offset": "",
+                        "cs_version":   "", "xor_key":   "", "beacon_type": "",
+                        "c2_host":      "", "c2_uri":     "", "port":        "",
+                        "useragent":    "", "pipename":   h.ObjectName,
+                        "license_id":   "", "sleep_ms":   "", "jitter_pct":  "",
+                        "details":      f"Handle=0x{h.Handle:x}" + (f"; framework={fm[0]}" if fm else ""),
+                    })
                 for hit in findings.get("private_pipes", []):
                     r, off, name = hit["region"], hit["offset"], hit["name"]
                     abs_va = r.BaseAddress + off
@@ -370,7 +408,7 @@ class StructuredOutput:
                         pipename += f" [truncated, sha256={hit['sha256'][:16]}…]"
                     findings_rows.append({
                         "ttp":          ttp,
-                        "finding_type": "suspicious_pipe",
+                        "finding_type": "pipe_string_scan_lead",
                         "va_process":   f"0x{abs_va:016x}",
                         "file_offset":  f"0x{fo:x}" if fo else "",
                         "cs_version":   "", "xor_key":   "", "beacon_type": "",
@@ -380,9 +418,27 @@ class StructuredOutput:
                         "details":      prot_str(r.Protect),
                     })
 
+                # Phase-two Finding schema (facts/inference/confidence/
+                # rationale/limitations) — populated by injection/stomping/
+                # pipe/obfuscation via findings["findings"]. One row per
+                # Finding, independent of the legacy per-item rows above.
+                for f in findings.get("findings", []):
+                    finding_detail_rows.append({
+                        "ttp":         ttp,
+                        "check":       f.get("check", ""),
+                        "tag":         f.get("tag", ""),
+                        "confidence":  f.get("confidence", ""),
+                        "inference":   f.get("inference", ""),
+                        "rationale":   f.get("rationale", ""),
+                        "facts":       " | ".join(f.get("facts", [])),
+                        "limitations": " | ".join(f.get("limitations", [])),
+                    })
+
             tables = {"summary": summary_rows}
             if findings_rows:
                 tables["findings"] = findings_rows
+            if finding_detail_rows:
+                tables["finding_details"] = finding_detail_rows
             return tables
 
         # Fallback: try list-of-dicts as-is

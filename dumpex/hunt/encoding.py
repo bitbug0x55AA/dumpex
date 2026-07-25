@@ -41,16 +41,18 @@ import os
 from collections import Counter
 from minidump.minidumpfile import MinidumpFile
 
-from dumpex.ui.colors   import RED, GREEN, YELLOW, DIM, BOLD, CYAN
+from dumpex.ui.colors   import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (
     get_modules, get_memory_regions, addr_to_module,
-    va_to_file_offset, prot_str, read_region, _extract_strings_from_data,
+    va_to_file_offset, prot_str, read_region,
 )
+from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._budget import ScanBudget
-from dumpex.hunt.injection import _hunt_hidden_pe   # reuse for PE re-check
+from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW,
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION)
 
 # ── Tunables ──────────────────────────────────────────────────────────────
 ENTROPY_PRIVATE_THRESHOLD = 7.2   # MEM_PRIVATE: likely encrypted / packed
@@ -187,9 +189,9 @@ def _classify_decoded(data: bytes) -> dict:
         return result
 
     if data[:2] == b'MZ':
-        pe_offset = struct.unpack_from('<I', data, 0x3c)[0] if len(data) > 0x40 else 0
-        if pe_offset and pe_offset + 4 <= len(data) and data[pe_offset:pe_offset+4] == b'PE\x00\x00':
-            result.update({'type': 'pe', 'is_pe': True})
+        pe = parse_pe_header(data)
+        if pe['valid']:
+            result.update({'type': 'pe', 'is_pe': True, 'pe_info': pe})
             return result
 
     if data[:6] in (b'\xe8\x00\x00\x00\x00\x58',
@@ -698,13 +700,15 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     findings = {
         'sleep_mask': [],   # Layer 0: (hit_dict, ...)
-        'entropy':    [],   # Layer 1: (region, entropy, threshold)
-        'base64':     [],   # Layer 2: (region, offset, cls)
-        'xor':        [],   # Layer 3: (region, key, cls)
-        'compressed': [],   # Layer 4: (region, offset, algo, cls)
-        'hidden_pe':  [],
+        'entropy':    [],   # Layer 1: (region, entropy, threshold) — OBSERVATION ONLY
+        'base64':     [],   # Layer 2: (region, offset, cls) — OBSERVATION/LEAD unless PE/shellcode
+        'xor':        [],   # Layer 3: (region, key, cls) — OBSERVATION/LEAD unless PE/shellcode
+        'compressed': [],   # Layer 4: (region, offset, algo, cls) — OBSERVATION/LEAD unless PE/shellcode
+        'hidden_pe':       [],   # structural: decoded content validates as a PE (any layer)
+        'hidden_shellcode': [],  # structural: decoded content matches a shellcode bootstrap (any layer)
         'score': 0,
     }
+    findings_list = []   # Finding objects — facts/inference/confidence/rationale/limitations
 
     _print_hunt_header("Obfuscation Detection")
 
@@ -737,6 +741,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
             if cls['is_pe']:
                 findings['hidden_pe'].append(('sleep_mask', r, 0, hit['decoded']))
+            elif cls['is_shellcode']:
+                findings['hidden_shellcode'].append(('sleep_mask', r, 0, hit['decoded']))
 
         _print_check(
             "CS Sleep Mask XOR-encoded beacon memory",
@@ -744,7 +750,25 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             detail,
         )
         findings['sleep_mask'] = sleep_mask_hits
-        findings['score'] += 1
+        findings_list.append(Finding(
+            check="obfuscation.sleep_mask_confirmed",
+            facts=[f"VA=0x{h['region'].BaseAddress:x} key={h['key'].hex()} "
+                   f"rotation_offset={h['offset']} decoded_type={h['cls']['type']}"
+                   for h in sleep_mask_hits[:10]],
+            inference=f"{len(sleep_mask_hits)} region(s) decode cleanly under a recovered "
+                       f"repeating-key XOR AND contain the literal 'sha256\\x00' marker "
+                       f"that Cobalt Strike's sleep-mask-encoded beacon memory always "
+                       f"carries once decoded.",
+            confidence=CONFIDENCE_HIGH,
+            rationale="This is not a raw statistical signal (unlike entropy/Base64/GZIP "
+                       "below): key recovery is validated against a specific, known-content "
+                       "marker before being accepted — a coincidental match is not "
+                       "plausible for a repeating XOR key long enough to pass the "
+                       "frequency-analysis candidate filters.",
+            limitations=["Specific to Cobalt Strike's sleep-mask XOR scheme; does not "
+                         "generalize to other frameworks' memory-encryption-at-rest."],
+            tag=TAG_DETECTION,
+        ))
     else:
         _print_check(
             "CS Sleep Mask XOR-encoded beacon memory",
@@ -771,10 +795,27 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                     f"\n          Entropy        {ent:.3f} bits  (threshold: {threshold})"
                     f"\n          Protection     {p}"
                 )
-        _print_check("High-entropy private memory (likely encrypted/packed)",
-                     RED("SUSPICIOUS"), detail)
+        _print_check("High-entropy private memory (observation)",
+                     YELLOW("OBSERVATION — not scored, see rationale"), detail)
         findings['entropy'] = entropy_hits
-        findings['score'] += 1
+        findings_list.append(Finding(
+            check="obfuscation.entropy_observation",
+            facts=[f"VA=0x{r.BaseAddress:x} entropy={ent:.3f} threshold={threshold} "
+                   f"protect={prot_str(r.Protect)}" for r, ent, threshold in entropy_hits[:15]],
+            inference=f"{len(entropy_hits)} MEM_PRIVATE region(s) exceed the Shannon-entropy "
+                       f"threshold typical of encrypted/compressed/packed content.",
+            confidence=CONFIDENCE_LOW,
+            rationale="Shannon entropy is a purely statistical property shared by "
+                       "encryption, compression, packed code, media buffers, crypto key "
+                       "material, and plenty of ordinary high-randomness data — it carries "
+                       "no information about WHAT the content is. Reported as an "
+                       "observation only; never contributes to the obfuscation score on "
+                       "its own.",
+            limitations=["Cannot distinguish malicious encoding from benign "
+                         "high-randomness content (e.g. session keys, compressed media, "
+                         "GUIDs/hashes in bulk)."],
+            tag=TAG_OBSERVATION,
+        ))
     else:
         _print_check("High-entropy private memory",
                      GREEN("CLEAN — no anomalous entropy in private regions"))
@@ -782,7 +823,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     # ── Layers 2–4: per-region decode ─────────────────────────────────────
     print(DIM("  [*] Layers 2-4: Base64 / XOR / GZIP scan …"))
 
-    b64_hits, xor_hits, cmp_hits, pe_hits = [], [], [], []
+    b64_hits, xor_hits, cmp_hits, pe_hits, shellcode_hits = [], [], [], [], []
     decode_scanned      = 0
     decode_size_skipped = 0
     decode_read_failed  = 0
@@ -828,6 +869,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             b64_hits.append((r, off, cls, raw, decoded))
             if cls['is_pe']:
                 pe_hits.append(('base64', r, off, decoded))
+            elif cls['is_shellcode']:
+                shellcode_hits.append(('base64', r, off, decoded))
 
         if (prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= XOR_SCAN_MAX):
             for key, decoded, cls in _scan_xor(data, r.BaseAddress, decode_budget):
@@ -836,6 +879,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                 xor_hits.append((r, key, cls, decoded))
                 if cls['is_pe']:
                     pe_hits.append(('xor', r, 0, decoded))
+                elif cls['is_shellcode']:
+                    shellcode_hits.append(('xor', r, 0, decoded))
 
         if not decode_budget.exhausted():
             for off, algo, decoded, cls in _scan_compressed(data, r.BaseAddress, decode_budget):
@@ -844,6 +889,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                 cmp_hits.append((r, off, algo, cls, decoded))
                 if cls['is_pe']:
                     pe_hits.append((algo, r, off, decoded))
+                elif cls['is_shellcode']:
+                    shellcode_hits.append((algo, r, off, decoded))
 
     # ── Report Base64 ─────────────────────────────────────────────────────
     seen_b64 = set()
@@ -854,29 +901,50 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             b64_unique.append(item)
 
     if b64_unique:
-        detail = f"{len(b64_unique)} region(s) with Base64 payload(s)"
+        detail = f"{len(b64_unique)} region(s) with Base64-decodable data"
         if verbose:
             for r, off, cls, raw, decoded in b64_unique[:10]:
                 abs_va = r.BaseAddress + off
                 fo     = va_to_file_offset(mf, abs_va)
                 fo_str = f"0x{fo:x}" if fo else "(not captured)"
                 ctype  = cls['type'].upper()
-                color_fn = RED if cls['is_pe'] or cls['is_shellcode'] else YELLOW
                 detail += (
                     f"\n          VA (process)   0x{abs_va:016x}"
                     f"\n          File offset    {fo_str}"
-                    f"\n          Decoded type   {color_fn(ctype)}"
+                    f"\n          Decoded type   {ctype}"
                     f"\n          Decoded size   {len(decoded)} bytes"
                     f"\n          B64 length     {len(raw)} chars"
                 )
                 if cls['ioc_strings']:
                     detail += f"\n          IOC strings    {', '.join(cls['ioc_strings'][:3])}"
-        severity = (RED("SUSPICIOUS — PE or shellcode in Base64")
-                    if any(h[2]['is_pe'] or h[2]['is_shellcode'] for h in b64_unique)
-                    else YELLOW("NOTABLE — Base64 encoded data in memory"))
-        _print_check("Base64 encoded payloads", severity, detail)
+        structural = [h for h in b64_unique if h[2]['is_pe'] or h[2]['is_shellcode']]
+        ioc_only   = [h for h in b64_unique if h[2]['ioc_strings'] and not (h[2]['is_pe'] or h[2]['is_shellcode'])]
+        tag  = TAG_LEAD if ioc_only and not structural else TAG_OBSERVATION
+        note = ("PE/shellcode payload(s) found — see obfuscation.structural_payload below"
+                if structural else "IOC-style string(s) found inside decoded content — treated "
+                "as a lead, not a detection" if ioc_only else
+                "no structural or IOC content found in decoded data")
+        _print_check("Base64 encoded payloads (observation)",
+                     YELLOW("OBSERVATION" if tag == TAG_OBSERVATION else "LEAD") + f" — {note}", detail)
         findings['base64'] = b64_unique
-        findings['score'] += 1
+        findings_list.append(Finding(
+            check="obfuscation.base64_observation",
+            facts=[f"VA=0x{r.BaseAddress+off:x} decoded_type={cls['type']} "
+                   f"decoded_size={len(decoded)}" for r, off, cls, raw, decoded in b64_unique[:15]],
+            inference=f"{len(b64_unique)} region(s) contain data that decodes cleanly as "
+                       f"Base64.",
+            confidence=CONFIDENCE_LOW,
+            rationale="Base64 is a generic, ubiquitous encoding used constantly by benign "
+                       "software (certificates, config blobs, telemetry, embedded assets) — "
+                       "its mere presence carries no information about intent. Reported as "
+                       "an observation and never drives the obfuscation score by itself; "
+                       "only a decoded PE header or shellcode bootstrap pattern (see "
+                       "obfuscation.structural_payload) does.",
+            limitations=["IOC-style strings inside decoded content are a lead, not proof — "
+                         "see obfuscation.base64_observation facts / stomping-style string "
+                         "caveats."],
+            tag=tag,
+        ))
     else:
         _print_check("Base64 encoded payloads",
                      GREEN("CLEAN — no significant Base64 payloads found"))
@@ -900,16 +968,36 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                     f"\n          VA (process)   0x{r.BaseAddress:016x}"
                     f"\n          File offset    {fo_str}"
                     f"\n          XOR key        0x{key:02x}"
-                    f"\n          Decoded type   {RED(ctype) if cls['is_pe'] else YELLOW(ctype)}"
+                    f"\n          Decoded type   {ctype}"
                 )
                 if cls['ioc_strings']:
                     detail += f"\n          IOC strings    {', '.join(cls['ioc_strings'][:3])}"
-        severity = (RED("SUSPICIOUS — PE or shellcode behind XOR obfuscation")
-                    if any(h[2]['is_pe'] or h[2]['is_shellcode'] for h in xor_unique)
-                    else YELLOW("NOTABLE — XOR-obfuscated data identified"))
-        _print_check("XOR single-byte obfuscation", severity, detail)
+        structural = [h for h in xor_unique if h[2]['is_pe'] or h[2]['is_shellcode']]
+        ioc_only   = [h for h in xor_unique if h[2]['ioc_strings'] and not (h[2]['is_pe'] or h[2]['is_shellcode'])]
+        tag  = TAG_LEAD if ioc_only and not structural else TAG_OBSERVATION
+        note = ("PE/shellcode payload(s) found — see obfuscation.structural_payload below"
+                if structural else "IOC-style string(s) found — treated as a lead" if ioc_only else
+                "no structural or IOC content found")
+        _print_check("XOR single-byte obfuscation (observation)",
+                     YELLOW("OBSERVATION" if tag == TAG_OBSERVATION else "LEAD") + f" — {note}", detail)
         findings['xor'] = xor_unique
-        findings['score'] += 1
+        findings_list.append(Finding(
+            check="obfuscation.xor_observation",
+            facts=[f"VA=0x{r.BaseAddress:x} key=0x{key:02x} decoded_type={cls['type']}"
+                   for r, key, cls, decoded in xor_unique[:15]],
+            inference=f"{len(xor_unique)} region(s) decode plausibly under a brute-forced "
+                       f"single-byte XOR key (already filtered to require IOC content or a "
+                       f"structural PE/shellcode match before being surfaced at all).",
+            confidence=CONFIDENCE_LOW,
+            rationale="A single-byte XOR key is trivial to satisfy by chance on any "
+                       "sufficiently long buffer scored only by printable-ratio — reported "
+                       "as an observation/lead; only a decoded PE header or shellcode "
+                       "bootstrap counts toward the score (see obfuscation.structural_payload).",
+            limitations=["255-key brute force with a printable-ratio heuristic; a "
+                         "coincidental key that happens to look plausible cannot be ruled "
+                         "out for short samples."],
+            tag=tag,
+        ))
     else:
         _print_check("XOR single-byte obfuscation",
                      GREEN("CLEAN — no single-byte XOR payloads identified"))
@@ -938,39 +1026,94 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                 )
                 if cls['ioc_strings']:
                     detail += f"\n          IOC strings    {', '.join(cls['ioc_strings'][:3])}"
-        severity = (RED("SUSPICIOUS — PE or shellcode in compressed data")
-                    if any(h[3]['is_pe'] or h[3]['is_shellcode'] for h in cmp_unique)
-                    else YELLOW("NOTABLE — compressed data blobs in memory"))
-        _print_check("Compressed data (GZIP/ZLIB)", severity, detail)
+        structural = [h for h in cmp_unique if h[3]['is_pe'] or h[3]['is_shellcode']]
+        ioc_only   = [h for h in cmp_unique if h[3]['ioc_strings'] and not (h[3]['is_pe'] or h[3]['is_shellcode'])]
+        tag  = TAG_LEAD if ioc_only and not structural else TAG_OBSERVATION
+        note = ("PE/shellcode payload(s) found — see obfuscation.structural_payload below"
+                if structural else "IOC-style string(s) found — treated as a lead" if ioc_only else
+                "no structural or IOC content found")
+        _print_check("Compressed data (GZIP/ZLIB) (observation)",
+                     YELLOW("OBSERVATION" if tag == TAG_OBSERVATION else "LEAD") + f" — {note}", detail)
         findings['compressed'] = cmp_unique
-        findings['score'] += 1
+        findings_list.append(Finding(
+            check="obfuscation.compressed_observation",
+            facts=[f"VA=0x{r.BaseAddress+off:x} algo={algo} decoded_type={cls['type']} "
+                   f"decoded_size={len(decoded)}" for r, off, algo, cls, decoded in cmp_unique[:15]],
+            inference=f"{len(cmp_unique)} region(s) contain data that decompresses cleanly "
+                       f"as GZIP/ZLIB.",
+            confidence=CONFIDENCE_LOW,
+            rationale="GZIP/ZLIB is a general-purpose compression format used throughout "
+                       "ordinary software (updates, resources, network payloads) — its "
+                       "presence alone carries no information about intent. Reported as an "
+                       "observation; only a decompressed PE header or shellcode bootstrap "
+                       "(see obfuscation.structural_payload) contributes to the score.",
+            limitations=["IOC-style strings inside decompressed content are a lead, not "
+                         "proof, on their own."],
+            tag=tag,
+        ))
     else:
         _print_check("Compressed data (GZIP/ZLIB)",
                      GREEN("CLEAN — no compressed payloads found"))
 
-    # ── PE re-check ───────────────────────────────────────────────────────
+    # ── Structural payload check (this is what actually drives the score) ──
+    # Unifies every layer's decoded content: a PE header that passes full
+    # structural validation (dumpex.core.pe_utils.parse_pe_header — DOS/COFF/
+    # optional header/section table, not just an 'MZ' prefix) or a shellcode
+    # bootstrap pattern, found via ANY layer (sleep mask, Base64, XOR, GZIP/
+    # ZLIB). This — not "an encoding scheme was merely detected" — is what
+    # can move the obfuscation verdict, per phase-two policy.
     all_pe_hits = findings['hidden_pe'] + pe_hits
-    if all_pe_hits:
-        detail = f"{len(all_pe_hits)} PE payload(s) found inside encoded/compressed data"
+    all_shellcode_hits = findings['hidden_shellcode'] + shellcode_hits
+    if all_pe_hits or all_shellcode_hits:
+        detail = f"{len(all_pe_hits)} PE + {len(all_shellcode_hits)} shellcode payload(s) found inside encoded/compressed data"
+        facts = []
         for enc, r, off, decoded in all_pe_hits:
             abs_va = r.BaseAddress + off
             known  = addr_to_module(abs_va, modules)
-            reg_str = "registered" if known else RED("UNREGISTERED — hidden PE")
-            detail += (
-                f"\n          Encoding       {enc.upper()}"
-                f"\n          Container VA   0x{abs_va:016x}"
-                f"\n          Module status  {reg_str}"
-                f"\n          Decoded PE     {len(decoded)} bytes"
-                f"\n          PE header      {decoded[:8].hex()}"
-            )
-        _print_check("PE payloads inside encoded data",
-                     RED("SUSPICIOUS — executable payload concealed by encoding"),
+            reg_str = "registered" if known else "UNREGISTERED"
+            facts.append(f"type=PE encoding={enc} container_VA=0x{abs_va:x} "
+                         f"module_status={reg_str} decoded_size={len(decoded)}")
+            detail += (f"\n          Encoding       {enc.upper()}"
+                       f"\n          Container VA   0x{abs_va:016x}"
+                       f"\n          Module status  {RED('UNREGISTERED — hidden PE') if not known else 'registered'}"
+                       f"\n          Decoded PE     {len(decoded)} bytes")
+        for enc, r, off, decoded in all_shellcode_hits:
+            abs_va = r.BaseAddress + off
+            facts.append(f"type=shellcode encoding={enc} container_VA=0x{abs_va:x} decoded_size={len(decoded)}")
+            detail += (f"\n          Encoding       {enc.upper()}"
+                       f"\n          Container VA   0x{abs_va:016x}"
+                       f"\n          Decoded shellcode  {len(decoded)} bytes (call-$+5 bootstrap)")
+        _print_check("Structural payload inside encoded data",
+                     RED("DETECTION — executable payload concealed by encoding"),
                      detail)
         findings['hidden_pe'] = all_pe_hits
-        findings['score'] += 1
+        findings['hidden_shellcode'] = all_shellcode_hits
+        findings_list.append(Finding(
+            check="obfuscation.structural_payload",
+            facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
+            inference=f"Decoded/decompressed content from one or more obfuscation layers "
+                       f"structurally validates as {'a PE image' if all_pe_hits else ''}"
+                       f"{' and/or ' if all_pe_hits and all_shellcode_hits else ''}"
+                       f"{'a shellcode entry bootstrap' if all_shellcode_hits else ''}.",
+            confidence=CONFIDENCE_HIGH,
+            rationale="Unlike raw entropy/Base64/GZIP presence, this checks WHAT the "
+                       "decoded bytes actually are: full PE structural validation (DOS/"
+                       "COFF/optional header + complete section table) or a specific "
+                       "call-$+5 shellcode bootstrap pattern. Encoding was only the "
+                       "delivery mechanism here — the payload itself is the evidence.",
+            limitations=["Structural validation reduces but does not eliminate false "
+                         "positives from adversarially-crafted or coincidental byte "
+                         "sequences in high-entropy data."],
+            tag=TAG_DETECTION,
+        ))
 
     # ── Verdict ───────────────────────────────────────────────────────────
-    score  = findings['score']
+    # Score reflects STRUCTURAL detections only — confirmed sleep-mask
+    # decode, a validated PE payload, and/or a shellcode bootstrap, each
+    # found via any layer. Raw entropy/Base64/GZIP/XOR presence (reported
+    # above as observations/leads) never contributes.
+    score = (int(bool(sleep_mask_hits)) + int(bool(all_pe_hits)) + int(bool(all_shellcode_hits)))
+    findings['score'] = score
     # Every layer has its own size/type filters (SLEEP_MASK_REGION_MAX,
     # ENTROPY_SCAN_MAX, DECODE_SCAN_MAX) — regions can exist (mem_info
     # available) while every single one gets filtered out by every layer
@@ -995,6 +1138,14 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     else:
         status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
     findings['status'] = status
+    findings['findings'] = [f.to_dict() for f in findings_list]
+
+    # Detection-tier findings first, for visibility; observations/leads are
+    # already shown inline with each layer's CLEAN/OBSERVATION/LEAD check
+    # above and are not repeated here.
+    for f in findings_list:
+        if f.tag == TAG_DETECTION:
+            f.print()
 
     if not mem_info_available:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
@@ -1010,11 +1161,13 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         ]))
         verdict = _status_text(INCONCLUSIVE, reason)
     else:
-        verdict = (RED("HIGH CONFIDENCE — active payload obfuscation")    if score >= 3 else
-                   YELLOW("LIKELY — encoding/obfuscation present")        if score >= 2 else
-                   YELLOW("POSSIBLE — one obfuscation indicator")         if score == 1 else
-                   GREEN("CLEAN — no encoding or obfuscation detected"))
-    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/6 checks flagged)\n")
+        verdict = (RED("HIGH CONFIDENCE — structural payload(s) confirmed") if score >= 3 else
+                   RED("LIKELY — structural payload found")                 if score == 2 else
+                   YELLOW("POSSIBLE — one structural indicator")            if score == 1 else
+                   GREEN("CLEAN — no structurally-confirmed payload; raw observations/leads "
+                         "above (entropy/Base64/GZIP/XOR/string) are informational only"))
+    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/3 — structural detections only; "
+          f"entropy/Base64/GZIP are observations, never a verdict by themselves)\n")
 
     if not verbose and any([sleep_mask_hits, b64_unique, xor_unique,
                             cmp_unique, entropy_hits]):

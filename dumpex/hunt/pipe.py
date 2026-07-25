@@ -1,17 +1,42 @@
-"""Named pipe C2 hunter."""
+"""Named pipe C2 hunter.
+
+Phase-two detection model
+──────────────────────────
+The primary, scored signal is now **handle objects**, not string
+scanning. HandleDataStream (when the dump was captured with
+MiniDumpWithHandleData) records the OS's own account of every open
+handle the process held, including .TypeName ("File" for a pipe handle)
+and .ObjectName (the actual kernel object name, e.g.
+"\\Device\\NamedPipe\\mypipe") — proof the process actually opened that
+pipe, not just that the bytes "\\pipe\\mypipe" happen to sit somewhere in
+its memory (which could be freed heap, a copy-pasted string, a decoy, or
+data belonging to something else entirely).
+
+The original memory-string scan for "\\pipe\\" occurrences is still run
+— it is the only way to find a pipe name in a dump with no
+HandleDataStream, and it is genuinely useful for locating nearby C2
+context (URLs/IPs) and correlating execution — but per phase-two policy
+it is explicitly demoted: a bare string match, on its own, is reported as
+a `tag="lead"` / LOW-confidence finding and does NOT contribute to
+`score`. Only a handle-object match — optionally corroborated by a
+same-named string hit's surrounding C2 context or by a thread executing
+in that string's region — can raise the verdict.
+"""
 import os
 import re
 import time
 import hashlib
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
+from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
-    get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
-    read_region)
+    get_thread_infos, get_thread_contexts, get_handles,
+    addr_to_module, va_to_file_offset, prot_str, read_region)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._budget import ScanBudget
+from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION)
 
 PIPE_SCAN_MAX = 8 * 1024 * 1024   # skip regions > 8MB; pipe names / C2 context
                                    # are short strings, no need to read huge
@@ -41,6 +66,10 @@ _MIN_RUN_LEN = 6   # matches the min_len _extract_strings_from_data previously u
 
 _ASCII_RUN_PAT = re.compile(rb'[ -~]{%d,}' % _MIN_RUN_LEN)
 _UTF16_RUN_PAT = re.compile(rb'(?:[ -~]\x00){%d,}' % _MIN_RUN_LEN)
+
+# Handle ObjectName patterns identifying a named-pipe kernel object.
+_HANDLE_PIPE_PAT = re.compile(r'\\Device\\NamedPipe\\|\\pipe\\', re.IGNORECASE)
+_HANDLE_PIPE_SHORTNAME_PAT = re.compile(r'(?:NamedPipe|pipe)\\(.+)$', re.IGNORECASE)
 
 
 def _iter_printable_runs(data: bytes):
@@ -91,22 +120,47 @@ def _iter_c2_matches(data: bytes, pattern, max_per_region: int):
                 byte_end   = run_offset + m.end()
             yield byte_start, byte_end, m.group(0)
 
+
+def _is_pipe_handle(h) -> bool:
+    if not getattr(h, "ObjectName", None):
+        return False
+    type_name = (getattr(h, "TypeName", None) or "").lower()
+    if type_name and "file" not in type_name:
+        return False
+    return bool(_HANDLE_PIPE_PAT.search(h.ObjectName))
+
+
+def _handle_pipe_shortname(object_name: str) -> str:
+    m = _HANDLE_PIPE_SHORTNAME_PAT.search(object_name)
+    return (m.group(1) if m else object_name).strip().lower()
+
+
 def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
     Detect Named Pipe C2 / Lateral Movement channels.
 
-    Strategy: structural, not signature-based.
-      Check 1 — Pipe names in MEM_PRIVATE memory
-                 (system DLLs legitimately reference pipes; private memory does not)
-      Check 2 — C2 artifacts near private pipe names
-                 (IP:port, HTTP URLs in same region = strong signal)
-      Check 3 — Known framework pipe naming patterns (bonus score only)
-      Check 4 — Unbacked thread executing in same region as pipe name
+    Primary (scored):
+      Check A — HandleDataStream entries for open pipe handles, matched
+                against known C2/lateral-movement framework naming
+                conventions (rules.yaml framework_pipes).
+      Check B — Corroboration of a handle-confirmed pipe: C2 artifacts
+                (IP:port, HTTP URLs) or execution (current RIP/EIP, or a
+                thread's StartAddress) found in the memory region backing
+                a same-named string occurrence, when one exists.
+
+    Secondary (leads, not scored):
+      Memory-string "\\pipe\\" scan — kept for coverage when
+      HandleDataStream is unavailable and to locate the regions Check B
+      correlates against, but a bare string match is never, by itself,
+      evidence of anything (see module docstring).
     """
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
     infos   = get_thread_infos(mf)
-    mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
+    thread_contexts = get_thread_contexts(mf)
+    handles = get_handles(mf)
+    mem_info_available    = bool(mf.memory_info and mf.memory_info.infos)
+    handle_stream_available = bool(mf.handles and mf.handles.handles)
 
     # Pipe name patterns
     # Match pipe names in both ASCII and UTF-16LE.
@@ -125,16 +179,101 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     SUSPICIOUS_PROTS      = _r["suspicious_protections"]
 
     findings = {
-        "private_pipes":   [],   # [{"region","offset","name","sha256","original_length"}, ...]
-        "c2_context":      [],   # (region, pipe_name, [bounded C2 match record, ...])
-        "framework_pipes": [],   # (region, pipe_name, framework, technique, mitre)
-        "unbacked_in_rgn": [],   # (thread_info, region)
+        "handle_pipes":    [],   # [{"handle", "framework_match"}, ...]
+        "private_pipes":   [],   # string-scan leads (unchanged shape)
+        "c2_context":      [],
+        "framework_pipes": [],
+        "unbacked_in_rgn": [],
         "score": 0,
     }
 
     _print_hunt_header("Named Pipe C2 / Lateral Movement")
 
-    # ── Collect all pipe name occurrences ────────────────────────────
+    # ── Check A (primary, scored): handle objects ────────────────────────
+    handle_pipe_hits = [h for h in handles if _is_pipe_handle(h)]
+    findings_list = []
+
+    def _framework_match(name: str):
+        for pat, framework, technique, mitre in KNOWN_FRAMEWORK_PIPES:
+            if pat.search(name):
+                return (framework, technique, mitre)
+        return None
+
+    handle_classified = []   # {"handle", "shortname", "framework_match"}
+    for h in handle_pipe_hits:
+        shortname = _handle_pipe_shortname(h.ObjectName)
+        handle_classified.append({
+            "handle": h, "shortname": shortname,
+            "framework_match": _framework_match(h.ObjectName),
+        })
+
+    if handle_stream_available:
+        if handle_pipe_hits:
+            facts = []
+            for hc in handle_classified[:20]:
+                h = hc["handle"]
+                fm = f"  [framework={hc['framework_match'][0]}]" if hc["framework_match"] else ""
+                facts.append(f"Handle=0x{h.Handle:x} ObjectName={h.ObjectName} "
+                             f"GrantedAccess=0x{h.GrantedAccess:x}{fm}")
+            if len(handle_classified) > 20:
+                facts.append(f"... and {len(handle_classified)-20} more")
+            findings_list.append(Finding(
+                check="pipe.open_handles",
+                facts=facts,
+                inference=f"Process holds {len(handle_pipe_hits)} open handle(s) to named "
+                           f"pipe object(s), per HandleDataStream.",
+                confidence=CONFIDENCE_MEDIUM,
+                rationale="HandleDataStream is the OS's own record of what this process "
+                           "actually has open — far stronger than a bare string match, but "
+                           "having ANY pipe handle open is completely ordinary for most "
+                           "Windows processes (IPC, RPC, print spooler, etc.); only a "
+                           "handle whose name matches a known C2/lateral-movement framework "
+                           "convention, or one corroborated by nearby C2 context / active "
+                           "execution, is treated as a detection.",
+                limitations=["Presence of a pipe handle is not inherently suspicious."],
+                tag=TAG_OBSERVATION,
+            ))
+            _print_check("Open pipe handles (HandleDataStream)",
+                         GREEN(f"{len(handle_pipe_hits)} found") if not any(hc["framework_match"] for hc in handle_classified)
+                         else RED("SUSPICIOUS — framework-pattern match"),
+                         f"{len(handle_pipe_hits)} pipe handle(s)" if not verbose else
+                         "\n          " + "\n          ".join(f"0x{hc['handle'].Handle:x}  {hc['handle'].ObjectName}"
+                                                                for hc in handle_classified))
+        else:
+            _print_check("Open pipe handles (HandleDataStream)",
+                         GREEN("CLEAN — no pipe handles open"))
+    else:
+        _print_check("Open pipe handles (HandleDataStream)",
+                     YELLOW("NOT AVAILABLE — dump was not captured with MiniDumpWithHandleData"))
+
+    findings["handle_pipes"] = handle_classified
+
+    framework_handle_hits = [hc for hc in handle_classified if hc["framework_match"]]
+    if framework_handle_hits:
+        facts = []
+        for hc in framework_handle_hits:
+            h = hc["handle"]
+            fw, tech, mitre = hc["framework_match"]
+            facts.append(f"Handle=0x{h.Handle:x} ObjectName={h.ObjectName} "
+                         f"framework={fw} technique={tech} mitre={mitre}")
+        findings_list.append(Finding(
+            check="pipe.handle_framework_match",
+            facts=facts,
+            inference=f"{len(framework_handle_hits)} open pipe handle(s) match a known "
+                       f"C2/lateral-movement framework naming convention.",
+            confidence=CONFIDENCE_MEDIUM,
+            rationale="An OS-confirmed open handle (not just a string sitting in memory) "
+                       "whose name matches a specific, narrow framework convention "
+                       "(e.g. Cobalt Strike's msagent_/postex_ or PsExec's psexesvc) is "
+                       "meaningfully unlikely to be coincidental — raised to HIGH only "
+                       "when further corroborated (see pipe.corroboration below).",
+            limitations=["Framework pipe-name conventions can be renamed/customized by an "
+                         "operator; absence of a match does not mean absence of C2."],
+            tag=TAG_DETECTION,
+        ))
+        findings["framework_pipes"] = framework_handle_hits
+
+    # ── Collect all pipe name occurrences (string scan — lead only) ──────
     # Each entry: {"region", "offset", "name" (bounded preview),
     # "sha256" (of the FULL match, however long), "original_length"} — a
     # 1 MiB printable run following a \pipe\ match must never turn into a
@@ -318,38 +457,41 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             seen_private.add(key)
             deduped.append(hit)
     private_pipes = deduped
+    findings["private_pipes"] = private_pipes
 
-    # ── Check 1: Pipe names outside trusted system DLLs ──────────────
     if private_pipes:
-        detail = f"{len(private_pipes)} pipe name(s) in non-system memory"
-        if verbose:
-            for hit in private_pipes:
-                r, off, name = hit["region"], hit["offset"], hit["name"]
-                p    = prot_str(r.Protect)
-                mtype_r = prot_str(r.Type)
-                mod_r   = addr_to_module(r.BaseAddress, modules)
-                rwx  = RED(" [RWX]") if any(s in p for s in SUSPICIOUS_PROTS) else ""
-                abs_va = r.BaseAddress + off
-                fo_abs = va_to_file_offset(mf, abs_va)
-                fo_str = f"0x{fo_abs:x}" if fo_abs is not None else "(not captured)"
-                if mod_r and "MEM_IMAGE" in mtype_r:
-                    backer = YELLOW(f" [image: {os.path.basename(mod_r.name)}]")
-                else:
-                    backer = DIM(" [private/unregistered]")
-                truncated = f"  [truncated, full length {hit['original_length']} bytes]" \
-                    if hit.get("truncated") else ""
-                detail += (f"\n          VA (process)   0x{abs_va:016x}{rwx}{backer}"
-                           f"\n          File offset    {fo_str}"
-                           f"\n          Region base    0x{r.BaseAddress:016x}"
-                           f"\n          Pipe name: {name.strip()}{truncated}")
-        _print_check("Pipe names outside trusted system DLLs",
-                     RED("SUSPICIOUS — pipe name found in non-system memory"),
-                     detail)
-        findings["private_pipes"] = private_pipes
-        findings["score"] += 1
+        facts = []
+        for hit in private_pipes[:15]:
+            r = hit["region"]
+            abs_va = r.BaseAddress + hit["offset"]
+            fo = va_to_file_offset(mf, abs_va)
+            fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+            facts.append(f"VA=0x{abs_va:x} file_offset={fo_str} name={hit['name'].strip()!r} "
+                         f"region_type={prot_str(r.Type)}")
+        if len(private_pipes) > 15:
+            facts.append(f"... and {len(private_pipes)-15} more")
+        findings_list.append(Finding(
+            check="pipe.string_scan_lead",
+            facts=facts,
+            inference=f"{len(private_pipes)} occurrence(s) of a '\\pipe\\' name found in "
+                       f"non-system-DLL memory via byte-pattern scan.",
+            confidence=CONFIDENCE_LOW,
+            rationale="A string match proves only that these bytes exist somewhere in "
+                       "memory — not that any handle was ever opened by that name, nor "
+                       "that the name isn't leftover/freed heap data or an unrelated "
+                       "buffer. Reported as a lead for the analyst and to locate regions "
+                       "for C2-context/execution correlation; does NOT contribute to the "
+                       "pipe score on its own.",
+            limitations=["Not corroborated by HandleDataStream."] if not handle_stream_available
+                        else ["No corresponding open handle found for this exact name."],
+            tag=TAG_LEAD,
+        ))
+        _print_check("Pipe name strings in non-system memory (lead only)",
+                     YELLOW("LEAD — not scored, see handle checks above"),
+                     f"{len(private_pipes)} occurrence(s)")
     else:
-        _print_check("Pipe names outside trusted system DLLs",
-                     GREEN("CLEAN — all pipe name references are in known system modules"))
+        _print_check("Pipe name strings in non-system memory",
+                     GREEN("CLEAN — no pipe-name byte patterns found"))
 
     if image_pipes and verbose:
         mod_names = sorted({h["module"] for h in image_pipes})
@@ -361,74 +503,123 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                       f"({pipe_name_budget.exhausted_reason}) — some regions may not "
                       f"have been checked for pipe names.\n"))
 
-    # ── Check 2: C2 artifacts near private pipe names ─────────────────
-    # Uses the bounded C2 match records already built inline in the main
-    # loop above (region_c2_records) — no re-read of the region and no
-    # retained copy of its raw bytes or any unboundedly long string, only
-    # the short {match, context, ...} records built under c2_budget.
+    # ── Check B (corroboration, scored): C2 context / execution near a ───
+    # handle-confirmed pipe's matching string occurrence, if one exists.
     c2_hits = []
     for hit in private_pipes:
         records = region_c2_records.get(hit["region"].BaseAddress)
         if not records:
             continue
         c2_hits.append((hit["region"], hit["name"].strip(), records))
+    findings["c2_context"] = c2_hits
 
-    if c2_hits:
-        detail = f"{len(c2_hits)} region(s) with pipe name + C2 artifacts"
-        if verbose:
-            for r, pipe_name, records in c2_hits:
-                detail += f"\n          Region 0x{r.BaseAddress:x}  pipe: {pipe_name}"
-                for rec in records[:3]:
-                    detail += (f"\n            C2: {rec['match']}"
-                               f"  VA 0x{rec['va']:016x}"
-                               f"  sha256={rec['sha256'][:16]}…")
-                if len(records) > 3:
-                    detail += f"\n            ... and {len(records)-3} more"
-        _print_check("C2 artifacts co-located with pipe name",
-                     RED("SUSPICIOUS — C2 IP/URL in same region as private pipe name"),
-                     detail)
-        findings["c2_context"] = c2_hits
-        findings["score"] += 1
-    else:
-        _print_check("C2 artifacts near pipe names",
-                     GREEN("CLEAN — no C2 patterns found near private pipe names"))
+    def _string_hit_for_handle(shortname: str):
+        for hit in private_pipes:
+            name = hit["name"].strip().lower()
+            if shortname and (shortname in name or name in shortname):
+                return hit
+        return None
+
+    corroborated_handles = []   # (handle_classified_entry, string_hit, c2_records, exec_hit)
+    for hc in handle_classified:
+        sh = _string_hit_for_handle(hc["shortname"])
+        if sh is None:
+            continue
+        c2_records = region_c2_records.get(sh["region"].BaseAddress)
+        r = sh["region"]
+        exec_hit = None
+        for tc in thread_contexts:
+            if r.BaseAddress <= tc["ip"] < r.BaseAddress + r.RegionSize:
+                exec_hit = ("rip", tc)
+                break
+        if exec_hit is None:
+            for ti in infos:
+                sa = ti.StartAddress or 0
+                if r.BaseAddress <= sa < r.BaseAddress + r.RegionSize and not addr_to_module(sa, modules):
+                    exec_hit = ("start_addr", ti)
+                    break
+        if c2_records or exec_hit:
+            corroborated_handles.append((hc, sh, c2_records, exec_hit))
+
+    if corroborated_handles:
+        facts = []
+        for hc, sh, c2_records, exec_hit in corroborated_handles[:10]:
+            h = hc["handle"]
+            f = f"Handle=0x{h.Handle:x} ObjectName={h.ObjectName} region=0x{sh['region'].BaseAddress:x}"
+            if c2_records:
+                f += f"  C2_context={c2_records[0]['match']!r}"
+            if exec_hit:
+                kind, obj = exec_hit
+                f += (f"  live_rip=TID:0x{obj['ThreadId']:x}@{obj['ip_reg']}" if kind == "rip"
+                      else f"  unbacked_thread_start=TID:0x{obj.ThreadId:x}")
+            facts.append(f)
+        findings_list.append(Finding(
+            check="pipe.corroboration",
+            facts=facts,
+            inference=f"{len(corroborated_handles)} open pipe handle(s) are corroborated "
+                       f"by C2-style context and/or active/unbacked-thread execution in "
+                       f"the memory region backing a matching pipe-name string.",
+            confidence=CONFIDENCE_HIGH,
+            rationale="Combines an OS-confirmed open handle with independent memory "
+                       "evidence (C2 artifacts and/or execution) in the SAME region as "
+                       "that pipe's name string — the strongest correlation this hunter "
+                       "can produce.",
+            limitations=["Name correlation between a handle's ObjectName and a string "
+                         "scan hit is a best-effort substring match, not a guaranteed "
+                         "same-object link."],
+            tag=TAG_DETECTION,
+        ))
+        for hc, sh, c2_records, exec_hit in corroborated_handles:
+            h = hc["handle"]
+            detail = f"ObjectName={h.ObjectName}  region=0x{sh['region'].BaseAddress:x}"
+            _print_check("Handle-confirmed pipe corroborated by memory evidence",
+                         RED("SUSPICIOUS — C2 context and/or execution near handle-confirmed pipe"),
+                         detail)
+
+    if c2_hits and verbose:
+        detail = f"{len(c2_hits)} region(s) with pipe-name string + C2 artifacts (uncorrelated to a handle)"
+        for r, pipe_name, records in c2_hits:
+            detail += f"\n          Region 0x{r.BaseAddress:x}  pipe: {pipe_name}"
+            for rec in records[:3]:
+                detail += (f"\n            C2: {rec['match']}"
+                           f"  VA 0x{rec['va']:016x}"
+                           f"  sha256={rec['sha256'][:16]}…")
+        print(DIM(detail) + "\n")
     if c2_budget.exhausted():
         print(YELLOW(f"  [~] C2-context scan budget exhausted "
                       f"({c2_budget.exhausted_reason}) — some pipe-bearing regions "
                       f"may not have been checked for C2 context.\n"))
 
-    # ── Check 3: Known framework patterns — attribution only, not scored ──
-    # This re-classifies the exact same strings Check 1 already counted
-    # (a framework match can only happen on a name already in
-    # private_pipes) — it tells you WHICH framework a pipe name looks
-    # like, it isn't a second independent piece of evidence. Counting it
-    # as its own +1 double-counts one observation as two signals.
-    framework_hits = []  # (region, full_pipe_name, framework, technique, mitre_id)
+    # ── Check 3: Known framework patterns on the STRING leads too ─────────
+    # (attribution only — a name-pattern match on a string that has no
+    # corresponding handle is still informational, not separately scored)
+    framework_string_hits = []  # (region, full_pipe_name, framework, technique, mitre_id)
     for hit in private_pipes:
         r = hit["region"]
         clean = hit["name"].strip()
         for pat, framework, technique, mitre in KNOWN_FRAMEWORK_PIPES:
             if pat.search(clean):
-                framework_hits.append((r, clean, framework, technique, mitre))
-                break  # one attribution per pipe name
+                framework_string_hits.append((r, clean, framework, technique, mitre))
+                break
 
-    if framework_hits:
-        detail = f"{len(framework_hits)} match(es) — framework attribution:"
-        for r, pipe_name, framework, technique, mitre in framework_hits:
+    if framework_string_hits:
+        detail = f"{len(framework_string_hits)} match(es) on string leads — framework attribution (not scored):"
+        for r, pipe_name, framework, technique, mitre in framework_string_hits:
             detail += f"\n          Pipe     : {pipe_name}"
             detail += f"\n          Framework: {framework}"
             detail += f"\n          Technique: {technique}"
             detail += f"\n          MITRE    : {mitre}"
-        _print_check("Known C2 framework pipe naming pattern (attribution)",
-                     YELLOW(f"NOTABLE — matches known {framework_hits[0][2]} pipe naming, "
-                            f"not scored separately from Check 1"),
+        _print_check("Known C2 framework pipe naming pattern (string lead attribution)",
+                     YELLOW(f"NOTABLE — matches known {framework_string_hits[0][2]} pipe naming, "
+                            f"lead only"),
                      detail)
-        findings["framework_pipes"] = framework_hits
     else:
-        _print_check("Known C2 framework pipe naming pattern",
-                     DIM("CLEAN — no known framework patterns (note: custom names evade this check)"))
+        _print_check("Known C2 framework pipe naming pattern (string leads)",
+                     DIM("CLEAN — no known framework patterns among string leads"))
 
-    # ── Check 4: Unbacked threads in same region as pipe name ─────────
+    # ── Check 4: Unbacked threads in same region as a string pipe-name lead ──
+    # (kept for analyst visibility; NOT independently scored — see
+    # pipe.corroboration above for the scored, handle-anchored version)
     pipe_regions = {hit["region"].BaseAddress for hit in private_pipes}
     unbacked_in_pipe_rgn = []
     for ti in infos:
@@ -438,40 +629,67 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 if r.BaseAddress <= sa < r.BaseAddress + r.RegionSize:
                     if not addr_to_module(sa, modules):
                         unbacked_in_pipe_rgn.append((ti, r))
+    findings["unbacked_in_rgn"] = unbacked_in_pipe_rgn
 
-    if unbacked_in_pipe_rgn:
-        detail = f"{len(unbacked_in_pipe_rgn)} unbacked thread(s) executing in pipe-name region"
-        if verbose:
-            for ti, r in unbacked_in_pipe_rgn:
-                detail += (f"\n          TID=0x{ti.ThreadId:x}  "
-                           f"StartAddr=0x{ti.StartAddress:x}  "
-                           f"Region=0x{r.BaseAddress:x}")
-        _print_check("Unbacked thread in same region as pipe name",
-                     RED("SUSPICIOUS — active execution at pipe name location"),
-                     detail)
-        findings["unbacked_in_rgn"] = unbacked_in_pipe_rgn
-        findings["score"] += 1
-    else:
-        _print_check("Unbacked threads in pipe-name region",
-                     GREEN("CLEAN — no unbacked threads in regions containing pipe names"))
+    if unbacked_in_pipe_rgn and verbose:
+        detail = f"{len(unbacked_in_pipe_rgn)} unbacked thread(s) executing in a pipe-name-string region (lead only)"
+        for ti, r in unbacked_in_pipe_rgn:
+            detail += (f"\n          TID=0x{ti.ThreadId:x}  "
+                       f"StartAddr=0x{ti.StartAddress:x}  "
+                       f"Region=0x{r.BaseAddress:x}")
+        print(DIM(detail) + "\n")
 
-    # ── Verdict ───────────────────────────────────────────────────────
-    score = findings["score"]
+    # ── Print corroboration/handle findings ──────────────────────────────
+    for f in findings_list:
+        if f.tag == TAG_DETECTION:
+            f.print()
+
+    # ── Score / Verdict ───────────────────────────────────────────────────
+    # 1 — a handle-confirmed pipe matches a known C2/lateral-movement
+    #     framework naming convention (OS-confirmed usage + specific name).
+    # 2 — that framework-matched handle is additionally corroborated by
+    #     C2-style context OR execution evidence in a matching region.
+    # 3 — corroborated by BOTH C2 context AND execution evidence at once.
+    score = 0
+    corroborated_ids = {id(hc) for hc, _, _, _ in corroborated_handles}
+    if framework_handle_hits:
+        score = 1
+    if any(id(hc) in corroborated_ids for hc in framework_handle_hits):
+        score = 2
+    for hc, sh, c2_records, exec_hit in corroborated_handles:
+        if hc["framework_match"] and c2_records and exec_hit:
+            score = 3
+            break
+
+    findings["score"] = score
+
     c2_exhausted   = c2_budget.exhausted()
     name_exhausted = pipe_name_budget.exhausted()
     budget_exhausted = c2_exhausted or name_exhausted
     findings["budget_exhausted"] = budget_exhausted
     findings["scan_complete"] = not (budget_exhausted or skipped_size or read_failed)
-    if not mem_info_available:
+    findings["findings"] = [f.to_dict() for f in findings_list]
+
+    evaluated = mem_info_available or handle_stream_available
+    if not evaluated:
         status = NOT_EVALUATED
+    elif not handle_stream_available:
+        # The PRIMARY (scored) check literally could not run — a negative
+        # score here must not be read the same as "checked and clean".
+        status = INCONCLUSIVE
     elif score == 0 and (skipped_size or read_failed or budget_exhausted):
         status = INCONCLUSIVE
     else:
         status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
 
-    if not mem_info_available:
-        verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
+    if not evaluated:
+        verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream and HandleDataStream both missing from this dump")
+    elif not handle_stream_available:
+        verdict = _status_text(INCONCLUSIVE,
+            "HandleDataStream not in this dump (needs MiniDumpWithHandleData) — the "
+            "primary, scored pipe-handle check could not run; only unscored string "
+            "leads are available above")
     elif status == INCONCLUSIVE:
         reason = ", ".join(filter(None, [
             f"{skipped_size} oversized region(s) skipped" if skipped_size else "",
@@ -484,12 +702,11 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         verdict = (RED("HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT") if score >= 3 else
                    YELLOW("LIKELY C2 PIPE")                           if score == 2 else
                    YELLOW("POSSIBLE C2 PIPE")                         if score == 1 else
-                   GREEN("CLEAN — no named pipe C2 indicators"))
-    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/3 checks flagged — "
-          f"framework attribution is informational, not separately scored)\n")
+                   GREEN("CLEAN — no handle-confirmed C2 pipe indicators"))
+    print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/3 — handle-anchored; string leads "
+          f"shown above are informational only)\n")
 
-    if not verbose and private_pipes:
-        print(DIM("  Use --verbose to expand pipe names, C2 strings, and thread details.\n"))
+    if not verbose and (private_pipes or handle_pipe_hits):
+        print(DIM("  Use --verbose to expand handle list, pipe names, and C2 strings.\n"))
 
     return findings
-
