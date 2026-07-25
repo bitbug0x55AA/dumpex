@@ -1,5 +1,5 @@
 """Hunter-level tests for dumpex.hunt.pipe (Named Pipe C2 / Lateral Movement)."""
-from fakes import Region, ThreadInfo, Handle, FakeStream, FakeMF, mem_reader
+from tests.fixtures.fakes import Region, ThreadInfo, Handle, FakeStream, FakeMF, mem_reader
 
 import dumpex.hunt.pipe as pipemod
 

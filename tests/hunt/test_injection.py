@@ -1,7 +1,7 @@
 """Hunter-level tests for dumpex.hunt.injection (Process Injection detection)."""
-from fakes import (Region, Module, ThreadInfo, Ctx, Thread, FakeStream, FakeMF,
-                    build_pe_header, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ,
-                    mem_reader)
+from tests.fixtures.fakes import (Region, Module, ThreadInfo, Ctx, Thread, FakeStream, FakeMF,
+                                   build_pe_header, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ,
+                                   mem_reader)
 
 import dumpex.hunt.injection as injection
 

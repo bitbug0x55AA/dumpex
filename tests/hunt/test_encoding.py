@@ -2,8 +2,8 @@
 import base64
 import random
 
-from fakes import (Region, FakeStream, FakeMF, build_pe_header,
-                    IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ, mem_reader)
+from tests.fixtures.fakes import (Region, FakeStream, FakeMF, build_pe_header,
+                                   IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ, mem_reader)
 
 import dumpex.hunt.encoding as encoding
 

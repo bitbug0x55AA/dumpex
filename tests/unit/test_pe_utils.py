@@ -5,7 +5,7 @@ synthetic PE bytes and the parsing/relocation functions themselves.
 """
 import struct
 
-from fakes import build_pe_header, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ
+from tests.fixtures.fakes import build_pe_header, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ
 
 from dumpex.core.pe_utils import (
     parse_pe_header, apply_base_relocations, _rva_to_file_offset,

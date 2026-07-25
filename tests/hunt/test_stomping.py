@@ -2,9 +2,9 @@
 import os
 import tempfile
 
-from fakes import (Region, Module, FakeStream, FakeMF, build_pe_header,
-                    TEXT_SECTION_RX, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ,
-                    mem_reader, matching_module_and_ref)
+from tests.fixtures.fakes import (Region, Module, FakeStream, FakeMF, build_pe_header,
+                                   TEXT_SECTION_RX, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ,
+                                   mem_reader, matching_module_and_ref)
 
 import dumpex.hunt.stomping as stomping
 

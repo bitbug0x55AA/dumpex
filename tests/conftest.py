@@ -3,21 +3,22 @@ Shared pytest setup for the whole tests/ tree.
 
 No real .dmp/PE sample files are required to run this suite: every test
 builds its own synthetic PE header and minidump object graph via
-tests/fixtures/fakes.py, so `pytest` from a bare checkout must succeed
-with no external fixtures, network access, or malware corpus.
+tests/fixtures/fakes.py (imported as `tests.fixtures.fakes` — every
+directory under tests/ is a proper package via __init__.py, so pytest
+resolves each test module by its fully-qualified dotted name rather than
+bare basename; without that, pytest's default "prepend" import mode can
+collide/misresolve same-named modules across sibling test directories),
+so `pytest` from a bare checkout must succeed with no external fixtures,
+network access, or malware corpus.
 """
 import os
 import sys
 
 import pytest
 
-_TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
-_REPO_ROOT = os.path.dirname(_TESTS_DIR)
-_FIXTURES_DIR = os.path.join(_TESTS_DIR, "fixtures")
-
-for _p in (_REPO_ROOT, _FIXTURES_DIR):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from dumpex.core.memory import get_thread_contexts as _real_get_thread_contexts
 import dumpex.hunt.stomping as stomping
