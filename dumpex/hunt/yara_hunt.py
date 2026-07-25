@@ -89,6 +89,26 @@ def _load_yara_rules(rules_dir: str) -> tuple:
     return loaded, compile_failed
 
 
+def _context_unverified_reason(contexts) -> str:
+    """
+    Build an accurate explanation for a set of MemoryContext values (see
+    dumpex/hunt/_context.py) behind one or more context_unverified hits.
+    UNKNOWN and OTHER are different findings and must not share one
+    message: UNKNOWN means neither ModuleList nor MemoryInfo could
+    classify the address at all; OTHER means MemoryInfo WAS available and
+    resolved it to some type that's neither MEM_IMAGE nor MEM_PRIVATE
+    (e.g. MEM_MAPPED) — that's a materially different situation from
+    "no context available".
+    """
+    contexts = set(contexts)
+    parts = []
+    if "unknown" in contexts:
+        parts.append("no ModuleList/MemoryInfo available to classify")
+    if "other" in contexts:
+        parts.append("region type is neither MEM_IMAGE nor MEM_PRIVATE, e.g. MEM_MAPPED")
+    return "; ".join(parts) if parts else "context could not be verified"
+
+
 def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                verbose: bool = False) -> dict:
     """
@@ -263,6 +283,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     break
 
                 hit_context_unverified = False
+                hit_memory_context = None
                 if match.rule == "PE_In_Private_Memory":
                     # PE_In_Private_Memory's own rule description says it's
                     # only meaningful applied to MEM_PRIVATE/unregistered
@@ -282,6 +303,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     addr = seg.start_virtual_address
                     ctx = classify_memory_context(addr, modules, regions,
                                                    modules_available, mem_info_available)
+                    hit_memory_context = ctx.value
 
                     if ctx == MemoryContext.IMAGE:
                         suppressed_module_pe += 1
@@ -292,7 +314,14 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                         # confidently classified as private memory. Still
                         # record the hit (an investigator should see it)
                         # but it must not, by itself, stand as a confirmed
-                        # detection.
+                        # detection. Which of the two it is matters for the
+                        # message shown later — UNKNOWN means neither
+                        # context source could even be consulted, OTHER
+                        # means MemoryInfo WAS consulted and resolved to
+                        # some type that's neither MEM_IMAGE nor
+                        # MEM_PRIVATE (e.g. MEM_MAPPED) — those are
+                        # different findings and must not share one
+                        # "no ModuleList/MemoryInfo" message.
                         context_unverified += 1
                         hit_context_unverified = True
 
@@ -347,6 +376,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     "seg_size": seg.size,
                     "strings":  annotated_strings,
                     "context_unverified": hit_context_unverified,
+                    "memory_context": hit_memory_context,
                 })
             if truncated:
                 break
@@ -460,12 +490,20 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                 has_verbose_overflow = True
 
         # A rule whose EVERY hit is context_unverified (PE_In_Private_Memory
-        # with no ModuleList and no MemoryInfo to classify it against)
-        # cannot be reported as a confirmed detection — it's shown for
-        # visibility but with a distinct, non-alarming status.
+        # in a MemoryContext.OTHER or MemoryContext.UNKNOWN region — see
+        # dumpex/hunt/_context.py) cannot be reported as a confirmed
+        # detection — it's shown for visibility but with a distinct,
+        # non-alarming status. The two contexts are different findings
+        # (OTHER means MemoryInfo WAS available and resolved to some other
+        # type; UNKNOWN means neither context source classified it at
+        # all), so the message must say which applies, not always claim
+        # "no ModuleList/MemoryInfo".
         rule_is_unverified = all(h.get("context_unverified") for h in hits)
-        status_label = (YELLOW("CONTEXT UNVERIFIED — no ModuleList/MemoryInfo to classify")
-                         if rule_is_unverified else RED("SUSPICIOUS"))
+        if rule_is_unverified:
+            rule_contexts = {h.get("memory_context") for h in hits}
+            status_label = YELLOW(f"CONTEXT UNVERIFIED — {_context_unverified_reason(rule_contexts)}")
+        else:
+            status_label = RED("SUSPICIOUS")
         _print_check(
             f"Rule: {rule_name}  {DIM('(' + rfile + ')')}",
             status_label,
@@ -476,9 +514,10 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         print(DIM(f"  [·] {suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
                   f"resolved to a known module or a MEM_IMAGE region.\n"))
     if context_unverified:
+        all_unverified_contexts = {h.get("memory_context") for h in all_hits
+                                   if h.get("context_unverified")}
         print(YELLOW(f"  [~] {context_unverified} PE_In_Private_Memory match(es) could not be "
-                      f"classified — this dump has neither ModuleList nor MemoryInfo, so "
-                      f"module-backed vs. private memory cannot be told apart.\n"))
+                      f"classified ({_context_unverified_reason(all_unverified_contexts)}).\n"))
 
     # ── Verdict ───────────────────────────────────────────────────────
     # score/DETECTED are driven only by confidently classified hits

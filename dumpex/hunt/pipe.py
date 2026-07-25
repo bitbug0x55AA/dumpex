@@ -29,27 +29,67 @@ PIPE_C2_BUDGET_MAX_HITS     = 200               # cumulative C2 hits retained, w
 PIPE_C2_BUDGET_MAX_RETAINED = 2 * 1024 * 1024   # cumulative context bytes retained, whole hunt
 PIPE_C2_BUDGET_TIME_SECONDS = 30.0
 
+PIPE_NAME_MAX_CHARS   = 512     # bound on the retained pipe-name PREVIEW; the true
+                                 # extent is still walked (for an accurate sha256/
+                                 # original_length) but never fully decoded/kept
+PIPE_NAME_BUDGET_MAX_HITS     = 500               # cumulative private+image pipe
+                                                   # names retained, whole hunt
+PIPE_NAME_BUDGET_MAX_RETAINED = 1 * 1024 * 1024   # cumulative preview bytes retained
+PIPE_NAME_BUDGET_TIME_SECONDS = 30.0
+
+_MIN_RUN_LEN = 6   # matches the min_len _extract_strings_from_data previously used here
+
+_ASCII_RUN_PAT = re.compile(rb'[ -~]{%d,}' % _MIN_RUN_LEN)
+_UTF16_RUN_PAT = re.compile(rb'(?:[ -~]\x00){%d,}' % _MIN_RUN_LEN)
+
+
+def _iter_printable_runs(data: bytes):
+    """
+    Yield (byte_offset, text, is_utf16) for each ASCII and UTF16LE
+    printable run in `data` — one pass each via re.finditer, so nothing is
+    collected into a persisted list. `text` is only meant for transient use
+    by the caller (matching a pattern against it); it is not retained here
+    and callers must not retain it either beyond what they actually need
+    to keep (see _iter_c2_matches).
+    """
+    for m in _ASCII_RUN_PAT.finditer(data):
+        yield m.start(), m.group().decode('ascii', errors='replace'), False
+    for m in _UTF16_RUN_PAT.finditer(data):
+        yield m.start(), m.group().decode('utf-16-le', errors='replace'), True
+
 
 def _iter_c2_matches(data: bytes, pattern, max_per_region: int):
     """
-    Stream C2_PAT matches directly over region bytes — decoded via latin-1,
-    a lossless 1-byte-to-1-char mapping that keeps match offsets identical
-    to byte offsets — instead of first extracting arbitrarily long
-    printable "strings" (_extract_strings_from_data's approach) and then
-    searching those. A single multi-MB printable run containing one URL
-    must not retain the whole run: every one of C2_PAT's own patterns
-    (a literal "http://"/"https://", an IP:port, "submit.php", "/ca",
-    "/w2p") already matches a short, bounded span on its own, so scanning
-    the raw bytes directly preserves that bound regardless of what
-    (possibly huge) printable content surrounds the match.
+    Stream C2_PAT matches against each ASCII/UTF16LE printable run found in
+    `data` individually — matching the same string boundaries a human or
+    the original _extract_strings_from_data-based scan would see — rather
+    than running the pattern against the ENTIRE region decoded as one
+    latin-1 blob. Matching against the whole region breaks two things:
+    end-anchored patterns like `/ca$` (the `$` then anchors to the
+    region's end instead of each individual string's end, so it almost
+    never matches) and UTF16LE C2 strings entirely (interleaved NUL bytes
+    prevent any match against a pattern written for contiguous ASCII).
+
+    Each run's decoded text is used only transiently for matching here;
+    only the short, bounded match token and its BYTE offset within `data`
+    are ever yielded — the full run itself (which can be enormous) is
+    never retained.
     """
-    text = data.decode('latin-1')
     count = 0
-    for m in pattern.finditer(text):
+    for run_offset, text, is_utf16 in _iter_printable_runs(data):
         if count >= max_per_region:
             return
-        count += 1
-        yield m.start(), m.end(), m.group(0)
+        for m in pattern.finditer(text):
+            if count >= max_per_region:
+                return
+            count += 1
+            if is_utf16:
+                byte_start = run_offset + m.start() * 2
+                byte_end   = run_offset + m.end() * 2
+            else:
+                byte_start = run_offset + m.start()
+                byte_end   = run_offset + m.end()
+            yield byte_start, byte_end, m.group(0)
 
 def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
@@ -85,9 +125,9 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     SUSPICIOUS_PROTS      = _r["suspicious_protections"]
 
     findings = {
-        "private_pipes":   [],   # (region, offset, name)
-        "c2_context":      [],   # (region, pipe_name, c2_strings)
-        "framework_pipes": [],   # (region, pipe_name, pattern)
+        "private_pipes":   [],   # [{"region","offset","name","sha256","original_length"}, ...]
+        "c2_context":      [],   # (region, pipe_name, [bounded C2 match record, ...])
+        "framework_pipes": [],   # (region, pipe_name, framework, technique, mitre)
         "unbacked_in_rgn": [],   # (thread_info, region)
         "score": 0,
     }
@@ -95,8 +135,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     _print_hunt_header("Named Pipe C2 / Lateral Movement")
 
     # ── Collect all pipe name occurrences ────────────────────────────
-    private_pipes = []   # (region, offset, decoded_name)
-    image_pipes   = []   # (region, mod_name, decoded_name)
+    # Each entry: {"region", "offset", "name" (bounded preview),
+    # "sha256" (of the FULL match, however long), "original_length"} — a
+    # 1 MiB printable run following a \pipe\ match must never turn into a
+    # 1 MiB retained "pipe name"; see _extract_pipe_name.
+    private_pipes = []
+    image_pipes   = []
     region_c2_records = {}   # region.BaseAddress -> [bounded C2 match records],
                               # ONLY for regions with a private pipe name. Each
                               # record is {match, context, offset, sha256,
@@ -116,6 +160,53 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         max_hits=PIPE_C2_BUDGET_MAX_HITS,
         deadline=time.monotonic() + PIPE_C2_BUDGET_TIME_SECONDS,
     )
+    # Separate budget for pipe-NAME collection itself (Check 1/3/4's raw
+    # material) — independent of c2_budget, which only bounds Check 2.
+    pipe_name_budget = ScanBudget(
+        max_bytes_read=PIPE_NAME_BUDGET_MAX_RETAINED * 4,
+        max_attempts=10**9,
+        max_retained_bytes=PIPE_NAME_BUDGET_MAX_RETAINED,
+        max_hits=PIPE_NAME_BUDGET_MAX_HITS,
+        deadline=time.monotonic() + PIPE_NAME_BUDGET_TIME_SECONDS,
+    )
+
+    def _extract_pipe_name(data, m, is_utf16, max_chars=PIPE_NAME_MAX_CHARS):
+        """
+        Walk forward from the \\pipe\\ match to find the full printable
+        run (needed for an accurate sha256/original_length even when that
+        run is huge), but DECODE/RETAIN at most max_chars of it as the
+        preview — a 1 MiB printable run following the match must not
+        become a 1 MiB "pipe name" string kept in findings. Building the
+        raw byte slice to hash/measure it is transient (freed once this
+        call returns); only the bounded preview + digest + length survive.
+        Returns (preview, sha256_hex, original_length_bytes).
+        """
+        end = m.end()
+        if is_utf16:
+            # Read UTF-16LE chars until double-null or end
+            while end + 1 < len(data):
+                ch = data[end]
+                hi = data[end + 1]
+                if hi == 0 and 32 <= ch < 127:
+                    end += 2
+                else:
+                    break
+            raw = data[m.start():end]
+            preview_src = raw[:max_chars * 2]
+            try:
+                preview = preview_src.decode("utf-16-le", errors="replace")
+            except Exception:
+                preview = repr(preview_src)
+        else:
+            while end < len(data) and 32 <= data[end] < 127:
+                end += 1
+            raw = data[m.start():end]
+            preview_src = raw[:max_chars]
+            try:
+                preview = preview_src.decode("ascii", errors="replace")
+            except Exception:
+                preview = repr(preview_src)
+        return preview, hashlib.sha256(raw).hexdigest(), len(raw)
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
@@ -123,6 +214,8 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         if r.RegionSize > PIPE_SCAN_MAX:
             skipped_size += 1
             continue
+        if pipe_name_budget.exhausted() and c2_budget.exhausted():
+            break   # nothing left this loop could still usefully collect
         mtype = prot_str(r.Type)
         mod   = addr_to_module(r.BaseAddress, modules)
 
@@ -132,31 +225,6 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             read_failed += 1
             continue
         pipes_before = len(private_pipes)
-
-        def _extract_pipe_name(data, m, is_utf16):
-            end = m.end()
-            if is_utf16:
-                # Read UTF-16LE chars until double-null or end
-                while end + 1 < len(data):
-                    ch = data[end]
-                    hi = data[end + 1]
-                    if hi == 0 and 32 <= ch < 127:
-                        end += 2
-                    else:
-                        break
-                raw = data[m.start():end]
-                try:
-                    return raw.decode("utf-16-le", errors="replace")
-                except Exception:
-                    return repr(raw)
-            else:
-                while end < len(data) and 32 <= data[end] < 127:
-                    end += 1
-                raw = data[m.start():end]
-                try:
-                    return raw.decode("ascii", errors="replace")
-                except Exception:
-                    return repr(raw)
 
         # Classify: only Microsoft system DLLs under System32/SysWOW64 are
         # treated as "expected".  Any other image-backed region — including
@@ -173,25 +241,24 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             )
 
         region_matches = 0
-        for m in PIPE_PAT_ASCII.finditer(data):
-            if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
+        for pat, is_utf16 in ((PIPE_PAT_ASCII, False), (PIPE_PAT_UTF16, True)):
+            if pipe_name_budget.exhausted():
                 break
-            region_matches += 1
-            name = _extract_pipe_name(data, m, is_utf16=False)
-            if "MEM_IMAGE" in mtype and _is_system_dll(mod):
-                image_pipes.append((r, os.path.basename(mod.name), name))
-            else:
-                private_pipes.append((r, m.start(), name))
-
-        for m in PIPE_PAT_UTF16.finditer(data):
-            if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
-                break
-            region_matches += 1
-            name = _extract_pipe_name(data, m, is_utf16=True)
-            if "MEM_IMAGE" in mtype and _is_system_dll(mod):
-                image_pipes.append((r, os.path.basename(mod.name), name))
-            else:
-                private_pipes.append((r, m.start(), name))
+            for m in pat.finditer(data):
+                if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
+                    break
+                if pipe_name_budget.exhausted():
+                    break
+                region_matches += 1
+                preview, digest, orig_len = _extract_pipe_name(data, m, is_utf16)
+                if not pipe_name_budget.take_hit(len(preview)):
+                    break
+                hit = {"region": r, "offset": m.start(), "name": preview,
+                       "sha256": digest, "original_length": orig_len}
+                if "MEM_IMAGE" in mtype and _is_system_dll(mod):
+                    image_pipes.append({**hit, "module": os.path.basename(mod.name)})
+                else:
+                    private_pipes.append(hit)
 
         if len(private_pipes) > pipes_before and not c2_budget.exhausted():
             # Stream C2 matches directly over `data` (bounded per-match
@@ -220,21 +287,25 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             if records:
                 region_c2_records[r.BaseAddress] = records
 
-    # Deduplicate private pipes by (region_base, name)
+    # Deduplicate private pipes by (region_base, sha256) — sha256 is over
+    # the FULL match regardless of preview truncation, so two different
+    # long names that happen to share the same truncated preview are never
+    # wrongly merged.
     seen_private = set()
     deduped = []
-    for r, off, name in private_pipes:
-        key = (r.BaseAddress, name.strip())
+    for hit in private_pipes:
+        key = (hit["region"].BaseAddress, hit["sha256"])
         if key not in seen_private:
             seen_private.add(key)
-            deduped.append((r, off, name))
+            deduped.append(hit)
     private_pipes = deduped
 
     # ── Check 1: Pipe names outside trusted system DLLs ──────────────
     if private_pipes:
         detail = f"{len(private_pipes)} pipe name(s) in non-system memory"
         if verbose:
-            for r, off, name in private_pipes:
+            for hit in private_pipes:
+                r, off, name = hit["region"], hit["offset"], hit["name"]
                 p    = prot_str(r.Protect)
                 mtype_r = prot_str(r.Type)
                 mod_r   = addr_to_module(r.BaseAddress, modules)
@@ -246,10 +317,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                     backer = YELLOW(f" [image: {os.path.basename(mod_r.name)}]")
                 else:
                     backer = DIM(" [private/unregistered]")
+                truncated = f"  [truncated, full length {hit['original_length']}]" \
+                    if hit["original_length"] > len(name) else ""
                 detail += (f"\n          VA (process)   0x{abs_va:016x}{rwx}{backer}"
                            f"\n          File offset    {fo_str}"
                            f"\n          Region base    0x{r.BaseAddress:016x}"
-                           f"\n          Pipe name: {name.strip()}")
+                           f"\n          Pipe name: {name.strip()}{truncated}")
         _print_check("Pipe names outside trusted system DLLs",
                      RED("SUSPICIOUS — pipe name found in non-system memory"),
                      detail)
@@ -260,9 +333,14 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                      GREEN("CLEAN — all pipe name references are in known system modules"))
 
     if image_pipes and verbose:
-        mod_names = sorted({n for _, n, _ in image_pipes})
+        mod_names = sorted({h["module"] for h in image_pipes})
         print(DIM(f"  [·] {len(image_pipes)} pipe reference(s) in system DLLs "
                   f"({', '.join(mod_names)}) — expected, skipped\n"))
+
+    if pipe_name_budget.exhausted():
+        print(YELLOW(f"  [~] Pipe-name scan budget exhausted "
+                      f"({pipe_name_budget.exhausted_reason}) — some regions may not "
+                      f"have been checked for pipe names.\n"))
 
     # ── Check 2: C2 artifacts near private pipe names ─────────────────
     # Uses the bounded C2 match records already built inline in the main
@@ -270,11 +348,11 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     # retained copy of its raw bytes or any unboundedly long string, only
     # the short {match, context, ...} records built under c2_budget.
     c2_hits = []
-    for r, off, pipe_name in private_pipes:
-        records = region_c2_records.get(r.BaseAddress)
+    for hit in private_pipes:
+        records = region_c2_records.get(hit["region"].BaseAddress)
         if not records:
             continue
-        c2_hits.append((r, pipe_name.strip(), records))
+        c2_hits.append((hit["region"], hit["name"].strip(), records))
 
     if c2_hits:
         detail = f"{len(c2_hits)} region(s) with pipe name + C2 artifacts"
@@ -307,8 +385,9 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     # like, it isn't a second independent piece of evidence. Counting it
     # as its own +1 double-counts one observation as two signals.
     framework_hits = []  # (region, full_pipe_name, framework, technique, mitre_id)
-    for r, off, name in private_pipes:
-        clean = name.strip()
+    for hit in private_pipes:
+        r = hit["region"]
+        clean = hit["name"].strip()
         for pat, framework, technique, mitre in KNOWN_FRAMEWORK_PIPES:
             if pat.search(clean):
                 framework_hits.append((r, clean, framework, technique, mitre))
@@ -331,7 +410,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                      DIM("CLEAN — no known framework patterns (note: custom names evade this check)"))
 
     # ── Check 4: Unbacked threads in same region as pipe name ─────────
-    pipe_regions = {r.BaseAddress for r, _, _ in private_pipes}
+    pipe_regions = {hit["region"].BaseAddress for hit in private_pipes}
     unbacked_in_pipe_rgn = []
     for ti in infos:
         sa = ti.StartAddress or 0
@@ -359,8 +438,11 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Verdict ───────────────────────────────────────────────────────
     score = findings["score"]
-    budget_exhausted = c2_budget.exhausted()
+    c2_exhausted   = c2_budget.exhausted()
+    name_exhausted = pipe_name_budget.exhausted()
+    budget_exhausted = c2_exhausted or name_exhausted
     findings["budget_exhausted"] = budget_exhausted
+    findings["scan_complete"] = not (budget_exhausted or skipped_size or read_failed)
     if not mem_info_available:
         status = NOT_EVALUATED
     elif score == 0 and (skipped_size or read_failed or budget_exhausted):
@@ -375,7 +457,8 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         reason = ", ".join(filter(None, [
             f"{skipped_size} oversized region(s) skipped" if skipped_size else "",
             f"{read_failed} region(s) failed to read" if read_failed else "",
-            f"C2-context budget exhausted ({c2_budget.exhausted_reason})" if budget_exhausted else "",
+            f"C2-context budget exhausted ({c2_budget.exhausted_reason})" if c2_exhausted else "",
+            f"pipe-name budget exhausted ({pipe_name_budget.exhausted_reason})" if name_exhausted else "",
         ]))
         verdict = _status_text(INCONCLUSIVE, reason)
     else:

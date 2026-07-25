@@ -12,6 +12,7 @@ from dumpex.hunt.pipe       import _hunt_pipe
 from dumpex.hunt.cs_beacon  import _hunt_cs_beacon
 from dumpex.hunt.yara_hunt  import _hunt_yara
 from dumpex.hunt.encoding   import _hunt_encoding
+from dumpex.rules_pkg.loader import get_rules_source_info
 
 def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None):
     """Run TTP-specific detection playbooks."""
@@ -49,6 +50,14 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         results["yara"]       = _hunt_yara(mf, rules_dir=yara_dir, verbose=verbose)
     if run_obfuscation:
         results["obfuscation"]   = _hunt_encoding(mf, verbose=verbose)
+
+    # Rule provenance (path + sha256 of the rules.yaml that actually
+    # produced these verdicts) for JSON/TXT output. Only stomping/pipe/
+    # obfuscation read TTP rules.yaml via get_rules(); this is None if
+    # none of them ran (e.g. --hunt injection alone).
+    rules_source = get_rules_source_info()
+    if rules_source is not None:
+        results["_rules_source"] = rules_source
 
     # ── Sanitize for JSON serialization ───────────────────────────────────
     # CS beacon: convert int-keyed field dicts + bytes

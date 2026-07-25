@@ -96,23 +96,30 @@ def _commit_no_clobber(temp_path, final_path: Path, force: bool, label: str) -> 
     Path.exists() check followed by a separate write. force=True skips
     straight to os.replace() — overwriting is the explicit intent.
 
-    temp_path is always consumed here: unlinked on success, and unlinked
-    again on the refusal path so nothing is ever left dangling at either
-    location, including no empty file at final_path.
+    temp_path is always consumed here: unlinked on the two "expected"
+    paths (success, and the existing-file refusal), AND on any other
+    exception os.link()/os.replace() can raise — a PermissionError, a
+    filesystem that doesn't support hard links (ENOTSUP), a cross-device
+    link (EXDEV) — via the _unlink_temp_on_error wrapper. This function is
+    the single choke point every caller commits through (write_output_bytes,
+    commit_output, commit_to_directory), so making IT self-contained here
+    means no caller can forget to wrap its own call and leak a temp file
+    on an unexpected failure mode.
     """
     final_path = Path(final_path)
-    if force:
-        os.replace(temp_path, final_path)
-        return
-    try:
-        os.link(temp_path, final_path)
-    except FileExistsError:
-        os.unlink(temp_path)
-        print(RED(f"[!] {label} already exists: {final_path}"))
-        print(DIM(f"    Pass --force to overwrite."))
-        sys.exit(1)
-    else:
-        os.unlink(temp_path)
+    with _unlink_temp_on_error(temp_path):
+        if force:
+            os.replace(temp_path, final_path)
+            return
+        try:
+            os.link(temp_path, final_path)
+        except FileExistsError:
+            os.unlink(temp_path)
+            print(RED(f"[!] {label} already exists: {final_path}"))
+            print(DIM(f"    Pass --force to overwrite."))
+            sys.exit(1)
+        else:
+            os.unlink(temp_path)
 
 
 def write_output_bytes(final_path, data: bytes, dump_path, force: bool, label: str) -> str:

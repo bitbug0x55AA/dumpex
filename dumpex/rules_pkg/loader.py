@@ -2,9 +2,10 @@
 import re
 import sys
 import json
+import hashlib
 import importlib.resources
 from pathlib import Path
-from dumpex.ui.colors import DIM, YELLOW
+from dumpex.ui.colors import DIM, YELLOW, RED, GREEN
 
 SUSPICIOUS_PROTS = {"PAGE_EXECUTE_READWRITE", "PAGE_EXECUTE_WRITECOPY"}
 
@@ -26,6 +27,7 @@ SUSPICIOUS_PROTS = {"PAGE_EXECUTE_READWRITE", "PAGE_EXECUTE_WRITECOPY"}
 
 _RULES_CACHE = None   # module-level singleton; populated on first call to get_rules()
 _EXPLICIT_RULES_PATH = None   # set via configure_rules_source() / --rules-file
+_LAST_SOURCE_INFO = None      # set by _load_rules(); see get_rules_source_info()
 
 
 def configure_rules_source(explicit_path) -> None:
@@ -35,10 +37,34 @@ def configure_rules_source(explicit_path) -> None:
     call actually loads anything — get_rules() caches its result on first
     use, so this clears that cache to force a reload if one already
     happened. Passing None clears any previously configured override.
+
+    Once set, this path is the ONLY source that will ever be used for
+    this run — see _load_explicit_rules(): a missing, unreadable,
+    unparseable, or schema-invalid file at this path is a hard exit, not
+    a fallback to packaged/built-in rules. A caller who explicitly asked
+    for a specific ruleset must never silently get a verdict produced by
+    a different one.
     """
-    global _EXPLICIT_RULES_PATH, _RULES_CACHE
+    global _EXPLICIT_RULES_PATH, _RULES_CACHE, _LAST_SOURCE_INFO
     _EXPLICIT_RULES_PATH = Path(explicit_path) if explicit_path else None
     _RULES_CACHE = None
+    _LAST_SOURCE_INFO = None
+
+
+def get_rules_source_info() -> "dict | None":
+    """
+    Metadata describing the rules source actually used by the most recent
+    get_rules() call: {"path": str|None, "sha256": str|None, "explicit":
+    bool, "version": int}. `path`/`sha256` are None only for the built-in
+    defaults (no file was loaded at all). None overall if get_rules()
+    hasn't been called yet in this process.
+
+    Callers (structured JSON/TXT output) use this to record provenance —
+    which ruleset, and its exact content hash, actually produced a given
+    verdict — so a finding can be reproduced later even if rules.yaml
+    changes.
+    """
+    return _LAST_SOURCE_INFO
 
 # ── Built-in defaults (kept in sync with rules.yaml) ─────────────────────────
 _DEFAULT_RULES = {
@@ -181,20 +207,14 @@ def _packaged_source() -> "_RuleSource | None":
 
 def _find_rules_source() -> "_RuleSource | None":
     """
-    Search for the TTP rules file. First match wins.
+    Search for the PACKAGED/AUTOMATIC TTP rules file — not consulted at
+    all when --rules-file is set (see _load_rules/_load_explicit_rules,
+    which is a separate, fail-closed path). First match wins.
 
-      1. --rules-file PATH (configure_rules_source())  Explicit, deliberate
-                                             override — the only way to use
-                                             a rules.yaml other than the
-                                             packaged one. If PATH doesn't
-                                             exist, this is reported and
-                                             loading falls through to the
-                                             packaged defaults rather than
-                                             silently using built-ins.
-      2. <_MEIPASS>/rules/rules.yaml        PyInstaller onefile: --add-data
+      1. <_MEIPASS>/rules/rules.yaml        PyInstaller onefile: --add-data
                                              extracts to sys._MEIPASS, not
                                              next to the exe (sys.argv[0]).
-      3. dumpex.rules_pkg/data/rules.yaml   Bundled inside the installed
+      2. dumpex.rules_pkg/data/rules.yaml   Bundled inside the installed
                                              package itself — see
                                              _packaged_source(). This is the
                                              single canonical copy of the
@@ -212,16 +232,6 @@ def _find_rules_source() -> "_RuleSource | None":
     rules.yaml happens to be sitting in a DFIR analyst's case working
     directory. --rules-file is the explicit, auditable replacement.
     """
-    if _EXPLICIT_RULES_PATH is not None:
-        if _EXPLICIT_RULES_PATH.is_file():
-            suffix = _EXPLICIT_RULES_PATH.suffix.lower()
-            if suffix not in (".yaml", ".yml", ".json"):
-                suffix = ".yaml"
-            return _RuleSource(str(_EXPLICIT_RULES_PATH), suffix,
-                                lambda p=_EXPLICIT_RULES_PATH: p.read_text(encoding="utf-8"))
-        print(YELLOW(f"  [~] --rules-file {_EXPLICIT_RULES_PATH} not found — "
-                      f"falling back to packaged defaults"))
-
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         src = _fs_source(Path(meipass) / "rules")
@@ -231,32 +241,107 @@ def _find_rules_source() -> "_RuleSource | None":
     return _packaged_source()
 
 
+def _load_explicit_rules() -> dict:
+    """
+    Load rules from the user-specified --rules-file, with NO fallback to
+    packaged/built-in rules on any failure: a missing file, unreadable
+    content, YAML/JSON parse failure, non-mapping/unexpected schema, or a
+    rule pattern that fails to compile is a hard, non-zero exit. Silently
+    falling back here (as a prior version did) meant an automated caller
+    who asked for a specific ruleset could get a verdict produced by a
+    DIFFERENT ruleset without any indication that its request wasn't
+    honored — for a DFIR tool, that's a worse failure mode than just
+    stopping.
+    """
+    global _LAST_SOURCE_INFO
+    path = _EXPLICIT_RULES_PATH
+
+    if not path.is_file():
+        print(RED(f"[!] --rules-file {path} not found."))
+        sys.exit(1)
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except Exception as e:
+        print(RED(f"[!] --rules-file {path} could not be read: {e}"))
+        sys.exit(1)
+
+    suffix = path.suffix.lower()
+    try:
+        if suffix == ".json":
+            raw = json.loads(text)
+        else:
+            # .yaml/.yml, or an unrecognized extension — YAML is a
+            # superset of JSON for our purposes, so this also handles a
+            # JSON-formatted file with an unexpected extension.
+            import yaml
+            raw = yaml.safe_load(text)
+    except ImportError:
+        print(RED(f"[!] --rules-file {path}: pyyaml not installed, cannot parse. "
+                  f"Install with: pip install pyyaml"))
+        sys.exit(1)
+    except Exception as e:
+        print(RED(f"[!] --rules-file {path}: parse error: {e}"))
+        sys.exit(1)
+
+    if not isinstance(raw, dict):
+        print(RED(f"[!] --rules-file {path}: expected a YAML/JSON mapping at the top "
+                  f"level, got {type(raw).__name__}."))
+        sys.exit(1)
+
+    version = raw.get("version", 1)
+    if version != 1:
+        print(RED(f"[!] --rules-file {path}: unknown schema version {version}."))
+        sys.exit(1)
+
+    try:
+        rules = _compile_rules(raw)
+    except Exception as e:
+        print(RED(f"[!] --rules-file {path}: failed to compile rules: {e}"))
+        sys.exit(1)
+
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    _LAST_SOURCE_INFO = {"path": str(path), "sha256": digest, "explicit": True, "version": version}
+    print(GREEN(f"  [·] Rules loaded from --rules-file {path}  (sha256={digest[:16]}…)"))
+    return rules
+
+
 def _load_rules() -> dict:
     """
     Load and compile TTP detection rules.
 
-    Priority:
-      1. rules.yaml / rules.yml  (requires pyyaml)
-      2. rules.json              (stdlib json)
-      3. Built-in defaults       (always available)
+    If --rules-file was set (configure_rules_source()), it is the ONLY
+    source consulted — see _load_explicit_rules(), which fails closed
+    (non-zero exit) on any problem rather than falling back. Otherwise:
+      1. Packaged defaults (rules.yaml bundled in the wheel — see
+         _find_rules_source)
+      2. Built-in defaults (always available)
 
-    Errors (missing file, parse failure, schema mismatch) are printed as
-    warnings and cause automatic fallback to the next source.
+    Errors loading the packaged copy (parse failure, schema mismatch) are
+    printed as warnings and cause automatic fallback to built-in defaults
+    — that path is NOT user-requested, so silent fallback there is the
+    right behavior (it's what keeps the tool runnable standalone).
     """
+    global _LAST_SOURCE_INFO
+
+    if _EXPLICIT_RULES_PATH is not None:
+        return _load_explicit_rules()
+
     source = _find_rules_source()
 
     if source is not None:
         try:
+            text = source.read_text()
             if source.suffix in (".yaml", ".yml"):
                 try:
                     import yaml
-                    raw = yaml.safe_load(source.read_text())
+                    raw = yaml.safe_load(text)
                 except ImportError:
                     print(DIM(f"  [~] pyyaml not installed — cannot read {source.display}; "
                               f"install with: pip install pyyaml"))
                     raw = None
             else:
-                raw = json.loads(source.read_text())
+                raw = json.loads(text)
 
             if raw is not None:
                 version = raw.get("version", 1)
@@ -264,12 +349,16 @@ def _load_rules() -> dict:
                     print(YELLOW(f"  [~] {source.display}: unknown schema version {version}, "
                                  f"proceeding anyway"))
                 rules = _compile_rules(raw)
-                print(DIM(f"  [·] Rules loaded from {source.display}"))
+                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                _LAST_SOURCE_INFO = {"path": source.display, "sha256": digest,
+                                      "explicit": False, "version": version}
+                print(DIM(f"  [·] Rules loaded from {source.display}  (sha256={digest[:16]}…)"))
                 return rules
 
         except Exception as e:
             print(YELLOW(f"  [~] Could not load {source.display}: {e} — using built-in defaults"))
 
+    _LAST_SOURCE_INFO = {"path": None, "sha256": None, "explicit": False, "version": 1}
     return _compile_rules({k: list(v) if isinstance(v, set) else v
                            for k, v in _DEFAULT_RULES.items()})
 

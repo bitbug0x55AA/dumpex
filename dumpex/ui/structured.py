@@ -182,6 +182,8 @@ class StructuredOutput:
             findings_rows = []
 
             for ttp, findings in data.items():
+                if ttp.startswith("_"):
+                    continue   # metadata (e.g. "_rules_source"), not a TTP's findings
                 if not isinstance(findings, dict):
                     continue
                 score     = findings.get("score", 0)
@@ -359,9 +361,13 @@ class StructuredOutput:
                             f"encoding={enc}; decoded_len={len(decoded)}"))
 
                 # Pipe findings
-                for r, off, name in findings.get("private_pipes", []):
+                for hit in findings.get("private_pipes", []):
+                    r, off, name = hit["region"], hit["offset"], hit["name"]
                     abs_va = r.BaseAddress + off
                     fo     = (va_to_file_offset(self._mf, abs_va) or 0) if self._mf else 0
+                    pipename = name.strip()
+                    if hit.get("original_length", len(name)) > len(name):
+                        pipename += f" [truncated, sha256={hit['sha256'][:16]}…]"
                     findings_rows.append({
                         "ttp":          ttp,
                         "finding_type": "suspicious_pipe",
@@ -369,7 +375,7 @@ class StructuredOutput:
                         "file_offset":  f"0x{fo:x}" if fo else "",
                         "cs_version":   "", "xor_key":   "", "beacon_type": "",
                         "c2_host":      "", "c2_uri":     "", "port":        "",
-                        "useragent":    "", "pipename":   name.strip(),
+                        "useragent":    "", "pipename":   pipename,
                         "license_id":   "", "sleep_ms":   "", "jitter_pct":  "",
                         "details":      prot_str(r.Protect),
                     })
