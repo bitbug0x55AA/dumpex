@@ -48,7 +48,11 @@ from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     _scan_status, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED)
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
+    verdict_level)
+
+# score -> verdict_level, owned by this hunter (see _finding.verdict_level).
+_VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "likely", 3: "high"}
 
 # Bytes read per MZ-prefixed candidate for structural PE validation — large
 # enough for the DOS/COFF/optional headers plus a section table of typical
@@ -216,9 +220,26 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     thread_contexts  = get_thread_contexts(mf)   # [{ThreadId, ip, ip_reg, is_wow64}, ...]
     coverage["thread_context"] = bool(thread_contexts)
 
+    # Explicit counts so a PARTIAL context gap is visible even when it
+    # doesn't zero out thread_context entirely (some threads parsed, some
+    # didn't) — bare booleans can't distinguish "every thread's context
+    # parsed" from "1 out of 200 did".
+    threads_total = len(mf.threads.threads) if (mf.threads and mf.threads.threads) else 0
+    contexts_parsed = len(thread_contexts)
+    coverage["threads_total"]     = threads_total
+    coverage["contexts_parsed"]   = contexts_parsed
+    coverage["contexts_missing"]  = max(0, threads_total - contexts_parsed)
+
     evaluated = coverage["memory_info_stream"] or coverage["thread_info_stream"]
+    # RIP/EIP correlation is the ONLY path to the HIGH (3/3) tier (see
+    # scoring below) — a dump where thread contexts are missing or only
+    # partially parsed cannot rule out a live-execution correlation that
+    # simply wasn't observable, so that gap must count against
+    # completeness the same way a missing/partial stream does, not be
+    # treated as "nothing to check here".
     complete  = (coverage["memory_info_stream"] and coverage["thread_info_stream"]
-                 and coverage["module_list_stream"] and pe_read_failed == 0)
+                 and coverage["module_list_stream"] and pe_read_failed == 0
+                 and coverage["thread_context"] and coverage["contexts_missing"] == 0)
 
     # Only STRUCTURALLY VALID hidden PEs count toward correlation; an
     # MZ-prefixed region that fails header validation is a much weaker
@@ -454,6 +475,10 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     if not coverage["thread_context"]:
         coverage_reasons.append("No per-thread CONTEXT (RIP/EIP) available — live-execution "
                                  "correlation could not run")
+    elif coverage["contexts_missing"]:
+        coverage_reasons.append(f"{coverage['contexts_missing']}/{coverage['threads_total']} "
+                                 f"thread(s) had no parsed CONTEXT — live-execution correlation "
+                                 f"ran, but not for every thread")
     coverage_status = ("not_evaluated" if not evaluated else
                         "partial" if not complete else
                         "complete")
@@ -475,6 +500,7 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         "coverage_status":      coverage_status,
         "coverage_reasons":     coverage_reasons,
         "confidence":           overall_confidence(findings_list, score),
+        "verdict_level":        verdict_level(score, _VERDICT_LEVEL_BY_SCORE),
         "pe_read_failed":       pe_read_failed,
         "findings":             [f.to_dict() for f in findings_list],
     }

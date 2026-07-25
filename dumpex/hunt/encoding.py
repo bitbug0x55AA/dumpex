@@ -52,7 +52,13 @@ from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
+    verdict_level)
+
+# score -> verdict_level, owned by this hunter (see _finding.verdict_level).
+# No "3": this hunter's max score is 2 (confirmed sleep-mask decode and/or
+# a validated PE payload — no third independent structural signal).
+_VERDICT_LEVEL_BY_SCORE = {1: "likely", 2: "high"}
 
 # ── Tunables ──────────────────────────────────────────────────────────────
 ENTROPY_PRIVATE_THRESHOLD = 7.2   # MEM_PRIVATE: likely encrypted / packed
@@ -1172,6 +1178,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     score = int(bool(sleep_mask_hits)) + int(bool(all_pe_hits))
     findings['score'] = score
     findings['max_score'] = 2
+    findings['verdict_level'] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE)
     # Every layer has its own size/type filters (SLEEP_MASK_REGION_MAX,
     # ENTROPY_SCAN_MAX, DECODE_SCAN_MAX) — regions can exist (mem_info
     # available) while every single one gets filtered out by every layer

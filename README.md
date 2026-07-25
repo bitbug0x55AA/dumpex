@@ -102,8 +102,10 @@ python -m dumpex dump.DMP --hunt injection
 # Detect process hollowing indicators
 python -m dumpex dump.DMP --hunt hollowing
 
-# Detect module stomping (IOC strings inside legitimate DLL memory)
+# Detect module stomping (verified on-disk-vs-memory section content diff;
+# --ref-dir is required for a score — see "Module Stomping Detection" below)
 python -m dumpex dump.DMP --hunt stomping
+python -m dumpex dump.DMP --hunt stomping --ref-dir ./known-good-dlls/
 
 # Detect suspicious named pipes (C2 frameworks, lateral movement tools)
 python -m dumpex dump.DMP --hunt pipe
@@ -196,6 +198,68 @@ The rule file controls:
 
 To add new detection coverage, edit `rules.yaml` — no code changes required.
 
+---
+
+## Module Stomping Detection
+
+`--hunt stomping` no longer scores on IOC strings or on an unusual page
+protection alone — both are still reported (as an unscored, low/medium-
+confidence **lead**), but the only signal that can produce a nonzero score
+is a **verified, relocation-normalized on-disk-vs-memory content diff**:
+
+1. Each loaded module's own PE header is parsed out of process memory.
+2. For every section the header declares executable-but-not-writable, its
+   live memory protection is compared against the normal, unmodified-
+   mapping set. `PAGE_EXECUTE_WRITECOPY` is explicitly **not** flagged —
+   Windows routinely maps executable sections copy-on-write even when
+   nothing was ever written, so treating it as suspicious made every
+   ordinary, untouched DLL look "stomped". A deviation from that (most
+   notably `PAGE_EXECUTE_READWRITE`) is reported as a lead only:
+   protection state alone proves nothing about content, since an attacker
+   can reprotect a section back to RX after stomping it and before a dump
+   is captured.
+3. **`--ref-dir DIR`** points at a directory of analyst-supplied reference
+   copies of modules (matched by filename), used to perform the actual
+   content verification. Without it, the verified-content check — the
+   only scored signal this hunter has — cannot run at all.
+
+### Reference file requirements
+
+A candidate reference file is only used if its **own** PE header identity
+(Machine, SizeOfImage, TimeDateStamp) matches the in-memory module's
+header. A same-named file that is actually a different build/version/patch
+level is skipped rather than diffed — comparing against the wrong build
+would report ordinary compiler-output differences as "stomped". Before
+comparing, the reference file's bytes are **relocation-normalized**: if
+the module loaded at a different address than its preferred `ImageBase`
+(ASLR, or a base collision), the same delta the Windows loader applied at
+load time is applied to the on-disk copy, so an unmodified-but-relocated
+section reads as identical rather than "changed". IAT/delay-import
+ranges and hotpatch trampolines are **not** specifically excluded; see the
+`stomping.verified_content_change` finding's `limitations` for that
+residual caveat.
+
+### Coverage semantics: `DETECTED` with `coverage_status: partial`
+
+Every hunt result carries `status` (`DETECTED` / `NOT_DETECTED_IN_SCANNED_SCOPE`
+/ `INCONCLUSIVE` / `NOT_EVALUATED`) **and**, independently, `coverage_status`
+(`complete` / `partial` / `not_evaluated`) plus a `coverage_reasons` list.
+These are deliberately not collapsed into one field: a hunter can find a
+genuine, verified stomped section (`status: DETECTED`) while *other*
+modules in the same dump couldn't be checked (unreadable header, no
+matching reference file, identity mismatch) — that's still `DETECTED`,
+with `coverage_status: partial` reported alongside so an investigator
+knows there could be more they haven't seen. Without `--ref-dir` at all,
+`score` is always `0` and `status` is `INCONCLUSIVE` (never a bare
+"clean") — the one scored signal in this hunter simply never ran.
+
+Every finding also carries a `verdict_level` (`clean` / `possible` /
+`likely` / `high`) that the hunter itself computes from its own score;
+this is the single value console output, `--json`, and `--csv` all read
+directly (uppercased) — none of them re-derive a verdict from `score` or
+`confidence` independently, so the same finding can't show different
+tiers in different output formats.
+
 YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass `--yara-dir PATH` for an explicit directory of `.yar` files to extend scanning coverage without touching the installed package — same as `--rules-file`, there is no automatic cwd/script-dir scan.
 
 ---
@@ -243,6 +307,7 @@ YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass
 | `--verbose` | Show all regions including routine ones |
 | `--yara-dir DIR` | Directory of `.yar` rule files for `--hunt yara` (explicit override; no automatic cwd scan) |
 | `--rules-file FILE` | Explicit `rules.yaml`/`.yml`/`.json` for TTP detection (no automatic cwd scan) |
+| `--ref-dir DIR` | Directory of reference module files for `--hunt stomping`'s verified content diff (required for a nonzero score; see "Module Stomping Detection") |
 | `--json FILE` | Write structured results to FILE as JSON |
 | `--csv PATH` | Write CSV output: `FILE.csv` → single combined file, `DIR\` → one file per table |
 | `--txt FILE` | Write plain-text copy of console output (ANSI colours stripped) |

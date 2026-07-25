@@ -199,11 +199,13 @@ class StructuredOutput:
                              "obfuscation": 2}.get(ttp, "?")
 
                 # Phase-two hunters (injection/stomping/pipe/obfuscation)
-                # report their own "confidence" (none/low/medium/high) and
-                # "coverage_status" (complete/partial/not_evaluated),
+                # report their own "verdict_level" (clean/possible/likely/
+                # high), "confidence" (none/low/medium/high), and
+                # "coverage_status" (complete/partial/not_evaluated), all
                 # computed independently of score — hunters not yet
                 # upgraded (hollowing/cs-beacon/yara) don't have these and
-                # fall back to the legacy score/max_score heuristics below.
+                # fall back to the legacy score/max_score heuristic below.
+                hunter_verdict_level   = findings.get("verdict_level")
                 hunter_confidence      = findings.get("confidence")
                 hunter_coverage_status = findings.get("coverage_status")
 
@@ -231,14 +233,20 @@ class StructuredOutput:
                     # handling).
                     coverage_complete = (hunter_coverage_status != "partial"
                                           if hunter_coverage_status is not None else True)
-                    if hunter_confidence is not None:
-                        # Use the hunter's OWN confidence, never
-                        # `score >= max_score - 1` — that arithmetic
-                        # previously turned a single MEDIUM-confidence
-                        # lead (e.g. stomping's uncorroborated verified
-                        # diff, 1/2) into a CSV "HIGH CONFIDENCE" row for
-                        # several hunters, independent of how weak the
-                        # underlying evidence actually was.
+                    if hunter_verdict_level is not None:
+                        # The hunter's OWN verdict_level, printed as-is —
+                        # NEVER re-derived here from score/confidence.
+                        # Different hunters have different max scores and
+                        # different evidentiary weight per point (stomping's
+                        # max is 2, injection's is 3), so a single
+                        # generic formula produced console text and CSV
+                        # text that disagreed with each other for the same
+                        # finding (e.g. stomping 1/2 showing LIKELY on the
+                        # console but POSSIBLE in the CSV). Each hunter
+                        # owns its own score->level table; this is purely
+                        # a display transform (upper-casing) of that.
+                        verdict = hunter_verdict_level.upper()
+                    elif hunter_confidence is not None:
                         verdict = ("CLEAN" if score == 0 else
                                    "HIGH CONFIDENCE" if hunter_confidence == "high" else
                                    "POSSIBLE")
@@ -263,6 +271,7 @@ class StructuredOutput:
                 summary_rows.append({
                     "ttp": ttp, "score": score, "max_score": max_score,
                     "status": status, "verdict": verdict,
+                    "verdict_level": hunter_verdict_level or "",
                     "confidence": hunter_confidence or "",
                     "coverage_complete": coverage_complete,
                     "coverage_reason": coverage_reason,

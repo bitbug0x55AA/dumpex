@@ -1,7 +1,7 @@
 """Module stomping hunter.
 
-Phase-two detection model (revised after review)
-──────────────────────────────────────────────────
+Phase-two detection model (revised after two rounds of review)
+──────────────────────────────────────────────────────────────
 Detection requires a VERIFIED content change, not merely an unusual
 protection state — an unusual protection state alone is demoted to a
 lead:
@@ -15,37 +15,49 @@ lead:
      core.pe_utils.NORMAL_IMAGE_PROTECTIONS. A deviation (most notably
      PAGE_EXECUTE_READWRITE) is reported as a LEAD ONLY —
      PAGE_EXECUTE_WRITECOPY is normal, unmodified-loader copy-on-write
-     behavior for an untouched section (see core.pe_utils docstring), and
-     an attacker can VirtualProtect a section back to RX after stomping
-     it and before a dump is captured — so protection state alone proves
-     nothing about content either way, in either direction.
-  3. The ONLY path to a nonzero score is a VERIFIED on-disk-vs-memory
-     byte diff against an analyst-supplied reference file (--ref-dir):
+     behavior for an untouched section, and an attacker can VirtualProtect
+     a section back to RX after stomping it and before a dump is
+     captured — so protection state alone proves nothing about content
+     either way.
+  3. The ONLY path to a nonzero score is a VERIFIED on-disk-vs-memory byte
+     diff against an analyst-supplied reference file (--ref-dir):
        - the reference file's own identity (Machine / SizeOfImage /
          TimeDateStamp, all read from ITS OWN PE header) must match the
          in-memory module's header, or the comparison is skipped and
-         reported as a coverage gap — diffing against a different
-         build/version of a same-named file is worse than not diffing at
-         all, since ordinary version differences would masquerade as
-         "stomped" content.
+         reported as a coverage gap.
+       - the reference file's bytes are RELOCATION-NORMALIZED before
+         comparison (core.pe_utils.apply_base_relocations): if the module
+         loaded at a different address than its preferred ImageBase
+         (ASLR, or a base collision), every absolute address the .reloc
+         table lists gets the same delta applied to the on-disk copy that
+         the Windows loader applied to the in-memory copy — otherwise an
+         UNMODIFIED, merely-relocated section would show byte differences
+         that have nothing to do with tampering.
        - the diff reports the actual differing (offset, length) byte
-         ranges, not just a whole-section match/mismatch hash.
-       - score 1: verified byte differences exist against an
-         identity-matched reference.
-         score 2: a thread's CURRENT RIP/EIP (core.memory.
-         get_thread_contexts) lands inside one of the actually-differing
-         byte ranges — not merely "somewhere in the section".
+         ranges (ALL of them are scanned for a RIP/EIP hit — only the
+         first few are kept for display), not just a whole-section
+         match/mismatch hash.
+       - score 1: verified, relocation-normalized byte differences exist
+         against an identity-matched reference.
+         score 2: a thread's CURRENT RIP/EIP lands inside one of the
+         actually-differing byte ranges.
 
-Known, explicitly documented limitation: this does NOT apply relocation
-normalization or exclude IAT/delay-import/hotpatch regions before
-diffing (that needs parsing the module's relocation table and import
-directory, which this hunter does not do). Restricting the diff to
-EXECUTABLE sections already excludes the IAT/import tables for typical
-PE layouts (they live in non-executable sections), but a legitimate
-hotpatch trampoline or a relocated absolute-address fixup inside .text
-can still produce a genuine, non-malicious byte difference — see the
-`stomping.verified_content_change` Finding's `limitations` for this
-caveat on every reported diff.
+  Without --ref-dir, an empty/non-matching --ref-dir, an identity
+  mismatch, or any read failure along the way, the verified-content
+  check could not run to completion for at least one eligible section —
+  coverage_status is "partial" and, with score==0, status is
+  INCONCLUSIVE, never a bare "clean" NOT_DETECTED_IN_SCANNED_SCOPE. This
+  hunter has exactly one scored signal; if it never ran, a negative
+  result is not the same claim as "checked and clean".
+
+Known, explicitly documented limitation: IAT/delay-import ranges and
+hotpatch trampolines are NOT specifically excluded before diffing.
+Restricting the diff to EXECUTABLE, non-writable sections already
+excludes the import tables themselves for typical PE layouts (linkers
+place them in non-executable data sections), but a legitimate hotpatch
+NOP-padding/trampoline at a function prologue can still produce a
+genuine, non-malicious byte difference inside .text — see the
+`stomping.verified_content_change` Finding's `limitations`.
 
 The string-based IOC scan is retained as an unscored, low-confidence
 lead — see hunt/_finding.py for why raw string matches never drive a
@@ -61,11 +73,17 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_contexts, addr_to_module, prot_str,
     read_region, _extract_ioc_strings)
 from dumpex.core.pe_utils import (parse_pe_header, expected_protection_name,
-    section_protection_deviates)
+    section_protection_deviates, apply_base_relocations)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
+    verdict_level)
+
+# score -> verdict_level, owned by this hunter (see _finding.verdict_level).
+# No "3": this hunter's max score is 2 (verified change, optionally
+# corroborated by live RIP/EIP — there's no third independent signal).
+_VERDICT_LEVEL_BY_SCORE = {1: "likely", 2: "high"}
 
 PE_VALIDATE_READ_MAX = 4096   # bytes read from each module base to parse its
                                # own header + section table (see injection.py)
@@ -74,10 +92,19 @@ REF_FILE_MAX_READ = 64 * 1024 * 1024   # cap on a --ref-dir reference file read;
                                         # legitimate DLLs/EXEs are far smaller,
                                         # this just bounds a pathological input
 
-MAX_DIFF_RANGES = 20   # cap on the number of distinct differing byte ranges
-                        # recorded per section — a section with more than
-                        # this many separate diffs is already unambiguously
-                        # different; no need to enumerate every last one
+MAX_DIFF_RANGES = 20        # cap on how many differing byte ranges are KEPT
+                             # for display/facts — a section with more than
+                             # this many separate diffs is already
+                             # unambiguously different, no need to enumerate
+                             # every last one for a human to read.
+MAX_DIFF_RANGES_SCAN = 200_000   # separate, much larger safety ceiling on how
+                                  # many ranges are computed AT ALL (purely to
+                                  # bound worst-case memory/CPU on a section
+                                  # that is byte-for-byte unrelated to its
+                                  # reference) — RIP-hit checking scans every
+                                  # range up to THIS limit, not just the 20
+                                  # kept for display, so a hit in e.g. the
+                                  # 21st range is never silently missed.
 
 
 def _module_basename(module) -> str:
@@ -156,11 +183,15 @@ def _reference_identity_matches(mem_pe: dict, disk_pe: dict) -> "tuple[bool, str
     return True, ""
 
 
-def _diff_byte_ranges(a: bytes, b: bytes, max_ranges: int = MAX_DIFF_RANGES) -> list:
+def _diff_byte_ranges(a: bytes, b: bytes, max_ranges: int = MAX_DIFF_RANGES_SCAN) -> list:
     """
     Return contiguous (offset, length) ranges where `a` and `b` differ,
     over their shared length — actual changed-byte locations, not just a
-    single whole-buffer match/mismatch boolean or hash.
+    single whole-buffer match/mismatch boolean or hash. Bounded only by
+    the large MAX_DIFF_RANGES_SCAN safety ceiling (not the much smaller
+    MAX_DIFF_RANGES used for display) — callers that need a RIP/EIP hit
+    check must scan the FULL list this returns, not a display-truncated
+    slice of it.
     """
     ranges = []
     n = min(len(a), len(b))
@@ -176,26 +207,35 @@ def _diff_byte_ranges(a: bytes, b: bytes, max_ranges: int = MAX_DIFF_RANGES) -> 
     return ranges
 
 
-def _diff_section_on_disk(ref_path: str, mem_pe: dict, section: dict, mem_bytes: bytes) -> "dict|None":
+def _diff_section_on_disk(ref_path: str, mem_pe: dict, module_base: int, section: dict,
+                           mem_bytes: bytes) -> "dict|None":
     """
     Compare a section's on-disk raw bytes (from the analyst-supplied
-    reference file) against the corresponding live memory bytes.
+    reference file, RELOCATION-NORMALIZED to what memory should contain
+    at its actual load address) against the corresponding live memory
+    bytes.
 
     Returns None only if the reference file itself couldn't be read at
-    all. Otherwise returns:
+    all (I/O error). Otherwise returns:
       {"identity_ok": bool, "identity_reason": str,
-       "diff_ranges": [(offset, length), ...], "compared_len": int,
+       "diff_ranges": [(offset, length), ...]  (ALL of them, up to
+           MAX_DIFF_RANGES_SCAN — NOT pre-truncated to the display cap),
+       "ranges_truncated": bool, "compared_len": int,
        "disk_sha256": str, "mem_sha256": str}
     identity_ok False means the comparison was skipped (version/identity
     mismatch or an invalid reference header) — diff_ranges is empty in
     that case, and callers must treat this as a coverage gap, not "clean".
+    compared_len == 0 with identity_ok True means the section's on-disk
+    range couldn't actually be read (truncated/short reference file) —
+    also a coverage gap, not "clean" and not "changed".
     """
     try:
         size = os.path.getsize(ref_path)
         if size > REF_FILE_MAX_READ:
             return {"identity_ok": False,
                     "identity_reason": f"reference file exceeds {REF_FILE_MAX_READ} byte cap",
-                    "diff_ranges": [], "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+                    "diff_ranges": [], "ranges_truncated": False, "compared_len": 0,
+                    "disk_sha256": "", "mem_sha256": ""}
         with open(ref_path, "rb") as fh:
             disk_data = fh.read()
     except OSError:
@@ -205,35 +245,48 @@ def _diff_section_on_disk(ref_path: str, mem_pe: dict, section: dict, mem_bytes:
     if not disk_pe["valid"]:
         return {"identity_ok": False,
                 "identity_reason": f"reference file PE header invalid ({disk_pe['reason']})",
-                "diff_ranges": [], "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+                "diff_ranges": [], "ranges_truncated": False, "compared_len": 0,
+                "disk_sha256": "", "mem_sha256": ""}
 
     identity_ok, identity_reason = _reference_identity_matches(mem_pe, disk_pe)
     if not identity_ok:
         return {"identity_ok": False, "identity_reason": identity_reason,
-                "diff_ranges": [], "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+                "diff_ranges": [], "ranges_truncated": False, "compared_len": 0,
+                "disk_sha256": "", "mem_sha256": ""}
+
+    # Relocation-normalize: the reference file's bytes reflect its
+    # PREFERRED ImageBase; the in-memory module is loaded at module_base,
+    # which can differ (ASLR). Applying that delta to the on-disk copy
+    # before comparing means an unmodified-but-relocated section reads as
+    # identical, not "changed".
+    delta = module_base - disk_pe['image_base']
+    disk_data = apply_base_relocations(disk_data, disk_pe, delta)
 
     start  = section["pointer_to_raw_data"]
     length = min(section["size_of_raw_data"], len(mem_bytes))
     if length <= 0 or start + length > len(disk_data):
         return {"identity_ok": True, "identity_reason": "", "diff_ranges": [],
-                "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
+                "ranges_truncated": False, "compared_len": 0, "disk_sha256": "", "mem_sha256": ""}
 
     disk_slice = disk_data[start:start + length]
     mem_slice  = mem_bytes[:length]
+    all_ranges = _diff_byte_ranges(disk_slice, mem_slice)
     return {
         "identity_ok": True, "identity_reason": "",
-        "diff_ranges":  _diff_byte_ranges(disk_slice, mem_slice),
-        "compared_len": length,
-        "disk_sha256":  hashlib.sha256(disk_slice).hexdigest(),
-        "mem_sha256":   hashlib.sha256(mem_slice).hexdigest(),
+        "diff_ranges":      all_ranges,
+        "ranges_truncated": len(all_ranges) >= MAX_DIFF_RANGES_SCAN,
+        "compared_len":     length,
+        "disk_sha256":      hashlib.sha256(disk_slice).hexdigest(),
+        "mem_sha256":       hashlib.sha256(mem_slice).hexdigest(),
     }
 
 
 def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None) -> dict:
     """
-    Detect Module Stomping via a verified on-disk-vs-memory content diff
-    (primary, scored — requires --ref-dir), a demoted protection-deviation
-    lead, and a demoted string-IOC lead. See module docstring.
+    Detect Module Stomping via a verified, relocation-normalized on-disk-
+    vs-memory content diff (primary, scored — requires --ref-dir), a
+    demoted protection-deviation lead, and a demoted string-IOC lead. See
+    module docstring.
     """
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
@@ -251,15 +304,31 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
 
     findings_list = []
 
-    # ── Per-module: protection-deviation lead + optional verified content diff ──
+    # ── Explicit coverage counters for the verified-content check ────────
+    # Every one of these is a reason the ONE scored signal in this hunter
+    # could not run to completion for at least one eligible section — see
+    # content_complete below. Bare pass/fail booleans can't distinguish
+    # "checked everything, all clean" from "silently skipped N sections",
+    # which is exactly the gap this dict closes.
+    coverage_counts = {
+        "modules_total":          len(modules),
+        "headers_parsed":         0,
+        "sections_total":         0,   # eligible (exec, non-writable) sections found
+        "sections_compared":      0,   # sections that got a real, identity-matched byte comparison
+        "reference_missing":      0,   # --ref-dir given, no matching file found for the module
+        "reference_mismatch":     0,   # matching-name file found, but its own header identity differs
+        "reference_read_failed":  0,   # matching-name file found, but couldn't be read/parsed
+        "memory_read_failed":     0,   # couldn't read the section's live memory bytes
+        "short_reads":            0,   # read succeeded but nothing usable could be compared
+    }
+
     protection_leads = []   # dicts: module, section, region, expected, actual
-    verified_changes = []   # dicts: module, section, diff_ranges, compared_len,
-                             #        rip_in_changed_range, disk_sha256, mem_sha256
+    verified_changes = []   # dicts: module, section, diff_ranges (display-capped),
+                             #        ranges_truncated, compared_len, rip_in_changed_range,
+                             #        disk_sha256, mem_sha256
     identity_skipped  = []  # (module, section, reason) — ref file found but version/identity mismatched
-    ref_missing       = []  # module — ref_dir given, no matching reference file found
-    parse_failed     = []   # (module, pe) — module's own header didn't structurally validate
-    read_failed      = 0
-    modules_scanned  = 0
+    parse_failed      = []  # (module, pe) — module's own header didn't structurally validate
+    read_failed       = 0   # module HEADER reads that raised (distinct from section memory reads)
 
     if mem_info_available and module_list_available:
         for m in modules:
@@ -268,7 +337,6 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
             except Exception:
                 read_failed += 1
                 continue
-            modules_scanned += 1
             pe = parse_pe_header(header_bytes)
             if not pe["valid"]:
                 # A loaded, known module whose own header fails structural
@@ -277,9 +345,9 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                 # could not be checked for stomping at all.
                 parse_failed.append((m, pe))
                 continue
+            coverage_counts["headers_parsed"] += 1
 
             ref_path = _find_reference_file(m, ref_dir) if ref_dir else None
-            module_ref_missing_noted = False
 
             for section in pe["sections"]:
                 if not section["is_executable"] or section["is_writable"]:
@@ -287,6 +355,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                 va_start = m.baseaddress + section["virtual_address"]
                 va_end   = va_start + max(section["virtual_size"], section["size_of_raw_data"], 1)
                 covering = _regions_covering(va_start, va_end, regions)
+                coverage_counts["sections_total"] += 1
 
                 # Protection-deviation LEAD — informational, never scored
                 # (see module docstring for why WRITECOPY is excluded and
@@ -304,38 +373,50 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                         })
 
                 # Verified content diff — the ONLY path to a nonzero score.
-                if ref_dir:
-                    if ref_path is None:
-                        if not module_ref_missing_noted:
-                            ref_missing.append(m)
-                            module_ref_missing_noted = True
-                        continue
-                    try:
-                        mem_bytes = read_region(mf, va_start,
-                            min(section["size_of_raw_data"] or section["virtual_size"], va_end - va_start))
-                    except Exception:
-                        continue
-                    if not mem_bytes:
-                        continue
-                    diff = _diff_section_on_disk(ref_path, pe, section, mem_bytes)
-                    if diff is None:
-                        continue   # reference file unreadable — not a version mismatch, just I/O
-                    if not diff["identity_ok"]:
-                        identity_skipped.append((m, section, diff["identity_reason"]))
-                        continue
-                    if diff["diff_ranges"]:
-                        rip_in_changed = False
-                        for off, length in diff["diff_ranges"]:
-                            change_va = va_start + off
-                            if any(change_va <= tc["ip"] < change_va + length for tc in thread_contexts):
-                                rip_in_changed = True
-                                break
-                        verified_changes.append({
-                            "module": m, "section": section, "va_start": va_start,
-                            "diff_ranges": diff["diff_ranges"], "compared_len": diff["compared_len"],
-                            "rip_in_changed_range": rip_in_changed,
-                            "disk_sha256": diff["disk_sha256"], "mem_sha256": diff["mem_sha256"],
-                        })
+                if not ref_dir:
+                    continue   # accounted for globally below (content_complete requires ref_dir)
+                if ref_path is None:
+                    coverage_counts["reference_missing"] += 1
+                    continue
+                try:
+                    mem_bytes = read_region(mf, va_start,
+                        min(section["size_of_raw_data"] or section["virtual_size"], va_end - va_start))
+                except Exception:
+                    coverage_counts["memory_read_failed"] += 1
+                    continue
+                if not mem_bytes:
+                    coverage_counts["memory_read_failed"] += 1
+                    continue
+                diff = _diff_section_on_disk(ref_path, pe, m.baseaddress, section, mem_bytes)
+                if diff is None:
+                    coverage_counts["reference_read_failed"] += 1
+                    continue
+                if not diff["identity_ok"]:
+                    coverage_counts["reference_mismatch"] += 1
+                    identity_skipped.append((m, section, diff["identity_reason"]))
+                    continue
+                if diff["compared_len"] == 0:
+                    coverage_counts["short_reads"] += 1
+                    continue
+
+                coverage_counts["sections_compared"] += 1
+                all_ranges = diff["diff_ranges"]
+                if all_ranges:
+                    rip_in_changed = False
+                    for off, length in all_ranges:   # scan EVERY range, not just the displayed subset
+                        change_va = va_start + off
+                        if any(change_va <= tc["ip"] < change_va + length for tc in thread_contexts):
+                            rip_in_changed = True
+                            break
+                    verified_changes.append({
+                        "module": m, "section": section, "va_start": va_start,
+                        "diff_ranges": all_ranges[:MAX_DIFF_RANGES],
+                        "ranges_truncated": diff["ranges_truncated"] or len(all_ranges) > MAX_DIFF_RANGES,
+                        "total_ranges": len(all_ranges),
+                        "compared_len": diff["compared_len"],
+                        "rip_in_changed_range": rip_in_changed,
+                        "disk_sha256": diff["disk_sha256"], "mem_sha256": diff["mem_sha256"],
+                    })
 
     findings["protection_leads"] = protection_leads
     findings["verified_changes"] = verified_changes
@@ -372,7 +453,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
     else:
         findings_list.append(Finding(
             check="stomping.protection_deviation_lead",
-            facts=[f"{modules_scanned} module(s) checked"],
+            facts=[f"{coverage_counts['headers_parsed']} module(s) checked"],
             inference="No module section declared executable-but-not-writable shows a "
                        "live protection state outside the normal set.",
             confidence=CONFIDENCE_LOW,
@@ -391,7 +472,9 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
             name = _module_basename(m) or "(unnamed module)"
             ranges_str = ", ".join(f"+0x{off:x}(len 0x{length:x})" for off, length in vc["diff_ranges"][:5])
             if len(vc["diff_ranges"]) > 5:
-                ranges_str += f", ... +{len(vc['diff_ranges'])-5} more range(s)"
+                ranges_str += f", ... +{len(vc['diff_ranges'])-5} more shown"
+            if vc["ranges_truncated"]:
+                ranges_str += f" ({vc['total_ranges']} total differing range(s), truncated for display)"
             live = "  [LIVE RIP/EIP inside changed range]" if vc["rip_in_changed_range"] else ""
             facts.append(f"module={name} section={sec['name']!r} VA=0x{vc['va_start']:x} "
                          f"compared={vc['compared_len']} bytes changed_ranges=[{ranges_str}] "
@@ -402,27 +485,30 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         findings_list.append(Finding(
             check="stomping.verified_content_change",
             facts=facts,
-            inference=f"{len(verified_changes)} module section(s) have byte-level content "
-                       f"differences from an identity-matched (Machine/SizeOfImage/"
-                       f"TimeDateStamp) reference file supplied via --ref-dir.",
+            inference=f"{len(verified_changes)} module section(s) have relocation-normalized, "
+                       f"byte-level content differences from an identity-matched "
+                       f"(Machine/SizeOfImage/TimeDateStamp) reference file supplied via "
+                       f"--ref-dir.",
             confidence=CONFIDENCE_HIGH if any_rip else CONFIDENCE_MEDIUM,
             rationale=("A thread's current RIP/EIP executes inside one of the actually-"
                        "changed byte ranges — the strongest evidence this hunter can "
                        "produce." if any_rip else
-                       "Verified byte-level difference against an identity-matched "
-                       "reference, but no observed thread is currently executing inside "
-                       "the changed range(s)."),
-            limitations=["Relocation entries and IAT/delay-import patching are NOT "
-                         "normalized before this diff — a legitimate hotpatch trampoline "
-                         "or an absolute-address fixup inside an executable section can "
-                         "produce a genuine, non-malicious difference. Restricting the diff "
-                         "to executable sections already excludes the import tables "
-                         "themselves for typical PE layouts, but does not eliminate this "
-                         "risk entirely.",
+                       "Verified byte-level difference against an identity-matched, "
+                       "relocation-normalized reference, but no observed thread is currently "
+                       "executing inside the changed range(s)."),
+            limitations=["IAT/delay-import ranges and hotpatch trampolines are NOT "
+                         "specifically excluded before diffing — restricting the diff to "
+                         "executable, non-writable sections already excludes the import "
+                         "tables themselves for typical PE layouts, but a legitimate hotpatch "
+                         "NOP-padding/trampoline at a function prologue can still produce a "
+                         "genuine, non-malicious difference inside .text.",
                          "PDB GUID/Age (CodeView debug directory) is not checked as part of "
                          "reference-identity matching — Machine/SizeOfImage/TimeDateStamp "
                          "matching all three is a strong but not perfect guarantee the "
-                         "reference is the exact same build."],
+                         "reference is the exact same build.",
+                         "Relocation normalization applies IMAGE_REL_BASED_HIGHLOW/DIR64 "
+                         "fixups only — the types real x86/x64 linkers emit; an exotic or "
+                         "corrupt relocation table would leave some fixups un-normalized."],
             tag=TAG_DETECTION,
         ))
 
@@ -580,7 +666,22 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
 
     # ── Coverage — independent of score/status, so "DETECTED but coverage
     # was partial" is representable rather than DETECTED silently implying
-    # a complete scan. ─────────────────────────────────────────────────────
+    # a complete scan. content_complete is specifically about the ONE
+    # scored signal (verified content diff): it requires --ref-dir AND
+    # every eligible section actually being compared, with zero failures
+    # of any kind along the way. ─────────────────────────────────────────
+    content_complete = (
+        ref_dir is not None
+        and coverage_counts["sections_compared"] == coverage_counts["sections_total"]
+        and not any([
+            coverage_counts["reference_missing"],
+            coverage_counts["reference_mismatch"],
+            coverage_counts["reference_read_failed"],
+            coverage_counts["memory_read_failed"],
+            coverage_counts["short_reads"],
+        ])
+    )
+
     coverage_reasons = []
     if not mem_info_available:
         coverage_reasons.append("MemoryInfoListStream missing from this dump")
@@ -590,24 +691,35 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         coverage_reasons.append(f"{read_failed} module header read(s) failed")
     if parse_failed:
         coverage_reasons.append(f"{len(parse_failed)} module header(s) failed PE structural validation")
-    if identity_skipped:
-        coverage_reasons.append(f"{len(identity_skipped)} section(s) had a reference file that "
-                                 f"didn't match the in-memory module's build identity")
-    if ref_dir and ref_missing:
-        coverage_reasons.append(f"{len(ref_missing)} module(s) with a protection-deviation lead "
-                                 f"had no matching reference file under --ref-dir")
-    if not ref_dir:
-        coverage_reasons.append("--ref-dir not supplied — verified content-diff (the only "
-                                 "scored signal) could not be attempted for any module")
+    if ref_dir is None:
+        coverage_reasons.append("--ref-dir not supplied — verified content comparison "
+                                 "(the only scored signal) was not performed for any module")
+    else:
+        if coverage_counts["reference_missing"]:
+            coverage_reasons.append(f"{coverage_counts['reference_missing']} section(s) had no "
+                                     f"matching reference file under --ref-dir")
+        if coverage_counts["reference_mismatch"]:
+            coverage_reasons.append(f"{coverage_counts['reference_mismatch']} section(s) had a "
+                                     f"reference file whose build identity didn't match")
+        if coverage_counts["reference_read_failed"]:
+            coverage_reasons.append(f"{coverage_counts['reference_read_failed']} reference "
+                                     f"file(s) could not be read")
+        if coverage_counts["memory_read_failed"]:
+            coverage_reasons.append(f"{coverage_counts['memory_read_failed']} section(s) could "
+                                     f"not be read from memory")
+        if coverage_counts["short_reads"]:
+            coverage_reasons.append(f"{coverage_counts['short_reads']} section(s) had nothing "
+                                     f"comparable to read")
 
     if not (mem_info_available and module_list_available):
         coverage_status = "not_evaluated"
-    elif read_failed or parse_failed:
+    elif read_failed or parse_failed or not content_complete:
         coverage_status = "partial"
     else:
         coverage_status = "complete"
     findings["coverage_status"]  = coverage_status
     findings["coverage_reasons"] = coverage_reasons
+    findings["coverage_counts"]  = coverage_counts
 
     if coverage_status == "not_evaluated":
         status = NOT_EVALUATED
@@ -619,6 +731,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
         status = NOT_DETECTED_IN_SCANNED_SCOPE
     findings["status"] = status
     findings["confidence"] = overall_confidence(findings_list, score)
+    findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE)
     findings["findings"] = [f.to_dict() for f in findings_list]
 
     if status == NOT_EVALUATED:
@@ -628,8 +741,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                        "the changed range") if score == 2 else
                    YELLOW("LIKELY STOMPING — verified content change against reference file"))
     elif status == INCONCLUSIVE:
-        verdict = _status_text(INCONCLUSIVE, "; ".join(
-            r for r in coverage_reasons if not r.startswith("--ref-dir")) or "partial coverage")
+        verdict = _status_text(INCONCLUSIVE, "; ".join(coverage_reasons) or "partial coverage")
     else:
         verdict = GREEN("CLEAN — no verified stomping indicators")
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2, requires --ref-dir; "
@@ -642,8 +754,8 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
     if not verbose and verified_changes:
         print(DIM("  Use --verbose to list every verified change in detail.\n"))
     if not ref_dir:
-        print(DIM("  [·] --ref-dir not supplied — verified content-diff was not attempted; "
-                  "the protection-deviation lead above cannot by itself produce a nonzero "
-                  "score.\n"))
+        print(DIM("  [·] --ref-dir not supplied — verified content-diff (the only scored "
+                  "signal) was not attempted; reported as INCONCLUSIVE/partial coverage, "
+                  "not a clean result.\n"))
 
     return findings

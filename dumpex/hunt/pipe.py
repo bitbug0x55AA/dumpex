@@ -36,11 +36,27 @@ from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
+    verdict_level)
+
+# score -> verdict_level, owned by this hunter (see _finding.verdict_level).
+_VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "likely", 3: "high"}
 
 PIPE_SCAN_MAX = 8 * 1024 * 1024   # skip regions > 8MB; pipe names / C2 context
                                    # are short strings, no need to read huge
                                    # regions in full to find them
+
+PIPE_CONTEXT_DISTANCE = 4096   # +/- byte window, anchored on a pipe-name
+                                # string hit's own VA, for BOTH C2-context
+                                # and RIP/EIP corroboration. A prior version
+                                # correlated anything anywhere in the same
+                                # MemoryInfo region — a single region can
+                                # span megabytes, so a C2-looking string a
+                                # full 1 MiB away from the pipe name (or a
+                                # thread executing elsewhere in a large
+                                # region for entirely unrelated reasons)
+                                # was being counted as if it were adjacent
+                                # to the pipe reference. 4 KiB is one page.
 
 PIPE_MAX_MATCHES_PER_REGION = 50    # cap raw \pipe\ matches processed per region
 PIPE_C2_MAX_HITS_PER_REGION = 5     # cap C2_PAT matches recorded per pipe-bearing region
@@ -548,8 +564,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                       f"({pipe_name_budget.exhausted_reason}) — some regions may not "
                       f"have been checked for pipe names.\n"))
 
-    # ── Check B (corroboration, scored): C2 context / execution near a ───
-    # handle-confirmed pipe's matching string occurrence, if one exists.
+    # ── Check B (corroboration, scored): C2 context / execution WITHIN
+    # PIPE_CONTEXT_DISTANCE of a handle-confirmed pipe's matching string
+    # occurrence, if one exists. Anchored on the pipe hit's own VA, not
+    # "anywhere in the same MemoryInfo region" — a region can span
+    # megabytes, so a C2-looking string or an executing thread far away in
+    # the same region says nothing about THIS pipe reference.
     c2_hits = []
     for hit in private_pipes:
         records = region_c2_records.get(hit["region"].BaseAddress)
@@ -573,71 +593,133 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 return hit
         return None
 
-    corroborated_handles = []   # (handle_classified_entry, string_hit, c2_records, exec_hit)
+    corroborated_handles = []   # [{"hc", "string_hit", "pipe_va", "nearby_c2", "rip_hit"}, ...]
+    start_addr_leads      = []  # [{"hc", "string_hit", "pipe_va", "thread_info"}, ...] — LEAD ONLY, never scored
     for hc in handle_classified:
         sh = _string_hit_for_handle(hc["canonical_name"])
         if sh is None:
             continue
-        c2_records = region_c2_records.get(sh["region"].BaseAddress)
         r = sh["region"]
-        exec_hit = None
-        for tc in thread_contexts:
-            if r.BaseAddress <= tc["ip"] < r.BaseAddress + r.RegionSize:
-                exec_hit = ("rip", tc)
-                break
-        if exec_hit is None:
+        pipe_va = r.BaseAddress + sh["offset"]
+        region_is_executable = "EXECUTE" in prot_str(r.Protect)
+
+        all_records = region_c2_records.get(r.BaseAddress) or []
+        nearby_c2 = [rec for rec in all_records
+                     if abs(rec["va"] - pipe_va) <= PIPE_CONTEXT_DISTANCE]
+
+        # RIP/EIP corroboration additionally requires the region actually
+        # BE executable — a thread whose current instruction pointer sits
+        # near a pipe-name string in non-executable (e.g. data-only)
+        # memory can't actually be running code from that location.
+        rip_hit = None
+        if region_is_executable:
+            for tc in thread_contexts:
+                if abs(tc["ip"] - pipe_va) <= PIPE_CONTEXT_DISTANCE:
+                    rip_hit = tc
+                    break
+
+        # StartAddress proximity is collected but NEVER scored — it's
+        # where a thread began, not where it is now (see hunt/injection.py
+        # for the same distinction), and is reported as a lead only.
+        if rip_hit is None:
             for ti in infos:
                 sa = ti.StartAddress or 0
-                if r.BaseAddress <= sa < r.BaseAddress + r.RegionSize and not addr_to_module(sa, modules):
-                    exec_hit = ("start_addr", ti)
+                if sa and abs(sa - pipe_va) <= PIPE_CONTEXT_DISTANCE and not addr_to_module(sa, modules):
+                    start_addr_leads.append({"hc": hc, "string_hit": sh, "pipe_va": pipe_va, "thread_info": ti})
                     break
-        if c2_records or exec_hit:
-            corroborated_handles.append((hc, sh, c2_records, exec_hit))
+
+        if nearby_c2 or rip_hit:
+            corroborated_handles.append({
+                "hc": hc, "string_hit": sh, "pipe_va": pipe_va,
+                "nearby_c2": nearby_c2, "rip_hit": rip_hit,
+            })
 
     if corroborated_handles:
         facts = []
-        for hc, sh, c2_records, exec_hit in corroborated_handles[:10]:
-            h = hc["handle"]
-            f = f"Handle=0x{h.Handle:x} ObjectName={h.ObjectName} region=0x{sh['region'].BaseAddress:x}"
-            if c2_records:
-                f += f"  C2_context={c2_records[0]['match']!r}"
-            if exec_hit:
-                kind, obj = exec_hit
-                f += (f"  live_rip=TID:0x{obj['ThreadId']:x}@{obj['ip_reg']}" if kind == "rip"
-                      else f"  unbacked_thread_start=TID:0x{obj.ThreadId:x}")
+        for entry in corroborated_handles[:10]:
+            h, sh, pipe_va = entry["hc"]["handle"], entry["string_hit"], entry["pipe_va"]
+            f = f"Handle=0x{h.Handle:x} ObjectName={h.ObjectName} pipe_va=0x{pipe_va:x}"
+            if entry["nearby_c2"]:
+                rec = entry["nearby_c2"][0]
+                distance = abs(rec["va"] - pipe_va)
+                same_page = (rec["va"] // 0x1000) == (pipe_va // 0x1000)
+                f += (f"  c2_va=0x{rec['va']:x} c2_match={rec['match']!r} "
+                      f"distance=0x{distance:x} same_page={same_page}")
+            if entry["rip_hit"]:
+                tc = entry["rip_hit"]
+                distance = abs(tc["ip"] - pipe_va)
+                same_page = (tc["ip"] // 0x1000) == (pipe_va // 0x1000)
+                f += (f"  live_rip=TID:0x{tc['ThreadId']:x}@{tc['ip_reg']}=0x{tc['ip']:x} "
+                      f"distance=0x{distance:x} same_page={same_page}")
             facts.append(f)
-        # HIGH only when at least one corroborated handle has BOTH C2
-        # context AND execution evidence at once (the score=3 case below) —
-        # a Finding's confidence must track what actually justified it, not
-        # be uniformly HIGH regardless of whether one or both signals fired.
-        full_corroboration = any(c2 and ex for _, _, c2, ex in corroborated_handles)
+        # HIGH only when at least one corroborated handle has BOTH nearby
+        # C2 context AND a nearby RIP/EIP hit at once (the score=3 case
+        # below) — a Finding's confidence must track what actually
+        # justified it, not be uniformly HIGH regardless of whether one or
+        # both signals fired.
+        full_corroboration = any(e["nearby_c2"] and e["rip_hit"] for e in corroborated_handles)
         findings_list.append(Finding(
             check="pipe.corroboration",
             facts=facts,
             inference=f"{len(corroborated_handles)} open pipe handle(s) are corroborated "
-                       f"by C2-style context and/or active/unbacked-thread execution in "
-                       f"the memory region backing a matching pipe-name string.",
+                       f"by C2-style context and/or live RIP/EIP execution within "
+                       f"±{PIPE_CONTEXT_DISTANCE} bytes of a matching pipe-name string's "
+                       f"own address.",
             confidence=CONFIDENCE_HIGH if full_corroboration else CONFIDENCE_MEDIUM,
             rationale=("Combines an OS-confirmed open handle with BOTH independent memory "
-                       "signals (C2 artifacts AND execution) in the SAME region as that "
-                       "pipe's name string — the strongest correlation this hunter can "
-                       "produce." if full_corroboration else
+                       "signals (C2 artifacts AND live execution), both within "
+                       f"{PIPE_CONTEXT_DISTANCE} bytes of that pipe's name string — the "
+                       "strongest correlation this hunter can produce." if full_corroboration else
                        "Combines an OS-confirmed open handle with ONE independent memory "
-                       "signal (C2 artifacts or execution, not both) in the same region as "
-                       "that pipe's name string."),
+                       "signal (C2 artifacts or live execution, not both) within "
+                       f"{PIPE_CONTEXT_DISTANCE} bytes of that pipe's name string."),
             limitations=["Name correlation between a handle's ObjectName and a string scan "
                          "hit uses exact match on the canonicalized pipe name (prefix "
                          "stripped, casefolded) — still not a cryptographic guarantee both "
                          "refer to the identical kernel object if the process has multiple "
-                         "same-named pipe instances."],
+                         "same-named pipe instances.",
+                         f"Proximity window is ±{PIPE_CONTEXT_DISTANCE} bytes, not a proof of "
+                         "logical association — an unrelated string or thread could "
+                         "coincidentally fall within that window in a dense region."],
             tag=TAG_DETECTION,
         ))
-        for hc, sh, c2_records, exec_hit in corroborated_handles:
+        for entry in corroborated_handles:
+            hc = entry["hc"]
             h = hc["handle"]
-            detail = f"ObjectName={h.ObjectName}  region=0x{sh['region'].BaseAddress:x}"
+            detail = f"ObjectName={h.ObjectName}  pipe_va=0x{entry['pipe_va']:x}"
             _print_check("Handle-confirmed pipe corroborated by memory evidence",
-                         RED("SUSPICIOUS — C2 context and/or execution near handle-confirmed pipe"),
+                         RED(f"SUSPICIOUS — C2 context and/or execution within "
+                             f"{PIPE_CONTEXT_DISTANCE} bytes of handle-confirmed pipe"),
                          detail)
+
+    if start_addr_leads:
+        facts = []
+        for entry in start_addr_leads[:15]:
+            h, ti, pipe_va = entry["hc"]["handle"], entry["thread_info"], entry["pipe_va"]
+            sa = ti.StartAddress or 0
+            distance = abs(sa - pipe_va)
+            same_page = (sa // 0x1000) == (pipe_va // 0x1000)
+            facts.append(f"Handle=0x{h.Handle:x} ObjectName={h.ObjectName} pipe_va=0x{pipe_va:x} "
+                         f"TID=0x{ti.ThreadId:x} StartAddr=0x{sa:x} distance=0x{distance:x} "
+                         f"same_page={same_page}")
+        if len(start_addr_leads) > 15:
+            facts.append(f"... and {len(start_addr_leads)-15} more")
+        findings_list.append(Finding(
+            check="pipe.start_address_proximity_lead",
+            facts=facts,
+            inference=f"{len(start_addr_leads)} handle-confirmed pipe(s) have an unbacked "
+                       f"thread whose StartAddress (not current RIP/EIP) falls within "
+                       f"±{PIPE_CONTEXT_DISTANCE} bytes of the pipe name string.",
+            confidence=CONFIDENCE_LOW,
+            rationale="StartAddress records where a thread BEGAN, not where it is executing "
+                       "now — unlike a live RIP/EIP hit, this is not evidence the thread is "
+                       "currently doing anything related to the pipe. Reported as a lead "
+                       "only and does NOT contribute to the pipe score.",
+            limitations=["Superseded by pipe.corroboration whenever a live RIP/EIP hit is "
+                         "also present for the same handle — this only appears when no RIP "
+                         "hit was found."],
+            tag=TAG_LEAD,
+        ))
 
     if c2_hits and verbose:
         detail = f"{len(c2_hits)} region(s) with pipe-name string + C2 artifacts (uncorrelated to a handle)"
@@ -713,29 +795,31 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     #     framework naming convention (OS-confirmed usage + specific name),
     #     even with no further corroboration.
     # 2 — ANY handle-confirmed pipe (framework-matched or not) is
-    #     corroborated by C2-style context OR execution evidence in the
-    #     region backing a same-named string occurrence.
-    # 3 — corroborated by BOTH C2 context AND execution evidence at once.
+    #     corroborated by C2-style context OR live RIP/EIP execution
+    #     within PIPE_CONTEXT_DISTANCE of the same-named string occurrence.
+    # 3 — corroborated by BOTH at once, within that same distance window.
     #
     # Deliberately NOT gated on framework_match for tiers 2-3: a
-    # same-named handle actively corroborated by C2 context or live
-    # execution is strong evidence on its own (an OS-confirmed handle
-    # PLUS independent memory evidence in the same region), and requiring
-    # a framework-name match on top of that would silently downgrade a
+    # same-named handle actively corroborated by nearby C2 context or live
+    # execution is strong evidence on its own (an OS-confirmed handle PLUS
+    # independent, PROXIMATE memory evidence), and requiring a
+    # framework-name match on top of that would silently downgrade a
     # genuinely corroborated custom/non-framework pipe to a Finding the
     # score doesn't reflect — exactly the Finding/verdict mismatch this
-    # scoring model exists to avoid.
+    # scoring model exists to avoid. StartAddress proximity never
+    # contributes here — see pipe.start_address_proximity_lead.
     score = 0
     if framework_handle_hits:
         score = 1
-    for hc, sh, c2_records, exec_hit in corroborated_handles:
-        if c2_records and exec_hit:
+    for entry in corroborated_handles:
+        if entry["nearby_c2"] and entry["rip_hit"]:
             score = max(score, 3)
-        elif c2_records or exec_hit:
+        elif entry["nearby_c2"] or entry["rip_hit"]:
             score = max(score, 2)
 
     findings["score"] = score
     findings["max_score"] = 3
+    findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE)
 
     c2_exhausted   = c2_budget.exhausted()
     name_exhausted = pipe_name_budget.exhausted()

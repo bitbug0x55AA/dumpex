@@ -117,10 +117,11 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         any_hit           = False
         any_not_evaluated = False
         any_inconclusive  = False
+        _LEVEL_COLOR = {"high": RED, "likely": RED, "possible": YELLOW, "clean": GREEN}
         for key, (name, score, max_score) in labels.items():
-            hunt_result = results.get(key, {})
-            status      = hunt_result.get("status")
-            confidence  = hunt_result.get("confidence")   # phase-two hunters only
+            hunt_result   = results.get(key, {})
+            status        = hunt_result.get("status")
+            verdict_level = hunt_result.get("verdict_level")   # phase-two hunters only
             if status == NOT_EVALUATED:
                 verdict = _status_text(NOT_EVALUATED)
                 any_not_evaluated = True
@@ -136,12 +137,15 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
                 any_hit = True
             elif score == 0:
                 verdict = GREEN("CLEAN")
-            elif confidence is not None:
-                # Hunter-supplied confidence, not score/max_score
-                # arithmetic — see structured.py for why `score >=
-                # max_score - 1` previously inflated a single
-                # medium-confidence lead into "HIGH CONFIDENCE".
-                verdict = RED("HIGH CONFIDENCE") if confidence == "high" else YELLOW("POSSIBLE")
+            elif verdict_level is not None:
+                # The hunter's OWN verdict_level, printed as-is — see
+                # structured.py for why this must not be re-derived here
+                # (score/max_score arithmetic previously disagreed with
+                # what the same hunter's console output said elsewhere,
+                # e.g. stomping 1/2 showing LIKELY on one and POSSIBLE on
+                # the other for the identical finding).
+                color = _LEVEL_COLOR.get(verdict_level, YELLOW)
+                verdict = color(verdict_level.upper())
                 any_hit = True
             elif score >= max_score - 1:
                 verdict = RED("HIGH CONFIDENCE")

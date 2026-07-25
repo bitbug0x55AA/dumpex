@@ -124,3 +124,33 @@ def overall_confidence(findings: list, score: int) -> str:
     if not detections:
         return CONFIDENCE_LOW
     return max((f.confidence for f in detections), key=lambda c: _CONFIDENCE_ORDER.get(c, -1))
+
+
+VERDICT_CLEAN    = "clean"
+VERDICT_POSSIBLE = "possible"
+VERDICT_LIKELY   = "likely"
+VERDICT_HIGH     = "high"
+
+
+def verdict_level(score: int, level_by_score: dict) -> str:
+    """
+    Map a hunter's integer score to "clean"/"possible"/"likely"/"high"
+    using an EXPLICIT, hunter-supplied {score: level} table — never
+    derived generically from score/max_score arithmetic. Different
+    hunters have different max scores and different evidentiary weight
+    per point (stomping's max is 2, injection's is 3; a stomping "2" and
+    an injection "2" do not mean the same thing), so a single formula
+    like `score >= max_score - 1` cannot represent both correctly at
+    once — it previously produced console/CSV verdict text that
+    disagreed with each other for the same finding.
+
+    Each hunter owns its own table and is the single source of truth for
+    its own verdict_level; structured.py and hunt/__init__.py must read
+    this field directly (`findings["verdict_level"].upper()`) rather than
+    re-deriving it from score or confidence.
+
+    score <= 0 always maps to "clean", regardless of the table.
+    """
+    if score <= 0:
+        return VERDICT_CLEAN
+    return level_by_score.get(score, VERDICT_POSSIBLE)

@@ -73,7 +73,7 @@ def parse_pe_header(data: bytes) -> dict:
         'time_date_stamp': None,
         'is_pe32_plus': None, 'number_of_sections': None,
         'size_of_image': None, 'address_of_entry_point': None,
-        'image_base': None, 'sections': [], 'reason': '',
+        'image_base': None, 'sections': [], 'data_directories': [], 'reason': '',
     }
     if len(data) < 0x40 or data[:2] != b'MZ':
         result['reason'] = 'no MZ signature'
@@ -140,6 +140,27 @@ def parse_pe_header(data: bytes) -> dict:
     result['image_base'] = (struct.unpack_from('<I', data, base_off)[0] if base_size == 4
                              else struct.unpack_from('<Q', data, base_off)[0])
     result['size_of_image'] = struct.unpack_from('<I', data, size_off)[0]
+
+    # Data Directories (RVA, Size) pairs — NumberOfRvaAndSizes precedes the
+    # array itself; offsets differ between PE32 and PE32+ because the
+    # Windows-specific fields ahead of it (Stack/Heap Reserve/Commit) are
+    # 4 bytes wide in PE32 and 8 bytes wide in PE32+. Only used so far for
+    # IMAGE_DIRECTORY_ENTRY_BASERELOC (index 5), by stomping.py's
+    # relocation-normalized disk diff — parsed here, not per-caller, since
+    # every caller needs the same offsets and the same PE32/PE32+ branch.
+    num_rva_sizes_off, dir_off = ((92, 96) if base_size == 4 else (108, 112))
+    num_rva_sizes_off += opt_off
+    dir_off += opt_off
+    data_directories = []
+    if num_rva_sizes_off + 4 <= len(data):
+        num_dirs = min(struct.unpack_from('<I', data, num_rva_sizes_off)[0], 16)
+        for i in range(num_dirs):
+            entry_off = dir_off + i * 8
+            if entry_off + 8 > len(data):
+                break
+            rva, size = struct.unpack_from('<II', data, entry_off)
+            data_directories.append((rva, size))
+    result['data_directories'] = data_directories
 
     sec_off = coff_off + 20 + opt_hdr_size
     sections = []
@@ -228,6 +249,99 @@ def section_protection_deviates(actual_protect_name: str, section: dict) -> bool
         return False
     name = actual_protect_name or ''
     return name not in NORMAL_IMAGE_PROTECTIONS
+
+
+# ── Base relocation normalization ────────────────────────────────────────
+# Used by hunt/stomping.py's on-disk-vs-memory content diff: a module
+# loaded at a different address than its preferred ImageBase (ASLR, or a
+# base collision forcing the loader to relocate it) has every absolute
+# address the linker baked into that build's on-disk bytes patched at
+# load time via the .reloc table. Without undoing that, a section that
+# was NEVER touched by anything except normal loading can still show
+# byte-for-byte differences from its on-disk original — a false positive
+# for "stomping" that has nothing to do with tampering.
+
+IMAGE_DIRECTORY_ENTRY_BASERELOC = 5
+IMAGE_REL_BASED_ABSOLUTE = 0    # padding entry, not a real fixup
+IMAGE_REL_BASED_HIGHLOW  = 3    # 32-bit fixup
+IMAGE_REL_BASED_DIR64    = 10   # 64-bit fixup
+
+
+def _rva_to_file_offset(sections: list, rva: int) -> "int|None":
+    """Translate a Relative Virtual Address to a byte offset inside the PE FILE, via the section table."""
+    for s in sections:
+        span = max(s['virtual_size'], s['size_of_raw_data'])
+        if s['virtual_address'] <= rva < s['virtual_address'] + span:
+            return s['pointer_to_raw_data'] + (rva - s['virtual_address'])
+    return None
+
+
+def apply_base_relocations(data: bytes, pe: dict, delta: int) -> bytes:
+    """
+    Apply a load-time base-relocation delta to a COPY of `data` (a PE FILE
+    image — i.e. `data` is indexed by FILE offset, the same indexing
+    parse_pe_header()'s section table uses) so that RVAs the loader would
+    have fixed up at load time reflect what memory SHOULD contain once
+    relocated by `delta` = actual_load_base - preferred_image_base
+    (pe['image_base'], from parsing `data`'s own header).
+
+    Only relocation types mainstream Windows linkers actually emit for
+    x86/x64 are applied: IMAGE_REL_BASED_HIGHLOW (32-bit fixups) and
+    IMAGE_REL_BASED_DIR64 (64-bit fixups). IMAGE_REL_BASED_ABSOLUTE is
+    block-alignment padding, not a real fixup, and is skipped; any other
+    type is left untouched (arm/mips-specific types this hunter has no
+    reason to encounter on x86/x64 dumps).
+
+    Never raises and never mutates `data` — returns an unmodified copy
+    (not the same object) if delta == 0, if the BASERELOC directory is
+    absent/empty, or if the relocation table is malformed/truncated. A
+    missing or corrupt relocation table means fixups couldn't be
+    normalized — callers should treat that as reduced confidence in the
+    resulting diff, not as a hard failure.
+    """
+    out = bytearray(data)
+    if delta == 0:
+        return bytes(out)
+
+    dirs = pe.get('data_directories') or []
+    if len(dirs) <= IMAGE_DIRECTORY_ENTRY_BASERELOC:
+        return bytes(out)
+    reloc_rva, reloc_size = dirs[IMAGE_DIRECTORY_ENTRY_BASERELOC]
+    if not reloc_rva or not reloc_size:
+        return bytes(out)
+
+    reloc_file_off = _rva_to_file_offset(pe['sections'], reloc_rva)
+    if reloc_file_off is None or reloc_file_off + reloc_size > len(data):
+        return bytes(out)
+
+    pos, end = reloc_file_off, reloc_file_off + reloc_size
+    while pos + 8 <= end:
+        try:
+            block_rva, block_size = struct.unpack_from('<II', data, pos)
+        except struct.error:
+            break
+        if block_size < 8 or pos + block_size > end:
+            break
+        entry_count = (block_size - 8) // 2
+        for i in range(entry_count):
+            entry_off = pos + 8 + i * 2
+            if entry_off + 2 > len(data):
+                break
+            entry = struct.unpack_from('<H', data, entry_off)[0]
+            rtype, page_off = entry >> 12, entry & 0xFFF
+            target_file_off = _rva_to_file_offset(pe['sections'], block_rva + page_off)
+            if target_file_off is None:
+                continue
+            if rtype == IMAGE_REL_BASED_HIGHLOW and target_file_off + 4 <= len(out):
+                val = struct.unpack_from('<I', out, target_file_off)[0]
+                struct.pack_into('<I', out, target_file_off, (val + delta) & 0xFFFFFFFF)
+            elif rtype == IMAGE_REL_BASED_DIR64 and target_file_off + 8 <= len(out):
+                val = struct.unpack_from('<Q', out, target_file_off)[0]
+                struct.pack_into('<Q', out, target_file_off, (val + delta) & 0xFFFFFFFFFFFFFFFF)
+            # IMAGE_REL_BASED_ABSOLUTE and any other type: no-op.
+        pos += block_size
+
+    return bytes(out)
 
 def _pe_timestamp_to_str(ts: int) -> str:
     """
