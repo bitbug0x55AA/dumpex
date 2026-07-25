@@ -79,6 +79,16 @@ def main():
     parser.add_argument('--force',      action='store_true',
                         help='Allow overwriting an existing output file (--txt/--output/--json/--csv). '
                              'Never allowed for the input dump file itself.')
+    parser.add_argument('--case-id',    metavar='ID',        default=None,
+                        help='Case/ticket identifier recorded in --json meta.execution.case_id '
+                             '(free-form; not validated or used elsewhere)')
+    parser.add_argument('--analyst',    metavar='NAME',      default=None,
+                        help='Analyst name/handle recorded in --json meta.execution.analyst')
+    parser.add_argument('--redact-paths', action='store_true',
+                        help='Omit absolute filesystem paths from --json meta (evidence.path and '
+                             'any --ref-dir/--yara-dir/--rules-file path in meta.execution.options '
+                             'are reduced to their basename) — for sharing JSON output outside the '
+                             'analyst\'s own machine without leaking local directory layout')
     args = parser.parse_args()
 
     # --ref-dir is only meaningful for --hunt stomping, but validated
@@ -131,6 +141,30 @@ def main():
         return "dumpex"
     cmd_label = _cmd_label()
 
+    # ── Curated CLI options for --json meta.execution.options ─────────────
+    # Deliberately NOT the full argparse Namespace (would include flags
+    # irrelevant to whatever mode actually ran) and NEVER raw environment
+    # variables (may carry credentials/hostnames unrelated to this run) —
+    # just the handful of options that could have influenced this run's
+    # output, so a JSON result can be understood/reproduced without also
+    # having the original command line.
+    def _build_options() -> dict:
+        opts = {"verbose": args.verbose}
+        if args.hunt:
+            opts["hunt"] = args.hunt
+            opts["yara_dir"] = args.yara_dir
+            opts["ref_dir"] = args.ref_dir
+            opts["rules_file"] = args.rules_file
+        if args.list:
+            opts["filter"] = args.filter
+        if args.strings:
+            opts["min_len"] = args.min_len
+            opts["grep"] = args.grep
+            opts["encoding"] = args.encoding
+        if args.diff:
+            opts["diff_mode"] = args.diff_mode
+        return opts
+
     # ── Plain-text tee ────────────────────────────────────────────────────
     # Streams to a scratch temp file for the whole run; the final filename
     # is only generated and committed in finalize() below, once (and only
@@ -150,7 +184,9 @@ def main():
 
         # Structured output collector — populated by commands that support it
         need_structured = bool(args.json or args.csv)
-        out = StructuredOutput(args.dumpfile, mf) if need_structured else None
+        out = StructuredOutput(args.dumpfile, mf, command=cmd_label, options=_build_options(),
+                                case_id=args.case_id, analyst=args.analyst,
+                                redact_paths=args.redact_paths) if need_structured else None
 
         # --json/--csv path resolution (existing-file / dump-path / dir-mode
         # collision handling) is owned entirely by StructuredOutput.write_json

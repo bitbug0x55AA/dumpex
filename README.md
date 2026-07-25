@@ -352,9 +352,70 @@ YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass
 | `--yara-dir DIR` | Directory of `.yar` rule files for `--hunt yara` (explicit override; no automatic cwd scan) |
 | `--rules-file FILE` | Explicit `rules.yaml`/`.yml`/`.json` for TTP detection (no automatic cwd scan) |
 | `--ref-dir DIR` | Directory of reference module files for `--hunt stomping`'s verified content diff (required for a nonzero score; see "Module Stomping Detection") |
-| `--json FILE` | Write structured results to FILE as JSON |
+| `--json FILE` | Write structured results to FILE as JSON (includes an evidence/provenance `meta` block — see below) |
 | `--csv PATH` | Write CSV output: `FILE.csv` → single combined file, `DIR\` → one file per table |
 | `--txt FILE` | Write plain-text copy of console output (ANSI colours stripped) |
+| `--case-id ID` | Case/ticket identifier recorded in `--json meta.execution.case_id` (free-form) |
+| `--analyst NAME` | Analyst name/handle recorded in `--json meta.execution.analyst` |
+| `--redact-paths` | Omit absolute filesystem paths from `--json` output (`meta.evidence.path`, and any `--ref-dir`/`--yara-dir`/`--rules-file` path in `meta.execution.options`, are reduced to their basename) |
+
+---
+
+## JSON Evidence Metadata
+
+`--json` output carries a top-level `meta` object alongside the existing
+per-command result sections (`modules`, `hunt`, `sysinfo`, ...) — those
+sections' own structure is unchanged; `meta` is purely additive:
+
+```json
+{
+  "meta": {
+    "schema_version": "1.0",
+    "tool": { "name": "dumpex", "version": "2.0.0" },
+    "execution": {
+      "started_at": "2026-07-25T11:10:40Z",
+      "finished_at": "2026-07-25T11:10:40Z",
+      "duration_seconds": 0.024,
+      "command": "hunt_stomping",
+      "options": { "verbose": false, "hunt": "stomping", "ref_dir": null },
+      "case_id": null,
+      "analyst": null
+    },
+    "evidence": {
+      "file_name": "sample.dmp",
+      "path": "/home/analyst/cases/sample.dmp",
+      "size_bytes": 123456,
+      "sha256": "..."
+    },
+    "runtime": { "python_version": "3.11.15", "minidump_version": "0.0.24" },
+    "rules": { "path": "...", "sha256": "...", "explicit": false, "version": 1 }
+  },
+  "hunt": { "...": "..." }
+}
+```
+
+Notes:
+
+- `schema_version` tracks the shape of this `meta` document, independently
+  of `tool.version` (dumpex's own version) — the two change on different
+  schedules.
+- `evidence.sha256` is computed by streaming the dump file in bounded
+  chunks (never loaded into memory at once) and is deterministic over file
+  content only — the same dump produces the same hash regardless of which
+  command or how many times it's run, so it can anchor a finding to an
+  exact evidence file in a case record.
+- `rules` (the ruleset that actually produced any `hunt` verdicts —
+  path, content hash, whether it was an explicit `--rules-file` override)
+  is surfaced once here rather than duplicated inside every hunt result;
+  it's omitted entirely (not a misleading empty object) if no hunt module
+  that reads `rules.yaml` ran this invocation.
+- A failure computing any single piece of `meta` (e.g. the dump file was
+  deleted or became unreadable between opening it and writing `--json`)
+  never aborts the write or loses already-completed analysis results —
+  that piece gets an `"error"` string instead, and the surrounding
+  sections that could be computed are still written normally.
+- `--redact-paths` only affects `meta` — it never changes what the
+  console prints or what `--txt`/`--csv` contain.
 
 ---
 
@@ -376,7 +437,7 @@ Layout:
 |---|---|
 | `tests/unit/` | Pure function-level tests (PE parsing, relocation normalization, the shared coverage/status reduction rule) — no hunter or minidump object graph involved |
 | `tests/hunt/` | Per-hunter tests (`dumpex.hunt.*`) driven through synthetic `FakeMF` minidump objects |
-| `tests/integration/` | Cross-module output-path tests (CSV/JSON summary rows faithfully reflecting a hunter's own `verdict_level`/`confidence`/`coverage_status`) |
+| `tests/integration/` | Cross-module output-path tests: CSV/JSON summary rows faithfully reflecting a hunter's own `verdict_level`/`confidence`/`coverage_status`; the `--json` `meta` block (evidence hashing, redaction, graceful degradation) |
 | `tests/fixtures/` | Shared synthetic-PE/minidump builders (`fakes.py`) used by all of the above |
 
 `tests/conftest.py` also resets `stomping.get_thread_contexts`/
