@@ -17,6 +17,10 @@ full = [
     "pyyaml",
     "yara-python",
 ]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
 
 [project.scripts]
 dumpex = "dumpex.cli:main"
@@ -33,3 +37,15 @@ include = ["dumpex*"]
 # resolve this via importlib.resources ahead of any dev-tree/user-override
 # path (script dir / cwd).
 "dumpex.rules_pkg" = ["data/rules.yaml", "data/yara/*.yar"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+# No real minidump/PE sample files are required to run this suite — every
+# test builds its own synthetic PE header / minidump object graph via
+# tests/fixtures/fakes.py, so `pytest` must succeed with nothing beyond
+# the repo checkout (no external fixtures, no network, no malware corpus).
+addopts = "-ra"
+
+[tool.coverage.run]
+source = ["dumpex"]

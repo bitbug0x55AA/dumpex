@@ -346,6 +346,39 @@ YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass
 
 ---
 
+## Development
+
+The regression suite requires no real `.dmp`/PE sample files — every test
+builds its own synthetic PE header and minidump object graph via
+`tests/fixtures/fakes.py`:
+
+```bash
+pip install -e ".[dev]"     # pytest, pytest-cov
+pytest                       # run the full suite
+pytest --cov=dumpex --cov-report=term-missing   # with coverage
+```
+
+Layout:
+
+| Path | Scope |
+|---|---|
+| `tests/unit/` | Pure function-level tests (PE parsing, relocation normalization) — no hunter or minidump object graph involved |
+| `tests/hunt/` | Per-hunter tests (`dumpex.hunt.*`) driven through synthetic `FakeMF` minidump objects |
+| `tests/integration/` | Cross-module output-path tests (CSV/JSON summary rows faithfully reflecting a hunter's own `verdict_level`/`confidence`/`coverage_status`) |
+| `tests/fixtures/` | Shared synthetic-PE/minidump builders (`fakes.py`) used by all of the above |
+
+`tests/conftest.py` also resets `stomping.get_thread_contexts`/
+`pipemod.get_thread_contexts` before and after every test — both hold a
+plain module-level monkeypatch point so a test can inject a synthetic
+RIP, and without a reset a patched value would otherwise leak into
+whichever test happens to run next.
+
+CI (`.github/workflows/tests.yml`) runs the suite on the package's
+minimum supported Python version (`requires-python` in `pyproject.toml`)
+and one current version, on every push/PR.
+
+---
+
 ## Acknowledgements
 
 Dumpex builds on the work of several researchers and organizations in the public security community. Their contributions are gratefully acknowledged below.
