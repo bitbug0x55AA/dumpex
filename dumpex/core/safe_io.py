@@ -3,21 +3,50 @@ Output-file safety helpers: no-clobber by default, atomic writes, and a
 hard refusal when an output path would collide with the input dump.
 
 A DFIR tool's output paths need to be provably safe:
-  - never truncate/overwrite the evidence file being analyzed
+  - never truncate/overwrite the evidence file being analyzed — checked
+    against the LITERAL final path, unconditionally, right before the
+    commit step; --force never lifts this specific check
   - never silently clobber an existing output the analyst didn't expect
     to lose (unless they explicitly opted in with --force)
-  - never leave a half-written file behind if the write is interrupted
-    (crash, disk full, Ctrl-C) — a truncated JSON/CSV/txt report that
-    LOOKS complete is worse than no report at all
+  - never leave a half-written file — or an empty placeholder — behind if
+    the write is interrupted (crash, disk full, Ctrl-C, an existing-file
+    refusal) — nothing is ever created at (or near) the final path until
+    the content is complete and ready to commit in one atomic step
+
+Everything funnels through commit_output() / commit_to_directory(): the
+final filename is generated, dump-path-checked, and committed together, at
+the moment the content is ready — never earlier. There is deliberately no
+"reserve an empty file now, fill it in later" step anywhere in this module.
 """
 import os
 import sys
 import hashlib
 import tempfile
 import datetime
+import contextlib
 from pathlib import Path
 
-from dumpex.ui.colors import RED, DIM, GREEN
+from dumpex.ui.colors import RED, DIM
+
+
+@contextlib.contextmanager
+def _unlink_temp_on_error(temp_path):
+    """
+    Guarantees temp_path never survives a refusal (check_not_dump_path's
+    sys.exit) or any other exception raised while committing it — a
+    caller-created temp file that outlives the commit attempt because the
+    refusal path forgot to clean it up is exactly the kind of leftover
+    file this module exists to prevent, even though it's a scratch temp
+    file rather than something at the final path.
+    """
+    try:
+        yield
+    except BaseException:
+        try:
+            os.unlink(temp_path)
+        except OSError:
+            pass
+        raise
 
 
 def resolve_or_none(path) -> Path | None:
@@ -32,11 +61,12 @@ def check_not_dump_path(out_path, dump_path, label: str):
     """
     Refuse if out_path resolves to the same file as dump_path.
 
-    This must be checked regardless of write timing (before or after the
-    dump is parsed): MinidumpFile reads are lazy/on-demand against the
-    still-open file handle for the life of the process, not a one-time
-    upfront slurp — so even writing "after the initial parse" doesn't
-    make it safe to replace the underlying file mid-run.
+    Callers must invoke this against the LITERAL path about to be written,
+    at commit time — never against a directory or pattern that merely
+    produced that path, and never skip it for --force. MinidumpFile reads
+    are lazy/on-demand against the still-open file handle for the life of
+    the process (not a one-time upfront slurp), so there is no point in
+    program execution where overwriting the dump path becomes safe.
     """
     out_resolved  = resolve_or_none(out_path)
     dump_resolved = resolve_or_none(dump_path)
@@ -44,145 +74,6 @@ def check_not_dump_path(out_path, dump_path, label: str):
         print(RED(f"[!] Refusing to write {label} to the same path as the input dump: {out_path}"))
         print(DIM(f"    This would destroy the evidence file. Choose a different output path."))
         sys.exit(1)
-
-
-def _reserve_exclusive(path: Path) -> bool:
-    """
-    Atomically claim `path` iff nothing exists there yet (O_CREAT|O_EXCL).
-
-    A plain `Path.exists()` check followed by a later write has a TOCTOU
-    window: two concurrent dumpex runs (or two runs racing on the same
-    output path) can both observe "free" and then both write, one silently
-    clobbering the other. Creating the file here — even though its content
-    is only filled in later via atomic_write_* — closes that window for the
-    lifetime of the reservation.
-    """
-    try:
-        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        return False
-    os.close(fd)
-    return True
-
-
-def check_overwrite(out_path, force: bool, label: str):
-    """
-    Refuse to clobber an existing file unless --force was passed.
-
-    When not forcing, this reserves out_path via O_CREAT|O_EXCL rather than
-    just checking existence (see _reserve_exclusive) — the empty file this
-    leaves behind is safe for the caller's subsequent atomic_write_* to
-    replace via os.replace().
-    """
-    p = Path(out_path)
-    if force:
-        return
-    p.parent.mkdir(parents=True, exist_ok=True)
-    if not _reserve_exclusive(p):
-        print(RED(f"[!] {label} already exists: {out_path}"))
-        print(DIM(f"    Pass --force to overwrite."))
-        sys.exit(1)
-
-
-def reserve_unique_path(directory, stem: str, suffix: str, force: bool = False,
-                         max_attempts: int = 1000) -> Path:
-    """
-    Reserve a unique filename `{stem}{suffix}` (or `{stem}_NNN{suffix}` on
-    collision) inside `directory`, for auto-generated output targets
-    (directory mode for --txt/--json/--csv).
-
-    A fixed-timestamp stem is not guaranteed unique — two runs within the
-    same wall-clock second, or two hunts against the same dump, would
-    otherwise produce the identical filename and one write would silently
-    clobber the other. Instead of trusting `Path.exists()` (itself a TOCTOU
-    race), each candidate is claimed with O_CREAT|O_EXCL and the first one
-    that succeeds is returned already reserved.
-
-    force=True skips the collision search entirely and returns the bare
-    `{stem}{suffix}` path unreserved — the caller intends to overwrite
-    whatever (if anything) is already there.
-    """
-    d = Path(directory)
-    d.mkdir(parents=True, exist_ok=True)
-    if force:
-        return d / f"{stem}{suffix}"
-
-    candidate = d / f"{stem}{suffix}"
-    if _reserve_exclusive(candidate):
-        return candidate
-    for i in range(1, max_attempts):
-        candidate = d / f"{stem}_{i:03d}{suffix}"
-        if _reserve_exclusive(candidate):
-            return candidate
-    raise RuntimeError(
-        f"could not reserve a unique output filename under {d} "
-        f"(tried {max_attempts} names starting with '{stem}{suffix}')")
-
-
-def resolve_output_target(requested_path, suffix: str, cmd_label: str,
-                           dump_path, force: bool) -> Path:
-    """
-    Single entry point for resolving a --txt/--json/--csv(single-file)
-    output argument into a concrete, safely-claimed path. Every caller that
-    accepts a directory-or-file output argument must go through this
-    (or reserve_unique_path directly, for the multi-file --csv directory
-    case where table names aren't known until after the scan) rather than
-    hand-rolling its own exists()/mkdir()/timestamp logic — see the P1
-    "directory-mode output can silently overwrite files" finding.
-
-    Behaviour:
-      1. Refuse if the resolved target is the input dump file itself.
-         Unconditional — --force does not lift this.
-      2. Directory target (path ends in a separator, or already exists as
-         a directory): auto-generate `dumpex_<utc-timestamp>_<cmd_label>`
-         and reserve a collision-free name for it (reserve_unique_path).
-      3. File target: reserve the exact path unless --force (check_overwrite).
-
-    Returns the resolved Path; exits the process on any refusal, consistent
-    with check_overwrite/check_not_dump_path.
-    """
-    p = Path(requested_path)
-    is_dir_target = str(requested_path).endswith(('/', '\\')) or p.is_dir()
-    if is_dir_target:
-        check_not_dump_path(p, dump_path, f"output directory ({suffix})")
-        ts    = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
-        label = f"_{cmd_label}" if cmd_label else ""
-        return reserve_unique_path(p, f"dumpex_{ts}{label}", suffix, force=force)
-
-    check_not_dump_path(p, dump_path, f"{suffix} output")
-    check_overwrite(p, force, f"{suffix} output")
-    return p
-
-
-def atomic_write_bytes(out_path, data: bytes) -> str:
-    """
-    Write data to out_path atomically: write to a temp file in the same
-    directory, then os.replace() into place. A crash, Ctrl-C, or full disk
-    mid-write leaves the temp file orphaned and the target path untouched
-    (either the old version, if any, or nothing) — never a truncated
-    half-write masquerading as a complete file.
-
-    Returns a "N bytes  sha256=..." summary string for chain-of-custody
-    logging.
-    """
-    p = Path(out_path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
-        os.replace(tmp_path, p)
-    except BaseException:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-    return summarize_bytes(data)
-
-
-def atomic_write_text(out_path, text: str, encoding: str = "utf-8") -> str:
-    return atomic_write_bytes(out_path, text.encode(encoding))
 
 
 def summarize_bytes(data: bytes) -> str:
@@ -193,23 +84,231 @@ def summarize_file(path) -> str:
     return summarize_bytes(Path(path).read_bytes())
 
 
+# ── Commit primitives ────────────────────────────────────────────────────
+# A completed temp file becomes real output content ONLY through these.
+
+def _commit_no_clobber(temp_path, final_path: Path, force: bool, label: str) -> None:
+    """
+    Commit temp_path onto final_path with no TOCTOU window and, in
+    non-force mode, no way to silently discard an existing file: a hard
+    link is atomic AND exclusive — it fails immediately (temp_path
+    untouched by the failure) if final_path already exists, unlike a
+    Path.exists() check followed by a separate write. force=True skips
+    straight to os.replace() — overwriting is the explicit intent.
+
+    temp_path is always consumed here: unlinked on success, and unlinked
+    again on the refusal path so nothing is ever left dangling at either
+    location, including no empty file at final_path.
+    """
+    final_path = Path(final_path)
+    if force:
+        os.replace(temp_path, final_path)
+        return
+    try:
+        os.link(temp_path, final_path)
+    except FileExistsError:
+        os.unlink(temp_path)
+        print(RED(f"[!] {label} already exists: {final_path}"))
+        print(DIM(f"    Pass --force to overwrite."))
+        sys.exit(1)
+    else:
+        os.unlink(temp_path)
+
+
+def write_output_bytes(final_path, data: bytes, dump_path, force: bool, label: str) -> str:
+    """
+    Write `data` as a new output file at an EXACT, caller-chosen path
+    (--extract, --output, --json/--csv single-file targets). Not for a
+    directory target — see commit_to_directory for the auto-named case.
+
+    check_not_dump_path runs against the literal final_path, unconditionally
+    (force never lifts it). The write goes to a temp file in the same
+    directory first; final_path itself is only ever touched by the single
+    atomic commit step (_commit_no_clobber) once that temp file is
+    complete — never before, so a crash or refusal never leaves an empty
+    placeholder there.
+    """
+    p = Path(final_path)
+    check_not_dump_path(p, dump_path, label)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(p.parent), prefix=f".{p.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    _commit_no_clobber(tmp_path, p, force, label)
+    return summarize_bytes(data)
+
+
+def write_output_text(final_path, text: str, dump_path, force: bool, label: str,
+                       encoding: str = "utf-8") -> str:
+    return write_output_bytes(final_path, text.encode(encoding), dump_path, force, label)
+
+
+def commit_to_directory(temp_path, directory, stem: str, suffix: str,
+                         dump_path, force: bool, label: str = "",
+                         max_attempts: int = 1000) -> Path:
+    """
+    Commit an already-written temp_path into `directory` as
+    `{stem}{suffix}`, retrying with `{stem}_001{suffix}`, `_002`, ... on
+    collision instead of refusing outright: the stem here is always
+    machine-generated (a timestamp, a CSV table name) rather than
+    something the user chose to protect, so a collision means "pick a
+    fresher name," not "you're about to lose something."
+
+    check_not_dump_path runs against every literal candidate BEFORE it is
+    attempted — including under force=True, which here only skips the
+    collision-retry search (single attempt, overwrite-tolerant) rather
+    than also skipping the evidence-file check. This is what closes the
+    force+directory-mode gap: a directory target whose auto-generated name
+    happens to collide with the input dump is refused regardless of
+    --force, at the exact final path, not the directory that produced it.
+    """
+    d = Path(directory)
+    d.mkdir(parents=True, exist_ok=True)
+
+    with _unlink_temp_on_error(temp_path):
+        if force:
+            final_path = d / f"{stem}{suffix}"
+            check_not_dump_path(final_path, dump_path, label or f"output ({suffix})")
+            os.replace(temp_path, final_path)
+            return final_path
+
+        for i in range(max_attempts):
+            final_path = d / (f"{stem}{suffix}" if i == 0 else f"{stem}_{i:03d}{suffix}")
+            check_not_dump_path(final_path, dump_path, label or f"output ({suffix})")
+            try:
+                os.link(temp_path, final_path)
+            except FileExistsError:
+                continue
+            os.unlink(temp_path)
+            return final_path
+
+        os.unlink(temp_path)
+        raise RuntimeError(
+            f"could not commit a unique output filename under {d} "
+            f"(tried {max_attempts} names starting with '{stem}{suffix}')")
+
+
+def commit_output(temp_path, requested_path, suffix: str, cmd_label: str,
+                   dump_path, force: bool, label: str = "") -> Path:
+    """
+    Single entry point for turning a completed temp file into a real
+    --json/--csv/--txt output, whether `requested_path` names a directory
+    (auto-generated `dumpex_<utc-ts>_<cmd_label>{suffix}` filename, via
+    commit_to_directory) or an exact file (write_output_bytes's
+    _commit_no_clobber). Every --json/--csv/--txt writer must go through
+    this (or commit_to_directory directly, for CSV's per-table directory
+    case where the stem isn't a timestamp) rather than hand-rolling its
+    own exists()/mkdir()/timestamp logic.
+    """
+    p = Path(requested_path)
+    is_dir_target = str(requested_path).endswith(('/', '\\')) or p.is_dir()
+    if is_dir_target:
+        ts    = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S")
+        tag   = f"_{cmd_label}" if cmd_label else ""
+        return commit_to_directory(temp_path, p, f"dumpex_{ts}{tag}", suffix,
+                                    dump_path, force, label)
+
+    final_path = p
+    with _unlink_temp_on_error(temp_path):
+        check_not_dump_path(final_path, dump_path, label or f"{suffix} output")
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        _commit_no_clobber(temp_path, final_path, force, label or f"{suffix} output")
+        return final_path
+
+
+# ── Write-then-commit convenience wrappers ───────────────────────────────
+
+def _mkstemp_text(directory: Path, encoding: str = "utf-8"):
+    directory.mkdir(parents=True, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(dir=str(directory), prefix=".dumpex-", suffix=".tmp")
+    return os.fdopen(fd, "w", encoding=encoding), tmp_path
+
+
+def write_text_to_target(requested_path, text: str, suffix: str, cmd_label: str,
+                          dump_path, force: bool, label: str = "",
+                          encoding: str = "utf-8") -> Path:
+    """
+    Full pipeline for a --json/--csv/--txt single-generated-name output:
+    write `text` to a scratch temp file (in whatever directory the final
+    output will end up in), then commit_output() it onto requested_path.
+    Nothing is ever created at/near the final path until the content is
+    complete and ready to commit in one atomic step.
+    """
+    p = Path(requested_path)
+    is_dir_target = str(requested_path).endswith(('/', '\\')) or p.is_dir()
+    directory = p if is_dir_target else (p.parent if str(p.parent) else Path("."))
+    fh, tmp_path = _mkstemp_text(directory, encoding)
+    try:
+        fh.write(text)
+        fh.close()
+    except BaseException:
+        try:
+            fh.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return commit_output(tmp_path, requested_path, suffix, cmd_label, dump_path, force, label)
+
+
+def write_text_to_directory(directory, text: str, stem: str, suffix: str,
+                             dump_path, force: bool, label: str = "",
+                             encoding: str = "utf-8") -> Path:
+    """Like write_text_to_target, but for CSV's per-table directory case
+    where the stem is a table name, not a timestamp — see commit_to_directory."""
+    d = Path(directory)
+    fh, tmp_path = _mkstemp_text(d, encoding)
+    try:
+        fh.write(text)
+        fh.close()
+    except BaseException:
+        try:
+            fh.close()
+        except Exception:
+            pass
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+    return commit_to_directory(tmp_path, d, stem, suffix, dump_path, force, label)
+
+
 class AtomicTextTee:
     """
-    Streaming tee-to-file that stays atomic: writes accumulate in a temp
-    file in the target's directory throughout the run, and are only
-    renamed onto the final path in finalize(). If the process dies mid-run
-    (crash, Ctrl-C, disk full), the target path is left exactly as it was
-    before — never a partial capture masquerading as the full run's output.
+    Streaming tee-to-file that stays atomic AND doesn't touch the final
+    output path — or its containing directory's namespace — until the run
+    actually completes: writes accumulate in a scratch temp file for the
+    whole run, and the final filename is generated + committed only in
+    finalize(), via commit_output(). A crash, Ctrl-C, or abandon() call
+    only ever touches the temp file — no empty placeholder is ever created
+    at or near the final path.
     """
 
-    def __init__(self, final_path, original_stdout, ansi_re):
-        self._final_path = Path(final_path)
+    def __init__(self, requested_path, cmd_label: str, dump_path, force: bool,
+                 original_stdout, ansi_re):
+        self._requested  = requested_path
+        self._cmd_label  = cmd_label
+        self._dump_path  = dump_path
+        self._force      = force
         self._original   = original_stdout
-        self._ansi_re     = ansi_re
-        self._final_path.parent.mkdir(parents=True, exist_ok=True)
-        fd, self._tmp_path = tempfile.mkstemp(
-            dir=str(self._final_path.parent),
-            prefix=f".{self._final_path.name}.", suffix=".tmp")
+        self._ansi_re    = ansi_re
+
+        p = Path(requested_path)
+        is_dir_target = str(requested_path).endswith(('/', '\\')) or p.is_dir()
+        scratch_dir = p if is_dir_target else (p.parent if str(p.parent) else Path("."))
+        scratch_dir.mkdir(parents=True, exist_ok=True)
+        fd, self._tmp_path = tempfile.mkstemp(dir=str(scratch_dir), prefix=".dumpex-txt-", suffix=".tmp")
         self._fh = os.fdopen(fd, "w", encoding="utf-8")
 
     def write(self, text: str) -> int:
@@ -224,14 +323,18 @@ class AtomicTextTee:
     def __getattr__(self, name):
         return getattr(self._original, name)
 
-    def finalize(self) -> str:
-        """Close the temp file and atomically rename it onto the final path."""
+    def finalize(self):
+        """Close the temp file, resolve + commit the final path now. Returns
+        (final_path, summary)."""
         self._fh.close()
-        os.replace(self._tmp_path, self._final_path)
-        return summarize_file(self._final_path)
+        final_path = commit_output(self._tmp_path, self._requested, ".txt",
+                                    self._cmd_label, self._dump_path, self._force,
+                                    "--txt output")
+        return final_path, summarize_file(final_path)
 
     def abandon(self):
-        """Discard the temp file without touching the final path (on error paths)."""
+        """Discard the temp file without touching the final path (on error
+        paths) — the final path was never created in the first place."""
         try:
             self._fh.close()
         except Exception:

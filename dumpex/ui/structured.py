@@ -11,8 +11,7 @@ import datetime
 from pathlib import Path
 from dumpex.ui.colors import DIM
 from dumpex.core.memory import va_to_file_offset, prot_str
-from dumpex.core.safe_io import (check_not_dump_path, atomic_write_text,
-    reserve_unique_path, resolve_output_target)
+from dumpex.core.safe_io import write_text_to_target, write_text_to_directory, summarize_file
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -90,9 +89,9 @@ class StructuredOutput:
         return json.dumps(doc, indent=2, ensure_ascii=False)
 
     def write_json(self, path: str, cmd_label: str = "", force: bool = False):
-        p = resolve_output_target(path, ".json", cmd_label, self._meta["dump_path"], force)
-        summary = atomic_write_text(p, self.to_json())
-        print(DIM(f"  [·] JSON written → {p}  ({summary})"))
+        p = write_text_to_target(path, self.to_json(), ".json", cmd_label,
+                                  self._meta["dump_path"], force, "--json output")
+        print(DIM(f"  [·] JSON written → {p}  ({summarize_file(p)})"))
 
     # ── CSV ──────────────────────────────────────────────────────────────
 
@@ -110,18 +109,22 @@ class StructuredOutput:
             All tables written into a single CSV file, separated by a blank
             row and a "## section / table" header line.
 
-        Both modes write atomically (temp file + rename). Single-file mode
-        refuses to clobber an existing file unless force=True; directory
-        mode instead auto-picks a fresh, collision-free filename per table
-        (dumpex_..._001.csv, _002.csv, ...) so a same-second re-run can
-        never silently overwrite a prior table — see reserve_unique_path.
+        Both modes write to a scratch temp file first, then commit; nothing
+        is ever created at/near the final path(s) until content is ready.
+        Single-file mode refuses to clobber an existing file unless
+        force=True; directory mode instead auto-picks a fresh,
+        collision-free filename per table (dumpex_..._001.csv, _002.csv,
+        ...) so a same-second re-run can never silently overwrite a prior
+        table — see write_text_to_directory / commit_to_directory. Every
+        candidate filename — in both modes, regardless of force — is
+        checked against the input dump path immediately before it is
+        committed.
         """
         p_in  = Path(path)
         label = f"{cmd_label}_" if cmd_label else ""
 
         # ── Single-file mode ─────────────────────────────────────────────
         if p_in.suffix.lower() == ".csv":
-            p = resolve_output_target(path, ".csv", cmd_label, self._meta["dump_path"], force)
             buf = io.StringIO()
             total_rows = 0
             for section, data in self._sections.items():
@@ -136,27 +139,27 @@ class StructuredOutput:
                     writer.writerows(rows)
                     buf.write("\n")
                     total_rows += len(rows)
-            summary = atomic_write_text(p, buf.getvalue(), encoding="utf-8")
-            print(DIM(f"  [·] CSV  written → {p}  ({total_rows} row(s) across all tables, {summary})"))
+            p = write_text_to_target(path, buf.getvalue(), ".csv", cmd_label,
+                                      self._meta["dump_path"], force, "--csv output")
+            print(DIM(f"  [·] CSV  written → {p}  ({total_rows} row(s) across all tables, {summarize_file(p)})"))
             return
 
         # ── Directory mode ───────────────────────────────────────────────
-        check_not_dump_path(p_in, self._meta["dump_path"], "--csv output directory")
-        p_in.mkdir(parents=True, exist_ok=True)
         for section, data in self._sections.items():
             tables = self._section_to_tables(section, data)
             for table_name, rows in tables.items():
                 if not rows:
                     continue
-                stem  = f"dumpex_{label}{section}_{table_name}"
-                fname = reserve_unique_path(p_in, stem, ".csv", force=force)
+                stem = f"dumpex_{label}{section}_{table_name}"
                 buf = io.StringIO()
                 writer = csv.DictWriter(buf, fieldnames=rows[0].keys(),
                                        extrasaction="ignore")
                 writer.writeheader()
                 writer.writerows(rows)
-                summary = atomic_write_text(fname, buf.getvalue(), encoding="utf-8")
-                print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s), {summary})"))
+                fname = write_text_to_directory(p_in, buf.getvalue(), stem, ".csv",
+                                                 self._meta["dump_path"], force,
+                                                 f"CSV table output ({stem}.csv)")
+                print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s), {summarize_file(fname)})"))
 
     def _section_to_tables(self, section: str, data) -> dict:
         """

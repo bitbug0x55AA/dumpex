@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import read_region
-from dumpex.core.safe_io import atomic_write_bytes, check_overwrite, check_not_dump_path
+from dumpex.core.safe_io import write_output_bytes
 
 def cmd_extract(mf, addr, size, output, auto_size=False, force=False):
     auto_note = DIM(" (auto from region)") if auto_size else ""
@@ -18,18 +18,12 @@ def cmd_extract(mf, addr, size, output, auto_size=False, force=False):
         print(YELLOW("[!] MZ header detected — this looks like an injected PE!"))
 
     # output may be auto-generated from addr (no --output given), so this
-    # is the first point the final path is known. Both checks are repeated
-    # here even when an explicit --output was already checked earlier,
-    # before the read — the auto-generated case (region_0x<addr>.bin) is
-    # never seen by that earlier check at all, since it doesn't exist
-    # until this line runs. check_not_dump_path is a hard, non-bypassable
-    # refusal (force only lifts check_overwrite's existing-file guard) —
-    # a coincidental or deliberate name collision with the dump must never
-    # be allowed to replace the evidence file.
+    # is the first point the final path is known. write_output_bytes checks
+    # the literal final path against the dump — unconditionally, force
+    # never lifts it — and only ever touches that path via one atomic
+    # commit once `data` is fully written to a temp file first.
     out = output or f"region_0x{addr:x}.bin"
-    check_not_dump_path(out, mf.filename, "--extract output")
-    check_overwrite(out, force, "--extract output")
-    summary = atomic_write_bytes(out, data)
+    summary = write_output_bytes(out, data, mf.filename, force, "--extract output")
     print(GREEN(f"[+] Saved → {out}  ({summary})"))
 
 

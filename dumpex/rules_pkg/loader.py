@@ -13,13 +13,32 @@ SUSPICIOUS_PROTS = {"PAGE_EXECUTE_READWRITE", "PAGE_EXECUTE_WRITECOPY"}
 # If neither file is found, or if the YAML/JSON parser is unavailable, built-in
 # defaults are used so the tool always runs standalone.
 #
-# Rule file search order:
-#   1. Same directory as dumpex.py
-#   2. Current working directory
+# Source priority: explicit --rules-file  >  packaged defaults (bundled in
+# the wheel). There is deliberately no automatic cwd/script-dir scan — see
+# configure_rules_source() and _find_rules_source() below. A DFIR working
+# directory routinely contains untrusted case files; silently picking up a
+# rules.yaml that happens to be sitting there (which is also what made the
+# override path unreachable in practice, since the packaged copy was
+# checked first and always exists) is neither safe nor useful. Use
+# --rules-file to opt in explicitly.
 #
 # To add a new pipe pattern or IOC keyword, edit rules.yaml — no code changes needed.
 
 _RULES_CACHE = None   # module-level singleton; populated on first call to get_rules()
+_EXPLICIT_RULES_PATH = None   # set via configure_rules_source() / --rules-file
+
+
+def configure_rules_source(explicit_path) -> None:
+    """
+    Set an explicit rules.yaml/.yml/.json path (--rules-file) to use ahead
+    of the packaged defaults. Must be called before the first get_rules()
+    call actually loads anything — get_rules() caches its result on first
+    use, so this clears that cache to force a reload if one already
+    happened. Passing None clears any previously configured override.
+    """
+    global _EXPLICIT_RULES_PATH, _RULES_CACHE
+    _EXPLICIT_RULES_PATH = Path(explicit_path) if explicit_path else None
+    _RULES_CACHE = None
 
 # ── Built-in defaults (kept in sync with rules.yaml) ─────────────────────────
 _DEFAULT_RULES = {
@@ -164,10 +183,18 @@ def _find_rules_source() -> "_RuleSource | None":
     """
     Search for the TTP rules file. First match wins.
 
-      1. <_MEIPASS>/rules/rules.yaml        PyInstaller onefile: --add-data
+      1. --rules-file PATH (configure_rules_source())  Explicit, deliberate
+                                             override — the only way to use
+                                             a rules.yaml other than the
+                                             packaged one. If PATH doesn't
+                                             exist, this is reported and
+                                             loading falls through to the
+                                             packaged defaults rather than
+                                             silently using built-ins.
+      2. <_MEIPASS>/rules/rules.yaml        PyInstaller onefile: --add-data
                                              extracts to sys._MEIPASS, not
                                              next to the exe (sys.argv[0]).
-      2. dumpex.rules_pkg/data/rules.yaml   Bundled inside the installed
+      3. dumpex.rules_pkg/data/rules.yaml   Bundled inside the installed
                                              package itself — see
                                              _packaged_source(). This is the
                                              single canonical copy of the
@@ -176,38 +203,32 @@ def _find_rules_source() -> "_RuleSource | None":
                                              the repo, so there is nothing
                                              else to drift out of sync
                                              with it.
-      3. <script_dir>/rules/rules.yaml,     Explicit user override: drop a
-         <cwd>/rules/rules.yaml             custom rules.yaml next to the
-                                             dumpex binary or in the
-                                             working directory to change
-                                             TTP rules without touching the
-                                             installed package.
-      4. <script_dir>/rules.yaml,           Legacy flat layout (back-compat).
-         <cwd>/rules.yaml
 
-    (.yml and .json are also tried at each filesystem location, in that order.)
+    There is deliberately no automatic cwd/script-dir scan (see module
+    docstring): that path used to sit AFTER the packaged-defaults check,
+    which always succeeds now that rules.yaml is bundled in the wheel —
+    making it dead code that could never actually run. Reordering it ahead
+    of the packaged check instead would mean silently trusting whatever
+    rules.yaml happens to be sitting in a DFIR analyst's case working
+    directory. --rules-file is the explicit, auditable replacement.
     """
+    if _EXPLICIT_RULES_PATH is not None:
+        if _EXPLICIT_RULES_PATH.is_file():
+            suffix = _EXPLICIT_RULES_PATH.suffix.lower()
+            if suffix not in (".yaml", ".yml", ".json"):
+                suffix = ".yaml"
+            return _RuleSource(str(_EXPLICIT_RULES_PATH), suffix,
+                                lambda p=_EXPLICIT_RULES_PATH: p.read_text(encoding="utf-8"))
+        print(YELLOW(f"  [~] --rules-file {_EXPLICIT_RULES_PATH} not found — "
+                      f"falling back to packaged defaults"))
+
     meipass = getattr(sys, "_MEIPASS", None)
     if meipass:
         src = _fs_source(Path(meipass) / "rules")
         if src is not None:
             return src
 
-    src = _packaged_source()
-    if src is not None:
-        return src
-
-    script_dir = Path(sys.argv[0]).resolve().parent
-    cwd        = Path.cwd()
-    for base in (script_dir, cwd):
-        src = _fs_source(base / "rules")
-        if src is not None:
-            return src
-    for base in (script_dir, cwd):
-        src = _fs_source(base)
-        if src is not None:
-            return src
-    return None
+    return _packaged_source()
 
 
 def _load_rules() -> dict:

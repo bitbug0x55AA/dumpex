@@ -181,7 +181,7 @@ python -m dumpex dump.DMP --hunt all --json results.json --csv ./output/ --txt r
 
 ## Detection Rules (`rules.yaml`)
 
-TTP detection is driven by `rules.yaml`, bundled inside the package at `dumpex/rules_pkg/data/rules.yaml` — this is what `pip install dumpex` ships, so the tool works standalone with no extra files. Drop a custom `rules.yaml` into a `rules/` folder next to the `dumpex` binary or in the current working directory to override it without touching the installed package. Built-in defaults are used if no file is found at all.
+TTP detection is driven by `rules.yaml`, bundled inside the package at `dumpex/rules_pkg/data/rules.yaml` — this is what `pip install dumpex` ships, so the tool works standalone with no extra files. Pass `--rules-file PATH` for an explicit, deliberate override without touching the installed package. There is **no** automatic scan of the current working directory or the directory the script lives in — a DFIR working directory routinely contains untrusted case files, so a `rules.yaml` sitting there is never picked up implicitly. Built-in defaults are used if no file is found at all.
 
 The rule file controls:
 
@@ -196,7 +196,7 @@ The rule file controls:
 
 To add new detection coverage, edit `rules.yaml` — no code changes required.
 
-YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Drop any `.yar` file into a `rules/yara/` folder next to the `dumpex` binary or in the current working directory (or pass `--yara-dir PATH`) to extend scanning coverage without touching the installed package.
+YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass `--yara-dir PATH` for an explicit directory of `.yar` files to extend scanning coverage without touching the installed package — same as `--rules-file`, there is no automatic cwd/script-dir scan.
 
 ---
 
@@ -241,7 +241,8 @@ YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Drop
 | `--min-len N` | Minimum string length for `--strings` (default: 6) |
 | `--encoding` | String encoding: `ascii`, `unicode`, `both` (default: `both`) |
 | `--verbose` | Show all regions including routine ones |
-| `--yara-dir DIR` | Directory of `.yar` rule files for `--hunt yara` |
+| `--yara-dir DIR` | Directory of `.yar` rule files for `--hunt yara` (explicit override; no automatic cwd scan) |
+| `--rules-file FILE` | Explicit `rules.yaml`/`.yml`/`.json` for TTP detection (no automatic cwd scan) |
 | `--json FILE` | Write structured results to FILE as JSON |
 | `--csv PATH` | Write CSV output: `FILE.csv` → single combined file, `DIR\` → one file per table |
 | `--txt FILE` | Write plain-text copy of console output (ANSI colours stripped) |

@@ -5,9 +5,9 @@ from minidump.minidumpfile import MinidumpFile
 
 from dumpex.ui.colors import RED, DIM, BOLD
 from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
-from dumpex.rules_pkg.loader import get_rules
+from dumpex.rules_pkg.loader import get_rules, configure_rules_source
 from dumpex.ui.structured import StructuredOutput, _ANSI_RE
-from dumpex.core.safe_io import check_not_dump_path, AtomicTextTee, resolve_output_target
+from dumpex.core.safe_io import check_not_dump_path, AtomicTextTee
 
 from dumpex.commands.list_cmd import cmd_list
 from dumpex.commands.modules  import cmd_modules
@@ -56,7 +56,11 @@ def main():
 
     parser.add_argument('--verbose',    action='store_true', help='Show all regions including routine ones')
     parser.add_argument('--yara-dir',   metavar='DIR',       default=None,
-                        help='Directory of .yar rule files for --hunt yara (default: ./rules/yara/)')
+                        help='Directory of .yar rule files for --hunt yara '
+                             '(default: packaged rules; no automatic cwd/script-dir scan)')
+    parser.add_argument('--rules-file', metavar='FILE',      default=None,
+                        help='Explicit rules.yaml/.yml/.json for TTP detection '
+                             '(default: packaged rules; no automatic cwd/script-dir scan)')
     parser.add_argument('--json',       metavar='FILE',      default=None,
                         help='Write structured results to FILE as JSON  (e.g. results.json)')
     parser.add_argument('--csv',        metavar='PATH',      default=None,
@@ -70,6 +74,13 @@ def main():
                         help='Allow overwriting an existing output file (--txt/--output/--json/--csv). '
                              'Never allowed for the input dump file itself.')
     args = parser.parse_args()
+
+    # Explicit rules.yaml override (--rules-file), if any — must be set
+    # before anything calls get_rules() (every hunt module that reads TTP
+    # rules does, on first use, and caches the result for the rest of the
+    # run). See rules_pkg/loader.py for why there's no automatic cwd scan.
+    if args.rules_file:
+        configure_rules_source(args.rules_file)
 
     # ── Output-path safety ──────────────────────────────────────────────────
     # Checked before the dump is opened or any output file is touched: a
@@ -107,15 +118,16 @@ def main():
     cmd_label = _cmd_label()
 
     # ── Plain-text tee ────────────────────────────────────────────────────
-    # Streams to a temp file for the whole run; only renamed onto the final
-    # path in the finally-block below, once (and only if) the run completes.
-    # A crash or Ctrl-C partway through leaves the target path untouched
-    # rather than holding a truncated, silently-incomplete "report".
+    # Streams to a scratch temp file for the whole run; the final filename
+    # is only generated and committed in finalize() below, once (and only
+    # if) the run completes — nothing is ever created at/near the final
+    # --txt path before that point, so a crash, Ctrl-C, or refusal never
+    # leaves an empty placeholder behind.
     _tee        = None
     _tee_stdout = None
     if args.txt:
-        txt_path    = resolve_output_target(args.txt, ".txt", cmd_label, args.dumpfile, args.force)
-        _tee        = AtomicTextTee(txt_path, sys.stdout, _ANSI_RE)
+        _tee        = AtomicTextTee(args.txt, cmd_label, args.dumpfile, args.force,
+                                     sys.stdout, _ANSI_RE)
         _tee_stdout = sys.stdout
         sys.stdout  = _tee
 
@@ -128,11 +140,9 @@ def main():
 
         # --json/--csv path resolution (existing-file / dump-path / dir-mode
         # collision handling) is owned entirely by StructuredOutput.write_json
-        # / write_csv (via resolve_output_target) — not duplicated here, since
-        # check_overwrite now reserves the path (O_CREAT|O_EXCL): calling it
-        # twice on the same target would make the second call fail spuriously
-        # against its own first reservation. Likewise --output is checked
-        # exactly once, inside cmd_extract/cmd_report right before the write.
+        # / write_csv (via commit_output) — not duplicated here. Likewise
+        # --output is checked exactly once, inside cmd_extract/cmd_report
+        # right before the write.
 
         _run(args, mf, out, cmd_label)
     except BaseException:
@@ -143,7 +153,7 @@ def main():
     else:
         if _tee is not None:
             sys.stdout = _tee_stdout
-            summary = _tee.finalize()
+            txt_path, summary = _tee.finalize()
             print(DIM(f"  [·] TXT  written → {txt_path}  ({summary})"))
 
 

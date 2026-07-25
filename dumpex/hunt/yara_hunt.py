@@ -12,6 +12,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions, addr_to_module,
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt.cs_beacon import CS_MAX_SEG_SCAN
+from dumpex.hunt._context import MemoryContext, classify_memory_context, CONFIRMED_PRIVATE
 
 YARA_MATCH_TIMEOUT      = 30    # seconds, per (segment, rule-file) match() call
 YARA_MAX_STRINGS_PER_MATCH = 50 # cap annotated string instances kept per match
@@ -106,10 +107,18 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
       File offset (.dmp) — byte position inside the .dmp file
       Region base (VA)  — start of the enclosing memory region
 
-    Rules directory search order (when rules_dir is None):
-      1. ./rules/yara/   (canonical — next to the script)
-      2. ./rules/yara/   (canonical — cwd)
-      3. ./yara-rules/   (legacy layout, backwards compat)
+    Rules directory resolution (when rules_dir is None — pass --yara-dir
+    for an explicit, deliberate override instead of relying on this):
+      1. sys._MEIPASS/rules/yara/         PyInstaller onefile builds
+      2. dumpex.rules_pkg/data/yara/      Packaged defaults (see
+                                           _packaged_yara_rules_dir())
+
+    There is deliberately no automatic cwd/script-dir scan: a DFIR working
+    directory routinely contains untrusted case files, and that scan used
+    to sit AFTER the packaged-defaults check anyway — which always
+    succeeds now that YARA rules are bundled in the wheel — making it dead
+    code that could never actually run. --yara-dir is the explicit,
+    auditable way to point at a different rules directory.
     """
     _print_hunt_header("YARA Memory Scan")
     findings = {"matches": [], "score": 0, "status": NOT_EVALUATED}
@@ -132,27 +141,12 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         # sys.argv[0] and cwd are dev-environment assumptions — a pip-
         # installed dumpex has no rules/ next to whatever invoked it, and a
         # PyInstaller --onefile build extracts --add-data to sys._MEIPASS,
-        # not dirname(sys.argv[0]). Check the packaged location (bundled
-        # inside dumpex.rules_pkg — the single copy shipped in the wheel,
-        # see pyproject.toml package-data) right after that, ahead of any
-        # dev-tree/user-override directory.
-        script_dir = Path(sys.argv[0]).resolve().parent
+        # not dirname(sys.argv[0]).
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass and (Path(meipass) / "rules" / "yara").is_dir():
             rules_dir = str(Path(meipass) / "rules" / "yara")
         else:
             rules_dir = _packaged_yara_rules_dir()
-
-        if rules_dir is None:
-            for candidate in (
-                script_dir / "rules" / "yara",   # explicit user override
-                Path.cwd()  / "rules" / "yara",
-                script_dir / "yara-rules",        # legacy
-                Path.cwd()  / "yara-rules",
-            ):
-                if candidate.is_dir():
-                    rules_dir = str(candidate)
-                    break
 
     if rules_dir is None or not os.path.isdir(rules_dir):
         print(YELLOW(f"  [~] No YARA rules directory found."))
@@ -277,27 +271,28 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     # segment bytes with no such context). Left unfiltered,
                     # it fires on every legitimately loaded module's MZ/PE
                     # header too, since the match is always at the scanned
-                    # segment's own base address. Suppress it when that
-                    # address resolves to a known module OR the backing
-                    # region is MEM_IMAGE — either signal alone is enough;
-                    # depending on ModuleList alone missed normal images
-                    # whenever that optional stream wasn't captured.
-                    addr    = seg.start_virtual_address
-                    module  = addr_to_module(addr, modules) if modules_available else None
-                    region  = _get_region_at(addr, regions) if mem_info_available else None
-                    is_known_image = module is not None
-                    is_mem_image   = region is not None and "MEM_IMAGE" in prot_str(region.Type)
+                    # segment's own base address. classify_memory_context
+                    # names every combination of ModuleList/MemoryInfo
+                    # availability explicitly (see dumpex/hunt/_context.py)
+                    # so there's no silent fall-through case: a MemoryInfo
+                    # gap (region not found) with ModuleList missing is
+                    # UNKNOWN, not a confirmed PRIVATE hit, and a region of
+                    # some other type (e.g. MEM_MAPPED) is OTHER, not
+                    # treated as either IMAGE or PRIVATE.
+                    addr = seg.start_virtual_address
+                    ctx = classify_memory_context(addr, modules, regions,
+                                                   modules_available, mem_info_available)
 
-                    if is_known_image or is_mem_image:
+                    if ctx == MemoryContext.IMAGE:
                         suppressed_module_pe += 1
                         continue
 
-                    if not modules_available and not mem_info_available:
-                        # Neither context source exists in this dump — the
-                        # address cannot be classified as module vs. private
-                        # memory at all. Still record the hit (an
-                        # investigator should see it) but it must not, by
-                        # itself, stand as a confirmed detection.
+                    if ctx not in CONFIRMED_PRIVATE:
+                        # OTHER or UNKNOWN — the address cannot be
+                        # confidently classified as private memory. Still
+                        # record the hit (an investigator should see it)
+                        # but it must not, by itself, stand as a confirmed
+                        # detection.
                         context_unverified += 1
                         hit_context_unverified = True
 

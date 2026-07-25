@@ -11,7 +11,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     _hexdump_context, _verdict, _search_string_in_memory)
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.pe_utils import _duration_100ns_to_str
-from dumpex.core.safe_io import check_not_dump_path, check_overwrite, atomic_write_bytes
+from dumpex.core.safe_io import write_output_bytes
 
 # _get_region_at, _extract_strings_from_data, _hexdump_context, _verdict,
 # and _search_string_in_memory all come from the core.memory import above.
@@ -342,15 +342,13 @@ def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None
     if extract_to and region is not None:
         print()
         try:
-            check_not_dump_path(extract_to, mf.filename, "--output")
-            check_overwrite(extract_to, force, "--output file")
             read_size = min(region.RegionSize, MAX_REGION_READ)
             if read_size < region.RegionSize:
                 print(YELLOW(f"  [~] Region is {region.RegionSize // 1024} KB — "
                              f"clamped to {MAX_REGION_READ // (1024*1024)} MB "
                              f"(use --extract with an explicit --size for more)"))
             data = read_region(mf, region.BaseAddress, read_size)
-            summary = atomic_write_bytes(extract_to, data)
+            summary = write_output_bytes(extract_to, data, mf.filename, force, "--output file")
             print(GREEN(f"[+] Region extracted → {extract_to}  ({summary})"))
         except Exception as e:
             print(RED(f"[!] Extract failed: {e}"))

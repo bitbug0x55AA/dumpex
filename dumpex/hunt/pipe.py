@@ -1,18 +1,55 @@
 """Named pipe C2 hunter."""
 import os
 import re
+import time
+import hashlib
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
-    read_region, _extract_strings_from_data)
+    read_region)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
+from dumpex.hunt._budget import ScanBudget
 
 PIPE_SCAN_MAX = 8 * 1024 * 1024   # skip regions > 8MB; pipe names / C2 context
                                    # are short strings, no need to read huge
                                    # regions in full to find them
+
+PIPE_MAX_MATCHES_PER_REGION = 50    # cap raw \pipe\ matches processed per region
+PIPE_C2_MAX_HITS_PER_REGION = 5     # cap C2_PAT matches recorded per pipe-bearing region
+PIPE_C2_CONTEXT_BYTES       = 512   # total context window (before+after) kept per match
+PIPE_C2_TOKEN_PREVIEW       = 256   # bound on the match token itself — every one of
+                                     # C2_PAT's own patterns (a literal "http://", an
+                                     # IP:port, "submit.php", ...) already produces a
+                                     # short match on its own; this is defense in depth,
+                                     # not the primary bound (see _iter_c2_matches)
+PIPE_C2_BUDGET_MAX_HITS     = 200               # cumulative C2 hits retained, whole hunt
+PIPE_C2_BUDGET_MAX_RETAINED = 2 * 1024 * 1024   # cumulative context bytes retained, whole hunt
+PIPE_C2_BUDGET_TIME_SECONDS = 30.0
+
+
+def _iter_c2_matches(data: bytes, pattern, max_per_region: int):
+    """
+    Stream C2_PAT matches directly over region bytes — decoded via latin-1,
+    a lossless 1-byte-to-1-char mapping that keeps match offsets identical
+    to byte offsets — instead of first extracting arbitrarily long
+    printable "strings" (_extract_strings_from_data's approach) and then
+    searching those. A single multi-MB printable run containing one URL
+    must not retain the whole run: every one of C2_PAT's own patterns
+    (a literal "http://"/"https://", an IP:port, "submit.php", "/ca",
+    "/w2p") already matches a short, bounded span on its own, so scanning
+    the raw bytes directly preserves that bound regardless of what
+    (possibly huge) printable content surrounds the match.
+    """
+    text = data.decode('latin-1')
+    count = 0
+    for m in pattern.finditer(text):
+        if count >= max_per_region:
+            return
+        count += 1
+        yield m.start(), m.end(), m.group(0)
 
 def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
@@ -60,20 +97,25 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     # ── Collect all pipe name occurrences ────────────────────────────
     private_pipes = []   # (region, offset, decoded_name)
     image_pipes   = []   # (region, mod_name, decoded_name)
-    region_c2_strings = {}   # region.BaseAddress -> [C2_PAT-matching strings]
-                              # ONLY for regions with a private pipe name.
-                              # Check 2 only ever needs these short matched
-                              # strings, not the region's raw bytes — caching
-                              # the full `data` here (as a prior version did)
-                              # let that cache grow unbounded across a dump
-                              # with many pipe-bearing regions, each
-                              # individually under PIPE_SCAN_MAX but large in
-                              # aggregate. Extracting the C2 strings inline,
-                              # right here while `data` is in scope, means
-                              # the full region bytes are never retained past
-                              # this loop iteration.
+    region_c2_records = {}   # region.BaseAddress -> [bounded C2 match records],
+                              # ONLY for regions with a private pipe name. Each
+                              # record is {match, context, offset, sha256,
+                              # original_length} — never the region's raw
+                              # bytes, and never an unboundedly long
+                              # printable "string" (see _iter_c2_matches).
+                              # Bounded further by c2_budget across the
+                              # whole hunt, not just per region.
     skipped_size  = 0
     read_failed   = 0
+
+    c2_budget = ScanBudget(
+        max_bytes_read=PIPE_C2_BUDGET_MAX_RETAINED * 4,
+        max_attempts=10**9,   # matching is cheap regex work, not the resource
+                               # this budget bounds — hits/retained-bytes are
+        max_retained_bytes=PIPE_C2_BUDGET_MAX_RETAINED,
+        max_hits=PIPE_C2_BUDGET_MAX_HITS,
+        deadline=time.monotonic() + PIPE_C2_BUDGET_TIME_SECONDS,
+    )
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
@@ -130,7 +172,11 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 "/windows/winsxs/"   in path
             )
 
+        region_matches = 0
         for m in PIPE_PAT_ASCII.finditer(data):
+            if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
+                break
+            region_matches += 1
             name = _extract_pipe_name(data, m, is_utf16=False)
             if "MEM_IMAGE" in mtype and _is_system_dll(mod):
                 image_pipes.append((r, os.path.basename(mod.name), name))
@@ -138,20 +184,41 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                 private_pipes.append((r, m.start(), name))
 
         for m in PIPE_PAT_UTF16.finditer(data):
+            if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
+                break
+            region_matches += 1
             name = _extract_pipe_name(data, m, is_utf16=True)
             if "MEM_IMAGE" in mtype and _is_system_dll(mod):
                 image_pipes.append((r, os.path.basename(mod.name), name))
             else:
                 private_pipes.append((r, m.start(), name))
 
-        if len(private_pipes) > pipes_before:
-            # Extract the (short) C2-context strings now, while `data` is
-            # still in scope, instead of caching the raw bytes for a later
-            # pass — this is the only piece of the region Check 2 needs.
-            strings = _extract_strings_from_data(data, min_len=6)
-            c2_strings = [s for _, _, s in strings if C2_PAT.search(s)]
-            if c2_strings:
-                region_c2_strings[r.BaseAddress] = c2_strings
+        if len(private_pipes) > pipes_before and not c2_budget.exhausted():
+            # Stream C2 matches directly over `data` (bounded per-match
+            # span, see _iter_c2_matches) and build small, bounded records
+            # right here while `data` is still in scope — the raw region
+            # bytes are never cached or retained past this loop iteration.
+            # Only Check 2's C2-context gathering stops once its budget is
+            # spent; pipe-name detection (Check 1/3/4) is unaffected.
+            records = []
+            for start, end, token in _iter_c2_matches(data, C2_PAT, PIPE_C2_MAX_HITS_PER_REGION):
+                ctx_half  = PIPE_C2_CONTEXT_BYTES // 2
+                ctx_start = max(0, start - ctx_half)
+                ctx_end   = min(len(data), end + ctx_half)
+                context   = data[ctx_start:ctx_end][:PIPE_C2_CONTEXT_BYTES]
+                match_b   = data[start:end]
+                record = {
+                    "match":           token[:PIPE_C2_TOKEN_PREVIEW],
+                    "context":         context,
+                    "va":              r.BaseAddress + start,
+                    "sha256":          hashlib.sha256(match_b).hexdigest(),
+                    "original_length": end - start,
+                }
+                if not c2_budget.take_hit(len(record["context"]) + len(record["match"])):
+                    break
+                records.append(record)
+            if records:
+                region_c2_records[r.BaseAddress] = records
 
     # Deduplicate private pipes by (region_base, name)
     seen_private = set()
@@ -198,25 +265,28 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                   f"({', '.join(mod_names)}) — expected, skipped\n"))
 
     # ── Check 2: C2 artifacts near private pipe names ─────────────────
-    # Uses the C2-context strings already extracted inline in the main loop
-    # above (region_c2_strings) — no re-read of the region and no retained
-    # copy of its raw bytes, only the short strings that actually matched.
+    # Uses the bounded C2 match records already built inline in the main
+    # loop above (region_c2_records) — no re-read of the region and no
+    # retained copy of its raw bytes or any unboundedly long string, only
+    # the short {match, context, ...} records built under c2_budget.
     c2_hits = []
     for r, off, pipe_name in private_pipes:
-        c2_strings = region_c2_strings.get(r.BaseAddress)
-        if not c2_strings:
+        records = region_c2_records.get(r.BaseAddress)
+        if not records:
             continue
-        c2_hits.append((r, pipe_name.strip(), c2_strings))
+        c2_hits.append((r, pipe_name.strip(), records))
 
     if c2_hits:
         detail = f"{len(c2_hits)} region(s) with pipe name + C2 artifacts"
         if verbose:
-            for r, pipe_name, c2s in c2_hits:
+            for r, pipe_name, records in c2_hits:
                 detail += f"\n          Region 0x{r.BaseAddress:x}  pipe: {pipe_name}"
-                for s in c2s[:3]:
-                    detail += f"\n            C2: {s}"
-                if len(c2s) > 3:
-                    detail += f"\n            ... and {len(c2s)-3} more"
+                for rec in records[:3]:
+                    detail += (f"\n            C2: {rec['match']}"
+                               f"  VA 0x{rec['va']:016x}"
+                               f"  sha256={rec['sha256'][:16]}…")
+                if len(records) > 3:
+                    detail += f"\n            ... and {len(records)-3} more"
         _print_check("C2 artifacts co-located with pipe name",
                      RED("SUSPICIOUS — C2 IP/URL in same region as private pipe name"),
                      detail)
@@ -225,6 +295,10 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     else:
         _print_check("C2 artifacts near pipe names",
                      GREEN("CLEAN — no C2 patterns found near private pipe names"))
+    if c2_budget.exhausted():
+        print(YELLOW(f"  [~] C2-context scan budget exhausted "
+                      f"({c2_budget.exhausted_reason}) — some pipe-bearing regions "
+                      f"may not have been checked for C2 context.\n"))
 
     # ── Check 3: Known framework patterns — attribution only, not scored ──
     # This re-classifies the exact same strings Check 1 already counted
@@ -285,9 +359,11 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Verdict ───────────────────────────────────────────────────────
     score = findings["score"]
+    budget_exhausted = c2_budget.exhausted()
+    findings["budget_exhausted"] = budget_exhausted
     if not mem_info_available:
         status = NOT_EVALUATED
-    elif score == 0 and (skipped_size or read_failed):
+    elif score == 0 and (skipped_size or read_failed or budget_exhausted):
         status = INCONCLUSIVE
     else:
         status = DETECTED if score > 0 else NOT_DETECTED_IN_SCANNED_SCOPE
@@ -299,6 +375,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         reason = ", ".join(filter(None, [
             f"{skipped_size} oversized region(s) skipped" if skipped_size else "",
             f"{read_failed} region(s) failed to read" if read_failed else "",
+            f"C2-context budget exhausted ({c2_budget.exhausted_reason})" if budget_exhausted else "",
         ]))
         verdict = _status_text(INCONCLUSIVE, reason)
     else:
