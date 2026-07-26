@@ -505,11 +505,28 @@ def _cs_validate_public_key_der(raw: bytes) -> "tuple[bool, str]":
 
     # A SubjectPublicKeyInfo has a BIT STRING (the actual key material)
     # immediately after AlgorithmIdentifier, still within the outer
-    # SEQUENCE. Checking for its presence (not decoding its contents,
-    # which callers don't need) rules out a buffer that's shaped like
-    # just an AlgorithmIdentifier/OID with nothing real after it.
+    # SEQUENCE. A bare tag byte with no length/content behind it is not
+    # enough — that's still just as spoofable as the old "308" prefix
+    # check this replaced, one tag byte later. The BIT STRING's own DER
+    # length must be read and bounds-checked the same way
+    # AlgorithmIdentifier's was: it must declare at least the mandatory
+    # unused-bits byte, its content must not extend past the outer
+    # SEQUENCE, and since it's the SubjectPublicKeyInfo's final field it
+    # must consume exactly the rest of the outer SEQUENCE, not leave
+    # declared-but-unaccounted-for trailing bytes.
     if alg_end >= outer_end or raw[alg_end] != 0x03:
         return False, "PublicKey field: no BIT STRING follows AlgorithmIdentifier"
+    bit_string = _der_read_length(raw, alg_end + 1)
+    if bit_string is None:
+        return False, "PublicKey field: malformed BIT STRING length"
+    bit_string_len, bit_string_pos = bit_string
+    if bit_string_len < 1:
+        return False, "PublicKey field: BIT STRING too short to contain the unused-bits byte"
+    bit_string_end = bit_string_pos + bit_string_len
+    if bit_string_end > outer_end:
+        return False, "PublicKey field: BIT STRING extends past the outer SEQUENCE"
+    if bit_string_end != outer_end:
+        return False, "PublicKey field: BIT STRING does not consume the rest of the outer SEQUENCE"
 
     return True, ""
 
@@ -683,7 +700,14 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
                               f"{len(hits)} hit(s) found — scan deadline reached "
                               f"before all segments were examined")
             break
-        if total_scanned_bytes > CS_MAX_TOTAL_SCANNED_BYTES:
+        # Checked against the PLANNED read size (total_scanned_bytes +
+        # seg.size), not just the already-accumulated total — a pure
+        # post-read check only fires on the NEXT segment's iteration, so
+        # if the segment that pushes the total over the cap happens to be
+        # the last one in the dump, no next iteration ever runs and the
+        # scan silently reports "complete" despite having scanned well
+        # past the budget.
+        if total_scanned_bytes + seg.size > CS_MAX_TOTAL_SCANNED_BYTES:
             budget_exhausted = True
             budget_reason = (f"{total_scanned_bytes} byte(s) scanned across "
                               f"{total_candidates} candidate(s), {len(hits)} hit(s) "
@@ -729,18 +753,44 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
                 break
             parsed = _cs_decode_and_parse_tlv(data, idx, xor_key, CS_CONFIG_DECODE_MAX)
             total_decoded_bytes += parsed['consumed']
-            if not parsed['complete'] or not _cs_sanity_check(parsed['fields']):
-                continue
-            if hit_va not in seen_hit_vas:
-                seen_hit_vas.add(hit_va)
-                hits.append((xor_key, hit_va, hit_fo, parsed['fields']))
-                if len(hits) >= CS_MAX_HITS:
-                    budget_exhausted = True
-                    budget_reason = (f"{total_candidates} candidate(s) examined, "
-                                      f"{total_decoded_bytes} byte(s) decoded, "
-                                      f"{len(hits)} hit(s) found — hit cap reached")
-                    break
+            if parsed['complete'] and _cs_sanity_check(parsed['fields']):
+                if hit_va not in seen_hit_vas:
+                    seen_hit_vas.add(hit_va)
+                    hits.append((xor_key, hit_va, hit_fo, parsed['fields']))
+                    if len(hits) >= CS_MAX_HITS:
+                        budget_exhausted = True
+                        budget_reason = (f"{total_candidates} candidate(s) examined, "
+                                          f"{total_decoded_bytes} byte(s) decoded, "
+                                          f"{len(hits)} hit(s) found — hit cap reached")
+                        break
+            # Re-checked immediately after THIS candidate's decode work,
+            # not only at the top of the next loop iteration — if this
+            # candidate is the last one (in the last segment), no next
+            # iteration ever runs, so a budget crossed only by decoding
+            # this candidate would otherwise never be noticed and the
+            # scan would silently report "complete".
+            if (total_candidates > CS_MAX_CANDIDATES
+                    or total_decoded_bytes > CS_MAX_DECODED_BYTES
+                    or time.monotonic() > scan_deadline):
+                budget_exhausted = True
+                budget_reason = (f"{total_candidates} candidate(s) examined, "
+                                  f"{total_decoded_bytes} byte(s) decoded, "
+                                  f"{len(hits)} hit(s) found before the scan "
+                                  f"budget was exhausted")
+                break
         if budget_exhausted:
+            break
+        # Re-checked after finishing this segment's candidate scan, not
+        # only at the top of the next segment's iteration — a segment
+        # whose read+scan alone crosses the deadline (few or zero
+        # candidates, just a slow/large read) would otherwise only be
+        # caught if there is a NEXT segment to re-enter the loop for.
+        if time.monotonic() > scan_deadline:
+            budget_exhausted = True
+            budget_reason = (f"{total_candidates} candidate(s) examined, "
+                              f"{total_scanned_bytes} byte(s) scanned, "
+                              f"{len(hits)} hit(s) found — scan deadline reached "
+                              f"before all segments were examined")
             break
 
     scan_note = (f" ({coverage_counts.skipped_oversize} segment(s) >50 MB skipped)"

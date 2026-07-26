@@ -27,7 +27,7 @@ jobs:
       - name: Install dumpex with dev + optional extras
         run: pip install -e ".[dev,full]"
 
-      - name: Run pytest with coverage (overall gate - see pyproject.toml [tool.coverage.report])
+      - name: Run pytest with coverage (overall gate — see pyproject.toml [tool.coverage.report])
         run: pytest --cov=dumpex --cov-report=term-missing
 
       - name: Coverage gate — key detection modules
@@ -46,3 +46,4 @@ jobs:
           coverage report --include="dumpex/core/pe_utils.py"   --fail-under=56
           coverage report --include="dumpex/hunt/_coverage.py"  --fail-under=85
           coverage report --include="dumpex/hunt/_finding.py"   --fail-under=90
+          coverage report --include="dumpex/hunt/yara_hunt.py"  --fail-under=65

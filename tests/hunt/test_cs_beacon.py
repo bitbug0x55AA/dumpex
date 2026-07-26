@@ -461,6 +461,53 @@ def test_validate_public_key_der_rejects_algorithm_id_extending_past_outer_seque
     assert reason
 
 
+def test_validate_public_key_der_rejects_bit_string_tag_with_no_length():
+    # The BIT STRING tag (0x03) sits immediately after AlgorithmIdentifier,
+    # exactly like a real SubjectPublicKeyInfo -- but nothing else follows
+    # it: no length byte, no unused-bits byte, no key material at all. A
+    # prior version only checked for the tag byte's presence and accepted
+    # this as a complete structure.
+    oid = bytes.fromhex('06092a864886f70d010101')
+    der_null = bytes.fromhex('0500')
+    algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
+    content = algorithm_id + b'\x03'   # bare tag, no length byte at all
+    der = bytes([0x30, len(content)]) + content
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert reason
+
+
+def test_validate_public_key_der_rejects_bit_string_not_filling_outer_sequence():
+    # The BIT STRING's declared length leaves trailing bytes inside the
+    # outer SEQUENCE unaccounted for by any actual field -- the outer
+    # SEQUENCE claims more content than AlgorithmIdentifier + BIT STRING
+    # together actually declare.
+    oid = bytes.fromhex('06092a864886f70d010101')
+    der_null = bytes.fromhex('0500')
+    algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
+    bit_string = bytes([0x03, 0x01, 0x00])   # BIT STRING, only the mandatory unused-bits byte
+    content = algorithm_id + bit_string
+    der = bytes([0x30, len(content) + 10]) + content + bytes(10)   # outer overclaims by 10
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert reason
+
+
+def test_validate_public_key_der_rejects_bit_string_extending_past_outer_sequence():
+    # The BIT STRING's own declared length reaches past the outer
+    # SEQUENCE's declared end -- its content claims to include bytes the
+    # outer structure never said were part of it.
+    oid = bytes.fromhex('06092a864886f70d010101')
+    der_null = bytes.fromhex('0500')
+    algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
+    bit_string_header = bytes([0x03, 0x7f])   # BIT STRING claims 127 bytes of content
+    content = algorithm_id + bit_string_header + b'\xff' * 5   # buffer only has 5 more real bytes
+    der = bytes([0x30, len(content)]) + content
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert reason
+
+
 def test_validate_public_key_der_rejects_fake_asn1_prefix():
     # Exactly what the OLD "hex startswith '308'" check accepted: a
     # SEQUENCE tag + long-form length byte followed by arbitrary zero
@@ -675,3 +722,59 @@ def test_total_scanned_bytes_budget_stops_marker_free_segments(monkeypatch):
     assert f["coverage_status"] == "partial"
     assert f["status"] == "INCONCLUSIVE"
     assert any("scanned-bytes budget" in r for r in f["coverage_reasons"])
+
+
+# ── hunter-level: the scanned-bytes budget must be caught even when the ───
+# segment that pushes the total over the cap is the LAST (here, the only)
+# segment in the dump -- a check performed only against the ALREADY-
+# accumulated total, re-evaluated solely at the top of the NEXT segment's
+# loop iteration, would never fire when there is no next iteration, and
+# the scan would silently report "complete" despite having read well past
+# CS_MAX_TOTAL_SCANNED_BYTES.
+
+def test_total_scanned_bytes_budget_stops_on_final_segment(monkeypatch):
+    monkeypatch.setattr(cs_beacon, "CS_MAX_TOTAL_SCANNED_BYTES", 0x2000)   # 8 KB cap
+    seg_size = 0x3000   # 12 KB in a single segment -- already over the cap alone
+    va = 0x72000000
+    seg = Segment(va, va, seg_size)
+    regions = [Region(va, va, seg_size, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({va: b'\x00' * seg_size})
+
+    f = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("scanned-bytes budget" in r for r in f["coverage_reasons"])
+
+
+# ── hunter-level: the decoded-bytes budget must be caught even when the ───
+# candidate that pushes the total over the cap is the LAST candidate
+# examined -- decoding it is what crosses the budget, so the overrun can
+# only be noticed by checking again right after that decode, not by
+# waiting for a next candidate that never comes. The config is still a
+# real hit (still DETECTED), but coverage must reflect that the scan
+# stopped short of its budget, not silently claim "complete".
+
+def test_decoded_bytes_budget_marks_partial_on_final_candidate(monkeypatch):
+    monkeypatch.setattr(cs_beacon, "CS_MAX_DECODED_BYTES", 1)   # far below one config
+    seg_va, seg_fo = 0x23000, 0x2300
+    config = cs_beacon_config_bytes(0x69)
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    f = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+
+    assert f["score"] == 1
+    assert f["status"] == "DETECTED"
+    assert f["coverage_status"] == "partial"
+    assert any("scan resource budget exhausted" in r for r in f["coverage_reasons"])
