@@ -27,7 +27,7 @@ jobs:
       - name: Install dumpex with dev + optional extras
         run: pip install -e ".[dev,full]"
 
-      - name: Run pytest with coverage (overall gate: see pyproject.toml [tool.coverage.report])
+      - name: Run pytest with coverage (overall gate - see pyproject.toml [tool.coverage.report])
         run: pytest --cov=dumpex --cov-report=term-missing
 
       - name: Coverage gate — key detection modules
