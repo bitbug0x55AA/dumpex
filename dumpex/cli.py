@@ -2,6 +2,7 @@
 import os
 import sys
 import argparse
+import datetime
 from minidump.minidumpfile import MinidumpFile
 
 from dumpex.ui.colors import RED, DIM, BOLD
@@ -21,6 +22,14 @@ from dumpex.commands.diff     import cmd_diff
 from dumpex.hunt              import cmd_hunt
 
 def main():
+    # Captured before any argument parsing or dump access — the earliest
+    # possible point in the run — so --json meta.execution.duration_seconds
+    # covers the whole invocation (including open_dump()/MinidumpFile.parse(),
+    # which can be non-trivial for a multi-GB dump) rather than only the
+    # time from StructuredOutput's own construction, which used to happen
+    # AFTER the dump was already open.
+    started_at = datetime.datetime.now(datetime.timezone.utc)
+
     parser = argparse.ArgumentParser(
         prog="dumpex",
         description=BOLD("dumpex — Minidump Memory Extractor & Analyzer"),
@@ -186,7 +195,8 @@ def main():
         need_structured = bool(args.json or args.csv)
         out = StructuredOutput(args.dumpfile, mf, command=cmd_label, options=_build_options(),
                                 case_id=args.case_id, analyst=args.analyst,
-                                redact_paths=args.redact_paths) if need_structured else None
+                                redact_paths=args.redact_paths,
+                                started_at=started_at) if need_structured else None
 
         # --json/--csv path resolution (existing-file / dump-path / dir-mode
         # collision handling) is owned entirely by StructuredOutput.write_json

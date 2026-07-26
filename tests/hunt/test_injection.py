@@ -78,3 +78,36 @@ def test_full_correlation_still_detects():
     f = injection._hunt_injection(MF(), verbose=False)
     assert f["score"] == 3
     assert f["confidence"] == "high"
+
+
+# ── MZ prefix read succeeds but the deeper PE-validation read fails ───────
+# must not be silently treated as a completed check: the MZ observation is
+# still reported (parse_pe_header falls back to the 2-byte prefix), but
+# pe_read_failed must count it, coverage must go partial, and with nothing
+# else to score, the overall result must be INCONCLUSIVE.
+
+def test_mz_prefix_ok_deep_read_fails_is_inconclusive():
+    region_base = 0x8000000
+    dummy_regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT",
+                             "PAGE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    def flaky_reader(mf, addr, size):
+        if addr == region_base and size <= 2:
+            return b'MZ'
+        raise OSError("simulated deep-read failure")
+
+    class MF(FakeMF):
+        memory_info = FakeStream(dummy_regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+    injection.read_region = flaky_reader
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 0
+    assert f["pe_read_failed"] == 1
+    assert len(f["hidden_pe_unvalidated"]) == 1, "MZ observation must still be reported"
+    assert len(f["hidden_pe_validated"]) == 0
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("failed to read" in r for r in f["coverage_reasons"])

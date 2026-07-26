@@ -27,7 +27,21 @@ def open_dump(path: str) -> MinidumpFile:
     if not os.path.exists(path):
         print(RED(f"[!] File not found: {path}"))
         sys.exit(1)
-    return MinidumpFile.parse(path)
+    try:
+        return MinidumpFile.parse(path)
+    except Exception as e:
+        # A corrupted, truncated, or non-minidump file previously propagated
+        # whatever internal exception the minidump library happened to
+        # raise (e.g. MinidumpHeaderSignatureMismatchException) as a raw,
+        # unhandled traceback all the way up through cli.main() — an
+        # analyst feeding dumpex bad evidence deserves the same clean,
+        # actionable refusal as the "File not found" case right above,
+        # not an implementation-detail stack trace.
+        print(RED(f"[!] Could not parse {path} as a minidump file: "
+                   f"{type(e).__name__}: {e}"))
+        print(DIM(f"    The file may be corrupted, truncated, or not a Windows "
+                   f"minidump (.dmp) at all."))
+        sys.exit(1)
 
 
 def read_region(mf: MinidumpFile, addr: int, size: int) -> bytes:

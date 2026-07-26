@@ -83,7 +83,7 @@ class StructuredOutput:
 
     def __init__(self, dump_path: str, mf=None, *, command: str = None,
                  options: dict = None, case_id: str = None, analyst: str = None,
-                 redact_paths: bool = False):
+                 redact_paths: bool = False, started_at: "datetime.datetime" = None):
         self._dump_path_abs  = os.path.abspath(dump_path)
         self._dump_file_name = os.path.basename(dump_path)
         self._command        = command
@@ -91,7 +91,14 @@ class StructuredOutput:
         self._case_id        = case_id
         self._analyst        = analyst
         self._redact_paths   = redact_paths
-        self._started_at     = datetime.datetime.now(datetime.timezone.utc)
+        # Defaults to "now" (construction time) for any caller that
+        # doesn't pass one explicitly — but cli.py passes the timestamp
+        # captured at the CLI entry point, BEFORE open_dump()/
+        # MinidumpFile.parse() runs, so execution.duration_seconds
+        # reflects the run's actual total wall-clock time (dump parsing
+        # included) rather than starting the clock only once analysis
+        # itself began.
+        self._started_at = started_at or datetime.datetime.now(datetime.timezone.utc)
         self._sections: dict = {}
         self._mf = mf   # MinidumpFile reference for VA → file-offset lookups
         # Evidence hash is computed at most once per process (a multi-GB
@@ -125,7 +132,15 @@ class StructuredOutput:
         try:
             version = importlib.metadata.version("dumpex")
         except importlib.metadata.PackageNotFoundError:
-            version = None
+            # A source checkout run without `pip install -e .` (or any
+            # other layout where the package isn't registered with
+            # importlib.metadata) previously reported version: null here
+            # — falling back to the package's own __version__ constant
+            # means --json output still carries a real version string
+            # from the most common "not actually installed" case, rather
+            # than silently going null.
+            import dumpex
+            version = getattr(dumpex, "__version__", None)
         return {"name": self.TOOL, "version": version}
 
     def _execution_meta(self, finished_at: "datetime.datetime") -> dict:
@@ -181,10 +196,45 @@ class StructuredOutput:
         was never called this run (e.g. --hunt injection alone, which
         doesn't read rules.yaml) — omitted from meta entirely in that case
         rather than printed as a misleading empty object.
+
+        `path` can be a real absolute filesystem path (--rules-file, or a
+        PyInstaller _MEIPASS extraction dir) — same leak `_redact()`
+        exists to prevent for CLI path options, so the identical
+        basename-only redaction is applied here under --redact-paths
+        rather than shipping this one field unredacted.
         """
         try:
             from dumpex.rules_pkg.loader import get_rules_source_info
-            return get_rules_source_info()
+            info = get_rules_source_info()
+            if info is None:
+                return None
+            info = dict(info)
+            if self._redact_paths and info.get("path"):
+                info["path"] = os.path.basename(info["path"].rstrip("/\\"))
+            return info
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _yara_meta(self):
+        """
+        YARA rule provenance (sorted rule filenames, per-file sha256,
+        aggregate sha256, compile success/fail counts) for the rule files
+        actually used by the most recent --hunt yara/all run — the same
+        reproducibility guarantee meta.rules already gives rules.yaml.
+        None if YARA scanning was never invoked this run (e.g. --hunt
+        injection alone, which never loads any .yar/.yara file) —
+        omitted from meta entirely in that case rather than printed as a
+        misleading empty object.
+        """
+        try:
+            from dumpex.hunt.yara_hunt import get_yara_provenance
+            info = get_yara_provenance()
+            if info is None:
+                return None
+            info = dict(info)
+            if self._redact_paths and info.get("rules_dir"):
+                info["rules_dir"] = os.path.basename(info["rules_dir"].rstrip("/\\"))
+            return info
         except Exception as e:
             return {"error": str(e)}
 
@@ -201,6 +251,9 @@ class StructuredOutput:
             rules = self._rules_meta()
             if rules is not None:
                 meta["rules"] = rules
+            yara_meta = self._yara_meta()
+            if yara_meta is not None:
+                meta["yara_rules"] = yara_meta
             return meta
         except Exception as e:
             # Last-resort net: meta construction itself must never take

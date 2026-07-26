@@ -101,6 +101,13 @@ class FakeReader:
         return b''
 
 
+class Peb:
+    """Stand-in for MinidumpFile.peb (only the fields hunt/hollowing.py reads)."""
+    def __init__(self, image_base_address, image_path):
+        self.image_base_address = image_base_address
+        self.image_path         = image_path
+
+
 class FakeMF:
     """
     Stand-in MinidumpFile. Every stream defaults to None (== "not present
@@ -115,6 +122,7 @@ class FakeMF:
     handles                = None
     memory_segments_64      = None
     memory_segments          = None
+    peb                       = None
     _reader                   = None
 
     def get_reader(self):
@@ -197,11 +205,18 @@ def matching_module_and_ref(module_base=0x7ff600000000, timestamp=0x11111111,
 def cs_beacon_config_bytes(xor_key: int = 0x69) -> bytes:
     """
     Build a minimal, XOR-encoded CS beacon config TLV blob that passes
-    dumpex.hunt.cs_beacon's _cs_scan_segment/_cs_parse_tlv/_cs_sanity_check:
+    dumpex.hunt.cs_beacon's _cs_scan_segment/_cs_decode_and_parse_tlv/
+    _cs_sanity_check:
       - field 0x0001 (BeaconType) = 0 ("HTTP", a recognized value)
-      - field 0x0007 (PublicKey) raw bytes starting with an ASN.1 SEQUENCE
-        tag (0x30) + long-form length byte (0x8_), satisfying the
-        hex-starts-with-"308" sanity check
+      - field 0x0007 (PublicKey) raw bytes forming a minimally-valid X.509
+        SubjectPublicKeyInfo DER structure: an outer SEQUENCE whose
+        declared length fits the buffer, containing an AlgorithmIdentifier
+        SEQUENCE carrying the rsaEncryption OID (1.2.840.113549.1.1.1) —
+        satisfies _cs_validate_public_key_der(), not just a "308" hex
+        prefix (see cs_beacon.py for why the stricter check exists)
+      - a trailing fid=0 terminator record, required for `complete=True`
+        (a TLV blob with no terminator is truncated, not a legitimate
+        config, however "clean" its fields otherwise look)
     The plaintext's first 6 bytes are exactly CS_BEACON_SIGNATURE by
     construction (field_id=1, type=1, length=2), so XOR-encoding the
     whole blob with `xor_key` embeds the corresponding pre-XOR marker
@@ -211,7 +226,15 @@ def cs_beacon_config_bytes(xor_key: int = 0x69) -> bytes:
         return struct.pack('>HHH', fid, ftype, len(raw)) + raw
 
     beacon_type_field = _tlv(0x0001, 1, struct.pack('>H', 0))
-    pubkey_raw = bytes([0x30, 0x81]) + b'\x00' * 20
+
+    rsa_encryption_oid = bytes.fromhex('06092a864886f70d010101')   # tag+len+OID value
+    der_null            = bytes.fromhex('0500')
+    algorithm_id        = bytes([0x30, len(rsa_encryption_oid) + len(der_null)]) \
+                           + rsa_encryption_oid + der_null
+    bit_string           = bytes([0x03, 0x03, 0x00]) + b'\xff\xff'   # fake subjectPublicKey
+    pubkey_content        = algorithm_id + bit_string
+    pubkey_raw            = bytes([0x30, len(pubkey_content)]) + pubkey_content
     pubkey_field = _tlv(0x0007, 3, pubkey_raw)
-    plaintext = beacon_type_field + pubkey_field
+    terminator = struct.pack('>H', 0)   # fid=0, no type/length follows
+    plaintext = beacon_type_field + pubkey_field + terminator
     return bytes(b ^ (xor_key & 0xff) for b in plaintext)

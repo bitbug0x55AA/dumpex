@@ -26,6 +26,36 @@ def _patch_basereloc_directory(header, reloc_vaddr, reloc_size):
     return bytes(header)
 
 
+def _build_pe_with_reloc(reloc_bytes: bytes, machine: int = 0x8664,
+                          preferred_base: int = 0x140000000):
+    """
+    Build a minimal synthetic PE (one .text section, one .reloc section
+    whose raw content is exactly `reloc_bytes`) with the BASERELOC data
+    directory pointed at it. Returns (file_bytes, pe_dict, text_vaddr,
+    text_size) — pe_dict is already parse_pe_header()'s result.
+    """
+    text_vaddr, text_size = 0x1000, 0x2000
+    reloc_vaddr = 0x4000
+    text_bytes = bytes((i * 3) % 251 for i in range(text_size))
+    sections = [
+        {"name": b".text", "vaddr": text_vaddr, "vsize": text_size, "rawptr": 0x400,
+         "rawsize": text_size, "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ},
+        {"name": b".reloc", "vaddr": reloc_vaddr, "vsize": len(reloc_bytes),
+         "rawptr": 0x400 + text_size, "rawsize": len(reloc_bytes), "chars": IMAGE_SCN_MEM_READ},
+    ]
+    header = build_pe_header(sections, machine=machine, timestamp=0x77777777,
+                              size_of_image=0x6000, image_base=preferred_base)
+    header = _patch_basereloc_directory(header, reloc_vaddr, len(reloc_bytes))
+    file_bytes = bytearray(header)
+    file_bytes += b'\x00' * (sections[0]["rawptr"] - len(file_bytes))
+    file_bytes += text_bytes
+    file_bytes += reloc_bytes
+    file_bytes = bytes(file_bytes)
+    pe = parse_pe_header(file_bytes)
+    assert pe["valid"], pe["reason"]
+    return file_bytes, pe, text_vaddr, text_size
+
+
 # ── an unrecognized relocation type must force the whole normalization ────
 # to "malformed", not silently leave that address un-normalized while
 # reporting status="applied" (targeted test confirmed: entries with types
@@ -44,7 +74,11 @@ def test_unsupported_relocation_type_forces_malformed():
     page_rva = text_vaddr & ~0xFFF
     offset_in_page = (text_vaddr + 0x40) - page_rva
     entry = (UNSUPPORTED_TYPE << 12) | offset_in_page
-    reloc_data = struct.pack('<II', page_rva, 8 + 2) + struct.pack('<H', entry)
+    padding_entry = 0   # IMAGE_REL_BASED_ABSOLUTE -- pads block_size to a
+                        # multiple of 4, matching how real linkers emit
+                        # relocation blocks (apply_base_relocations rejects
+                        # unaligned block sizes as malformed)
+    reloc_data = struct.pack('<II', page_rva, 8 + 4) + struct.pack('<HH', entry, padding_entry)
 
     sections = [
         {"name": b".text", "vaddr": text_vaddr, "vsize": text_size, "rawptr": 0x400,
@@ -137,7 +171,9 @@ def test_relocation_only_diff_normalizes_to_identical_bytes():
     page_rva = text_vaddr & ~0xFFF
     offset_in_page = (text_vaddr + abs_ptr_off) - page_rva
     entry = (IMAGE_REL_BASED_DIR64 << 12) | offset_in_page
-    reloc_data = struct.pack('<II', page_rva, 8 + 2) + struct.pack('<H', entry)
+    padding_entry = 0   # IMAGE_REL_BASED_ABSOLUTE -- pads block_size to a
+                        # multiple of 4 (see test above)
+    reloc_data = struct.pack('<II', page_rva, 8 + 4) + struct.pack('<HH', entry, padding_entry)
 
     sections = [
         {"name": b".text", "vaddr": text_vaddr, "vsize": text_size, "rawptr": 0x400,
@@ -210,3 +246,81 @@ def test_apply_base_relocations_unavailable_on_unsupported_machine():
     result = apply_base_relocations(header, pe, delta=0x1000)
     assert result.status == "unavailable"
     assert result.data == header
+
+
+# ── a BASERELOC directory too small to hold even one block header (< 8 ────
+# bytes) must be malformed, not silently "applied" with zero fixups.
+
+def test_reloc_directory_too_small_for_any_block_is_malformed():
+    for size in (1, 4, 7):
+        reloc_bytes = bytes(size)
+        file_bytes, pe, _, _ = _build_pe_with_reloc(reloc_bytes)
+        result = apply_base_relocations(file_bytes, pe, delta=0x50000)
+        assert result.status == "malformed", size
+        assert result.applied_count == 0, size
+
+
+# ── one well-formed block followed by trailing residue that isn't itself ──
+# a valid block must be malformed -- exiting the scan loop early (fewer
+# than 8 bytes left) must not be conflated with "the directory's declared
+# size was fully accounted for."
+
+def test_reloc_directory_trailing_residue_is_malformed():
+    entry = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x100
+    padding_entry = 0
+    valid_block = struct.pack('<II', 0x1000, 12) + struct.pack('<HH', entry, padding_entry)
+    reloc_bytes = valid_block + b'\x01\x02\x03'   # 3 leftover bytes, not another block
+    file_bytes, pe, _, _ = _build_pe_with_reloc(reloc_bytes)
+    result = apply_base_relocations(file_bytes, pe, delta=0x50000)
+    assert result.status == "malformed"
+    # the valid block was still applied before the trailing residue was
+    # noticed -- status reflects "don't trust this as a complete
+    # normalization", not "nothing at all happened"
+    assert result.applied_count == 1
+
+
+# ── a block whose declared size isn't a multiple of 4 (every real linker ──
+# pads to avoid this) must be malformed, not accepted as-is.
+
+def test_reloc_block_size_not_4byte_aligned_is_malformed():
+    entry = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x100
+    reloc_bytes = struct.pack('<II', 0x1000, 8 + 2) + struct.pack('<H', entry)   # size=10
+    file_bytes, pe, _, _ = _build_pe_with_reloc(reloc_bytes)
+    result = apply_base_relocations(file_bytes, pe, delta=0x50000)
+    assert result.status == "malformed"
+    assert result.applied_count == 0
+
+
+# ── a fixup target whose [rva, rva+width) span crosses the section's raw- ─
+# data boundary (starts in-bounds, needs more bytes than remain) must not
+# be partially applied.
+
+def test_reloc_target_crosses_raw_section_boundary_is_malformed():
+    text_vaddr, text_size = 0x1000, 0x2000
+    target_rva = text_vaddr + text_size - 2   # only 2 bytes remain; HIGHLOW needs 4
+    page_rva = target_rva & ~0xFFF
+    offset_in_page = target_rva - page_rva
+    entry = (IMAGE_REL_BASED_HIGHLOW << 12) | offset_in_page
+    padding_entry = 0
+    reloc_bytes = struct.pack('<II', page_rva, 12) + struct.pack('<HH', entry, padding_entry)
+    file_bytes, pe, _, _ = _build_pe_with_reloc(reloc_bytes)
+    result = apply_base_relocations(file_bytes, pe, delta=0x50000)
+    assert result.status == "malformed"
+    assert result.applied_count == 0
+
+
+# ── positive control: a well-formed, multi-block directory that exactly ───
+# fills its declared size must still reach "applied" -- the new
+# trailing-residue/alignment checks must not make a genuinely valid table
+# fail too.
+
+def test_reloc_directory_multiple_blocks_fully_consumed_is_applied():
+    entry1 = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x100
+    block1 = struct.pack('<II', 0x1000, 12) + struct.pack('<HH', entry1, 0)
+    entry2 = (IMAGE_REL_BASED_HIGHLOW << 12) | 0x200
+    block2 = struct.pack('<II', 0x1000, 12) + struct.pack('<HH', entry2, 0)
+    reloc_bytes = block1 + block2
+    file_bytes, pe, _, _ = _build_pe_with_reloc(reloc_bytes)
+    result = apply_base_relocations(file_bytes, pe, delta=0x50000)
+    assert result.status == "applied"
+    assert result.applied_count == 2

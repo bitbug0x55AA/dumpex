@@ -143,8 +143,15 @@ def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tup
         try:
             deep = read_region(mf, r.BaseAddress, min(PE_VALIDATE_READ_MAX, r.RegionSize))
         except Exception:
-            deep = prefix   # fall back to what we already have; parse_pe_header
-                             # will report a truncation reason on 2 bytes
+            # Still report the MZ observation (parse_pe_header will report
+            # a truncation reason on just the 2-byte prefix) rather than
+            # dropping the hit entirely — but this region could NOT be
+            # properly validated, which is a real coverage gap distinct
+            # from "read fine, structurally invalid": count it the same as
+            # a prefix-read failure so `complete`/pe_read_failed reflects
+            # it rather than silently treating this as a completed check.
+            read_failed += 1
+            deep = prefix
         pe = parse_pe_header(deep)
         # owner is already known from the range check above for MEM_IMAGE
         # regions; a non-image region can still fall inside a module's

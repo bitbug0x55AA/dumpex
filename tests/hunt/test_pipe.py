@@ -168,3 +168,28 @@ def test_framework_plus_full_corroboration_scores_3():
     f = pipemod._hunt_pipe(MF(), verbose=False)
     assert f["score"] == 3
     assert f["confidence"] == "high"
+
+
+# ── a region that returns FEWER bytes than its own declared RegionSize ────
+# (a short read, no exception raised) must not be treated as a complete
+# scan -- the unread tail could hide a real pipe name or C2 string.
+
+def test_short_read_region_makes_result_inconclusive():
+    region_base = 0x2000000
+    declared_size = 0x4000
+    actual_bytes  = b'\x00' * 0x1000   # far less than RegionSize claims
+    regions = [Region(region_base, region_base, declared_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+    handle_list = [Handle(0x77, "File", r"\Device\NamedPipe\some_pipe")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream(handle_list, "handles")
+    pipemod.read_region = mem_reader({region_base: actual_bytes})
+
+    f = pipemod._hunt_pipe(MF(), verbose=False)
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("short read" in r for r in f["coverage_reasons"])

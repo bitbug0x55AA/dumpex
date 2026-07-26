@@ -185,7 +185,7 @@ python -m dumpex dump.DMP --hunt all --json results.json --csv ./output/ --txt r
 
 ## Detection Rules (`rules.yaml`)
 
-TTP detection is driven by `rules.yaml`, bundled inside the package at `dumpex/rules_pkg/data/rules.yaml` — this is what `pip install dumpex` ships, so the tool works standalone with no extra files. Pass `--rules-file PATH` for an explicit, deliberate override without touching the installed package. There is **no** automatic scan of the current working directory or the directory the script lives in — a DFIR working directory routinely contains untrusted case files, so a `rules.yaml` sitting there is never picked up implicitly. Built-in defaults are used only when **no** `--rules-file` was given and the packaged copy can't be loaded; if you *do* pass `--rules-file`, a missing/unreadable/unparseable/schema-invalid file is a hard error (non-zero exit) rather than a silent fallback — you never get a verdict produced by a different ruleset than the one you asked for. The rules source actually used (path + SHA-256) is printed to the console (and captured in `--txt` output) and recorded under `hunt._rules_source` in `--json` output.
+TTP detection is driven by `rules.yaml`, bundled inside the package at `dumpex/rules_pkg/data/rules.yaml` — this is what `pip install dumpex` ships, so the tool works standalone with no extra files. Pass `--rules-file PATH` for an explicit, deliberate override without touching the installed package. There is **no** automatic scan of the current working directory or the directory the script lives in — a DFIR working directory routinely contains untrusted case files, so a `rules.yaml` sitting there is never picked up implicitly. Built-in defaults are used only when **no** `--rules-file` was given and the packaged copy can't be loaded; if you *do* pass `--rules-file`, a missing/unreadable/unparseable/schema-invalid file is a hard error (non-zero exit) rather than a silent fallback — you never get a verdict produced by a different ruleset than the one you asked for. The rules source actually used (path + SHA-256) is printed to the console (and captured in `--txt` output) and recorded under `meta.rules` in `--json` output.
 
 The rule file controls:
 
@@ -487,6 +487,7 @@ Layout:
 | `tests/hunt/` | Per-hunter tests (`dumpex.hunt.*`) driven through synthetic `FakeMF` minidump objects |
 | `tests/integration/` | Cross-module output-path tests: CSV/JSON summary rows faithfully reflecting a hunter's own `verdict_level`/`confidence`/`coverage_status`; the `--json` `meta` block (evidence hashing, redaction, graceful degradation) |
 | `tests/fixtures/` | Shared synthetic-PE/minidump builders (`fakes.py`) used by all of the above |
+| `tests/corpus/` | Opt-in real-dump validation harness against an external, private sample corpus (clean/malicious/missing-stream/corrupted/short-read) — skipped by default, see `tests/corpus/README.md` |
 
 `tests/conftest.py` also resets `stomping.get_thread_contexts`/
 `pipemod.get_thread_contexts` before and after every test — both hold a
@@ -496,7 +497,10 @@ whichever test happens to run next.
 
 CI (`.github/workflows/tests.yml`) runs the suite on the package's
 minimum supported Python version (`requires-python` in `pyproject.toml`)
-and one current version, on every push/PR.
+and one current version, on every push/PR. It has no access to any
+private real-dump corpus, so `tests/corpus/` always skips there too —
+see `tests/corpus/README.md` to run it locally against your own
+authorized sample set.
 
 ---
 

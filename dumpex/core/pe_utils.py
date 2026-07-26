@@ -412,7 +412,7 @@ def apply_base_relocations(data: bytes, pe: dict, delta: int) -> RelocationResul
         except struct.error:
             malformed = True
             break
-        if block_size < 8 or pos + block_size > end:
+        if block_size < 8 or block_size % 4 != 0 or pos + block_size > end:
             malformed = True
             break
         entry_count = (block_size - 8) // 2
@@ -452,6 +452,20 @@ def apply_base_relocations(data: bytes, pe: dict, delta: int) -> RelocationResul
         if malformed:
             break
         pos += block_size
+
+    # A well-formed BASERELOC directory is a run of blocks that exactly
+    # fills the directory — pos stops at `end` only if the last block's
+    # declared size accounted for every byte. Exiting the loop early
+    # because fewer than 8 bytes remained (pos + 8 > end) without having
+    # reached `end` means there is unconsumed trailing residue — a
+    # directory whose declared size doesn't match its actual block
+    # layout, which is malformed the same way a corrupt block is, not a
+    # silently-ignorable few bytes of padding. This also implicitly
+    # rejects a directory too small to hold even one block header
+    # (reloc_size 1-7): the loop runs zero iterations and pos never
+    # reaches end.
+    if not malformed and pos != end:
+        malformed = True
 
     return RelocationResult(
         data=bytes(out),

@@ -39,13 +39,14 @@ as a fingerprinted/confirmed build.
 """
 import os
 import struct
+import time
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
 from dumpex.core.memory import (va_to_file_offset, get_memory_regions, _get_region_at,
     get_thread_contexts, prot_str)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     NOT_EVALUATED, INCONCLUSIVE)
-from dumpex.hunt._coverage import derive_status, derive_coverage_status
+from dumpex.hunt._coverage import derive_status, derive_coverage_status, CoverageTracker
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_DETECTION, overall_confidence, verdict_level)
 
@@ -53,6 +54,23 @@ CS_BEACON_SIGNATURE  = b'\x00\x01\x00\x01\x00\x02'   # plaintext TLV start
 CS_SIG_XOR69         = b'ihihik'                       # above ^ 0x69
 CS_SIG_XOR2E         = b'././.,'                       # above ^ 0x2e
 CS_MAX_SEG_SCAN      = 50 * 1024 * 1024               # skip segments > 50 MB
+
+# Total resource budget for the WHOLE scan (across every segment), not a
+# per-segment limit — a dump stuffed with thousands of decoy/duplicate
+# markers (deliberately or by coincidence) must not be able to make this
+# hunter run unbounded time/memory. When any cap is hit, the scan stops
+# and the result is reported as coverage-partial rather than silently
+# treating the unscanned remainder as "checked, nothing there".
+CS_CONFIG_DECODE_MAX = 8192          # bytes decoded per candidate (real CS
+                                       # configs are a few KB at most; only
+                                       # decoding this much instead of a
+                                       # fixed 64 KB avoids retaining a huge
+                                       # buffer for markers that are never a
+                                       # real config)
+CS_MAX_CANDIDATES     = 20000        # marker matches examined, whole scan
+CS_MAX_DECODED_BYTES  = 64 * 1024 * 1024   # total bytes XOR-decoded, whole scan
+CS_MAX_HITS           = 100          # stop once this many configs are found
+CS_SCAN_DEADLINE_SECONDS = 60         # wall-clock budget for the whole scan
 
 # Field IDs from 1768.py dConfigIdentifiers
 CS_FIELD_NAMES = {
@@ -171,53 +189,105 @@ def _cs_xor_bytes(data: bytes, key: int) -> bytes:
     return bytes(b ^ kb for b in data)
 
 
-def _cs_scan_segment(data: bytes, seg_va: int, seg_fo: int) -> list:
+def _cs_scan_segment(data: bytes, seg_va: int, seg_fo: int):
     """
-    Search one memory segment for CS beacon config signatures.
+    Locate candidate CS beacon config markers in one memory segment.
 
-    Strategy (from 1768.py AnalyzeEmbeddedPEFileSub):
-      For each XOR key (0x69, 0x2e), search for the pre-XOR'd marker.
-      On hit: XOR-decode from that offset, verify the plaintext signature.
+    Strategy (from 1768.py AnalyzeEmbeddedPEFileSub): for each XOR key
+    (0x69, 0x2e), search for the pre-XOR'd marker bytes.
 
-    Returns list of (xor_key, hit_va, hit_file_offset, decoded_config_bytes).
+    A generator, not a list: a segment stuffed with thousands of decoy or
+    duplicate marker bytes must not force building (and holding) one giant
+    candidate list before the caller gets a chance to enforce the global
+    scan budget (CS_MAX_CANDIDATES / CS_SCAN_DEADLINE_SECONDS below) — the
+    caller can stop pulling from this generator the moment a cap is hit.
+
+    Decoding is deliberately NOT done here — see _cs_decode_and_parse_tlv,
+    which decodes only as many bytes as a candidate's TLV structure
+    actually needs instead of eagerly XOR-decoding (and retaining) a large
+    fixed window for every marker match, most of which are never a real
+    config.
+
+    Yields (xor_key, offset_in_data, hit_va, hit_file_offset).
     """
-    results = []
     for key, marker in ((0x69, CS_SIG_XOR69), (0x2e, CS_SIG_XOR2E)):
         start = 0
         while True:
             idx = data.find(marker, start)
             if idx == -1:
                 break
-            chunk = _cs_xor_bytes(data[idx: idx + 0x10000], key)
-            if chunk.startswith(CS_BEACON_SIGNATURE):
-                results.append((key, seg_va + idx, seg_fo + idx, chunk))
+            yield key, idx, seg_va + idx, seg_fo + idx
             start = idx + 1
-    return results
 
 
-def _cs_parse_tlv(data: bytes) -> dict:
+def _cs_decode_and_parse_tlv(data: bytes, offset: int, key: int, max_len: int) -> dict:
     """
-    Parse a CS TLV config block (adapted from 1768.py AnalyzeEmbeddedPEFileSub2).
+    XOR-decode and TLV-parse a CS beacon config candidate in-place,
+    decoding only as many bytes as are actually needed field-by-field (up
+    to `max_len`) instead of eagerly XOR-decoding a large fixed window
+    up front (adapted from 1768.py AnalyzeEmbeddedPEFileSub2/
+    SanityCheckExtractedConfig).
 
-    Wire format (all big-endian):
+    Wire format (all big-endian), decoded plaintext:
         field_id  uint16    (0 = end of config)
         type      uint16    (1=uint16, 2=uint32, 3=bytes)
         length    uint16
         value     <length> bytes
 
-    Returns dict: field_id (int) -> {name, type, raw, value}.
+    Returns {fields, complete, reason, consumed}:
+      fields   -- field_id (int) -> {name, type, raw, value}, whatever was
+                  parsed even if parsing stopped early.
+      complete -- True ONLY if a legitimate fid=0 terminator was reached
+                  with no truncation, no duplicate field ID, and no
+                  illegal field type along the way. A blob that merely
+                  "looks like fields" but never properly terminates is
+                  NOT a legitimate config — it must not pass the sanity
+                  check downstream.
+      reason   -- short string explaining why complete is False, else None.
+      consumed -- plaintext bytes consumed from `offset`, up to and
+                  including the fid=0 terminator when complete, else up
+                  to the point parsing stopped (used by the caller to
+                  track the total-decoded-bytes budget).
     """
+    kb = key & 0xff
     fields = {}
-    pos = 0
-    while pos + 6 <= len(data):
-        fid   = struct.unpack_from('>H', data, pos)[0]; pos += 2
+    pos = offset
+    limit = min(offset + max_len, len(data))
+    valid_types = (1, 2, 3)
+
+    if pos + len(CS_BEACON_SIGNATURE) > limit:
+        return {'fields': fields, 'complete': False,
+                'reason': 'buffer too small for signature', 'consumed': 0}
+    signature = bytes(b ^ kb for b in data[pos: pos + len(CS_BEACON_SIGNATURE)])
+    if signature != CS_BEACON_SIGNATURE:
+        return {'fields': fields, 'complete': False,
+                'reason': 'plaintext signature mismatch', 'consumed': 0}
+
+    while True:
+        if pos + 6 > limit:
+            return {'fields': fields, 'complete': False,
+                    'reason': 'truncated before fid=0 terminator (ran out of '
+                              'decode budget)',
+                    'consumed': pos - offset}
+        header = bytes(b ^ kb for b in data[pos: pos + 6])
+        fid, ftype, flen = struct.unpack('>HHH', header)
         if fid == 0:
-            break
-        ftype = struct.unpack_from('>H', data, pos)[0]; pos += 2
-        flen  = struct.unpack_from('>H', data, pos)[0]; pos += 2
-        if pos + flen > len(data):
-            break
-        raw  = data[pos: pos + flen]; pos += flen
+            return {'fields': fields, 'complete': True, 'reason': None,
+                    'consumed': pos + 2 - offset}
+        if ftype not in valid_types:
+            return {'fields': fields, 'complete': False,
+                    'reason': f'illegal field type 0x{ftype:04x} for field 0x{fid:04x}',
+                    'consumed': pos - offset}
+        if pos + 6 + flen > limit:
+            return {'fields': fields, 'complete': False,
+                    'reason': f'field 0x{fid:04x} declares length {flen} past '
+                              f'end of decode budget',
+                    'consumed': pos - offset}
+        if fid in fields:
+            return {'fields': fields, 'complete': False,
+                    'reason': f'duplicate field id 0x{fid:04x}',
+                    'consumed': pos - offset}
+        raw = bytes(b ^ kb for b in data[pos + 6: pos + 6 + flen])
 
         value = None
         try:
@@ -247,7 +317,7 @@ def _cs_parse_tlv(data: bytes) -> dict:
             'raw':   raw,
             'value': value,
         }
-    return fields
+        pos += 6 + flen
 
 
 def _cs_decode_instructions(raw: bytes, itype: int) -> list:
@@ -321,17 +391,98 @@ def _cs_guess_version(fields: dict) -> str:
     return '4.4+'
 
 
+# DER encoding of the rsaEncryption algorithm OID (1.2.840.113549.1.1.1):
+# tag(0x06) + length(0x09) + the 9-byte OID value. Cobalt Strike embeds an
+# RSA public key here (SubjectPublicKeyInfo), never any other algorithm.
+CS_RSA_ENCRYPTION_OID = bytes.fromhex('06092a864886f70d010101')
+CS_PUBLIC_KEY_MIN_LEN = 16   # short-form outer tag+length + minimal AlgorithmIdentifier
+
+
+def _der_read_length(data: bytes, pos: int) -> "tuple[int, int] | None":
+    """
+    Read one DER length field (definite form only — BER indefinite-length
+    encoding, 0x80, is not valid DER and is rejected) starting at `pos`.
+    Returns (length, next_pos) or None if malformed/insufficient bytes.
+    """
+    if pos >= len(data):
+        return None
+    first = data[pos]
+    if first & 0x80 == 0:
+        return first, pos + 1
+    n = first & 0x7f
+    if n == 0 or pos + 1 + n > len(data):
+        return None
+    return int.from_bytes(data[pos + 1: pos + 1 + n], 'big'), pos + 1 + n
+
+
+def _cs_validate_public_key_der(raw: bytes) -> "tuple[bool, str]":
+    """
+    Validate the PublicKey field (0x0007) as a minimally plausible X.509
+    SubjectPublicKeyInfo DER structure:
+
+        SEQUENCE {                        -- SubjectPublicKeyInfo
+          SEQUENCE {                      -- AlgorithmIdentifier
+            OID  rsaEncryption (1.2.840.113549.1.1.1)
+            ...                           -- (params, not checked here)
+          }
+          ...                             -- subjectPublicKey, not checked
+        }
+
+    A prior version only checked that the raw bytes' hex started with
+    "308" — three hex nibbles that happen to match ANY DER SEQUENCE
+    beginning with a plausible short/long-form length byte, regardless of
+    whether the length is internally consistent or the structure has
+    anything to do with an RSA key. This checks minimum length, that the
+    outer SEQUENCE's declared DER length doesn't exceed the actual buffer,
+    and that immediately inside it sits an AlgorithmIdentifier SEQUENCE
+    whose OID is exactly rsaEncryption — cheap to spoof entirely, but no
+    longer trivially satisfied by 3 fixed nibbles plus arbitrary bytes.
+
+    Returns (valid, reason); reason is a short diagnostic string on
+    failure, "" on success.
+    """
+    if len(raw) < CS_PUBLIC_KEY_MIN_LEN:
+        return False, f"PublicKey field too short ({len(raw)} bytes) for a DER SEQUENCE"
+    if raw[0] != 0x30:
+        return False, "PublicKey field does not start with a DER SEQUENCE tag (0x30)"
+
+    outer = _der_read_length(raw, 1)
+    if outer is None:
+        return False, "PublicKey field: malformed outer SEQUENCE length"
+    outer_len, pos = outer
+    if pos + outer_len > len(raw):
+        return False, (f"PublicKey field: declared SEQUENCE length {outer_len} exceeds "
+                        f"available {len(raw) - pos} byte(s)")
+
+    if pos >= len(raw) or raw[pos] != 0x30:
+        return False, "PublicKey field: AlgorithmIdentifier SEQUENCE tag not found"
+    inner = _der_read_length(raw, pos + 1)
+    if inner is None:
+        return False, "PublicKey field: malformed AlgorithmIdentifier length"
+    inner_len, alg_pos = inner
+    if alg_pos + inner_len > len(raw):
+        return False, "PublicKey field: AlgorithmIdentifier length exceeds buffer"
+
+    if raw[alg_pos: alg_pos + len(CS_RSA_ENCRYPTION_OID)] != CS_RSA_ENCRYPTION_OID:
+        return False, "PublicKey field: AlgorithmIdentifier OID is not rsaEncryption"
+
+    return True, ""
+
+
 def _cs_sanity_check(fields: dict) -> bool:
     """
-    Validate extracted config (mirrors 1768.py SanityCheckExtractedConfig):
+    Validate extracted config (mirrors 1768.py SanityCheckExtractedConfig,
+    hardened beyond it — see _cs_validate_public_key_der):
       - field 0x0001 (beacon type) must be present and a known value
-      - field 0x0007 (public key) must start with ASN.1 SEQUENCE prefix 0x308...
+      - field 0x0007 (public key) must be a structurally-consistent DER
+        SubjectPublicKeyInfo carrying the rsaEncryption OID
     """
     if 0x0001 not in fields or 0x0007 not in fields:
         return False
     if fields[0x0001]['value'] not in CS_BEACON_TYPES:
         return False
-    return fields[0x0007]['raw'].hex().startswith('308')
+    valid, _reason = _cs_validate_public_key_der(fields[0x0007]['raw'])
+    return valid
 
 
 def _cs_context_corroborates(hit_region, regions: list, thread_contexts: list) -> "tuple[bool, list]":
@@ -430,14 +581,47 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
     mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
     regions = get_memory_regions(mf)
     thread_contexts = get_thread_contexts(mf)
-    skipped, read_failed, hits = 0, 0, []
+
+    # ThreadList/CONTEXT coverage — the same explicit counts injection.py
+    # tracks (see its coverage["contexts_missing"]): a bare "did any thread
+    # context parse" boolean can't distinguish "every thread's context
+    # parsed" from "1 out of 200 did". Unlike injection.py, RIP/EIP is NOT
+    # the only path to this hunter's top tier (score 2 also comes from
+    # executable+private region protection alone — see
+    # _cs_context_corroborates), so an incomplete thread-context picture
+    # only actually matters for a hit that ISN'T already corroborated by
+    # region protection — see the top_tier_uncertain check below.
+    thread_list_stream_available = bool(mf.threads and mf.threads.threads)
+    threads_total    = len(mf.threads.threads) if (mf.threads and mf.threads.threads) else 0
+    contexts_parsed  = len(thread_contexts)
+    contexts_missing = max(0, threads_total - contexts_parsed)
+    thread_context_gap = (not thread_list_stream_available) or contexts_missing > 0
+    findings['coverage'] = {
+        "mem_info_stream":       mem_info_available,
+        "thread_list_stream":    thread_list_stream_available,
+        "threads_total":         threads_total,
+        "contexts_parsed":       contexts_parsed,
+        "contexts_missing":      contexts_missing,
+    }
+
+    coverage_counts = CoverageTracker()
+    hits = []
+    seen_hit_vas = set()   # O(1) dedup, not an O(n) scan of `hits` per candidate
     reader = mf.get_reader()
 
     print(DIM(f"  [*] Scanning {len(segs)} segment(s) for beacon signature …"))
 
+    total_candidates    = 0
+    total_decoded_bytes = 0
+    budget_exhausted     = False
+    budget_reason         = None
+    scan_deadline = time.monotonic() + CS_SCAN_DEADLINE_SECONDS
+
     for seg in segs:
+        if budget_exhausted:
+            break
         if seg.size > CS_MAX_SEG_SCAN:
-            skipped += 1
+            coverage_counts.note_skipped_oversize()
             continue
         try:
             data = reader.read(seg.start_virtual_address, seg.size)
@@ -446,20 +630,56 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
             # at — it must not be silently indistinguishable from "read
             # fine, no hit". Tracked separately from size-based skips so a
             # negative result can say exactly what coverage gap exists.
-            read_failed += 1
+            coverage_counts.note_read_failed()
             continue
 
-        for xor_key, hit_va, hit_fo, cfg_bytes in _cs_scan_segment(
-                data, seg.start_virtual_address, seg.start_file_address):
-            fields = _cs_parse_tlv(cfg_bytes)
-            if not fields or not _cs_sanity_check(fields):
+        if len(data) < seg.size:
+            # A short read (fewer bytes back than the segment's own
+            # declared size) is NOT the same as "read fine, no hit" —
+            # whatever wasn't returned was never actually examined for a
+            # signature. Still scan what WAS returned (a partial read can
+            # still contain a hit), but this segment must not silently
+            # count toward a "complete" scan.
+            coverage_counts.note_short_read()
+            if not data:
                 continue
-            if not any(h[1] == hit_va for h in hits):   # deduplicate by VA
-                hits.append((xor_key, hit_va, hit_fo, fields))
 
-    scan_note = f" ({skipped} segment(s) >50 MB skipped)" if skipped else ""
-    if read_failed:
-        scan_note += f" ({read_failed} segment(s) failed to read)"
+        for xor_key, idx, hit_va, hit_fo in _cs_scan_segment(
+                data, seg.start_virtual_address, seg.start_file_address):
+            total_candidates += 1
+            if (total_candidates > CS_MAX_CANDIDATES
+                    or total_decoded_bytes > CS_MAX_DECODED_BYTES
+                    or time.monotonic() > scan_deadline):
+                budget_exhausted = True
+                budget_reason = (f"{total_candidates} candidate(s) examined, "
+                                  f"{total_decoded_bytes} byte(s) decoded, "
+                                  f"{len(hits)} hit(s) found before the scan "
+                                  f"budget was exhausted")
+                break
+            parsed = _cs_decode_and_parse_tlv(data, idx, xor_key, CS_CONFIG_DECODE_MAX)
+            total_decoded_bytes += parsed['consumed']
+            if not parsed['complete'] or not _cs_sanity_check(parsed['fields']):
+                continue
+            if hit_va not in seen_hit_vas:
+                seen_hit_vas.add(hit_va)
+                hits.append((xor_key, hit_va, hit_fo, parsed['fields']))
+                if len(hits) >= CS_MAX_HITS:
+                    budget_exhausted = True
+                    budget_reason = (f"{total_candidates} candidate(s) examined, "
+                                      f"{total_decoded_bytes} byte(s) decoded, "
+                                      f"{len(hits)} hit(s) found — hit cap reached")
+                    break
+        if budget_exhausted:
+            break
+
+    scan_note = (f" ({coverage_counts.skipped_oversize} segment(s) >50 MB skipped)"
+                 if coverage_counts.skipped_oversize else "")
+    if coverage_counts.read_failed:
+        scan_note += f" ({coverage_counts.read_failed} segment(s) failed to read)"
+    if coverage_counts.short_reads:
+        scan_note += f" ({coverage_counts.short_reads} segment(s) short-read)"
+    if budget_exhausted:
+        scan_note += f" (scan budget exhausted: {budget_reason})"
     print(DIM(f"  [*] Scan complete{scan_note}."))
 
     # Coverage is uniform across the DETECTED/clean/INCONCLUSIVE outcomes
@@ -467,12 +687,16 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
     # absence always makes coverage partial, since it's the region-context
     # corroboration check's own data source, regardless of whether this
     # scan happens to end up finding a config or not.
-    complete = not (skipped or read_failed) and mem_info_available
-    coverage_reasons = []
-    if skipped:
-        coverage_reasons.append(f"{skipped} oversized segment(s) (>50 MB) skipped")
-    if read_failed:
-        coverage_reasons.append(f"{read_failed} segment(s) failed to read")
+    complete = coverage_counts.complete and not budget_exhausted and mem_info_available
+    coverage_reasons = coverage_counts.build_reasons(
+        oversize_label="oversized segment(s) (>50 MB) skipped",
+        read_failed_label="segment(s) failed to read",
+        short_read_label="segment(s) returned fewer bytes than declared (short read) — "
+                          "not fully scanned",
+    )
+    if budget_exhausted:
+        coverage_reasons.append(f"scan resource budget exhausted ({budget_reason}) — "
+                                 f"stopped before every segment/candidate was examined")
     if not mem_info_available:
         coverage_reasons.append("MemoryInfoListStream missing from this dump — region/"
                                  "execution-context corroboration for any config hit "
@@ -526,6 +750,26 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
     score = 2 if any_corroborated else 1
     findings['score']         = score
     findings['config_count']  = len(hits)
+
+    # No hit was corroborated by region protection, and thread-context
+    # coverage was incomplete (or absent) — RIP/EIP corroboration could
+    # not fully run, so a genuine top-tier (score 2) result cannot be
+    # ruled out for these hits. This is a real coverage gap, not merely
+    # "checked and found nothing", so it downgrades coverage_status the
+    # same way a skipped/unreadable segment does.
+    top_tier_uncertain = not any_corroborated and thread_context_gap
+    if top_tier_uncertain:
+        complete = False
+        if not thread_list_stream_available:
+            coverage_reasons.append("ThreadListStream missing from this dump — RIP/EIP-based "
+                                     "context corroboration could not run for any uncorroborated hit")
+        else:
+            coverage_reasons.append(f"{contexts_missing}/{threads_total} thread(s) had no parsed "
+                                     f"CONTEXT — RIP/EIP corroboration ran, but not for every "
+                                     f"thread, for a hit not otherwise corroborated")
+        findings['coverage_status']  = derive_coverage_status(True, complete)
+        findings['coverage_reasons'] = coverage_reasons
+
     status = derive_status(True, True, complete)
     findings['status'] = status
     print()
@@ -706,6 +950,18 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
                       f"protect={prot_str(region.Protect)}"
                       if region is not None else
                       "enclosing region not covered by MemoryInfoListStream")
+
+        hit_limitations = []
+        if not mem_info_available:
+            hit_limitations.append("Region/execution-context corroboration could not be "
+                                    "verified — MemoryInfoListStream missing from this dump.")
+        if not corroborated and thread_context_gap:
+            hit_limitations.append(
+                "RIP/EIP-based execution corroboration could not fully run — "
+                + ("ThreadListStream missing from this dump" if not thread_list_stream_available
+                   else f"{contexts_missing}/{threads_total} thread(s) had no parsed CONTEXT")
+                + " — a live-execution corroboration for this hit cannot be ruled out.")
+
         findings_list.append(Finding(
             check="cs_beacon.structural_config",
             facts=facts,
@@ -720,9 +976,7 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
                        "lining up — is itself hard to produce by chance, but no independent "
                        "memory-context corroboration (executable private region, or a thread "
                        "executing within the same allocation) was found for this hit."),
-            limitations=(["Region/execution-context corroboration could not be verified — "
-                          "MemoryInfoListStream missing from this dump."]
-                         if not mem_info_available else []),
+            limitations=hit_limitations,
             tag=TAG_DETECTION,
         ))
 

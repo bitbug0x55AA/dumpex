@@ -94,7 +94,12 @@ def test_relocation_only_diff_not_detected():
     page_rva = text_vaddr & ~0xFFF
     offset_in_page = (text_vaddr + abs_ptr_off) - page_rva
     entry = (IMAGE_REL_BASED_DIR64 << 12) | offset_in_page
-    reloc_data = struct.pack('<II', page_rva, 8 + 2) + struct.pack('<H', entry)
+    padding_entry = 0   # IMAGE_REL_BASED_ABSOLUTE -- pads block_size to a
+                        # multiple of 4 (apply_base_relocations rejects
+                        # unaligned block sizes as malformed, so this must
+                        # actually reach "applied" for the test to mean
+                        # anything)
+    reloc_data = struct.pack('<II', page_rva, 8 + 4) + struct.pack('<HH', entry, padding_entry)
 
     sections = [
         {"name": b".text", "vaddr": text_vaddr, "vsize": text_size, "rawptr": 0x400,
@@ -137,6 +142,11 @@ def test_relocation_only_diff_not_detected():
         f = stomping._hunt_stomping(MF(), verbose=True, ref_dir=d)
 
     assert f["score"] == 0, "relocation-only difference must normalize away"
+    # A relocation-normalization FAILURE also produces score 0 (the diff
+    # is gated, not compared) — assert the section was actually compared
+    # and matched, not that normalization silently failed to run at all.
+    assert f["coverage_counts"]["relocation_failed"] == 0, f["coverage_counts"]
+    assert f["coverage_counts"]["sections_compared"] == 1, f["coverage_counts"]
 
 
 # ── all module headers invalid -> PARTIAL, not clean-complete ─────────────

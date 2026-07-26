@@ -49,3 +49,14 @@ addopts = "-ra"
 
 [tool.coverage.run]
 source = ["dumpex"]
+branch = true
+
+[tool.coverage.report]
+# Gate CI on total coverage, not just report it — a few points below the
+# measured baseline (branch coverage, full extras installed) at the time
+# this was added, so ordinary test additions don't trip it while a real
+# regression (removing tests, adding a large untested module) does. Raise
+# this incrementally as coverage improves; never lower it to make a
+# failing PR pass — fix the coverage gap instead.
+fail_under = 45
+show_missing = true

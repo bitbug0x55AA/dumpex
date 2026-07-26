@@ -1,0 +1,108 @@
+# Template for a private, external dumpex validation corpus manifest.
+# Copy this file to $CORPUS_DIR/manifest.yaml, fill in real samples, and
+# point DUMPEX_CORPUS_MANIFEST at it -- see README.md in this directory.
+#
+# `file` is a path RELATIVE TO THIS MANIFEST FILE. `sha256` is verified
+# against the actual file content on every test run (see
+# tests/integration/test_corpus.py) -- a mismatch fails loudly rather
+# than silently validating against substituted or bit-rotted bytes.
+#
+# `expected.hunt.<ttp>` keys accept:
+#   status            -- exact match against the hunter's "status" field
+#                         (DETECTED / NOT_DETECTED_IN_SCANNED_SCOPE /
+#                         INCONCLUSIVE / NOT_EVALUATED)
+#   coverage_status   -- exact match against "coverage_status"
+#                         (complete / partial / not_evaluated)
+#   min_score         -- hunter's "score" must be >= this value
+#
+# `expected.open_dump_fails: true` means dumpex.core.memory.open_dump()
+# is expected to raise SystemExit on this file (corrupted/truncated
+# sample) -- no hunt/* keys are meaningful in that case.
+
+version: 1
+samples:
+
+  # ── category: clean ──────────────────────────────────────────────────
+  - id: clean_baseline_01
+    file: samples/clean_baseline_01.dmp
+    sha256: "REPLACE_WITH_REAL_SHA256_0000000000000000000000000000000000"
+    category: clean
+    source: "Internal DFIR lab capture, case DFIR-2024-0113"
+    authorization: "Written authorization on file: legal/authorizations/DFIR-2024-0113.pdf"
+    capture:
+      tool: "procdump 11.0 (-ma, MiniDumpWithFullMemory + MiniDumpWithHandleData)"
+      os: "Windows 10 22H2 x64"
+      captured_at: "2024-11-03T14:22:00Z"
+      process: "explorer.exe, ordinary user session, no injected payload"
+    expected:
+      hunt:
+        injection:  {status: NOT_DETECTED_IN_SCANNED_SCOPE, coverage_status: complete}
+        stomping:   {status: NOT_DETECTED_IN_SCANNED_SCOPE, coverage_status: complete}
+        pipe:       {status: NOT_DETECTED_IN_SCANNED_SCOPE, coverage_status: complete}
+        cs-beacon:  {status: NOT_DETECTED_IN_SCANNED_SCOPE, coverage_status: complete}
+
+  # ── category: malicious ──────────────────────────────────────────────
+  - id: cobalt_strike_beacon_01
+    file: samples/cs_beacon_01.dmp
+    sha256: "REPLACE_WITH_REAL_SHA256_1111111111111111111111111111111111"
+    category: malicious
+    source: "Isolated malware analysis VM, authorized engagement ENG-2024-088"
+    authorization: "See legal/authorizations/ENG-2024-088.pdf; handled per lab SOP-14"
+    capture:
+      tool: "procdump 11.0 (-ma, MiniDumpWithFullMemory + MiniDumpWithHandleData)"
+      os: "Windows 11 23H2 x64"
+      captured_at: "2024-11-05T09:03:11Z"
+      process: "svchost.exe, CS beacon injected via reflective DLL (family: Cobalt Strike 4.9)"
+    expected:
+      hunt:
+        cs-beacon: {status: DETECTED, coverage_status: complete, min_score: 1}
+    notes: "Beacon config expected in configs[]; C2 domain intentionally not asserted here."
+
+  # ── category: missing_stream ─────────────────────────────────────────
+  - id: missing_handle_stream_01
+    file: samples/missing_handle_stream_01.dmp
+    sha256: "REPLACE_WITH_REAL_SHA256_2222222222222222222222222222222222"
+    category: missing_stream
+    source: "Internal DFIR lab capture, case DFIR-2024-0113"
+    authorization: "Written authorization on file: legal/authorizations/DFIR-2024-0113.pdf"
+    capture:
+      tool: "MiniDumpWriteDump, MiniDumpNormal only (no MiniDumpWithHandleData)"
+      os: "Windows 10 22H2 x64"
+      captured_at: "2024-11-03T14:30:00Z"
+      process: "explorer.exe"
+    expected:
+      hunt:
+        pipe: {status: INCONCLUSIVE, coverage_status: partial}
+    notes: "HandleDataStream deliberately absent from this capture."
+
+  # ── category: corrupted ──────────────────────────────────────────────
+  - id: corrupted_truncated_01
+    file: samples/corrupted_truncated_01.dmp
+    sha256: "REPLACE_WITH_REAL_SHA256_3333333333333333333333333333333333"
+    category: corrupted
+    source: "Internal DFIR lab capture, case DFIR-2024-0113 (deliberately truncated copy)"
+    authorization: "Written authorization on file: legal/authorizations/DFIR-2024-0113.pdf"
+    capture:
+      tool: "clean_baseline_01.dmp truncated to 4096 bytes"
+      os: "Windows 10 22H2 x64"
+      captured_at: "2024-11-03T14:22:00Z"
+      process: "explorer.exe"
+    expected:
+      open_dump_fails: true
+
+  # ── category: short_read ─────────────────────────────────────────────
+  - id: short_read_segment_01
+    file: samples/short_read_segment_01.dmp
+    sha256: "REPLACE_WITH_REAL_SHA256_4444444444444444444444444444444444"
+    category: short_read
+    source: "Isolated malware analysis VM, authorized engagement ENG-2024-088"
+    authorization: "See legal/authorizations/ENG-2024-088.pdf; handled per lab SOP-14"
+    capture:
+      tool: "procdump against a process with a since-unmapped/paged-out region"
+      os: "Windows 11 23H2 x64"
+      captured_at: "2024-11-05T09:10:00Z"
+      process: "svchost.exe"
+    expected:
+      hunt:
+        cs-beacon: {coverage_status: partial}
+    notes: "At least one declared memory segment legitimately reads back shorter than its own size."

@@ -57,7 +57,12 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # duplicated here inside the hunt results themselves.
 
     # ── Sanitize for JSON serialization ───────────────────────────────────
-    # CS beacon: convert int-keyed field dicts + bytes
+    # CS beacon: convert int-keyed field dicts + bytes. Every OTHER key in
+    # cfg (context_corroborated, cs_version_note, and anything added to
+    # _hunt_cs_beacon's findings["configs"] entries in the future) is
+    # passed through unchanged via `{**cfg, ...}` rather than hand-picked
+    # field-by-field — a hand-reconstructed dict silently drops any field
+    # this dispatcher doesn't already know about.
     if "cs-beacon" in results:
         safe_cfgs = []
         for cfg in results["cs-beacon"].get("configs", []):
@@ -72,16 +77,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
                               if isinstance(rec.get("value"), bytes)
                               else rec.get("value")),
                 }
-            safe_cfgs.append({
-                "va":              cfg["va"],
-                "file_offset":     cfg["file_offset"],
-                "region_base":     cfg.get("region_base"),
-                "region_size":     cfg.get("region_size"),
-                "region_protect":  cfg.get("region_protect"),
-                "xor_key":         cfg["xor_key"],
-                "cs_version":      cfg["cs_version"],
-                "fields":          safe_fields,
-            })
+            safe_cfgs.append({**cfg, "fields": safe_fields})
         results["cs-beacon"]["configs"] = safe_cfgs
 
     # YARA: bytes → hex in matched string data

@@ -2,6 +2,7 @@
 import os
 import sys
 import atexit
+import hashlib
 import contextlib
 import importlib.resources
 from pathlib import Path
@@ -9,6 +10,7 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, CYAN
 from dumpex.core.memory import (get_modules, get_memory_regions, addr_to_module,
     va_to_file_offset, prot_str, _get_region_at)
+from dumpex.core.evidence import sha256_file
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt.cs_beacon import CS_MAX_SEG_SCAN
@@ -19,6 +21,26 @@ YARA_MAX_STRINGS_PER_MATCH = 50 # cap annotated string instances kept per match
 YARA_MAX_TOTAL_HITS     = 2000  # hard cap on collected hits across the whole scan
 
 _packaged_yara_ctx_stack = None   # lazily-created; closed at process exit via atexit
+_LAST_YARA_PROVENANCE    = None   # set by _load_yara_rules(); see get_yara_provenance()
+
+
+def get_yara_provenance() -> "dict | None":
+    """
+    Reproducible content provenance for the YARA rule files actually used
+    by the most recent _load_yara_rules() call: {"rules_dir": str,
+    "files": [{"name", "sha256", "compiled", "error"}, ...] sorted by
+    name, "aggregate_sha256": str, "compiled_ok": int, "compile_failed":
+    int}. None if YARA scanning was never invoked this process (e.g.
+    --hunt injection alone, which never calls _load_yara_rules).
+
+    A --yara-dir path or directory name alone doesn't tell an analyst
+    reviewing a report months later WHICH rules actually produced a
+    verdict — rule files get edited in place routinely. The per-file and
+    aggregate sha256 let a finding be tied to the exact rule content that
+    generated it, the same way meta.rules already does for rules.yaml
+    (see dumpex.rules_pkg.loader.get_rules_source_info).
+    """
+    return _LAST_YARA_PROVENANCE
 
 
 def _packaged_yara_rules_dir() -> "str | None":
@@ -66,10 +88,17 @@ def _load_yara_rules(rules_dir: str) -> tuple:
     coverage rather than just print a warning and vanish: a dump that would
     have matched that broken rule file's signatures must not come back
     NOT_DETECTED_IN_SCANNED_SCOPE as if the file's rules had actually run.
+
+    Also records reproducible content provenance for every candidate file
+    (compiled or not) — see get_yara_provenance() — as a side effect,
+    keyed by sorted filename so the recorded order is deterministic
+    regardless of filesystem iteration order.
     """
     import yara, glob
+    global _LAST_YARA_PROVENANCE
     loaded = []
     compile_failed = 0
+    file_provenance = []
     patterns = [
         os.path.join(rules_dir, "*.yar"),
         os.path.join(rules_dir, "*.yara"),
@@ -78,14 +107,37 @@ def _load_yara_rules(rules_dir: str) -> tuple:
         for path in sorted(glob.glob(pat)):
             fname = os.path.basename(path)
             try:
+                file_sha256 = sha256_file(path)
+            except OSError:
+                file_sha256 = None
+            try:
                 compiled = yara.compile(filepath=path)
                 loaded.append((fname, compiled))
+                file_provenance.append({"name": fname, "sha256": file_sha256,
+                                         "compiled": True, "error": None})
             except yara.SyntaxError as e:
                 print(YELLOW(f"  [~] YARA syntax error in {fname}: {e}"))
                 compile_failed += 1
+                file_provenance.append({"name": fname, "sha256": file_sha256,
+                                         "compiled": False, "error": str(e)})
             except Exception as e:
                 print(YELLOW(f"  [~] Could not load {fname}: {e}"))
                 compile_failed += 1
+                file_provenance.append({"name": fname, "sha256": file_sha256,
+                                         "compiled": False, "error": str(e)})
+
+    file_provenance.sort(key=lambda f: f["name"])
+    aggregate = hashlib.sha256()
+    for f in file_provenance:
+        aggregate.update(f["name"].encode("utf-8"))
+        aggregate.update((f["sha256"] or "").encode("utf-8"))
+    _LAST_YARA_PROVENANCE = {
+        "rules_dir":        rules_dir,
+        "files":            file_provenance,
+        "aggregate_sha256": aggregate.hexdigest(),
+        "compiled_ok":      len(loaded),
+        "compile_failed":   compile_failed,
+    }
     return loaded, compile_failed
 
 

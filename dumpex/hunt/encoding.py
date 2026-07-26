@@ -50,7 +50,7 @@ from dumpex.core.memory import (
 from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
-from dumpex.hunt._coverage import derive_status, derive_coverage_status
+from dumpex.hunt._coverage import derive_status, derive_coverage_status, CoverageTracker
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
@@ -436,9 +436,9 @@ def _sm_validate_and_decode(data: bytes, candidates: list,
 
 def _scan_sleep_mask(regions, modules, mf) -> tuple:
     """
-    Returns (hits, scanned_count, size_skipped_count, read_failed_count).
-    Layer 0: scan PAGE_READWRITE MEM_PRIVATE regions for CS Sleep Mask
-    XOR encoding and attempt key recovery + decode.
+    Returns (hits, coverage). Layer 0: scan PAGE_READWRITE MEM_PRIVATE
+    regions for CS Sleep Mask XOR encoding and attempt key recovery +
+    decode.
 
     Target region characteristics:
       - State  : MEM_COMMIT
@@ -447,6 +447,13 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
                   leaving protection as RW — NOT execute)
       - Size   : ≤ SLEEP_MASK_REGION_MAX (10 MB)
       - Not backed by a known module
+
+    `coverage` (dumpex.hunt._coverage.CoverageTracker) distinguishes "0
+    candidate regions existed" from "candidates existed but every one was
+    too big / failed to read / short-read" — see CoverageTracker's own
+    docstring for why this layer's gap shape fits it directly rather than
+    hand-rolling the same four counters this function used to keep
+    separately.
 
     Returns list of:
         {
@@ -457,14 +464,8 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
           'cls'     : dict,           # _classify_decoded() result
         }
     """
-    hits        = []
-    scanned     = 0   # regions actually read+analyzed, past all filters —
-                       # distinguishes "0 candidate regions existed" from
-                       # "candidates existed but every one was too big/wrong type"
-    size_skipped = 0   # otherwise-eligible region skipped only for exceeding
-                        # SLEEP_MASK_REGION_MAX — a real coverage gap, unlike
-                        # a region that structurally doesn't match this layer
-    read_failed  = 0
+    hits = []
+    coverage = CoverageTracker()
     for r in regions:
         if prot_str(r.State)   != 'MEM_COMMIT':
             continue
@@ -477,15 +478,19 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
         if addr_to_module(r.BaseAddress, modules):
             continue   # module-backed region — not the beacon's private heap
         if r.RegionSize > SLEEP_MASK_REGION_MAX:
-            size_skipped += 1
+            coverage.note_skipped_oversize()
             continue
 
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            read_failed += 1
+            coverage.note_read_failed()
             continue
-        scanned += 1
+        if len(data) < r.RegionSize:
+            coverage.note_short_read()
+            if not data:
+                continue
+        coverage.note_scanned()
 
         candidates = _sm_recover_candidates(data)
         if not candidates:
@@ -502,7 +507,7 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
                 'cls':     cls,
             })
 
-    return hits, scanned, size_skipped, read_failed
+    return hits, coverage
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -510,10 +515,9 @@ def _scan_sleep_mask(regions, modules, mf) -> tuple:
 # ══════════════════════════════════════════════════════════════════════════
 
 def _scan_entropy(regions, modules, mf, susp_prots):
-    hits        = []
-    scanned     = 0
-    size_skipped = 0
-    read_failed  = 0
+    """Returns (hits, coverage) — see _scan_sleep_mask for the CoverageTracker shape."""
+    hits = []
+    coverage = CoverageTracker()
     for r in regions:
         if prot_str(r.State) != 'MEM_COMMIT':
             continue
@@ -522,16 +526,20 @@ def _scan_entropy(regions, modules, mf, susp_prots):
         if addr_to_module(r.BaseAddress, modules):
             continue
         if r.RegionSize > ENTROPY_SCAN_MAX:
-            size_skipped += 1
+            coverage.note_skipped_oversize()
             continue
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            read_failed += 1
+            coverage.note_read_failed()
             continue
+        if len(data) < r.RegionSize:
+            coverage.note_short_read()
+            if not data:
+                continue
         if len(data) < 256:
             continue
-        scanned += 1
+        coverage.note_scanned()
 
         ent = _shannon_entropy(data)
         p      = prot_str(r.Protect)
@@ -540,7 +548,7 @@ def _scan_entropy(regions, modules, mf, susp_prots):
 
         if ent >= threshold:
             hits.append((r, ent, threshold))
-    return hits, scanned, size_skipped, read_failed
+    return hits, coverage
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -587,10 +595,32 @@ def _scan_base64(data: bytes, region_base: int, budget: ScanBudget):
 # LAYER 3 — Single-byte XOR brute-force
 # ══════════════════════════════════════════════════════════════════════════
 
+# Precomputed ONCE at import time, not per call: table[b] == 1 if byte
+# value b is printable ASCII (or tab/LF/CR), else 0. _XOR_DECODE_TABLES /
+# _XOR_SCORE_TABLES below fold this together with each of the 256
+# possible single-byte XOR keys, so scoring/decoding a whole buffer is a
+# single C-level bytes.translate() call with an O(1) table lookup instead
+# of rebuilding a 256-entry table via a Python-level generator expression
+# on every call. The previous implementation (even after switching to
+# translate()) still cost ~4096 Python-level XOR operations PER KEY,
+# times 255 keys, PER ELIGIBLE REGION just to build that table — with
+# only the shared decode budget's own deadline eventually stopping it,
+# that measurably dominated this hunter's total scan time once region
+# counts reached the hundreds (see tests/perf/test_benchmarks.py, which
+# caught this regression).
+_XOR_PRINTABLE_FLAGS = bytes(1 if (32 <= b < 127 or b in (9, 10, 13)) else 0 for b in range(256))
+_XOR_DECODE_TABLES = [bytes(b ^ key for b in range(256)) for key in range(256)]
+_XOR_SCORE_TABLES   = [bytes(_XOR_PRINTABLE_FLAGS[b ^ key] for b in range(256)) for key in range(256)]
+
+
+def _xor_table(key: int) -> bytes:
+    """256-entry translation table for XOR-decoding with a single-byte key."""
+    return _XOR_DECODE_TABLES[key]
+
+
 def _score_xor_key(data: bytes, key: int) -> float:
-    decoded  = bytes(b ^ key for b in data)
-    printable = sum(1 for b in decoded if 32 <= b < 127 or b in (9, 10, 13))
-    return printable / len(decoded)
+    printable = sum(data.translate(_XOR_SCORE_TABLES[key]))
+    return printable / len(data)
 
 
 def _scan_xor(data: bytes, region_base: int, budget: ScanBudget):
@@ -608,7 +638,7 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget):
             return
         score = _score_xor_key(sample, key)
         if score >= XOR_SCORE_MIN:
-            decoded_sample = bytes(b ^ key for b in sample)
+            decoded_sample = sample.translate(_xor_table(key))
             text = decoded_sample.decode('ascii', errors='replace')
             if _IOC_PAT.search(text) or any(
                 kw in text.lower() for kw in
@@ -619,7 +649,7 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget):
     for key, _ in sorted(candidates, key=lambda x: -x[1])[:5]:
         if budget.exhausted():
             return
-        decoded = bytes(b ^ key for b in data)
+        decoded = data.translate(_xor_table(key))
         if not budget.seen_content(decoded):
             continue
         cls = _classify_decoded(decoded)
@@ -741,8 +771,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Layer 0: CS Sleep Mask XOR ────────────────────────────────────────
     print(DIM("  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …"))
-    sleep_mask_hits, sleep_mask_scanned, sleep_mask_size_skipped, sleep_mask_read_failed = \
-        _scan_sleep_mask(regions, modules, mf)
+    sleep_mask_hits, sleep_mask_coverage = _scan_sleep_mask(regions, modules, mf)
 
     if sleep_mask_hits:
         detail = f"{len(sleep_mask_hits)} region(s) with confirmed CS Sleep Mask encoding"
@@ -804,8 +833,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Layer 1: Entropy ──────────────────────────────────────────────────
     print(DIM("  [*] Layer 1: Shannon entropy scan …"))
-    entropy_hits, entropy_scanned, entropy_size_skipped, entropy_read_failed = \
-        _scan_entropy(regions, modules, mf, SUSPICIOUS_PROTS)
+    entropy_hits, entropy_coverage = _scan_entropy(regions, modules, mf, SUSPICIOUS_PROTS)
 
     if entropy_hits:
         detail = f"{len(entropy_hits)} high-entropy MEM_PRIVATE region(s)"
@@ -851,9 +879,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     print(DIM("  [*] Layers 2-4: Base64 / XOR / GZIP scan …"))
 
     b64_hits, xor_hits, cmp_hits, pe_hits, shellcode_hits = [], [], [], [], []
-    decode_scanned      = 0
-    decode_size_skipped = 0
-    decode_read_failed  = 0
+    decode_coverage = CoverageTracker()
 
     # One budget shared across every region for the rest of this hunt (see
     # dumpex/hunt/_budget.py) — bounds total decode/decompress attempts and
@@ -877,14 +903,18 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         if prot_str(r.Type) == 'MEM_IMAGE' and _is_system_dll(mod):
             continue
         if r.RegionSize > DECODE_SCAN_MAX:
-            decode_size_skipped += 1
+            decode_coverage.note_skipped_oversize()
             continue
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            decode_read_failed += 1
+            decode_coverage.note_read_failed()
             continue
-        decode_scanned += 1
+        if len(data) < r.RegionSize:
+            decode_coverage.note_short_read()
+            if not data:
+                continue
+        decode_coverage.note_scanned()
 
         for off, raw, decoded, cls in _scan_base64(data, r.BaseAddress, decode_budget):
             # take_hit() is the ONLY gate for whether this candidate is
@@ -1188,13 +1218,18 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     # catch partial gaps too, not just the all-skipped extreme: one region
     # scanned fine and a second one skipped/unreadable is still an
     # incomplete scope, even though *something* got scanned.
-    any_region_scanned = bool(sleep_mask_scanned or entropy_scanned or decode_scanned)
+    any_region_scanned = bool(sleep_mask_coverage.scanned or entropy_coverage.scanned
+                               or decode_coverage.scanned)
     fully_skipped = mem_info_available and bool(regions) and not any_region_scanned
-    total_size_skipped = sleep_mask_size_skipped + entropy_size_skipped + decode_size_skipped
-    total_read_failed  = sleep_mask_read_failed + entropy_read_failed + decode_read_failed
+    total_size_skipped = (sleep_mask_coverage.skipped_oversize + entropy_coverage.skipped_oversize
+                           + decode_coverage.skipped_oversize)
+    total_read_failed  = (sleep_mask_coverage.read_failed + entropy_coverage.read_failed
+                           + decode_coverage.read_failed)
+    total_short_reads  = (sleep_mask_coverage.short_reads + entropy_coverage.short_reads
+                           + decode_coverage.short_reads)
     budget_exhausted = decode_budget.exhausted()
     findings['budget_exhausted'] = budget_exhausted
-    coverage_gap = bool(total_size_skipped or total_read_failed or budget_exhausted)
+    coverage_gap = bool(total_size_skipped or total_read_failed or total_short_reads or budget_exhausted)
 
     # Coverage tracked independently of status/score — see stomping.py /
     # pipe.py for why: a nonzero score must not silently imply every
@@ -1209,6 +1244,9 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         coverage_reasons.append(f"{total_size_skipped} oversized region(s) skipped")
     if total_read_failed:
         coverage_reasons.append(f"{total_read_failed} region(s) failed to read")
+    if total_short_reads:
+        coverage_reasons.append(f"{total_short_reads} region(s) returned fewer bytes than "
+                                 f"declared (short read) — not fully scanned")
     if budget_exhausted:
         coverage_reasons.append(f"decode budget exhausted ({decode_budget.exhausted_reason})")
 
@@ -1240,6 +1278,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         reason = ", ".join(filter(None, [
             f"{total_size_skipped} oversized region(s) skipped" if total_size_skipped else "",
             f"{total_read_failed} region(s) failed to read" if total_read_failed else "",
+            f"{total_short_reads} region(s) short-read" if total_short_reads else "",
             f"decode budget exhausted ({decode_budget.exhausted_reason})" if budget_exhausted else "",
         ]))
         verdict = _status_text(INCONCLUSIVE, reason)

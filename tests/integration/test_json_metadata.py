@@ -10,6 +10,7 @@ import tempfile
 
 from dumpex.ui.structured import StructuredOutput
 from dumpex.rules_pkg.loader import configure_rules_source, get_rules
+import dumpex.hunt.yara_hunt as yara_hunt
 
 
 def _make_dump_file(content: bytes) -> str:
@@ -67,6 +68,61 @@ def test_execution_timestamps_are_utc_and_ordered():
     assert execution["started_at"].endswith("Z")
     assert execution["finished_at"].endswith("Z")
     assert execution["duration_seconds"] >= 0
+
+
+# ── started_at can be injected (cli.py passes the timestamp captured at ───
+# the CLI entry point, before open_dump()/MinidumpFile.parse() runs) so
+# duration_seconds covers the whole invocation, not just the time since
+# StructuredOutput itself was constructed.
+
+def test_started_at_parameter_is_used_when_provided():
+    import datetime
+    custom_start = datetime.datetime(2020, 1, 1, 0, 0, 0, tzinfo=datetime.timezone.utc)
+    path = _make_dump_file(b"x")
+    try:
+        doc = json.loads(StructuredOutput(path, mf=None, command="modules",
+                                           started_at=custom_start).to_json())
+    finally:
+        os.unlink(path)
+    assert doc["meta"]["execution"]["started_at"] == "2020-01-01T00:00:00Z"
+    # duration_seconds must reflect the full span from the injected
+    # started_at (years), not from construction time (milliseconds)
+    assert doc["meta"]["execution"]["duration_seconds"] > 1_000_000
+
+
+def test_started_at_defaults_to_construction_time_when_omitted():
+    path = _make_dump_file(b"x")
+    try:
+        doc = json.loads(StructuredOutput(path, mf=None, command="modules").to_json())
+    finally:
+        os.unlink(path)
+    # No started_at given -> behaves as before: duration is small (this
+    # test itself takes well under a minute).
+    assert 0 <= doc["meta"]["execution"]["duration_seconds"] < 60
+
+
+# ── tool.version falls back to dumpex.__version__ when the package isn't ──
+# registered with importlib.metadata (e.g. a source checkout run without
+# `pip install -e .`) instead of going null ──────────────────────────────
+
+def test_tool_version_falls_back_to_dunder_version_when_not_installed(monkeypatch):
+    import importlib.metadata as importlib_metadata
+    import dumpex.ui.structured as structured_mod
+    import dumpex
+
+    def _raise(name):
+        raise importlib_metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(structured_mod.importlib.metadata, "version", _raise)
+
+    path = _make_dump_file(b"x")
+    try:
+        doc = json.loads(StructuredOutput(path, mf=None, command="modules").to_json())
+    finally:
+        os.unlink(path)
+
+    assert doc["meta"]["tool"]["version"] == dumpex.__version__
+    assert doc["meta"]["tool"]["version"] is not None
 
 
 def test_case_id_and_analyst_pass_through():
@@ -162,3 +218,94 @@ def test_hunt_section_has_no_rules_source_leftover():
         os.unlink(path)
     assert "_rules_source" not in doc["hunt"]
     assert doc["hunt"]["stomping"]["score"] == 0
+
+
+# ── --redact-paths must also redact meta.rules.path -- an explicit ────────
+# --rules-file is a real absolute filesystem path (unlike the packaged
+# "<dumpex.rules_pkg>/data/rules.yaml" display string), so it leaks the
+# same local-directory-layout information evidence.path and CLI path
+# options do, and must go through the identical basename-only redaction.
+
+def test_redact_paths_hides_rules_meta_path():
+    tmp_dir = tempfile.mkdtemp()
+    rules_path = os.path.join(tmp_dir, "custom_rules.yaml")
+    with open(rules_path, "w") as fh:
+        fh.write("version: 1\n")
+    dump_path = _make_dump_file(b"x")
+    try:
+        configure_rules_source(rules_path)
+        get_rules()
+        doc = json.loads(StructuredOutput(dump_path, mf=None, command="hunt_stomping",
+                                           redact_paths=True).to_json())
+    finally:
+        os.unlink(dump_path)
+        os.unlink(rules_path)
+        os.rmdir(tmp_dir)
+        configure_rules_source(None)
+
+    assert doc["meta"]["rules"]["path"] == "custom_rules.yaml"
+    assert tmp_dir not in json.dumps(doc), "no absolute temp-dir path may survive serialization"
+
+
+def test_without_redact_paths_rules_meta_path_is_absolute():
+    tmp_dir = tempfile.mkdtemp()
+    rules_path = os.path.join(tmp_dir, "custom_rules.yaml")
+    with open(rules_path, "w") as fh:
+        fh.write("version: 1\n")
+    dump_path = _make_dump_file(b"x")
+    try:
+        configure_rules_source(rules_path)
+        get_rules()
+        doc = json.loads(StructuredOutput(dump_path, mf=None, command="hunt_stomping",
+                                           redact_paths=False).to_json())
+    finally:
+        os.unlink(dump_path)
+        os.unlink(rules_path)
+        os.rmdir(tmp_dir)
+        configure_rules_source(None)
+
+    assert doc["meta"]["rules"]["path"] == rules_path
+
+
+# ── meta.yara_rules: reproducible YARA content provenance, omitted when ───
+# never loaded, and redacted the same way meta.rules.path is. Exercised
+# against yara_hunt._LAST_YARA_PROVENANCE directly (rather than an actual
+# _load_yara_rules() call) so this doesn't depend on the optional
+# yara-python package being installed — see tests/unit/test_yara_hunt.py
+# for the real _load_yara_rules() provenance-recording behavior itself.
+
+def test_yara_meta_omitted_when_never_loaded():
+    yara_hunt._LAST_YARA_PROVENANCE = None
+    path = _make_dump_file(b"x")
+    try:
+        doc = json.loads(StructuredOutput(path, mf=None, command="modules").to_json())
+    finally:
+        os.unlink(path)
+    assert "yara_rules" not in doc["meta"]
+
+
+def test_yara_meta_present_and_redacts_rules_dir_path():
+    yara_hunt._LAST_YARA_PROVENANCE = {
+        "rules_dir":        "/home/analyst/case123/yara_rules",
+        "files":            [{"name": "a.yar", "sha256": "aa" * 32,
+                               "compiled": True, "error": None}],
+        "aggregate_sha256": "bb" * 32,
+        "compiled_ok":      1,
+        "compile_failed":   0,
+    }
+    path = _make_dump_file(b"x")
+    try:
+        doc_redacted = json.loads(StructuredOutput(path, mf=None, command="hunt_yara",
+                                                     redact_paths=True).to_json())
+        doc_plain = json.loads(StructuredOutput(path, mf=None, command="hunt_yara",
+                                                  redact_paths=False).to_json())
+    finally:
+        os.unlink(path)
+        yara_hunt._LAST_YARA_PROVENANCE = None
+
+    assert doc_redacted["meta"]["yara_rules"]["rules_dir"] == "yara_rules"
+    assert doc_plain["meta"]["yara_rules"]["rules_dir"] == "/home/analyst/case123/yara_rules"
+    assert doc_redacted["meta"]["yara_rules"]["compiled_ok"] == 1
+    assert doc_redacted["meta"]["yara_rules"]["files"][0]["name"] == "a.yar"
+    assert "/home/analyst/case123" not in json.dumps(doc_redacted), \
+        "no absolute path may survive serialization under --redact-paths"

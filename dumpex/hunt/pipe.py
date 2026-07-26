@@ -34,7 +34,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     addr_to_module, va_to_file_offset, prot_str, read_region)
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
-from dumpex.hunt._coverage import derive_status, derive_coverage_status
+from dumpex.hunt._coverage import derive_status, derive_coverage_status, CoverageTracker
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
@@ -350,8 +350,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                               # printable "string" (see _iter_c2_matches).
                               # Bounded further by c2_budget across the
                               # whole hunt, not just per region.
-    skipped_size  = 0
-    read_failed   = 0
+    coverage_counts = CoverageTracker()
 
     c2_budget = ScanBudget(
         max_bytes_read=PIPE_C2_BUDGET_MAX_RETAINED * 4,
@@ -431,7 +430,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         if prot_str(r.State) != "MEM_COMMIT":
             continue
         if r.RegionSize > PIPE_SCAN_MAX:
-            skipped_size += 1
+            coverage_counts.note_skipped_oversize()
             continue
         if pipe_name_budget.exhausted() and c2_budget.exhausted():
             break   # nothing left this loop could still usefully collect
@@ -441,8 +440,17 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            read_failed += 1
+            coverage_counts.note_read_failed()
             continue
+        if len(data) < r.RegionSize:
+            # Fewer bytes came back than the region's own declared size —
+            # not the same as "read fine, nothing here". Still scan what
+            # WAS returned (a real pipe name/C2 string can still be found
+            # in the readable portion), but this region must not silently
+            # count toward a "complete" scan.
+            coverage_counts.note_short_read()
+            if not data:
+                continue
         pipes_before = len(private_pipes)
 
         # Classify: only Microsoft system DLLs under System32/SysWOW64 are
@@ -825,7 +833,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     name_exhausted = pipe_name_budget.exhausted()
     budget_exhausted = c2_exhausted or name_exhausted
     findings["budget_exhausted"] = budget_exhausted
-    findings["scan_complete"] = not (budget_exhausted or skipped_size or read_failed)
+    findings["scan_complete"] = coverage_counts.complete and not budget_exhausted
     findings["findings"] = [f.to_dict() for f in findings_list]
 
     # Coverage is tracked independently of status/score, so "DETECTED but
@@ -838,10 +846,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         coverage_reasons.append("HandleDataStream missing from this dump (needs "
                                  "MiniDumpWithHandleData) — the primary, scored "
                                  "pipe-handle check could not run")
-    if skipped_size:
-        coverage_reasons.append(f"{skipped_size} oversized region(s) skipped")
-    if read_failed:
-        coverage_reasons.append(f"{read_failed} region(s) failed to read")
+    coverage_reasons.extend(coverage_counts.build_reasons(
+        oversize_label="oversized region(s) skipped",
+        read_failed_label="region(s) failed to read",
+        short_read_label="region(s) returned fewer bytes than declared (short read) — "
+                          "not fully scanned",
+    ))
     if c2_exhausted:
         coverage_reasons.append(f"C2-context scan budget exhausted ({c2_budget.exhausted_reason})")
     if name_exhausted:
@@ -851,7 +861,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     # The PRIMARY (scored) check may not have run at all (no
     # HandleDataStream) or ran incompletely — a negative score here must
     # not be read the same as "checked and clean".
-    complete  = not (not handle_stream_available or skipped_size or read_failed or budget_exhausted)
+    complete  = handle_stream_available and coverage_counts.complete and not budget_exhausted
     coverage_status = derive_coverage_status(evaluated, complete)
     findings["coverage_status"]  = coverage_status
     findings["coverage_reasons"] = coverage_reasons
@@ -870,8 +880,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             "leads are available above")
     elif status == INCONCLUSIVE:
         reason = ", ".join(filter(None, [
-            f"{skipped_size} oversized region(s) skipped" if skipped_size else "",
-            f"{read_failed} region(s) failed to read" if read_failed else "",
+            f"{coverage_counts.skipped_oversize} oversized region(s) skipped"
+                if coverage_counts.skipped_oversize else "",
+            f"{coverage_counts.read_failed} region(s) failed to read"
+                if coverage_counts.read_failed else "",
+            f"{coverage_counts.short_reads} region(s) short-read"
+                if coverage_counts.short_reads else "",
             f"C2-context budget exhausted ({c2_budget.exhausted_reason})" if c2_exhausted else "",
             f"pipe-name budget exhausted ({pipe_name_budget.exhausted_reason})" if name_exhausted else "",
         ]))
