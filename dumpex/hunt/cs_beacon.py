@@ -520,13 +520,26 @@ def _cs_validate_public_key_der(raw: bytes) -> "tuple[bool, str]":
     if bit_string is None:
         return False, "PublicKey field: malformed BIT STRING length"
     bit_string_len, bit_string_pos = bit_string
-    if bit_string_len < 1:
-        return False, "PublicKey field: BIT STRING too short to contain the unused-bits byte"
+    # >= 2, not >= 1: byte 0 is the mandatory unused-bits count, but that
+    # alone is an EMPTY key ("03 01 00" -- a bare unused-bits byte with no
+    # key material at all) and would otherwise still pass. There must be
+    # at least one more byte behind it for this to be an actual key.
+    if bit_string_len < 2:
+        return False, "PublicKey field: BIT STRING too short to contain key material"
     bit_string_end = bit_string_pos + bit_string_len
     if bit_string_end > outer_end:
         return False, "PublicKey field: BIT STRING extends past the outer SEQUENCE"
     if bit_string_end != outer_end:
         return False, "PublicKey field: BIT STRING does not consume the rest of the outer SEQUENCE"
+    if raw[bit_string_pos] != 0x00:
+        return False, ("PublicKey field: BIT STRING unused-bits byte is not 0 -- an RSA "
+                        "SubjectPublicKeyInfo's key material is always byte-aligned")
+    # The RSA public key itself (RSAPublicKey ::= SEQUENCE { modulus,
+    # publicExponent }) is DER-encoded inside the BIT STRING's content --
+    # it must start with a SEQUENCE tag, not arbitrary bytes.
+    if raw[bit_string_pos + 1] != 0x30:
+        return False, ("PublicKey field: BIT STRING content is not a DER SEQUENCE "
+                        "(expected RSAPublicKey)")
 
     return True, ""
 

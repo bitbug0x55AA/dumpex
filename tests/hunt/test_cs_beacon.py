@@ -419,7 +419,7 @@ def _valid_public_key_der() -> bytes:
     der_null            = bytes.fromhex('0500')
     algorithm_id        = bytes([0x30, len(rsa_encryption_oid) + len(der_null)]) \
                            + rsa_encryption_oid + der_null
-    bit_string           = bytes([0x03, 0x03, 0x00]) + b'\xff\xff'
+    bit_string           = bytes([0x03, 0x03, 0x00, 0x30, 0x00])   # unused-bits=0 + DER SEQUENCE (RSAPublicKey)
     content               = algorithm_id + bit_string
     return bytes([0x30, len(content)]) + content
 
@@ -485,7 +485,7 @@ def test_validate_public_key_der_rejects_bit_string_not_filling_outer_sequence()
     oid = bytes.fromhex('06092a864886f70d010101')
     der_null = bytes.fromhex('0500')
     algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
-    bit_string = bytes([0x03, 0x01, 0x00])   # BIT STRING, only the mandatory unused-bits byte
+    bit_string = bytes([0x03, 0x02, 0x00, 0x30])   # unused-bits=0 + SEQUENCE tag, otherwise well-formed
     content = algorithm_id + bit_string
     der = bytes([0x30, len(content) + 10]) + content + bytes(10)   # outer overclaims by 10
     valid, reason = cs_beacon._cs_validate_public_key_der(der)
@@ -506,6 +506,52 @@ def test_validate_public_key_der_rejects_bit_string_extending_past_outer_sequenc
     valid, reason = cs_beacon._cs_validate_public_key_der(der)
     assert valid is False
     assert reason
+
+
+def test_validate_public_key_der_rejects_empty_bit_string():
+    # "03 01 00" -- a BIT STRING containing only the mandatory unused-bits
+    # byte and nothing else. Structurally a complete, self-consistent BIT
+    # STRING (length matches what follows, fits inside the outer SEQUENCE),
+    # but there is no actual key material behind it at all.
+    oid = bytes.fromhex('06092a864886f70d010101')
+    der_null = bytes.fromhex('0500')
+    algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
+    bit_string = bytes([0x03, 0x01, 0x00])   # empty BIT STRING: just the unused-bits byte
+    content = algorithm_id + bit_string
+    der = bytes([0x30, len(content)]) + content
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert "key material" in reason
+
+
+def test_validate_public_key_der_rejects_bit_string_nonzero_unused_bits():
+    # The unused-bits byte is non-zero -- a real RSA SubjectPublicKeyInfo's
+    # key material is always byte-aligned (unused-bits == 0). A non-zero
+    # value here means this isn't a genuine byte-aligned RSAPublicKey.
+    oid = bytes.fromhex('06092a864886f70d010101')
+    der_null = bytes.fromhex('0500')
+    algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
+    bit_string = bytes([0x03, 0x03, 0x04, 0x30, 0x00])   # unused-bits=4, not byte-aligned
+    content = algorithm_id + bit_string
+    der = bytes([0x30, len(content)]) + content
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert "unused-bits" in reason
+
+
+def test_validate_public_key_der_rejects_bit_string_content_not_sequence():
+    # The BIT STRING has real content behind the unused-bits byte, but it
+    # isn't a DER SEQUENCE -- not the RSAPublicKey structure it claims to
+    # carry, just arbitrary bytes shaped enough to pass a length check.
+    oid = bytes.fromhex('06092a864886f70d010101')
+    der_null = bytes.fromhex('0500')
+    algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
+    bit_string = bytes([0x03, 0x03, 0x00, 0xff, 0xff])   # content doesn't start with 0x30
+    content = algorithm_id + bit_string
+    der = bytes([0x30, len(content)]) + content
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert "SEQUENCE" in reason
 
 
 def test_validate_public_key_der_rejects_fake_asn1_prefix():
@@ -546,7 +592,7 @@ def test_validate_public_key_der_rejects_wrong_oid():
     der_null            = bytes.fromhex('0500')
     algorithm_id        = bytes([0x30, len(ec_public_key_oid) + len(der_null)]) \
                            + ec_public_key_oid + der_null
-    bit_string           = bytes([0x03, 0x03, 0x00]) + b'\xff\xff'
+    bit_string           = bytes([0x03, 0x03, 0x00, 0x30, 0x00])   # unused-bits=0 + DER SEQUENCE (RSAPublicKey)
     content               = algorithm_id + bit_string
     der = bytes([0x30, len(content)]) + content
     valid, reason = cs_beacon._cs_validate_public_key_der(der)

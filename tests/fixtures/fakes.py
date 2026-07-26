@@ -231,7 +231,7 @@ def cs_beacon_config_bytes(xor_key: int = 0x69) -> bytes:
     der_null            = bytes.fromhex('0500')
     algorithm_id        = bytes([0x30, len(rsa_encryption_oid) + len(der_null)]) \
                            + rsa_encryption_oid + der_null
-    bit_string           = bytes([0x03, 0x03, 0x00]) + b'\xff\xff'   # fake subjectPublicKey
+    bit_string           = bytes([0x03, 0x03, 0x00, 0x30, 0x00])   # unused-bits=0 + DER SEQUENCE (RSAPublicKey)
     pubkey_content        = algorithm_id + bit_string
     pubkey_raw            = bytes([0x30, len(pubkey_content)]) + pubkey_content
     pubkey_field = _tlv(0x0007, 3, pubkey_raw)
