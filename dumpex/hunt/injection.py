@@ -95,7 +95,7 @@ def _hunt_rwx(mf: MinidumpFile) -> list:
 
 def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tuple:
     """
-    Return (list of hit dicts, read_failed_count).
+    Return (list of hit dicts, read_failed_count, short_read_count).
 
     If ModuleListStream isn't present, module_list_available is False and
     this returns [] rather than flagging every MZ header as "hidden": an
@@ -103,9 +103,16 @@ def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tup
     means we have no way to tell. Producing a hit for every legitimate
     loaded PE header would be pure false-positive noise, not a finding.
 
-    A region whose header read fails is not the same as a region that was
-    read and doesn't start with 'MZ' — it was never actually looked at, so
-    it's tracked separately rather than silently dropped.
+    A region whose header read fails (raises) is not the same as a region
+    that was read and doesn't start with 'MZ' — it was never actually
+    looked at, so it's tracked separately (read_failed) rather than
+    silently dropped. A region whose read SUCCEEDS but returns fewer
+    bytes than requested (a short read — e.g. the prefix read comes back
+    empty/truncated, or the deep validation read returns only the 2-byte
+    prefix instead of up to PE_VALIDATE_READ_MAX bytes) is likewise not
+    "read fine, no MZ here" / "read fine, structurally invalid" — the
+    unread remainder was never actually examined, so it's tracked
+    separately too (short_reads), distinct from an exception.
 
     Each hit dict: {"region", "in_module_list", "pe"} where "pe" is the
     full dumpex.core.pe_utils.parse_pe_header() result — callers decide
@@ -113,10 +120,11 @@ def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tup
     silently only returning validated hits.
     """
     if not module_list_available:
-        return [], 0
+        return [], 0, 0
     modules = get_modules(mf)
     hits = []
     read_failed = 0
+    short_reads = 0
     for r in get_memory_regions(mf):
         if prot_str(r.State) != "MEM_COMMIT":
             continue
@@ -133,15 +141,23 @@ def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tup
         owner = addr_to_module(r.BaseAddress, modules)
         if prot_str(r.Type) == "MEM_IMAGE" and owner is not None:
             continue   # inside a known module — not a hidden-PE candidate at all
+        prefix_want = min(2, r.RegionSize)
         try:
-            prefix = read_region(mf, r.BaseAddress, min(2, r.RegionSize))
+            prefix = read_region(mf, r.BaseAddress, prefix_want)
         except Exception:
             read_failed += 1
             continue
+        if len(prefix) < prefix_want:
+            # A short prefix read is not the same as "read fine, doesn't
+            # start with MZ" — the bytes that would confirm or deny an MZ
+            # header were never actually returned.
+            short_reads += 1
+            continue
         if prefix[:2] != b'MZ':
             continue
+        deep_want = min(PE_VALIDATE_READ_MAX, r.RegionSize)
         try:
-            deep = read_region(mf, r.BaseAddress, min(PE_VALIDATE_READ_MAX, r.RegionSize))
+            deep = read_region(mf, r.BaseAddress, deep_want)
         except Exception:
             # Still report the MZ observation (parse_pe_header will report
             # a truncation reason on just the 2-byte prefix) rather than
@@ -152,13 +168,24 @@ def _hunt_hidden_pe(mf: MinidumpFile, module_list_available: bool = True) -> tup
             # it rather than silently treating this as a completed check.
             read_failed += 1
             deep = prefix
+        else:
+            if len(deep) < deep_want:
+                # Short read, no exception — parse whatever bytes DID come
+                # back (parse_pe_header will itself report a truncation
+                # reason if that's not enough for a valid header) rather
+                # than dropping the hit, but this region was still never
+                # fully examined: count it, don't let pe_read_failed==0
+                # (and therefore `complete`) silently claim otherwise.
+                short_reads += 1
+                if not deep:
+                    deep = prefix
         pe = parse_pe_header(deep)
         # owner is already known from the range check above for MEM_IMAGE
         # regions; a non-image region can still fall inside a module's
         # declared [baseaddress, endaddress) span in principle, so the
         # same range check is used uniformly rather than re-deriving it.
         hits.append({"region": r, "in_module_list": owner is not None, "pe": pe})
-    return hits, read_failed
+    return hits, read_failed, short_reads
 
 
 def _hunt_unbacked_threads(mf: MinidumpFile, module_list_available: bool = True) -> list:
@@ -223,7 +250,8 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     modules  = get_modules(mf)
     regions  = get_memory_regions(mf)
     rwx      = _hunt_rwx(mf)
-    pe_hits, pe_read_failed = _hunt_hidden_pe(mf, module_list_available=coverage["module_list_stream"])
+    pe_hits, pe_read_failed, pe_short_reads = _hunt_hidden_pe(
+        mf, module_list_available=coverage["module_list_stream"])
     start_threads    = _hunt_unbacked_threads(mf, module_list_available=coverage["module_list_stream"])
     thread_contexts  = get_thread_contexts(mf)   # [{ThreadId, ip, ip_reg, is_wow64}, ...]
     coverage["thread_context"] = bool(thread_contexts)
@@ -247,6 +275,7 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     # treated as "nothing to check here".
     complete  = (coverage["memory_info_stream"] and coverage["thread_info_stream"]
                  and coverage["module_list_stream"] and pe_read_failed == 0
+                 and pe_short_reads == 0
                  and coverage["thread_context"] and coverage["contexts_missing"] == 0)
 
     # Only STRUCTURALLY VALID hidden PEs count toward correlation; an
@@ -480,6 +509,10 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     if pe_read_failed:
         coverage_reasons.append(f"{pe_read_failed} region(s) failed to read while checking "
                                  f"for hidden PE headers")
+    if pe_short_reads:
+        coverage_reasons.append(f"{pe_short_reads} region(s) returned fewer bytes than "
+                                 f"requested while checking for hidden PE headers "
+                                 f"(short read) — not fully examined")
     if not coverage["thread_context"]:
         coverage_reasons.append("No per-thread CONTEXT (RIP/EIP) available — live-execution "
                                  "correlation could not run")
@@ -508,6 +541,7 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         "confidence":           overall_confidence(findings_list, score),
         "verdict_level":        verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status),
         "pe_read_failed":       pe_read_failed,
+        "pe_short_reads":       pe_short_reads,
         "findings":             [f.to_dict() for f in findings_list],
     }
 
@@ -593,6 +627,9 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     if pe_read_failed:
         print(YELLOW(f"  [~] {pe_read_failed} region(s) could not be read while checking for "
                       f"hidden PE headers — coverage is incomplete.\n"))
+    if pe_short_reads:
+        print(YELLOW(f"  [~] {pe_short_reads} region(s) returned fewer bytes than requested "
+                      f"while checking for hidden PE headers — coverage is incomplete.\n"))
 
     # Verdict — driven by AllocationBase correlation + live execution, not
     # by how many independent checks happened to fire somewhere in the

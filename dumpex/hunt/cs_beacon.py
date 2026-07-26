@@ -71,6 +71,14 @@ CS_MAX_CANDIDATES     = 20000        # marker matches examined, whole scan
 CS_MAX_DECODED_BYTES  = 64 * 1024 * 1024   # total bytes XOR-decoded, whole scan
 CS_MAX_HITS           = 100          # stop once this many configs are found
 CS_SCAN_DEADLINE_SECONDS = 60         # wall-clock budget for the whole scan
+CS_MAX_TOTAL_SCANNED_BYTES = 500 * 1024 * 1024   # total bytes READ across all
+                                                    # segments, whole scan — bounds
+                                                    # work even for many large,
+                                                    # marker-free segments, where
+                                                    # the deadline check inside the
+                                                    # per-candidate loop below never
+                                                    # runs at all (see the
+                                                    # per-segment deadline check)
 
 # Field IDs from 1768.py dConfigIdentifiers
 CS_FIELD_NAMES = {
@@ -264,16 +272,28 @@ def _cs_decode_and_parse_tlv(data: bytes, offset: int, key: int, max_len: int) -
                 'reason': 'plaintext signature mismatch', 'consumed': 0}
 
     while True:
-        if pos + 6 > limit:
+        # The fid=0 terminator is exactly 2 bytes (no type/length follows
+        # it) — checked on its own BEFORE demanding a full 6-byte header,
+        # so a legitimately-terminated config whose terminator happens to
+        # sit in the last 2-5 bytes of the available buffer (no trailing
+        # padding) isn't misreported as truncated. Only a non-terminator
+        # field actually needs the full type+length header.
+        if pos + 2 > limit:
             return {'fields': fields, 'complete': False,
                     'reason': 'truncated before fid=0 terminator (ran out of '
                               'decode budget)',
                     'consumed': pos - offset}
-        header = bytes(b ^ kb for b in data[pos: pos + 6])
-        fid, ftype, flen = struct.unpack('>HHH', header)
+        fid = struct.unpack('>H', bytes(b ^ kb for b in data[pos: pos + 2]))[0]
         if fid == 0:
             return {'fields': fields, 'complete': True, 'reason': None,
                     'consumed': pos + 2 - offset}
+        if pos + 6 > limit:
+            return {'fields': fields, 'complete': False,
+                    'reason': f'truncated before terminator (field 0x{fid:04x} '
+                              f'header incomplete)',
+                    'consumed': pos - offset}
+        header = bytes(b ^ kb for b in data[pos: pos + 6])
+        fid, ftype, flen = struct.unpack('>HHH', header)
         if ftype not in valid_types:
             return {'fields': fields, 'complete': False,
                     'reason': f'illegal field type 0x{ftype:04x} for field 0x{fid:04x}',
@@ -450,21 +470,46 @@ def _cs_validate_public_key_der(raw: bytes) -> "tuple[bool, str]":
     if outer is None:
         return False, "PublicKey field: malformed outer SEQUENCE length"
     outer_len, pos = outer
-    if pos + outer_len > len(raw):
+    outer_end = pos + outer_len
+    if outer_end > len(raw):
         return False, (f"PublicKey field: declared SEQUENCE length {outer_len} exceeds "
                         f"available {len(raw) - pos} byte(s)")
 
-    if pos >= len(raw) or raw[pos] != 0x30:
+    if pos >= outer_end or raw[pos] != 0x30:
         return False, "PublicKey field: AlgorithmIdentifier SEQUENCE tag not found"
     inner = _der_read_length(raw, pos + 1)
     if inner is None:
         return False, "PublicKey field: malformed AlgorithmIdentifier length"
     inner_len, alg_pos = inner
-    if alg_pos + inner_len > len(raw):
-        return False, "PublicKey field: AlgorithmIdentifier length exceeds buffer"
+    alg_end = alg_pos + inner_len
+    # The AlgorithmIdentifier SEQUENCE must be fully contained within the
+    # OUTER SubjectPublicKeyInfo SEQUENCE it's declared to be part of, not
+    # merely within the overall buffer — a short outer length paired with
+    # a longer inner one would otherwise let AlgorithmIdentifier (and the
+    # OID comparison below) read bytes that sit past where the outer
+    # SEQUENCE actually claims to end.
+    if alg_end > outer_end:
+        return False, "PublicKey field: AlgorithmIdentifier extends past the outer SEQUENCE"
 
-    if raw[alg_pos: alg_pos + len(CS_RSA_ENCRYPTION_OID)] != CS_RSA_ENCRYPTION_OID:
+    oid_len = len(CS_RSA_ENCRYPTION_OID)
+    # The OID itself must fit entirely within AlgorithmIdentifier's own
+    # declared length — otherwise a zero-or-short inner_len (e.g. an
+    # AlgorithmIdentifier SEQUENCE that declares 0 bytes of content) would
+    # let the comparison below read bytes that were never actually
+    # claimed to be part of this structure at all, still matching the OID
+    # by coincidence if the right bytes happen to sit right after it.
+    if alg_pos + oid_len > alg_end:
+        return False, "PublicKey field: AlgorithmIdentifier too short to contain the OID"
+    if raw[alg_pos: alg_pos + oid_len] != CS_RSA_ENCRYPTION_OID:
         return False, "PublicKey field: AlgorithmIdentifier OID is not rsaEncryption"
+
+    # A SubjectPublicKeyInfo has a BIT STRING (the actual key material)
+    # immediately after AlgorithmIdentifier, still within the outer
+    # SEQUENCE. Checking for its presence (not decoding its contents,
+    # which callers don't need) rules out a buffer that's shaped like
+    # just an AlgorithmIdentifier/OID with nothing real after it.
+    if alg_end >= outer_end or raw[alg_end] != 0x03:
+        return False, "PublicKey field: no BIT STRING follows AlgorithmIdentifier"
 
     return True, ""
 
@@ -613,12 +658,36 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     total_candidates    = 0
     total_decoded_bytes = 0
+    total_scanned_bytes = 0
     budget_exhausted     = False
     budget_reason         = None
     scan_deadline = time.monotonic() + CS_SCAN_DEADLINE_SECONDS
 
     for seg in segs:
         if budget_exhausted:
+            break
+        # Checked at the START of every segment, not just inside the
+        # per-candidate loop below — a segment that contains ZERO
+        # candidate markers never enters that inner loop at all, so a
+        # deadline check placed only there never fires for a long run of
+        # large, marker-free segments (the scan would keep reading and
+        # scanning them, unbounded, regardless of CS_SCAN_DEADLINE_SECONDS
+        # having already elapsed). CS_MAX_TOTAL_SCANNED_BYTES is a second,
+        # independent cap for the same gap on a machine fast enough to
+        # stay under the time budget while still reading an unbounded
+        # amount of data.
+        if time.monotonic() > scan_deadline:
+            budget_exhausted = True
+            budget_reason = (f"{total_candidates} candidate(s) examined, "
+                              f"{total_scanned_bytes} byte(s) scanned, "
+                              f"{len(hits)} hit(s) found — scan deadline reached "
+                              f"before all segments were examined")
+            break
+        if total_scanned_bytes > CS_MAX_TOTAL_SCANNED_BYTES:
+            budget_exhausted = True
+            budget_reason = (f"{total_scanned_bytes} byte(s) scanned across "
+                              f"{total_candidates} candidate(s), {len(hits)} hit(s) "
+                              f"found — total scanned-bytes budget exhausted")
             break
         if seg.size > CS_MAX_SEG_SCAN:
             coverage_counts.note_skipped_oversize()
@@ -632,6 +701,8 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
             # negative result can say exactly what coverage gap exists.
             coverage_counts.note_read_failed()
             continue
+
+        total_scanned_bytes += len(data)
 
         if len(data) < seg.size:
             # A short read (fewer bytes back than the segment's own

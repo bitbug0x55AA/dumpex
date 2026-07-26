@@ -109,6 +109,28 @@ def test_structural_config_uncorroborated_scores_1():
     assert any("live-execution corroboration" in lim for lim in dets[0]["limitations"])
 
 
+# ── a structurally-valid config whose fid=0 terminator sits at the exact ──
+# end of the segment, with no trailing padding, must still be detected —
+# not silently lost to the "terminator needs 6 bytes available" bug.
+
+def test_structural_config_with_terminator_at_segment_end_is_detected():
+    seg_va, seg_fo = 0x21000, 0x2100
+    config = cs_beacon_config_bytes(0x69)
+    data = _mk_segment_data(config, pad_before=0x100, pad_after=0)   # nothing after the terminator
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    f = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    assert f["score"] == 1
+    assert f["status"] == "DETECTED"
+    assert f["config_count"] == 1
+
+
 # ── same uncorroborated scenario, but with a ThreadListStream that only ───
 # partially parsed (some threads have CONTEXT, some don't) -- the explicit
 # threads_total/contexts_parsed/contexts_missing counts must reflect the
@@ -369,6 +391,23 @@ def test_decode_and_parse_tlv_illegal_field_type_is_incomplete():
     assert "illegal field type" in parsed["reason"]
 
 
+def test_decode_and_parse_tlv_terminator_at_exact_buffer_end_is_complete():
+    # The fid=0 terminator is only 2 bytes -- it must be recognized even
+    # when those are the LAST 2 bytes of the available buffer, with no
+    # trailing padding to satisfy a full 6-byte header read. A prior bug
+    # required 6 bytes to be available before even checking fid==0,
+    # incorrectly reporting a legitimately-terminated config as
+    # truncated whenever it wasn't followed by at least 4 extra bytes.
+    plaintext = (_tlv(0x0001, 1, struct.pack('>H', 0))
+                 + _tlv(0x0007, 3, bytes([0x30, 0x81]))
+                 + struct.pack('>H', 0))   # 2-byte terminator, nothing after it
+    encoded = bytes(b ^ 0x69 for b in plaintext)   # no trailing padding after the terminator
+    parsed = cs_beacon._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    assert parsed["complete"] is True
+    assert parsed["reason"] is None
+    assert parsed["consumed"] == len(plaintext)
+
+
 # ── _cs_validate_public_key_der: the PublicKey field must be a minimally ──
 # consistent X.509 SubjectPublicKeyInfo DER structure carrying the
 # rsaEncryption OID, not just three fixed hex nibbles ("308") followed by
@@ -389,6 +428,37 @@ def test_validate_public_key_der_accepts_well_formed_structure():
     valid, reason = cs_beacon._cs_validate_public_key_der(_valid_public_key_der())
     assert valid is True
     assert reason == ""
+
+
+def test_validate_public_key_der_rejects_oid_outside_zero_length_inner_sequence():
+    # The AlgorithmIdentifier SEQUENCE declares 0 bytes of content, but a
+    # real OID sits immediately after it in the buffer anyway -- outside
+    # what the structure actually claims to contain. The OID comparison
+    # must be bounded by AlgorithmIdentifier's own declared length, not
+    # just checked against overall buffer availability.
+    oid = bytes.fromhex('06092a864886f70d010101')
+    algorithm_id_header = bytes([0x30, 0x00])   # SEQUENCE, declared length 0
+    outer_content = algorithm_id_header + oid + bytes(20)
+    der = bytes([0x30, len(outer_content)]) + outer_content
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert reason
+
+
+def test_validate_public_key_der_rejects_algorithm_id_extending_past_outer_sequence():
+    # The outer SubjectPublicKeyInfo SEQUENCE declares a length far
+    # shorter than the AlgorithmIdentifier that follows actually needs,
+    # even though the buffer has plenty of real bytes past that
+    # artificially-short declared end. AlgorithmIdentifier must be
+    # bounded by the OUTER SEQUENCE's own declared end, not merely by
+    # len(raw).
+    oid = bytes.fromhex('06092a864886f70d010101')
+    der_null = bytes.fromhex('0500')
+    algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null   # 15 bytes
+    der = bytes([0x30, 5]) + algorithm_id + bytes(10)   # outer claims only 5 content bytes
+    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    assert valid is False
+    assert reason
 
 
 def test_validate_public_key_der_rejects_fake_asn1_prefix():
@@ -525,3 +595,83 @@ def test_mass_duplicate_markers_triggers_budget_and_stops_safely(monkeypatch):
     assert f["coverage_status"] == "partial"
     assert f["status"] == "INCONCLUSIVE"
     assert any("budget" in r for r in f["coverage_reasons"])
+
+
+# ── hunter-level: the scan deadline must be enforced even when every ──────
+# segment is marker-free — a candidate-loop-only deadline check never runs
+# at all for a segment with zero candidates, so a long run of large,
+# marker-free segments could scan unbounded past CS_SCAN_DEADLINE_SECONDS.
+# Reproduced with a simulated clock: the deadline is established on the
+# very first time.monotonic() call, then every later call reports time
+# already far past it — this must stop the scan and mark coverage partial,
+# not silently finish "complete" having called monotonic() only once.
+
+def test_scan_deadline_enforced_across_marker_free_segments(monkeypatch):
+    n_segs = 5
+    seg_size = 0x1000
+    segs = []
+    read_map = {}
+    for i in range(n_segs):
+        va = 0x70000000 + i * 0x100000
+        segs.append(Segment(va, va, seg_size))
+        read_map[va] = b'\x00' * seg_size   # no beacon markers anywhere
+
+    regions = [Region(va, va, seg_size, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
+               for va in (s.start_virtual_address for s in segs)]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream(segs, "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader(read_map)
+
+    calls = {"n": 0}
+
+    def fake_monotonic():
+        calls["n"] += 1
+        # First call establishes scan_deadline; every call after that
+        # (including the very next one) reports time already twice the
+        # whole deadline budget forward.
+        return calls["n"] * (cs_beacon.CS_SCAN_DEADLINE_SECONDS * 2)
+
+    monkeypatch.setattr(cs_beacon.time, "monotonic", fake_monotonic)
+
+    f = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+
+    assert calls["n"] > 1, (
+        "deadline must be re-checked per segment, not established once and "
+        "never consulted again for marker-free segments"
+    )
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("deadline" in r.lower() for r in f["coverage_reasons"])
+
+
+# ── hunter-level: a total-scanned-bytes cap independently bounds work ─────
+# across many marker-free segments even when each individual segment is
+# well under CS_MAX_SEG_SCAN and the wall-clock deadline hasn't elapsed —
+# defense in depth alongside the per-segment deadline check above.
+
+def test_total_scanned_bytes_budget_stops_marker_free_segments(monkeypatch):
+    monkeypatch.setattr(cs_beacon, "CS_MAX_TOTAL_SCANNED_BYTES", 0x2000)   # 8 KB
+    n_segs = 5
+    seg_size = 0x1000   # 4 KB each -- second segment already exceeds the cap
+    segs = []
+    read_map = {}
+    for i in range(n_segs):
+        va = 0x71000000 + i * 0x100000
+        segs.append(Segment(va, va, seg_size))
+        read_map[va] = b'\x00' * seg_size
+
+    regions = [Region(va, va, seg_size, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
+               for va in (s.start_virtual_address for s in segs)]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream(segs, "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader(read_map)
+
+    f = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("scanned-bytes budget" in r for r in f["coverage_reasons"])

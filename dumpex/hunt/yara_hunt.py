@@ -198,6 +198,16 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     _print_hunt_header("YARA Memory Scan")
     findings = {"matches": [], "score": 0, "status": NOT_EVALUATED}
 
+    # get_yara_provenance() is a module-level global, only ever SET by
+    # _load_yara_rules() — never cleared. Without resetting it here, a
+    # run that returns NOT_EVALUATED before ever reaching
+    # _load_yara_rules() (no rules directory found, yara-python missing,
+    # ...) would leave meta.yara_rules reporting a PRIOR successful
+    # scan's rule file hashes from earlier in the same process, silently
+    # implying rules were used for this run when they weren't.
+    global _LAST_YARA_PROVENANCE
+    _LAST_YARA_PROVENANCE = None
+
     def _not_evaluated(reason: str) -> dict:
         print(f"  {BOLD('[ VERDICT ]')}  {_status_text(NOT_EVALUATED, reason)}\n")
         return findings

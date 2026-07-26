@@ -111,3 +111,41 @@ def test_mz_prefix_ok_deep_read_fails_is_inconclusive():
     assert f["coverage_status"] == "partial"
     assert f["status"] == "INCONCLUSIVE"
     assert any("failed to read" in r for r in f["coverage_reasons"])
+
+
+# ── MZ prefix read succeeds and the deeper PE-validation read succeeds ────
+# but SHORT-reads (returns fewer bytes than requested, no exception) —
+# must not be silently treated as a completed check either: pe_read_failed
+# stays 0 in this scenario, but pe_short_reads must count it, and coverage
+# must still go partial/INCONCLUSIVE, not silently claim full coverage.
+
+def test_mz_prefix_ok_deep_read_short_reads_is_inconclusive():
+    region_base = 0x9000000
+    dummy_regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT",
+                             "PAGE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    def short_reader(mf, addr, size):
+        # Prefix read (size<=2) succeeds fully; the deep validation read
+        # (size > 2) returns fewer bytes than requested WITHOUT raising —
+        # exactly what a real short read from a partially-paged-out or
+        # truncated capture looks like.
+        if addr == region_base and size <= 2:
+            return b'MZ'
+        return b'MZ'   # deep read: only 2 bytes back, even though more were requested
+
+    class MF(FakeMF):
+        memory_info = FakeStream(dummy_regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+    injection.read_region = short_reader
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 0
+    assert f["pe_read_failed"] == 0, "no exception was raised, so this must stay 0"
+    assert f["pe_short_reads"] == 1
+    assert len(f["hidden_pe_unvalidated"]) == 1, "MZ observation must still be reported"
+    assert len(f["hidden_pe_validated"]) == 0
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("short read" in r.lower() or "fewer bytes" in r for r in f["coverage_reasons"])
