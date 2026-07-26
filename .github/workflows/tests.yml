@@ -47,3 +47,4 @@ jobs:
           coverage report --include="dumpex/hunt/_coverage.py"  --fail-under=85
           coverage report --include="dumpex/hunt/_finding.py"   --fail-under=90
           coverage report --include="dumpex/hunt/yara_hunt.py"  --fail-under=65
+          coverage report --include="dumpex/hunt/hollowing.py"  --fail-under=90

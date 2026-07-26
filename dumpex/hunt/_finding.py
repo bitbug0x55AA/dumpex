@@ -181,3 +181,74 @@ def verdict_level(score: int, level_by_score: dict, status: str = None) -> str:
     if score <= 0:
         return VERDICT_CLEAN
     return level_by_score.get(score, VERDICT_POSSIBLE)
+
+
+PRIORITY_NONE   = "none"
+PRIORITY_LOW    = "low"
+PRIORITY_MEDIUM = "medium"
+PRIORITY_HIGH   = "high"
+
+
+def lead_count(findings: list) -> int:
+    """
+    Count of tag=TAG_LEAD findings in a hunter's own findings_list —
+    leads worth an analyst's attention that did NOT contribute to score.
+    Deliberately excludes TAG_OBSERVATION (background signal, never
+    actionable on its own) and TAG_DETECTION (already reflected in
+    score/status, not a separate "unscored" item).
+    """
+    return sum(1 for f in findings if f.tag == TAG_LEAD)
+
+
+def review_priority(findings: list, score: int, status: str = None) -> str:
+    """
+    Reduce a hunter's findings_list (+ score/status) to a single
+    "none"/"low"/"medium"/"high" triage label for CSV/JSON/console summary
+    consumers — independent of the verdict TEXT (which already encodes
+    score/status), so a score==0 hunter that nonetheless surfaced real
+    leads doesn't silently read as "nothing to do here" in a summary table.
+
+      status == NOT_EVALUATED                     -> "none": never ran,
+                                                      nothing to review.
+      score > 0 (a TAG_DETECTION contributed)      -> "high": already
+                                                      actionable.
+      any TAG_LEAD with confidence >= MEDIUM       -> "medium": a
+                                                      corroborated-enough
+                                                      lead worth a closer
+                                                      look even though it
+                                                      didn't score (e.g.
+                                                      stomping's RIP-in-
+                                                      anomalous-section lead,
+                                                      encoding's shellcode-
+                                                      bootstrap-in-RWX lead).
+      any TAG_LEAD (low confidence) or
+      any TAG_OBSERVATION                          -> "low": background
+                                                      signal, low urgency.
+      nothing at all                               -> "none".
+    """
+    if status == _STATUS_NOT_EVALUATED:
+        return PRIORITY_NONE
+    if score > 0:
+        return PRIORITY_HIGH
+    leads = [f for f in findings if f.tag == TAG_LEAD]
+    if any(confidence_at_least(f.confidence, CONFIDENCE_MEDIUM) for f in leads):
+        return PRIORITY_MEDIUM
+    if leads or any(f.tag == TAG_OBSERVATION for f in findings):
+        return PRIORITY_LOW
+    return PRIORITY_NONE
+
+
+def leads_suffix(findings: list) -> str:
+    """
+    "" if no TAG_LEAD findings are present, else a short suffix to append
+    to a hunter's own CLEAN/INCONCLUSIVE verdict reason text — so the ONE
+    line an analyst may only glance at (or grep for) never implies
+    "nothing here" when unscored leads actually were found just above it.
+    Deliberately keyed only on TAG_LEAD, not TAG_OBSERVATION — background
+    signal like bare entropy/Base64 presence is not something the verdict
+    line itself needs to call out.
+    """
+    n = lead_count(findings)
+    if not n:
+        return ""
+    return f" — {n} lead(s) found above (unscored, see findings/--verbose)"

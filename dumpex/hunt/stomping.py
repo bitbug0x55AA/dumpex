@@ -79,7 +79,7 @@ from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
-    verdict_level)
+    verdict_level, lead_count, review_priority, leads_suffix)
 
 # score -> verdict_level, owned by this hunter (see _finding.verdict_level).
 # No "3": this hunter's max score is 2 (verified change, optionally
@@ -400,6 +400,7 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                             "expected": expected_protection_name(section["is_readable"],
                                                                    section["is_writable"], section["is_executable"]),
                             "actual": actual,
+                            "va_start": va_start, "va_end": va_end,
                         })
 
                 # Verified content diff — the ONLY path to a nonzero score.
@@ -496,6 +497,55 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
             limitations=[],
             tag=TAG_OBSERVATION,
         ))
+
+    # ── Finding: protection anomaly + a thread's LIVE RIP/EIP inside that ─
+    # same section — a stronger, more specific signal than the bare
+    # protection-deviation lead above, but still not the verified,
+    # relocation-normalized byte diff that alone earns "confirmed
+    # stomping" (stomping.verified_content_change below). Only checked
+    # when the scored path couldn't already settle it (no --ref-dir, or
+    # --ref-dir supplied but no verified diff came out of it) — once a
+    # verified diff exists, its OWN rip_in_changed_range already covers
+    # this correlation with actual evidence behind it, not just a
+    # protection-state guess.
+    if protection_leads and (not ref_dir or not verified_changes):
+        rip_correlated = []
+        for hit in protection_leads:
+            for tc in thread_contexts:
+                if hit["va_start"] <= tc["ip"] < hit["va_end"]:
+                    rip_correlated.append((hit, tc))
+                    break
+        if rip_correlated:
+            facts = []
+            for hit, tc in rip_correlated[:20]:
+                m, sec = hit["module"], hit["section"]
+                name = _module_basename(m) or "(unnamed module)"
+                facts.append(f"module={name} section={sec['name']!r} "
+                             f"VA=0x{hit['va_start']:x}-0x{hit['va_end']:x} "
+                             f"declared={hit['expected']} actual={hit['actual']} "
+                             f"TID=0x{tc['ThreadId']:x} {tc['ip_reg']}=0x{tc['ip']:x}")
+            if len(rip_correlated) > 20:
+                facts.append(f"... and {len(rip_correlated)-20} more")
+            findings_list.append(Finding(
+                check="stomping.rip_in_anomalous_section_lead",
+                facts=facts,
+                inference=f"{len(rip_correlated)} module section(s) with anomalous live "
+                           f"protection ALSO have a thread's current RIP/EIP executing "
+                           f"inside that exact section.",
+                confidence=CONFIDENCE_MEDIUM,
+                rationale="A protection deviation alone proves nothing about content "
+                           "(see stomping.protection_deviation_lead), but a thread "
+                           "actively executing inside the SAME anomalously-protected "
+                           "range is a materially stronger, more specific correlation "
+                           "worth a closer manual look — without --ref-dir there is no "
+                           "verified byte-level diff behind it, so this stays a lead, "
+                           "not a confirmed stomping detection.",
+                limitations=["Protection state + live RIP still cannot rule out a "
+                             "debugger/EDR hook or other benign reprotect-then-execute "
+                             "sequence — only a verified content diff "
+                             "(stomping.verified_content_change, requires --ref-dir) can."],
+                tag=TAG_LEAD,
+            ))
 
     # ── Finding: verified content change (the only scored signal) ────────
     if verified_changes:
@@ -774,6 +824,8 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
     findings["confidence"] = overall_confidence(findings_list, score)
     findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings["findings"] = [f.to_dict() for f in findings_list]
+    findings["lead_count"] = lead_count(findings_list)
+    findings["review_priority"] = review_priority(findings_list, score, status)
 
     if status == NOT_EVALUATED:
         verdict = _status_text(NOT_EVALUATED, "; ".join(coverage_reasons) or "required streams missing")
@@ -793,9 +845,11 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                           "(uncorroborated; consistent with hotpatch/EDR-hook activity as well "
                           "as stomping)"))
     elif status == INCONCLUSIVE:
-        verdict = _status_text(INCONCLUSIVE, "; ".join(coverage_reasons) or "partial coverage")
+        verdict = _status_text(INCONCLUSIVE,
+                                ("; ".join(coverage_reasons) or "partial coverage")
+                                + leads_suffix(findings_list))
     else:
-        verdict = GREEN("CLEAN — no verified stomping indicators")
+        verdict = GREEN("CLEAN — no verified stomping indicators" + leads_suffix(findings_list))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2, requires --ref-dir; "
           f"protection-deviation and string-IOC leads above are informational and not counted)\n")
 

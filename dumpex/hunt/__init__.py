@@ -99,7 +99,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         print(BOLD("══════════════════════════════════════════"))
         labels = {
             "injection": ("Process Injection",          results["injection"]["score"],  3),
-            "hollowing": ("Process Hollowing",          results["hollowing"]["score"],  4),
+            "hollowing": ("Process Hollowing",          results["hollowing"]["score"],
+                          results["hollowing"].get("max_score", 2)),
             "stomping":  ("Module Stomping",            results["stomping"]["score"],   2),
             "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       3),
             "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],
@@ -148,6 +149,19 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             suffix = (f"  ({score}/{max_score})" if key != "yara" else "")
             if key == "cs-beacon" and hunt_result.get("config_count"):
                 suffix += f"  [{hunt_result['config_count']} config(s)]"
+            # Surfaced regardless of status/score — a CLEAN or INCONCLUSIVE
+            # line must not read as "nothing here" when unscored leads
+            # (pipe names, C2 strings, shellcode patterns, ...) were
+            # actually found for this TTP; see dumpex.hunt._finding
+            # .lead_count/.review_priority (only set for hunters on the
+            # shared Finding model — legacy yara_hunt.py has neither, so
+            # this is silently a no-op for it via .get()).
+            lead_n = hunt_result.get("lead_count") or 0
+            if lead_n:
+                prio = hunt_result.get("review_priority")
+                suffix += YELLOW(f"  [{lead_n} lead(s)"
+                                  + (f", review: {prio}" if prio and prio != "none" else "")
+                                  + "]")
             print(f"  {name:<25} {verdict}{suffix}")
         print()
         if any_hit:

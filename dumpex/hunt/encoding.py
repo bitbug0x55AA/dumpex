@@ -52,9 +52,9 @@ from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._coverage import derive_status, derive_coverage_status, CoverageTracker
 from dumpex.hunt._budget import ScanBudget
-from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW,
+from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
-    verdict_level)
+    verdict_level, lead_count, review_priority, leads_suffix)
 
 # score -> verdict_level, owned by this hunter (see _finding.verdict_level).
 # No "3": this hunter's max score is 2 (confirmed sleep-mask decode and/or
@@ -1172,30 +1172,56 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     if all_shellcode_hits:
         facts = []
         detail = f"{len(all_shellcode_hits)} shellcode-bootstrap-pattern match(es) inside encoded/compressed data"
+        # A bare 6-byte prefix match is weak on its own, but one sitting
+        # inside a region that's ALSO executable+private (the same
+        # combination injection.py/hollowing.py treat as suspicious) is a
+        # meaningfully stronger combination than either signal alone —
+        # still not structural proof (no section table, no entry-point
+        # check), so this stays tag=LEAD and never touches score, but the
+        # combo is worth flagging above a bare "6 bytes matched somewhere".
+        context_hits = [(enc, r, off, decoded) for enc, r, off, decoded in all_shellcode_hits
+                         if prot_str(r.Type) == 'MEM_PRIVATE'
+                         and any(s in prot_str(r.Protect) for s in SUSPICIOUS_PROTS)]
         for enc, r, off, decoded in all_shellcode_hits:
             abs_va = r.BaseAddress + off
+            in_context = (enc, r, off, decoded) in context_hits
             facts.append(f"type=shellcode_bootstrap encoding={enc} container_VA=0x{abs_va:x} "
-                         f"decoded_size={len(decoded)} prefix={decoded[:6].hex()}")
+                         f"decoded_size={len(decoded)} prefix={decoded[:6].hex()}"
+                         + (f" container_protect={prot_str(r.Protect)} (executable+private)"
+                            if in_context else ""))
             detail += (f"\n          Encoding       {enc.upper()}"
                        f"\n          Container VA   0x{abs_va:016x}"
                        f"\n          Decoded size   {len(decoded)} bytes (call-$+5 bootstrap prefix)")
+            if in_context:
+                detail += f"\n          Container prot {prot_str(r.Protect)}  (executable+private — elevated lead)"
         _print_check("Shellcode bootstrap pattern inside encoded data (lead)",
                      YELLOW("LEAD — not scored, see rationale"), detail)
         findings['hidden_shellcode'] = all_shellcode_hits
+        confidence = CONFIDENCE_MEDIUM if context_hits else CONFIDENCE_LOW
+        rationale = ("A 6-byte prefix match has no structural validation behind it "
+                     "(no section table, no entry-point plausibility check, no "
+                     "instruction-stream/control-flow corroboration) — nowhere near the "
+                     "rigor of the PE structural check above, so this never contributes "
+                     "to the obfuscation score regardless of confidence. Would need "
+                     "disassembly-based corroboration (e.g. a sustained run of valid "
+                     "instructions, a recognizable API-resolution idiom) before being "
+                     "treated as a detection.")
+        if context_hits:
+            rationale += (f" Confidence raised to MEDIUM because {len(context_hits)} of "
+                           f"{len(all_shellcode_hits)} match(es) sit inside a region that is "
+                           f"ALSO executable+private (MEM_PRIVATE + one of "
+                           f"{', '.join(SUSPICIOUS_PROTS)}) — the same combination "
+                           f"injection.py/hollowing.py treat as suspicious on its own — worth "
+                           f"an analyst's closer look even though it still isn't structural proof.")
         findings_list.append(Finding(
             check="obfuscation.shellcode_bootstrap_lead",
             facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
             inference=f"{len(all_shellcode_hits)} decoded payload(s) begin with a "
-                       f"call-$+5-style shellcode bootstrap prefix (6 bytes).",
-            confidence=CONFIDENCE_LOW,
-            rationale="A 6-byte prefix match has no structural validation behind it "
-                       "(no section table, no entry-point plausibility check, no "
-                       "instruction-stream/control-flow corroboration) — nowhere near the "
-                       "rigor of the PE structural check above. Reported as a lead only; "
-                       "does NOT contribute to the obfuscation score. Would need "
-                       "disassembly-based corroboration (e.g. a sustained run of valid "
-                       "instructions, a recognizable API-resolution idiom) before being "
-                       "treated as a detection.",
+                       f"call-$+5-style shellcode bootstrap prefix (6 bytes)"
+                       + (f", {len(context_hits)} of them inside an executable+private region"
+                          if context_hits else "") + ".",
+            confidence=confidence,
+            rationale=rationale,
             limitations=["6 bytes is not enough evidence to rule out coincidence, "
                          "especially inside high-entropy or adversarially-crafted data."],
             tag=TAG_LEAD,
@@ -1260,6 +1286,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     findings['verdict_level'] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings['confidence'] = overall_confidence(findings_list, score)
     findings['findings'] = [f.to_dict() for f in findings_list]
+    findings['lead_count'] = lead_count(findings_list)
+    findings['review_priority'] = review_priority(findings_list, score, status)
 
     # Detection-tier findings first, for visibility; observations/leads are
     # already shown inline with each layer's CLEAN/OBSERVATION/LEAD check
@@ -1281,13 +1309,13 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             f"{total_short_reads} region(s) short-read" if total_short_reads else "",
             f"decode budget exhausted ({decode_budget.exhausted_reason})" if budget_exhausted else "",
         ]))
-        verdict = _status_text(INCONCLUSIVE, reason)
+        verdict = _status_text(INCONCLUSIVE, reason + leads_suffix(findings_list))
     else:
         verdict = (RED("HIGH CONFIDENCE — sleep-mask decode AND a structural PE payload confirmed") if score >= 2 else
                    YELLOW("LIKELY — one structural indicator (sleep-mask decode or PE payload)")     if score == 1 else
                    GREEN("CLEAN — no structurally-confirmed payload; raw observations/leads "
                          "above (entropy/Base64/GZIP/XOR/string/shellcode-prefix) are "
-                         "informational only"))
+                         "informational only" + leads_suffix(findings_list)))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2 — structural detections only; "
           f"entropy/Base64/GZIP/shellcode-prefix are observations/leads, never a verdict "
           f"by themselves)\n")

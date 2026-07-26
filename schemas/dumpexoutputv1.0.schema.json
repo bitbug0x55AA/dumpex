@@ -1,0 +1,149 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v1.0.schema.json",
+  "title": "dumpex hunt JSON output (schema_version 1.0)",
+  "description": "Validates the document written by `dumpex <dump> --hunt <ttp|all> --json <file>`. Scope: meta + hunt sections only -- other commands (--list/--modules/--threads/...) are not covered by this schema. See docs/OUTPUT_SCHEMA.md for the versioning policy.",
+  "type": "object",
+  "required": ["meta", "hunt"],
+  "additionalProperties": true,
+  "properties": {
+    "meta": { "$ref": "#/$defs/meta" },
+    "hunt": { "$ref": "#/$defs/hunt" }
+  },
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version", "tool", "execution", "evidence"],
+      "properties": {
+        "schema_version": { "const": "1.0" },
+        "tool": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string" },
+            "version": { "type": ["string", "null"] }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": ["started_at", "finished_at", "duration_seconds", "command", "options"],
+          "properties": {
+            "started_at":       { "type": "string" },
+            "finished_at":      { "type": "string" },
+            "duration_seconds": { "type": "number" },
+            "command":          { "type": ["string", "null"] },
+            "options":          { "type": "object" },
+            "case_id":          { "type": ["string", "null"] },
+            "analyst":          { "type": ["string", "null"] }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "required": ["file_name"],
+          "properties": {
+            "file_name":  { "type": "string" },
+            "path":       { "type": "string" },
+            "size_bytes": { "type": ["integer", "null"] },
+            "sha256":     { "type": "string" },
+            "error":      { "type": "string" }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "python_version":     { "type": "string" },
+            "minidump_version":   { "type": "string" },
+            "yara_version":       { "type": "string" },
+            "pyyaml_version":     { "type": "string" }
+          }
+        },
+        "rules":      { "type": ["object", "null"] },
+        "yara_rules": { "type": ["object", "null"] }
+      }
+    },
+
+    "hunt": {
+      "type": "object",
+      "description": "Keyed by TTP name (injection/hollowing/stomping/pipe/cs-beacon/yara/obfuscation).",
+      "additionalProperties": { "$ref": "#/$defs/hunterResult" }
+    },
+
+    "status": {
+      "enum": ["DETECTED", "NOT_DETECTED_IN_SCANNED_SCOPE", "INCONCLUSIVE", "NOT_EVALUATED"]
+    },
+    "coverageStatus": {
+      "enum": ["complete", "partial", "not_evaluated"]
+    },
+    "verdictLevel": {
+      "enum": ["clean", "possible", "likely", "high", "inconclusive", "not_evaluated"]
+    },
+    "confidenceLevel": {
+      "enum": ["none", "low", "medium", "high"]
+    },
+
+    "finding": {
+      "type": "object",
+      "required": ["check", "tag", "confidence", "facts", "inference", "rationale", "limitations"],
+      "properties": {
+        "check":       { "type": "string" },
+        "tag":         { "enum": ["observation", "lead", "detection"] },
+        "confidence":  { "enum": ["low", "medium", "high"] },
+        "facts":       { "type": "array", "items": { "type": "string" } },
+        "inference":   { "type": "string" },
+        "rationale":   { "type": "string" },
+        "limitations": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "hunterResult": {
+      "type": "object",
+      "description": "Common shape across all 7 hunters. coverage_status/verdict_level/confidence/findings are present for every hunter as of schema_version 1.0 (injection/hollowing/stomping/pipe/cs-beacon/obfuscation/yara) -- additionalProperties stays true because each hunter also reports TTP-specific fields (e.g. cs-beacon.configs, pipe.private_pipes) not modeled here.",
+      "required": ["status", "score"],
+      "additionalProperties": true,
+      "properties": {
+        "status":            { "$ref": "#/$defs/status" },
+        "coverage_status":   { "$ref": "#/$defs/coverageStatus" },
+        "coverage_reasons":  { "type": "array", "items": { "type": "string" } },
+        "verdict_level":     { "$ref": "#/$defs/verdictLevel" },
+        "confidence":        { "$ref": "#/$defs/confidenceLevel" },
+        "score":             { "type": "integer", "minimum": 0 },
+        "max_score":         { "type": ["integer", "null"] },
+        "findings":          { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+        "lead_count":        { "type": ["integer", "string"] },
+        "review_priority":   { "enum": ["none", "low", "medium", "high", ""] }
+      },
+      "allOf": [
+        {
+          "comment": "NOT_EVALUATED must correspond to coverage_status: not_evaluated (when coverage_status is reported at all).",
+          "if": {
+            "required": ["status"],
+            "properties": { "status": { "const": "NOT_EVALUATED" } }
+          },
+          "then": {
+            "properties": {
+              "coverage_status": { "const": "not_evaluated" },
+              "verdict_level":   { "const": "not_evaluated" }
+            }
+          }
+        },
+        {
+          "comment": "INCONCLUSIVE must never be reported as verdict_level: clean.",
+          "if": {
+            "required": ["status"],
+            "properties": { "status": { "const": "INCONCLUSIVE" } }
+          },
+          "then": {
+            "properties": {
+              "verdict_level": { "not": { "const": "clean" } }
+            }
+          }
+        },
+        {
+          "comment": "DETECTED + coverage_status: partial is explicitly ALLOWED (not constrained here) -- a detection found under incomplete coverage is still a real detection, just one where more may exist beyond what was checked. This clause exists only to document that allowance; it imposes no restriction.",
+          "if": { "properties": { "status": { "const": "DETECTED" } } },
+          "then": {}
+        }
+      ]
+    }
+  }
+}

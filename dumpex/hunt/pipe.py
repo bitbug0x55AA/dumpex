@@ -38,7 +38,7 @@ from dumpex.hunt._coverage import derive_status, derive_coverage_status, Coverag
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
-    verdict_level)
+    verdict_level, lead_count, review_priority, leads_suffix)
 
 # score -> verdict_level, owned by this hunter (see _finding.verdict_level).
 _VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "likely", 3: "high"}
@@ -870,6 +870,8 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
     findings["status"] = status
     findings["verdict_level"] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
     findings["confidence"] = overall_confidence(findings_list, score)
+    findings["lead_count"] = lead_count(findings_list)
+    findings["review_priority"] = review_priority(findings_list, score, status)
 
     if not evaluated:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream and HandleDataStream both missing from this dump")
@@ -877,7 +879,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
         verdict = _status_text(INCONCLUSIVE,
             "HandleDataStream not in this dump (needs MiniDumpWithHandleData) — the "
             "primary, scored pipe-handle check could not run; only unscored string "
-            "leads are available above")
+            "leads are available above" + leads_suffix(findings_list))
     elif status == INCONCLUSIVE:
         reason = ", ".join(filter(None, [
             f"{coverage_counts.skipped_oversize} oversized region(s) skipped"
@@ -889,12 +891,12 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
             f"C2-context budget exhausted ({c2_budget.exhausted_reason})" if c2_exhausted else "",
             f"pipe-name budget exhausted ({pipe_name_budget.exhausted_reason})" if name_exhausted else "",
         ]))
-        verdict = _status_text(INCONCLUSIVE, reason)
+        verdict = _status_text(INCONCLUSIVE, reason + leads_suffix(findings_list))
     else:
         verdict = (RED("HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT") if score >= 3 else
                    YELLOW("LIKELY C2 PIPE")                           if score == 2 else
                    YELLOW("POSSIBLE C2 PIPE")                         if score == 1 else
-                   GREEN("CLEAN — no handle-confirmed C2 pipe indicators"))
+                   GREEN("CLEAN — no handle-confirmed C2 pipe indicators" + leads_suffix(findings_list)))
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/3 — handle-anchored; string leads "
           f"shown above are informational only)\n")
 

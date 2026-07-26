@@ -30,6 +30,31 @@ def test_call_pop_prefix_never_scores():
     assert "obfuscation.structural_payload" not in tags
 
 
+# ── same shellcode-bootstrap prefix, but the containing region is ─────────
+# ALSO executable+private (MEM_PRIVATE + PAGE_EXECUTE_READWRITE) -- the
+# combination is a stronger lead than the bare pattern match above, so
+# confidence is raised to medium, but it still must never score.
+
+def test_call_pop_prefix_in_rwx_private_region_raises_lead_confidence():
+    random.seed(2)
+    region_base = 0x410000
+    shellcode_prefix = b'\xe8\x00\x00\x00\x00\x58'
+    payload = shellcode_prefix + bytes(random.getrandbits(8) for _ in range(200))
+    b64_payload = base64.b64encode(payload)
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({region_base: b64_payload.ljust(0x1000, b'\x00')})
+
+    f = encoding._hunt_encoding(MF(), verbose=False)
+    tags = {finding["check"]: (finding["tag"], finding["confidence"]) for finding in f["findings"]}
+    assert f["score"] == 0
+    assert tags.get("obfuscation.shellcode_bootstrap_lead") == ("lead", "medium")
+    assert "obfuscation.structural_payload" not in tags
+
+
 # ── Bonus: a validated PE payload (even Base64-wrapped) still scores ──────
 
 def test_validated_pe_still_scores():

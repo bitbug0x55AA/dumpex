@@ -373,18 +373,17 @@ class StructuredOutput:
                 score     = findings.get("score", 0)
                 status    = findings.get("status", "")
                 max_score = findings.get("max_score") or {
-                             "injection": 3, "hollowing": 4, "stomping": 2,
+                             "injection": 3, "hollowing": 2, "stomping": 2,
                              "pipe": 3, "cs-beacon": 2, "yara": 3,
                              "obfuscation": 2}.get(ttp, "?")
 
-                # Phase-two/three hunters (injection/stomping/pipe/
-                # obfuscation/cs-beacon) report their own "verdict_level"
-                # (clean/possible/likely/high), "confidence" (none/low/
-                # medium/high), and "coverage_status" (complete/partial/
-                # not_evaluated), all computed independently of score —
-                # hunters not yet upgraded (hollowing/yara) don't have
-                # these and fall back to the legacy score/max_score
-                # heuristic below.
+                # Phase-two/three/four hunters (injection/stomping/pipe/
+                # obfuscation/cs-beacon/hollowing) report their own
+                # "verdict_level" (clean/possible/likely/high), "confidence"
+                # (none/low/medium/high), and "coverage_status" (complete/
+                # partial/not_evaluated), all computed independently of
+                # score — yara_hunt.py is still on the legacy model and
+                # falls back to the score/max_score heuristic below.
                 hunter_verdict_level   = findings.get("verdict_level")
                 hunter_confidence      = findings.get("confidence")
                 hunter_coverage_status = findings.get("coverage_status")
@@ -455,6 +454,13 @@ class StructuredOutput:
                     "confidence": hunter_confidence or "",
                     "coverage_complete": coverage_complete,
                     "coverage_reason": coverage_reason,
+                    # Only populated for hunters on the shared Finding model
+                    # (see dumpex.hunt._finding.lead_count/.review_priority)
+                    # — "" for legacy hunters (yara_hunt.py) rather than 0/
+                    # "none", so a consumer can't mistake "field not
+                    # computed" for "computed as zero/none".
+                    "lead_count": findings.get("lead_count", ""),
+                    "review_priority": findings.get("review_priority", ""),
                 })
 
                 # CS beacon configs

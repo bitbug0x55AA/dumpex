@@ -50,7 +50,7 @@ from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
-    verdict_level)
+    verdict_level, lead_count, review_priority, leads_suffix)
 
 # score -> verdict_level, owned by this hunter (see _finding.verdict_level).
 _VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "likely", 3: "high"}
@@ -543,6 +543,8 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
         "pe_read_failed":       pe_read_failed,
         "pe_short_reads":       pe_short_reads,
         "findings":             [f.to_dict() for f in findings_list],
+        "lead_count":           lead_count(findings_list),
+        "review_priority":      review_priority(findings_list, score, status),
     }
 
     # ── Output ────────────────────────────────────────────────────────
@@ -641,8 +643,8 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     verdict = (RED("HIGH CONFIDENCE INJECTION") if score >= 3 else
                YELLOW("LIKELY INJECTION") if score == 2 else
                YELLOW("POSSIBLE INJECTION") if score == 1 else
-               GREEN("CLEAN") if status == NOT_DETECTED_IN_SCANNED_SCOPE else
-               YELLOW("INCONCLUSIVE — partial stream coverage"))
+               GREEN("CLEAN" + leads_suffix(findings_list)) if status == NOT_DETECTED_IN_SCANNED_SCOPE else
+               YELLOW("INCONCLUSIVE — partial stream coverage" + leads_suffix(findings_list)))
     basis = ("no correlated signals" if score == 0 else
               "raw signals only — no shared allocation, no execution overlap" if score == 1 else
               "same-allocation structural correlation, or thread execution in a flagged allocation" if score == 2 else

@@ -209,6 +209,8 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     _LAST_YARA_PROVENANCE = None
 
     def _not_evaluated(reason: str) -> dict:
+        findings["coverage_status"] = "not_evaluated"
+        findings["verdict_level"]   = "not_evaluated"
         print(f"  {BOLD('[ VERDICT ]')}  {_status_text(NOT_EVALUATED, reason)}\n")
         return findings
 
@@ -598,6 +600,14 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         findings["status"]        = DETECTED
         findings["scan_complete"] = not any_gap   # keep DETECTED even with
                                                    # partial coverage, but say so
+        # coverage_status/verdict_level mirror scan_complete/score here so
+        # this hunter's JSON output satisfies the same cross-hunter
+        # invariants the Finding-model hunters already do (see
+        # schemas/dumpex-output-v1.0.schema.json) even though yara_hunt.py
+        # itself is still on its own "matches" list, not tag=observation/
+        # lead/detection Finding objects.
+        findings["coverage_status"] = "complete" if not any_gap else "partial"
+        findings["verdict_level"]   = "high" if score >= 3 else "likely"
         verdict = (RED(f"HIGH — {score} distinct rule(s) matched")      if score >= 3 else
                    YELLOW(f"MEDIUM — {score} distinct rule(s) matched") if score >= 1 else
                    GREEN("CLEAN"))
@@ -607,6 +617,8 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         # trusted and a positive can't be confirmed either.
         findings["status"]        = INCONCLUSIVE
         findings["scan_complete"] = False
+        findings["coverage_status"] = "partial"
+        findings["verdict_level"]   = "inconclusive"
         reason = (f"{len(unverified_rules)} rule(s) matched but could not be classified "
                   f"(context_unverified)" if unverified_rules else
                   "coverage incomplete, see above")

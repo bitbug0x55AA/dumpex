@@ -48,7 +48,8 @@ from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._coverage import derive_status, derive_coverage_status, CoverageTracker
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_DETECTION, overall_confidence, verdict_level)
+    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_DETECTION, overall_confidence, verdict_level,
+    lead_count, review_priority, leads_suffix)
 
 CS_BEACON_SIGNATURE  = b'\x00\x01\x00\x01\x00\x02'   # plaintext TLV start
 CS_SIG_XOR69         = b'ihihik'                       # above ^ 0x69
@@ -642,6 +643,8 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         findings['coverage_reasons'] = ['Memory64ListStream missing from this dump']
         findings['verdict_level'] = verdict_level(0, _VERDICT_LEVEL_BY_SCORE, status=NOT_EVALUATED)
         findings['confidence'] = overall_confidence([], 0)
+        findings['lead_count'] = 0
+        findings['review_priority'] = review_priority([], 0, NOT_EVALUATED)
         findings['findings'] = []
         print(YELLOW("  [~] No memory segments in dump — cannot scan for beacon config.\n"))
         print(f"  {BOLD('[ VERDICT ]')}  {_status_text(NOT_EVALUATED, 'Memory64ListStream missing from this dump')}\n")
@@ -859,12 +862,16 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
         ))
         findings['findings']   = [f.to_dict() for f in findings_list]
         findings['confidence'] = overall_confidence(findings_list, 0)
+        findings['lead_count'] = lead_count(findings_list)
+        findings['review_priority'] = review_priority(findings_list, 0, status)
         if status == INCONCLUSIVE:
             _print_check("Cobalt Strike beacon config",
-                         _status_text(INCONCLUSIVE, "; ".join(coverage_reasons) or "partial coverage"))
+                         _status_text(INCONCLUSIVE,
+                                      ("; ".join(coverage_reasons) or "partial coverage")
+                                      + leads_suffix(findings_list)))
         else:
             _print_check("Cobalt Strike beacon config",
-                         GREEN("CLEAN — no beacon config found in memory"))
+                         GREEN("CLEAN — no beacon config found in memory") + leads_suffix(findings_list))
         print()
         return findings
 
@@ -1117,6 +1124,8 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
     findings['findings']       = [f.to_dict() for f in findings_list]
     findings['confidence']     = overall_confidence(findings_list, score)
     findings['verdict_level']  = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
+    findings['lead_count']     = lead_count(findings_list)
+    findings['review_priority'] = review_priority(findings_list, score, status)
 
     corrob_note = ("  (context-corroborated)" if any_corroborated else
                    "  (structural validity only — no independent memory-context corroboration)")

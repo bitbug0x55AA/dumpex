@@ -443,3 +443,56 @@ def test_verified_change_scores_1_then_2_with_rip():
                                                       "ip_reg": "RIP", "is_wow64": False}]
         f2 = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
         assert f2["score"] == 2
+
+
+# ── no --ref-dir: a protection anomaly ALONE stays a plain lead, but one ──
+# with a thread's live RIP inside that exact section gets a second,
+# distinct medium-confidence lead calling out the correlation — still
+# never scored, never "confirmed stomping" (that requires --ref-dir).
+
+def test_rip_in_anomalous_section_without_ref_dir_is_medium_lead():
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base)
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    # RWX deviates from the section's declared RX -- WRITECOPY (the
+    # "normal" loader state) is deliberately NOT used here.
+    regions = [Region(module_base + section["vaddr"], module_base, section["vsize"],
+                       "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_IMAGE")]
+    section_va = module_base + section["vaddr"]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+    stomping.read_region = mem_reader({module_base: header, section_va: mem_text})
+    stomping.get_thread_contexts = lambda mf: [{"ThreadId": 0x42, "ip": section_va + 0x10,
+                                                  "ip_reg": "RIP", "is_wow64": False}]
+
+    f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=None)
+
+    assert f["score"] == 0
+    assert f["status"] == "INCONCLUSIVE"
+    tags = {finding["check"]: finding for finding in f["findings"]}
+    assert "stomping.rip_in_anomalous_section_lead" in tags
+    lead = tags["stomping.rip_in_anomalous_section_lead"]
+    assert lead["tag"] == "lead"
+    assert lead["confidence"] == "medium"
+
+
+def test_no_rip_in_anomalous_section_omits_correlation_lead():
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base)
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    regions = [Region(module_base + section["vaddr"], module_base, section["vsize"],
+                       "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_IMAGE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+    stomping.read_region = mem_reader({module_base: header, module_base + section["vaddr"]: mem_text})
+    stomping.get_thread_contexts = lambda mf: []   # no thread executing anywhere
+
+    f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=None)
+
+    checks = {finding["check"] for finding in f["findings"]}
+    assert "stomping.protection_deviation_lead" in checks
+    assert "stomping.rip_in_anomalous_section_lead" not in checks
