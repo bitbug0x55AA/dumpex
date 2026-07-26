@@ -3,7 +3,7 @@
 A field guide for reading `dumpex --hunt` output as a triage analyst —
 what the fields mean, what to do (and not do) with each result, and what
 each hunter can and cannot actually tell you. This is not a tool
-reference (see the main [README](../README.md) for flags); it's a
+reference (see the [CLI Reference](CLI_REFERENCE.md) for flags); it's a
 disposition guide.
 
 ## Minimum viable workflow

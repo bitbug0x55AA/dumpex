@@ -1,586 +1,209 @@
 # dumpex
 
-**dumpex** is a command-line DFIR/CTF triage tool for analyzing Windows minidump (`.DMP`) files. It parses minidump structures to surface system information, memory layout, loaded modules, and thread state — and includes a TTP detection engine to hunt for signs of process injection, module stomping, C2 named pipes, Cobalt Strike beacons, and encoded/obfuscated payloads.
+**dumpex** is a command-line DFIR and CTF triage tool for Windows process
+minidumps (`.dmp`). It exposes captured system, module, thread, and memory
+state, and hunts for evidence of injection, hollowing, module stomping,
+named-pipe C2, Cobalt Strike Beacon artifacts, YARA matches, and
+encoded/obfuscated payloads.
 
-**Triaging `--hunt` output?** See [`docs/SOC_QUICKSTART.md`](docs/SOC_QUICKSTART.md) — how to read `status`/`coverage_status`/`verdict_level`/`confidence`, what `DETECTED`+`partial` vs `INCONCLUSIVE` vs `NOT_EVALUATED` actually mean for disposition, and each hunter's evidence requirements and limits.
+> Start with the [SOC / DFIR Quick Start](docs/SOC_QUICKSTART.md) when
+> interpreting hunt output. `DETECTED` with partial coverage, `INCONCLUSIVE`,
+> `NOT_EVALUATED`, and a scoped non-detection require different dispositions.
 
----
+## What it does
 
-## Features
+- **Recon** — inspect system information, PID, PEB, modules, threads, and
+  captured memory regions.
+- **TTP hunting** — run focused or complete hunts with explicit evidence,
+  confidence, verdict, and coverage semantics.
+- **Alert triage** — build a report around a thread ID, address, or string.
+- **Dump comparison** — identify module, thread, memory-region, and protection
+  changes between two dumps.
+- **Extraction** — recover raw bytes or ASCII/Unicode strings from a region.
+- **Rule-driven detection** — use packaged defaults or explicit analyst
+  overrides without editing Python.
+- **Case-ready output** — export JSON, CSV, and plain-text results with
+  evidence and rule provenance.
 
-- **Recon** — Extract system info, PID, PEB, loaded modules, threads, and memory regions from a dump
-- **TTP Hunting** — Detect process injection, process hollowing, module stomping, named pipe C2, Cobalt Strike beacon artifacts, and encoded/obfuscated payloads
-- **Alert Triage** — Generate focused reports anchored to a thread ID, memory address, or string match
-- **Diff** — Compare two dumps to identify new/removed modules, threads, and memory regions (including RWX changes)
-- **Extraction** — Dump raw bytes or extract strings from a specific memory region, with regex filtering
-- **Rule-driven** — Detection patterns are externalized in `rules.yaml`; extend coverage without modifying code
-- **Structured Output** — Export results as JSON, CSV, or plain-text for downstream tooling and reporting
+## Investigative role
 
----
+dumpex answers questions about one process at capture time. It complements,
+rather than replaces, broader sources:
 
-## Investigative Context
-
-dumpex is the **minidump analysis layer** in a broader DFIR investigation stack. It fills a specific gap that full-memory tools (Volatility, MemProcFS) and log-based platforms (Splunk, Sysmon) do not cover:
-
-| Evidence Source | Tool | What It Answers |
+| Evidence | Typical tool | Question |
 |---|---|---|
-| Full RAM image | Volatility 3 / MemProcFS | What was running across the entire system |
-| Windows Event Logs | Splunk + Sysmon | What happened, when, and from where |
-| **Process .DMP file** | **dumpex** | **What was in a specific process's memory at capture time** |
+| Full RAM image | Volatility 3 / MemProcFS | What was running across the system? |
+| Event and EDR telemetry | Splunk / Sysmon / EDR | What happened over time? |
+| **Process minidump** | **dumpex** | **What was captured inside this process?** |
 
-Minidumps are produced in a wider range of scenarios than full memory images — EDR-triggered captures, Windows Error Reporting (WER), crash dumps, and attacker-generated dumps via `MiniDumpWriteDump`. When a full RAM image is not available, a process `.DMP` is often the only memory artifact.
+Minidumps may come from EDR collection, Windows Error Reporting, crash
+handling, or `MiniDumpWriteDump`. Their streams are selective, so absence from
+a dump is not necessarily absence from the process.
 
-For a complete investigation workflow showing how dumpex integrates with Volatility, Sysmon, and Splunk across the full incident response lifecycle:
-
-→ **[Blue Team Hunting Field Notes](https://github.com/bitbug0x55AA/Blue_Team_Hunting_Field_Notes/tree/main)**  
-   See: [`3.2.06 Minidump Analysis Workflow`](https://github.com/bitbug0x55AA/Blue_Team_Hunting_Field_Notes/blob/main/03_DFIR_Analysis/3.2_Investigation_Workflow/3.2.06_Minidump_Analysis.md) — when to use dumpex, how it connects to Sysmon alerts, and how to pivot from memory findings back to log-based investigation.
-
----
-
-## Requirements
-
-- Python 3.10+
-- [`minidump`](https://github.com/skelsec/minidump) library
-
-```bash
-pip install minidump
-```
-
-Optional (for YAML rule files and YARA scanning):
-
-```bash
-pip install pyyaml yara-python
-```
-
----
+For an end-to-end investigation workflow, see
+[Minidump Analysis Workflow](https://github.com/bitbug0x55AA/Blue_Team_Hunting_Field_Notes/blob/main/03_DFIR_Analysis/3.2_Investigation_Workflow/3.2.06_Minidump_Analysis.md).
 
 ## Installation
+
+Python 3.10 or newer is required.
 
 ```bash
 git clone https://github.com/bitbug0x55AA/dumpex.git
 cd dumpex
-pip install -e .
+python -m pip install -e .
 ```
 
-For full functionality including YAML rules and YARA scanning:
+Install YAML and YARA support for the complete hunt set:
 
 ```bash
-pip install -e ".[full]"
+python -m pip install -e ".[full]"
 ```
 
----
+The install exposes both `dumpex` and `python -m dumpex` entry points.
 
-## Usage
-
-### Recon
+## Quick start
 
 ```bash
-# OS, host, process and CPU summary
-python -m dumpex dump.DMP --sysinfo
+# Identify the process and capture environment
+dumpex sample.dmp --sysinfo
 
-# Process ID recorded in the dump
-python -m dumpex dump.DMP --pid
+# Review memory, modules, and threads
+dumpex sample.dmp --list
+dumpex sample.dmp --modules
+dumpex sample.dmp --threads
 
-# PEB (Process Environment Block) information
-python -m dumpex dump.DMP --peb
-
-# List loaded modules
-python -m dumpex dump.DMP --modules
-
-# List threads with analysis
-python -m dumpex dump.DMP --threads
-
-# List all memory regions, optionally filtered by protection
-python -m dumpex dump.DMP --list
-python -m dumpex dump.DMP --list --filter PAGE_EXECUTE
+# Run all hunters and preserve a case-ready result
+dumpex sample.dmp --hunt all \
+  --json result.json \
+  --case-id CASE-1234 \
+  --analyst analyst01
 ```
 
-### TTP Hunting
+Useful focused operations:
 
 ```bash
-# Detect process injection (RWX regions, unbacked executable memory)
-python -m dumpex dump.DMP --hunt injection
+# Compare captured module code with trusted same-build references
+dumpex sample.dmp --hunt stomping --ref-dir C:\Windows\System32
 
-# Detect process hollowing indicators
-python -m dumpex dump.DMP --hunt hollowing
+# Scan with an analyst-controlled YARA directory
+dumpex sample.dmp --hunt yara --yara-dir case-yara
 
-# Detect module stomping (verified on-disk-vs-memory section content diff;
-# --ref-dir is required for a score — see "Module Stomping Detection" below)
-python -m dumpex dump.DMP --hunt stomping
-python -m dumpex dump.DMP --hunt stomping --ref-dir ./known-good-dlls/
+# Build a report around a suspicious instruction pointer
+dumpex sample.dmp --report --report-addr 0x7ff600001000
 
-# Detect suspicious named pipes (C2 frameworks, lateral movement tools)
-python -m dumpex dump.DMP --hunt pipe
+# Extract a memory region
+dumpex sample.dmp --extract 0x7ff600001000 --size 0x1000 --output region.bin
 
-# Detect Cobalt Strike beacon artifacts
-python -m dumpex dump.DMP --hunt cs-beacon --verbose
-
-# Detect encoded or obfuscated payloads (Base64, XOR, GZIP, high entropy)
-python -m dumpex dump.DMP --hunt obfuscation
-python -m dumpex dump.DMP --hunt obfuscation --verbose
-
-# Run YARA rules against dump memory
-python -m dumpex dump.DMP --hunt yara --yara-dir ./rules/yara/
-
-# Run all TTP checks
-python -m dumpex dump.DMP --hunt all --verbose
+# Compare two captures
+dumpex before.dmp --diff after.dmp --diff-mode all
 ```
 
-### Alert Triage
+See the [CLI Reference](docs/CLI_REFERENCE.md) for every mode, option, and
+example.
 
-```bash
-# Report anchored to a thread ID
-python -m dumpex dump.DMP --report --report-tid 0x3a8
+## Hunt overview
 
-# Report anchored to a memory address
-python -m dumpex dump.DMP --report --report-addr 0xb120870000
-
-# Search all memory for a string and report on each hit region
-python -m dumpex dump.DMP --report --report-string "192.168.1.1"
-```
-
-### Diff (Two Dumps)
-
-```bash
-# Full diff (modules, threads, memory)
-python -m dumpex before.DMP --diff after.DMP
-
-# Diff specific categories
-python -m dumpex before.DMP --diff after.DMP --diff-mode modules
-python -m dumpex before.DMP --diff after.DMP --diff-mode threads
-python -m dumpex before.DMP --diff after.DMP --diff-mode memory
-```
-
-### Extraction
-
-```bash
-# Extract raw bytes from a memory region to a file
-python -m dumpex dump.DMP --extract 0x3a0000 --size 0x4e000 -o out.bin
-
-# Extract strings from a region with optional regex filter
-python -m dumpex dump.DMP --strings 0x3a0000 --size 0x4e000 --grep "http|cmd"
-
-# Extract Unicode strings with minimum length of 4
-python -m dumpex dump.DMP --strings 0x3a0000 --encoding unicode --min-len 4
-```
-
-### Structured Output
-
-```bash
-# Export results as JSON
-python -m dumpex dump.DMP --hunt all --json results.json
-
-# Export results as CSV (single file or directory)
-python -m dumpex dump.DMP --modules --csv modules.csv
-python -m dumpex dump.DMP --hunt all --csv ./output/
-
-# Save a plain-text copy of all console output
-python -m dumpex dump.DMP --hunt all --txt report.txt
-
-# Combine output formats
-python -m dumpex dump.DMP --hunt all --json results.json --csv ./output/ --txt report.txt
-```
-
----
-
-## Detection Rules (`rules.yaml`)
-
-TTP detection is driven by `rules.yaml`, bundled inside the package at `dumpex/rules_pkg/data/rules.yaml` — this is what `pip install dumpex` ships, so the tool works standalone with no extra files. Pass `--rules-file PATH` for an explicit, deliberate override without touching the installed package. There is **no** automatic scan of the current working directory or the directory the script lives in — a DFIR working directory routinely contains untrusted case files, so a `rules.yaml` sitting there is never picked up implicitly. Built-in defaults are used only when **no** `--rules-file` was given and the packaged copy can't be loaded; if you *do* pass `--rules-file`, a missing/unreadable/unparseable/schema-invalid file is a hard error (non-zero exit) rather than a silent fallback — you never get a verdict produced by a different ruleset than the one you asked for. The rules source actually used (path + SHA-256) is printed to the console (and captured in `--txt` output) and recorded under `meta.rules` in `--json` output.
-
-The rule file controls:
-
-| Section | Description |
-|---|---|
-| `suspicious_protections` | Memory protection flags flagged as suspicious (e.g. `PAGE_EXECUTE_READWRITE`) |
-| `stomping_whitelist` | DLLs excluded from net-IOC checks to reduce false positives |
-| `stomping_ioc_patterns` | Always-suspicious strings checked in all modules |
-| `stomping_net_ioc_patterns` | Network IOC patterns (URLs, IPs, API names) flagged outside whitelisted DLLs |
-| `pipe_c2_context_patterns` | Patterns matched in memory near a suspicious pipe name |
-| `framework_pipes` | Named pipe patterns mapped to C2 frameworks and MITRE ATT&CK technique IDs |
-
-To add new detection coverage, edit `rules.yaml` — no code changes required.
-
----
-
-## Module Stomping Detection
-
-`--hunt stomping` no longer scores on IOC strings or on an unusual page
-protection alone — both are still reported (as an unscored, low/medium-
-confidence **lead**), but the only signal that can produce a nonzero score
-is a **verified, relocation-normalized on-disk-vs-memory content diff**:
-
-1. Each loaded module's own PE header is parsed out of process memory.
-2. For every section the header declares executable-but-not-writable, its
-   live memory protection is compared against the normal, unmodified-
-   mapping set. `PAGE_EXECUTE_WRITECOPY` is explicitly **not** flagged —
-   Windows routinely maps executable sections copy-on-write even when
-   nothing was ever written, so treating it as suspicious made every
-   ordinary, untouched DLL look "stomped". A deviation from that (most
-   notably `PAGE_EXECUTE_READWRITE`) is reported as a lead only:
-   protection state alone proves nothing about content, since an attacker
-   can reprotect a section back to RX after stomping it and before a dump
-   is captured.
-3. **`--ref-dir DIR`** points at a directory of analyst-supplied reference
-   copies of modules (matched by filename), used to perform the actual
-   content verification. Without it, the verified-content check — the
-   only scored signal this hunter has — cannot run at all.
-
-### Reference file requirements
-
-A candidate reference file is only used if its **own** PE header identity
-(Machine, SizeOfImage, TimeDateStamp) matches the in-memory module's
-header. A same-named file that is actually a different build/version/patch
-level is skipped rather than diffed — comparing against the wrong build
-would report ordinary compiler-output differences as "stomped". Before
-comparing, the reference file's bytes are **relocation-normalized**: if
-the module loaded at a different address than its preferred `ImageBase`
-(ASLR, or a base collision), the same delta the Windows loader applied at
-load time is applied to the on-disk copy, so an unmodified-but-relocated
-section reads as identical rather than "changed". Only `IMAGE_REL_BASED_
-HIGHLOW`/`DIR64` fixups on **x86/x64** (`I386`/`AMD64`) modules are
-applied — the two types real x86/x64 linkers emit. On any other machine
-type (ARM/ARM64/…), if the relocation table itself is missing/malformed,
-if an entry uses a fixup type other than `ABSOLUTE`/`HIGHLOW`/`DIR64`
-(unrecognized/unsupported), or if an entry's target RVA falls in a
-section's virtual-only tail — `VirtualSize` extending past
-`SizeOfRawData`, e.g. a zero-padded region the loader fills at load time
-with no corresponding on-disk bytes — normalization is explicitly
-reported as **unavailable/malformed** rather than silently skipped or
-partially applied: when a nonzero relocation delta is actually needed and
-normalization can't be completed *in full*, the comparison is aborted for
-that section (counted under `coverage_counts.relocation_failed`) instead
-of diffing raw, un-normalized bytes — doing so would misreport every
-relocation-touched instruction as "modified". Similarly, a live-memory
-read shorter than the section's declared `SizeOfRawData` is never
-silently compared over just the bytes that happened to be readable — it's
-counted under `coverage_counts.short_reads`, a coverage gap, not a clean
-result. IAT/delay-import ranges and hotpatch trampolines are **not**
-specifically excluded from the diff itself; see the
-`stomping.verified_content_change` finding's `limitations` for that
-residual caveat.
-
-A verified diff with **no** corroborating live execution in the changed
-range (score 1) is reported as a neutral **"VERIFIED MODULE CODE
-MODIFICATION"**, not "stomping" — that same signature is also what a
-legitimate hotpatch or EDR inline hook produces, and attributing it to
-malicious stomping from a content diff alone would overstate what's
-actually known. The "stomping" framing (and `verdict_level: high`) is
-reserved for score 2, where a thread's own current RIP/EIP is executing
-inside one of the changed byte ranges.
-
-### Coverage semantics: `DETECTED` with `coverage_status: partial`
-
-Every hunt result carries `status` (`DETECTED` / `NOT_DETECTED_IN_SCANNED_SCOPE`
-/ `INCONCLUSIVE` / `NOT_EVALUATED`) **and**, independently, `coverage_status`
-(`complete` / `partial` / `not_evaluated`) plus a `coverage_reasons` list.
-These are deliberately not collapsed into one field: a hunter can find a
-genuine, verified stomped section (`status: DETECTED`) while *other*
-modules in the same dump couldn't be checked (unreadable header, no
-matching reference file, identity mismatch) — that's still `DETECTED`,
-with `coverage_status: partial` reported alongside so an investigator
-knows there could be more they haven't seen. Without `--ref-dir` at all,
-`score` is always `0` and `status` is `INCONCLUSIVE` (never a bare
-"clean") — the one scored signal in this hunter simply never ran.
-
-`status` and `coverage_status` are both reduced from the same rule for
-every phase-two hunter (`dumpex/hunt/_coverage.py`'s `derive_status()` /
-`derive_coverage_status()`), not re-derived separately by each one:
-no required data source at all → `NOT_EVALUATED`; a nonzero score →
-`DETECTED` regardless of coverage elsewhere; a zero score with incomplete
-coverage → `INCONCLUSIVE`; a zero score with complete coverage →
-`NOT_DETECTED_IN_SCANNED_SCOPE`. Each hunter still tracks its own
-domain-specific coverage counters and reasons (a stomping reference-file
-mismatch and a pipe scan-budget exhaustion are different kinds of gaps),
-but the final status/coverage_status reduction is one shared
-implementation.
-
-Every finding also carries a `verdict_level` (`clean` / `possible` /
-`likely` / `high`, plus `inconclusive` / `not_evaluated` mirroring
-`status`) that the hunter itself computes from its own score and status;
-this is the single value console output, `--json`, and `--csv` all read
-directly (uppercased) — none of them re-derive a verdict from `score` or
-`confidence` independently, so the same finding can't show different
-tiers in different output formats. `verdict_level` is never `clean` when
-`status` is `INCONCLUSIVE` or `NOT_EVALUATED` — a scanner that didn't run,
-or ran over incomplete coverage, hasn't earned "clean", and reporting it
-as such would tell an analyst a scope was verified benign when it was
-actually never (or only partly) checked.
-
-YARA rules are bundled inside the package at `dumpex/rules_pkg/data/yara/`. Pass `--yara-dir PATH` for an explicit directory of `.yar` files to extend scanning coverage without touching the installed package — same as `--rules-file`, there is no automatic cwd/script-dir scan.
-
----
-
-## Cobalt Strike Beacon Detection
-
-`--hunt cs-beacon` shares the same evidence model as the hunters above
-(`score` / `max_score` / `status` / `verdict_level` / `confidence` /
-`coverage_status` / `coverage_reasons` / `findings`) rather than scoring
-on raw config count:
-
-- **score 0** — no structurally-valid config found (TLV wire format
-  parsed, a recognized `BeaconType`, and an ASN.1-shaped public key all
-  have to line up).
-- **score 1** (`verdict_level: likely`) — at least one structurally-valid
-  config found, with no independent memory-context corroboration.
-  **Finding more configs does not raise this** — how many were found is
-  reported as a fact (`config_count`), not folded into confidence. A
-  decoded config surviving in memory is itself strong evidence (hard to
-  produce by chance), which is why score 1 already maps to `likely`
-  rather than `possible`.
-- **score 2** (`verdict_level: high`) — additionally corroborated by
-  memory context independent of the config bytes themselves: either the
-  enclosing region is executable, private memory (not an inert data-only
-  mapping), or a thread's *current* RIP/EIP executes somewhere within the
-  same allocation as the config hit.
-
-Deliberately **not** reported: a `DORMANT`/`INITIALIZED`/`LIVE` activity
-label. A decoded config proves a beacon payload existed in this process's
-memory — it says nothing about whether it was maintaining live network
-callbacks at dump time, and static memory content alone can't establish
-that. The estimated CS version (`cs_version`, from the highest recognized
-config field ID) is explicitly labeled as an estimate
-(`cs_version_note`), not a fingerprinted/confirmed build.
-
-`MemoryInfoListStream` is only needed for the score 1→2 corroboration
-check and per-hit region display — its absence never blocks config
-detection (score 1 is still reachable), but it does make
-`coverage_status: partial` (`status: INCONCLUSIVE` if no config was
-found either), since the corroboration check couldn't be verified.
-
-The existing `configs` list (per-hit VA, file offset, region, XOR key,
-version estimate, parsed TLV fields) is kept exactly as before for
-existing consumers — everything above is additive.
-
----
-
-## MITRE ATT&CK Coverage
-
-| Technique | ID | Detection |
+| Hunt | Primary signal | Important limit |
 |---|---|---|
-| Process Injection | T1055 | RWX memory regions, unbacked executable memory, hidden PE headers |
-| Process Hollowing | T1055.012 | Image base memory type, MZ header, module list mismatch |
-| Inter-Process Communication: Named Pipes | T1559.001 | Cobalt Strike postex, msagent, status, beacon pipes |
-| Proxy: Internal Proxy | T1090.001 | CS SMB Beacon peer-to-peer pipe |
-| Remote Services: SMB/Windows Admin Shares | T1021.002 | PsExec, PAExec, RemCom, svcctl pipes |
-| Exploitation for Privilege Escalation | T1068 | PrintNightmare / Spooler pipe (DserNamePipe) |
-| Obfuscated Files or Information | T1027 | CS beacon XOR-encoded config; single-byte XOR payload detection |
-| Obfuscated Files or Information: HTML Smuggling | T1027.006 | Base64-encoded payloads in memory |
-| Encrypted Channel: Asymmetric Cryptography | T1573.002 | CS beacon RSA public key ASN.1 header |
-| Impair Defenses: Execution Guardrails | T1622 | CS 64-bit sleep mask deobfuscation routine |
-| Deobfuscate/Decode Files or Information | T1140 | Shannon entropy scan; GZIP/ZLIB compressed payload detection |
+| `injection` | Executable private memory, validated PE structure, thread context | Legitimate JIT and packed code can resemble injection |
+| `hollowing` | Image, PEB, module, and memory inconsistencies | Required structures may be absent from a small dump |
+| `stomping` | Section/protection mismatch and optional normalized code diff | Content comparison needs a trusted same-build `--ref-dir` |
+| `pipe` | Named-pipe syntax and framework patterns | Names are contextual and can be spoofed |
+| `cs-beacon` | Valid Beacon configuration and execution context | Config presence does not prove active C2 |
+| `yara` | Matches from successfully compiled rules over captured bytes | Only captured memory and loaded rules are scanned |
+| `obfuscation` | Encoding, entropy, and sleep-mask-related indicators | Compressed or encrypted benign data may look similar |
 
----
+The detailed validation, relocation, scoring, rule-selection, and ATT&CK
+mapping rationale is in
+[Detection Methodology and Coverage](docs/DETECTION_METHODOLOGY.md).
 
-## Options Reference
+## Reading results
 
-| Flag | Description |
+Do not interpret a single field in isolation:
+
+| Field | Meaning |
 |---|---|
-| `--list` | List all memory regions |
-| `--modules` | List loaded modules |
-| `--threads` | List threads with analysis |
-| `--peb` | Show PEB info |
-| `--pid` | Show recorded process ID |
-| `--sysinfo` | Show OS, host, process, and CPU summary |
-| `--hunt TTP` | TTP detection: `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `obfuscation`, `all` |
-| `--report` | Generate triage report (requires `--report-tid`, `--report-addr`, or `--report-string`) |
-| `--diff DUMP2` | Diff against a second dump file |
-| `--diff-mode` | Scope of diff: `modules`, `threads`, `memory`, `all` (default: `all`) |
-| `--extract ADDR` | Extract raw bytes at address |
-| `--strings ADDR` | Extract strings at address |
-| `--size SIZE` | Region size in hex |
-| `-o FILE` | Output file for `--extract` |
-| `--filter PROT` | Filter `--list` by protection name |
-| `--grep REGEX` | Regex filter for `--strings` |
-| `--min-len N` | Minimum string length for `--strings` (default: 6) |
-| `--encoding` | String encoding: `ascii`, `unicode`, `both` (default: `both`) |
-| `--verbose` | Show all regions including routine ones |
-| `--yara-dir DIR` | Directory of `.yar` rule files for `--hunt yara` (explicit override; no automatic cwd scan) |
-| `--rules-file FILE` | Explicit `rules.yaml`/`.yml`/`.json` for TTP detection (no automatic cwd scan) |
-| `--ref-dir DIR` | Directory of reference module files for `--hunt stomping`'s verified content diff (required for a nonzero score; see "Module Stomping Detection") |
-| `--json FILE` | Write structured results to FILE as JSON (includes an evidence/provenance `meta` block — see below) |
-| `--csv PATH` | Write CSV output: `FILE.csv` → single combined file, `DIR\` → one file per table |
-| `--txt FILE` | Write plain-text copy of console output (ANSI colours stripped) |
-| `--case-id ID` | Case/ticket identifier recorded in `--json meta.execution.case_id` (free-form) |
-| `--analyst NAME` | Analyst name/handle recorded in `--json meta.execution.analyst` |
-| `--redact-paths` | Omit absolute filesystem paths from `--json` output (`meta.evidence.path`, and any `--ref-dir`/`--yara-dir`/`--rules-file` path in `meta.execution.options`, are reduced to their basename) |
+| `status` | Whether evidence was detected, not detected in scanned scope, inconclusive, or not evaluated |
+| `coverage_status` | Whether the dump supplied the evidence required by that hunter |
+| `verdict_level` | Severity supported by validated evidence |
+| `confidence` | Strength of the interpretation given the available evidence |
 
----
+Two rules matter most:
 
-## JSON Evidence Metadata
+1. `DETECTED` with `coverage_status: partial` remains a positive finding.
+2. `NOT_DETECTED_IN_SCANNED_SCOPE` does not prove the behavior was absent from
+   the process or host.
 
-See also [`docs/SOC_QUICKSTART.md`](docs/SOC_QUICKSTART.md#evidence-handling-hashes-reproducing-a-run)
-for how to use this in case-tracking workflows.
+Use the [SOC disposition guide](docs/SOC_QUICKSTART.md) for the decision matrix,
+recommended pivots, and per-hunter evidence requirements.
 
-`--json` output carries a top-level `meta` object alongside the existing
-per-command result sections (`modules`, `hunt`, `sysinfo`, ...) — those
-sections' own structure is unchanged; `meta` is purely additive:
+## Rules and reproducibility
 
-```json
-{
-  "meta": {
-    "schema_version": "1.0",
-    "tool": { "name": "dumpex", "version": "2.0.0" },
-    "execution": {
-      "started_at": "2026-07-25T11:10:40Z",
-      "finished_at": "2026-07-25T11:10:40Z",
-      "duration_seconds": 0.024,
-      "command": "hunt_stomping",
-      "options": { "verbose": false, "hunt": "stomping", "ref_dir": null },
-      "case_id": null,
-      "analyst": null
-    },
-    "evidence": {
-      "file_name": "sample.dmp",
-      "path": "/home/analyst/cases/sample.dmp",
-      "size_bytes": 123456,
-      "sha256": "..."
-    },
-    "runtime": { "python_version": "3.11.15", "minidump_version": "0.0.24" },
-    "rules": { "path": "...", "sha256": "...", "explicit": false, "version": 1 }
-  },
-  "hunt": { "...": "..." }
-}
+Canonical defaults are packaged under:
+
+```text
+dumpex/rules_pkg/data/rules.yaml
+dumpex/rules_pkg/data/yara/*.yar
 ```
 
-Notes:
+Use `--rules-file` and `--yara-dir` for explicit case-specific overrides.
+dumpex does not automatically load a rules file from the current working
+directory. JSON output records evidence identity, execution options,
+dependency versions, and the hashes of rules actually used.
 
-- `schema_version` tracks the shape of this `meta` document, independently
-  of `tool.version` (dumpex's own version) — the two change on different
-  schedules.
-- `evidence.sha256` is computed by streaming the dump file in bounded
-  chunks (never loaded into memory at once) and is deterministic over file
-  content only — the same dump produces the same hash regardless of which
-  command or how many times it's run, so it can anchor a finding to an
-  exact evidence file in a case record.
-- `rules` (the ruleset that actually produced any `hunt` verdicts —
-  path, content hash, whether it was an explicit `--rules-file` override)
-  is surfaced once here rather than duplicated inside every hunt result;
-  it's omitted entirely (not a misleading empty object) if no hunt module
-  that reads `rules.yaml` ran this invocation.
-- A failure computing any single piece of `meta` (e.g. the dump file was
-  deleted or became unreadable between opening it and writing `--json`)
-  never aborts the write or loses already-completed analysis results —
-  that piece gets an `"error"` string instead, and the surrounding
-  sections that could be computed are still written normally.
-- `--redact-paths` only affects `meta` — it never changes what the
-  console prints or what `--txt`/`--csv` contain.
+See [Output and Evidence Schema](docs/OUTPUT_SCHEMA.md) before building an
+integration or archiving a result.
 
----
+## Documentation
+
+| Document | Use it for |
+|---|---|
+| [SOC / DFIR Quick Start](docs/SOC_QUICKSTART.md) | Triage, disposition, evidence requirements, and next actions |
+| [CLI Reference](docs/CLI_REFERENCE.md) | Complete modes, options, and examples |
+| [Detection Methodology](docs/DETECTION_METHODOLOGY.md) | Validation logic, limitations, scoring, and ATT&CK mapping |
+| [Output and Evidence Schema](docs/OUTPUT_SCHEMA.md) | JSON metadata, provenance, formats, and reproducibility |
+| [Contributing](CONTRIBUTING.md) | Development setup, tests, CI, and contribution expectations |
+| [CREDITS](CREDITS) | Research attribution, licenses, and nature of use |
+
+## Scope and limitations
+
+- dumpex analyzes only bytes and streams present in the supplied process dump.
+- It is a triage aid, not a substitute for full-memory, endpoint, timeline, or
+  malware analysis.
+- Heuristic findings require investigator validation and corroboration.
+- Reference modules must match the captured build; a same-named file is not
+  sufficient.
+- Path redaction protects local directory layout, not sensitive content inside
+  findings.
 
 ## Development
 
-The regression suite requires no real `.dmp`/PE sample files — every test
-builds its own synthetic PE header and minidump object graph via
-`tests/fixtures/fakes.py`:
-
 ```bash
-pip install -e ".[dev]"     # pytest, pytest-cov
-pytest                       # run the full suite
-pytest --cov=dumpex --cov-report=term-missing   # with coverage
+python -m pip install -e ".[full,dev]"
+pytest
+pytest --cov=dumpex --cov-report=term-missing
 ```
 
-Layout:
-
-| Path | Scope |
-|---|---|
-| `tests/unit/` | Pure function-level tests (PE parsing, relocation normalization, the shared coverage/status reduction rule) — no hunter or minidump object graph involved |
-| `tests/hunt/` | Per-hunter tests (`dumpex.hunt.*`) driven through synthetic `FakeMF` minidump objects |
-| `tests/integration/` | Cross-module output-path tests: CSV/JSON summary rows faithfully reflecting a hunter's own `verdict_level`/`confidence`/`coverage_status`; the `--json` `meta` block (evidence hashing, redaction, graceful degradation) |
-| `tests/fixtures/` | Shared synthetic-PE/minidump builders (`fakes.py`) used by all of the above |
-| `tests/corpus/` | Opt-in real-dump validation harness against an external, private sample corpus (clean/malicious/missing-stream/corrupted/short-read) — skipped by default, see `tests/corpus/README.md` |
-
-`tests/conftest.py` also resets `stomping.get_thread_contexts`/
-`pipemod.get_thread_contexts` before and after every test — both hold a
-plain module-level monkeypatch point so a test can inject a synthetic
-RIP, and without a reset a patched value would otherwise leak into
-whichever test happens to run next.
-
-CI (`.github/workflows/tests.yml`) runs the suite on the package's
-minimum supported Python version (`requires-python` in `pyproject.toml`)
-and one current version, on every push/PR. It has no access to any
-private real-dump corpus, so `tests/corpus/` always skips there too —
-see `tests/corpus/README.md` to run it locally against your own
-authorized sample set.
-
----
+The default suite builds synthetic minidump and PE object graphs and does not
+require a malware corpus or network access. See [Contributing](CONTRIBUTING.md)
+for the test layout and optional private-corpus workflow.
 
 ## Acknowledgements
 
-Dumpex builds on the work of several researchers and organizations in the public security community. Their contributions are gratefully acknowledged below.
-
----
-
-### Didier Stevens — 1768.py and cs-analyze-processdump.py
-
-The Cobalt Strike beacon configuration scanner in [`dumpex/hunt/cs_beacon.py`](dumpex/hunt/cs_beacon.py) is an adaptation of **1768.py** by [Didier Stevens](https://blog.didierstevens.com/). While [`dumpex/hunt/encoding.py (Layer 0 — _scan_sleep_mask and helpers)`](dumpex/hunt/encoding.py) is from his **cs-analyze-processdump.py**.
-
-Specifically derived from 1768.py:
-
-- XOR-encoded config block detection algorithm (`AnalyzeEmbeddedPEFileSub`)
-- TLV config field parser (`AnalyzeEmbeddedPEFileSub2`)
-- Malleable C2 instruction stream decoder (`DecodeInstructions`)
-- Config field identifier table (`dConfigIdentifiers`)
-- Beacon type and proxy type lookup tables (`LookupConfigValue`)
-- CS version estimation from max field ID (`DetermineCSVersionFromConfig`)
-- Config sanity check logic (`SanityCheckExtractedConfig`)
-
-The YARA signatures `CS_Beacon_Config_XOR69` and `CS_Beacon_Config_XOR2E` in [`dumpex/rules_pkg/data/yara/cs_indicators.yar`](dumpex/rules_pkg/data/yara/cs_indicators.yar) are also derived from the same work.
-
-> Didier Stevens, *1768.py and cs-analyze-processdump.py — Analyse Cobalt Strike beacons*  
-> <https://blog.didierstevens.com/programs/cobalt-strike-tools/>  
-> Source code placed in the **public domain** by the author.
-
----
-
-### Elastic Security
-
-The YARA rules `CS_SleepMask_64bit` and `CS_SleepMask_32bit` in [`dumpex/rules_pkg/data/yara/cs_indicators.yar`](dumpex/rules_pkg/data/yara/cs_indicators.yar) are based on byte signatures published by **Elastic Security**.
-
-> Elastic Security, *Detecting Cobalt Strike with Memory Signatures*  
-> <https://www.elastic.co/blog/detecting-cobalt-strike-with-memory-signatures>  
-> Published as public security research.
-
----
-
-### NVISO Labs
-
-The contextual understanding of Cobalt Strike beacon memory layout and config extraction that informed the design of `cs_beacon.py` draws on the public research series published by **NVISO Labs**.
-
-> NVISO Labs, *Cobalt Strike: Memory Dumps* blog series  
-> <https://blog.nviso.eu/>  
-> Published as public security research.
-
----
-
-### Stephen Fewer — ReflectiveDLLInjection
-
-The hash constants used in the `Reflective_Loader_Signature` YARA rule in [`dumpex/rules_pkg/data/yara/suspicious_memory.yar`](dumpex/rules_pkg/data/yara/suspicious_memory.yar) are derived from the **ReflectiveDLLInjection** project by Stephen Fewer.
-
-> Stephen Fewer, *ReflectiveDLLInjection*  
-> <https://github.com/stephenfewer/ReflectiveDLLInjection>  
-> Source code placed in the **public domain** by the author.
-
----
-
-*All referenced works are used for defensive, educational, and incident response
-purposes, consistent with the intent of their original authors.*
-
----
+dumpex incorporates and references public defensive research by Didier
+Stevens, Elastic Security, NVISO Labs, and Stephen Fewer. Full attribution and
+license details are maintained in [`CREDITS`](CREDITS).
 
 ## Disclaimer
 
-This tool is designed strictly for educational purposes, authorized digital forensics, and incident response operations. The author is not responsible for any misuse or damage caused by the application of this tool.
+This tool is intended for education, authorized digital forensics, and
+incident response. The author is not responsible for misuse or resulting
+damage.
 
----
+## Author and license
 
-## Author
+Developed by Juana (Tao Fan), a cyber security analyst specializing in DFIR,
+threat hunting, operational malware analysis, and detection engineering.
+Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229).
 
-Developed by Juana (Tao Fan)  
-Cyber Security Analyst specializing in DFIR, Threat Hunting, Operational Malware Analysis, and Detection Engineering.  
-Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229)
-
----
-
-## License
-
-This project is licensed under the MIT License.
+Licensed under the [MIT License](LICENSE).
