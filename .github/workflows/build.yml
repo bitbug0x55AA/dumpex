@@ -24,10 +24,34 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install pyinstaller minidump pyyaml yara-python colorama
+        run: python -m pip install pyinstaller -e ".[full]"
 
       - name: Build EXE
-        run: pyinstaller --onefile dumpex.py --name dumpex --add-data "rules;rules"
+        # Keep the resources inside their real Python package. Both the
+        # installed wheel and the frozen executable then resolve the same
+        # canonical dumpex/rules_pkg/data layout via importlib.resources.
+        # The CLI deliberately uses Unicode evidence/output labels, so force
+        # UTF-8 mode for redirected/non-console Windows executions as well.
+        run: pyinstaller --onefile dumpex.py --name dumpex --collect-data dumpex.rules_pkg --python-option "X utf8"
+
+      - name: Verify bundled package resources
+        shell: pwsh
+        run: |
+          $archive = (& pyi-archive_viewer -l dist/dumpex.exe) -join "`n"
+          $archive = $archive.Replace('\', '/')
+          $archive = $archive -replace '/+', '/'
+          $required = @(
+            'dumpex/rules_pkg/data/rules.yaml',
+            'dumpex/rules_pkg/data/yara/cs_indicators.yar',
+            'dumpex/rules_pkg/data/yara/lateral_movement.yar',
+            'dumpex/rules_pkg/data/yara/suspicious_memory.yar'
+          )
+          foreach ($resource in $required) {
+            if (-not $archive.Contains($resource)) {
+              throw "PyInstaller artifact is missing package resource: $resource"
+            }
+          }
+          & .\dist\dumpex.exe --help
 
       - name: Create Release and Upload EXE
         uses: softprops/action-gh-release@v2

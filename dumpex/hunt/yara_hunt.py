@@ -181,8 +181,11 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
 
     Rules directory resolution (when rules_dir is None — pass --yara-dir
     for an explicit, deliberate override instead of relying on this):
-      1. sys._MEIPASS/rules/yara/         PyInstaller onefile builds
-      2. dumpex.rules_pkg/data/yara/      Packaged defaults (see
+      1. sys._MEIPASS/rules/yara/         Compatibility with older
+                                           PyInstaller builds
+      2. dumpex.rules_pkg/data/yara/      Canonical package resource used
+                                           by wheels and current PyInstaller
+                                           builds (see
                                            _packaged_yara_rules_dir())
 
     There is deliberately no automatic cwd/script-dir scan: a DFIR working
@@ -211,9 +214,10 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     # ── Resolve rules directory ───────────────────────────────────────
     if rules_dir is None:
         # sys.argv[0] and cwd are dev-environment assumptions — a pip-
-        # installed dumpex has no rules/ next to whatever invoked it, and a
-        # PyInstaller --onefile build extracts --add-data to sys._MEIPASS,
-        # not dirname(sys.argv[0]).
+        # installed dumpex has no rules/ next to whatever invoked it.
+        # Current PyInstaller builds collect dumpex.rules_pkg's package data
+        # in its canonical layout; the _MEIPASS/rules path below is retained
+        # only for compatibility with older frozen builds.
         meipass = getattr(sys, "_MEIPASS", None)
         if meipass and (Path(meipass) / "rules" / "yara").is_dir():
             rules_dir = str(Path(meipass) / "rules" / "yara")
@@ -613,4 +617,3 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         print(DIM("  Use --verbose to expand all region and string match details.\n"))
 
     return findings
-

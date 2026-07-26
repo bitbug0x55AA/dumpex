@@ -269,18 +269,16 @@ def _find_rules_source() -> "_RuleSource | None":
     all when --rules-file is set (see _load_rules/_load_explicit_rules,
     which is a separate, fail-closed path). First match wins.
 
-      1. <_MEIPASS>/rules/rules.yaml        PyInstaller onefile: --add-data
-                                             extracts to sys._MEIPASS, not
-                                             next to the exe (sys.argv[0]).
-      2. dumpex.rules_pkg/data/rules.yaml   Bundled inside the installed
-                                             package itself — see
-                                             _packaged_source(). This is the
-                                             single canonical copy of the
-                                             default ruleset; it is NOT
-                                             duplicated anywhere else in
-                                             the repo, so there is nothing
-                                             else to drift out of sync
-                                             with it.
+      1. <_MEIPASS>/rules/rules.yaml        Compatibility with older
+                                             PyInstaller builds that copied
+                                             a top-level `rules` directory.
+      2. dumpex.rules_pkg/data/rules.yaml   Canonical package resource used
+                                             by installed wheels and current
+                                             PyInstaller builds (`--collect-data
+                                             dumpex.rules_pkg`) — see
+                                             _packaged_source(). The source
+                                             ruleset is not duplicated
+                                             elsewhere in the repository.
 
     There is deliberately no automatic cwd/script-dir scan (see module
     docstring): that path used to sit AFTER the packaged-defaults check,
