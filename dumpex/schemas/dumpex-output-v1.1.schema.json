@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v1.0.schema.json",
-  "title": "dumpex hunt JSON output (schema_version 1.0)",
-  "description": "Validates the document written by `dumpex <dump> --hunt <ttp|all> --json <file>`. Scope: meta + hunt sections only -- other commands (--list/--modules/--threads/...) are not covered by this schema. See docs/OUTPUT_SCHEMA.md for the versioning policy.",
+  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v1.1.schema.json",
+  "title": "dumpex hunt JSON output (schema_version 1.1)",
+  "description": "Validates the document written by `dumpex <dump> --hunt <ttp|all> --json <file>`. Scope: meta + hunt sections only -- other commands (--list/--modules/--threads/...) are not covered by this schema. See docs/OUTPUT_SCHEMA.md for the versioning policy. 1.0 -> 1.1: obfuscation's sleep_mask/entropy/base64/xor/compressed/hidden_pe/hidden_shellcode hit shape changed incompatibly (sleep_mask's `offset` used to BE the XOR key rotation value; it is now always 0, with rotation moved to a new `key_offset` field) and is formally defined here for the first time via obfuscationHunterResult -- previously these fields were entirely unvalidated, passing through `additionalProperties: true` on the generic findingHunterResult.",
   "type": "object",
   "required": ["meta", "hunt"],
   "additionalProperties": true,
@@ -15,7 +15,7 @@
       "type": "object",
       "required": ["schema_version", "tool", "execution", "evidence"],
       "properties": {
-        "schema_version": { "const": "1.0" },
+        "schema_version": { "const": "1.1" },
         "tool": {
           "type": "object",
           "required": ["name", "version"],
@@ -64,9 +64,10 @@
 
     "hunt": {
       "type": "object",
-      "description": "Keyed by TTP name (injection/hollowing/stomping/pipe/cs-beacon/yara/obfuscation). `yara` is routed to yaraHunterResult (it reports matches/rules_hit, not the Finding-object model); every other key -- including any future/renamed hunter -- falls through additionalProperties to findingHunterResult, which is the stricter of the two.",
+      "description": "Keyed by TTP name (injection/hollowing/stomping/pipe/cs-beacon/yara/obfuscation). `yara` is routed to yaraHunterResult (it reports matches/rules_hit, not the Finding-object model); `obfuscation` is routed to obfuscationHunterResult (the only Finding-model hunter with additional formally-typed hit fields of its own); every other key -- including any future/renamed hunter -- falls through additionalProperties to findingHunterResult, the generic (and stricter of the two) shape.",
       "properties": {
-        "yara": { "$ref": "#/$defs/yaraHunterResult" }
+        "yara": { "$ref": "#/$defs/yaraHunterResult" },
+        "obfuscation": { "$ref": "#/$defs/obfuscationHunterResult" }
       },
       "additionalProperties": { "$ref": "#/$defs/findingHunterResult" }
     },
@@ -167,6 +168,87 @@
       "description": "yara_hunt.py's own matches/rules_hit shape -- only hunterResultBase's fields (status/score/coverage_status/verdict_level) are guaranteed; it does not emit confidence/findings/lead_count/review_priority, so those are not required (and not modeled) here. additionalProperties stays true for matches/rules_hit/scan_complete/coverage and similar yara-specific fields.",
       "allOf": [
         { "$ref": "#/$defs/hunterResultBase" }
+      ]
+    },
+
+    "obfuscationRegion": {
+      "description": "dumpex.hunt.encoding.models._region_to_dict's output -- a memory region described BY VALUE (never a live object reference, which JSON can't represent reproducibly). State/Protect/Type are the enum's .name string by the time this reaches JSON.",
+      "type": ["object", "null"],
+      "required": ["BaseAddress", "RegionSize"],
+      "properties": {
+        "BaseAddress":    { "type": "integer" },
+        "AllocationBase": { "type": ["integer", "null"] },
+        "RegionSize":     { "type": "integer" },
+        "State":          { "type": ["string", "null"] },
+        "Protect":        { "type": ["string", "null"] },
+        "Type":           { "type": ["string", "null"] }
+      },
+      "additionalProperties": true
+    },
+
+    "obfuscationClassification": {
+      "description": "dumpex.hunt.encoding.classification._classify_decoded's output.",
+      "type": "object",
+      "required": ["type", "is_pe", "is_shellcode", "ioc_strings"],
+      "properties": {
+        "type":         { "type": "string" },
+        "is_pe":        { "type": "boolean" },
+        "is_shellcode": { "type": "boolean" },
+        "ioc_strings":  { "type": "array", "items": { "type": "string" } },
+        "hex_prefix":   { "type": "string" },
+        "entropy":      { "type": "number" }
+      },
+      "additionalProperties": true
+    },
+
+    "obfuscationHit": {
+      "description": "dumpex.hunt.encoding.models.Hit.to_dict()'s output -- one decoded/classified payload from the sleep_mask, base64, xor, or gzip/zlib layer. `offset` is the byte offset within `region` where the payload starts (always 0 for the whole-region layers: sleep_mask, xor). `key_offset` is sleep_mask's XOR key rotation value (0..key_size-1) -- NOT `offset`, which schema_version 1.0 conflated for sleep_mask hits specifically (a breaking fix, see this schema's own top-level description).",
+      "type": "object",
+      "required": ["layer", "region", "offset", "decoded", "cls", "complete"],
+      "properties": {
+        "layer":      { "enum": ["sleep_mask", "base64", "xor", "gzip", "zlib"] },
+        "region":     { "$ref": "#/$defs/obfuscationRegion" },
+        "offset":     { "type": "integer", "minimum": 0 },
+        "decoded":    { "type": "string" },
+        "cls":        { "$ref": "#/$defs/obfuscationClassification" },
+        "complete":   { "type": "boolean" },
+        "raw":        { "type": ["string", "null"] },
+        "key":        { "type": ["string", "integer", "null"] },
+        "key_offset": { "type": ["integer", "null"] }
+      },
+      "additionalProperties": false
+    },
+
+    "obfuscationEntropyHit": {
+      "description": "dumpex.hunt.encoding.models.EntropyHit.to_dict()'s output -- a statistical observation, never classified/decoded content (no `cls`/`decoded` fields at all).",
+      "type": "object",
+      "required": ["region", "entropy", "threshold"],
+      "properties": {
+        "region":    { "$ref": "#/$defs/obfuscationRegion" },
+        "entropy":   { "type": "number" },
+        "threshold": { "type": "number" }
+      },
+      "additionalProperties": false
+    },
+
+    "obfuscationHunterResult": {
+      "description": "The obfuscation hunter (dumpex/hunt/encoding/) -- a findingHunterResult with additional, formally-typed hit-list fields. These are all optional (a clean scan simply omits or empties them), but where present must match the shape above.",
+      "allOf": [
+        { "$ref": "#/$defs/findingHunterResult" },
+        {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "sleep_mask":       { "type": "array", "items": { "$ref": "#/$defs/obfuscationHit" } },
+            "entropy":          { "type": "array", "items": { "$ref": "#/$defs/obfuscationEntropyHit" } },
+            "base64":           { "type": "array", "items": { "$ref": "#/$defs/obfuscationHit" } },
+            "xor":              { "type": "array", "items": { "$ref": "#/$defs/obfuscationHit" } },
+            "compressed":       { "type": "array", "items": { "$ref": "#/$defs/obfuscationHit" } },
+            "hidden_pe":        { "type": "array", "items": { "$ref": "#/$defs/obfuscationHit" } },
+            "hidden_shellcode": { "type": "array", "items": { "$ref": "#/$defs/obfuscationHit" } },
+            "budget_exhausted": { "type": "boolean" }
+          }
+        }
       ]
     }
   }

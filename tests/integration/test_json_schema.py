@@ -1,6 +1,6 @@
 """
 Validates real `--json` output against
-dumpex/schemas/dumpex-output-v1.0.schema.json -- typical DETECTED,
+dumpex/schemas/dumpex-output-v1.1.schema.json -- typical DETECTED,
 DETECTED+partial coverage, INCONCLUSIVE, and NOT_EVALUATED outputs from
 actual hunters (not hand-written fixture JSON), so a future change to any
 hunter's output shape is caught here rather than only being noticed by a
@@ -380,3 +380,57 @@ def test_schema_rejects_minimal_result_under_an_unknown_hunter_name(validator):
     doc = _doc_for({"some_new_hunter": {"status": "DETECTED", "score": 1}})
     with pytest.raises(jsonschema.ValidationError):
         validator.validate(doc)
+
+
+# ── obfuscationHunterResult (schema_version 1.1) actually constrains ──────
+# something -- these previously passed through additionalProperties: true
+# on the generic findingHunterResult completely unvalidated.
+
+def _minimal_valid_obfuscation_doc(hidden_pe_hit):
+    return _doc_for({"obfuscation": {
+        "status": "DETECTED", "score": 1, "max_score": 2,
+        "coverage_status": "complete", "verdict_level": "high",
+        "confidence": "high", "findings": [], "lead_count": 0, "review_priority": "high",
+        "hidden_pe": [hidden_pe_hit],
+    }})
+
+
+def test_schema_accepts_a_real_obfuscation_hit_shape(validator):
+    # A positive control for the two negative tests below: this exact
+    # shape (Hit.to_dict()'s real output) must validate cleanly.
+    valid_hit = {
+        "layer": "gzip",
+        "region": {"BaseAddress": 0x10000, "AllocationBase": 0x10000, "RegionSize": 0x1000,
+                   "State": "MEM_COMMIT", "Protect": "PAGE_READWRITE", "Type": "MEM_PRIVATE"},
+        "offset": 16, "decoded": "4d5a9000", "cls": {"type": "pe", "is_pe": True,
+        "is_shellcode": False, "ioc_strings": []}, "complete": True,
+        "raw": None, "key": None, "key_offset": None,
+    }
+    _assert_valid(validator, _minimal_valid_obfuscation_doc(valid_hit))
+
+
+def test_schema_rejects_obfuscation_hit_with_unknown_extra_field(validator):
+    # additionalProperties: false on obfuscationHit -- a field that isn't
+    # part of Hit.to_dict()'s real shape must be rejected, not silently
+    # accepted the way the pre-1.1 schema accepted anything here.
+    bad_hit = {
+        "layer": "gzip", "region": None, "offset": 0, "decoded": "00",
+        "cls": {"type": "binary", "is_pe": False, "is_shellcode": False, "ioc_strings": []},
+        "complete": True, "raw": None, "key": None, "key_offset": None,
+        "totally_made_up_field": "should not be allowed",
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(_minimal_valid_obfuscation_doc(bad_hit))
+
+
+def test_schema_rejects_obfuscation_hit_missing_required_field(validator):
+    # `layer` is required on obfuscationHit -- omitting it must be caught,
+    # not silently pass as "some object" the way additionalProperties: true
+    # used to let through pre-1.1.
+    bad_hit = {
+        "region": None, "offset": 0, "decoded": "00",
+        "cls": {"type": "binary", "is_pe": False, "is_shellcode": False, "ioc_strings": []},
+        "complete": True,
+    }
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(_minimal_valid_obfuscation_doc(bad_hit))

@@ -29,7 +29,7 @@ def test_meta_top_level_shape():
         os.unlink(path)
 
     meta = doc["meta"]
-    assert meta["schema_version"] == "1.0"
+    assert meta["schema_version"] == "1.1"
     assert meta["tool"]["name"] == "dumpex"
     assert meta["execution"]["command"] == "modules"
     assert meta["evidence"]["file_name"] == os.path.basename(path)

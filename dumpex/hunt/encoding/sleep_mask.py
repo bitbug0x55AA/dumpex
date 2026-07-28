@@ -4,45 +4,20 @@ Layer 0 of dumpex.hunt.encoding — CS Sleep Mask XOR decode.
 Algorithm adapted from cs-analyze-processdump.py by Didier Stevens
 (public domain — https://DidierStevens.com).
 
-Split out of encoding.py verbatim (see the package-split notes in
-dumpex/hunt/encoding.py's own docstring) — no behavior change. Imported
-back into dumpex.hunt.encoding, which is still the only public entry
-point (_hunt_encoding).
+Returns a LayerResult, never prints, never decides score/status — see
+dumpex/hunt/encoding/models.py and dumpex/hunt/encoding/aggregate.py.
 """
 import struct
 
 from dumpex.core.memory import addr_to_module, prot_str
 from dumpex.hunt._coverage import CoverageTracker
-from dumpex.hunt._encoding.classification import _classify_decoded
-from dumpex.hunt._encoding.config import EncodingConfig
-
-# ── Sleep Mask tunables (mirroring cs-analyze-processdump.py defaults) ────
-SLEEP_MASK_KEY_SIZE        = 13        # XOR key length used by default CS sleep mask
-SLEEP_MASK_MIN_REPEAT      = 100       # key must repeat ≥ N times to be a candidate
-SLEEP_MASK_MAX_BYTE_FREQ   = 3         # reject if any single byte appears ≥ N times
-                                        # in the candidate key (monotonic key filter)
-SLEEP_MASK_MIN_ACBD        = 20.0      # min average consecutive byte difference
-                                        # (rejects keys like 01 02 03 … or 00 00 00)
-SLEEP_MASK_MAX_CANDIDATES  = 10        # max candidates to try per region
-SLEEP_MASK_REGION_MAX      = 10 * 1024 * 1024   # skip regions > 10 MB
-SLEEP_MASK_VALIDATE_SAMPLE = 2 * 1024 * 1024    # search only the first N bytes of
-                                        # each candidate x rotation combination for
-                                        # the validation marker before committing to
-                                        # a full-region decode. Unbounded, up to
-                                        # MAX_CANDIDATES x KEY_SIZE x REGION_MAX
-                                        # (10 x 13 x 10MB ~= 1.3GB) of XOR work is
-                                        # done per region; mirrors the same
-                                        # sample-then-full-decode pattern _scan_xor
-                                        # already uses (XOR_SAMPLE_SIZE).
-SLEEP_MASK_VALIDATION_MARKER = b'sha256\x00'    # always present in beacon memory
-SLEEP_MASK_MAX_WINDOWS      = 200_000  # hard cap on windows counted per region, across
-                                        # all key_size alignment offsets. Without this, a
-                                        # ~10MB region produces ~10M dict entries (one per
-                                        # non-overlapping window) — real sleep-mask keys
-                                        # repeat densely enough that even sampling well
-                                        # below that still surfaces them as the top
-                                        # candidate, so this bounds memory/CPU without
-                                        # meaningfully hurting detection.
+from dumpex.hunt.encoding.classification import _classify_decoded
+from dumpex.hunt.encoding.config import (
+    EncodingConfig, SLEEP_MASK_KEY_SIZE, SLEEP_MASK_MIN_REPEAT, SLEEP_MASK_MAX_BYTE_FREQ,
+    SLEEP_MASK_MIN_ACBD, SLEEP_MASK_MAX_CANDIDATES, SLEEP_MASK_MAX_WINDOWS,
+    SLEEP_MASK_REGION_MAX, SLEEP_MASK_VALIDATE_SAMPLE, SLEEP_MASK_VALIDATION_MARKER,
+)
+from dumpex.hunt.encoding.models import Hit, LayerResult
 
 
 def _sm_xor(data: bytes, key: bytes, offset: int) -> bytes:
@@ -250,11 +225,10 @@ def _sm_validate_and_decode(data: bytes, candidates: list,
     return confirmed
 
 
-def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig = None, budget=None) -> tuple:
+def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig = None, budget=None) -> LayerResult:
     """
-    Returns (hits, coverage). Layer 0: scan PAGE_READWRITE MEM_PRIVATE
-    regions for CS Sleep Mask XOR encoding and attempt key recovery +
-    decode.
+    Layer 0: scan PAGE_READWRITE MEM_PRIVATE regions for CS Sleep Mask
+    XOR encoding and attempt key recovery + decode.
 
     Target region characteristics:
       - State  : MEM_COMMIT
@@ -267,18 +241,13 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
     `coverage` (dumpex.hunt._coverage.CoverageTracker) distinguishes "0
     candidate regions existed" from "candidates existed but every one was
     too big / failed to read / short-read" — see CoverageTracker's own
-    docstring for why this layer's gap shape fits it directly rather than
-    hand-rolling the same four counters this function used to keep
-    separately.
+    docstring.
 
     `read_region` and `config` are passed in explicitly (rather than
     imported/read here) because dumpex.hunt.encoding's tests monkeypatch
     `encoding.read_region`/`encoding.SLEEP_MASK_*` directly; _hunt_encoding
     passes its own (possibly-patched) module-level values through on
-    every call, so this function always sees whatever the caller
-    currently has bound rather than this module's own separate constants
-    (see dumpex/hunt/_encoding/config.py). `config=None` defaults to this
-    module's own constants.
+    every call. `config=None` defaults to this module's own constants.
 
     `budget` (default None -- no cross-region bound, matching this
     function's behavior before this parameter existed) is the SAME
@@ -292,14 +261,10 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
     here, and threaded into _sm_recover_candidates/_sm_validate_and_decode
     so a single expensive region can't run unbounded either.
 
-    Returns list of:
-        {
-          'region'  : MinidumpMemoryInfo,
-          'key'     : bytes,          # recovered XOR key
-          'offset'  : int,            # key rotation offset that decoded correctly
-          'decoded' : bytes,          # fully decoded region content
-          'cls'     : dict,           # _classify_decoded() result
-        }
+    Returns a LayerResult whose hits are Hit objects carrying `key`
+    (recovered XOR key) and `key_offset` (rotation offset that decoded
+    correctly), in addition to the common region/offset/decoded/cls
+    fields.
     """
     if config is None:
         config = EncodingConfig(
@@ -355,12 +320,7 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
             validation_marker=config.sleep_mask_validation_marker, budget=budget)
         for key, offset, decoded in confirmed:
             cls = _classify_decoded(decoded)
-            hits.append({
-                'region':  r,
-                'key':     key,
-                'offset':  offset,
-                'decoded': decoded,
-                'cls':     cls,
-            })
+            hits.append(Hit(layer='sleep_mask', region=r, offset=0, decoded=decoded, cls=cls,
+                             complete=True, key=key, key_offset=offset))
 
-    return hits, coverage
+    return LayerResult(hits=hits, coverage=coverage)

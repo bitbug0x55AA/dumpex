@@ -15,6 +15,8 @@ from tests.fixtures.fakes import (Region, FakeStream, FakeMF, build_pe_header,
                                    IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ, mem_reader)
 
 import dumpex.hunt.encoding as encoding
+import dumpex.hunt.encoding.classification as classification
+import dumpex.hunt.encoding.decoding as decoding
 
 
 # ── _classify_decoded ──────────────────────────────────────────────────────
@@ -24,28 +26,28 @@ def test_classify_decoded_recognizes_valid_pe():
                                   "rawptr": 0x400, "rawsize": 0x200,
                                   "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
                                 size_of_image=0x2000, trailing_padding=0x300)
-    cls = encoding._classify_decoded(pe_bytes)
+    cls = classification._classify_decoded(pe_bytes)
     assert cls["type"] == "pe"
     assert cls["is_pe"] is True
 
 
 def test_classify_decoded_recognizes_shellcode_bootstrap():
     data = b'\xe8\x00\x00\x00\x00\x58' + b'\x90' * 100
-    cls = encoding._classify_decoded(data)
+    cls = classification._classify_decoded(data)
     assert cls["type"] == "shellcode"
     assert cls["is_shellcode"] is True
 
 
 def test_classify_decoded_finds_ioc_text():
     data = b"beacon check-in: http://185.220.101.5:8080/gate.php" + b" " * 50
-    cls = encoding._classify_decoded(data)
+    cls = classification._classify_decoded(data)
     assert cls["type"] == "ioc_text"
     assert cls["ioc_strings"]
 
 
 def test_classify_decoded_plain_text_has_no_ioc():
     data = b"the quick brown fox jumps over the lazy dog, nothing suspicious here at all" * 3
-    cls = encoding._classify_decoded(data)
+    cls = classification._classify_decoded(data)
     assert cls["type"] == "plaintext"
     assert cls["ioc_strings"] == []
     assert cls["is_pe"] is False
@@ -56,46 +58,46 @@ def test_classify_decoded_high_entropy_binary():
     import random
     random.seed(3)
     data = bytes(random.getrandbits(8) for _ in range(4096))
-    cls = encoding._classify_decoded(data)
+    cls = classification._classify_decoded(data)
     assert cls["type"] in ("high_entropy", "binary")
     assert cls["is_pe"] is False
 
 
 def test_classify_decoded_too_short_is_binary():
-    cls = encoding._classify_decoded(b'\x01\x02')
+    cls = classification._classify_decoded(b'\x01\x02')
     assert cls["type"] == "binary"
 
 
 # ── _is_plausible_ip ────────────────────────────────────────────────────────
 
 def test_is_plausible_ip_accepts_public_address():
-    assert encoding._is_plausible_ip("185.220.101.5") is True
-    assert encoding._is_plausible_ip("185.220.101.5:8080") is True
+    assert classification._is_plausible_ip("185.220.101.5") is True
+    assert classification._is_plausible_ip("185.220.101.5:8080") is True
 
 
 def test_is_plausible_ip_rejects_private_ranges():
-    assert encoding._is_plausible_ip("10.0.0.1") is False
-    assert encoding._is_plausible_ip("172.16.0.1") is False
-    assert encoding._is_plausible_ip("172.31.255.255") is False
-    assert encoding._is_plausible_ip("192.168.1.1") is False
-    assert encoding._is_plausible_ip("169.254.1.1") is False
-    assert encoding._is_plausible_ip("127.0.0.1") is False
-    assert encoding._is_plausible_ip("0.0.0.5") is False
+    assert classification._is_plausible_ip("10.0.0.1") is False
+    assert classification._is_plausible_ip("172.16.0.1") is False
+    assert classification._is_plausible_ip("172.31.255.255") is False
+    assert classification._is_plausible_ip("192.168.1.1") is False
+    assert classification._is_plausible_ip("169.254.1.1") is False
+    assert classification._is_plausible_ip("127.0.0.1") is False
+    assert classification._is_plausible_ip("0.0.0.5") is False
 
 
 def test_is_plausible_ip_rejects_malformed():
-    assert encoding._is_plausible_ip("not.an.ip.address") is False
-    assert encoding._is_plausible_ip("1.2.3") is False
-    assert encoding._is_plausible_ip("1.2.3.4.5") is False
-    assert encoding._is_plausible_ip("300.1.1.1") is False
-    assert encoding._is_plausible_ip("1.1.1.1") is False   # all octets < 10
+    assert classification._is_plausible_ip("not.an.ip.address") is False
+    assert classification._is_plausible_ip("1.2.3") is False
+    assert classification._is_plausible_ip("1.2.3.4.5") is False
+    assert classification._is_plausible_ip("300.1.1.1") is False
+    assert classification._is_plausible_ip("1.1.1.1") is False   # all octets < 10
 
 
 # ── _bounded_decompress ─────────────────────────────────────────────────────
 
 def test_bounded_decompress_normal_payload():
     payload = zlib.compress(b"hello world" * 100)
-    out, complete = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
+    out, complete = decoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
     assert out == b"hello world" * 100
     assert complete is True   # fully verified end-to-end (eof reached)
 
@@ -103,7 +105,7 @@ def test_bounded_decompress_normal_payload():
 def test_bounded_decompress_caps_oversized_output():
     huge = b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
     payload = zlib.compress(huge)
-    out, complete = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
+    out, complete = decoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
     assert len(out) <= encoding.DECOMPRESS_MAX_OUTPUT
     assert complete is False   # cap hit before eof -- never verified end-to-end
 
@@ -112,7 +114,7 @@ def test_bounded_decompress_raises_on_truncated_payload():
     payload = zlib.compress(b"hello world" * 100)
     truncated = payload[:len(payload) // 2]
     with pytest.raises(zlib.error):
-        encoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
+        decoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
 
 
 def test_bounded_decompress_raises_when_only_trailing_checksum_missing():
@@ -127,7 +129,7 @@ def test_bounded_decompress_raises_when_only_trailing_checksum_missing():
     payload = zlib.compress(pe_bytes)
     truncated = payload[:-1]
     with pytest.raises(zlib.error):
-        encoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
+        decoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
 
 
 def test_bounded_decompress_does_not_raise_when_output_cap_hit_on_valid_stream():
@@ -138,7 +140,7 @@ def test_bounded_decompress_does_not_raise_when_output_cap_hit_on_valid_stream()
     # callers must be able to tell this apart from a verified decode.
     huge = b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
     payload = zlib.compress(huge)
-    out, complete = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
+    out, complete = decoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
     assert len(out) == encoding.DECOMPRESS_MAX_OUTPUT
     assert complete is False
 
@@ -154,7 +156,7 @@ def test_bounded_decompress_incomplete_when_cap_hit_even_with_trailing_truncatio
     huge = b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
     payload = zlib.compress(huge)
     truncated = payload[:-1]
-    out, complete = encoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
+    out, complete = decoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
     assert len(out) == encoding.DECOMPRESS_MAX_OUTPUT
     assert complete is False
 

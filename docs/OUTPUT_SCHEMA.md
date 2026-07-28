@@ -26,7 +26,7 @@ result sections:
 ```json
 {
   "meta": {
-    "schema_version": "1.0",
+    "schema_version": "1.1",
     "tool": {
       "name": "dumpex",
       "version": "2.0.0"
@@ -150,7 +150,7 @@ instead and does not emit those four fields — only `status`, `score`,
 ## JSON Schema
 
 The formal contract for the document above is
-[`dumpex/schemas/dumpex-output-v1.0.schema.json`](../dumpex/schemas/dumpex-output-v1.0.schema.json)
+[`dumpex/schemas/dumpex-output-v1.1.schema.json`](../dumpex/schemas/dumpex-output-v1.1.schema.json)
 (JSON Schema, draft 2020-12). It ships inside the installed package — a
 consumer of `pip install dumpex` reaches it via
 `importlib.resources.files("dumpex.schemas")`, the same way
@@ -160,28 +160,35 @@ validates real hunter output (all seven hunters, both typical and edge-case
 verdicts) against this file on every test run, including the negative cases
 it must reject.
 
-Each entry under `hunt` is validated as one of two shapes: `findingHunterResult`
-(injection, hollowing, stomping, pipe, cs-beacon, obfuscation — and any
-future/renamed hunter, via the schema's `additionalProperties` fallback),
-which requires `confidence`/`findings`/`lead_count`/`review_priority` in
-addition to the fields common to both; or `yaraHunterResult` (the `yara` key
-specifically), which only requires the common fields since yara_hunt.py's
-own `matches`/`rules_hit` model never emits the other four. Both compose the
-same `hunterResultBase` (`status`/`score`/`coverage_status`/`verdict_level`
-plus the NOT_EVALUATED/INCONCLUSIVE cross-field invariants) via `allOf`.
+Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
+(injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
+hunter, via the schema's `additionalProperties` fallback), which requires
+`confidence`/`findings`/`lead_count`/`review_priority` in addition to the
+fields common to all three; `obfuscationHunterResult` (the `obfuscation`
+key specifically), a `findingHunterResult` that additionally formally
+types its own `sleep_mask`/`entropy`/`base64`/`xor`/`compressed`/
+`hidden_pe`/`hidden_shellcode` hit-list fields (schema_version 1.1 —
+these were entirely unvalidated before, passing through the generic
+shape's `additionalProperties: true`); or `yaraHunterResult` (the `yara`
+key specifically), which only requires the fields common to all three
+since yara_hunt.py's own `matches`/`rules_hit` model never emits
+`confidence`/`findings`/`lead_count`/`review_priority`. All three compose
+the same `hunterResultBase` (`status`/`score`/`coverage_status`/
+`verdict_level` plus the NOT_EVALUATED/INCONCLUSIVE cross-field
+invariants) via `allOf`.
 
 The standalone Windows EXE built by `.github/workflows/build.yml` does not
 read this file at runtime (nothing in the running tool validates its own
 output — only the test suite and external `--json` consumers do), so it is
 not collected into the frozen executable. It is instead uploaded as a
-separate `dumpex-output-v1.0.schema.json` file alongside `dumpex.exe` on
+separate `dumpex-output-v1.1.schema.json` file alongside `dumpex.exe` on
 each GitHub release, so an EXE-only install (no `pip install dumpex`, no
 source checkout) still has a way to get the canonical schema for that
 release.
 
 ### Versioning and breaking changes
 
-`meta.schema_version` (currently `"1.0"`) is the contract version, independent
+`meta.schema_version` (currently `"1.1"`) is the contract version, independent
 of the dumpex application version. The policy for changing the schema file:
 
 - **A new optional object field** — no version bump. `additionalProperties`

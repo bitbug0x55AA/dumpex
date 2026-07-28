@@ -2,30 +2,28 @@
 Layers 2-4 of dumpex.hunt.encoding — Base64, single-byte XOR brute-force,
 and GZIP/ZLIB decompression.
 
-Split out of encoding.py verbatim (see the package-split notes in
-dumpex/hunt/encoding.py's own docstring) — no behavior change. Imported
-back into dumpex.hunt.encoding, which is still the only public entry
-point (_hunt_encoding). Unlike sleep_mask.py/entropy.py, nothing here
-touches `read_region` — these functions all operate on an already-read
-`data: bytes` buffer, so no read_region threading is needed.
+`scan_decode_layers` is the entry point _hunt_encoding calls: it owns the
+per-region read loop (one shared read + coverage pass feeds all three
+sub-layers, since they all need the same region bytes) and returns a
+DecodeResult of standardized Hit objects. `_scan_base64`/`_scan_xor`/
+`_scan_compressed` below it are lower-level generators over an
+already-read `data: bytes` buffer -- kept as their own testable units
+(existing unit tests call them directly), yielding raw tuples rather
+than Hit objects; `scan_decode_layers` is what converts each yield into
+a Hit and applies the budget's take_hit() gate.
 """
 import re
 import zlib
 
+from dumpex.core.memory import addr_to_module, prot_str
 from dumpex.hunt._budget import ScanBudget
-from dumpex.hunt._encoding.classification import _IOC_PAT, _classify_decoded
-from dumpex.hunt._encoding.config import EncodingConfig
-
-B64_MIN_LEN               = 80                 # minimum Base64 string length
-XOR_SCAN_MAX              = 512 * 1024         # max region for single-byte XOR BF
-XOR_SAMPLE_SIZE           = 4096               # bytes sampled before full decode
-XOR_SCORE_MIN             = 0.68               # printable ratio to accept a key
-
-DECOMPRESS_MAX_OUTPUT = 8 * 1024 * 1024   # cap decompressed output per candidate; a small
-                                           # compressed blob can expand enormously (zip
-                                           # bomb), and input-size limits alone don't bound
-                                           # output size — 8MB is far more than needed to
-                                           # classify content (PE header, IOC strings, etc).
+from dumpex.hunt._coverage import CoverageTracker
+from dumpex.hunt.encoding.classification import _IOC_PAT, _classify_decoded
+from dumpex.hunt.encoding.config import (
+    EncodingConfig, B64_MIN_LEN, XOR_SCAN_MAX, XOR_SAMPLE_SIZE, XOR_SCORE_MIN,
+    DECOMPRESS_MAX_OUTPUT, DECODE_SCAN_MAX,
+)
+from dumpex.hunt.encoding.models import DecodeResult, Hit
 
 _B64_PAT = re.compile(
     rb'(?:[A-Za-z0-9+/]{4}){12,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?'
@@ -34,6 +32,18 @@ _B64_PAT = re.compile(
 
 _GZIP_SIG  = b'\x1f\x8b'
 _ZLIB_SIGS = (b'\x78\x9c', b'\x78\xda', b'\x78\x01', b'\x78\x5e')
+
+
+def _is_system_dll(module) -> bool:
+    """True if module is a Microsoft system DLL under System32/SysWOW64/WinSxS."""
+    if module is None:
+        return False
+    path = (module.name or "").replace("\\", "/").lower()
+    return (
+        "/windows/system32/"  in path or
+        "/windows/syswow64/" in path or
+        "/windows/winsxs/"   in path
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -48,11 +58,6 @@ def _scan_base64(data: bytes, region_base: int, budget: ScanBudget, config: Enco
     decide whether to keep/retain a candidate: that's the consumer's call
     via budget.take_hit(), the single point where hit-count and
     retained-bytes limits are enforced together (see _budget.py).
-
-    `config` (default None -> this module's own B64_MIN_LEN) lets
-    _hunt_encoding thread through its own live `encoding.B64_MIN_LEN`
-    value rather than this module's separate copy — see
-    dumpex/hunt/_encoding/config.py.
     """
     b64_min_len = config.b64_min_len if config is not None else B64_MIN_LEN
     for m in _B64_PAT.finditer(data):
@@ -122,11 +127,6 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: Encodin
     # the other layers once a candidate actually decodes. It still polls
     # the budget periodically (every 16 keys) so an expired deadline stops
     # the loop promptly instead of always running all 255 keys first.
-    #
-    # `config` (default None -> this module's own XOR_SAMPLE_SIZE/
-    # XOR_SCORE_MIN) lets _hunt_encoding thread through its own live
-    # values rather than this module's separate copies — see
-    # dumpex/hunt/_encoding/config.py.
     xor_sample_size = config.xor_sample_size if config is not None else XOR_SAMPLE_SIZE
     xor_score_min   = config.xor_score_min   if config is not None else XOR_SCORE_MIN
     sample = data[:xor_sample_size]
@@ -172,7 +172,7 @@ def _bounded_decompress(payload: bytes, wbits: int, max_output: int = None) -> t
     `max_output` (default None -> this module's own DECOMPRESS_MAX_OUTPUT)
     lets _hunt_encoding thread through its own live
     `encoding.DECOMPRESS_MAX_OUTPUT` value rather than this module's
-    separate copy — see dumpex/hunt/_encoding/config.py.
+    separate copy.
 
     max_length also means a merely truncated/corrupted stream can return
     partial output with no exception raised at all: decompressobj() doesn't
@@ -185,13 +185,13 @@ def _bounded_decompress(payload: bytes, wbits: int, max_output: int = None) -> t
     genuinely truncated ones raise).
 
     That still leaves a real gap for output AT the cap: a stream large
-    enough that decompression hits DECOMPRESS_MAX_OUTPUT before the input
-    is exhausted looks identical here whether the remaining, never-fed
-    compressed bytes are intact or corrupted/truncated -- the checksum
-    covering the FULL stream is never reached either way, by design (that's
-    the whole point of capping). Returning `(out, complete)` lets callers
-    tell "verified end-to-end" (complete=True, d.eof) apart from "valid as
-    far as examined, but truncation beyond the cap can't be ruled out"
+    enough that decompression hits the cap before the input is exhausted
+    looks identical here whether the remaining, never-fed compressed bytes
+    are intact or corrupted/truncated -- the checksum covering the FULL
+    stream is never reached either way, by design (that's the whole point
+    of capping). Returning `(out, complete)` lets callers tell "verified
+    end-to-end" (complete=True, d.eof) apart from "valid as far as
+    examined, but truncation beyond the cap can't be ruled out"
     (complete=False) and downgrade confidence accordingly instead of
     treating both the same.
     """
@@ -262,3 +262,76 @@ def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget, config: 
             except Exception:
                 pass
             start = idx + 1
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Combined entry point — the per-region read loop that used to live inline
+# in _hunt_encoding. Feeds all three sub-layers from one shared region read.
+# ══════════════════════════════════════════════════════════════════════════
+
+def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig, budget: ScanBudget) -> DecodeResult:
+    """
+    Layers 2-4 combined: reads each eligible region ONCE and feeds Base64,
+    single-byte XOR, and GZIP/ZLIB decoding from that one read, applying
+    the shared budget's take_hit() gate to each candidate before it's
+    kept. Returns a DecodeResult of standardized Hit lists (one per
+    sub-layer) plus the shared region-level CoverageTracker.
+    """
+    base64_hits, xor_hits, compressed_hits = [], [], []
+    coverage = CoverageTracker()
+
+    for r in regions:
+        if budget.exhausted():
+            break
+        if prot_str(r.State) != 'MEM_COMMIT':
+            continue
+        if prot_str(r.Type) not in ('MEM_PRIVATE', 'MEM_IMAGE'):
+            continue
+        mod = addr_to_module(r.BaseAddress, modules)
+        if prot_str(r.Type) == 'MEM_IMAGE' and _is_system_dll(mod):
+            continue
+        if r.RegionSize > config.decode_scan_max:
+            coverage.note_skipped_oversize()
+            continue
+        try:
+            data = read_region(mf, r.BaseAddress, r.RegionSize)
+        except Exception:
+            coverage.note_read_failed()
+            continue
+        if len(data) < r.RegionSize:
+            coverage.note_short_read()
+            if not data:
+                continue
+        coverage.note_scanned()
+
+        for off, raw, decoded, cls in _scan_base64(data, r.BaseAddress, budget, config):
+            # take_hit() is the ONLY gate for whether this candidate is
+            # actually kept — its return value MUST be checked (unlike the
+            # old note_hit(), whose result could be silently ignored while
+            # still appending the item regardless).
+            if not budget.take_hit(len(decoded)):
+                break
+            base64_hits.append(Hit(layer='base64', region=r, offset=off, decoded=decoded, cls=cls,
+                                    complete=True, raw=raw))
+
+        if prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= config.xor_scan_max:
+            for key, decoded, cls in _scan_xor(data, r.BaseAddress, budget, config):
+                if not budget.take_hit(len(decoded)):
+                    break
+                xor_hits.append(Hit(layer='xor', region=r, offset=0, decoded=decoded, cls=cls,
+                                     complete=True, key=key))
+
+        if not budget.exhausted():
+            for off, algo, decoded, cls, complete in _scan_compressed(data, r.BaseAddress, budget, config):
+                if not budget.take_hit(len(decoded)):
+                    break
+                # complete=False means decompression hit the output cap
+                # before the stream's own end-of-stream/checksum was
+                # reached -- classification is based on a verified-so-far
+                # PREFIX, not a fully end-to-end-validated stream (see
+                # _bounded_decompress). Downstream confidence must reflect
+                # that, not treat it identically to a complete decode.
+                compressed_hits.append(Hit(layer=algo, region=r, offset=off, decoded=decoded, cls=cls,
+                                            complete=complete))
+
+    return DecodeResult(base64=base64_hits, xor=xor_hits, compressed=compressed_hits, coverage=coverage)

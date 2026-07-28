@@ -76,10 +76,19 @@ class StructuredOutput:
     """
 
     TOOL           = "dumpex"
-    SCHEMA_VERSION = "1.0"   # meta document shape — bumped independently of
+    SCHEMA_VERSION = "1.1"   # meta document shape — bumped independently of
                               # the tool's own version (dumpex.__version__ /
                               # importlib.metadata), which changes far more
                               # often than the shape a consumer parses.
+                              # 1.0 -> 1.1: obfuscation's sleep_mask/entropy/
+                              # base64/xor/compressed/hidden_pe/hidden_shellcode
+                              # hit shape changed incompatibly (sleep_mask's
+                              # `offset` used to BE the XOR key rotation value;
+                              # it is now always 0, with rotation moved to a
+                              # new `key_offset` field) and is formally defined
+                              # in the schema for the first time -- see
+                              # dumpex/schemas/dumpex-output-v1.1.schema.json
+                              # and docs/OUTPUT_SCHEMA.md's versioning policy.
 
     def __init__(self, dump_path: str, mf=None, *, command: str = None,
                  options: dict = None, case_id: str = None, analyst: str = None,
@@ -533,9 +542,11 @@ class StructuredOutput:
 
                 # Injection findings. Guarded by ttp (not just dict-key
                 # presence): "hidden_pe_validated" is injection-specific —
-                # obfuscation's "hidden_pe" key has a different tuple shape
-                # entirely, so keying off ttp avoids unpacking the wrong
-                # shape from the wrong TTP.
+                # obfuscation's "hidden_pe" key holds a differently-shaped
+                # dict (dumpex.hunt.encoding.models.Hit.to_dict(): layer/
+                # region/offset/decoded/cls/..., not region/pe like this
+                # one), so keying off ttp avoids reading the wrong shape
+                # from the wrong TTP.
                 if ttp == "injection":
                     for r in findings.get("rwx", []):
                         fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
@@ -588,33 +599,45 @@ class StructuredOutput:
                             f"live_rip={'yes' if m.get('rip_hit') else 'no'}; "
                             f"disk_diff_match={disk_diff['match'] if disk_diff else 'n/a'}"))
 
-                # Obfuscation (encoding.py) findings
+                # Obfuscation (dumpex/hunt/encoding/ package) findings.
+                # sleep_mask/entropy/hidden_pe/hidden_shellcode hold plain
+                # dicts -- the output of dumpex.hunt.encoding.models.Hit/
+                # EntropyHit.to_dict(), NOT the Hit/EntropyHit objects
+                # themselves. aggregate.py deliberately converts before
+                # returning `findings`, because _json_safe below has no
+                # dataclass case and would otherwise fall back to
+                # str(obj) for the raw object -- embedding a live memory
+                # address and the full undecoded `decoded` bytes into the
+                # JSON output. `region` is itself a nested dict
+                # (BaseAddress/RegionSize/State/Protect/Type) for the same
+                # reason -- see models._region_to_dict.
                 if ttp == "obfuscation":
                     for hit in findings.get("sleep_mask", []):
                         r  = hit.get("region")
-                        va = r.BaseAddress if r else 0
+                        va = r["BaseAddress"] if r else 0
                         fo = (va_to_file_offset(self._mf, va) if self._mf and va else None)
                         key = hit.get("key")
                         key_str = key.hex() if isinstance(key, (bytes, bytearray)) else str(key)
                         findings_rows.append(_blank_row(
                             "obfuscation_sleep_mask_confirmed", va, fo, f"key=0x{key_str}"))
-                    for r, ent, threshold in findings.get("entropy", []):
-                        fo = (va_to_file_offset(self._mf, r.BaseAddress) if self._mf else None)
+                    for hit in findings.get("entropy", []):
+                        va = hit["region"]["BaseAddress"]
+                        fo = (va_to_file_offset(self._mf, va) if self._mf else None)
                         findings_rows.append(_blank_row(
-                            "obfuscation_entropy_observation", r.BaseAddress, fo,
-                            f"entropy={ent:.3f}; threshold={threshold}"))
-                    for enc, r, off, decoded in findings.get("hidden_pe", []):
-                        abs_va = r.BaseAddress + off
+                            "obfuscation_entropy_observation", va, fo,
+                            f"entropy={hit['entropy']:.3f}; threshold={hit['threshold']}"))
+                    for hit in findings.get("hidden_pe", []):
+                        abs_va = hit["region"]["BaseAddress"] + hit["offset"]
                         fo = (va_to_file_offset(self._mf, abs_va) if self._mf else None)
                         findings_rows.append(_blank_row(
                             "obfuscation_structural_pe_payload", abs_va, fo,
-                            f"encoding={enc}; decoded_len={len(decoded)}"))
-                    for enc, r, off, decoded in findings.get("hidden_shellcode", []):
-                        abs_va = r.BaseAddress + off
+                            f"encoding={hit['layer']}; decoded_len={len(hit['decoded'])}"))
+                    for hit in findings.get("hidden_shellcode", []):
+                        abs_va = hit["region"]["BaseAddress"] + hit["offset"]
                         fo = (va_to_file_offset(self._mf, abs_va) if self._mf else None)
                         findings_rows.append(_blank_row(
                             "obfuscation_structural_shellcode_payload", abs_va, fo,
-                            f"encoding={enc}; decoded_len={len(decoded)}"))
+                            f"encoding={hit['layer']}; decoded_len={len(hit['decoded'])}"))
 
                 # Pipe findings
                 for hc in findings.get("handle_pipes", []):

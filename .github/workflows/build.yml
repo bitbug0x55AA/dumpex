@@ -65,8 +65,8 @@ jobs:
         # ships silently.
         shell: pwsh
         run: |
-          python -c "import json; json.load(open('dumpex/schemas/dumpex-output-v1.0.schema.json', encoding='utf-8'))"
-          Copy-Item dumpex/schemas/dumpex-output-v1.0.schema.json dist/dumpex-output-v1.0.schema.json
+          python -c "import json; json.load(open('dumpex/schemas/dumpex-output-v1.1.schema.json', encoding='utf-8'))"
+          Copy-Item dumpex/schemas/dumpex-output-v1.1.schema.json dist/dumpex-output-v1.1.schema.json
 
       - name: Create Release and Upload EXE
         uses: softprops/action-gh-release@v2
@@ -76,4 +76,4 @@ jobs:
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
             dist/dumpex.exe
-            dist/dumpex-output-v1.0.schema.json
+            dist/dumpex-output-v1.1.schema.json

@@ -16,6 +16,7 @@ why.
 from tests.fixtures.fakes import Region, FakeStream, FakeMF, mem_reader
 
 import dumpex.hunt.encoding as encoding
+import dumpex.hunt.encoding.sleep_mask as sleep_mask
 
 # A 13-byte (SLEEP_MASK_KEY_SIZE) key with high average-consecutive-byte-
 # difference (>= SLEEP_MASK_MIN_ACBD) and no byte repeated >= SLEEP_MASK_
@@ -31,7 +32,7 @@ def _sleep_masked_region(key=_KEY, n_key_blocks=150, marker_offset=500,
     if include_marker:
         plaintext[marker_offset:marker_offset + len(_MARKER)] = _MARKER
     plaintext = bytes(plaintext)
-    encoded = encoding._sm_xor(plaintext, key, 0)
+    encoded = sleep_mask._sm_xor(plaintext, key, 0)
     return plaintext, encoded
 
 
@@ -39,7 +40,7 @@ def _sleep_masked_region(key=_KEY, n_key_blocks=150, marker_offset=500,
 
 def test_recover_candidates_finds_the_repeating_key():
     _, encoded = _sleep_masked_region()
-    candidates = encoding._sm_recover_candidates(encoded)
+    candidates = sleep_mask._sm_recover_candidates(encoded)
     assert candidates, "expected at least one candidate key"
     keys = [k for k, _count in candidates]
     assert _KEY in keys
@@ -47,8 +48,8 @@ def test_recover_candidates_finds_the_repeating_key():
 
 def test_validate_and_decode_confirms_marker_and_recovers_plaintext():
     plaintext, encoded = _sleep_masked_region()
-    candidates = encoding._sm_recover_candidates(encoded)
-    confirmed = encoding._sm_validate_and_decode(encoded, candidates)
+    candidates = sleep_mask._sm_recover_candidates(encoded)
+    confirmed = sleep_mask._sm_validate_and_decode(encoded, candidates)
     assert len(confirmed) == 1
     key, offset, decoded = confirmed[0]
     assert key == _KEY
@@ -62,7 +63,7 @@ def test_recover_candidates_rejects_monotonic_key():
     # -- either way it must not be recovered as a plausible sleep-mask key.
     monotonic_key = bytes(range(0, 13))   # diffs of 1 each -> ACBD == 1.0
     _, encoded = _sleep_masked_region(key=monotonic_key)
-    candidates = encoding._sm_recover_candidates(encoded)
+    candidates = sleep_mask._sm_recover_candidates(encoded)
     assert candidates == []
 
 
@@ -72,9 +73,9 @@ def test_validate_and_decode_rejects_candidate_with_no_marker():
     # must not be confirmed (a repeating pattern alone is not proof this
     # is beacon memory).
     _, encoded = _sleep_masked_region(include_marker=False)
-    candidates = encoding._sm_recover_candidates(encoded)
+    candidates = sleep_mask._sm_recover_candidates(encoded)
     assert candidates   # the repeating key IS still recoverable structurally
-    confirmed = encoding._sm_validate_and_decode(encoded, candidates)
+    confirmed = sleep_mask._sm_validate_and_decode(encoded, candidates)
     assert confirmed == []
 
 

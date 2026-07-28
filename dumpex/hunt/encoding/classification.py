@@ -1,19 +1,16 @@
 """
-Shared classifier for decoded/decompressed content — used by every layer
-(sleep_mask, decoders) to answer "what IS this data, once decoded":
+Shared classifier for decoded/decompressed content — used by every
+content-producing layer (sleep_mask, decoding) to answer "what IS this
+data, once decoded":
   - MZ + PE\\x00\\x00     → PE payload
   - call-$+5 bootstrap    → likely shellcode
   - printable > 85 %      → IOC string scan (IP / URL / pipe names)
   - else                  → hex prefix reported
-
-Split out of encoding.py verbatim — no behavior change. Imported back
-into dumpex.hunt.encoding, which is still the only public entry point
-(_hunt_encoding).
 """
 import re
 
 from dumpex.core.pe_utils import parse_pe_header
-from dumpex.hunt._encoding.entropy import _shannon_entropy
+from dumpex.hunt.encoding.entropy import _shannon_entropy
 
 # IOC pattern for plaintext classification
 _IOC_PAT = re.compile(

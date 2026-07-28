@@ -4,7 +4,7 @@ and cross-layer partial-failure combinations -- a scan-budget exhaustion
 or a single layer's read failure must show up as coverage_status=partial/
 INCONCLUSIVE with a specific reason, and must never silently suppress a
 detection an OTHER layer still found (DETECTED + partial must be allowed
-to coexist, matching dumpex/schemas/dumpex-output-v1.0.schema.json's own
+to coexist, matching dumpex/schemas/dumpex-output-v1.1.schema.json's own
 DETECTED+partial invariant).
 """
 import base64
@@ -107,11 +107,11 @@ def test_retained_bytes_budget_limits_hits(monkeypatch):
 
 
 # ── monkeypatching an encoding.* tunable must actually change behavior ────
-# (the _encoding/ package split re-exports these constants into encoding.py,
-# but decoders.py/entropy.py/sleep_mask.py have their OWN separate bindings
-# of the same name -- without explicit EncodingConfig threading,
-# `encoding.B64_MIN_LEN = X` would silently stop affecting _scan_base64's
-# actual behavior. See dumpex/hunt/_encoding/config.py.)
+# (encoding/__init__.py re-exports these constants for read/monkeypatch
+# access, but decoding.py/entropy.py/sleep_mask.py each have their OWN
+# separate binding of the same name -- without explicit EncodingConfig
+# threading, `encoding.B64_MIN_LEN = X` would silently stop affecting
+# _scan_base64's actual behavior. See dumpex/hunt/encoding/config.py.)
 
 def test_monkeypatched_b64_min_len_actually_changes_behavior(monkeypatch):
     region_base = 0x650000

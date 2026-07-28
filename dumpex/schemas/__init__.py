@@ -14,5 +14,5 @@ def schema_path():
     """Path to the packaged schema file, usable as a context manager
     (works whether the package is on disk or inside a zipped wheel)."""
     return resources.as_file(
-        resources.files(__name__).joinpath("dumpex-output-v1.0.schema.json")
+        resources.files(__name__).joinpath("dumpex-output-v1.1.schema.json")
     )
