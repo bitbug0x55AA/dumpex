@@ -13,8 +13,8 @@ Detection layers (applied per memory region):
   Layer 1: Shannon entropy scan  — catches all encoding schemes including custom
                                    crypto, RC4, AES blobs, multi-byte XOR, etc.
 
-  Layer 2: Base64 detection      — standard + URL-safe; minimum 48 chars (36
-                                   decoded bytes)
+  Layer 2: Base64 detection      — standard + URL-safe; minimum 80 chars (60
+                                   decoded bytes) — see B64_MIN_LEN
 
   Layer 3: XOR single-byte BF    — MEM_PRIVATE regions ≤ 512 KB only;
                                    sample-first heuristic to avoid O(n×255)
@@ -30,15 +30,54 @@ All decoded/decompressed content goes through a shared classifier:
 
 Address semantics: every hit reports VA (process) + .dmp file offset,
 consistent with the rest of Dumpex.
+
+This file used to hold all five layers' implementations directly; each
+layer's own logic now lives in dumpex/hunt/_encoding/ instead
+(classification.py, entropy.py, sleep_mask.py, decoders.py, config.py —
+see that package's own __init__.py). No specific line-count comparison
+here on purpose — `wc -l` this file and `git log` for the actual before/
+after if you need the number; a hardcoded count in a comment just goes
+stale the next time either file changes size.
+
+The ONLY stable contract this split preserves is `_hunt_encoding` itself
+(the public entry point imported by dumpex/hunt/__init__.py): same
+signature, same behavior, same JSON output for the same input. Verified
+during development via this file's own regression test suite (see
+tests/hunt/test_encoding*.py, tests/integration/test_json_schema.py,
+tests/perf/test_benchmarks.py) plus ad hoc before/after output diffing
+that was NOT committed as a repo fixture — there is no standing
+golden-snapshot test here, only the ordinary regression tests above; if
+you need snapshot-style diffing again, treat it as a one-off tool, not an
+existing asset. Every constant is still re-exported so
+`import dumpex.hunt.encoding as encoding; encoding.X` reads the current
+value for any X that lived here before. That is NOT the same claim as
+"every private helper's call
+signature is unchanged" — it explicitly is not: _scan_sleep_mask and
+_scan_entropy, in particular, gained new required parameters
+(`read_region`, and both now also take `config`) that a direct call with
+the OLD argument list would no longer satisfy. These were never a public
+contract (leading underscore, no caller outside this package), so that
+break is deliberate and in scope for this split; only _hunt_encoding's
+own contract is guaranteed.
+
+Re-exporting a name is NOT enough by itself to keep monkeypatching
+working, though: `encoding.B64_MIN_LEN = 999` only rebinds THIS module's
+copy of that name -- decoders.py's own separate B64_MIN_LEN binding never
+sees it, so _scan_base64's behavior wouldn't actually change (see
+dumpex/hunt/_encoding/config.py for the full explanation, and its own
+history for why this was initially missed). Every tunable that affects a
+layer's actual behavior is therefore threaded through explicitly instead
+of read as a bare module constant inside each layer: `read_region` as
+its own parameter, and every other tunable (B64_MIN_LEN, XOR_*,
+ENTROPY_*, SLEEP_MASK_*, DECOMPRESS_MAX_OUTPUT) bundled into one
+`EncodingConfig`, built here from THIS module's own (re-exported, still
+monkeypatchable) globals and passed into every layer. `_hunt_encoding`
+passes through whatever its OWN module-level values currently are, on
+every call -- so `encoding.read_region = ...` / `encoding.B64_MIN_LEN =
+...` style overrides set before calling `_hunt_encoding()` still work.
 """
 
-import re
-import math
 import time
-import zlib
-import struct
-import os
-from collections import Counter
 from minidump.minidumpfile import MinidumpFile
 
 from dumpex.ui.colors   import RED, GREEN, YELLOW, DIM, BOLD
@@ -47,7 +86,6 @@ from dumpex.core.memory import (
     get_modules, get_memory_regions, addr_to_module,
     va_to_file_offset, prot_str, read_region,
 )
-from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._ui    import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._coverage import derive_status, derive_coverage_status, CoverageTracker
@@ -56,20 +94,39 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
     verdict_level, lead_count, review_priority, leads_suffix)
 
+# ── Re-exports: every name previously defined directly in this file, now
+# implemented in dumpex/hunt/_encoding/*. Kept importable as encoding.X for
+# existing callers/tests (import dumpex.hunt.encoding as encoding). ────────
+from dumpex.hunt._encoding.config import EncodingConfig
+from dumpex.hunt._encoding.classification import (
+    _IOC_PAT, _is_plausible_ip, _classify_decoded, _structural_note,
+)
+from dumpex.hunt._encoding.entropy import (
+    ENTROPY_PRIVATE_THRESHOLD, ENTROPY_RWX_THRESHOLD, ENTROPY_SCAN_MAX,
+    _shannon_entropy, _scan_entropy,
+)
+from dumpex.hunt._encoding.sleep_mask import (
+    SLEEP_MASK_KEY_SIZE, SLEEP_MASK_MIN_REPEAT, SLEEP_MASK_MAX_BYTE_FREQ,
+    SLEEP_MASK_MIN_ACBD, SLEEP_MASK_MAX_CANDIDATES, SLEEP_MASK_REGION_MAX,
+    SLEEP_MASK_VALIDATE_SAMPLE, SLEEP_MASK_VALIDATION_MARKER, SLEEP_MASK_MAX_WINDOWS,
+    _sm_xor, _sm_key_stats, _sm_normalize_key, _sm_avg_consec_diff,
+    _sm_recover_candidates, _sm_validate_and_decode, _scan_sleep_mask,
+)
+from dumpex.hunt._encoding.decoders import (
+    B64_MIN_LEN, XOR_SCAN_MAX, XOR_SAMPLE_SIZE, XOR_SCORE_MIN, DECOMPRESS_MAX_OUTPUT,
+    _B64_PAT, _GZIP_SIG, _ZLIB_SIGS,
+    _scan_base64, _xor_table, _score_xor_key, _scan_xor,
+    _bounded_decompress, _scan_compressed,
+)
+
 # score -> verdict_level, owned by this hunter (see _finding.verdict_level).
 # No "3": this hunter's max score is 2 (confirmed sleep-mask decode and/or
 # a validated PE payload — no third independent structural signal).
 _VERDICT_LEVEL_BY_SCORE = {1: "likely", 2: "high"}
 
-# ── Tunables ──────────────────────────────────────────────────────────────
-ENTROPY_PRIVATE_THRESHOLD = 7.2   # MEM_PRIVATE: likely encrypted / packed
-ENTROPY_RWX_THRESHOLD     = 6.5   # MEM_PRIVATE + RWX: lower bar (combo is critical)
-ENTROPY_SCAN_MAX          = 10 * 1024 * 1024   # entropy scan: skip regions > 10 MB
-DECODE_SCAN_MAX           =  2 * 1024 * 1024   # Base64 / XOR / GZIP: skip > 2 MB
-XOR_SCAN_MAX              = 512 * 1024         # max region for single-byte XOR BF
-XOR_SAMPLE_SIZE           = 4096               # bytes sampled before full decode
-XOR_SCORE_MIN             = 0.68               # printable ratio to accept a key
-B64_MIN_LEN               = 80                 # minimum Base64 string length
+# ── Tunables (kept here: only _hunt_encoding itself reads these, to build
+# the shared decode budget below — no submodule needs them) ────────────────
+DECODE_SCAN_MAX = 2 * 1024 * 1024   # Base64 / XOR / GZIP: skip > 2 MB
 
 # Layers 2 (Base64) and 4 (GZIP/ZLIB) share ONE ScanBudget across the whole
 # hunt (all regions combined) rather than each region getting its own
@@ -81,41 +138,9 @@ ENCODING_BUDGET_MAX_ATTEMPTS  = 2000              # total decode/decompress
 ENCODING_BUDGET_MAX_RETAINED  = 32 * 1024 * 1024  # cumulative decoded bytes
                                                    # kept in findings, whole hunt
 ENCODING_BUDGET_MAX_HITS      = 500               # cumulative hits retained
-ENCODING_BUDGET_TIME_SECONDS  = 60.0              # wall-clock cap, layers 2-4 combined
-
-# ── Sleep Mask tunables (mirroring cs-analyze-processdump.py defaults) ────
-SLEEP_MASK_KEY_SIZE        = 13        # XOR key length used by default CS sleep mask
-SLEEP_MASK_MIN_REPEAT      = 100       # key must repeat ≥ N times to be a candidate
-SLEEP_MASK_MAX_BYTE_FREQ   = 3         # reject if any single byte appears ≥ N times
-                                        # in the candidate key (monotonic key filter)
-SLEEP_MASK_MIN_ACBD        = 20.0      # min average consecutive byte difference
-                                        # (rejects keys like 01 02 03 … or 00 00 00)
-SLEEP_MASK_MAX_CANDIDATES  = 10        # max candidates to try per region
-SLEEP_MASK_REGION_MAX      = 10 * 1024 * 1024   # skip regions > 10 MB
-SLEEP_MASK_VALIDATE_SAMPLE = 2 * 1024 * 1024    # search only the first N bytes of
-                                        # each candidate x rotation combination for
-                                        # the validation marker before committing to
-                                        # a full-region decode. Unbounded, up to
-                                        # MAX_CANDIDATES x KEY_SIZE x REGION_MAX
-                                        # (10 x 13 x 10MB ~= 1.3GB) of XOR work is
-                                        # done per region; mirrors the same
-                                        # sample-then-full-decode pattern _scan_xor
-                                        # already uses (XOR_SAMPLE_SIZE).
-SLEEP_MASK_VALIDATION_MARKER = b'sha256\x00'    # always present in beacon memory
-SLEEP_MASK_MAX_WINDOWS      = 200_000  # hard cap on windows counted per region, across
-                                        # all key_size alignment offsets. Without this, a
-                                        # ~10MB region produces ~10M dict entries (one per
-                                        # non-overlapping window) — real sleep-mask keys
-                                        # repeat densely enough that even sampling well
-                                        # below that still surfaces them as the top
-                                        # candidate, so this bounds memory/CPU without
-                                        # meaningfully hurting detection.
-
-DECOMPRESS_MAX_OUTPUT = 8 * 1024 * 1024   # cap decompressed output per candidate; a small
-                                           # compressed blob can expand enormously (zip
-                                           # bomb), and input-size limits alone don't bound
-                                           # output size — 8MB is far more than needed to
-                                           # classify content (PE header, IOC strings, etc).
+ENCODING_BUDGET_TIME_SECONDS  = 60.0              # wall-clock cap, layers 0 and 2-4 combined
+                                                   # (Layer 0 now shares this deadline too --
+                                                   # see decode_budget's construction below)
 
 
 def _is_system_dll(module) -> bool:
@@ -128,634 +153,6 @@ def _is_system_dll(module) -> bool:
         "/windows/syswow64/" in path or
         "/windows/winsxs/"   in path
     )
-
-# IOC pattern for plaintext classification
-_IOC_PAT = re.compile(
-    r'https?://\S{4,}'
-    r'|\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d{2,5})?'
-    r'|\\pipe\\[^\s\x00]+'
-    r'|(?:cmd|powershell|mshta|wscript)\.exe',
-    re.IGNORECASE,
-)
-
-def _is_plausible_ip(ip_str: str) -> bool:
-    host = ip_str.split(':')[0]
-    parts = host.split('.')
-    if len(parts) != 4:
-        return False
-    try:
-        octets = [int(p) for p in parts]
-    except ValueError:
-        return False
-    if not all(0 <= o <= 255 for o in octets):
-        return False
-    if all(o < 10 for o in octets):
-        return False
-    if octets[0] in (0, 127):
-        return False
-    if octets[0] == 169 and octets[1] == 254:
-        return False
-    if octets[0] == 10:
-        return False
-    if octets[0] == 172 and 16 <= octets[1] <= 31:
-        return False
-    if octets[0] == 192 and octets[1] == 168:
-        return False
-    return True
-
-
-_B64_PAT = re.compile(
-    rb'(?:[A-Za-z0-9+/]{4}){12,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?'
-    rb'|(?:[A-Za-z0-9\-_]{4}){12,}(?:[A-Za-z0-9\-_]{2}==|[A-Za-z0-9\-_]{3}=)?'
-)
-
-_GZIP_SIG  = b'\x1f\x8b'
-_ZLIB_SIGS = (b'\x78\x9c', b'\x78\xda', b'\x78\x01', b'\x78\x5e')
-
-
-# ── Shared classifier ─────────────────────────────────────────────────────
-
-def _shannon_entropy(data: bytes) -> float:
-    if not data:
-        return 0.0
-    counts = Counter(data)
-    n = len(data)
-    return -sum(c / n * math.log2(c / n) for c in counts.values())
-
-
-def _classify_decoded(data: bytes) -> dict:
-    result = {
-        'type': 'binary',
-        'is_pe': False,
-        'is_shellcode': False,
-        'ioc_strings': [],
-        'hex_prefix': data[:16].hex() if data else '',
-        'entropy': _shannon_entropy(data[:4096]),
-    }
-    if len(data) < 4:
-        return result
-
-    if data[:2] == b'MZ':
-        pe = parse_pe_header(data)
-        if pe['valid']:
-            result.update({'type': 'pe', 'is_pe': True, 'pe_info': pe})
-            return result
-
-    if data[:6] in (b'\xe8\x00\x00\x00\x00\x58',
-                    b'\xe8\x00\x00\x00\x00\x59',
-                    b'\xe8\x00\x00\x00\x00\x5b',
-                    b'\xe8\x00\x00\x00\x00\x5e'):
-        result.update({'type': 'shellcode', 'is_shellcode': True})
-        return result
-
-    sample = data[:2048]
-    printable = sum(1 for b in sample if 32 <= b < 127 or b in (9, 10, 13))
-    ratio = printable / len(sample)
-    if ratio > 0.85:
-        text = data[:8192].decode('ascii', errors='replace')
-        raw_iocs = _IOC_PAT.findall(text)
-        iocs = [s for s in raw_iocs
-                if not re.match(r'^\d+\.\d+\.\d+\.\d+', s) or _is_plausible_ip(s)]
-        if iocs:
-            result.update({'type': 'ioc_text', 'ioc_strings': iocs[:10]})
-        else:
-            result['type'] = 'plaintext'
-        return result
-
-    if result['entropy'] > 7.2:
-        result['type'] = 'high_entropy'
-
-    return result
-
-
-def _structural_note(has_pe: bool, has_shellcode: bool) -> str:
-    """
-    One-line pointer to WHICH downstream Finding a layer's structural
-    content actually landed in — PE payloads are scored
-    (obfuscation.structural_payload); a bare shellcode-bootstrap prefix is
-    a lead only (obfuscation.shellcode_bootstrap_lead) and must not be
-    described the same way, or a reader would assume it scores too.
-    """
-    if has_pe and has_shellcode:
-        return ("PE payload(s) found — see obfuscation.structural_payload below "
-                "(scored); shellcode-bootstrap prefix match(es) also found — see "
-                "obfuscation.shellcode_bootstrap_lead (lead only, not scored)")
-    if has_pe:
-        return "PE payload(s) found — see obfuscation.structural_payload below (scored)"
-    if has_shellcode:
-        return ("shellcode-bootstrap prefix match(es) found — see "
-                "obfuscation.shellcode_bootstrap_lead (lead only, not scored)")
-    return "no structural or IOC content found in decoded data"
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# LAYER 0 — CS Sleep Mask XOR decode
-# Algorithm adapted from cs-analyze-processdump.py by Didier Stevens
-# (public domain — https://DidierStevens.com)
-# ══════════════════════════════════════════════════════════════════════════
-
-def _sm_xor(data: bytes, key: bytes, offset: int) -> bytes:
-    """
-    XOR data with key starting at rotation offset.
-
-    Mirrors Didier Stevens' Xor() from cs-analyze-processdump.py:
-        key = key[offset:] + key[:offset]
-        decoded[i] = data[i] ^ key[i % len(key)]
-
-    Implemented as a big-integer XOR (C-level bignum op) rather than a
-    per-byte Python loop — for a multi-MB region tried across ~130
-    candidate/rotation combinations (_sm_validate_and_decode), the
-    per-byte generator-expression version was the actual bottleneck
-    behind the sleep-mask layer's worst-case cost, independent of any
-    region-size cap: ~2MB took several seconds per call, not the
-    microseconds a byte-XOR should take. int.from_bytes/to_bytes give
-    identical output, verified byte-for-byte against the naive version.
-    """
-    if not data:
-        return b""
-    rotated = key[offset:] + key[:offset]
-    klen = len(rotated)
-    reps = (len(data) + klen - 1) // klen
-    keystream = (rotated * reps)[:len(data)]
-    return (int.from_bytes(data, "big") ^ int.from_bytes(keystream, "big")).to_bytes(len(data), "big")
-
-
-def _sm_key_stats(key: bytes) -> list:
-    """
-    Return byte frequency table for key, sorted descending by count.
-    Mirrors KeyStats() from cs-analyze-processdump.py.
-    """
-    stats = {}
-    for b in key:
-        stats[b] = stats.get(b, 0) + 1
-    return sorted(stats.items(), key=lambda x: x[1], reverse=True)
-
-
-def _sm_normalize_key(key: bytes) -> bytes:
-    """
-    Return the lexicographically smallest rotation of key (big-endian first 4 bytes).
-
-    Mirrors NormalizeKey() from cs-analyze-processdump.py.
-    Used to deduplicate candidate keys that are simply rotations of each other
-    (e.g. the same 13-byte key found at offset 0 vs offset 3).
-    """
-    smallest = 0x1_0000_0000
-    best = key
-    for pos in range(len(key)):
-        rot = key[pos:] + key[:pos]
-        val = struct.unpack('>I', rot[:4])[0]
-        if val < smallest:
-            smallest = val
-            best = rot
-    return best
-
-
-def _sm_avg_consec_diff(key: bytes) -> float:
-    """
-    Average absolute difference between consecutive bytes of key.
-
-    Mirrors AverageDifferenceConsecutiveBytes() from cs-analyze-processdump.py.
-    Rejects monotonic sequences like 00 01 02 03 (low ACBD) that are never
-    real sleep mask keys.
-    """
-    if len(key) < 2:
-        return 0.0
-    return sum(abs(int(key[i]) - int(key[i-1])) for i in range(1, len(key))) / (len(key) - 1)
-
-
-def _sm_recover_candidates(data: bytes,
-                            key_size: int   = SLEEP_MASK_KEY_SIZE,
-                            min_repeat: int = SLEEP_MASK_MIN_REPEAT,
-                            max_candidates: int = SLEEP_MASK_MAX_CANDIDATES,
-                            max_windows: int = SLEEP_MASK_MAX_WINDOWS) -> list:
-    """
-    Recover candidate sleep mask XOR keys from a memory region via frequency
-    analysis on overlapping key-sized windows.
-
-    Algorithm (from cs-analyze-processdump.py ProcessBinaryFile):
-      1. For each alignment offset 0..key_size-1, slide a non-overlapping
-         key_size window across the data and count occurrences of each window.
-      2. Filter candidates: count >= min_repeat, no single byte dominates
-         (max byte freq < SLEEP_MASK_MAX_BYTE_FREQ), and the key is not
-         monotonic (ACBD >= SLEEP_MASK_MIN_ACBD).
-      3. Deduplicate via NormalizeKey to avoid reporting the same key at
-         different rotations.
-      4. Return top max_candidates by occurrence count.
-
-    Windows examined per offset are capped at max_windows // key_size: for a
-    region large enough to exceed that, positions are strided evenly across
-    the whole region (not just the head) rather than counting every single
-    window — a real sleep-mask key repeats densely enough that sampling
-    still surfaces it as the top candidate, while bounding memory/CPU on a
-    huge or adversarially large region (unbounded, a 10MB region produces
-    ~10M dict entries here).
-
-    Returns list of (key_bytes, occurrence_count).
-    """
-    key_counts: dict = {}
-    windows_per_offset_budget = max(1, max_windows // key_size)
-    for offset in range(key_size):
-        available = (len(data) - offset) // key_size
-        if available <= 0:
-            continue
-        step = max(1, available // windows_per_offset_budget)
-        pos = 0
-        examined = 0
-        while pos + offset + key_size <= len(data) and examined < windows_per_offset_budget:
-            window = data[pos + offset: pos + offset + key_size]
-            key_counts[window] = key_counts.get(window, 0) + 1
-            pos += key_size * step
-            examined += 1
-
-    candidates = []
-    seen_normalized: set = set()
-
-    for key, count in sorted(key_counts.items(), key=lambda x: x[1], reverse=True):
-        if count < min_repeat:
-            break   # sorted descending — no point continuing
-
-        stats     = _sm_key_stats(key)
-        max_freq  = stats[0][1]
-        acbd      = _sm_avg_consec_diff(key)
-
-        if max_freq >= SLEEP_MASK_MAX_BYTE_FREQ:
-            continue   # single byte dominates → not a real key
-        if acbd < SLEEP_MASK_MIN_ACBD:
-            continue   # monotonic sequence → not a real key
-
-        norm = _sm_normalize_key(key)
-        if norm in seen_normalized:
-            continue   # same key at a different rotation already accepted
-        seen_normalized.add(norm)
-
-        candidates.append((key, count))
-        if len(candidates) >= max_candidates:
-            break
-
-    return candidates
-
-
-def _sm_validate_and_decode(data: bytes, candidates: list,
-                             key_size: int = SLEEP_MASK_KEY_SIZE) -> list:
-    """
-    Try each candidate key at each rotation offset and look for the validation
-    marker sha256\\x00, which is always present in beacon process memory.
-
-    Algorithm (from cs-analyze-processdump.py ProcessBinaryFile inner loop):
-        for offset in range(key_size):
-            decoded = Xor(data, key, offset)
-            if b'sha256\\x00' in decoded:
-                → confirmed hit
-
-    Two-phase like _scan_xor's sample-then-full-decode: up to
-    MAX_CANDIDATES x key_size XOR passes over the WHOLE region would be
-    up to ~1.3GB of work for a 10MB region (10 candidates x 13 rotations).
-    Each combination is first tried against only the first
-    SLEEP_MASK_VALIDATE_SAMPLE bytes; the full-region decode (needed to
-    return complete decoded content) only runs for combinations that
-    actually found the marker in the sample — expected to be rare (at
-    most a handful of real hits), not all ~130 combinations.
-
-    Returns list of (key_bytes, offset, decoded_bytes) for confirmed hits.
-    """
-    confirmed = []
-    sample_len = min(len(data), SLEEP_MASK_VALIDATE_SAMPLE)
-    marker_len = len(SLEEP_MASK_VALIDATION_MARKER)
-    for key, _count in candidates:
-        for offset in range(key_size):
-            # Sample includes marker_len extra bytes of overlap so a match
-            # straddling the sample boundary isn't missed.
-            sample = _sm_xor(data[:sample_len + marker_len], key, offset)
-            if SLEEP_MASK_VALIDATION_MARKER not in sample:
-                continue
-            decoded = sample if sample_len >= len(data) else _sm_xor(data, key, offset)
-            confirmed.append((key, offset, decoded))
-            break   # one confirmed decode per key is sufficient
-    return confirmed
-
-
-def _scan_sleep_mask(regions, modules, mf) -> tuple:
-    """
-    Returns (hits, coverage). Layer 0: scan PAGE_READWRITE MEM_PRIVATE
-    regions for CS Sleep Mask XOR encoding and attempt key recovery +
-    decode.
-
-    Target region characteristics:
-      - State  : MEM_COMMIT
-      - Type   : MEM_PRIVATE   (beacon's own heap/stack, not backed by a file)
-      - Protect: PAGE_READWRITE (beacon XOR-encodes its memory before sleeping,
-                  leaving protection as RW — NOT execute)
-      - Size   : ≤ SLEEP_MASK_REGION_MAX (10 MB)
-      - Not backed by a known module
-
-    `coverage` (dumpex.hunt._coverage.CoverageTracker) distinguishes "0
-    candidate regions existed" from "candidates existed but every one was
-    too big / failed to read / short-read" — see CoverageTracker's own
-    docstring for why this layer's gap shape fits it directly rather than
-    hand-rolling the same four counters this function used to keep
-    separately.
-
-    Returns list of:
-        {
-          'region'  : MinidumpMemoryInfo,
-          'key'     : bytes,          # recovered XOR key
-          'offset'  : int,            # key rotation offset that decoded correctly
-          'decoded' : bytes,          # fully decoded region content
-          'cls'     : dict,           # _classify_decoded() result
-        }
-    """
-    hits = []
-    coverage = CoverageTracker()
-    for r in regions:
-        if prot_str(r.State)   != 'MEM_COMMIT':
-            continue
-        if prot_str(r.Type)    != 'MEM_PRIVATE':
-            continue
-        if prot_str(r.Protect) != 'PAGE_READWRITE':
-            continue
-        if r.RegionSize < SLEEP_MASK_KEY_SIZE * SLEEP_MASK_MIN_REPEAT:
-            continue   # region too small to ever contain enough key repetitions
-        if addr_to_module(r.BaseAddress, modules):
-            continue   # module-backed region — not the beacon's private heap
-        if r.RegionSize > SLEEP_MASK_REGION_MAX:
-            coverage.note_skipped_oversize()
-            continue
-
-        try:
-            data = read_region(mf, r.BaseAddress, r.RegionSize)
-        except Exception:
-            coverage.note_read_failed()
-            continue
-        if len(data) < r.RegionSize:
-            coverage.note_short_read()
-            if not data:
-                continue
-        coverage.note_scanned()
-
-        candidates = _sm_recover_candidates(data)
-        if not candidates:
-            continue
-
-        confirmed = _sm_validate_and_decode(data, candidates)
-        for key, offset, decoded in confirmed:
-            cls = _classify_decoded(decoded)
-            hits.append({
-                'region':  r,
-                'key':     key,
-                'offset':  offset,
-                'decoded': decoded,
-                'cls':     cls,
-            })
-
-    return hits, coverage
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# LAYER 1 — Shannon entropy
-# ══════════════════════════════════════════════════════════════════════════
-
-def _scan_entropy(regions, modules, mf, susp_prots):
-    """Returns (hits, coverage) — see _scan_sleep_mask for the CoverageTracker shape."""
-    hits = []
-    coverage = CoverageTracker()
-    for r in regions:
-        if prot_str(r.State) != 'MEM_COMMIT':
-            continue
-        if prot_str(r.Type) != 'MEM_PRIVATE':
-            continue
-        if addr_to_module(r.BaseAddress, modules):
-            continue
-        if r.RegionSize > ENTROPY_SCAN_MAX:
-            coverage.note_skipped_oversize()
-            continue
-        try:
-            data = read_region(mf, r.BaseAddress, r.RegionSize)
-        except Exception:
-            coverage.note_read_failed()
-            continue
-        if len(data) < r.RegionSize:
-            coverage.note_short_read()
-            if not data:
-                continue
-        if len(data) < 256:
-            continue
-        coverage.note_scanned()
-
-        ent = _shannon_entropy(data)
-        p      = prot_str(r.Protect)
-        is_rwx = any(s in p for s in susp_prots)
-        threshold = ENTROPY_RWX_THRESHOLD if is_rwx else ENTROPY_PRIVATE_THRESHOLD
-
-        if ent >= threshold:
-            hits.append((r, ent, threshold))
-    return hits, coverage
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# LAYER 2 — Base64
-# ══════════════════════════════════════════════════════════════════════════
-
-def _scan_base64(data: bytes, region_base: int, budget: ScanBudget):
-    """
-    Yields (offset, raw, decoded, cls) candidates. Bounds decode ATTEMPTS
-    (note_attempt) and skips exact-duplicate content (seen_content) here,
-    since those are properties of the candidate itself — but does NOT
-    decide whether to keep/retain a candidate: that's the consumer's call
-    via budget.take_hit(), the single point where hit-count and
-    retained-bytes limits are enforced together (see _budget.py).
-    """
-    for m in _B64_PAT.finditer(data):
-        if budget.exhausted():
-            return
-        raw = m.group(0)
-        if len(raw) < B64_MIN_LEN:
-            continue
-        if not budget.note_attempt():
-            return
-        try:
-            normalised = raw.replace(b'-', b'+').replace(b'_', b'/')
-            pad = len(normalised) % 4
-            if pad:
-                normalised += b'=' * (4 - pad)
-            decoded = __import__('base64').b64decode(normalised)
-        except Exception:
-            continue
-        if len(decoded) < 16:
-            continue
-        if not budget.seen_content(decoded):
-            continue   # identical payload already seen elsewhere in this hunt
-        cls = _classify_decoded(decoded)
-        if cls['type'] == 'binary' and not cls['ioc_strings']:
-            continue
-        budget.note_bytes_read(len(decoded))
-        yield m.start(), raw, decoded, cls
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# LAYER 3 — Single-byte XOR brute-force
-# ══════════════════════════════════════════════════════════════════════════
-
-# Precomputed ONCE at import time, not per call: table[b] == 1 if byte
-# value b is printable ASCII (or tab/LF/CR), else 0. _XOR_DECODE_TABLES /
-# _XOR_SCORE_TABLES below fold this together with each of the 256
-# possible single-byte XOR keys, so scoring/decoding a whole buffer is a
-# single C-level bytes.translate() call with an O(1) table lookup instead
-# of rebuilding a 256-entry table via a Python-level generator expression
-# on every call. The previous implementation (even after switching to
-# translate()) still cost ~4096 Python-level XOR operations PER KEY,
-# times 255 keys, PER ELIGIBLE REGION just to build that table — with
-# only the shared decode budget's own deadline eventually stopping it,
-# that measurably dominated this hunter's total scan time once region
-# counts reached the hundreds (see tests/perf/test_benchmarks.py, which
-# caught this regression).
-_XOR_PRINTABLE_FLAGS = bytes(1 if (32 <= b < 127 or b in (9, 10, 13)) else 0 for b in range(256))
-_XOR_DECODE_TABLES = [bytes(b ^ key for b in range(256)) for key in range(256)]
-_XOR_SCORE_TABLES   = [bytes(_XOR_PRINTABLE_FLAGS[b ^ key] for b in range(256)) for key in range(256)]
-
-
-def _xor_table(key: int) -> bytes:
-    """256-entry translation table for XOR-decoding with a single-byte key."""
-    return _XOR_DECODE_TABLES[key]
-
-
-def _score_xor_key(data: bytes, key: int) -> float:
-    printable = sum(data.translate(_XOR_SCORE_TABLES[key]))
-    return printable / len(data)
-
-
-def _scan_xor(data: bytes, region_base: int, budget: ScanBudget):
-    # The key-scoring pass below is already tightly bounded (exactly 255
-    # keys scored against a fixed 4KB sample, only for MEM_PRIVATE regions
-    # <= XOR_SCAN_MAX) — it doesn't draw on the shared decode/decompress
-    # attempt budget, only on the dedup/retention accounting shared with
-    # the other layers once a candidate actually decodes. It still polls
-    # the budget periodically (every 16 keys) so an expired deadline stops
-    # the loop promptly instead of always running all 255 keys first.
-    sample = data[:XOR_SAMPLE_SIZE]
-    candidates = []
-    for key in range(1, 256):
-        if key % 16 == 0 and not budget.poll():
-            return
-        score = _score_xor_key(sample, key)
-        if score >= XOR_SCORE_MIN:
-            decoded_sample = sample.translate(_xor_table(key))
-            text = decoded_sample.decode('ascii', errors='replace')
-            if _IOC_PAT.search(text) or any(
-                kw in text.lower() for kw in
-                ('http', 'pipe', 'cmd', 'shellcode', 'beacon', 'rundll')
-            ):
-                candidates.append((key, score))
-
-    for key, _ in sorted(candidates, key=lambda x: -x[1])[:5]:
-        if budget.exhausted():
-            return
-        decoded = data.translate(_xor_table(key))
-        if not budget.seen_content(decoded):
-            continue
-        cls = _classify_decoded(decoded)
-        if cls['is_pe'] or cls['is_shellcode'] or cls['ioc_strings']:
-            budget.note_bytes_read(len(decoded))
-            yield key, decoded, cls
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# LAYER 4 — GZIP / ZLIB
-# ══════════════════════════════════════════════════════════════════════════
-
-def _bounded_decompress(payload: bytes, wbits: int) -> tuple:
-    """
-    Decompress with a hard output-size cap. zlib.decompress() has no such
-    cap — a small, even accidentally-truncated, compressed blob can expand
-    to gigabytes (zip bomb), and the input-size limit callers apply
-    upstream doesn't bound that. decompressobj().decompress(data,
-    max_length=N) stops after N output bytes, which is all classification
-    needs (PE header / IOC strings live in the first few KB anyway).
-
-    max_length also means a merely truncated/corrupted stream can return
-    partial output with no exception raised at all: decompressobj() doesn't
-    validate the trailing checksum (or even reach end-of-stream) until the
-    input runs out, and running out of input mid-stream is silent, not an
-    error. `d.eof` distinguishes a stream that actually completed from one
-    that merely ran out of input; the `unconsumed_tail` check tells that
-    apart from the legitimate "hit the output cap while more valid input
-    remained" case (large-but-valid payloads must NOT raise here, only
-    genuinely truncated ones raise).
-
-    That still leaves a real gap for output AT the cap: a stream large
-    enough that decompression hits DECOMPRESS_MAX_OUTPUT before the input
-    is exhausted looks identical here whether the remaining, never-fed
-    compressed bytes are intact or corrupted/truncated -- the checksum
-    covering the FULL stream is never reached either way, by design (that's
-    the whole point of capping). Returning `(out, complete)` lets callers
-    tell "verified end-to-end" (complete=True, d.eof) apart from "valid as
-    far as examined, but truncation beyond the cap can't be ruled out"
-    (complete=False) and downgrade confidence accordingly instead of
-    treating both the same.
-    """
-    d = zlib.decompressobj(wbits)
-    out = d.decompress(payload, DECOMPRESS_MAX_OUTPUT)
-    if not d.eof and not d.unconsumed_tail:
-        raise zlib.error("truncated compressed stream")
-    return out, d.eof
-
-
-def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget):
-    """
-    Scan for GZIP/ZLIB magic bytes and attempt decompression at each one.
-
-    Decompress attempts are bounded by the shared, whole-hunt `budget`
-    (ENCODING_BUDGET_MAX_ATTEMPTS) rather than a fixed count per signature
-    per region — a 2-byte magic sequence has no error-correction, so a
-    region with many coincidental (or adversarially placed) occurrences
-    could otherwise trigger unbounded decompressobj() attempts across a
-    dump with many such regions, even though each individual attempt is
-    itself output-capped (_bounded_decompress). Successful decodes are
-    deduplicated by content hash here; whether one gets RETAINED (vs.
-    dropped once the budget is tight) is the consumer's call via
-    budget.take_hit(), not decided in this generator.
-
-    Yields (offset, algo, decoded, cls, complete) -- `complete` is
-    _bounded_decompress's eof signal, passed through so a candidate that
-    only decoded up to the output cap (stream never verified end-to-end)
-    can be scored/reported at reduced confidence rather than treated the
-    same as a fully-verified decode.
-    """
-    start = 0
-    while True:
-        if budget.exhausted():
-            return
-        idx = data.find(_GZIP_SIG, start)
-        if idx == -1:
-            break
-        if not budget.note_attempt():
-            return
-        try:
-            decoded, complete = _bounded_decompress(data[idx:], wbits=47)
-            if len(decoded) >= 64 and budget.seen_content(decoded):
-                budget.note_bytes_read(len(decoded))
-                yield idx, 'gzip', decoded, _classify_decoded(decoded), complete
-        except Exception:
-            pass
-        start = idx + 1
-
-    for sig in _ZLIB_SIGS:
-        start = 0
-        while True:
-            if budget.exhausted():
-                return
-            idx = data.find(sig, start)
-            if idx == -1:
-                break
-            if not budget.note_attempt():
-                return
-            try:
-                decoded, complete = _bounded_decompress(data[idx:], wbits=zlib.MAX_WBITS)
-                if len(decoded) >= 64 and budget.seen_content(decoded):
-                    budget.note_bytes_read(len(decoded))
-                    yield idx, 'zlib', decoded, _classify_decoded(decoded), complete
-            except Exception:
-                pass
-            start = idx + 1
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -797,11 +194,46 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     }
     findings_list = []   # Finding objects — facts/inference/confidence/rationale/limitations
 
+    # config bundles every encoding.* tunable, read from THIS module's own
+    # (re-exported, and therefore still monkeypatchable) globals -- see
+    # dumpex/hunt/_encoding/config.py for why layers can't just read their
+    # own separate copies of these constants directly.
+    config = EncodingConfig(
+        entropy_private_threshold=ENTROPY_PRIVATE_THRESHOLD, entropy_rwx_threshold=ENTROPY_RWX_THRESHOLD,
+        entropy_scan_max=ENTROPY_SCAN_MAX, b64_min_len=B64_MIN_LEN, xor_scan_max=XOR_SCAN_MAX,
+        xor_sample_size=XOR_SAMPLE_SIZE, xor_score_min=XOR_SCORE_MIN,
+        decompress_max_output=DECOMPRESS_MAX_OUTPUT, sleep_mask_key_size=SLEEP_MASK_KEY_SIZE,
+        sleep_mask_min_repeat=SLEEP_MASK_MIN_REPEAT, sleep_mask_max_byte_freq=SLEEP_MASK_MAX_BYTE_FREQ,
+        sleep_mask_min_acbd=SLEEP_MASK_MIN_ACBD, sleep_mask_max_candidates=SLEEP_MASK_MAX_CANDIDATES,
+        sleep_mask_region_max=SLEEP_MASK_REGION_MAX, sleep_mask_validate_sample=SLEEP_MASK_VALIDATE_SAMPLE,
+        sleep_mask_validation_marker=SLEEP_MASK_VALIDATION_MARKER, sleep_mask_max_windows=SLEEP_MASK_MAX_WINDOWS,
+    )
+
+    # One budget shared across the WHOLE hunt, layers 0 and 2-4 alike (see
+    # dumpex/hunt/_budget.py) — bounds total decode/decompress attempts and
+    # retained bytes, but just as importantly bounds sleep-mask's own
+    # candidate-recovery/validation cost: unlike entropy's cheap linear
+    # per-region scan, sleep-mask's per-region cost is genuinely large (up
+    # to ~130 XOR-over-2MB combinations, see _sm_validate_and_decode), so a
+    # dump with many qualifying regions could otherwise make Layer 0 run
+    # for unbounded total time before this budget previously even existed
+    # (it used to only cover layers 2-4). Layer 0 only reads
+    # exhausted()/poll() here (deadline), never note_attempt()/take_hit() —
+    # those remain specific to what layers 2-4 actually decode/retain.
+    decode_budget = ScanBudget(
+        max_bytes_read=ENCODING_BUDGET_MAX_RETAINED * 4,
+        max_attempts=ENCODING_BUDGET_MAX_ATTEMPTS,
+        max_retained_bytes=ENCODING_BUDGET_MAX_RETAINED,
+        max_hits=ENCODING_BUDGET_MAX_HITS,
+        deadline=time.monotonic() + ENCODING_BUDGET_TIME_SECONDS,
+    )
+
     _print_hunt_header("Obfuscation Detection")
 
     # ── Layer 0: CS Sleep Mask XOR ────────────────────────────────────────
     print(DIM("  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …"))
-    sleep_mask_hits, sleep_mask_coverage = _scan_sleep_mask(regions, modules, mf)
+    sleep_mask_hits, sleep_mask_coverage = _scan_sleep_mask(regions, modules, mf, read_region,
+                                                             config, decode_budget)
 
     if sleep_mask_hits:
         detail = f"{len(sleep_mask_hits)} region(s) with confirmed CS Sleep Mask encoding"
@@ -863,7 +295,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Layer 1: Entropy ──────────────────────────────────────────────────
     print(DIM("  [*] Layer 1: Shannon entropy scan …"))
-    entropy_hits, entropy_coverage = _scan_entropy(regions, modules, mf, SUSPICIOUS_PROTS)
+    entropy_hits, entropy_coverage = _scan_entropy(regions, modules, mf, SUSPICIOUS_PROTS, read_region, config)
 
     if entropy_hits:
         detail = f"{len(entropy_hits)} high-entropy MEM_PRIVATE region(s)"
@@ -910,17 +342,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     b64_hits, xor_hits, cmp_hits, pe_hits, shellcode_hits = [], [], [], [], []
     decode_coverage = CoverageTracker()
-
-    # One budget shared across every region for the rest of this hunt (see
-    # dumpex/hunt/_budget.py) — bounds total decode/decompress attempts and
-    # retained bytes across the WHOLE scan, not per-region.
-    decode_budget = ScanBudget(
-        max_bytes_read=ENCODING_BUDGET_MAX_RETAINED * 4,
-        max_attempts=ENCODING_BUDGET_MAX_ATTEMPTS,
-        max_retained_bytes=ENCODING_BUDGET_MAX_RETAINED,
-        max_hits=ENCODING_BUDGET_MAX_HITS,
-        deadline=time.monotonic() + ENCODING_BUDGET_TIME_SECONDS,
-    )
+    # decode_budget was already constructed above (shared with Layer 0).
 
     for r in regions:
         if decode_budget.exhausted():
@@ -946,7 +368,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                 continue
         decode_coverage.note_scanned()
 
-        for off, raw, decoded, cls in _scan_base64(data, r.BaseAddress, decode_budget):
+        for off, raw, decoded, cls in _scan_base64(data, r.BaseAddress, decode_budget, config):
             # take_hit() is the ONLY gate for whether this candidate is
             # actually kept — its return value MUST be checked (unlike the
             # old note_hit(), whose result could be silently ignored while
@@ -961,8 +383,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             elif cls['is_shellcode']:
                 shellcode_hits.append(('base64', r, off, decoded, True))
 
-        if (prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= XOR_SCAN_MAX):
-            for key, decoded, cls in _scan_xor(data, r.BaseAddress, decode_budget):
+        if (prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= config.xor_scan_max):
+            for key, decoded, cls in _scan_xor(data, r.BaseAddress, decode_budget, config):
                 if not decode_budget.take_hit(len(decoded)):
                     break
                 xor_hits.append((r, key, cls, decoded))
@@ -972,7 +394,7 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                     shellcode_hits.append(('xor', r, 0, decoded, True))
 
         if not decode_budget.exhausted():
-            for off, algo, decoded, cls, complete in _scan_compressed(data, r.BaseAddress, decode_budget):
+            for off, algo, decoded, cls, complete in _scan_compressed(data, r.BaseAddress, decode_budget, config):
                 if not decode_budget.take_hit(len(decoded)):
                     break
                 cmp_hits.append((r, off, algo, cls, decoded))

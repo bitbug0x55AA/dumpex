@@ -59,3 +59,17 @@ jobs:
           coverage report --include="dumpex/hunt/yara_hunt.py"  --fail-under=65
           coverage report --include="dumpex/hunt/hollowing.py"  --fail-under=90
           coverage report --include="dumpex/hunt/encoding.py"   --fail-under=78
+          # dumpex/hunt/_encoding/*: the layer implementations _hunt_encoding
+          # (still gated above) calls into -- see dumpex/hunt/_encoding/__init__.py
+          # for why this split exists. Gating these separately (not just the
+          # combined dumpex/hunt/encoding.py line above) is what actually keeps
+          # this gate meaningful post-split: most of the five layers'
+          # implementation lines now live here, not in encoding.py itself,
+          # so a gate on that file alone would silently stop covering them.
+          # (Deliberately no specific line-count comparison here -- it goes
+          # stale the moment either file changes size again.)
+          coverage report --include="dumpex/hunt/_encoding/config.py"         --fail-under=95
+          coverage report --include="dumpex/hunt/_encoding/classification.py" --fail-under=90
+          coverage report --include="dumpex/hunt/_encoding/entropy.py"        --fail-under=78
+          coverage report --include="dumpex/hunt/_encoding/sleep_mask.py"     --fail-under=85
+          coverage report --include="dumpex/hunt/_encoding/decoders.py"       --fail-under=75

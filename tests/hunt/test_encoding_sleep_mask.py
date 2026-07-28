@@ -117,6 +117,32 @@ def test_region_too_small_for_min_repeat_is_skipped():
     assert "obfuscation.sleep_mask_confirmed" not in tags
 
 
+# ── sleep-mask shares the whole-hunt deadline budget (P2-03 review) ────────
+# Before this fix, Layer 0 ran with no cross-region time bound at all: a
+# dump with many qualifying <=10MB regions could make it run for
+# unboundedly long even though each region alone stayed within its own
+# size cap. It now polls the same ScanBudget layers 2-4 use.
+
+def test_sleep_mask_budget_exhaustion_leaves_partial_coverage(monkeypatch):
+    monkeypatch.setattr(encoding, "ENCODING_BUDGET_TIME_SECONDS", -1)   # already expired
+    region_base = 0x80000
+    _, encoded = _sleep_masked_region()
+    regions = [Region(region_base, region_base, len(encoded), "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({region_base: encoded})
+
+    f = encoding._hunt_encoding(MF(), verbose=False)
+    # The deadline was already expired before Layer 0 even started, so the
+    # otherwise-confirmable sleep-mask hit must never have been attempted.
+    assert f["score"] == 0
+    assert f["coverage_status"] == "partial"
+    assert f["budget_exhausted"] is True
+
+
 def test_no_repeating_pattern_no_candidates_no_score():
     import random
     random.seed(7)

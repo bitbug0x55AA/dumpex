@@ -104,3 +104,32 @@ def test_retained_bytes_budget_limits_hits(monkeypatch):
     assert f["coverage_status"] == "partial"
     assert f["budget_exhausted"] is True
     assert any("max_retained_bytes" in r for r in f["coverage_reasons"])
+
+
+# ── monkeypatching an encoding.* tunable must actually change behavior ────
+# (the _encoding/ package split re-exports these constants into encoding.py,
+# but decoders.py/entropy.py/sleep_mask.py have their OWN separate bindings
+# of the same name -- without explicit EncodingConfig threading,
+# `encoding.B64_MIN_LEN = X` would silently stop affecting _scan_base64's
+# actual behavior. See dumpex/hunt/_encoding/config.py.)
+
+def test_monkeypatched_b64_min_len_actually_changes_behavior(monkeypatch):
+    region_base = 0x650000
+    # 116 chars -- above the real default (80) but comfortably below a
+    # patched-up threshold, so this is deterministic either way.
+    plaintext = b"c2 callback: http://185.220.101.5:8080/gate.php" + b"A" * 40
+    payload = base64.b64encode(plaintext)
+    assert 80 < len(payload) < 999
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({region_base: payload.ljust(0x1000, b'\x00')})
+
+    f_default = encoding._hunt_encoding(MF(), verbose=False)
+    assert f_default.get("base64")   # passes the real default B64_MIN_LEN=80
+
+    monkeypatch.setattr(encoding, "B64_MIN_LEN", 999)
+    f_patched = encoding._hunt_encoding(MF(), verbose=False)
+    assert not f_patched.get("base64")   # same candidate now rejected as too short

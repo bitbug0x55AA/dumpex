@@ -24,7 +24,7 @@ Didier Stevens — 1768.py
                 dumpex/rules_pkg/data/yara/cs_indicators.yar
                 (CS_Beacon_Config_XOR69,
                 CS_Beacon_Config_XOR2E)
-  Used in     : dumpex/hunt/encoding.py (Layer 0 — _scan_sleep_mask and helpers)
+  Used in     : dumpex/hunt/_encoding/sleep_mask.py (Layer 0 — _scan_sleep_mask and helpers)
                 [cs-analyze-processdump.py and 1768.py]
 
   Nature of use:
