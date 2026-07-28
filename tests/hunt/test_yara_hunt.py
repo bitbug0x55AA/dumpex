@@ -79,6 +79,11 @@ def test_clean_scan_no_matches_is_not_detected():
     assert f["score"] == 0
     assert f["coverage"]["rule_files_compiled"] is True
     assert f["coverage"]["segments_read"] is True
+    # Required by the JSON schema's hunterResultBase (all 7 hunters,
+    # including yara) -- a clean result must still carry these, not just
+    # yara's own internal "coverage" dict.
+    assert f["coverage_status"] == "complete"
+    assert f["verdict_level"] == "clean"
 
 
 # ── segment read failure must be counted, not silently dropped ────────
@@ -105,6 +110,175 @@ def test_segment_read_failure_makes_result_inconclusive():
 
     assert f["status"] == "INCONCLUSIVE"
     assert f["coverage"]["segments_read"] is False
+    assert f["coverage_status"] == "partial"
+    assert f["verdict_level"] == "inconclusive"
+
+
+# ── a short read (fewer bytes than the segment's declared size) must ──────
+# count as a coverage gap, not read as "scanned, clean" (mirrors
+# cs_beacon.py's identical check on the same reader.read() pattern)
+
+def test_short_read_segment_makes_result_inconclusive():
+    seg_va, seg_fo = 0x21000, 0x2100
+    declared_size = 0x1000
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, declared_size)
+
+        class ShortReader:
+            def read(self, addr, size):
+                return b'\x00' * (size // 2)   # always returns half of what's asked
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = ShortReader()
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["coverage"]["segments_short_read"] is False
+    assert f["coverage_status"] == "partial"
+
+
+# ── the whole-scan budget (time/total bytes) must bound the ENTIRE scan, ──
+# not just a single (segment, rule-file) match() call -- many segments must
+# not be able to run past it unbounded even if every match() call itself
+# stays well inside YARA_MATCH_TIMEOUT
+
+def test_scan_byte_budget_exhaustion_makes_result_inconclusive(monkeypatch):
+    monkeypatch.setattr(yara_hunt, "YARA_MAX_TOTAL_BYTES_SCANNED", 10)
+    seg1_va, seg1_fo = 0x22000, 0x2200
+    seg2_va, seg2_fo = 0x23000, 0x2300
+    data = b'\x00' * 0x100
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg1 = Segment(seg1_va, seg1_fo, len(data))
+        seg2 = Segment(seg2_va, seg2_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg1, seg2], "memory_segments")
+            _reader                = FakeReader({seg1_va: data, seg2_va: data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["coverage"]["scan_budget_ok"] is False
+    assert f["coverage_status"] == "partial"
+    # the first segment's read (0x100 bytes) already exceeds the 10-byte
+    # cap, so the second segment must never have been scanned at all.
+    assert f["coverage"]["rule_files_compiled"] is True
+
+
+def test_scan_byte_budget_exceeded_by_the_only_segment_still_marks_exhausted(monkeypatch):
+    # The exact gap this closes: with only ONE (or the LAST) segment, there
+    # is no subsequent loop iteration to catch the budget having been blown
+    # -- the flag must be set as soon as the overrun is detected, not only
+    # when checked before starting a next segment that may not exist.
+    monkeypatch.setattr(yara_hunt, "YARA_MAX_TOTAL_BYTES_SCANNED", 10)
+    seg_va, seg_fo = 0x25000, 0x2500
+    data = b'\x00' * 0x100   # 256 bytes, well past the 10-byte cap
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({seg_va: data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["status"] != "NOT_DETECTED_IN_SCANNED_SCOPE"
+    assert f["coverage"]["scan_budget_ok"] is False
+    assert f["coverage_status"] == "partial"
+
+
+def test_scan_deadline_exceeded_mid_segment_across_many_rule_files_is_caught(monkeypatch):
+    # A single segment scanned against several rule files, each match()
+    # call individually well inside YARA_MATCH_TIMEOUT, must still trip the
+    # whole-scan deadline if the CUMULATIVE time across those rule files
+    # exceeds it -- the per-call timeout alone cannot bound this. Uses a
+    # fake monotonic clock (rather than a real short sleep) so this is
+    # deterministic: real match() calls against a tiny buffer are fast
+    # enough that a real wall-clock deadline could race and never trip.
+    calls = {"n": 0}
+    def fake_monotonic():
+        calls["n"] += 1
+        # Stays "no time elapsed" for the first few calls (covers computing
+        # scan_deadline, the top-of-outer-loop check, and a couple of rule
+        # files actually running), then jumps far past the deadline --
+        # simulating the deadline expiring PARTWAY through this segment's
+        # rule-file loop, not before it even started.
+        return 100.0 if calls["n"] >= 4 else 0.0
+    monkeypatch.setattr(yara_hunt.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(yara_hunt, "YARA_SCAN_DEADLINE_SECONDS", 50)
+    seg_va, seg_fo = 0x26000, 0x2600
+    data = b'\x00' * 0x100
+    with tempfile.TemporaryDirectory() as d:
+        for i in range(5):
+            _write_rule(d, f"rule{i}.yar",
+                        f'rule Good{i} {{ strings: $a = "nomatch_marker" condition: $a }}')
+        seg = Segment(seg_va, seg_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({seg_va: data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["coverage"]["scan_budget_ok"] is False
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+
+
+def test_deadline_crossed_during_the_only_match_call_is_still_caught(monkeypatch):
+    # The exact gap this closes: a match() call that starts BEFORE the
+    # global deadline expires, but the deadline is crossed DURING that
+    # call (or is discovered to be crossed as soon as it returns) -- if
+    # this is the last (or only) rule file for the last (or only) segment,
+    # there is no subsequent check-before-a-next-call to catch it. The
+    # post-call recheck (added alongside tightening call_timeout to
+    # whatever's left of the global budget) must catch this even when
+    # nothing else runs afterward.
+    calls = {"n": 0}
+    def fake_monotonic():
+        calls["n"] += 1
+        # calls 1-3: computing scan_deadline, the top-of-outer-loop check,
+        # and the pre-match "remaining" check all see plenty of time left,
+        # so the match() call is allowed to start. Call 4 (checked
+        # immediately after match() returns) reports the deadline as
+        # already passed -- simulating the call itself having consumed it.
+        return 1000.0 if calls["n"] >= 4 else 0.0
+    monkeypatch.setattr(yara_hunt.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(yara_hunt, "YARA_SCAN_DEADLINE_SECONDS", 50)
+    seg_va, seg_fo = 0x27000, 0x2700
+    data = b'\x00' * 0x100
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({seg_va: data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["coverage"]["scan_budget_ok"] is False
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["status"] != "NOT_DETECTED_IN_SCANNED_SCOPE"
+
+
+def test_scan_deadline_exhaustion_makes_result_inconclusive(monkeypatch):
+    monkeypatch.setattr(yara_hunt, "YARA_SCAN_DEADLINE_SECONDS", -1)   # already expired
+    seg_va, seg_fo = 0x24000, 0x2400
+    data = b'\x00' * 0x100
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({seg_va: data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["coverage"]["scan_budget_ok"] is False
+    assert f["coverage_status"] == "partial"
 
 
 # ── an oversized segment is skipped, not silently scanned/dropped ──────

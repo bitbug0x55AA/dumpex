@@ -272,6 +272,59 @@ def test_yara_detected_result_validates(validator):
     _assert_valid(validator, _doc_for({"yara": f}))
 
 
+def test_yara_clean_no_matches_result_validates(validator):
+    # The "scanned, nothing matched" path (_hunt_yara's `if not all_hits`
+    # branch) previously returned without ever setting coverage_status/
+    # verdict_level at all -- a clean YARA result violated the schema's own
+    # hunterResultBase.required. This is the path a real "no detections"
+    # dump takes, so it must be covered here, not just NOT_EVALUATED/DETECTED.
+    pytest.importorskip("yara")
+    seg_va, seg_fo = 0x51000, 0x5100
+    data = b'\x00' * 0x100
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "good.yar"), "w") as fh:
+            fh.write('rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({seg_va: data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
+    _assert_valid(validator, _doc_for({"yara": f}))
+
+
+def test_yara_clean_scan_with_coverage_gap_is_inconclusive_and_validates(validator):
+    # Same "nothing matched" branch, but with a coverage gap (a segment
+    # failed to read) -- must resolve to INCONCLUSIVE with coverage_status:
+    # partial, not silently omit both fields either.
+    pytest.importorskip("yara")
+    good_va, good_fo = 0x52000, 0x5200
+    bad_va,  bad_fo  = 0x53000, 0x5300
+    data = b'\x00' * 0x100
+
+    class FlakyReader:
+        def read(self, addr, size):
+            if addr == bad_va:
+                raise OSError("simulated unreadable segment")
+            return data
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "good.yar"), "w") as fh:
+            fh.write('rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        good_seg = Segment(good_va, good_fo, len(data))
+        bad_seg  = Segment(bad_va, bad_fo, 0x100)
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([good_seg, bad_seg], "memory_segments")
+            _reader                = FlakyReader()
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["status"] == "INCONCLUSIVE"
+    _assert_valid(validator, _doc_for({"yara": f}))
+
+
 # ── the exact broken shapes a prior version of this schema let through ────
 # (status+score only, string lead_count, empty-string review_priority) --
 # each must now be REJECTED, not silently accepted.

@@ -30,11 +30,11 @@ stomping" result actually checked anything.
 ## The four fields that matter
 
 Every hunter (`injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`,
-`yara`, `obfuscation`) reports a `status`. Five of the seven
-(`injection`, `stomping`, `pipe`, `obfuscation`, `cs-beacon`) additionally
-report `coverage_status`, `verdict_level`, and `confidence` — the rest
-(`hollowing`, `yara`) have `status` only. Where present, read them in
-this order:
+`yara`, `obfuscation`) reports `status`, `coverage_status`, and
+`verdict_level`. Six of the seven (all but `yara`) additionally report
+`confidence` and structured `findings` — `yara` reports its own
+`matches`/`rules_hit` shape instead (see [YARA](#yara-yara) below). Read
+these in this order:
 
 | Field | Values | What it answers |
 |---|---|---|
@@ -180,12 +180,31 @@ The only scored signals are a confirmed CS Sleep Mask XOR decode and a
 validated structural PE payload (real DOS/COFF/optional headers, not
 just a file-type guess).
 
-### Process Hollowing (`hollowing`) and YARA (`yara`)
+### Process Hollowing (`hollowing`)
 
-Both report `status` (the same four-state model as above) but do not yet
-have `verdict_level`/`confidence`/`coverage_status`/structured
-`findings` — treat their console output and `score`/`max_score` as the
-source of truth for now.
+Same shape as injection/stomping/pipe/cs-beacon/obfuscation above:
+`status`/`coverage_status`/`verdict_level`/`confidence`/structured
+`findings` are always present. DETECTED requires the MEM_PRIVATE anchor
+correlated with either a missing/wiped MZ header or RWX protection at the
+image base — a single anomaly alone (including a bare MZ-wipe) is a
+`tag: lead`, not a detection. A failed read of the image base's MZ header
+(not just a missing region) is its own coverage gap and yields
+`coverage_status: partial` / `status: INCONCLUSIVE`, not a false CLEAN.
+
+### YARA (`yara`)
+
+Reports `status`/`coverage_status`/`verdict_level` like every other
+hunter, but **not** `confidence`/structured `findings`/`lead_count`/
+`review_priority` — it uses its own `matches`/`rules_hit` model instead
+(see [Output and Evidence Schema](OUTPUT_SCHEMA.md#json-schema)). Treat
+`matches`, `rules_hit`, and the `coverage` sub-object (per-gap-reason
+booleans: rule compile failures, unread/short-read/oversized segments,
+`match()` timeouts/failures, the hit cap, and the whole-scan time/byte
+budget) as the source of truth for what actually ran. A
+`PE_In_Private_Memory` hit is only a confirmed detection when it's
+corroborated as private memory by ModuleList or MemoryInfo; with neither
+source available the hit is `context_unverified` and the result is
+INCONCLUSIVE rather than a confirmed DETECTED.
 
 ## Evidence handling: hashes, reproducing a run
 

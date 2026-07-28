@@ -45,6 +45,11 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
     peb     = mf.peb
     modules = get_modules(mf)
+    # get_modules() returns [] both when ModuleList is entirely missing/empty
+    # AND when it's present but genuinely has no entry for this address —
+    # those are different coverage situations for check 4 below (the first
+    # means the check never actually ran; the second is a real signal).
+    modules_available = bool(mf.modules and mf.modules.modules)
     regions = get_memory_regions(mf)
     SUSPICIOUS_PROTS = get_rules()["suspicious_protections"]
 
@@ -122,17 +127,28 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Check 2 (anchor): MZ header at image base ───────────────────────
     mz_wiped = False
+    mz_read_failed = False
     try:
         header = read_region(mf, image_base, min(64, 0x1000))
-        if header[:2] == b'MZ':
+        if len(header) < 2:
+            # Fewer than 2 bytes back is a short/failed read, not evidence
+            # the MZ header is actually missing -- there isn't even enough
+            # data to check the 'MZ' magic. Treating this as mz_wiped would
+            # let a truncated read alone (paired with MEM_PRIVATE) reach
+            # DETECTED without the MZ check having genuinely run.
+            mz_read_failed = True
+            _print_check("MZ header at image base",
+                         YELLOW("NOTABLE — short read, could not check"),
+                         f"Only {len(header)} byte(s) returned")
+        elif header[:2] == b'MZ':
             _print_check("MZ header at image base",
                          GREEN("CLEAN — MZ present"),
                          f"Header bytes: {header[:8].hex()}")
-        elif not header or header == b'\x00' * len(header):
+        elif header == b'\x00' * len(header):
             mz_wiped = True
             _print_check("MZ header at image base",
                          RED("SUSPICIOUS — MZ zeroed out (header wiping)"),
-                         f"First bytes: {header[:8].hex() if header else '(empty read)'}")
+                         f"First bytes: {header[:8].hex()}")
         else:
             mz_wiped = True
             _print_check("MZ header at image base",
@@ -141,7 +157,7 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
         if mz_wiped:
             findings_list.append(Finding(
                 check="hollowing.mz_header_missing",
-                facts=[f"VA=0x{image_base:x} header_bytes={header[:8].hex() if header else '(empty read)'}"],
+                facts=[f"VA=0x{image_base:x} header_bytes={header[:8].hex()}"],
                 inference="No valid MZ/DOS header is present where the PEB's own image base "
                            "says the main module should start.",
                 confidence=CONFIDENCE_MEDIUM,
@@ -156,6 +172,7 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
                 tag=TAG_LEAD,
             ))
     except Exception as e:
+        mz_read_failed = True
         _print_check("MZ header at image base",
                      YELLOW("NOTABLE — could not read"),
                      str(e))
@@ -187,6 +204,7 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     # ── Check 4 (corroborator): module list sanity ──────────────────────
     name_mismatch = False
+    module_list_unavailable = not modules_available
     main_mod = addr_to_module(image_base, modules)
     if main_mod:
         mod_name = _basename_lower(main_mod.name)
@@ -199,6 +217,14 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
             _print_check("PEB image name vs module list",
                          RED("SUSPICIOUS — name mismatch"),
                          f"PEB says '{peb_name}', module list says '{mod_name}'")
+    elif module_list_unavailable:
+        # ModuleList itself is missing/empty -- this check could not
+        # actually run at all (main_mod is guaranteed None either way), so
+        # it must not be reported as "not in any module" (a genuine signal
+        # implying the list WAS checked) nor silently left out of coverage.
+        _print_check("PEB image name vs module list",
+                     YELLOW("NOTABLE — ModuleList unavailable, cannot verify"),
+                     "ModuleListStream missing/empty from this dump")
     else:
         name_mismatch = True
         _print_check("PEB image name vs module list",
@@ -252,11 +278,24 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
     findings["score"] = score
 
     evaluated = True   # PEB was present — the check actually ran
-    complete  = base_region is not None
+    # `complete` must reflect every check that failed to actually run, not
+    # just a missing region: the MZ-header anchor reads a fixed 64-byte
+    # window at image_base independently of base_region, and an OSError/
+    # short-read failure there was previously only printed, never folded
+    # into coverage -- as long as base_region existed, the result claimed
+    # coverage_status: complete even though anchor 2 never actually ran.
+    complete = base_region is not None and not mz_read_failed and not module_list_unavailable
+    coverage_reasons = []
+    if base_region is None:
+        coverage_reasons.append("Image base page not captured in this dump — memory-type and "
+                                 "RWX checks could not run")
+    if mz_read_failed:
+        coverage_reasons.append("Image base MZ header could not be read — MZ-header check "
+                                 "could not run")
+    if module_list_unavailable:
+        coverage_reasons.append("ModuleListStream missing/empty from this dump — module-list "
+                                 "sanity check could not run")
     coverage_status = derive_coverage_status(evaluated, complete)
-    coverage_reasons = ([] if complete else
-                         ["Image base page not captured in this dump — memory-type and "
-                          "RWX checks could not run"])
     status = derive_status(evaluated, score > 0, complete)
 
     findings["coverage_status"]  = coverage_status
@@ -269,8 +308,7 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
     findings["review_priority"]  = review_priority(findings_list, score, status)
 
     if not complete:
-        print(YELLOW("  [~] Image base page not captured in this dump — "
-                      "memory-type and RWX checks could not run.\n"))
+        print(YELLOW(f"  [~] {'; '.join(coverage_reasons)}.\n"))
 
     if status == INCONCLUSIVE:
         verdict = _status_text(INCONCLUSIVE,

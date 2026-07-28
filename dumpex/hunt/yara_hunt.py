@@ -1,6 +1,7 @@
 """YARA memory scanner."""
 import os
 import sys
+import time
 import atexit
 import hashlib
 import contextlib
@@ -19,6 +20,15 @@ from dumpex.hunt._context import MemoryContext, classify_memory_context, CONFIRM
 YARA_MATCH_TIMEOUT      = 30    # seconds, per (segment, rule-file) match() call
 YARA_MAX_STRINGS_PER_MATCH = 50 # cap annotated string instances kept per match
 YARA_MAX_TOTAL_HITS     = 2000  # hard cap on collected hits across the whole scan
+# YARA_MATCH_TIMEOUT only bounds a SINGLE (segment, rule-file) match() call —
+# a dump with many segments times many rule files can still run unboundedly
+# long even with every individual call finishing well inside 30s. These two
+# bound the WHOLE scan loop the same way ScanBudget bounds encoding.py's
+# decode loop and CS_MAX_CANDIDATES/CS_SCAN_DEADLINE_SECONDS bound
+# cs_beacon.py's: once either is hit, remaining segments are treated as an
+# explicit coverage gap (reported, not silently dropped), never a false CLEAN.
+YARA_SCAN_DEADLINE_SECONDS   = 300          # wall-clock budget for the whole scan loop
+YARA_MAX_TOTAL_BYTES_SCANNED = 512 * 1024 * 1024   # cumulative segment bytes read
 
 _packaged_yara_ctx_stack = None   # lazily-created; closed at process exit via atexit
 _LAST_YARA_PROVENANCE    = None   # set by _load_yara_rules(); see get_yara_provenance()
@@ -289,6 +299,10 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     all_hits     = []
     skipped      = 0
     read_failed  = 0
+    short_reads  = 0   # read succeeded but returned fewer bytes than seg.size —
+                       # whatever wasn't returned was never actually scanned,
+                       # so this must not be indistinguishable from a clean
+                       # full-segment scan (mirrors cs_beacon.py's same check).
     scanned      = 0
     timed_out    = 0
     match_failed = 0   # non-timeout exception from compiled.match() — the
@@ -296,6 +310,10 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                        # evaluated and must not be indistinguishable from
                        # "evaluated, no match"
     truncated    = False   # hit YARA_MAX_TOTAL_HITS before finishing the scan
+    budget_exhausted   = False   # hit the whole-scan time/byte budget before
+                                  # finishing every segment
+    total_bytes_scanned = 0
+    scan_deadline = time.monotonic() + YARA_SCAN_DEADLINE_SECONDS
     suppressed_module_pe = 0   # PE_In_Private_Memory hits suppressed because
                                # the match address resolved to a known module
                                # or a MEM_IMAGE region
@@ -311,9 +329,23 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     for seg in segs:
         if truncated:
             break
+        if (time.monotonic() > scan_deadline
+                or total_bytes_scanned > YARA_MAX_TOTAL_BYTES_SCANNED):
+            # Remaining segments are an explicit coverage gap, not silently
+            # dropped -- see the "budget_exhausted" coverage key below.
+            budget_exhausted = True
+            break
         if seg.size > CS_MAX_SEG_SCAN:
             skipped += 1
             continue
+        if total_bytes_scanned + seg.size > YARA_MAX_TOTAL_BYTES_SCANNED:
+            # Checked against the segment's declared size BEFORE reading —
+            # the budget is meant to bound total work done, not just be
+            # noticed after the fact. Checking only after the read (below)
+            # would still let one full CS_MAX_SEG_SCAN-sized segment (up to
+            # 50 MB) be read past the cap before it's detected.
+            budget_exhausted = True
+            break
         try:
             data = reader.read(seg.start_virtual_address, seg.size)
         except Exception:
@@ -321,14 +353,49 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
             # must not be silently indistinguishable from "scanned, clean".
             read_failed += 1
             continue
+        total_bytes_scanned += len(data)
+        if total_bytes_scanned > YARA_MAX_TOTAL_BYTES_SCANNED:
+            # Defensive backstop for the (normally impossible) case of a
+            # reader returning more than the segment's declared size -- the
+            # real enforcement is the predictive check above.
+            budget_exhausted = True
+        if len(data) < seg.size:
+            # A short read is NOT "read fine, no hit" -- whatever wasn't
+            # returned was never actually examined for a signature. Still
+            # scan what WAS returned (a partial read can still contain a
+            # hit), but this segment must not silently count toward a
+            # "complete" scan.
+            short_reads += 1
+            if not data:
+                continue
         scanned += 1
 
         for fname, compiled in rule_files:
+            remaining = scan_deadline - time.monotonic()
+            if remaining <= 0:
+                # Checked HERE, not just between segments -- a single
+                # segment scanned against many rule files (each individually
+                # inside YARA_MATCH_TIMEOUT) could otherwise blow past the
+                # whole-scan deadline without it ever being noticed, since
+                # there might be no further segment iteration left to catch
+                # it either.
+                budget_exhausted = True
+                break
             try:
-                # timeout bounds a single (segment, rule-file) match() call —
-                # a pathological rule/input combination (e.g. rules with
-                # heavy regex backtracking) must not be able to hang the scan.
-                matches = compiled.match(data=data, timeout=YARA_MATCH_TIMEOUT)
+                # Bounded by whichever is smaller: the per-call timeout, or
+                # whatever's left of the WHOLE-scan deadline. Using a flat
+                # YARA_MATCH_TIMEOUT here regardless of how much global
+                # budget remained let the single LAST match() call of the
+                # scan run up to a further 30s past scan_deadline with
+                # nothing left afterward to notice it happened (no next
+                # rule file, no next segment) -- tightening the call's own
+                # timeout stops it from overrunning in the first place,
+                # rather than only detecting it after the fact. int(...) is
+                # required (yara-python's timeout is whole seconds, and 0
+                # means "no timeout" in libyara, not "expire immediately"),
+                # so this floors at 1s rather than passing 0.
+                call_timeout = max(1, min(YARA_MATCH_TIMEOUT, int(remaining)))
+                matches = compiled.match(data=data, timeout=call_timeout)
             except Exception as e:
                 # yara-python raises yara.TimeoutError specifically; match on
                 # the exception class name rather than message text, which
@@ -343,7 +410,19 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     timed_out += 1
                 else:
                     match_failed += 1
+                if time.monotonic() > scan_deadline:
+                    budget_exhausted = True
+                    break
                 continue
+
+            if time.monotonic() > scan_deadline:
+                # Re-checked immediately after the call returns (not only
+                # at the top of the next iteration) -- even a call that
+                # completed within its own tightened call_timeout can still
+                # be the one that pushes elapsed time past scan_deadline,
+                # and this may be the last rule file / last segment with no
+                # further iteration left to notice it otherwise.
+                budget_exhausted = True
 
             for match in matches:
                 if len(all_hits) >= YARA_MAX_TOTAL_HITS:
@@ -446,18 +525,24 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                     "context_unverified": hit_context_unverified,
                     "memory_context": hit_memory_context,
                 })
-            if truncated:
+            if truncated or budget_exhausted:
                 break
 
     scan_note = f" ({skipped} segment(s) >50 MB skipped)" if skipped else ""
     if read_failed:
         scan_note += f" ({read_failed} segment(s) failed to read)"
+    if short_reads:
+        scan_note += f" ({short_reads} segment(s) short-read)"
     if timed_out:
         scan_note += f" ({timed_out} match() call(s) timed out after {YARA_MATCH_TIMEOUT}s)"
     if match_failed:
         scan_note += f" ({match_failed} match() call(s) failed)"
     if truncated:
         scan_note += f" — TRUNCATED at {YARA_MAX_TOTAL_HITS} hits, scan did not complete"
+    if budget_exhausted:
+        scan_note += (f" — scan budget exhausted "
+                       f"({YARA_SCAN_DEADLINE_SECONDS}s/{YARA_MAX_TOTAL_BYTES_SCANNED} "
+                       f"bytes), remaining segments not scanned")
     print(DIM(f"  [*] Scan complete — {scanned} segment(s) scanned{scan_note}."))
     if suppressed_module_pe:
         print(DIM(f"  [·] {suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
@@ -466,9 +551,11 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     coverage = {
         "rule_files_compiled": compile_failed == 0,
         "segments_read":       read_failed == 0,
+        "segments_short_read": short_reads == 0,
         "segments_size_ok":    skipped == 0,
         "matches_completed":   match_failed == 0 and timed_out == 0,
         "hit_cap_not_reached": not truncated,
+        "scan_budget_ok":      not budget_exhausted,
     }
     findings["coverage"] = coverage
     any_gap = not all(coverage.values())
@@ -481,16 +568,22 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                 f"{compile_failed} rule file(s) failed to compile" if compile_failed else "",
                 f"{skipped} oversized segment(s) skipped" if skipped else "",
                 f"{read_failed} segment(s) failed to read" if read_failed else "",
+                f"{short_reads} segment(s) short-read" if short_reads else "",
                 f"{timed_out} match() call(s) timed out" if timed_out else "",
                 f"{match_failed} match() call(s) failed" if match_failed else "",
                 f"hit cap reached" if truncated else "",
+                f"scan budget exhausted" if budget_exhausted else "",
             ]))
             findings["status"] = INCONCLUSIVE
             findings["scan_complete"] = False
+            findings["coverage_status"] = "partial"
+            findings["verdict_level"]   = "inconclusive"
             _print_check("YARA rules", _status_text(INCONCLUSIVE, reason))
         else:
             findings["status"] = NOT_DETECTED_IN_SCANNED_SCOPE
             findings["scan_complete"] = True
+            findings["coverage_status"] = "complete"
+            findings["verdict_level"]   = "clean"
             _print_check("YARA rules", GREEN("CLEAN — no rules matched"))
         return findings
 

@@ -7,7 +7,7 @@ on:
 
 jobs:
   pytest:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -16,6 +16,14 @@ jobs:
         # .dmp/PE sample files are needed — the suite builds its own
         # synthetic fixtures (see tests/fixtures/fakes.py).
         python-version: ["3.10", "3.12"]
+        # dumpex parses Windows minidumps and reasons about Windows-
+        # specific memory/protection semantics (MEM_IMAGE/MEM_PRIVATE,
+        # PAGE_EXECUTE_WRITECOPY, backslash paths in module/PEB records,
+        # ...) -- Ubuntu-only CI had never actually run this suite on the
+        # platform it targets. Path handling, file-locking/O_EXCL
+        # semantics (safe_io), and temp-directory behavior can all differ
+        # in ways Linux CI can't catch.
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +44,9 @@ jobs:
         # needing a second push to discover the per-module one. Targets
         # sit a few points below each module's measured coverage when
         # this was added — raise them as coverage improves, don't lower
-        # them to make a failing PR pass.
+        # them to make a failing PR pass. Same thresholds on every OS in
+        # the matrix: the modules under test don't branch on platform, so
+        # coverage shouldn't either.
         if: always()
         run: |
           coverage report --include="dumpex/hunt/injection.py"  --fail-under=75
