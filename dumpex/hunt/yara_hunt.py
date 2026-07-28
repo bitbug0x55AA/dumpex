@@ -25,7 +25,7 @@ YARA_MAX_TOTAL_HITS     = 2000  # hard cap on collected hits across the whole sc
 # long even with every individual call finishing well inside 30s. These two
 # bound the WHOLE scan loop the same way ScanBudget bounds encoding.py's
 # decode loop and CS_MAX_CANDIDATES/CS_SCAN_DEADLINE_SECONDS bound
-# cs_beacon.py's: once either is hit, remaining segments are treated as an
+# dumpex/hunt/cs_beacon/'s: once either is hit, remaining segments are treated as an
 # explicit coverage gap (reported, not silently dropped), never a false CLEAN.
 YARA_SCAN_DEADLINE_SECONDS   = 300          # wall-clock budget for the whole scan loop
 YARA_MAX_TOTAL_BYTES_SCANNED = 512 * 1024 * 1024   # cumulative segment bytes read
@@ -302,7 +302,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     short_reads  = 0   # read succeeded but returned fewer bytes than seg.size —
                        # whatever wasn't returned was never actually scanned,
                        # so this must not be indistinguishable from a clean
-                       # full-segment scan (mirrors cs_beacon.py's same check).
+                       # full-segment scan (mirrors dumpex/hunt/cs_beacon/'s same check).
     scanned      = 0
     timed_out    = 0
     match_failed = 0   # non-timeout exception from compiled.match() — the

@@ -30,15 +30,18 @@ This software incorporates or is derived from work by third parties, as describe
 1. 1768.py by Didier Stevens
    ─────────────────────────
    Files affected:
-     dumpex/hunt/cs_beacon.py
-     rules/yara/cs_indicators.yar
+     dumpex/hunt/cs_beacon/scanner.py
+     dumpex/hunt/cs_beacon/parser.py
+     dumpex/hunt/cs_beacon/schema.py
+     dumpex/hunt/encoding/sleep_mask.py
+     dumpex/rules_pkg/data/yara/cs_indicators.yar
 
    Original notice:
-     "Source code put in the public domain by Didier Stevens, no Copyright 
-     https://DidierStevens.com 
+     "Source code put in the public domain by Didier Stevens, no Copyright
+     https://DidierStevens.com
      Use at your own risk"
 
-   The Cobalt Strike beacon config scanning algorithm in cs_beacon.py, including the TLV parser, field identifier table, Malleable C2 instruction decoder, version estimator, and sanity check, is adapted from 1768.py. The XOR-encoded config signature patterns in cs_indicators.yar are derived from the same work.
+   The Cobalt Strike beacon config scanning algorithm in dumpex/hunt/cs_beacon/, including the TLV parser, field identifier table, Malleable C2 instruction decoder, version estimator, and sanity check, is adapted from 1768.py. The XOR-encoded config signature patterns in cs_indicators.yar are derived from the same work.
 
 
 2. Elastic Security — Cobalt Strike Memory Signatures

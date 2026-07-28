@@ -20,7 +20,12 @@ Didier Stevens — 1768.py
                 "Source code put in the public domain by Didier Stevens,
                  no Copyright"
 
-  Used in     : dumpex/hunt/cs_beacon.py
+  Used in     : dumpex/hunt/cs_beacon/scanner.py (XOR marker search, segment/
+                candidate scanning algorithm)
+                dumpex/hunt/cs_beacon/parser.py (TLV parser, Malleable C2
+                instruction decoder, CS version estimator, config sanity check)
+                dumpex/hunt/cs_beacon/schema.py (config field identifier table,
+                beacon/proxy type lookup tables)
                 dumpex/rules_pkg/data/yara/cs_indicators.yar
                 (CS_Beacon_Config_XOR69,
                 CS_Beacon_Config_XOR2E)
@@ -28,7 +33,7 @@ Didier Stevens — 1768.py
                 [cs-analyze-processdump.py and 1768.py]
 
   Nature of use:
-    The beacon config detection algorithm, TLV field parser, Malleable C2 instruction decoder, config field identifier table, beacon/proxy type lookup tables, CS version estimator, and config sanity check logic in cs_beacon.py are adapted from the corresponding functions in 1768.py. The XOR-encoded signature byte patterns in cs_indicators.yar are derived from the same work.
+    The beacon config detection algorithm (XOR marker search, segment/candidate scanning), TLV field parser, Malleable C2 instruction decoder, config field identifier table, beacon/proxy type lookup tables, CS version estimator, and config sanity check logic in dumpex/hunt/cs_beacon/ are adapted from the corresponding functions in 1768.py. The XOR-encoded signature byte patterns in cs_indicators.yar are derived from the same work. dumpex/hunt/cs_beacon/der.py's PublicKey field validation (full DER structure/length checking against the rsaEncryption OID) is Dumpex's own hardening added on top of 1768.py's simpler "308" hex-prefix check — it is not itself derived from 1768.py.
 
 
 ────────────────────────────────────────────────────────────────────────────────
@@ -59,10 +64,10 @@ NVISO Labs
   URL         : https://blog.nviso.eu/
   License     : Published as public security research
 
-  Used in     : dumpex/hunt/cs_beacon.py (contextual reference)
+  Used in     : dumpex/hunt/cs_beacon/ (contextual reference)
 
   Nature of use:
-    The NVISO Labs blog series informed the overall design approach for Cobalt Strike beacon config extraction in cs_beacon.py. No code or signatures were directly copied.
+    The NVISO Labs blog series informed the overall design approach for Cobalt Strike beacon config extraction in dumpex/hunt/cs_beacon/. No code or signatures were directly copied.
 
 
 ────────────────────────────────────────────────────────────────────────────────

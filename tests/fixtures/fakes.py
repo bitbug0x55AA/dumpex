@@ -86,7 +86,7 @@ class Segment:
 
 class FakeReader:
     """
-    Stand-in for MinidumpFile.get_reader()'s return value — cs_beacon.py
+    Stand-in for MinidumpFile.get_reader()'s return value — cs_beacon/scanner.py
     calls reader.read(va, size) directly (unlike the rest of the hunt
     modules, which go through core.memory.read_region).
     """
@@ -205,15 +205,16 @@ def matching_module_and_ref(module_base=0x7ff600000000, timestamp=0x11111111,
 def cs_beacon_config_bytes(xor_key: int = 0x69) -> bytes:
     """
     Build a minimal, XOR-encoded CS beacon config TLV blob that passes
-    dumpex.hunt.cs_beacon's _cs_scan_segment/_cs_decode_and_parse_tlv/
-    _cs_sanity_check:
+    dumpex.hunt.cs_beacon.scanner's _cs_scan_segment and
+    dumpex.hunt.cs_beacon.parser's _cs_decode_and_parse_tlv/_cs_sanity_check:
       - field 0x0001 (BeaconType) = 0 ("HTTP", a recognized value)
       - field 0x0007 (PublicKey) raw bytes forming a minimally-valid X.509
         SubjectPublicKeyInfo DER structure: an outer SEQUENCE whose
         declared length fits the buffer, containing an AlgorithmIdentifier
         SEQUENCE carrying the rsaEncryption OID (1.2.840.113549.1.1.1) —
-        satisfies _cs_validate_public_key_der(), not just a "308" hex
-        prefix (see cs_beacon.py for why the stricter check exists)
+        satisfies dumpex.hunt.cs_beacon.der's _cs_validate_public_key_der(),
+        not just a "308" hex prefix (see that module for why the stricter
+        check exists)
       - a trailing fid=0 terminator record, required for `complete=True`
         (a TLV blob with no terminator is truncated, not a legitimate
         config, however "clean" its fields otherwise look)

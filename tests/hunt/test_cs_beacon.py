@@ -5,6 +5,8 @@ from tests.fixtures.fakes import (Region, Segment, FakeReader, FakeStream, FakeM
                                    cs_beacon_config_bytes)
 
 import dumpex.hunt.cs_beacon as cs_beacon
+import dumpex.hunt.cs_beacon.parser as parser
+import dumpex.hunt.cs_beacon.der as cs_der
 from dumpex.ui.structured import StructuredOutput
 
 
@@ -359,7 +361,7 @@ def test_decode_and_parse_tlv_no_terminator_is_incomplete():
     # Two well-formed fields but no trailing fid=0 record.
     plaintext = _tlv(0x0001, 1, struct.pack('>H', 0)) + _tlv(0x0007, 3, bytes([0x30, 0x81]))
     encoded = bytes(b ^ 0x69 for b in plaintext)
-    parsed = cs_beacon._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
     assert parsed["complete"] is False
     assert "terminator" in parsed["reason"]
 
@@ -369,7 +371,7 @@ def test_decode_and_parse_tlv_truncated_field_payload_is_incomplete():
     # declares a 100-byte payload but the buffer ends right after its header.
     plaintext = _tlv(0x0001, 1, struct.pack('>H', 0)) + struct.pack('>HHH', 0x0007, 3, 100)
     encoded = bytes(b ^ 0x69 for b in plaintext)
-    parsed = cs_beacon._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
     assert parsed["complete"] is False
     assert "0007" in parsed["reason"] and "length" in parsed["reason"]
 
@@ -378,7 +380,7 @@ def test_decode_and_parse_tlv_duplicate_field_id_is_incomplete():
     field = _tlv(0x0001, 1, struct.pack('>H', 0))
     plaintext = field + field   # same field id twice
     encoded = bytes(b ^ 0x69 for b in plaintext)
-    parsed = cs_beacon._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
     assert parsed["complete"] is False
     assert "duplicate" in parsed["reason"]
 
@@ -386,7 +388,7 @@ def test_decode_and_parse_tlv_duplicate_field_id_is_incomplete():
 def test_decode_and_parse_tlv_illegal_field_type_is_incomplete():
     plaintext = _tlv(0x0001, 1, struct.pack('>H', 0)) + struct.pack('>HHH', 0x0002, 9, 0)
     encoded = bytes(b ^ 0x69 for b in plaintext)
-    parsed = cs_beacon._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
     assert parsed["complete"] is False
     assert "illegal field type" in parsed["reason"]
 
@@ -402,7 +404,7 @@ def test_decode_and_parse_tlv_terminator_at_exact_buffer_end_is_complete():
                  + _tlv(0x0007, 3, bytes([0x30, 0x81]))
                  + struct.pack('>H', 0))   # 2-byte terminator, nothing after it
     encoded = bytes(b ^ 0x69 for b in plaintext)   # no trailing padding after the terminator
-    parsed = cs_beacon._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
     assert parsed["complete"] is True
     assert parsed["reason"] is None
     assert parsed["consumed"] == len(plaintext)
@@ -425,7 +427,7 @@ def _valid_public_key_der() -> bytes:
 
 
 def test_validate_public_key_der_accepts_well_formed_structure():
-    valid, reason = cs_beacon._cs_validate_public_key_der(_valid_public_key_der())
+    valid, reason = cs_der._cs_validate_public_key_der(_valid_public_key_der())
     assert valid is True
     assert reason == ""
 
@@ -440,7 +442,7 @@ def test_validate_public_key_der_rejects_oid_outside_zero_length_inner_sequence(
     algorithm_id_header = bytes([0x30, 0x00])   # SEQUENCE, declared length 0
     outer_content = algorithm_id_header + oid + bytes(20)
     der = bytes([0x30, len(outer_content)]) + outer_content
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert reason
 
@@ -456,7 +458,7 @@ def test_validate_public_key_der_rejects_algorithm_id_extending_past_outer_seque
     der_null = bytes.fromhex('0500')
     algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null   # 15 bytes
     der = bytes([0x30, 5]) + algorithm_id + bytes(10)   # outer claims only 5 content bytes
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert reason
 
@@ -472,7 +474,7 @@ def test_validate_public_key_der_rejects_bit_string_tag_with_no_length():
     algorithm_id = bytes([0x30, len(oid) + len(der_null)]) + oid + der_null
     content = algorithm_id + b'\x03'   # bare tag, no length byte at all
     der = bytes([0x30, len(content)]) + content
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert reason
 
@@ -488,7 +490,7 @@ def test_validate_public_key_der_rejects_bit_string_not_filling_outer_sequence()
     bit_string = bytes([0x03, 0x02, 0x00, 0x30])   # unused-bits=0 + SEQUENCE tag, otherwise well-formed
     content = algorithm_id + bit_string
     der = bytes([0x30, len(content) + 10]) + content + bytes(10)   # outer overclaims by 10
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert reason
 
@@ -503,7 +505,7 @@ def test_validate_public_key_der_rejects_bit_string_extending_past_outer_sequenc
     bit_string_header = bytes([0x03, 0x7f])   # BIT STRING claims 127 bytes of content
     content = algorithm_id + bit_string_header + b'\xff' * 5   # buffer only has 5 more real bytes
     der = bytes([0x30, len(content)]) + content
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert reason
 
@@ -519,7 +521,7 @@ def test_validate_public_key_der_rejects_empty_bit_string():
     bit_string = bytes([0x03, 0x01, 0x00])   # empty BIT STRING: just the unused-bits byte
     content = algorithm_id + bit_string
     der = bytes([0x30, len(content)]) + content
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert "key material" in reason
 
@@ -534,7 +536,7 @@ def test_validate_public_key_der_rejects_bit_string_nonzero_unused_bits():
     bit_string = bytes([0x03, 0x03, 0x04, 0x30, 0x00])   # unused-bits=4, not byte-aligned
     content = algorithm_id + bit_string
     der = bytes([0x30, len(content)]) + content
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert "unused-bits" in reason
 
@@ -549,7 +551,7 @@ def test_validate_public_key_der_rejects_bit_string_content_not_sequence():
     bit_string = bytes([0x03, 0x03, 0x00, 0xff, 0xff])   # content doesn't start with 0x30
     content = algorithm_id + bit_string
     der = bytes([0x30, len(content)]) + content
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert "SEQUENCE" in reason
 
@@ -559,19 +561,19 @@ def test_validate_public_key_der_rejects_fake_asn1_prefix():
     # SEQUENCE tag + long-form length byte followed by arbitrary zero
     # bytes, with no real AlgorithmIdentifier/OID behind it at all.
     fake = bytes([0x30, 0x81]) + b'\x00' * 20
-    valid, reason = cs_beacon._cs_validate_public_key_der(fake)
+    valid, reason = cs_der._cs_validate_public_key_der(fake)
     assert valid is False
     assert reason
 
 
 def test_validate_public_key_der_rejects_too_short_buffer():
-    valid, reason = cs_beacon._cs_validate_public_key_der(b'\x30\x05\x00\x00\x00')
+    valid, reason = cs_der._cs_validate_public_key_der(b'\x30\x05\x00\x00\x00')
     assert valid is False
     assert "too short" in reason
 
 
 def test_validate_public_key_der_rejects_non_sequence_tag():
-    valid, reason = cs_beacon._cs_validate_public_key_der(b'\x04' + b'\x00' * 20)
+    valid, reason = cs_der._cs_validate_public_key_der(b'\x04' + b'\x00' * 20)
     assert valid is False
     assert "SEQUENCE tag" in reason
 
@@ -579,7 +581,7 @@ def test_validate_public_key_der_rejects_non_sequence_tag():
 def test_validate_public_key_der_rejects_length_exceeding_buffer():
     # Declares a SEQUENCE of 100 bytes but the buffer only has 18 more.
     der = bytes([0x30, 0x64]) + b'\x00' * 18
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert "exceeds" in reason
 
@@ -595,7 +597,7 @@ def test_validate_public_key_der_rejects_wrong_oid():
     bit_string           = bytes([0x03, 0x03, 0x00, 0x30, 0x00])   # unused-bits=0 + DER SEQUENCE (RSAPublicKey)
     content               = algorithm_id + bit_string
     der = bytes([0x30, len(content)]) + content
-    valid, reason = cs_beacon._cs_validate_public_key_der(der)
+    valid, reason = cs_der._cs_validate_public_key_der(der)
     assert valid is False
     assert "rsaEncryption" in reason
 
@@ -605,7 +607,7 @@ def test_sanity_check_rejects_fake_public_key_prefix():
         0x0001: {'value': 0},   # HTTP -- recognized BeaconType
         0x0007: {'raw': bytes([0x30, 0x81]) + b'\x00' * 20},   # fake prefix only
     }
-    assert cs_beacon._cs_sanity_check(fields) is False
+    assert parser._cs_sanity_check(fields) is False
 
 
 def test_sanity_check_accepts_well_formed_public_key():
@@ -613,7 +615,7 @@ def test_sanity_check_accepts_well_formed_public_key():
         0x0001: {'value': 0},
         0x0007: {'raw': _valid_public_key_der()},
     }
-    assert cs_beacon._cs_sanity_check(fields) is True
+    assert parser._cs_sanity_check(fields) is True
 
 
 # ── hunter-level: a candidate with the OLD-style fake "308..." PublicKey ──

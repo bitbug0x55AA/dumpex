@@ -116,7 +116,7 @@ def test_segment_read_failure_makes_result_inconclusive():
 
 # ── a short read (fewer bytes than the segment's declared size) must ──────
 # count as a coverage gap, not read as "scanned, clean" (mirrors
-# cs_beacon.py's identical check on the same reader.read() pattern)
+# dumpex/hunt/cs_beacon/'s identical check on the same reader.read() pattern)
 
 def test_short_read_segment_makes_result_inconclusive():
     seg_va, seg_fo = 0x21000, 0x2100
