@@ -662,7 +662,7 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget):
 # LAYER 4 — GZIP / ZLIB
 # ══════════════════════════════════════════════════════════════════════════
 
-def _bounded_decompress(payload: bytes, wbits: int) -> bytes:
+def _bounded_decompress(payload: bytes, wbits: int) -> tuple:
     """
     Decompress with a hard output-size cap. zlib.decompress() has no such
     cap — a small, even accidentally-truncated, compressed blob can expand
@@ -670,9 +670,33 @@ def _bounded_decompress(payload: bytes, wbits: int) -> bytes:
     upstream doesn't bound that. decompressobj().decompress(data,
     max_length=N) stops after N output bytes, which is all classification
     needs (PE header / IOC strings live in the first few KB anyway).
+
+    max_length also means a merely truncated/corrupted stream can return
+    partial output with no exception raised at all: decompressobj() doesn't
+    validate the trailing checksum (or even reach end-of-stream) until the
+    input runs out, and running out of input mid-stream is silent, not an
+    error. `d.eof` distinguishes a stream that actually completed from one
+    that merely ran out of input; the `unconsumed_tail` check tells that
+    apart from the legitimate "hit the output cap while more valid input
+    remained" case (large-but-valid payloads must NOT raise here, only
+    genuinely truncated ones raise).
+
+    That still leaves a real gap for output AT the cap: a stream large
+    enough that decompression hits DECOMPRESS_MAX_OUTPUT before the input
+    is exhausted looks identical here whether the remaining, never-fed
+    compressed bytes are intact or corrupted/truncated -- the checksum
+    covering the FULL stream is never reached either way, by design (that's
+    the whole point of capping). Returning `(out, complete)` lets callers
+    tell "verified end-to-end" (complete=True, d.eof) apart from "valid as
+    far as examined, but truncation beyond the cap can't be ruled out"
+    (complete=False) and downgrade confidence accordingly instead of
+    treating both the same.
     """
     d = zlib.decompressobj(wbits)
-    return d.decompress(payload, DECOMPRESS_MAX_OUTPUT)
+    out = d.decompress(payload, DECOMPRESS_MAX_OUTPUT)
+    if not d.eof and not d.unconsumed_tail:
+        raise zlib.error("truncated compressed stream")
+    return out, d.eof
 
 
 def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget):
@@ -689,6 +713,12 @@ def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget):
     deduplicated by content hash here; whether one gets RETAINED (vs.
     dropped once the budget is tight) is the consumer's call via
     budget.take_hit(), not decided in this generator.
+
+    Yields (offset, algo, decoded, cls, complete) -- `complete` is
+    _bounded_decompress's eof signal, passed through so a candidate that
+    only decoded up to the output cap (stream never verified end-to-end)
+    can be scored/reported at reduced confidence rather than treated the
+    same as a fully-verified decode.
     """
     start = 0
     while True:
@@ -700,10 +730,10 @@ def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget):
         if not budget.note_attempt():
             return
         try:
-            decoded = _bounded_decompress(data[idx:], wbits=47)
+            decoded, complete = _bounded_decompress(data[idx:], wbits=47)
             if len(decoded) >= 64 and budget.seen_content(decoded):
                 budget.note_bytes_read(len(decoded))
-                yield idx, 'gzip', decoded, _classify_decoded(decoded)
+                yield idx, 'gzip', decoded, _classify_decoded(decoded), complete
         except Exception:
             pass
         start = idx + 1
@@ -719,10 +749,10 @@ def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget):
             if not budget.note_attempt():
                 return
             try:
-                decoded = _bounded_decompress(data[idx:], wbits=zlib.MAX_WBITS)
+                decoded, complete = _bounded_decompress(data[idx:], wbits=zlib.MAX_WBITS)
                 if len(decoded) >= 64 and budget.seen_content(decoded):
                     budget.note_bytes_read(len(decoded))
-                    yield idx, 'zlib', decoded, _classify_decoded(decoded)
+                    yield idx, 'zlib', decoded, _classify_decoded(decoded), complete
             except Exception:
                 pass
             start = idx + 1
@@ -796,9 +826,9 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                 detail += f"\n          IOC strings    {', '.join(cls['ioc_strings'][:4])}"
 
             if cls['is_pe']:
-                findings['hidden_pe'].append(('sleep_mask', r, 0, hit['decoded']))
+                findings['hidden_pe'].append(('sleep_mask', r, 0, hit['decoded'], True))
             elif cls['is_shellcode']:
-                findings['hidden_shellcode'].append(('sleep_mask', r, 0, hit['decoded']))
+                findings['hidden_shellcode'].append(('sleep_mask', r, 0, hit['decoded'], True))
 
         _print_check(
             "CS Sleep Mask XOR-encoded beacon memory",
@@ -924,10 +954,12 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             if not decode_budget.take_hit(len(decoded)):
                 break
             b64_hits.append((r, off, cls, raw, decoded))
+            # Base64 has no output-cap/truncation concern (1:1-ish decode
+            # of an already-bounded region) -- always "complete".
             if cls['is_pe']:
-                pe_hits.append(('base64', r, off, decoded))
+                pe_hits.append(('base64', r, off, decoded, True))
             elif cls['is_shellcode']:
-                shellcode_hits.append(('base64', r, off, decoded))
+                shellcode_hits.append(('base64', r, off, decoded, True))
 
         if (prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= XOR_SCAN_MAX):
             for key, decoded, cls in _scan_xor(data, r.BaseAddress, decode_budget):
@@ -935,19 +967,25 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
                     break
                 xor_hits.append((r, key, cls, decoded))
                 if cls['is_pe']:
-                    pe_hits.append(('xor', r, 0, decoded))
+                    pe_hits.append(('xor', r, 0, decoded, True))
                 elif cls['is_shellcode']:
-                    shellcode_hits.append(('xor', r, 0, decoded))
+                    shellcode_hits.append(('xor', r, 0, decoded, True))
 
         if not decode_budget.exhausted():
-            for off, algo, decoded, cls in _scan_compressed(data, r.BaseAddress, decode_budget):
+            for off, algo, decoded, cls, complete in _scan_compressed(data, r.BaseAddress, decode_budget):
                 if not decode_budget.take_hit(len(decoded)):
                     break
                 cmp_hits.append((r, off, algo, cls, decoded))
+                # complete=False means decompression hit the output cap
+                # before the stream's own end-of-stream/checksum was
+                # reached -- classification is based on a verified-so-far
+                # PREFIX, not a fully end-to-end-validated stream (see
+                # _bounded_decompress). Downstream confidence must reflect
+                # that, not treat it identically to a complete decode.
                 if cls['is_pe']:
-                    pe_hits.append((algo, r, off, decoded))
+                    pe_hits.append((algo, r, off, decoded, complete))
                 elif cls['is_shellcode']:
-                    shellcode_hits.append((algo, r, off, decoded))
+                    shellcode_hits.append((algo, r, off, decoded, complete))
 
     # ── Report Base64 ─────────────────────────────────────────────────────
     seen_b64 = set()
@@ -1128,18 +1166,33 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     # obfuscation verdict, per phase-two policy.
     all_pe_hits = findings['hidden_pe'] + pe_hits
     if all_pe_hits:
+        # A gzip/zlib hit whose decompression stopped at the output cap
+        # before reaching end-of-stream (complete=False) was never verified
+        # end-to-end — the visible PE structure is real, but truncation/
+        # corruption beyond the cap can't be ruled out the way it can for a
+        # fully-decoded stream (see _bounded_decompress). That's disclosed
+        # as a limitation whenever ANY hit is incomplete, but only pulls
+        # confidence down to MEDIUM when EVERY hit in this batch is
+        # incomplete -- one fully end-to-end-verified PE in the batch is
+        # itself enough to justify HIGH, regardless of what else showed up
+        # alongside it; a single unverified extra hit must not drag a
+        # genuinely confirmed detection down.
+        any_incomplete = any(not complete for *_, complete in all_pe_hits)
+        all_incomplete = all(not complete for *_, complete in all_pe_hits)
         detail = f"{len(all_pe_hits)} PE payload(s) found inside encoded/compressed data"
         facts = []
-        for enc, r, off, decoded in all_pe_hits:
+        for enc, r, off, decoded, complete in all_pe_hits:
             abs_va = r.BaseAddress + off
             known  = addr_to_module(abs_va, modules)
             reg_str = "registered" if known else "UNREGISTERED"
             facts.append(f"type=PE encoding={enc} container_VA=0x{abs_va:x} "
-                         f"module_status={reg_str} decoded_size={len(decoded)}")
+                         f"module_status={reg_str} decoded_size={len(decoded)}"
+                         + ("" if complete else " decode=incomplete(output-cap)"))
             detail += (f"\n          Encoding       {enc.upper()}"
                        f"\n          Container VA   0x{abs_va:016x}"
                        f"\n          Module status  {RED('UNREGISTERED — hidden PE') if not known else 'registered'}"
-                       f"\n          Decoded PE     {len(decoded)} bytes")
+                       f"\n          Decoded PE     {len(decoded)} bytes"
+                       + ("" if complete else "  (decompression hit the output cap — not end-to-end verified)"))
         _print_check("Structural PE payload inside encoded data",
                      RED("DETECTION — executable payload concealed by encoding"),
                      detail)
@@ -1149,14 +1202,19 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
             facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
             inference="Decoded/decompressed content from one or more obfuscation layers "
                        "structurally validates as a PE image.",
-            confidence=CONFIDENCE_HIGH,
+            confidence=CONFIDENCE_MEDIUM if all_incomplete else CONFIDENCE_HIGH,
             rationale="Unlike raw entropy/Base64/GZIP presence, this checks WHAT the "
                        "decoded bytes actually are: full PE structural validation (DOS/"
                        "COFF/optional header + complete section table). Encoding was only "
                        "the delivery mechanism here — the payload itself is the evidence.",
-            limitations=["Structural validation reduces but does not eliminate false "
-                         "positives from adversarially-crafted or coincidental byte "
-                         "sequences in high-entropy data."],
+            limitations=(["Structural validation reduces but does not eliminate false "
+                          "positives from adversarially-crafted or coincidental byte "
+                          "sequences in high-entropy data."]
+                         + (["One or more hits came from a gzip/zlib stream that hit the "
+                             "decompression output cap before end-of-stream/checksum was "
+                             "reached — the decoded PE structure is real as far as examined, "
+                             "but the source stream was never verified end-to-end."]
+                            if any_incomplete else [])),
             tag=TAG_DETECTION,
         ))
 
@@ -1179,10 +1237,10 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
         # still not structural proof (no section table, no entry-point
         # check), so this stays tag=LEAD and never touches score, but the
         # combo is worth flagging above a bare "6 bytes matched somewhere".
-        context_hits = [(enc, r, off, decoded) for enc, r, off, decoded in all_shellcode_hits
+        context_hits = [(enc, r, off, decoded) for enc, r, off, decoded, _complete in all_shellcode_hits
                          if prot_str(r.Type) == 'MEM_PRIVATE'
                          and any(s in prot_str(r.Protect) for s in SUSPICIOUS_PROTS)]
-        for enc, r, off, decoded in all_shellcode_hits:
+        for enc, r, off, decoded, _complete in all_shellcode_hits:
             abs_va = r.BaseAddress + off
             in_context = (enc, r, off, decoded) in context_hits
             facts.append(f"type=shellcode_bootstrap encoding={enc} container_VA=0x{abs_va:x} "

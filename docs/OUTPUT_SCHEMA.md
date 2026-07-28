@@ -141,6 +141,77 @@ does not negate a positive detection, and a scoped non-detection is not proof
 of absence. See the [SOC / DFIR Quick Start](SOC_QUICKSTART.md) for the
 disposition matrix and hunter-specific caveats.
 
+`confidence`, `findings`, `lead_count`, and `review_priority` are reported by
+the six Finding-model hunters (injection, hollowing, stomping, pipe,
+cs-beacon, obfuscation). `yara` reports its own `matches`/`rules_hit` shape
+instead and does not emit those four fields — only `status`, `score`,
+`coverage_status`, and `verdict_level` are guaranteed across all seven.
+
+## JSON Schema
+
+The formal contract for the document above is
+[`dumpex/schemas/dumpex-output-v1.0.schema.json`](../dumpex/schemas/dumpex-output-v1.0.schema.json)
+(JSON Schema, draft 2020-12). It ships inside the installed package — a
+consumer of `pip install dumpex` reaches it via
+`importlib.resources.files("dumpex.schemas")`, the same way
+`dumpex.rules_pkg` ships the bundled YARA/TTP rule defaults — not by reading
+a path relative to a source checkout. `tests/integration/test_json_schema.py`
+validates real hunter output (all seven hunters, both typical and edge-case
+verdicts) against this file on every test run, including the negative cases
+it must reject.
+
+Each entry under `hunt` is validated as one of two shapes: `findingHunterResult`
+(injection, hollowing, stomping, pipe, cs-beacon, obfuscation — and any
+future/renamed hunter, via the schema's `additionalProperties` fallback),
+which requires `confidence`/`findings`/`lead_count`/`review_priority` in
+addition to the fields common to both; or `yaraHunterResult` (the `yara` key
+specifically), which only requires the common fields since yara_hunt.py's
+own `matches`/`rules_hit` model never emits the other four. Both compose the
+same `hunterResultBase` (`status`/`score`/`coverage_status`/`verdict_level`
+plus the NOT_EVALUATED/INCONCLUSIVE cross-field invariants) via `allOf`.
+
+The standalone Windows EXE built by `.github/workflows/build.yml` does not
+read this file at runtime (nothing in the running tool validates its own
+output — only the test suite and external `--json` consumers do), so it is
+not collected into the frozen executable. It is instead uploaded as a
+separate `dumpex-output-v1.0.schema.json` file alongside `dumpex.exe` on
+each GitHub release, so an EXE-only install (no `pip install dumpex`, no
+source checkout) still has a way to get the canonical schema for that
+release.
+
+### Versioning and breaking changes
+
+`meta.schema_version` (currently `"1.0"`) is the contract version, independent
+of the dumpex application version. The policy for changing the schema file:
+
+- **A new optional object field** — no version bump. `additionalProperties`
+  keeps object shapes open, so an older cached copy of the schema silently
+  ignores a field it doesn't know about; nothing that already validated
+  stops validating. Update the schema file and add/extend a schema test.
+- **A new value added to an existing enum-typed field** (`status`,
+  `coverage_status`, `verdict_level`, `confidence`, `review_priority`,
+  `finding.tag`, …) — **always bump**, even though this feels "additive" from
+  the tool's side. Unlike object properties, enums are a closed list: an
+  older cached copy of the schema will reject a document carrying the new
+  value, because that value simply isn't in its list. There is no
+  forward-compatible way to add an enum value without either bumping
+  `schema_version` or breaking whoever is still validating against the old
+  one.
+- **Narrowing that codifies existing behavior** (e.g. making `required` match
+  fields every hunter already unconditionally emits, or narrowing a field's
+  type to what the tool has only ever actually produced) — no version bump
+  *if and only if* it's verified against all seven hunters' real code paths
+  that no currently-produced document is rejected by the change. This is a
+  bugfix to the contract file, not a change to the contract itself. Add a
+  schema test proving both the still-valid real shape and the now-rejected
+  broken shape.
+- **Narrowing that could reject a currently-valid document**, or any
+  **removal/renaming of a field or status value** — bump `schema_version`
+  (the `const` in the schema, `StructuredOutput.SCHEMA_VERSION` in
+  `dumpex/ui/structured.py`, and the schema filename), and call it out in
+  release notes. Never silently reuse an existing `schema_version` for an
+  incompatible shape change.
+
 ## Reproducing a run
 
 Retain the following together:

@@ -4,7 +4,7 @@ and cross-layer partial-failure combinations -- a scan-budget exhaustion
 or a single layer's read failure must show up as coverage_status=partial/
 INCONCLUSIVE with a specific reason, and must never silently suppress a
 detection an OTHER layer still found (DETECTED + partial must be allowed
-to coexist, matching schemas/dumpex-output-v1.0.schema.json's own
+to coexist, matching dumpex/schemas/dumpex-output-v1.0.schema.json's own
 DETECTED+partial invariant).
 """
 import base64
@@ -87,6 +87,7 @@ def test_retained_bytes_budget_limits_hits(monkeypatch):
     monkeypatch.setattr(encoding, "ENCODING_BUDGET_MAX_RETAINED", 32)
     region_base = 0x640000
     payload = b"IOC text with http://185.220.101.5/gate padding padding padding padding padding"
+    assert len(payload) > 32   # decoded size must exceed the cap for this test to be meaningful
     regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
 
     class MF(FakeMF):
@@ -95,9 +96,11 @@ def test_retained_bytes_budget_limits_hits(monkeypatch):
     encoding.read_region = mem_reader(_b64_region(region_base, payload))
 
     f = encoding._hunt_encoding(MF(), verbose=False)
-    # Either the candidate was dropped by the tiny retention budget (no
-    # base64 finding at all) or coverage reflects the exhausted budget --
-    # either way this must not crash and must not silently claim complete
-    # coverage while dropping a candidate.
-    if not f.get("base64"):
-        assert f["coverage_status"] == "partial"
+    # The decoded candidate (len(payload) bytes) cannot fit under a 32-byte
+    # retention cap, so take_hit() must reject it deterministically: no
+    # base64 finding at all, and coverage must say why -- not silently
+    # claim complete coverage while dropping a candidate.
+    assert not f.get("base64")
+    assert f["coverage_status"] == "partial"
+    assert f["budget_exhausted"] is True
+    assert any("max_retained_bytes" in r for r in f["coverage_reasons"])

@@ -9,6 +9,8 @@ import base64
 import gzip
 import zlib
 
+import pytest
+
 from tests.fixtures.fakes import (Region, FakeStream, FakeMF, build_pe_header,
                                    IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ, mem_reader)
 
@@ -93,24 +95,68 @@ def test_is_plausible_ip_rejects_malformed():
 
 def test_bounded_decompress_normal_payload():
     payload = zlib.compress(b"hello world" * 100)
-    out = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
+    out, complete = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
     assert out == b"hello world" * 100
+    assert complete is True   # fully verified end-to-end (eof reached)
 
 
 def test_bounded_decompress_caps_oversized_output():
     huge = b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
     payload = zlib.compress(huge)
-    out = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
+    out, complete = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
     assert len(out) <= encoding.DECOMPRESS_MAX_OUTPUT
+    assert complete is False   # cap hit before eof -- never verified end-to-end
 
 
 def test_bounded_decompress_raises_on_truncated_payload():
     payload = zlib.compress(b"hello world" * 100)
     truncated = payload[:len(payload) // 2]
-    try:
+    with pytest.raises(zlib.error):
         encoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
-    except zlib.error:
-        pass   # expected -- caller (_scan_compressed) catches this
+
+
+def test_bounded_decompress_raises_when_only_trailing_checksum_missing():
+    # Dropping just the last byte still leaves decompressobj able to emit
+    # the FULL decoded output with no exception by default -- only the
+    # eof check catches this. A truncated compressed PE must not be able
+    # to pass through as if it were a complete, valid stream.
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x200,
+                                  "rawptr": 0x400, "rawsize": 0x200,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    payload = zlib.compress(pe_bytes)
+    truncated = payload[:-1]
+    with pytest.raises(zlib.error):
+        encoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
+
+
+def test_bounded_decompress_does_not_raise_when_output_cap_hit_on_valid_stream():
+    # A legitimately large (not truncated) payload that exceeds the output
+    # cap must still be accepted, truncated at the cap -- only genuine
+    # truncation should raise. It must still be reported as incomplete
+    # (complete=False) since the checksum/end-of-stream was never reached --
+    # callers must be able to tell this apart from a verified decode.
+    huge = b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
+    payload = zlib.compress(huge)
+    out, complete = encoding._bounded_decompress(payload, wbits=zlib.MAX_WBITS)
+    assert len(out) == encoding.DECOMPRESS_MAX_OUTPUT
+    assert complete is False
+
+
+def test_bounded_decompress_incomplete_when_cap_hit_even_with_trailing_truncation():
+    # The exact gap this test closes: a stream large enough to hit the
+    # output cap, ADDITIONALLY truncated by its last byte far beyond the
+    # cap. eof=False and unconsumed_tail is non-empty (more unexamined
+    # input remains) either way, so this can't be distinguished from the
+    # "merely capped, fully intact" case above by design -- what MUST hold
+    # is that both report complete=False, so a caller never treats either
+    # as a verified, fully end-to-end-checked decode.
+    huge = b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
+    payload = zlib.compress(huge)
+    truncated = payload[:-1]
+    out, complete = encoding._bounded_decompress(truncated, wbits=zlib.MAX_WBITS)
+    assert len(out) == encoding.DECOMPRESS_MAX_OUTPUT
+    assert complete is False
 
 
 # ── Base64 layer: plain text is observation-only, never scores ────────────
@@ -225,6 +271,80 @@ def test_gzip_containing_pe_scores():
     f = encoding._hunt_encoding(MF(), verbose=False)
     assert f["score"] == 1
     assert f["confidence"] == "high"
+
+
+def test_gzip_pe_truncated_beyond_output_cap_scores_at_reduced_confidence():
+    # A decompressed stream far larger than DECOMPRESS_MAX_OUTPUT, containing
+    # a valid PE at the very start, truncated by its last byte -- the
+    # truncation sits well past the point _bounded_decompress stops (the
+    # output cap), so the PE prefix genuinely decodes and is a real
+    # detection. But the source stream was never verified end-to-end (eof
+    # never reached), so this must NOT read as the same HIGH confidence as
+    # a fully-verified decode.
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x200,
+                                  "rawptr": 0x400, "rawsize": 0x200,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    huge = pe_bytes + b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
+    payload = gzip.compress(huge)[:-1]   # drop the last byte (well past the cap)
+    region_base = 0x565000
+    regions = [Region(region_base, region_base, len(payload) + 0x100, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({region_base: payload.ljust(len(payload) + 0x100, b'\x00')})
+
+    f = encoding._hunt_encoding(MF(), verbose=False)
+    assert f["score"] == 1
+    pe_finding = next(fd for fd in f["findings"] if fd["check"] == "obfuscation.structural_payload")
+    assert pe_finding["confidence"] == "medium"
+    assert any("output cap" in lim or "output-cap" in lim for lim in pe_finding["limitations"])
+
+
+def test_mixed_complete_and_incomplete_pe_hits_stay_high_confidence():
+    # One region with a small, fully-verified (complete=True) compressed PE
+    # and a SEPARATE region with a huge, output-cap-truncated (complete=
+    # False) one -- both land in the same obfuscation.structural_payload
+    # finding. The fully-verified hit alone is enough to justify HIGH
+    # confidence; a single additional unverified hit must not drag the
+    # whole finding down to MEDIUM (only an ALL-incomplete batch should).
+    small_pe = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x200,
+                                  "rawptr": 0x400, "rawsize": 0x200,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    complete_payload = gzip.compress(small_pe)
+    complete_base = 0x566000
+    complete_region = Region(complete_base, complete_base, len(complete_payload) + 0x100,
+                              "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
+
+    huge_pe = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x200,
+                                 "rawptr": 0x400, "rawsize": 0x200,
+                                 "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                               size_of_image=0x2000, trailing_padding=0x300)
+    huge_pe += b"\x00" * (encoding.DECOMPRESS_MAX_OUTPUT * 4)
+    incomplete_payload = gzip.compress(huge_pe)[:-1]
+    incomplete_base = 0x567000
+    incomplete_region = Region(incomplete_base, incomplete_base, len(incomplete_payload) + 0x100,
+                                "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
+
+    regions = [complete_region, incomplete_region]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({
+        complete_base:   complete_payload.ljust(len(complete_payload) + 0x100, b'\x00'),
+        incomplete_base: incomplete_payload.ljust(len(incomplete_payload) + 0x100, b'\x00'),
+    })
+
+    f = encoding._hunt_encoding(MF(), verbose=False)
+    assert f["score"] == 1
+    pe_finding = next(fd for fd in f["findings"] if fd["check"] == "obfuscation.structural_payload")
+    assert pe_finding["confidence"] == "high"
+    # Still disclosed even though confidence wasn't downgraded.
+    assert any("output cap" in lim or "output-cap" in lim for lim in pe_finding["limitations"])
 
 
 def test_truncated_gzip_magic_does_not_crash_or_score():

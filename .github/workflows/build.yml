@@ -53,10 +53,27 @@ jobs:
           }
           & .\dist\dumpex.exe --help
 
+      - name: Stage the output-contract schema as a release asset
+        # dumpex.exe never reads this file at runtime (only the test suite
+        # and external --json consumers validate against it), so it isn't
+        # collected into the frozen EXE via --collect-data -- there is
+        # nothing for PyInstaller to bundle it FOR. It's shipped instead as
+        # a plain, separately downloadable file alongside dumpex.exe, so an
+        # EXE-only user (no `pip install dumpex`, no source checkout) can
+        # still get the canonical schema for this release without needing
+        # the wheel. Validated as JSON here so a corrupted/empty file never
+        # ships silently.
+        shell: pwsh
+        run: |
+          python -c "import json; json.load(open('dumpex/schemas/dumpex-output-v1.0.schema.json', encoding='utf-8'))"
+          Copy-Item dumpex/schemas/dumpex-output-v1.0.schema.json dist/dumpex-output-v1.0.schema.json
+
       - name: Create Release and Upload EXE
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version }}
           name: Dumpex ${{ github.event.inputs.version }}
           prerelease: ${{ github.event.inputs.prerelease }}
-          files: dist/dumpex.exe
+          files: |
+            dist/dumpex.exe
+            dist/dumpex-output-v1.0.schema.json

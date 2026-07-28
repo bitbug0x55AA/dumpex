@@ -38,6 +38,7 @@ include = ["dumpex*"]
 # resolve this via importlib.resources ahead of any dev-tree/user-override
 # path (script dir / cwd).
 "dumpex.rules_pkg" = ["data/rules.yaml", "data/yara/*.yar"]
+"dumpex.schemas" = ["*.schema.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

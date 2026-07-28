@@ -603,7 +603,7 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         # coverage_status/verdict_level mirror scan_complete/score here so
         # this hunter's JSON output satisfies the same cross-hunter
         # invariants the Finding-model hunters already do (see
-        # schemas/dumpex-output-v1.0.schema.json) even though yara_hunt.py
+        # dumpex/schemas/dumpex-output-v1.0.schema.json) even though yara_hunt.py
         # itself is still on its own "matches" list, not tag=observation/
         # lead/detection Finding objects.
         findings["coverage_status"] = "complete" if not any_gap else "partial"

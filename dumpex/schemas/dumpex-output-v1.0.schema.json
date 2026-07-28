@@ -64,8 +64,11 @@
 
     "hunt": {
       "type": "object",
-      "description": "Keyed by TTP name (injection/hollowing/stomping/pipe/cs-beacon/yara/obfuscation).",
-      "additionalProperties": { "$ref": "#/$defs/hunterResult" }
+      "description": "Keyed by TTP name (injection/hollowing/stomping/pipe/cs-beacon/yara/obfuscation). `yara` is routed to yaraHunterResult (it reports matches/rules_hit, not the Finding-object model); every other key -- including any future/renamed hunter -- falls through additionalProperties to findingHunterResult, which is the stricter of the two.",
+      "properties": {
+        "yara": { "$ref": "#/$defs/yaraHunterResult" }
+      },
+      "additionalProperties": { "$ref": "#/$defs/findingHunterResult" }
     },
 
     "status": {
@@ -95,22 +98,18 @@
       }
     },
 
-    "hunterResult": {
+    "hunterResultBase": {
       "type": "object",
-      "description": "Common shape across all 7 hunters. coverage_status/verdict_level/confidence/findings are present for every hunter as of schema_version 1.0 (injection/hollowing/stomping/pipe/cs-beacon/obfuscation/yara) -- additionalProperties stays true because each hunter also reports TTP-specific fields (e.g. cs-beacon.configs, pipe.private_pipes) not modeled here.",
-      "required": ["status", "score"],
+      "description": "Fields and cross-field invariants common to ALL 7 hunters, regardless of which output model (Finding-based or yara's own matches/rules_hit) they use. Referenced by both findingHunterResult and yaraHunterResult via allOf, never used standalone in `hunt`.",
+      "required": ["status", "score", "coverage_status", "verdict_level"],
       "additionalProperties": true,
       "properties": {
         "status":            { "$ref": "#/$defs/status" },
         "coverage_status":   { "$ref": "#/$defs/coverageStatus" },
         "coverage_reasons":  { "type": "array", "items": { "type": "string" } },
         "verdict_level":     { "$ref": "#/$defs/verdictLevel" },
-        "confidence":        { "$ref": "#/$defs/confidenceLevel" },
         "score":             { "type": "integer", "minimum": 0 },
-        "max_score":         { "type": ["integer", "null"] },
-        "findings":          { "type": "array", "items": { "$ref": "#/$defs/finding" } },
-        "lead_count":        { "type": ["integer", "string"] },
-        "review_priority":   { "enum": ["none", "low", "medium", "high", ""] }
+        "max_score":         { "type": ["integer", "null"] }
       },
       "allOf": [
         {
@@ -143,6 +142,31 @@
           "if": { "properties": { "status": { "const": "DETECTED" } } },
           "then": {}
         }
+      ]
+    },
+
+    "findingHunterResult": {
+      "description": "The 6 Finding-model hunters (injection, hollowing, stomping, pipe, cs-beacon, obfuscation) -- these unconditionally emit confidence/findings/lead_count/review_priority alongside hunterResultBase's fields, verified against each hunter's actual code paths (including their NOT_EVALUATED/early-return branches). additionalProperties stays true because each hunter also reports TTP-specific fields (e.g. cs-beacon.configs, pipe.private_pipes) not modeled here.",
+      "allOf": [
+        { "$ref": "#/$defs/hunterResultBase" },
+        {
+          "type": "object",
+          "required": ["confidence", "findings", "lead_count", "review_priority"],
+          "additionalProperties": true,
+          "properties": {
+            "confidence":      { "$ref": "#/$defs/confidenceLevel" },
+            "findings":        { "type": "array", "items": { "$ref": "#/$defs/finding" } },
+            "lead_count":      { "type": "integer", "minimum": 0 },
+            "review_priority": { "enum": ["none", "low", "medium", "high"] }
+          }
+        }
+      ]
+    },
+
+    "yaraHunterResult": {
+      "description": "yara_hunt.py's own matches/rules_hit shape -- only hunterResultBase's fields (status/score/coverage_status/verdict_level) are guaranteed; it does not emit confidence/findings/lead_count/review_priority, so those are not required (and not modeled) here. additionalProperties stays true for matches/rules_hit/scan_complete/coverage and similar yara-specific fields.",
+      "allOf": [
+        { "$ref": "#/$defs/hunterResultBase" }
       ]
     }
   }
