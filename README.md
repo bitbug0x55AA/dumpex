@@ -53,7 +53,9 @@ cd dumpex
 python -m pip install -e .
 ```
 
-Install YAML and YARA support for the complete hunt set:
+The base install can already read the packaged `rules.yaml` TTP defaults
+(`pyyaml` is a required dependency, not optional). Install YARA support for
+the complete hunt set:
 
 ```bash
 python -m pip install -e ".[full]"

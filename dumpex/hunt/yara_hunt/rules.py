@@ -27,11 +27,15 @@ def packaged_yara_rules_dir() -> "str | None":
     Resolved via importlib.resources rather than a __file__-relative path,
     so this is what actually keeps YARA scanning working for a `pip
     install dumpex` wheel with no rules/ directory anywhere near the
-    invoking script — including a zip-safe/zipapp install, where __file__
-    isn't a real filesystem path at all. importlib.resources.as_file() is a
-    zero-cost passthrough when the package is already unpacked on disk (the
-    normal case), and only materializes to a temp directory when it isn't;
-    either way the returned path is real and glob()-able.
+    invoking script, and for a PyInstaller EXE built with `--collect-data
+    dumpex.rules_pkg`. importlib.resources.as_file() is a zero-cost
+    passthrough when the package is already unpacked on disk, which is the
+    case for both of those install forms. It is NOT relied on here for a
+    zipapp/zip-safe install: as_file() extracting a whole directory out of
+    a zip archive isn't reliably supported until Python 3.12, and this
+    project's floor is 3.10 (see pyproject.toml's requires-python) — dumpex
+    does not ship or test a zipapp build, so no claim is made about that
+    path working.
     """
     global _packaged_yara_ctx_stack
     try:

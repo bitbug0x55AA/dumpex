@@ -54,6 +54,12 @@ formats documented for their individual options.
 module stomping. The structural section-protection check still runs without
 it. See [Detection Methodology](DETECTION_METHODOLOGY.md#module-stomping).
 
+`--rules-file` fails closed: if the file is missing, unreadable, fails to
+parse, or does not satisfy the rules schema, dumpex exits non-zero rather
+than silently falling back to the packaged or built-in rule defaults. A run
+that asked for a specific ruleset never produces a verdict from a different
+one.
+
 ## Output and evidence options
 
 | Option | Description |

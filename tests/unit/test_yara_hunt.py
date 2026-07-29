@@ -74,6 +74,41 @@ def test_load_yara_rules_aggregate_sha256_stable_across_calls():
 # provenance -- meta.yara_rules would otherwise silently misreport which
 # rules (if any) actually produced this particular result.
 
+# ── a non-SyntaxError exception from yara.compile() must still count as ──
+# a compile failure (and leave OTHER files unaffected), not just the
+# yara.SyntaxError path that was already covered
+
+def test_load_and_compile_non_syntax_error_still_counts_as_compile_failed(monkeypatch, tmp_path):
+    pytest.importorskip("yara")
+    import yara
+    from dumpex.hunt.yara_hunt import rules
+
+    (tmp_path / "good.yar").write_text('rule Good { condition: true }')
+    (tmp_path / "boom.yar").write_text('rule Boom { condition: true }')
+
+    real_compile = yara.compile
+
+    def fake_compile(filepath, **kwargs):
+        if os.path.basename(filepath) == "boom.yar":
+            raise RuntimeError("simulated non-syntax compile failure")
+        return real_compile(filepath=filepath, **kwargs)
+
+    monkeypatch.setattr(yara, "compile", fake_compile)
+
+    bundle = rules.load_and_compile(str(tmp_path))
+
+    assert bundle.compile_failed == 1
+    assert [fname for fname, _ in bundle.rule_files] == ["good.yar"]
+
+    boom_entry = next(f for f in bundle.provenance["files"] if f["name"] == "boom.yar")
+    assert boom_entry["compiled"] is False
+    assert boom_entry["error"]
+
+    good_entry = next(f for f in bundle.provenance["files"] if f["name"] == "good.yar")
+    assert good_entry["compiled"] is True
+    assert good_entry["error"] is None
+
+
 def test_not_evaluated_run_clears_prior_scan_provenance():
     pytest.importorskip("yara")
     seg_va, seg_fo = 0x30000, 0x3000
