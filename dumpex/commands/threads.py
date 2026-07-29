@@ -1,5 +1,5 @@
 """--threads command."""
-import os
+import ntpath
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import get_modules, get_thread_infos, addr_to_module
 from dumpex.core.pe_utils import _filetime_to_str, _dumpflags_str, _duration_100ns_to_str
@@ -80,7 +80,10 @@ def collect_threads(mf):
         records.append(ThreadRecord(
             tid=ti.ThreadId,
             start_address=hex_address(sa) if sa is not None else None,
-            backing_module=os.path.basename(mod.name) if mod else None,
+            # ntpath.basename, not os.path.basename -- module paths are
+            # Windows paths regardless of the host OS this tool runs on
+            # (see dumpex.hunt.stomping.memory_scan._module_basename).
+            backing_module=ntpath.basename(mod.name) if mod else None,
             flags=[flag_tag.strip("[]")] if flag_tag else [],
             create_time=create_time,
             exit_time=exit_time,

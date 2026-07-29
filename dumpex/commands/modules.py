@@ -1,5 +1,5 @@
 """--modules command."""
-import os
+import ntpath
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
 from dumpex.core.memory import get_modules
 from dumpex.core.pe_utils import _pe_timestamp_to_str, _version_str
@@ -21,6 +21,13 @@ def collect_modules(mf):
     the module list stream."""
     records = []
     for m in sorted(get_modules(mf), key=lambda x: x.baseaddress):
+        # Module paths recorded in a minidump are from the ORIGINAL Windows
+        # system (e.g. "C:\Windows\System32\foo.dll") -- os.path.basename
+        # only splits on "/" on a POSIX analysis host, so it returns the
+        # whole backslash-separated string unchanged there. ntpath.basename
+        # always applies Windows path rules regardless of the host OS this
+        # tool runs on (see dumpex.hunt.stomping.memory_scan._module_basename
+        # for the same fix, applied there first).
         name     = m.name or "(unnamed)"
         ts_raw   = getattr(m, "timestamp", 0) or 0
         ts_str   = _pe_timestamp_to_str(ts_raw)
@@ -34,7 +41,7 @@ def collect_modules(mf):
             anomaly_flags.append("OLD_TIMESTAMP")
 
         records.append(ModuleRecord(
-            name=os.path.basename(name),
+            name=ntpath.basename(name),
             full_path=m.name or None,
             base_address=hex_address(m.baseaddress),
             end_address=hex_address(m.endaddress),
