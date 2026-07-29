@@ -281,7 +281,7 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
         ))
 
     # Coverage tracked independently of status/score — see dumpex.hunt.stomping /
-    # pipe.py for why: a nonzero score must not silently imply every
+    # dumpex.hunt.pipe for why: a nonzero score must not silently imply every
     # region/thread was checked.
     coverage_reasons = []
     if not coverage["memory_info_stream"]:

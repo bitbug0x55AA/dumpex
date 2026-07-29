@@ -49,7 +49,6 @@ jobs:
         # coverage shouldn't either.
         if: always()
         run: |
-          coverage report --include="dumpex/hunt/pipe.py"       --fail-under=73
           coverage report --include="dumpex/core/pe_utils.py"   --fail-under=56
           coverage report --include="dumpex/hunt/_coverage.py"  --fail-under=85
           coverage report --include="dumpex/hunt/_finding.py"   --fail-under=90
@@ -105,3 +104,14 @@ jobs:
           coverage report --include="dumpex/hunt/stomping/disk_reference.py" --fail-under=70
           coverage report --include="dumpex/hunt/stomping/memory_scan.py"    --fail-under=70
           coverage report --include="dumpex/hunt/stomping/presentation.py"   --fail-under=55
+          # dumpex/hunt/pipe/*: same reasoning -- pipe.py is a package now,
+          # not a single file.
+          coverage report --include="dumpex/hunt/pipe/__init__.py"      --fail-under=95
+          coverage report --include="dumpex/hunt/pipe/config.py"       --fail-under=95
+          coverage report --include="dumpex/hunt/pipe/models.py"       --fail-under=95
+          coverage report --include="dumpex/hunt/pipe/correlation.py"  --fail-under=78
+          coverage report --include="dumpex/hunt/pipe/aggregate.py"    --fail-under=78
+          coverage report --include="dumpex/hunt/pipe/patterns.py"    --fail-under=75
+          coverage report --include="dumpex/hunt/pipe/presentation.py" --fail-under=70
+          coverage report --include="dumpex/hunt/pipe/handle_scan.py" --fail-under=70
+          coverage report --include="dumpex/hunt/pipe/memory_scan.py" --fail-under=58

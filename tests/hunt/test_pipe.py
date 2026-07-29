@@ -193,3 +193,38 @@ def test_short_read_region_makes_result_inconclusive():
     assert f["coverage_status"] == "partial"
     assert f["status"] == "INCONCLUSIVE"
     assert any("short read" in r for r in f["coverage_reasons"])
+
+
+# ── HandleDataStream missing AND a short-read region gap co-occurring ─────
+# must not have the console verdict silently drop the short-read note just
+# because the "no HandleDataStream" branch fires first — --json's
+# coverage_reasons already carried both, but a prior version had the
+# console re-derive a narrower reason string for other branches and used a
+# fixed message here that never mentioned any OTHER coexisting gap. See
+# aggregate.build_report's verdict_reason for the fix.
+
+def test_missing_handle_stream_and_short_read_both_reported(capsys):
+    region_base = 0x2100000
+    declared_size = 0x4000
+    actual_bytes  = b'\x00' * 0x1000   # far less than RegionSize claims
+    regions = [Region(region_base, region_base, declared_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = None   # HandleDataStream stream ABSENT
+    pipemod.read_region = mem_reader({region_base: actual_bytes})
+
+    f = pipemod._hunt_pipe(MF(), verbose=False)
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("HandleDataStream" in r for r in f["coverage_reasons"])
+    assert any("short read" in r for r in f["coverage_reasons"])
+
+    out = capsys.readouterr().out
+    assert "HandleDataStream" in out
+    assert "short read" in out, (
+        "the short-read coverage gap must still be visible in the console verdict "
+        "even when HandleDataStream is also missing"
+    )

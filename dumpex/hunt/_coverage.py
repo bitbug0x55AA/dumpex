@@ -14,8 +14,8 @@ Before this module existed, each hunter hand-rolled the same two
 if/elif chains separately (stomping.py, pipe.py, encoding.py each wrote
 an near-identical copy; injection.py used a similarly-shaped but
 differently-named helper — this history predates the injection.py ->
-dumpex/hunt/injection/ and stomping.py -> dumpex/hunt/stomping/ package
-splits). That duplication is exactly how the four
+dumpex/hunt/injection/, stomping.py -> dumpex/hunt/stomping/, and
+pipe.py -> dumpex/hunt/pipe/ package splits). That duplication is exactly how the four
 hunters' coverage semantics could quietly drift apart from each other —
 `derive_coverage_status()` and `derive_status()` are the single place
 this reduction happens now; every hunter calls these two functions
@@ -81,16 +81,17 @@ class CoverageTracker:
     were skipped/failed for each of a handful of common reasons.
 
     Not every hunter's coverage gaps fit this generic shape exactly —
-    dumpex/hunt/stomping/'s verified-content-diff loop has several genuinely
-    domain-specific gap reasons (reference file missing, reference
-    identity mismatch, relocation normalization failure, ...) that don't
-    map cleanly onto skipped_oversize/read_failed/short_reads, so it
-    keeps its own richer coverage_counts dict rather than forcing those
-    into this shape. Use CoverageTracker where the gaps genuinely ARE
-    just "region too big / read failed / short read / ran out of
-    time-or-budget" (encoding.py's per-layer region scans, pipe.py's
-    region scan) — for everything else, track whatever the hunter's own
-    reasons array needs and call derive_status()/derive_coverage_status()
+    the verified-content-diff loop in dumpex.hunt.stomping has several
+    genuinely domain-specific gap reasons (reference file missing,
+    reference identity mismatch, relocation normalization failure, ...)
+    that don't map cleanly onto skipped_oversize/read_failed/short_reads,
+    so it keeps its own richer coverage_counts dict rather than forcing
+    those into this shape. Use CoverageTracker where the gaps genuinely
+    ARE just "region too big / read failed / short read / ran out of
+    time-or-budget" (the per-layer region scans in dumpex.hunt.encoding
+    and the region scan in dumpex.hunt.pipe.memory_scan) — for everything
+    else, track whatever the hunter's own reasons array needs and call
+    derive_status()/derive_coverage_status()
     directly with an explicit `complete` boolean.
     """
     total:            int = 0   # eligible items found (before any skip/fail)
