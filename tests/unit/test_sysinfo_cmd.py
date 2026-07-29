@@ -18,6 +18,8 @@ def test_collect_sysinfo_normal_is_complete():
     mf.sysinfo = SysInfo()
     mf.misc_info = MiscInfo(process_id=1234)
     mf.peb = Peb(0x140000000, r"C:\test.exe")
+    mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+    mf.modules = FakeStream([Module(0, 0, "a")], "modules")
     records, status, reasons, peb_present, threads_present, modules_present = collect_sysinfo(mf)
     assert status == "complete"
     assert reasons == []
@@ -26,18 +28,23 @@ def test_collect_sysinfo_normal_is_complete():
     assert rec.pid == 1234
     assert isinstance(rec.pid, int)
     assert rec.os == "Windows 10"
+    assert rec.thread_count == 1
+    assert rec.module_count == 1
 
 
 def test_collect_sysinfo_missing_streams_is_partial():
     records, status, reasons, peb_present, threads_present, modules_present = \
         collect_sysinfo(FakeMF())
     assert status == "partial"
-    assert len(reasons) == 3   # sysinfo, misc_info, peb all missing
+    # sysinfo, misc_info, peb, threads, modules all missing
+    assert len(reasons) == 5
     assert peb_present is False
     rec = records[0]
     assert rec.pid is None
     assert rec.os is None
     assert rec.hostname is None   # never "" or "(unknown)"
+    assert rec.thread_count is None   # never 0 when the stream itself is absent
+    assert rec.module_count is None
 
 
 def test_collect_sysinfo_windows_11_misdetection_fix():

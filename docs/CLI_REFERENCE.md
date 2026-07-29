@@ -85,7 +85,10 @@ output yet — `--json`/`--csv` with one of these is rejected immediately,
 before the dump is opened, rather than running the full command first.
 For the v2-routed modes, the process exit code also reports coverage
 independent of `--json`/`--csv`: `0` for complete coverage, `3` for
-partial (e.g. `--threads` on a dump missing `ThreadInfoListStream`).
+partial (e.g. `--threads` on a dump missing `ThreadInfoListStream`
+while the base thread list is still present), `4` when the one stream
+the command needed is entirely absent (e.g. `--modules` when
+`ModuleListStream` itself isn't in the dump at all).
 
 See [Output and Evidence Schema](OUTPUT_SCHEMA.md) for formats and metadata.
 

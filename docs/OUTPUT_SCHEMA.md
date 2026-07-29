@@ -299,13 +299,16 @@ a verdict:
 
 `result.data.records` is always an array of one canonical record type per
 `kind` (`memory_regions` → `MemoryRegionRecord`, `modules` →
-`ModuleRecord`, `threads` → `ThreadRecord`, `sysinfo`/`pid`/`peb` → the
-shared `ProcessInfoRecord`, each populating only its own subset of
-fields) — a single-record result (`sysinfo`/`pid`/`peb`) is still a
-one-element array, not a bare object, so a consumer never needs to
-special-case array-vs-object by `kind`. See
-[`dumpex/output/records.py`](../dumpex/output/records.py) for the exact
-field lists.
+`ModuleRecord`, `threads` → `ThreadRecord`, `sysinfo` → `SysInfoRecord`,
+`pid` → `PidRecord`, `peb` → `PebRecord`) — a single-record result
+(`sysinfo`/`pid`/`peb`) is still a one-element array, not a bare object,
+so a consumer never needs to special-case array-vs-object by `kind`. Each
+record type is fully typed per `kind` in the JSON Schema itself
+(`additionalProperties: false`, every field's exact type, hex-address
+format) via an `if`/`then` dispatch on `result.kind` — a dropped, renamed,
+or mistyped field fails schema validation, not just "records is an
+array." See [`dumpex/output/records.py`](../dumpex/output/records.py) for
+the exact field lists.
 
 Two type conventions apply uniformly across every v2 record: a field is a
 normalized, fixed-width (16 hex digit), lowercase `"0x..."` string only
@@ -318,14 +321,17 @@ the second rule structurally: it raises rather than silently
 stringifying any value that isn't already a plain JSON scalar/list/dict
 by the time it's serialized.
 
-An exit code distinguishes complete from partial coverage for these six
-commands independent of whether `--json`/`--csv` was even requested:
-`0` when `coverage.status` is `"complete"`, `3` when it's `"partial"` — a
-SOC script checking `$?` on a bare `dumpex sample.dmp --threads` can
-detect degraded coverage without parsing JSON at all. This convention is
-scoped to these six commands only; every other command's exit-code
-behavior (`0` on completion, an uncaught exception's default nonzero on a
-fatal error) is unchanged.
+An exit code mirrors `coverage.status` one-for-one for these six commands,
+independent of whether `--json`/`--csv` was even requested: `0` for
+`"complete"`, `3` for `"partial"`, `4` for `"not_evaluated"` (the primary
+stream a command needed was entirely absent from the dump — e.g.
+`--modules` when `ModuleListStream` itself isn't present, as opposed to
+being present with zero entries, which is `"complete"`) — a SOC script
+checking `$?` on a bare `dumpex sample.dmp --threads` can distinguish "no
+data at all" from "some data, degraded" without parsing JSON at all. This
+convention is scoped to these six commands only; every other command's
+exit-code behavior (`0` on completion, an uncaught exception's default
+nonzero on a fatal error) is unchanged.
 
 `--diff`/`--report`/`--extract`/`--strings` do not produce structured
 output yet. Passing `--json`/`--csv` with one of them is rejected before

@@ -86,12 +86,29 @@ class ModuleRecord:
         }
 
 
+MODULE_CONTEXT_RESOLVED     = "resolved"       # start_address falls inside a known module
+MODULE_CONTEXT_UNREGISTERED = "unregistered"   # ModuleListStream available; confirmed NOT
+                                                 # backed by any known module -- an actual
+                                                 # signal (e.g. injection/hollowing indicator)
+MODULE_CONTEXT_UNAVAILABLE  = "unavailable"     # ModuleListStream itself missing -- can't
+                                                 # tell either way, NOT a confirmed anomaly
+
+
 @dataclass
 class ThreadRecord:
     """One thread, as reported by `--threads`."""
     tid:               "int | None"
     start_address:     "str | None"
     backing_module:    "str | None"
+    # None only when start_address is itself None (module context is moot
+    # with no address to resolve). Otherwise one of MODULE_CONTEXT_* --
+    # see those constants' docstrings. Mirrors the same "confirmed vs
+    # can't-tell" distinction dumpex.hunt._context.classify_memory_context
+    # already makes for memory regions (UNREGISTERED vs UNKNOWN): a
+    # missing ModuleListStream must never be indistinguishable from a
+    # positively-confirmed "not in any module" finding, since the latter
+    # is itself a DFIR signal this tool's own hunters treat as suspicious.
+    module_context:    "str | None"
     create_time:       "str | None"
     exit_time:         "str | None"
     exit_status:       "int | None"
@@ -107,6 +124,7 @@ class ThreadRecord:
             "tid":               self.tid,
             "start_address":     self.start_address,
             "backing_module":    self.backing_module,
+            "module_context":    self.module_context,
             "flags":             list(self.flags),
             "create_time":       self.create_time,
             "exit_time":         self.exit_time,
@@ -120,51 +138,34 @@ class ThreadRecord:
 
 
 @dataclass
-class ProcessInfoRecord:
-    """
-    Shared "process-centric" record for `--sysinfo`, `--pid`, and `--peb`
-    -- one record type per the requested canonical-record list, rather
-    than three narrower ones, differentiated by result.kind
-    ("sysinfo"/"pid"/"peb"). Each command only populates its own subset
-    of fields; the rest stay None. See the v2 migration plan for why this
-    tradeoff was made (bundling vs. three separate record types).
-    """
+class SysInfoRecord:
+    """`--sysinfo`'s record. Split out from a single shared "process info"
+    record (an earlier iteration bundled sysinfo/pid/peb into one type
+    with dozens of nulled-out fields per command) so each kind's schema
+    can be fully and tightly typed -- see PidRecord/PebRecord below."""
+    dump_file:          "str | None" = None
+    hostname:           "str | None" = None
+    username:           "str | None" = None
+    os:                 "str | None" = None
+    os_version:         "str | None" = None
+    architecture:       "str | None" = None
+    product_type:       "str | None" = None
     pid:                "int | None" = None
-    source:             "str | None" = None   # pid only: which stream determined pid
-    dump_file:          "str | None" = None   # sysinfo only
-    hostname:           "str | None" = None   # sysinfo only
-    username:           "str | None" = None   # sysinfo only
-    os:                 "str | None" = None   # sysinfo only
-    os_version:         "str | None" = None   # sysinfo only
-    architecture:       "str | None" = None   # sysinfo only
-    product_type:       "str | None" = None   # sysinfo only
-    process_start_utc:  "str | None" = None   # sysinfo only
-    image_path:         "str | None" = None   # sysinfo, peb
-    command_line:       "str | None" = None   # sysinfo, peb
-    current_directory:  "str | None" = None   # sysinfo (working dir), peb
-    processors:         "int | None" = None   # sysinfo only
-    cpu_vendor:              "str | None" = None   # sysinfo only
-    cpu_current_mhz:         "int | None" = None   # sysinfo only
-    cpu_max_mhz:             "int | None" = None   # sysinfo only
-    process_user_time_seconds:   "int | float | None" = None   # sysinfo only
-    process_kernel_time_seconds: "int | float | None" = None   # sysinfo only
-    thread_count:       "int | None" = None   # sysinfo (was threads_in_dump), pid
-    module_count:       "int | None" = None   # sysinfo only (was modules_in_dump)
-    exc_tid:            "int | None" = None   # pid only -- exception-stream TID (last resort)
-    peb_address:        "str | None" = None   # peb only
-    image_base_address: "str | None" = None   # peb only
-    being_debugged:     "bool | None" = None  # peb only
-    window_title:       "str | None" = None   # peb only
-    dll_path:           "str | None" = None   # peb only
-    standard_input:     "str | None" = None   # peb only (handle value, hex)
-    standard_output:    "str | None" = None   # peb only (handle value, hex)
-    standard_error:     "str | None" = None   # peb only (handle value, hex)
-    environment_variables: "list | None" = None   # peb only: list[{"name","value"}]
+    process_start_utc:  "str | None" = None
+    image_path:         "str | None" = None
+    command_line:       "str | None" = None
+    current_directory:  "str | None" = None
+    processors:         "int | None" = None
+    cpu_vendor:         "str | None" = None
+    cpu_current_mhz:    "int | None" = None
+    cpu_max_mhz:        "int | None" = None
+    process_user_time_seconds:   "int | float | None" = None
+    process_kernel_time_seconds: "int | float | None" = None
+    thread_count:       "int | None" = None   # None if ThreadListStream itself is absent
+    module_count:       "int | None" = None   # None if ModuleListStream itself is absent
 
     def to_dict(self) -> dict:
         return {
-            "pid":                          self.pid,
-            "source":                       self.source,
             "dump_file":                    self.dump_file,
             "hostname":                     self.hostname,
             "username":                     self.username,
@@ -172,6 +173,7 @@ class ProcessInfoRecord:
             "os_version":                   self.os_version,
             "architecture":                 self.architecture,
             "product_type":                 self.product_type,
+            "pid":                          self.pid,
             "process_start_utc":            self.process_start_utc,
             "image_path":                   self.image_path,
             "command_line":                 self.command_line,
@@ -184,17 +186,57 @@ class ProcessInfoRecord:
             "process_kernel_time_seconds":  self.process_kernel_time_seconds,
             "thread_count":                 self.thread_count,
             "module_count":                 self.module_count,
-            "exc_tid":                      self.exc_tid,
-            "peb_address":                  self.peb_address,
-            "image_base_address":           self.image_base_address,
-            "being_debugged":               self.being_debugged,
-            "window_title":                 self.window_title,
-            "dll_path":                     self.dll_path,
-            "standard_input":               self.standard_input,
-            "standard_output":              self.standard_output,
-            "standard_error":               self.standard_error,
-            "environment_variables":        (list(self.environment_variables)
-                                              if self.environment_variables is not None else None),
+        }
+
+
+@dataclass
+class PidRecord:
+    """`--pid`'s record."""
+    pid:          "int | None" = None
+    source:       "str | None" = None   # which stream determined pid
+    thread_count: "int | None" = None
+    exc_tid:      "int | None" = None   # exception-stream TID (last resort, not a PID)
+
+    def to_dict(self) -> dict:
+        return {
+            "pid":          self.pid,
+            "source":       self.source,
+            "thread_count": self.thread_count,
+            "exc_tid":      self.exc_tid,
+        }
+
+
+@dataclass
+class PebRecord:
+    """`--peb`'s record."""
+    peb_address:        "str | None" = None
+    image_base_address: "str | None" = None
+    being_debugged:     "bool | None" = None
+    image_path:         "str | None" = None
+    command_line:       "str | None" = None
+    window_title:       "str | None" = None
+    dll_path:           "str | None" = None
+    current_directory:  "str | None" = None
+    standard_input:     "str | None" = None   # handle value, hex
+    standard_output:    "str | None" = None   # handle value, hex
+    standard_error:     "str | None" = None   # handle value, hex
+    environment_variables: "list | None" = None   # list[{"name","value"}]
+
+    def to_dict(self) -> dict:
+        return {
+            "peb_address":           self.peb_address,
+            "image_base_address":    self.image_base_address,
+            "being_debugged":        self.being_debugged,
+            "image_path":            self.image_path,
+            "command_line":          self.command_line,
+            "window_title":          self.window_title,
+            "dll_path":              self.dll_path,
+            "current_directory":     self.current_directory,
+            "standard_input":        self.standard_input,
+            "standard_output":       self.standard_output,
+            "standard_error":        self.standard_error,
+            "environment_variables": (list(self.environment_variables)
+                                       if self.environment_variables is not None else None),
         }
 
 

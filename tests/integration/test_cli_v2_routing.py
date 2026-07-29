@@ -137,8 +137,22 @@ def test_modules_complete_coverage_exits_zero(monkeypatch):
     dump_path = _make_dump_file()
     try:
         mf = FakeMF()
+        mf.modules = FakeStream([], "modules")   # stream present (not missing) -> "complete"
         monkeypatch.setattr(cli, "open_dump", lambda path: mf)
         monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--modules"])
         cli.main()   # must NOT raise SystemExit at all (falsy EXIT_OK)
+    finally:
+        os.remove(dump_path)
+
+
+def test_modules_stream_missing_exits_not_evaluated(monkeypatch):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # ModuleListStream entirely absent
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--modules"])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
     finally:
         os.remove(dump_path)

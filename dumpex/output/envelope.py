@@ -95,27 +95,59 @@ def build_meta_v2(*, dump_path_abs: str, dump_file_name: str, command: "str | No
                    options: dict, case_id: "str | None", analyst: "str | None",
                    redact_paths: bool, started_at: "datetime.datetime",
                    finished_at: "datetime.datetime") -> dict:
+    """
+    Each of tool/execution/evidence/runtime is isolated in its OWN
+    try/except rather than one try wrapping the whole document: the v2
+    schema requires meta.tool/meta.execution/meta.evidence (only
+    meta.runtime is optional) with their own required sub-fields, so a
+    single all-or-nothing except that replaced the entire meta object
+    with just {"schema_version", "error"} (as a prior version of this
+    function did) would itself be schema-invalid -- silently producing a
+    document that claims "schema_version: 2.0" but cannot pass the very
+    schema it names. Each fallback below still satisfies every field
+    dumpex-output-v2.0.schema.json's $defs/meta requires, with an "error"
+    key added alongside (additionalProperties is not restricted on these
+    objects) so the failure is visible rather than merely papered over.
+    """
+    meta = {"schema_version": SCHEMA_VERSION}
+
     try:
-        return {
-            "schema_version": SCHEMA_VERSION,
-            "tool": _tool_meta(),
-            "execution": {
-                "started_at":       started_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "finished_at":      finished_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                "duration_seconds": round((finished_at - started_at).total_seconds(), 3),
-                "command":          command,
-                "options":          _redact_options(options) if redact_paths else dict(options),
-                "case_id":          case_id,
-                "analyst":          analyst,
-            },
-            "evidence": [_evidence_entry(dump_path_abs, dump_file_name, "primary", "primary",
-                                          redact_paths)],
-            "runtime": _runtime_meta(),
+        meta["tool"] = _tool_meta()
+    except Exception as e:
+        meta["tool"] = {"name": "dumpex", "version": None,
+                         "error": f"tool metadata failed: {e}"}
+
+    try:
+        meta["execution"] = {
+            "started_at":       started_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "finished_at":      finished_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "duration_seconds": round((finished_at - started_at).total_seconds(), 3),
+            "command":          command,
+            "options":          _redact_options(options) if redact_paths else dict(options),
+            "case_id":          case_id,
+            "analyst":          analyst,
         }
     except Exception as e:
-        # Last-resort net, matching StructuredOutput._build_meta: meta
-        # construction must never take down an otherwise-complete result.
-        return {"schema_version": SCHEMA_VERSION, "error": f"metadata construction failed: {e}"}
+        meta["execution"] = {
+            "started_at": str(started_at), "finished_at": str(finished_at),
+            "duration_seconds": 0.0, "command": command, "options": {},
+            "case_id": case_id, "analyst": analyst,
+            "error": f"execution metadata failed: {e}",
+        }
+
+    try:
+        meta["evidence"] = [_evidence_entry(dump_path_abs, dump_file_name, "primary", "primary",
+                                             redact_paths)]
+    except Exception as e:
+        meta["evidence"] = [{"id": "primary", "role": "primary",
+                              "error": f"evidence metadata failed: {e}"}]
+
+    try:
+        meta["runtime"] = _runtime_meta()
+    except Exception:
+        pass   # optional field -- omitted entirely on failure, not required by the schema
+
+    return meta
 
 
 @dataclass

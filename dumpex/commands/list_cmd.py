@@ -7,9 +7,20 @@ from dumpex.output.records import MemoryRegionRecord, hex_address
 
 
 def collect_regions(mf, filter_prot=None):
-    """Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons). Always 'complete' -- MemoryInfo either has entries
-    or it doesn't; there is no partial-read/degraded mode for this stream."""
+    """
+    Pure data, no printing. Returns (records, coverage_status,
+    coverage_reasons).
+
+    get_memory_regions() returns [] both when MemoryInfoListStream is
+    entirely absent from the dump AND when it's present but genuinely
+    empty -- those are not the same claim. A dump captured without this
+    stream must report 'not_evaluated', not 'complete' with zero
+    regions: the latter would read as "we looked at every region and
+    there are none," which is a materially different (and false)
+    statement about coverage.
+    """
+    stream_present = bool(mf.memory_info)
+
     records = []
     for r in get_memory_regions(mf):
         p = prot_str(r.Protect)
@@ -23,6 +34,11 @@ def collect_regions(mf, filter_prot=None):
             type=prot_str(r.Type),
             suspicious=any(s in p for s in SUSPICIOUS_PROTS),
         ))
+
+    if not stream_present:
+        coverage_status = derive_coverage_status(evaluated=False, complete=False)
+        return records, coverage_status, ["MemoryInfoListStream not present in this dump"]
+
     coverage_status = derive_coverage_status(evaluated=True, complete=True)
     return records, coverage_status, []
 

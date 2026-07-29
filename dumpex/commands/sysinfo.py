@@ -4,7 +4,7 @@ import datetime
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
 from dumpex.hunt._coverage import derive_coverage_status
-from dumpex.output.records import ProcessInfoRecord
+from dumpex.output.records import SysInfoRecord, PidRecord
 
 def _os_display_name(si) -> str:
     """
@@ -65,7 +65,7 @@ def collect_sysinfo(mf: MinidumpFile):
         except Exception:
             cpu_vendor = None
 
-    record = ProcessInfoRecord(
+    record = SysInfoRecord(
         pid=(mi.ProcessId if mi and mi.ProcessId else None),
         dump_file=os.path.basename(mf.filename),
         hostname=hostname,
@@ -86,8 +86,11 @@ def collect_sysinfo(mf: MinidumpFile):
         cpu_max_mhz=(mi.ProcessorMaxMhz if mi and mi.ProcessorMaxMhz else None),
         process_user_time_seconds=(mi.ProcessUserTime if mi and mi.ProcessUserTime is not None else None),
         process_kernel_time_seconds=(mi.ProcessKernelTime if mi and mi.ProcessKernelTime is not None else None),
-        thread_count=(len(mf.threads.threads) if mf.threads else 0),
-        module_count=(len(mf.modules.modules) if mf.modules else 0),
+        # None (not 0) when the stream itself is absent -- "no thread
+        # list captured" and "thread list captured, zero threads" are not
+        # the same claim, and 0 would silently read as the latter.
+        thread_count=(len(mf.threads.threads) if mf.threads else None),
+        module_count=(len(mf.modules.modules) if mf.modules else None),
     )
 
     missing = []
@@ -97,11 +100,15 @@ def collect_sysinfo(mf: MinidumpFile):
         missing.append("MiscInfo stream not present")
     if not peb:
         missing.append("PEB not available (requires sysinfo + thread list)")
+    if not mf.threads:
+        missing.append("ThreadListStream not present (thread_count unavailable)")
+    if not mf.modules:
+        missing.append("ModuleListStream not present (module_count unavailable)")
     coverage_status = derive_coverage_status(evaluated=True, complete=not missing)
     return [record], coverage_status, missing, bool(peb), bool(mf.threads), bool(mf.modules)
 
 
-def render_sysinfo_console(record: ProcessInfoRecord, peb_present: bool,
+def render_sysinfo_console(record: SysInfoRecord, peb_present: bool,
                             threads_present: bool, modules_present: bool) -> None:
     print(f"\n{BOLD('═══ SYSTEM INFO ═══')}")
 
@@ -219,7 +226,7 @@ def collect_pid(mf: MinidumpFile):
                 f"(this is a Thread ID, not a Process ID)"
             )
 
-    record = ProcessInfoRecord(
+    record = PidRecord(
         pid=pid,
         source=source,
         thread_count=len(threads),
@@ -229,7 +236,7 @@ def collect_pid(mf: MinidumpFile):
     return [record], coverage_status, warnings
 
 
-def render_pid_console(record: ProcessInfoRecord, coverage_reasons: list) -> None:
+def render_pid_console(record: PidRecord, coverage_reasons: list) -> None:
     print(f"\n{BOLD('═══ PROCESS ID ═══')}")
 
     if record.pid is not None:

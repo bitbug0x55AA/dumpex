@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.0.schema.json",
   "title": "dumpex v2 structured output (schema_version 2.0)",
-  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb) via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract and the migration plan). `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. Per-kind `result.data.records[]` item shape is intentionally not strictly typed yet (would need if/then-by-kind branching for limited benefit at this stage) -- a known, non-blocking follow-up.",
+  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb) via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract and the migration plan). `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. result.data.records[] items ARE typed per kind (see the allOf/if-then block in $defs/result and the six record $defs) -- additionalProperties: false on every record type, so a dropped/renamed/retyped field or a stray field from the wrong kind fails validation, not just 'is an array'.",
   "type": "object",
   "required": ["meta", "result"],
   "additionalProperties": true,
@@ -69,6 +69,147 @@
       }
     },
 
+    "hexAddress": {
+      "description": "A memory address/pointer/handle, normalized to a fixed-width (16 hex digit), lowercase, 0x-prefixed string -- or null when there is nothing to report an address for (see dumpex/output/records.py's hex_address()). Never a bare int (uint64 precision isn't safe across all JSON consumers) and never a variable-width string.",
+      "type": ["string", "null"],
+      "pattern": "^0x[0-9a-f]{16}$"
+    },
+
+    "memoryRegionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_address", "size", "state", "protect", "type", "suspicious"],
+      "properties": {
+        "base_address": { "$ref": "#/$defs/hexAddress" },
+        "size":         { "type": ["integer", "null"] },
+        "state":        { "type": ["string", "null"] },
+        "protect":      { "type": ["string", "null"] },
+        "type":         { "type": ["string", "null"] },
+        "suspicious":   { "type": "boolean" }
+      }
+    },
+
+    "moduleRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "full_path", "base_address", "end_address", "size",
+                   "compiled_utc", "file_version", "checksum", "anomaly_flags"],
+      "properties": {
+        "name":          { "type": ["string", "null"] },
+        "full_path":     { "type": ["string", "null"] },
+        "base_address":  { "$ref": "#/$defs/hexAddress" },
+        "end_address":   { "$ref": "#/$defs/hexAddress" },
+        "size":          { "type": ["integer", "null"] },
+        "compiled_utc":  { "type": ["string", "null"] },
+        "file_version":  { "type": ["string", "null"] },
+        "checksum":      { "type": ["integer", "null"] },
+        "anomaly_flags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "threadRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tid", "start_address", "backing_module", "module_context", "flags",
+                   "create_time", "exit_time", "exit_status", "kernel_time_100ns",
+                   "user_time_100ns", "suspend_count", "priority", "teb"],
+      "properties": {
+        "tid":               { "type": ["integer", "null"] },
+        "start_address":     { "$ref": "#/$defs/hexAddress" },
+        "backing_module":    { "type": ["string", "null"] },
+        "module_context": {
+          "description": "resolved: backed by a known module. unregistered: ModuleListStream was available and this address is confirmed NOT backed by any known module (a real DFIR signal). unavailable: ModuleListStream itself is missing -- can't tell either way, must not be confused with 'unregistered'. null: start_address is itself unknown (module context is moot).",
+          "enum": ["resolved", "unregistered", "unavailable", null]
+        },
+        "flags":             { "type": "array", "items": { "type": "string" } },
+        "create_time":       { "type": ["string", "null"] },
+        "exit_time":         { "type": ["string", "null"] },
+        "exit_status":       { "type": ["integer", "null"] },
+        "kernel_time_100ns": { "type": ["integer", "null"] },
+        "user_time_100ns":   { "type": ["integer", "null"] },
+        "suspend_count":     { "type": ["integer", "null"] },
+        "priority":          { "type": ["integer", "null"] },
+        "teb":               { "$ref": "#/$defs/hexAddress" }
+      }
+    },
+
+    "sysInfoRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dump_file", "hostname", "username", "os", "os_version", "architecture",
+                   "product_type", "pid", "process_start_utc", "image_path", "command_line",
+                   "current_directory", "processors", "cpu_vendor", "cpu_current_mhz",
+                   "cpu_max_mhz", "process_user_time_seconds", "process_kernel_time_seconds",
+                   "thread_count", "module_count"],
+      "properties": {
+        "dump_file":                   { "type": ["string", "null"] },
+        "hostname":                    { "type": ["string", "null"] },
+        "username":                    { "type": ["string", "null"] },
+        "os":                          { "type": ["string", "null"] },
+        "os_version":                  { "type": ["string", "null"] },
+        "architecture":                { "type": ["string", "null"] },
+        "product_type":                { "type": ["string", "null"] },
+        "pid":                         { "type": ["integer", "null"] },
+        "process_start_utc":           { "type": ["string", "null"] },
+        "image_path":                  { "type": ["string", "null"] },
+        "command_line":                { "type": ["string", "null"] },
+        "current_directory":           { "type": ["string", "null"] },
+        "processors":                  { "type": ["integer", "null"] },
+        "cpu_vendor":                  { "type": ["string", "null"] },
+        "cpu_current_mhz":             { "type": ["integer", "null"] },
+        "cpu_max_mhz":                 { "type": ["integer", "null"] },
+        "process_user_time_seconds":   { "type": ["number", "null"] },
+        "process_kernel_time_seconds": { "type": ["number", "null"] },
+        "thread_count":                { "type": ["integer", "null"] },
+        "module_count":                { "type": ["integer", "null"] }
+      }
+    },
+
+    "pidRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "source", "thread_count", "exc_tid"],
+      "properties": {
+        "pid":          { "type": ["integer", "null"] },
+        "source":       { "type": ["string", "null"] },
+        "thread_count": { "type": ["integer", "null"] },
+        "exc_tid":      { "type": ["integer", "null"] }
+      }
+    },
+
+    "pebRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["peb_address", "image_base_address", "being_debugged", "image_path",
+                   "command_line", "window_title", "dll_path", "current_directory",
+                   "standard_input", "standard_output", "standard_error",
+                   "environment_variables"],
+      "properties": {
+        "peb_address":        { "$ref": "#/$defs/hexAddress" },
+        "image_base_address": { "$ref": "#/$defs/hexAddress" },
+        "being_debugged":     { "type": ["boolean", "null"] },
+        "image_path":         { "type": ["string", "null"] },
+        "command_line":       { "type": ["string", "null"] },
+        "window_title":       { "type": ["string", "null"] },
+        "dll_path":           { "type": ["string", "null"] },
+        "current_directory":  { "type": ["string", "null"] },
+        "standard_input":     { "$ref": "#/$defs/hexAddress" },
+        "standard_output":    { "$ref": "#/$defs/hexAddress" },
+        "standard_error":     { "$ref": "#/$defs/hexAddress" },
+        "environment_variables": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["name", "value"],
+            "properties": {
+              "name":  { "type": "string" },
+              "value": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
     "result": {
       "type": "object",
       "required": ["kind", "execution_status", "coverage", "data"],
@@ -104,7 +245,27 @@
             "records": { "type": "array" }
           }
         }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "memory_regions" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/memoryRegionRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "modules" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/moduleRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "threads" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/threadRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "sysinfo" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/sysInfoRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "pid" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/pidRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "peb" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/pebRecord" } } } } } } }
+      ]
     },
 
     "diagnostics": {

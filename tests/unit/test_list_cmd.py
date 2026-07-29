@@ -20,11 +20,22 @@ def test_collect_regions_normal():
     assert records[1].suspicious is False   # PAGE_READONLY
 
 
-def test_collect_regions_empty_is_complete_not_partial():
-    records, status, reasons = collect_regions(FakeMF())
+def test_collect_regions_present_but_empty_stream_is_complete():
+    mf = FakeMF()
+    mf.memory_info = FakeStream([], "infos")   # stream present, genuinely zero regions
+    records, status, reasons = collect_regions(mf)
     assert records == []
     assert status == "complete"
     assert reasons == []
+
+
+def test_collect_regions_missing_stream_is_not_evaluated():
+    # MemoryInfoListStream entirely absent must not be indistinguishable
+    # from "present, zero regions" -- see the P1 review fix.
+    records, status, reasons = collect_regions(FakeMF())
+    assert records == []
+    assert status == "not_evaluated"
+    assert reasons == ["MemoryInfoListStream not present in this dump"]
 
 
 def test_collect_regions_filter_by_protection():

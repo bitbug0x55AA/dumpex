@@ -23,10 +23,21 @@ def test_collect_modules_normal():
     assert rec.anomaly_flags == []
 
 
-def test_collect_modules_empty():
-    records, status, reasons = collect_modules(FakeMF())
+def test_collect_modules_present_but_empty_stream_is_complete():
+    mf = FakeMF()
+    mf.modules = FakeStream([], "modules")   # stream present, genuinely zero modules
+    records, status, reasons = collect_modules(mf)
     assert records == []
     assert status == "complete"
+
+
+def test_collect_modules_missing_stream_is_not_evaluated():
+    # ModuleListStream entirely absent must not be indistinguishable from
+    # "present, zero modules" -- see the P1 review fix.
+    records, status, reasons = collect_modules(FakeMF())
+    assert records == []
+    assert status == "not_evaluated"
+    assert reasons == ["ModuleListStream not present in this dump"]
 
 
 def test_collect_modules_no_name_flagged_as_anomaly():

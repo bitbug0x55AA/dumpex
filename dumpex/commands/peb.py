@@ -2,7 +2,7 @@
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD
 from dumpex.hunt._coverage import derive_coverage_status
-from dumpex.output.records import ProcessInfoRecord, hex_address
+from dumpex.output.records import PebRecord, hex_address
 
 _PEB_MISSING_REASON = "PEB could not be parsed (missing sysinfo or thread list in dump)"
 
@@ -12,13 +12,13 @@ def collect_peb(mf: MinidumpFile):
     Pure data, no printing. Returns (records, coverage_status,
     coverage_reasons, peb_present). Unlike the old cmd_peb (which
     returned nothing at all when PEB couldn't be parsed), this always
-    reports a ProcessInfoRecord -- all fields None, coverage 'partial' --
+    reports a PebRecord -- all fields None, coverage 'partial' --
     so `--peb --json out.json` on a dump without a PEB still produces a
     valid, schema-conformant result instead of silently no-op'ing.
     """
     peb = mf.peb
     if not peb:
-        record = ProcessInfoRecord()
+        record = PebRecord()
         coverage_status = derive_coverage_status(evaluated=True, complete=False)
         return [record], coverage_status, [_PEB_MISSING_REASON], False
 
@@ -30,7 +30,7 @@ def collect_peb(mf: MinidumpFile):
             v = env.get("value", "") if isinstance(env, dict) else env[1]
             env_vars.append({"name": k, "value": v})
 
-    record = ProcessInfoRecord(
+    record = PebRecord(
         peb_address=hex_address(peb.address),
         being_debugged=peb.being_debugged,
         image_base_address=hex_address(peb.image_base_address),
@@ -48,7 +48,7 @@ def collect_peb(mf: MinidumpFile):
     return [record], coverage_status, [], True
 
 
-def render_peb_console(record: ProcessInfoRecord, peb_present: bool) -> None:
+def render_peb_console(record: PebRecord, peb_present: bool) -> None:
     if not peb_present:
         print(f"[!] {_PEB_MISSING_REASON}")
         return

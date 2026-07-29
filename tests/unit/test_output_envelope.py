@@ -74,13 +74,34 @@ def test_meta_execution_fields(tmp_path):
     assert meta["execution"]["options"] == {"verbose": False}
 
 
-def test_meta_construction_failure_is_isolated(monkeypatch, tmp_path):
+def test_meta_construction_failure_is_isolated_to_its_own_block(monkeypatch, tmp_path):
+    # A failure in ONE block (tool) must not blow away the rest of meta
+    # into a shape that fails the v2 schema's own required fields --
+    # execution/evidence/runtime must still build normally.
     def _boom():
         raise RuntimeError("simulated failure")
     monkeypatch.setattr(envelope_mod, "_tool_meta", _boom)
     meta = _meta(tmp_path)
     assert meta["schema_version"] == SCHEMA_VERSION
-    assert "error" in meta
+    assert meta["tool"] == {"name": "dumpex", "version": None,
+                             "error": "tool metadata failed: simulated failure"}
+    # required top-level meta fields still present and well-formed
+    assert meta["execution"]["command"] == "modules"
+    assert len(meta["evidence"]) == 1
+    assert "error" not in meta["execution"]
+    assert "error" not in meta["evidence"][0]
+
+
+def test_meta_evidence_construction_failure_stays_schema_shaped(monkeypatch, tmp_path):
+    def _boom(*a, **kw):
+        raise RuntimeError("simulated evidence failure")
+    monkeypatch.setattr(envelope_mod, "_evidence_entry", _boom)
+    meta = _meta(tmp_path)
+    assert meta["evidence"] == [{"id": "primary", "role": "primary",
+                                  "error": "evidence metadata failed: simulated evidence failure"}]
+    # every other block still built normally
+    assert meta["tool"]["name"] == "dumpex"
+    assert meta["execution"]["command"] == "modules"
 
 
 # ── execution_status / coverage stay independent axes ────────────────────

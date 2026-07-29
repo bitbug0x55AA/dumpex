@@ -16,9 +16,17 @@ _ANOMALY_BADGES = {
 
 
 def collect_modules(mf):
-    """Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons). Always 'complete' -- no degraded mode exists for
-    the module list stream."""
+    """
+    Pure data, no printing. Returns (records, coverage_status,
+    coverage_reasons).
+
+    get_modules() returns [] both when ModuleListStream is entirely
+    absent from the dump AND when it's present but genuinely empty --
+    those are not the same claim. A dump captured without this stream
+    must report 'not_evaluated', not 'complete' with zero modules.
+    """
+    stream_present = bool(mf.modules)
+
     records = []
     for m in sorted(get_modules(mf), key=lambda x: x.baseaddress):
         # Module paths recorded in a minidump are from the ORIGINAL Windows
@@ -51,6 +59,11 @@ def collect_modules(mf):
             checksum=checksum or None,
             anomaly_flags=anomaly_flags,
         ))
+
+    if not stream_present:
+        coverage_status = derive_coverage_status(evaluated=False, complete=False)
+        return records, coverage_status, ["ModuleListStream not present in this dump"]
+
     coverage_status = derive_coverage_status(evaluated=True, complete=True)
     return records, coverage_status, []
 

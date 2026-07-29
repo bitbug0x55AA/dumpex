@@ -4,11 +4,19 @@ from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import get_modules, get_thread_infos, addr_to_module
 from dumpex.core.pe_utils import _filetime_to_str, _dumpflags_str, _duration_100ns_to_str
 from dumpex.hunt._coverage import derive_coverage_status
-from dumpex.output.records import ThreadRecord, hex_address
+from dumpex.output.records import (
+    ThreadRecord, hex_address,
+    MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
+)
 
+_NEITHER_STREAM_REASON = "Neither ThreadListStream nor ThreadInfoListStream present in this dump"
 _DEGRADED_REASON = (
     "ThreadInfoListStream not present; StartAddress/CreateTime/ExitTime/"
     "KernelTime/UserTime unavailable (TID/SuspendCount/Priority/TEB only)"
+)
+_MODULES_UNAVAILABLE_REASON = (
+    "ModuleListStream not present; thread backing-module classification unavailable "
+    "(cannot confirm whether a start address is backed by a known module)"
 )
 
 
@@ -43,6 +51,10 @@ def collect_threads(mf):
     timing fields at all), consumed only by render_threads_console;
     cli.py only ever sees the first three (see cmd_threads below).
     """
+    base_threads_present = bool(mf.threads)
+    info_stream_present  = bool(mf.thread_info)
+    modules_available    = bool(mf.modules)
+
     threads_by_tid = {t.ThreadId: t for t in (mf.threads.threads if mf.threads else [])}
     infos   = get_thread_infos(mf)
     modules = get_modules(mf)
@@ -52,7 +64,7 @@ def collect_threads(mf):
     # Falling straight through to "0 thread(s)" when the base ThreadListStream
     # actually has entries would misreport a dump that simply wasn't captured
     # with that extra stream as having no threads at all.
-    degraded = not infos and bool(threads_by_tid)
+    degraded = not info_stream_present and base_threads_present
     if degraded:
         infos = [_RawThreadInfo(tid) for tid in threads_by_tid]
 
@@ -61,7 +73,24 @@ def collect_threads(mf):
     records = []
     for ti in infos:
         sa  = ti.StartAddress   # may be None in degraded mode — do not coerce to 0
-        mod = None if sa is None else addr_to_module(sa, modules)
+
+        module_context = None   # start address itself unknown -- module context is moot
+        mod = None
+        if sa is not None:
+            mod = addr_to_module(sa, modules)
+            if mod is not None:
+                module_context = MODULE_CONTEXT_RESOLVED
+            elif modules_available:
+                # ModuleListStream WAS available and this address genuinely
+                # isn't in it -- a real, confirmed finding (this tool's own
+                # injection/hollowing hunters treat an unbacked thread start
+                # address as a suspicious indicator).
+                module_context = MODULE_CONTEXT_UNREGISTERED
+            else:
+                # ModuleListStream itself is missing -- we simply cannot
+                # tell either way. Must never be indistinguishable from
+                # MODULE_CONTEXT_UNREGISTERED above, which IS a signal.
+                module_context = MODULE_CONTEXT_UNAVAILABLE
 
         raw           = threads_by_tid.get(ti.ThreadId)
         suspend_count = getattr(raw, "SuspendCount", None) if raw else None
@@ -84,6 +113,7 @@ def collect_threads(mf):
             # Windows paths regardless of the host OS this tool runs on
             # (see dumpex.hunt.stomping.memory_scan._module_basename).
             backing_module=ntpath.basename(mod.name) if mod else None,
+            module_context=module_context,
             flags=[flag_tag.strip("[]")] if flag_tag else [],
             create_time=create_time,
             exit_time=exit_time,
@@ -95,9 +125,20 @@ def collect_threads(mf):
             teb=hex_address(teb) if teb else None,
         ))
 
-    coverage_status = derive_coverage_status(evaluated=True, complete=not degraded)
-    coverage_reasons = [_DEGRADED_REASON] if degraded else []
-    return records, coverage_status, coverage_reasons, degraded, has_times
+    if not base_threads_present and not info_stream_present:
+        # Neither stream exists at all -- there is no thread data of any
+        # kind to report, not "0 threads, fully evaluated."
+        coverage_status = derive_coverage_status(evaluated=False, complete=False)
+        return records, coverage_status, [_NEITHER_STREAM_REASON], degraded, has_times
+
+    gaps = []
+    if degraded:
+        gaps.append(_DEGRADED_REASON)
+    if not modules_available:
+        gaps.append(_MODULES_UNAVAILABLE_REASON)
+
+    coverage_status = derive_coverage_status(evaluated=True, complete=not gaps)
+    return records, coverage_status, gaps, degraded, has_times
 
 
 def render_threads_console(records, degraded: bool, has_times: bool) -> None:
@@ -125,7 +166,16 @@ def render_threads_console(records, degraded: bool, has_times: bool) -> None:
             backed = DIM("(unknown — requires ThreadInfoListStream)")
             print(f"  {'StartAddress':<16} {DIM('unavailable')}  ← {backed}")
         else:
-            backed = DIM(rec.backing_module) if rec.backing_module else RED("⚠  NOT IN ANY MODULE")
+            if rec.module_context == MODULE_CONTEXT_RESOLVED:
+                backed = DIM(rec.backing_module)
+            elif rec.module_context == MODULE_CONTEXT_UNREGISTERED:
+                # Confirmed: ModuleListStream was available and this
+                # address genuinely isn't backed by any known module.
+                backed = RED("⚠  NOT IN ANY MODULE")
+            else:
+                # MODULE_CONTEXT_UNAVAILABLE -- ModuleListStream itself
+                # missing; must not read as the confirmed anomaly above.
+                backed = YELLOW("(module data unavailable — ModuleListStream missing)")
             print(f"  {'StartAddress':<16} {rec.start_address}  ← {backed}")
         if rec.suspend_count is not None:
             # SuspendCount > 0 has legitimate benign explanations (thread

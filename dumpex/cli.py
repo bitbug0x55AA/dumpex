@@ -42,8 +42,16 @@ _UNSUPPORTED_STRUCTURED_MODES = frozenset({"diff", "report", "extract", "strings
 # default nonzero exit on a fatal error) is unchanged by this PR --
 # folding --report/--hunt into this same convention is a later,
 # cross-cutting decision, not made here for just these six commands.
-EXIT_OK      = 0
-EXIT_PARTIAL = 3
+#
+# Mirrors coverage_status's own three-value vocabulary
+# (dumpex.hunt._coverage.derive_coverage_status) one-for-one -- a command
+# that never had the ONE stream it needed at all (not_evaluated) must not
+# collapse onto the same exit code as one that ran but hit a partial gap;
+# collapsing the two would make "we have literally nothing" and "we have
+# most of it" indistinguishable to a script checking `$?` alone.
+EXIT_OK            = 0
+EXIT_PARTIAL       = 3
+EXIT_NOT_EVALUATED = 4
 
 
 def _selected_run_mode(args) -> str:
@@ -293,15 +301,20 @@ def main():
 
 def _run(args, mf, out, cmd_label) -> "int | None":
     """Returns the process exit code for the six v2-routed recon commands
-    (EXIT_OK/EXIT_PARTIAL — see module docstring), or None for every other
-    command (unchanged exit-code behavior: 0 on completion, an uncaught
-    exception's default nonzero exit on a fatal error)."""
+    (EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED — see module docstring), or
+    None for every other command (unchanged exit-code behavior: 0 on
+    completion, an uncaught exception's default nonzero exit on a fatal
+    error)."""
     exit_code = None
 
     def _apply_v2_result(kind, records, coverage_status, coverage_reasons):
         if out:
             out.set_result(kind, records, coverage_status, coverage_reasons)
-        return EXIT_PARTIAL if coverage_status == "partial" else EXIT_OK
+        if coverage_status == "not_evaluated":
+            return EXIT_NOT_EVALUATED
+        if coverage_status == "partial":
+            return EXIT_PARTIAL
+        return EXIT_OK
 
     if args.list:
         exit_code = _apply_v2_result("memory_regions", *cmd_list(mf, args.filter))
