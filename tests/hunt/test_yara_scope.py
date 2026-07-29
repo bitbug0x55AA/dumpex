@@ -295,6 +295,60 @@ def test_mixed_confirmed_and_unverified_hits_scores_only_confirmed():
     assert unverified_hits and unverified_hits[0]["context_unverified"] is True
 
 
+@_needs_yara
+def test_suppression_counts_printed_exactly_once(capsys):
+    # Regression test: suppressed_module_pe/suppressed_scoped were printed
+    # once in yara_hunt/__init__.py right after "Scan complete ..." and
+    # AGAIN in presentation.py's render_result -- but only whenever
+    # has_hits was True (i.e. at least one hit survived to be rendered),
+    # which is why this needs a CONFIRMED hit alongside the suppressed
+    # ones to actually exercise render_result's post-rule-group print
+    # block, not just the has_hits=False early return. Cosmetic-only bug
+    # (JSON/verdict were never affected) -- this only asserts on captured
+    # console output.
+    pe_suppressed_va, pe_suppressed_fo = 0xC0000, 0xC000
+    scoped_suppressed_va, scoped_suppressed_fo = 0xC1000, 0xC100
+    confirmed_va, confirmed_fo = 0xC2000, 0xC200
+
+    pe_data = b'MZ' + b'\x00' * 60 + b'PE\x00\x00' + b'\x00' * 200
+    scoped_data = b'\x00' * 0x100 + b'SCOPED_MARKER_XYZ' + b'\x00' * 0x100
+    confirmed_data = b'\x00' * 0x100 + b'SCOPED_MARKER_XYZ' + b'\x00' * 0x100
+
+    rule_body = ('rule PE_In_Private_Memory { strings: $mz = "MZ" $pe = "PE\\x00\\x00" '
+                 'condition: $mz at 0 and $pe }\n' + _SCOPED_RULE)
+
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "combo.yar", rule_body)
+        segs = [
+            Segment(pe_suppressed_va, pe_suppressed_fo, len(pe_data)),
+            Segment(scoped_suppressed_va, scoped_suppressed_fo, len(scoped_data)),
+            Segment(confirmed_va, confirmed_fo, len(confirmed_data)),
+        ]
+        # Module covers pe_suppressed_va and scoped_suppressed_va (both
+        # get IMAGE-classified and suppressed) but stops short of
+        # confirmed_va, which is backed by a separate MEM_PRIVATE region
+        # instead (confirmed, scoreable ScopedMarker hit).
+        module = Module(pe_suppressed_va, 0x2000, r"C:\Windows\System32\legit.dll")
+        regions = [Region(confirmed_va, confirmed_va, len(confirmed_data), "MEM_COMMIT",
+                          "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream(segs, "memory_segments")
+            modules              = FakeStream([module], "modules")
+            memory_info           = FakeStream(regions, "infos")
+            _reader                = FakeReader({pe_suppressed_va: pe_data,
+                                                   scoped_suppressed_va: scoped_data,
+                                                   confirmed_va: confirmed_data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    out = capsys.readouterr().out
+    assert f["status"] == "DETECTED"   # has_hits=True -> render_result's
+                                        # full path (incl. the removed
+                                        # duplicate block) actually runs
+    assert out.count("PE_In_Private_Memory match(es) suppressed") == 1
+    assert out.count("scoped rule match(es) suppressed") == 1
+
+
 # ── regression: real packaged rules must not fire on ordinary module ─────
 # content -- the exact clean-Notepad false positives this change fixes
 # (WMI/VirtualAlloc-sequence/Shellcode-bootstrap strings/bytes that occur
