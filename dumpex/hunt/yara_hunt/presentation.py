@@ -137,12 +137,11 @@ def render_result(report, modules: list, verbose: bool = False) -> dict:
         )
 
     outcome = report.outcome
-    if outcome.suppressed_module_pe:
-        print(DIM(f"  [·] {outcome.suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
-                  f"resolved to a known module or a MEM_IMAGE region.\n"))
-    if outcome.suppressed_scoped:
-        print(DIM(f"  [·] {outcome.suppressed_scoped} scoped rule match(es) suppressed — "
-                  f"resolved to a known module or a MEM_IMAGE region.\n"))
+    # suppressed_module_pe/suppressed_scoped are already printed once, right
+    # after the scan completes, in __init__.py's "Scan complete ..." block
+    # (which runs unconditionally, unlike this function's has_hits-gated
+    # rendering) — printing them again here would just duplicate the same
+    # two lines whenever has_hits is True.
     if outcome.context_unverified:
         # Shared across PE_In_Private_Memory and any dumpex_scope-scoped
         # rule (see scanner.py's dispatch) — not attributable to one rule

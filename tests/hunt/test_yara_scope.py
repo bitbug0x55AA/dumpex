@@ -12,19 +12,31 @@ available at all) is kept visible in matches but downgraded to
 context_unverified rather than scored.
 
 Needs the real yara-python package -- an optional ("full") dependency --
-so this whole module is skipped (not failed) when it isn't present.
+for the end-to-end tests (which compile and run real rules through
+yara_hunt._hunt_yara). A module-level `pytest.importorskip("yara")` would
+skip the whole FILE, including the six pure classify_scoped_hit tests
+below that call dumpex.hunt.yara_hunt.context directly and need no YARA
+engine at all -- see tests/hunt/test_yara_context.py's own docstring for
+the same reasoning. Only the end-to-end tests are decorated with
+@_needs_yara and skipped (not failed) when yara-python is missing.
 """
 import os
 import tempfile
 
 import pytest
 
-pytest.importorskip("yara")
-
 from tests.fixtures.fakes import Region, Module, Segment, FakeReader, FakeStream, FakeMF
 
 import dumpex.hunt.yara_hunt.context as context
 import dumpex.hunt.yara_hunt as yara_hunt
+
+try:
+    import yara
+    _HAS_YARA = True
+except ImportError:
+    _HAS_YARA = False
+
+_needs_yara = pytest.mark.skipif(not _HAS_YARA, reason="yara-python not installed")
 
 
 def _write_rule(d, name, body):
@@ -114,6 +126,7 @@ _UNSCOPED_RULE = ('rule HighSpecificityMarker {\n'
                    '}\n')
 
 
+@_needs_yara
 def test_scoped_rule_hit_in_known_module_is_suppressed():
     seg_va, seg_fo = 0x70000, 0x7000
     data = b'\x00' * 0x100 + b'SCOPED_MARKER_XYZ' + b'\x00' * 0x100
@@ -134,6 +147,7 @@ def test_scoped_rule_hit_in_known_module_is_suppressed():
     assert "ScopedMarker" not in f.get("rules_hit", [])
 
 
+@_needs_yara
 def test_scoped_rule_hit_in_readonly_mem_mapped_is_context_unverified():
     seg_va, seg_fo = 0x80000, 0x8000
     data = b'\x00' * 0x100 + b'SCOPED_MARKER_XYZ' + b'\x00' * 0x100
@@ -157,6 +171,7 @@ def test_scoped_rule_hit_in_readonly_mem_mapped_is_context_unverified():
     assert "ScopedMarker" not in f.get("rules_hit", [])
 
 
+@_needs_yara
 def test_scoped_rule_hit_in_executable_mem_private_triggers_and_scores():
     seg_va, seg_fo = 0x90000, 0x9000
     data = b'\x00' * 0x100 + b'SCOPED_MARKER_XYZ' + b'\x00' * 0x100
@@ -179,6 +194,7 @@ def test_scoped_rule_hit_in_executable_mem_private_triggers_and_scores():
     assert f["matches"][0]["memory_context"] == "private"
 
 
+@_needs_yara
 def test_unscoped_high_specificity_rule_still_triggers_in_known_module():
     # A rule with NO dumpex_scope meta is unaffected by the mechanism --
     # module-backed hits still trigger normally, exactly as before. This
@@ -204,6 +220,7 @@ def test_unscoped_high_specificity_rule_still_triggers_in_known_module():
     assert "HighSpecificityMarker" in f["rules_hit"]
 
 
+@_needs_yara
 def test_only_unverified_scoped_hits_is_inconclusive_score_zero():
     seg_va, seg_fo = 0xB0000, 0xB000
     data = b'\x00' * 0x100 + b'SCOPED_MARKER_XYZ' + b'\x00' * 0x100
@@ -223,6 +240,7 @@ def test_only_unverified_scoped_hits_is_inconclusive_score_zero():
     assert f["matches"][0]["context_unverified"] is True
 
 
+@_needs_yara
 def test_mixed_confirmed_and_unverified_hits_scores_only_confirmed():
     # Two rules in one scan: one matches inside executable MEM_PRIVATE
     # (confirmed), the other inside PAGE_READONLY MEM_MAPPED (unverified).
@@ -289,6 +307,7 @@ def _packaged_rules_dir():
     return d
 
 
+@_needs_yara
 def test_wmic_string_in_known_module_does_not_detect():
     seg_va, seg_fo = 0xD0000, 0xD000
     data = b'\x00' * 0x100 + b'wmic.exe' + b'\x00' * 0x100
@@ -305,6 +324,7 @@ def test_wmic_string_in_known_module_does_not_detect():
     assert f["status"] != "DETECTED"
 
 
+@_needs_yara
 def test_virtualalloc_sequence_strings_in_known_module_does_not_detect():
     seg_va, seg_fo = 0xE0000, 0xE000
     data = (b'\x00' * 0x100 + b'VirtualAllocEx' + b'\x00' * 0x40
@@ -322,6 +342,7 @@ def test_virtualalloc_sequence_strings_in_known_module_does_not_detect():
     assert f["status"] != "DETECTED"
 
 
+@_needs_yara
 def test_shellcode_bootstrap_bytes_in_known_module_does_not_detect():
     seg_va, seg_fo = 0xF0000, 0xF000
     data = b'\x00' * 0x100 + bytes.fromhex("e800000000") + b'\x59' + b'\x00' * 0x100
@@ -338,6 +359,7 @@ def test_shellcode_bootstrap_bytes_in_known_module_does_not_detect():
     assert f["status"] != "DETECTED"
 
 
+@_needs_yara
 def test_lsass_dump_keywords_in_known_module_does_not_detect():
     seg_va, seg_fo = 0x100000, 0x10000
     data = b'\x00' * 0x100 + b'lsass.exe' + b'\x00' * 0x40 + b'comsvcs.dll' + b'\x00' * 0x100
