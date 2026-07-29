@@ -102,10 +102,76 @@ class FakeReader:
 
 
 class Peb:
-    """Stand-in for MinidumpFile.peb (only the fields hunt/hollowing.py reads)."""
-    def __init__(self, image_base_address, image_path):
-        self.image_base_address = image_base_address
-        self.image_path         = image_path
+    """Stand-in for MinidumpFile.peb. Started as hunt/hollowing.py's
+    minimal (image_base_address, image_path) subset; extended with the
+    remaining fields dumpex.commands.peb/sysinfo read (address,
+    being_debugged, command_line, window_title, dll_path,
+    current_directory, standard_input/output/error,
+    environment_variables) -- all optional, defaulting to None/empty so
+    existing two-positional-arg callers are unaffected."""
+    def __init__(self, image_base_address, image_path, *, address=0,
+                 being_debugged=False, command_line=None, window_title=None,
+                 dll_path=None, current_directory=None,
+                 standard_input=None, standard_output=None, standard_error=None,
+                 environment_variables=None):
+        self.address                = address
+        self.image_base_address     = image_base_address
+        self.image_path             = image_path
+        self.being_debugged         = being_debugged
+        self.command_line           = command_line
+        self.window_title           = window_title
+        self.dll_path               = dll_path
+        self.current_directory      = current_directory
+        self.standard_input         = standard_input
+        self.standard_output        = standard_output
+        self.standard_error         = standard_error
+        self.environment_variables  = environment_variables
+
+
+class EnumVal:
+    """Alias of Prot -- stand-in for a minidump enum value (has .name).
+    Named separately so sysinfo-related fakes read clearly (ProductType/
+    ProcessorArchitecture are conceptually enums, not protection flags)."""
+    def __init__(self, name):
+        self.name = name
+
+
+class SysInfo:
+    """Stand-in for MinidumpFile.sysinfo (SystemInfoStream)."""
+    def __init__(self, *, major_version=10, minor_version=0, build_number=19041,
+                 operating_system="Windows 10", csd_version=None,
+                 processor_architecture="PROCESSOR_ARCHITECTURE_AMD64",
+                 product_type="VER_NT_WORKSTATION", number_of_processors=4,
+                 vendor_id=b"GenuineIntel"):
+        self.MajorVersion           = major_version
+        self.MinorVersion           = minor_version
+        self.BuildNumber            = build_number
+        self.OperatingSystem        = operating_system
+        self.CSDVersion             = csd_version
+        self.ProcessorArchitecture  = EnumVal(processor_architecture) if processor_architecture else None
+        self.ProductType            = EnumVal(product_type) if product_type else None
+        self.NumberOfProcessors     = number_of_processors
+        self.VendorId               = vendor_id
+
+
+class MiscInfo:
+    """Stand-in for MinidumpFile.misc_info (MINIDUMP_MISC_INFO)."""
+    def __init__(self, *, process_id=None, process_create_time=None,
+                 process_user_time=None, process_kernel_time=None,
+                 processor_current_mhz=None, processor_max_mhz=None):
+        self.ProcessId            = process_id
+        self.ProcessCreateTime    = process_create_time
+        self.ProcessUserTime      = process_user_time
+        self.ProcessKernelTime    = process_kernel_time
+        self.ProcessorCurrentMhz  = processor_current_mhz
+        self.ProcessorMaxMhz      = processor_max_mhz
+
+
+class ExceptionStream:
+    """Stand-in for MinidumpFile.exception (ExceptionStream) -- only the
+    field dumpex.commands.sysinfo.collect_pid reads as a last-resort TID."""
+    def __init__(self, thread_id):
+        self.ThreadId = thread_id
 
 
 class FakeMF:
@@ -123,6 +189,10 @@ class FakeMF:
     memory_segments_64      = None
     memory_segments          = None
     peb                       = None
+    sysinfo                   = None
+    misc_info                  = None
+    exception                   = None
+    filename                     = "test.dmp"
     _reader                   = None
 
     def get_reader(self):

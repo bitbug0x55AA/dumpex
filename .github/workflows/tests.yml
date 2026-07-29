@@ -135,6 +135,28 @@ jobs:
           coverage report --include="dumpex/hunt/yara_hunt/rules.py"        --fail-under=80
           coverage report --include="dumpex/hunt/yara_hunt/context.py"      --fail-under=90
           coverage report --include="dumpex/hunt/_context.py"               --fail-under=90
+          # dumpex/output/*: the v2 structured-output contract (--list/
+          # --modules/--threads/--pid/--sysinfo/--peb). New in this change,
+          # so gates sit close to measured coverage from day one rather
+          # than starting loose -- records.py/serializer.py/csv_export.py
+          # are pure data transforms with no console/presentation branches
+          # to skip testing.
+          coverage report --include="dumpex/output/records.py"       --fail-under=95
+          coverage report --include="dumpex/output/serializer.py"    --fail-under=95
+          coverage report --include="dumpex/output/csv_export.py"    --fail-under=90
+          coverage report --include="dumpex/output/envelope.py"      --fail-under=85
+          coverage report --include="dumpex/output/collector.py"     --fail-under=80
+          # dumpex/commands/{list_cmd,modules,threads,sysinfo,peb}.py: the
+          # six recon commands' collect_*()/render_*_console() split.
+          # collect_*() (the part that matters for --json/--csv output) is
+          # thoroughly covered; render_*_console()'s console-formatting
+          # branches are not chased for coverage the same way presentation
+          # modules elsewhere in this file aren't.
+          coverage report --include="dumpex/commands/list_cmd.py" --fail-under=90
+          coverage report --include="dumpex/commands/modules.py"  --fail-under=80
+          coverage report --include="dumpex/commands/threads.py"  --fail-under=65
+          coverage report --include="dumpex/commands/sysinfo.py"  --fail-under=70
+          coverage report --include="dumpex/commands/peb.py"      --fail-under=90
 
   package-smoke:
     # The pytest job above always installs dumpex editable (`pip install

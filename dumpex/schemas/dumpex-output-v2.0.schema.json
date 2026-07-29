@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.0.schema.json",
+  "title": "dumpex v2 structured output (schema_version 2.0)",
+  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb) via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract and the migration plan). `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. Per-kind `result.data.records[]` item shape is intentionally not strictly typed yet (would need if/then-by-kind branching for limited benefit at this stage) -- a known, non-blocking follow-up.",
+  "type": "object",
+  "required": ["meta", "result"],
+  "additionalProperties": true,
+  "properties": {
+    "meta":        { "$ref": "#/$defs/meta" },
+    "result":      { "$ref": "#/$defs/result" },
+    "artifacts":   { "type": "array", "default": [] },
+    "diagnostics": { "$ref": "#/$defs/diagnostics" }
+  },
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version", "tool", "execution", "evidence"],
+      "properties": {
+        "schema_version": { "const": "2.0" },
+        "tool": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name":    { "type": "string" },
+            "version": { "type": ["string", "null"] }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": ["started_at", "finished_at", "duration_seconds", "command", "options"],
+          "properties": {
+            "started_at":       { "type": "string" },
+            "finished_at":      { "type": "string" },
+            "duration_seconds": { "type": "number" },
+            "command":          { "type": ["string", "null"] },
+            "options":          { "type": "object" },
+            "case_id":          { "type": ["string", "null"] },
+            "analyst":          { "type": ["string", "null"] }
+          }
+        },
+        "evidence": {
+          "description": "One entry per evidence source. A single-dump recon command emits exactly one entry (role: 'primary'); a future comparison command emits one per side (e.g. 'baseline'/'target') without needing a breaking change to this array shape.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "role"],
+            "properties": {
+              "id":         { "type": "string" },
+              "role":       { "type": "string" },
+              "file_name":  { "type": "string" },
+              "path":       { "type": "string" },
+              "size_bytes": { "type": ["integer", "null"] },
+              "sha256":     { "type": "string" },
+              "error":      { "type": "string" }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "python_version":   { "type": "string" },
+            "minidump_version": { "type": "string" },
+            "yara_version":     { "type": "string" },
+            "pyyaml_version":   { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "result": {
+      "type": "object",
+      "required": ["kind", "execution_status", "coverage", "data"],
+      "properties": {
+        "kind": {
+          "description": "Which canonical record type result.data.records holds. Grows as more commands migrate onto v2 -- not an open string.",
+          "enum": ["memory_regions", "modules", "threads", "sysinfo", "pid", "peb"]
+        },
+        "execution_status": {
+          "description": "Did the COMMAND itself run to completion -- independent of whether the EVIDENCE it saw was complete (see coverage below). None of the six v2 recon commands has an internal scan-budget/timeout concept that could produce a genuine partial execution, so 'partial' is reserved for future commands (e.g. hunters, once migrated) that do.",
+          "enum": ["completed", "partial", "failed"]
+        },
+        "coverage": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "description": "Was the evidence available to this command complete? Vocabulary shared with dumpex.hunt._coverage.derive_coverage_status.",
+              "enum": ["complete", "partial", "not_evaluated"]
+            },
+            "reasons": {
+              "type": "array",
+              "items": { "type": "string" },
+              "default": []
+            }
+          }
+        },
+        "summary": { "type": "object" },
+        "data": {
+          "type": "object",
+          "required": ["records"],
+          "properties": {
+            "records": { "type": "array" }
+          }
+        }
+      }
+    },
+
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/diagnosticEntry" }, "default": [] },
+        "errors":   { "type": "array", "items": { "$ref": "#/$defs/diagnosticEntry" }, "default": [] }
+      }
+    },
+
+    "diagnosticEntry": {
+      "type": "object",
+      "required": ["severity", "message"],
+      "properties": {
+        "severity": { "enum": ["warning", "error"] },
+        "message":  { "type": "string" },
+        "code":     { "type": ["string", "null"] }
+      }
+    }
+  }
+}

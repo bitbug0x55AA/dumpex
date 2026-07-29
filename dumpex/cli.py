@@ -9,6 +9,7 @@ from dumpex.ui.colors import RED, DIM, BOLD
 from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
 from dumpex.rules_pkg.loader import get_rules, configure_rules_source
 from dumpex.ui.structured import StructuredOutput, _ANSI_RE
+from dumpex.output import V2Output
 from dumpex.core.safe_io import check_not_dump_path, AtomicTextTee
 
 from dumpex.commands.list_cmd import cmd_list
@@ -20,6 +21,50 @@ from dumpex.commands.sysinfo  import cmd_sysinfo, cmd_pid
 from dumpex.commands.report   import cmd_report
 from dumpex.commands.diff     import cmd_diff
 from dumpex.hunt              import cmd_hunt
+
+# ── v2 structured-output routing ────────────────────────────────────────
+# --hunt keeps StructuredOutput/dumpex-output-v1.1.schema.json unchanged.
+# These six recon commands are migrated onto the v2 envelope (see
+# dumpex/output/ and dumpex-output-v2.0.schema.json); --diff/--report/
+# --extract/--strings don't produce structured output yet at all (their
+# own canonical records are a later migration) -- requesting --json/--csv
+# with one of them is now rejected up front (see the pre-flight check in
+# main()) instead of running the full command and only saying so
+# afterward.
+_V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo", "peb"})
+_UNSUPPORTED_STRUCTURED_MODES = frozenset({"diff", "report", "extract", "strings"})
+
+# Exit codes for the six v2-routed recon commands, independent of
+# --json/--csv having been requested at all: a SOC script checking `$?`
+# on a bare `dumpex --threads dump.dmp` should be able to detect
+# incomplete coverage without needing to also parse JSON. Every other
+# command's exit-code behavior (0 on completion, an uncaught exception's
+# default nonzero exit on a fatal error) is unchanged by this PR --
+# folding --report/--hunt into this same convention is a later,
+# cross-cutting decision, not made here for just these six commands.
+EXIT_OK      = 0
+EXIT_PARTIAL = 3
+
+
+def _selected_run_mode(args) -> str:
+    """The single mode flag argparse's mutually_exclusive_group(required=True)
+    guarantees is set, as a plain string key into _V2_STRUCTURED_MODES /
+    _UNSUPPORTED_STRUCTURED_MODES -- kept separate from _cmd_label() below,
+    which returns a filename-oriented label (e.g. "hunt_all", "tid_1234"),
+    not a bare mode name."""
+    if args.list:      return "list"
+    if args.modules:   return "modules"
+    if args.threads:   return "threads"
+    if args.extract:   return "extract"
+    if args.strings:   return "strings"
+    if args.peb:       return "peb"
+    if args.pid:       return "pid"
+    if args.sysinfo:   return "sysinfo"
+    if args.diff:      return "diff"
+    if args.report:    return "report"
+    if args.hunt:      return "hunt"
+    return ""   # unreachable: the mode group is required=True
+
 
 def main():
     # Captured before any argument parsing or dump access — the earliest
@@ -99,6 +144,19 @@ def main():
                              'are reduced to their basename) — for sharing JSON output outside the '
                              'analyst\'s own machine without leaking local directory layout')
     args = parser.parse_args()
+
+    run_mode = _selected_run_mode(args)
+
+    # --json/--csv on a command that doesn't produce structured output yet
+    # (--diff/--report/--extract/--strings -- see _UNSUPPORTED_STRUCTURED_MODES)
+    # is rejected HERE, before the dump is even opened, rather than running
+    # the full command and only saying so afterward once nothing was
+    # collected to write.
+    if (args.json or args.csv) and run_mode in _UNSUPPORTED_STRUCTURED_MODES:
+        flag = "--json" if args.json else "--csv"
+        parser.error(f"{flag} is not supported for --{run_mode} yet -- structured output "
+                     f"currently covers --list/--modules/--threads/--pid/--sysinfo/--peb "
+                     f"(v2) and --hunt (v1.1). Rerun without {flag}.")
 
     # --ref-dir is only meaningful for --hunt stomping, but validated
     # unconditionally and up front — a silently-ignored typo'd/missing
@@ -188,15 +246,28 @@ def main():
         _tee_stdout = sys.stdout
         sys.stdout  = _tee
 
+    exit_code = None
     try:
         mf   = open_dump(args.dumpfile)
 
-        # Structured output collector — populated by commands that support it
+        # Structured output collector — populated by commands that support
+        # it. The six v2-routed recon commands always get a V2Output (built
+        # regardless of --json/--csv, so the exit-code contract below is
+        # consistent whether or not structured output was actually
+        # written); --hunt keeps constructing StructuredOutput exactly as
+        # before, only when --json/--csv was actually requested.
         need_structured = bool(args.json or args.csv)
-        out = StructuredOutput(args.dumpfile, mf, command=cmd_label, options=_build_options(),
-                                case_id=args.case_id, analyst=args.analyst,
-                                redact_paths=args.redact_paths,
-                                started_at=started_at) if need_structured else None
+        if run_mode in _V2_STRUCTURED_MODES:
+            out = V2Output(args.dumpfile, mf, command=cmd_label, options=_build_options(),
+                            case_id=args.case_id, analyst=args.analyst,
+                            redact_paths=args.redact_paths, started_at=started_at)
+        elif need_structured:
+            out = StructuredOutput(args.dumpfile, mf, command=cmd_label, options=_build_options(),
+                                    case_id=args.case_id, analyst=args.analyst,
+                                    redact_paths=args.redact_paths,
+                                    started_at=started_at)
+        else:
+            out = None
 
         # --json/--csv path resolution (existing-file / dump-path / dir-mode
         # collision handling) is owned entirely by StructuredOutput.write_json
@@ -204,7 +275,7 @@ def main():
         # --output is checked exactly once, inside cmd_extract/cmd_report
         # right before the write.
 
-        _run(args, mf, out, cmd_label)
+        exit_code = _run(args, mf, out, cmd_label)
     except BaseException:
         if _tee is not None:
             _tee.abandon()
@@ -216,22 +287,34 @@ def main():
             txt_path, summary = _tee.finalize()
             print(DIM(f"  [·] TXT  written → {txt_path}  ({summary})"))
 
+    if exit_code:
+        sys.exit(exit_code)
 
-def _run(args, mf, out, cmd_label):
-    if   args.list:         cmd_list(mf, args.filter)
+
+def _run(args, mf, out, cmd_label) -> "int | None":
+    """Returns the process exit code for the six v2-routed recon commands
+    (EXIT_OK/EXIT_PARTIAL — see module docstring), or None for every other
+    command (unchanged exit-code behavior: 0 on completion, an uncaught
+    exception's default nonzero exit on a fatal error)."""
+    exit_code = None
+
+    def _apply_v2_result(kind, records, coverage_status, coverage_reasons):
+        if out:
+            out.set_result(kind, records, coverage_status, coverage_reasons)
+        return EXIT_PARTIAL if coverage_status == "partial" else EXIT_OK
+
+    if args.list:
+        exit_code = _apply_v2_result("memory_regions", *cmd_list(mf, args.filter))
     elif args.modules:
-        data = cmd_modules(mf)
-        if out: out.add("modules", data)
+        exit_code = _apply_v2_result("modules", *cmd_modules(mf))
     elif args.threads:
-        data = cmd_threads(mf)
-        if out: out.add("threads", data)
-    elif args.peb:          cmd_peb(mf)
+        exit_code = _apply_v2_result("threads", *cmd_threads(mf))
+    elif args.peb:
+        exit_code = _apply_v2_result("peb", *cmd_peb(mf))
     elif args.pid:
-        data = cmd_pid(mf)
-        if out: out.add("pid", data)
+        exit_code = _apply_v2_result("pid", *cmd_pid(mf))
     elif args.sysinfo:
-        data = cmd_sysinfo(mf)
-        if out: out.add("sysinfo", data)
+        exit_code = _apply_v2_result("sysinfo", *cmd_sysinfo(mf))
     elif args.report:
         if not args.report_tid and not args.report_addr and not args.report_string:
             print(RED("[!] --report requires at least one of: --report-tid, --report-addr, --report-string"))
@@ -263,11 +346,18 @@ def _run(args, mf, out, cmd_label):
 
     # ── Write structured output ────────────────────────────────────────────
     if out:
-        if out._sections:
+        if isinstance(out, V2Output):
+            if args.json:
+                out.write_json(args.json, cmd_label=cmd_label, force=args.force)
+            if args.csv:
+                out.write_csv(args.csv,  cmd_label=cmd_label, force=args.force)
+        elif out._sections:
             if args.json:
                 out.write_json(args.json, cmd_label=cmd_label, force=args.force)
             if args.csv:
                 out.write_csv(args.csv,  cmd_label=cmd_label, force=args.force)
         else:
             print(DIM("  [~] --json/--csv: this command does not produce structured output."))
+
+    return exit_code
 

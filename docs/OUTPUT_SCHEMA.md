@@ -18,7 +18,30 @@ All enabled formats are derived from the same in-memory analysis result.
 Existing output files are protected unless `--force` is supplied, and an
 output path may never replace an input dump.
 
-## JSON document
+`--txt` is a human-readable console transcript (colours stripped), not a
+machine interface: it carries no schema, no version, and no compatibility
+promise. Automation must use `--json`, never scrape `--txt`.
+
+## Two JSON contracts
+
+dumpex currently has two coexisting JSON contracts, not one:
+
+| Commands | Contract | Schema file |
+|---|---|---|
+| `--hunt` | v1.1 | [`dumpex-output-v1.1.schema.json`](../dumpex/schemas/dumpex-output-v1.1.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb` | v2.0 | [`dumpex-output-v2.0.schema.json`](../dumpex/schemas/dumpex-output-v2.0.schema.json) |
+| `--diff`, `--report`, `--extract`, `--strings` | none yet | — `--json`/`--csv` are rejected up front (before the dump is opened) for these modes |
+
+This split exists because v1.1's root schema requires a top-level `hunt`
+object (`"required": ["meta", "hunt"]`) — the six recon commands never
+produced one, so their JSON, despite stamping `schema_version: "1.1"`,
+could never actually validate against the schema it claimed to satisfy.
+v2 is a genuinely separate, self-consistent contract for those six
+commands rather than a patch to v1.1's `hunt`-shaped root. `--hunt` keeps
+using v1.1 unchanged. The rest of this document describes v1.1
+(`--hunt`); see "v2 structured output" below for the recon contract.
+
+## JSON document (v1.1 — `--hunt`)
 
 The top-level object contains `meta` followed by one or more command-specific
 result sections:
@@ -219,12 +242,103 @@ of the dumpex application version. The policy for changing the schema file:
   release notes. Never silently reuse an existing `schema_version` for an
   incompatible shape change.
 
+## v2 structured output (`--list` / `--modules` / `--threads` / `--pid` / `--sysinfo` / `--peb`)
+
+These six recon commands are always structured internally — even without
+`--json`/`--csv` — and use a distinct envelope from v1.1's `hunt`-shaped
+root:
+
+```json
+{
+  "meta": {
+    "schema_version": "2.0",
+    "tool": { "name": "dumpex", "version": "2.1.0" },
+    "execution": { "...": "same shape as v1.1" },
+    "evidence": [
+      { "id": "primary", "role": "primary", "file_name": "sample.dmp",
+        "path": "C:\\cases\\sample.dmp", "size_bytes": 1048576,
+        "sha256": "<64 hex chars>" }
+    ],
+    "runtime": { "...": "same shape as v1.1" }
+  },
+  "result": {
+    "kind": "modules",
+    "execution_status": "completed",
+    "coverage": { "status": "complete", "reasons": [] },
+    "summary": { "count": 42 },
+    "data": { "records": [ "...": "one canonical record per item" ] }
+  },
+  "artifacts": [],
+  "diagnostics": { "warnings": [], "errors": [] }
+}
+```
+
+`meta.evidence` is an **array**, not a single object (v1.1's shape) — a
+future comparison command (baseline + target dumps) can add a second
+entry without a breaking change to this array's own shape. A single-dump
+recon command always emits exactly one entry, `role: "primary"`.
+
+`result` deliberately keeps three concepts separate, and none of them is
+a verdict:
+
+- **`execution_status`** — did the *command* run to completion
+  (`"completed"` / `"partial"` / `"failed"`)? None of these six commands
+  has an internal scan-budget/timeout, so this is `"completed"` in every
+  case that doesn't crash.
+- **`coverage.status`** — was the *evidence* it looked at complete
+  (`"complete"` / `"partial"` / `"not_evaluated"`), reusing the same
+  vocabulary `--hunt`'s `coverage_status` uses
+  (`dumpex.hunt._coverage.derive_coverage_status`)? For example,
+  `--threads` reports `"partial"` when a dump lacks
+  `ThreadInfoListStream`; `--pid` reports `"partial"` when it had to fall
+  back past `MINIDUMP_MISC_INFO` to a thread-list/exception-stream
+  heuristic. `coverage.reasons` explains why.
+- **verdict/confidence** — not applicable to these six commands at all;
+  that concept stays scoped to `--report`/`--hunt`, which reason about
+  evidence, not just list it.
+
+`result.data.records` is always an array of one canonical record type per
+`kind` (`memory_regions` → `MemoryRegionRecord`, `modules` →
+`ModuleRecord`, `threads` → `ThreadRecord`, `sysinfo`/`pid`/`peb` → the
+shared `ProcessInfoRecord`, each populating only its own subset of
+fields) — a single-record result (`sysinfo`/`pid`/`peb`) is still a
+one-element array, not a bare object, so a consumer never needs to
+special-case array-vs-object by `kind`. See
+[`dumpex/output/records.py`](../dumpex/output/records.py) for the exact
+field lists.
+
+Two type conventions apply uniformly across every v2 record: a field is a
+normalized, fixed-width (16 hex digit), lowercase `"0x..."` string only
+when it is a real memory address/pointer/handle; every other numeric
+field (`pid`, `tid`, `size`, `checksum`, durations, counts, `exit_status`,
+...) is a plain JSON integer. Missing values are always `null`, never
+`""`. The v2 serializer
+([`dumpex/output/serializer.py`](../dumpex/output/serializer.py)) enforces
+the second rule structurally: it raises rather than silently
+stringifying any value that isn't already a plain JSON scalar/list/dict
+by the time it's serialized.
+
+An exit code distinguishes complete from partial coverage for these six
+commands independent of whether `--json`/`--csv` was even requested:
+`0` when `coverage.status` is `"complete"`, `3` when it's `"partial"` — a
+SOC script checking `$?` on a bare `dumpex sample.dmp --threads` can
+detect degraded coverage without parsing JSON at all. This convention is
+scoped to these six commands only; every other command's exit-code
+behavior (`0` on completion, an uncaught exception's default nonzero on a
+fatal error) is unchanged.
+
+`--diff`/`--report`/`--extract`/`--strings` do not produce structured
+output yet. Passing `--json`/`--csv` with one of them is rejected before
+the dump is opened (`parser.error`, exit code `2`), not after a full run
+completes with nothing to write.
+
 ## Reproducing a run
 
 Retain the following together:
 
 1. the JSON result;
-2. the source dump identified by `meta.evidence.sha256`;
+2. the source dump identified by `meta.evidence[0].sha256` (v2) or
+   `meta.evidence.sha256` (v1.1 `--hunt`);
 3. any explicit rules or reference modules;
 4. the dumpex version and runtime versions in `meta`; and
 5. the exact options recorded under `meta.execution.options`.

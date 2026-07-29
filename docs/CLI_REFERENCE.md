@@ -75,6 +75,18 @@ one.
 Output files are not overwritten unless `--force` is present. dumpex also
 refuses any output path that resolves to an input dump path.
 
+`--json`/`--csv` currently route to one of two contracts depending on the
+mode: `--hunt` uses the v1.1 contract unchanged; `--list`/`--modules`/
+`--threads`/`--pid`/`--sysinfo`/`--peb` use the v2 contract (canonical
+records, `null` for missing values, normalized hex addresses — see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output---list--modules--threads--pid--sysinfo--peb)).
+`--diff`/`--report`/`--extract`/`--strings` don't produce structured
+output yet — `--json`/`--csv` with one of these is rejected immediately,
+before the dump is opened, rather than running the full command first.
+For the v2-routed modes, the process exit code also reports coverage
+independent of `--json`/`--csv`: `0` for complete coverage, `3` for
+partial (e.g. `--threads` on a dump missing `ThreadInfoListStream`).
+
 See [Output and Evidence Schema](OUTPUT_SCHEMA.md) for formats and metadata.
 
 ## Examples

@@ -3,49 +3,69 @@ import os
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
 from dumpex.core.memory import get_modules
 from dumpex.core.pe_utils import _pe_timestamp_to_str, _version_str
+from dumpex.hunt._coverage import derive_coverage_status
+from dumpex.output.records import ModuleRecord, hex_address
 
-def cmd_modules(mf):
-    mods = get_modules(mf)
-    rows = []
+# Console badge per anomaly_flags entry -- kept as a small lookup table
+# decoupled from record-building, replacing the colored_flags list that
+# used to be built inline alongside plain_flags during collection.
+_ANOMALY_BADGES = {
+    "NO_NAME":       lambda: RED("[NO NAME]"),
+    "OLD_TIMESTAMP": lambda: YELLOW("[OLD TIMESTAMP]"),
+}
 
-    for m in sorted(mods, key=lambda x: x.baseaddress):
+
+def collect_modules(mf):
+    """Pure data, no printing. Returns (records, coverage_status,
+    coverage_reasons). Always 'complete' -- no degraded mode exists for
+    the module list stream."""
+    records = []
+    for m in sorted(get_modules(mf), key=lambda x: x.baseaddress):
         name     = m.name or "(unnamed)"
-        basename = os.path.basename(name)
-
         ts_raw   = getattr(m, "timestamp", 0) or 0
         ts_str   = _pe_timestamp_to_str(ts_raw)
         ver_str  = _version_str(getattr(m, "versioninfo", None))
         checksum = getattr(m, "checksum", 0) or 0
 
-        plain_flags, colored_flags = [], []
+        anomaly_flags = []
         if not m.name:
-            plain_flags.append("NO_NAME");      colored_flags.append(RED("[NO NAME]"))
+            anomaly_flags.append("NO_NAME")
         if ts_raw and ts_raw < 315532800:
-            plain_flags.append("OLD_TIMESTAMP"); colored_flags.append(YELLOW("[OLD TIMESTAMP]"))
-        flag_str = "  " + " ".join(colored_flags) if colored_flags else ""
+            anomaly_flags.append("OLD_TIMESTAMP")
 
-        print(f"\n  {BOLD(basename)}{flag_str}")
-        print(f"  {'Full path':<18} {DIM(name)}")
-        print(f"  {'Base → End':<18} 0x{m.baseaddress:016x} → 0x{m.endaddress:016x}  (size 0x{m.size:x})")
-        print(f"  {'Compiled (UTC)':<18} {ts_str}")
-        if ver_str:
-            print(f"  {'File version':<18} {ver_str}")
-        if checksum:
-            print(f"  {'Checksum':<18} 0x{checksum:08x}")
+        records.append(ModuleRecord(
+            name=os.path.basename(name),
+            full_path=m.name or None,
+            base_address=hex_address(m.baseaddress),
+            end_address=hex_address(m.endaddress),
+            size=m.size,
+            compiled_utc=ts_str,
+            file_version=ver_str,
+            checksum=checksum or None,
+            anomaly_flags=anomaly_flags,
+        ))
+    coverage_status = derive_coverage_status(evaluated=True, complete=True)
+    return records, coverage_status, []
 
-        rows.append({
-            "name":          basename,
-            "full_path":     m.name or "",
-            "base_address":  f"0x{m.baseaddress:016x}",
-            "end_address":   f"0x{m.endaddress:016x}",
-            "size":          m.size,
-            "size_hex":      f"0x{m.size:x}",
-            "compiled_utc":  ts_str,
-            "file_version":  ver_str or "",
-            "checksum":      f"0x{checksum:08x}" if checksum else "",
-            "anomaly_flags": "|".join(plain_flags),
-        })
 
-    print(f"\n{GREEN(f'[+] {len(mods)} module(s).')}")
-    return rows
+def render_modules_console(records) -> None:
+    for rec in records:
+        badges = [_ANOMALY_BADGES[f]() for f in rec.anomaly_flags if f in _ANOMALY_BADGES]
+        flag_str = "  " + " ".join(badges) if badges else ""
 
+        print(f"\n  {BOLD(rec.name)}{flag_str}")
+        print(f"  {'Full path':<18} {DIM(rec.full_path or '(unnamed)')}")
+        print(f"  {'Base → End':<18} {rec.base_address} → {rec.end_address}  (size 0x{rec.size:x})")
+        print(f"  {'Compiled (UTC)':<18} {rec.compiled_utc}")
+        if rec.file_version:
+            print(f"  {'File version':<18} {rec.file_version}")
+        if rec.checksum:
+            print(f"  {'Checksum':<18} 0x{rec.checksum:08x}")
+
+    print(f"\n{GREEN(f'[+] {len(records)} module(s).')}")
+
+
+def cmd_modules(mf):
+    records, coverage_status, coverage_reasons = collect_modules(mf)
+    render_modules_console(records)
+    return records, coverage_status, coverage_reasons

@@ -2,8 +2,9 @@
 import os
 import datetime
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
-from dumpex.core.memory import get_modules, get_thread_infos, va_to_file_offset
+from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
+from dumpex.hunt._coverage import derive_coverage_status
+from dumpex.output.records import ProcessInfoRecord
 
 def _os_display_name(si) -> str:
     """
@@ -23,16 +24,22 @@ def _os_display_name(si) -> str:
     return os_name
 
 
-def cmd_sysinfo(mf: MinidumpFile):
-    import datetime
+# ── --sysinfo ────────────────────────────────────────────────────────────
 
+def collect_sysinfo(mf: MinidumpFile):
+    """
+    Pure data, no printing. Returns (records, coverage_status,
+    coverage_reasons) -- records is a single-element list (see the v2
+    migration plan's "always a records array" convention, even for a
+    one-record result). 'partial' coverage when the sysinfo/misc-info/PEB
+    streams are individually missing.
+    """
     si  = mf.sysinfo
     mi  = mf.misc_info
     peb = mf.peb
 
-    # Hostname from environment variables
-    hostname = "(unknown)"
-    username = "(unknown)"
+    hostname = None
+    username = None
     if peb and peb.environment_variables:
         for env in peb.environment_variables:
             name = env.get("name", "") if isinstance(env, dict) else env[0]
@@ -41,76 +48,6 @@ def cmd_sysinfo(mf: MinidumpFile):
                 hostname = val
             if name.upper() == "USERNAME":
                 username = val
-
-    print(f"\n{BOLD('═══ SYSTEM INFO ═══')}")
-
-    # ── OS ──────────────────────────────────────────────────────────────
-    print(f"\n  {BOLD('Operating System')}")
-    if si:
-        os_name = _os_display_name(si)
-        build   = si.BuildNumber if si.BuildNumber is not None else "?"
-        major   = si.MajorVersion if si.MajorVersion is not None else "?"
-        minor   = si.MinorVersion if si.MinorVersion is not None else "?"
-        csd     = f" {si.CSDVersion}" if si.CSDVersion else ""
-        arch    = si.ProcessorArchitecture.name if si.ProcessorArchitecture else "?"
-        ptype   = si.ProductType.name if si.ProductType else "?"
-        print(f"    {'OS':<22} {os_name}{csd}")
-        print(f"    {'Version':<22} {major}.{minor}.{build}")
-        print(f"    {'Architecture':<22} {arch}")
-        print(f"    {'Product Type':<22} {ptype}")
-    else:
-        print(f"    {DIM('(sysinfo stream not available)')}")
-
-    # ── Host ────────────────────────────────────────────────────────────
-    print(f"\n  {BOLD('Host')}")
-    print(f"    {'Hostname':<22} {hostname}")
-    print(f"    {'Username':<22} {username}")
-
-    # ── Process ─────────────────────────────────────────────────────────
-    print(f"\n  {BOLD('Process')}")
-    if mi and mi.ProcessId:
-        print(f"    {'PID':<22} {mi.ProcessId} (0x{mi.ProcessId:x})")
-    if mi and mi.ProcessCreateTime:
-        try:
-            ts = datetime.datetime.fromtimestamp(mi.ProcessCreateTime, tz=datetime.timezone.utc)
-            print(f"    {'Process Start (UTC)':<22} {ts.strftime('%Y-%m-%d %H:%M:%S')}")
-        except Exception:
-            print(f"    {'Process Start':<22} {mi.ProcessCreateTime}")
-    if mi and mi.ProcessUserTime is not None:
-        print(f"    {'CPU User Time':<22} {mi.ProcessUserTime}s")
-    if mi and mi.ProcessKernelTime is not None:
-        print(f"    {'CPU Kernel Time':<22} {mi.ProcessKernelTime}s")
-    if peb:
-        print(f"    {'Image Path':<22} {peb.image_path or '(none)'}")
-        print(f"    {'Command Line':<22} {peb.command_line or '(none)'}")
-        print(f"    {'Working Dir':<22} {peb.current_directory or '(none)'}")
-        print(f"    {'BeingDebugged':<22} {peb.being_debugged}")
-
-    # ── CPU ─────────────────────────────────────────────────────────────
-    if si:
-        print(f"\n  {BOLD('CPU')}")
-        print(f"    {'Processors':<22} {si.NumberOfProcessors}")
-        if si.VendorId:
-            try:
-                vendor = bytes(si.VendorId).decode("ascii", errors="replace").rstrip("\x00")
-                print(f"    {'Vendor':<22} {vendor}")
-            except Exception:
-                pass
-        if mi and mi.ProcessorCurrentMhz:
-            print(f"    {'Current MHz':<22} {mi.ProcessorCurrentMhz}")
-        if mi and mi.ProcessorMaxMhz:
-            print(f"    {'Max MHz':<22} {mi.ProcessorMaxMhz}")
-
-    # ── Dump metadata ────────────────────────────────────────────────────
-    print(f"\n  {BOLD('Dump File')}")
-    print(f"    {'File':<22} {os.path.basename(mf.filename)}")
-    thread_count = len(mf.threads.threads) if mf.threads else 0
-    module_count = len(mf.modules.modules) if mf.modules else 0
-    if mf.threads:
-        print(f"    {'Threads in dump':<22} {thread_count}")
-    if mf.modules:
-        print(f"    {'Modules in dump':<22} {module_count}")
-    print()
 
     proc_start = None
     if mi and mi.ProcessCreateTime:
@@ -121,29 +58,114 @@ def cmd_sysinfo(mf: MinidumpFile):
         except Exception:
             proc_start = str(mi.ProcessCreateTime)
 
-    pid_val = mi.ProcessId if mi and mi.ProcessId else None
-    return {
-        "dump_file":         os.path.basename(mf.filename),
-        "hostname":          hostname,
-        "username":          username,
-        "os":                (_os_display_name(si) if si else ""),
-        "os_version":        (f"{si.MajorVersion}.{si.MinorVersion}.{si.BuildNumber}"
-                              if si and all(x is not None for x in
-                              [si.MajorVersion, si.MinorVersion, si.BuildNumber]) else ""),
-        "architecture":      (si.ProcessorArchitecture.name if si and si.ProcessorArchitecture else ""),
-        "product_type":      (si.ProductType.name if si and si.ProductType else ""),
-        "pid":               pid_val,
-        "pid_hex":           f"0x{pid_val:x}" if pid_val else "",
-        "process_start_utc": proc_start or "",
-        "image_path":        (peb.image_path or "") if peb else "",
-        "command_line":      (peb.command_line or "") if peb else "",
-        "processors":        (si.NumberOfProcessors if si else ""),
-        "threads_in_dump":   thread_count,
-        "modules_in_dump":   module_count,
-    }
+    cpu_vendor = None
+    if si and si.VendorId:
+        try:
+            cpu_vendor = bytes(si.VendorId).decode("ascii", errors="replace").rstrip("\x00")
+        except Exception:
+            cpu_vendor = None
+
+    record = ProcessInfoRecord(
+        pid=(mi.ProcessId if mi and mi.ProcessId else None),
+        dump_file=os.path.basename(mf.filename),
+        hostname=hostname,
+        username=username,
+        os=(_os_display_name(si) if si else None),
+        os_version=(f"{si.MajorVersion}.{si.MinorVersion}.{si.BuildNumber}"
+                    if si and all(x is not None for x in
+                    [si.MajorVersion, si.MinorVersion, si.BuildNumber]) else None),
+        architecture=(si.ProcessorArchitecture.name if si and si.ProcessorArchitecture else None),
+        product_type=(si.ProductType.name if si and si.ProductType else None),
+        process_start_utc=proc_start,
+        image_path=(peb.image_path or None) if peb else None,
+        command_line=(peb.command_line or None) if peb else None,
+        current_directory=(peb.current_directory or None) if peb else None,
+        processors=(si.NumberOfProcessors if si else None),
+        cpu_vendor=cpu_vendor,
+        cpu_current_mhz=(mi.ProcessorCurrentMhz if mi and mi.ProcessorCurrentMhz else None),
+        cpu_max_mhz=(mi.ProcessorMaxMhz if mi and mi.ProcessorMaxMhz else None),
+        process_user_time_seconds=(mi.ProcessUserTime if mi and mi.ProcessUserTime is not None else None),
+        process_kernel_time_seconds=(mi.ProcessKernelTime if mi and mi.ProcessKernelTime is not None else None),
+        thread_count=(len(mf.threads.threads) if mf.threads else 0),
+        module_count=(len(mf.modules.modules) if mf.modules else 0),
+    )
+
+    missing = []
+    if not si:
+        missing.append("SystemInfoStream not present")
+    if not mi:
+        missing.append("MiscInfo stream not present")
+    if not peb:
+        missing.append("PEB not available (requires sysinfo + thread list)")
+    coverage_status = derive_coverage_status(evaluated=True, complete=not missing)
+    return [record], coverage_status, missing, bool(peb), bool(mf.threads), bool(mf.modules)
 
 
-def cmd_pid(mf: MinidumpFile):
+def render_sysinfo_console(record: ProcessInfoRecord, peb_present: bool,
+                            threads_present: bool, modules_present: bool) -> None:
+    print(f"\n{BOLD('═══ SYSTEM INFO ═══')}")
+
+    # ── OS ──────────────────────────────────────────────────────────────
+    print(f"\n  {BOLD('Operating System')}")
+    if record.os is not None:
+        print(f"    {'OS':<22} {record.os}")
+        print(f"    {'Version':<22} {record.os_version or '?'}")
+        print(f"    {'Architecture':<22} {record.architecture or '?'}")
+        print(f"    {'Product Type':<22} {record.product_type or '?'}")
+    else:
+        print(f"    {DIM('(sysinfo stream not available)')}")
+
+    # ── Host ────────────────────────────────────────────────────────────
+    print(f"\n  {BOLD('Host')}")
+    print(f"    {'Hostname':<22} {record.hostname or '(unknown)'}")
+    print(f"    {'Username':<22} {record.username or '(unknown)'}")
+
+    # ── Process ─────────────────────────────────────────────────────────
+    print(f"\n  {BOLD('Process')}")
+    if record.pid is not None:
+        print(f"    {'PID':<22} {record.pid} (0x{record.pid:x})")
+    if record.process_start_utc:
+        print(f"    {'Process Start (UTC)':<22} {record.process_start_utc}")
+    if record.process_user_time_seconds is not None:
+        print(f"    {'CPU User Time':<22} {record.process_user_time_seconds}s")
+    if record.process_kernel_time_seconds is not None:
+        print(f"    {'CPU Kernel Time':<22} {record.process_kernel_time_seconds}s")
+    if peb_present:
+        print(f"    {'Image Path':<22} {record.image_path or '(none)'}")
+        print(f"    {'Command Line':<22} {record.command_line or '(none)'}")
+        print(f"    {'Working Dir':<22} {record.current_directory or '(none)'}")
+
+    # ── CPU ─────────────────────────────────────────────────────────────
+    if record.os is not None:
+        print(f"\n  {BOLD('CPU')}")
+        print(f"    {'Processors':<22} {record.processors}")
+        if record.cpu_vendor:
+            print(f"    {'Vendor':<22} {record.cpu_vendor}")
+        if record.cpu_current_mhz:
+            print(f"    {'Current MHz':<22} {record.cpu_current_mhz}")
+        if record.cpu_max_mhz:
+            print(f"    {'Max MHz':<22} {record.cpu_max_mhz}")
+
+    # ── Dump metadata ────────────────────────────────────────────────────
+    print(f"\n  {BOLD('Dump File')}")
+    print(f"    {'File':<22} {record.dump_file}")
+    if threads_present:
+        print(f"    {'Threads in dump':<22} {record.thread_count}")
+    if modules_present:
+        print(f"    {'Modules in dump':<22} {record.module_count}")
+    print()
+
+
+def cmd_sysinfo(mf: MinidumpFile):
+    records, coverage_status, coverage_reasons, peb_present, threads_present, modules_present = \
+        collect_sysinfo(mf)
+    render_sysinfo_console(records[0], peb_present, threads_present, modules_present)
+    return records, coverage_status, coverage_reasons
+
+
+# ── --pid ────────────────────────────────────────────────────────────────
+
+def collect_pid(mf: MinidumpFile):
     """
     Report the Process ID recorded in the minidump.
 
@@ -155,6 +177,12 @@ def cmd_pid(mf: MinidumpFile):
                                reported as a cross-check when MiscInfo is absent
       3. Exception stream    – contains ThreadId; used purely as a last resort
          (gives TID, not PID, so it is labelled accordingly)
+
+    Pure data, no printing. Returns (records, coverage_status,
+    coverage_reasons) -- 'complete' only when MiscInfo directly supplied
+    the PID; any fallback path is 'partial' (reuses the same human-
+    readable explanations the console has always shown, now surfaced as
+    coverage_reasons instead of only being printed).
     """
     pid      = None
     source   = None
@@ -167,10 +195,6 @@ def cmd_pid(mf: MinidumpFile):
         source = "MINIDUMP_MISC_INFO (ProcessId field)"
 
     # ── 2. Thread list cross-check / fallback ────────────────────────────
-    #    minidump-python exposes thread.ThreadId but NOT thread.ProcessId
-    #    directly; however, we can cross-check that MiscInfo PID is plausible
-    #    by confirming threads exist.  When MiscInfo is missing we report the
-    #    thread count as evidence and surface any TID that might help.
     threads = mf.threads.threads if mf.threads else []
     if threads and pid is None:
         tids = [t.ThreadId for t in threads]
@@ -195,31 +219,38 @@ def cmd_pid(mf: MinidumpFile):
                 f"(this is a Thread ID, not a Process ID)"
             )
 
-    # ── Output ────────────────────────────────────────────────────────────
+    record = ProcessInfoRecord(
+        pid=pid,
+        source=source,
+        thread_count=len(threads),
+        exc_tid=exc_tid,
+    )
+    coverage_status = derive_coverage_status(evaluated=True, complete=(pid is not None))
+    return [record], coverage_status, warnings
+
+
+def render_pid_console(record: ProcessInfoRecord, coverage_reasons: list) -> None:
     print(f"\n{BOLD('═══ PROCESS ID ═══')}")
 
-    if pid is not None:
-        print(f"  {'PID (decimal)':<26} {GREEN(str(pid))}")
-        print(f"  {'PID (hex)':<26} {GREEN(f'0x{pid:x}')}")
-        print(f"  {'Source':<26} {DIM(source)}")
-        if threads:
-            print(f"  {'Threads in dump':<26} {len(threads)}")
+    if record.pid is not None:
+        print(f"  {'PID (decimal)':<26} {GREEN(str(record.pid))}")
+        print(f"  {'PID (hex)':<26} {GREEN(f'0x{record.pid:x}')}")
+        print(f"  {'Source':<26} {DIM(record.source)}")
+        if record.thread_count:
+            print(f"  {'Threads in dump':<26} {record.thread_count}")
     else:
         print(f"  {YELLOW('[!] ProcessId not found in MiscInfo stream.')}")
 
-    for w in warnings:
+    for w in coverage_reasons:
         print(f"\n  {YELLOW('[~]')} {w}")
 
-    if pid is None and not warnings:
+    if record.pid is None and not coverage_reasons:
         print(f"  {RED('[!] Could not determine PID — dump may lack MiscInfo, thread list, and exception stream.')}")
 
     print()
-    return {
-        "pid":          pid,
-        "pid_hex":      f"0x{pid:x}" if pid is not None else "",
-        "source":       source or "",
-        "thread_count": len(threads),
-        "exc_tid":      f"0x{exc_tid:x}" if exc_tid else "",
-        "warnings":     warnings,
-    }
 
+
+def cmd_pid(mf: MinidumpFile):
+    records, coverage_status, coverage_reasons = collect_pid(mf)
+    render_pid_console(records[0], coverage_reasons)
+    return records, coverage_status, coverage_reasons
