@@ -104,11 +104,14 @@ def build_report(outcome, compile_failed: int) -> Report:
             if hit["seg_va"] not in seen_vas:
                 seen_vas[hit["seg_va"]] = hit
 
-        # A rule whose EVERY hit is context_unverified (PE_In_Private_Memory
-        # in a MemoryContext.OTHER or MemoryContext.UNKNOWN region — see
-        # dumpex/hunt/yara_hunt/context.py) cannot be reported as a
-        # confirmed detection — it's shown for visibility but with a
-        # distinct, non-alarming status.
+        # A rule whose EVERY hit is context_unverified (PE_In_Private_Memory,
+        # or any dumpex_scope="private_or_unbacked" rule — see
+        # dumpex/hunt/yara_hunt/context.py and config.py — matched in a
+        # MemoryContext.OTHER or MemoryContext.UNKNOWN region) cannot be
+        # reported as a confirmed detection — it's shown for visibility but
+        # with a distinct, non-alarming status. This is already rule-name-
+        # agnostic: it reads the per-hit context_unverified flag scanner.py
+        # set, not the rule's identity.
         rule_is_unverified = all(h.get("context_unverified") for h in hits)
         unverified_contexts = ({h.get("memory_context") for h in hits}
                                 if rule_is_unverified else set())

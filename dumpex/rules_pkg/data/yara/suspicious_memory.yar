@@ -33,6 +33,7 @@ rule Shellcode_Bootstrap_x64 {
     meta:
         description = "Common x64 shellcode PIC bootstrap: call/pop RIP technique"
         mitre       = "T1059.003"
+        dumpex_scope = "private_or_unbacked"
     strings:
         // call $+5 / pop rcx  — position-independent code bootstrap
         $bootstrap = { E8 00 00 00 00 59 }
@@ -46,6 +47,7 @@ rule Win32_API_Hashing {
     meta:
         description = "Stack-based API hashing stubs commonly found in shellcode/loaders"
         mitre       = "T1027.007"
+        dumpex_scope = "private_or_unbacked"
     strings:
         // ror edi, 0x0d  — standard ROR-13 API hashing constant
         $ror13 = { C1 CF 0D }
@@ -59,6 +61,7 @@ rule Suspicious_VirtualAlloc_Sequence {
     meta:
         description = "VirtualAlloc + WriteProcessMemory string pair — common in injectors"
         mitre       = "T1055"
+        dumpex_scope = "private_or_unbacked"
     strings:
         $va  = "VirtualAllocEx" nocase wide ascii
         $wpm = "WriteProcessMemory" nocase wide ascii

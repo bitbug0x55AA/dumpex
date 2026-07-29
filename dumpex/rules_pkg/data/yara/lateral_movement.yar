@@ -48,6 +48,7 @@ rule LSASS_Dump_Keywords {
     meta:
         description = "LSASS process dump attempt string indicators"
         mitre       = "T1003.001"
+        dumpex_scope = "private_or_unbacked"
     strings:
         $s1 = "lsass.exe" nocase wide ascii
         $s2 = "MiniDumpWriteDump" wide ascii
@@ -73,10 +74,14 @@ rule WMI_Lateral_Movement {
     meta:
         description = "WMI-based lateral movement string pattern"
         mitre       = "T1047"
+        dumpex_scope = "private_or_unbacked"
     strings:
         $s1 = "Win32_Process" wide ascii
         $s2 = "Create" wide ascii
-        $s3 = "wmic" nocase wide ascii
+        // "wmic.exe" (not the bare "wmic" substring) — the bare form
+        // matched inside unrelated legitimate content coincidentally
+        // (e.g. system DLL string tables) too often to trust on its own.
+        $s3 = "wmic.exe" nocase wide ascii
     condition:
         ($s1 and $s2) or $s3
 }

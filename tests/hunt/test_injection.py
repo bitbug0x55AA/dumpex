@@ -149,3 +149,131 @@ def test_mz_prefix_ok_deep_read_short_reads_is_inconclusive():
     assert f["coverage_status"] == "partial"
     assert f["status"] == "INCONCLUSIVE"
     assert any("short read" in r.lower() or "fewer bytes" in r for r in f["coverage_reasons"])
+
+
+# ── context-only (informational) validated PE hits must not drive score ───
+# See dumpex/hunt/injection/memory_scan.py's pe_hit_is_context_scoreable and
+# aggregate.py's _split_scoreable_pe_hits: a structurally-valid PE header
+# that sits in read-only/non-executable, uncorrelated memory is real
+# evidence worth keeping visible, but must not by itself produce a
+# DETECTED/score>0 result — this is exactly the clean-Notepad false
+# positive (7 PAGE_READONLY MEM_MAPPED/MEM_IMAGE PE headers, none RWX, none
+# thread-correlated, previously still scored 1/POSSIBLE).
+
+def test_valid_pe_in_readonly_mem_mapped_is_observation_not_scored():
+    region_base = 0xA0000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_MAPPED")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+    injection.read_region = mem_reader({region_base: pe_bytes})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 0
+    assert len(f["hidden_pe_validated"]) == 1, "compat: full validated list unchanged"
+    assert len(f["suspicious_validated_pe_hits"]) == 0
+    assert len(f["informational_validated_pe_hits"]) == 1
+    obs = [x for x in f["findings"]
+           if x["check"] == "injection.hidden_pe_validated_context_only"]
+    assert obs and obs[0]["tag"] == "observation"
+    leads = [x for x in f["findings"] if x["check"] == "injection.hidden_pe_validated"]
+    assert not leads, "no scoreable-lead finding should be emitted when only context-only PE exists"
+
+
+def test_valid_pe_in_unbacked_mem_image_readonly_is_observation_not_scored():
+    region_base = 0xB0000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_IMAGE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+    injection.read_region = mem_reader({region_base: pe_bytes})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 0
+    assert len(f["suspicious_validated_pe_hits"]) == 0
+    assert len(f["informational_validated_pe_hits"]) == 1
+
+
+def test_valid_pe_in_mem_private_is_lead_score_1():
+    region_base = 0xC0000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+    injection.read_region = mem_reader({region_base: pe_bytes})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 1
+    assert len(f["suspicious_validated_pe_hits"]) == 1
+    assert len(f["informational_validated_pe_hits"]) == 0
+    leads = [x for x in f["findings"]
+             if x["check"] == "injection.hidden_pe_validated" and x["tag"] == "lead"]
+    assert leads
+
+
+def test_rwx_and_pe_same_allocation_without_rip_still_scores_2():
+    # Same-allocation RWX + validated PE, but no thread context at all (no
+    # RIP correlation possible) — must still reach score 2 via
+    # rwx_and_pe_alloc_bases, exactly as before this change.
+    alloc_base = 0x7ff700000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [
+        Region(alloc_base, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE"),
+        Region(alloc_base + 0x2000, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+    ]
+    mods = [Module(0x7ffe00000000, 0x10000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+    injection.read_region = mem_reader({alloc_base + 0x2000: pe_bytes})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 2
+
+
+def test_only_informational_pe_with_partial_coverage_is_inconclusive_not_detected():
+    region_base = 0xD0000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_MAPPED")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")   # present but empty -> partial coverage
+    injection.read_region = mem_reader({region_base: pe_bytes})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["score"] == 0
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["status"] != "DETECTED"
+    assert f["coverage_status"] == "partial"

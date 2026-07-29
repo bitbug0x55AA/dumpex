@@ -152,3 +152,50 @@ def split_hidden_pe_hits(scan: HiddenPeScan) -> "tuple[list, list]":
     validated = [h for h in scan.hits if not h["in_module_list"] and h["pe"]["valid"]]
     mz_only   = [h for h in scan.hits if not h["in_module_list"] and not h["pe"]["valid"]]
     return validated, mz_only
+
+
+def _has_executable_protection(protect: str) -> bool:
+    """
+    True if `protect` (a prot_str()-rendered Protect name) grants execute
+    access. Checked via substring rather than an exact-match set because
+    Protect can carry a combined flag name (e.g. "PAGE_EXECUTE_READ|
+    PAGE_GUARD") from the underlying enum — every executable PAGE_*
+    constant contains "EXECUTE" and no non-executable one does, so this is
+    a safe, simpler test than enumerating every combination.
+    """
+    return "EXECUTE" in protect
+
+
+def pe_hit_is_context_scoreable(hit: dict) -> bool:
+    """
+    Classify one validated hidden-PE hit's OWN memory context (before any
+    correlation) as scoreable-by-default or context-only/informational.
+    This is a FACT derivation from page type + protection — like the rest
+    of this module, it never scores anything itself; aggregate.py is
+    still the ONE place score gets computed. A context-only classification
+    here can still be PROMOTED to scoreable by aggregate.py if
+    correlation.py finds the same AllocationBase carrying an RWX region
+    or live thread execution (RIP/EIP or StartAddress) — see aggregate.py's
+    `_split_scoreable_pe_hits`.
+
+    Scoreable on its own:
+      - MEM_PRIVATE — no legitimate loader maps an unregistered PE image
+        into private memory; this needs no further corroboration.
+      - non-module-backed (already guaranteed by split_hidden_pe_hits,
+        which only keeps hits with in_module_list=False) AND executable
+        protection — an executable, unbacked mapping is just as
+        suspicious as MEM_PRIVATE regardless of whether the underlying
+        page type happens to be MEM_IMAGE or MEM_MAPPED.
+
+    Context-only otherwise: e.g. a read-only/non-executable MEM_MAPPED
+    region, or a MEM_IMAGE region absent from the module list but
+    carrying no execute permission (a resource-only view, a decoy
+    header, ...) — a structurally-valid PE header alone, with no execute
+    permission and no correlated RWX/live-execution signal, occurs often
+    enough in ordinary file-mapping/DLL-preview scenarios that it must
+    not by itself drive a verdict.
+    """
+    r = hit["region"]
+    if prot_str(r.Type) == "MEM_PRIVATE":
+        return True
+    return _has_executable_protection(prot_str(r.Protect))

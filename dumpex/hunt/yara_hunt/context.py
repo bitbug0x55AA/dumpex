@@ -4,6 +4,7 @@ module), counted as context_unverified (can't be confidently classified),
 or left as a confirmed private-memory hit. Builds on the generic
 classifier in dumpex/hunt/_context.py.
 """
+from dumpex.core.memory import prot_str, _get_region_at
 from dumpex.hunt._context import MemoryContext, classify_memory_context, CONFIRMED_PRIVATE
 
 
@@ -44,6 +45,49 @@ def classify_pe_in_private_memory_hit(addr, modules, regions, modules_available,
         return False, True, ctx.value
 
     return False, False, ctx.value
+
+
+def classify_scoped_hit(addr, modules, regions, modules_available,
+                         mem_info_available) -> "tuple[bool, bool, str]":
+    """
+    Generalized private/unbacked-context classification for any YARA rule
+    whose meta declares `dumpex_scope = "private_or_unbacked"` (see
+    dumpex/hunt/yara_hunt/config.py's SCOPE_PRIVATE_OR_UNBACKED) —
+    Shellcode_Bootstrap_x64, Win32_API_Hashing, Suspicious_VirtualAlloc_Sequence,
+    LSASS_Dump_Keywords, WMI_Lateral_Movement, and any future rule carrying
+    the same meta. These rules match on generic byte sequences or bare
+    Windows API-name strings that are ROUTINE inside a legitimately loaded
+    module — every DLL that documents/exports VirtualAllocEx contains that
+    string, and a short call/pop bootstrap sequence occurs by pure
+    coincidence in ntdll.dll-sized code — unlike PE_In_Private_Memory (see
+    classify_pe_in_private_memory_hit above, kept separate and unchanged
+    for backward compatibility with rule files/tests that predate this
+    meta-driven mechanism), so a module-backed hit here must never reach
+    triggered_rules at all.
+
+    Returns (suppressed, unverified, memory_context_value):
+      IMAGE (known module OR MemoryInfo says MEM_IMAGE)   -> suppressed
+      PRIVATE or UNREGISTERED (confirmed non-module)       -> allowed
+      OTHER (e.g. MEM_MAPPED) WITH executable protection   -> allowed —
+          just as worth flagging as MEM_PRIVATE: unbacked AND executable
+      OTHER without executable protection, or UNKNOWN       -> unverified
+    """
+    ctx = classify_memory_context(addr, modules, regions, modules_available, mem_info_available)
+
+    if ctx == MemoryContext.IMAGE:
+        return True, False, ctx.value
+
+    if ctx in CONFIRMED_PRIVATE:   # PRIVATE or UNREGISTERED
+        return False, False, ctx.value
+
+    if ctx == MemoryContext.OTHER:
+        region = _get_region_at(addr, regions)
+        if region is not None and "EXECUTE" in prot_str(region.Protect):
+            return False, False, ctx.value
+        return False, True, ctx.value
+
+    # UNKNOWN — neither context source available to classify this address.
+    return False, True, ctx.value
 
 
 def context_unverified_reason(contexts) -> str:

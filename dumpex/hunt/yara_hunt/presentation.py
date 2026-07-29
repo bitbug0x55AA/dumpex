@@ -140,10 +140,16 @@ def render_result(report, modules: list, verbose: bool = False) -> dict:
     if outcome.suppressed_module_pe:
         print(DIM(f"  [·] {outcome.suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
                   f"resolved to a known module or a MEM_IMAGE region.\n"))
+    if outcome.suppressed_scoped:
+        print(DIM(f"  [·] {outcome.suppressed_scoped} scoped rule match(es) suppressed — "
+                  f"resolved to a known module or a MEM_IMAGE region.\n"))
     if outcome.context_unverified:
+        # Shared across PE_In_Private_Memory and any dumpex_scope-scoped
+        # rule (see scanner.py's dispatch) — not attributable to one rule
+        # name, so the message stays generic rather than naming either.
         all_unverified_contexts = {h.get("memory_context") for h in outcome.all_hits
                                    if h.get("context_unverified")}
-        print(YELLOW(f"  [~] {outcome.context_unverified} PE_In_Private_Memory match(es) could not be "
+        print(YELLOW(f"  [~] {outcome.context_unverified} match(es) could not be "
                       f"classified ({context_unverified_reason(all_unverified_contexts)}).\n"))
 
     # ── Verdict ───────────────────────────────────────────────────────

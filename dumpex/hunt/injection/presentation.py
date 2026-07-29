@@ -24,6 +24,8 @@ def render(mf: MinidumpFile, report, verbose: bool = False) -> dict:
     rwx = report.rwx
     validated_pe_hits = report.validated_pe_hits
     mz_only_hits = report.mz_only_hits
+    suspicious_pe_hits = report.suspicious_pe_hits
+    informational_pe_hits = report.informational_pe_hits
     start_threads = report.start_threads
     coverage = report.coverage
     score = report.score
@@ -51,11 +53,16 @@ def render(mf: MinidumpFile, report, verbose: bool = False) -> dict:
     else:
         _print_check("RWX memory regions", GREEN("CLEAN — none found"))
 
-    # Check 2: Hidden PE headers (structurally validated)
-    if validated_pe_hits:
-        detail = f"{len(validated_pe_hits)} structurally-validated unregistered PE(s)"
+    # Check 2: Hidden PE headers (structurally validated) — only the
+    # scoreable subset (MEM_PRIVATE, executable unbacked mapping, or
+    # correlated with RWX/live execution) is shown as SUSPICIOUS; a
+    # read-only/non-executable, uncorrelated hit is context-only and must
+    # not read as a detection at a glance (see aggregate.py's
+    # _split_scoreable_pe_hits).
+    if suspicious_pe_hits:
+        detail = f"{len(suspicious_pe_hits)} structurally-validated unregistered PE(s)"
         if verbose:
-            for h in validated_pe_hits:
+            for h in suspicious_pe_hits:
                 r, pe = h["region"], h["pe"]
                 fo = va_to_file_offset(mf, r.BaseAddress)
                 fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
@@ -69,6 +76,11 @@ def render(mf: MinidumpFile, report, verbose: bool = False) -> dict:
                            f"\n          Declared ImageBase 0x{pe['image_base']:x}")
         _print_check("Hidden PE headers (structurally validated, MZ not in module list)",
                      RED("SUSPICIOUS"), detail)
+    elif informational_pe_hits:
+        detail = (f"{len(informational_pe_hits)} structurally-validated unregistered PE(s) — "
+                  f"read-only/non-executable, no RWX or live-execution correlation")
+        _print_check("Hidden PE headers (structurally validated, MZ not in module list)",
+                     DIM("OBSERVATION — context-only, not scored"), detail)
     else:
         _print_check("Hidden PE headers", GREEN("CLEAN — no structurally-valid unregistered PE headers"))
 

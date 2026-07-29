@@ -19,6 +19,7 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
     verdict_level, lead_count, review_priority)
 from dumpex.hunt.injection.config import PE_VALIDATE_READ_MAX
+from dumpex.hunt.injection.memory_scan import pe_hit_is_context_scoreable
 
 # score -> verdict_level, owned by this hunter (see dumpex.hunt._finding.verdict_level).
 _VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "likely", 3: "high"}
@@ -47,11 +48,45 @@ class Report:
     rwx: list = field(default_factory=list)
     validated_pe_hits: list = field(default_factory=list)
     mz_only_hits: list = field(default_factory=list)
+    suspicious_pe_hits: list = field(default_factory=list)
+    informational_pe_hits: list = field(default_factory=list)
     start_threads: list = field(default_factory=list)
     correlation: object = None
     coverage: dict = field(default_factory=dict)
     score: int = 0
     status: str = None
+
+
+def _split_scoreable_pe_hits(validated_pe_hits: list, rwx_and_pe_alloc_bases: set,
+                              rip_hits: list, start_hits: list) -> "tuple[list, list]":
+    """
+    Partition validated_pe_hits (memory_scan.split_hidden_pe_hits' output —
+    the FULL set, never pre-filtered) into (suspicious, informational): the
+    subset that actually drives score/lead vs. the subset kept for analyst
+    visibility only. A hit is scoreable if its OWN memory context already
+    qualifies (memory_scan.pe_hit_is_context_scoreable — MEM_PRIVATE, or
+    non-module-backed with executable protection) OR correlation.py found
+    its AllocationBase sharing an RWX region or live thread execution
+    (RIP/EIP or StartAddress) with something else. Example: a read-only
+    MEM_MAPPED PE header is context-only by itself, but if a thread's
+    CURRENT RIP executes inside that same allocation, that live-execution
+    signal promotes it regardless of page type.
+
+    correlation.py always correlates against the COMPLETE validated_pe_hits
+    set (not a pre-filtered one) precisely so this promotion path stays
+    available — filtering before correlation would silently make a
+    genuinely-corroborated context-only PE unreachable by any score tier.
+    """
+    correlated_bases = (set(rwx_and_pe_alloc_bases)
+                         | {r.AllocationBase for _, r in rip_hits}
+                         | {r.AllocationBase for _, r in start_hits})
+    suspicious, informational = [], []
+    for h in validated_pe_hits:
+        if pe_hit_is_context_scoreable(h) or h["region"].AllocationBase in correlated_bases:
+            suspicious.append(h)
+        else:
+            informational.append(h)
+    return suspicious, informational
 
 
 def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hits: list,
@@ -97,6 +132,14 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
     rwx_by_alloc            = correlation.rwx_by_alloc
     pe_by_alloc             = correlation.pe_by_alloc
 
+    # Split the FULL validated-PE set into what actually drives score/lead
+    # vs. what is context-only/informational — see _split_scoreable_pe_hits.
+    # Correlation above already ran against the complete validated_pe_hits
+    # set, so a context-only hit that turns out to share an allocation with
+    # RWX or live thread execution is promoted into suspicious_pe_hits here.
+    suspicious_pe_hits, informational_pe_hits = _split_scoreable_pe_hits(
+        validated_pe_hits, rwx_and_pe_alloc_bases, rip_hits, start_hits)
+
     # ── Score ────────────────────────────────────────────────────────────
     # 3 (HIGH)   — a thread's CURRENT RIP/EIP executes inside an allocation
     #               that structurally carries BOTH RWX protection AND a
@@ -109,8 +152,14 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
     #               correlation.
     # 1 (LOW)    — raw signals exist but never share an allocation and no
     #               thread (by RIP or StartAddress) executes inside one.
-    # 0          — nothing.
-    if not (rwx or validated_pe_hits or start_threads):
+    # 0          — nothing, OR the only "hidden PE" evidence is context-
+    #               only (read-only MEM_MAPPED, or an unbacked MEM_IMAGE
+    #               view with no execute permission and no correlated
+    #               RWX/live-execution signal) — see memory_scan.
+    #               `suspicious_pe_hits` (not the raw validated_pe_hits)
+    #               gates this so a purely-informational PE never drives a
+    #               score on its own.
+    if not (rwx or suspicious_pe_hits or start_threads):
         score = 0
     elif rip_full_correlation:
         score = 3
@@ -143,18 +192,21 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
             tag=TAG_LEAD,
         ))
 
-    if validated_pe_hits:
+    if suspicious_pe_hits:
         facts = []
-        for h in validated_pe_hits[:20]:
+        for h in suspicious_pe_hits[:20]:
             facts.append(_region_facts(h["region"]) + "  |  " + _pe_facts(h["pe"]))
-        if len(validated_pe_hits) > 20:
-            facts.append(f"... and {len(validated_pe_hits)-20} more")
+        if len(suspicious_pe_hits) > 20:
+            facts.append(f"... and {len(suspicious_pe_hits)-20} more")
         findings_list.append(Finding(
             check="injection.hidden_pe_validated",
             facts=facts,
-            inference=f"{len(validated_pe_hits)} region(s) contain a structurally-valid "
+            inference=f"{len(suspicious_pe_hits)} region(s) contain a structurally-valid "
                        f"PE header (DOS+COFF+optional header+full section table all "
-                       f"parsed successfully) at an address absent from the module list.",
+                       f"parsed successfully) at an address absent from the module list, "
+                       f"in MEM_PRIVATE memory, an executable unbacked mapping, or "
+                       f"otherwise correlated with an RWX allocation or live thread "
+                       f"execution.",
             confidence=CONFIDENCE_MEDIUM,
             rationale="Passing full structural PE validation (not just an 'MZ' prefix) "
                        "rules out coincidental bytes and most decoys, but a valid header "
@@ -166,6 +218,34 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
                          "a section table extending past that reports as invalid rather "
                          "than being partially trusted."],
             tag=TAG_LEAD,
+        ))
+
+    if informational_pe_hits:
+        facts = []
+        for h in informational_pe_hits[:20]:
+            facts.append(_region_facts(h["region"]) + "  |  " + _pe_facts(h["pe"]))
+        if len(informational_pe_hits) > 20:
+            facts.append(f"... and {len(informational_pe_hits)-20} more")
+        findings_list.append(Finding(
+            check="injection.hidden_pe_validated_context_only",
+            facts=facts,
+            inference=f"{len(informational_pe_hits)} region(s) contain a structurally-valid "
+                       f"PE header at an address absent from the module list, but are "
+                       f"read-only/non-executable mappings (e.g. MEM_MAPPED, or a "
+                       f"MEM_IMAGE view with no execute permission) with no correlated "
+                       f"RWX allocation or live thread execution.",
+            confidence=CONFIDENCE_LOW,
+            rationale="A structurally-valid PE header alone, sitting in memory with no "
+                       "execute permission and not backed by MEM_PRIVATE, occurs routinely "
+                       "in benign file-mapping/DLL-preview scenarios (e.g. a mapped-but-"
+                       "not-executed file view) — reported for analyst awareness but NOT "
+                       "counted toward the injection score unless corroborated by RWX "
+                       "correlation or live execution (see injection.hidden_pe_validated "
+                       "above, when present).",
+            limitations=["Memory-context classification only (page type + protection); "
+                         "does not by itself rule out a hidden module that is simply not "
+                         "currently executing."],
+            tag=TAG_OBSERVATION,
         ))
 
     if mz_only_hits:
@@ -310,6 +390,8 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
         "rwx":                  rwx,
         "hidden_pe_validated":  validated_pe_hits,
         "hidden_pe_unvalidated": mz_only_hits,
+        "suspicious_validated_pe_hits":    suspicious_pe_hits,
+        "informational_validated_pe_hits": informational_pe_hits,
         "threads":              start_threads,
         "thread_contexts":      thread_contexts,
         "rwx_and_pe_alloc_bases":  sorted(rwx_and_pe_alloc_bases),
@@ -333,5 +415,6 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
 
     return Report(findings=findings, findings_list=findings_list, rwx=rwx,
                    validated_pe_hits=validated_pe_hits, mz_only_hits=mz_only_hits,
+                   suspicious_pe_hits=suspicious_pe_hits, informational_pe_hits=informational_pe_hits,
                    start_threads=start_threads, correlation=correlation,
                    coverage=coverage, score=score, status=status)

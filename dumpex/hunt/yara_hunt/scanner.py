@@ -5,7 +5,7 @@ whole-scan budgets (deadline, total bytes, hit cap). Only collects facts
 """
 import time
 from minidump.minidumpfile import MinidumpFile
-from dumpex.hunt.yara_hunt.config import YaraConfig
+from dumpex.hunt.yara_hunt.config import YaraConfig, SCOPE_PRIVATE_OR_UNBACKED
 from dumpex.hunt.yara_hunt.models import ScanOutcome
 from dumpex.hunt.yara_hunt import context as context_mod
 
@@ -55,11 +55,16 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
     suppressed_module_pe = 0   # PE_In_Private_Memory hits suppressed because
                                # the match address resolved to a known module
                                # or a MEM_IMAGE region
-    context_unverified   = 0   # PE_In_Private_Memory hits that could not be
-                               # classified at all: neither ModuleList nor
-                               # MemoryInfo is present in this dump, so there
-                               # is no way to tell a legitimate module header
-                               # from a genuinely private-memory PE
+    suppressed_scoped    = 0   # hits from a dumpex_scope="private_or_unbacked"
+                               # rule (see config.SCOPE_PRIVATE_OR_UNBACKED)
+                               # suppressed for the same reason
+    context_unverified   = 0   # PE_In_Private_Memory / scoped-rule hits that
+                               # could not be classified at all: neither
+                               # ModuleList nor MemoryInfo is present (or, for
+                               # a scoped rule, the resolved region is neither
+                               # module-backed nor executable) — no way to
+                               # tell a legitimate module hit from a
+                               # genuinely private/unbacked one
     triggered_rules  = set()   # rule names with at least one confidently
                                 # classified hit — drives score/DETECTED
     unverified_rules = set()   # rule names whose hits were ALL context_unverified
@@ -169,6 +174,13 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
 
                 hit_context_unverified = False
                 hit_memory_context = None
+                # PE_In_Private_Memory predates the meta-driven scope
+                # mechanism below and keeps its own bespoke, unchanged
+                # classifier for backward compatibility with rule files/
+                # tests that don't carry dumpex_scope meta — every OTHER
+                # scoped rule is dispatched purely by meta, not by name,
+                # so adding a new scoped rule never needs a scanner.py
+                # change (see config.SCOPE_PRIVATE_OR_UNBACKED).
                 if match.rule == "PE_In_Private_Memory":
                     addr = seg.start_virtual_address
                     suppressed, unverified, ctx_value = context_mod.classify_pe_in_private_memory_hit(
@@ -177,6 +189,19 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
 
                     if suppressed:
                         suppressed_module_pe += 1
+                        continue
+
+                    if unverified:
+                        context_unverified += 1
+                        hit_context_unverified = True
+                elif match.meta.get("dumpex_scope") == SCOPE_PRIVATE_OR_UNBACKED:
+                    addr = seg.start_virtual_address
+                    suppressed, unverified, ctx_value = context_mod.classify_scoped_hit(
+                        addr, modules, regions, modules_available, mem_info_available)
+                    hit_memory_context = ctx_value
+
+                    if suppressed:
+                        suppressed_scoped += 1
                         continue
 
                     if unverified:
@@ -244,6 +269,7 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
         short_reads=short_reads, timed_out=timed_out, match_failed=match_failed,
         truncated=truncated, budget_exhausted=budget_exhausted,
         total_bytes_scanned=total_bytes_scanned, suppressed_module_pe=suppressed_module_pe,
+        suppressed_scoped=suppressed_scoped,
         context_unverified=context_unverified, triggered_rules=triggered_rules,
         unverified_rules=unverified_rules,
     )

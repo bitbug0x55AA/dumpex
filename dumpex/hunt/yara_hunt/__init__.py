@@ -228,6 +228,9 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     if outcome.suppressed_module_pe:
         print(DIM(f"  [·] {outcome.suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
                   f"MZ/PE header belonged to a known, legitimately loaded module.\n"))
+    if outcome.suppressed_scoped:
+        print(DIM(f"  [·] {outcome.suppressed_scoped} scoped rule match(es) suppressed — "
+                  f"resolved to a known module or a MEM_IMAGE region.\n"))
 
     report = aggregate.build_report(outcome, compile_failed)
 

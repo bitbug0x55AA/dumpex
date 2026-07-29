@@ -30,6 +30,7 @@ class ScanOutcome:
     budget_exhausted: bool = False
     total_bytes_scanned: int = 0
     suppressed_module_pe: int = 0
+    suppressed_scoped: int = 0
     context_unverified: int = 0
     triggered_rules: set = field(default_factory=set)
     unverified_rules: set = field(default_factory=set)
