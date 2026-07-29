@@ -280,7 +280,7 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
             tag=TAG_LEAD,
         ))
 
-    # Coverage tracked independently of status/score — see stomping.py /
+    # Coverage tracked independently of status/score — see dumpex.hunt.stomping /
     # pipe.py for why: a nonzero score must not silently imply every
     # region/thread was checked.
     coverage_reasons = []

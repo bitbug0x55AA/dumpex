@@ -31,7 +31,7 @@ _THREAD_CONTEXT_MODULES = (stomping, pipemod, cs_beacon)
 @pytest.fixture(autouse=True)
 def _reset_thread_context_monkeypatches():
     """
-    hunt/stomping.py, hunt/pipe.py, and hunt/cs_beacon/ all hold
+    hunt/stomping/, hunt/pipe.py, and hunt/cs_beacon/ all hold
     get_thread_contexts as a plain module attribute (imported from
     dumpex.core.memory) rather than always calling through the module,
     specifically so tests can monkeypatch it to inject a synthetic

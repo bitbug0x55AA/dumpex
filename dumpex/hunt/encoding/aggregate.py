@@ -433,7 +433,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
     report.exhausted_reason = decode_budget.exhausted_reason
     coverage_gap = bool(total_size_skipped or total_read_failed or total_short_reads or budget_exhausted)
 
-    # Coverage tracked independently of status/score — see stomping.py /
+    # Coverage tracked independently of status/score — see dumpex.hunt.stomping /
     # pipe.py for why: a nonzero score must not silently imply every
     # region was scanned.
     coverage_reasons = []

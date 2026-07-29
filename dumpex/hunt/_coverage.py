@@ -14,7 +14,8 @@ Before this module existed, each hunter hand-rolled the same two
 if/elif chains separately (stomping.py, pipe.py, encoding.py each wrote
 an near-identical copy; injection.py used a similarly-shaped but
 differently-named helper — this history predates the injection.py ->
-dumpex/hunt/injection/ package split). That duplication is exactly how the four
+dumpex/hunt/injection/ and stomping.py -> dumpex/hunt/stomping/ package
+splits). That duplication is exactly how the four
 hunters' coverage semantics could quietly drift apart from each other —
 `derive_coverage_status()` and `derive_status()` are the single place
 this reduction happens now; every hunter calls these two functions
@@ -80,7 +81,7 @@ class CoverageTracker:
     were skipped/failed for each of a handful of common reasons.
 
     Not every hunter's coverage gaps fit this generic shape exactly —
-    stomping.py's verified-content-diff loop has several genuinely
+    dumpex/hunt/stomping/'s verified-content-diff loop has several genuinely
     domain-specific gap reasons (reference file missing, reference
     identity mismatch, relocation normalization failure, ...) that don't
     map cleanly onto skipped_oversize/read_failed/short_reads, so it

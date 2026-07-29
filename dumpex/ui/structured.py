@@ -416,7 +416,7 @@ class StructuredOutput:
                     # can still be "partial" even when it found something
                     # (DETECTED): a nonzero score must not silently imply
                     # complete coverage just because status won the race
-                    # against a coverage gap (see stomping.py/pipe.py/
+                    # against a coverage gap (see dumpex.hunt.stomping/pipe.py/
                     # encoding.py/dumpex.hunt.injection "DETECTED but partial"
                     # handling).
                     coverage_complete = (hunter_coverage_status != "partial"

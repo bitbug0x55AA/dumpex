@@ -6,7 +6,7 @@ from dumpex.ui.colors import RED, YELLOW, DIM
 
 # ── PE structural validation ─────────────────────────────────────────────
 # Used by hunt/injection/ (structural "is this really a PE header" check,
-# replacing a bare MZ-prefix scan) and hunt/stomping.py (section table for
+# replacing a bare MZ-prefix scan) and hunt/stomping/ (section table for
 # disk-declared-vs-live-memory comparison). Deliberately hand-rolled rather
 # than depending on pefile: only the handful of fixed-offset fields these
 # two hunts actually need, parsed defensively (never raises) since the
@@ -146,7 +146,7 @@ def parse_pe_header(data: bytes) -> dict:
     # array itself; offsets differ between PE32 and PE32+ because the
     # Windows-specific fields ahead of it (Stack/Heap Reserve/Commit) are
     # 4 bytes wide in PE32 and 8 bytes wide in PE32+. Only used so far for
-    # IMAGE_DIRECTORY_ENTRY_BASERELOC (index 5), by stomping.py's
+    # IMAGE_DIRECTORY_ENTRY_BASERELOC (index 5), by dumpex/hunt/stomping/'s
     # relocation-normalized disk diff — parsed here, not per-caller, since
     # every caller needs the same offsets and the same PE32/PE32+ branch.
     num_rva_sizes_off, dir_off = ((92, 96) if base_size == 4 else (108, 112))
@@ -253,7 +253,7 @@ def section_protection_deviates(actual_protect_name: str, section: dict) -> bool
 
 
 # ── Base relocation normalization ────────────────────────────────────────
-# Used by hunt/stomping.py's on-disk-vs-memory content diff: a module
+# Used by hunt/stomping/'s on-disk-vs-memory content diff: a module
 # loaded at a different address than its preferred ImageBase (ASLR, or a
 # base collision forcing the loader to relocate it) has every absolute
 # address the linker baked into that build's on-disk bytes patched at
