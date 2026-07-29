@@ -193,3 +193,59 @@ def test_compiled_rules_have_expected_shapes(monkeypatch):
     pattern, framework, technique, mitre = rules["framework_pipes"][0]
     assert isinstance(pattern, re.Pattern)
     assert isinstance(framework, str)
+
+
+# ── packaged rules.yaml is the canonical source; _DEFAULT_RULES is an ────
+# emergency-only fallback for a corrupted/missing package resource, not a
+# second copy of the ruleset that's free to drift from it ────────────────
+
+def test_packaged_rules_match_builtin_fallback():
+    """
+    _DEFAULT_RULES only runs when the packaged rules.yaml can't be read at
+    all (see _load_rules's exception handler) -- a case that, with pyyaml
+    now a base dependency, should be rare. If it ever IS hit, it must
+    produce the same ruleset the packaged file does, not a stale one.
+    Editing rules.yaml without updating _DEFAULT_RULES to match must fail
+    this test, not silently ship a fallback that scores differently.
+    """
+    import yaml
+    from importlib import resources
+
+    text = resources.files("dumpex.rules_pkg").joinpath("data", "rules.yaml").read_text(encoding="utf-8")
+    raw = yaml.safe_load(text)
+    loader._validate_rules_schema(raw)   # same schema check the loader itself applies
+
+    defaults = loader._DEFAULT_RULES
+
+    assert set(raw["suspicious_protections"]) == defaults["suspicious_protections"]
+    assert set(raw["stomping_whitelist"]) == defaults["stomping_whitelist"]
+
+    for field in ("stomping_ioc_patterns", "stomping_net_ioc_patterns", "pipe_c2_context_patterns"):
+        assert raw[field] == defaults[field], f"'{field}' drifted between rules.yaml and _DEFAULT_RULES"
+
+    # Compare the raw pattern/framework/technique/mitre fields directly --
+    # not _compile_rules()'s output, which turns these into compiled
+    # re.Pattern objects that can never compare equal across two
+    # independently-compiled sources even when their source text matches.
+    assert raw["framework_pipes"] == defaults["framework_pipes"], \
+        "'framework_pipes' drifted between rules.yaml and _DEFAULT_RULES"
+
+
+def test_base_install_loads_packaged_rules_not_builtin_fallback():
+    """
+    pyyaml is a base dependency (see pyproject.toml) specifically so a
+    plain `pip install dumpex` -- no --rules-file, no yara-python -- can
+    still read the packaged canonical rules.yaml instead of silently
+    dropping to _DEFAULT_RULES. Exercises the real, unpatched
+    _find_rules_source()/_packaged_source() resolution path.
+    """
+    rules = loader.get_rules()
+    assert rules["suspicious_protections"]
+
+    info = loader.get_rules_source_info()
+    assert info is not None
+    assert info["path"] is not None
+    assert "rules_pkg" in info["path"]
+    assert info["explicit"] is False
+    assert info["sha256"] is not None
+    assert len(info["sha256"]) == 64
