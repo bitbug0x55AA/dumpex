@@ -132,3 +132,58 @@ jobs:
           coverage report --include="dumpex/hunt/yara_hunt/rules.py"        --fail-under=55
           coverage report --include="dumpex/hunt/yara_hunt/context.py"      --fail-under=90
           coverage report --include="dumpex/hunt/_context.py"               --fail-under=90
+
+  package-smoke:
+    # The pytest job above always installs dumpex editable (`pip install
+    # -e .`), which never exercises setuptools' actual package-data
+    # inclusion logic -- an editable install just symlinks/points back at
+    # the checkout, so a package-data glob typo'd in pyproject.toml (or a
+    # resource that silently stopped being packaged) would never be
+    # caught by that job passing. This job builds the real wheel and
+    # sdist artifacts, installs each into its own throwaway venv with NO
+    # editable/dev install anywhere in the picture, and proves the
+    # packaged rules.yaml / YARA rules / JSON schema are actually inside
+    # the distributed artifact and readable via importlib.resources --
+    # not just present in the source tree.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build
+        run: python -m pip install --upgrade pip build
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Copy smoke script outside the checkout
+        # The smoke test MUST run from a directory that does not contain a
+        # `dumpex/` source folder: Python adds the invoked script's own
+        # directory to sys.path ahead of site-packages, so running this
+        # script from inside the checkout would silently import the
+        # repo's source tree instead of the installed wheel/sdist even if
+        # the install itself were broken -- defeating the entire point of
+        # this job. See scripts/package_smoke.py's own docstring.
+        run: cp scripts/package_smoke.py "$RUNNER_TEMP/package_smoke.py"
+
+      - name: Wheel — install into a fresh venv and run the smoke test
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv "$RUNNER_TEMP/venv-wheel"
+          "$RUNNER_TEMP/venv-wheel/bin/pip" install --quiet "$GITHUB_WORKSPACE"/dist/*.whl
+          "$RUNNER_TEMP/venv-wheel/bin/python" "$RUNNER_TEMP/package_smoke.py" "$GITHUB_WORKSPACE"
+
+      - name: Sdist — install into a fresh venv and run the smoke test
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m venv "$RUNNER_TEMP/venv-sdist"
+          "$RUNNER_TEMP/venv-sdist/bin/pip" install --quiet "$GITHUB_WORKSPACE"/dist/*.tar.gz
+          "$RUNNER_TEMP/venv-sdist/bin/python" "$RUNNER_TEMP/package_smoke.py" "$GITHUB_WORKSPACE"
