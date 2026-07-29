@@ -171,7 +171,7 @@ types its own `sleep_mask`/`entropy`/`base64`/`xor`/`compressed`/
 these were entirely unvalidated before, passing through the generic
 shape's `additionalProperties: true`); or `yaraHunterResult` (the `yara`
 key specifically), which only requires the fields common to all three
-since yara_hunt.py's own `matches`/`rules_hit` model never emits
+since yara_hunt's own `matches`/`rules_hit` model never emits
 `confidence`/`findings`/`lead_count`/`review_priority`. All three compose
 the same `hunterResultBase` (`status`/`score`/`coverage_status`/
 `verdict_level` plus the NOT_EVALUATED/INCONCLUSIVE cross-field

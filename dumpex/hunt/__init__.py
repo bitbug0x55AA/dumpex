@@ -154,7 +154,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             # (pipe names, C2 strings, shellcode patterns, ...) were
             # actually found for this TTP; see dumpex.hunt._finding
             # .lead_count/.review_priority (only set for hunters on the
-            # shared Finding model — legacy yara_hunt.py has neither, so
+            # shared Finding model — legacy yara_hunt has neither, so
             # this is silently a no-op for it via .get()).
             lead_n = hunt_result.get("lead_count") or 0
             if lead_n:

@@ -1,6 +1,6 @@
 """Memory-context classification shared by hunt modules that need to judge
 whether an address is backed by a known module, a private allocation, or
-neither — most notably yara_hunt.py's PE_In_Private_Memory suppression.
+neither — most notably yara_hunt's PE_In_Private_Memory suppression.
 
 A prior, ad-hoc version of this check only special-cased "both ModuleList
 and MemoryInfo missing" as unclassifiable; every other combination silently

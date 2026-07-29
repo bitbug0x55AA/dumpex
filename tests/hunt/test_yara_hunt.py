@@ -285,7 +285,7 @@ def test_scan_deadline_exhaustion_makes_result_inconclusive(monkeypatch):
 
 def test_oversized_segment_is_skipped_and_makes_result_inconclusive():
     seg_va, seg_fo = 0x40000, 0x4000
-    huge_size = yara_hunt.CS_MAX_SEG_SCAN + 1
+    huge_size = yara_hunt.YARA_MAX_SEG_SCAN + 1
     with tempfile.TemporaryDirectory() as d:
         _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
         seg = Segment(seg_va, seg_fo, huge_size)
@@ -343,3 +343,67 @@ def test_match_failure_makes_result_inconclusive(monkeypatch):
 
     assert f["status"] == "INCONCLUSIVE"
     assert f["coverage"]["matches_completed"] is False
+
+
+# ── the oversized-segment progress note must reflect the ACTUAL configured ──
+# threshold, not a hardcoded "50 MB" -- YARA_MAX_SEG_SCAN is documented as
+# monkeypatchable, so a test/caller that lowers it must see the note change
+# to match, not silently keep reporting the old default.
+
+def test_oversized_segment_note_reflects_monkeypatched_threshold(monkeypatch, capsys):
+    monkeypatch.setattr(yara_hunt, "YARA_MAX_SEG_SCAN", 1024 * 1024)   # 1 MB, not 50 MB
+    seg_va, seg_fo = 0x41000, 0x4100
+    huge_size = yara_hunt.YARA_MAX_SEG_SCAN + 1
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, huge_size)
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({})
+        yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    out = capsys.readouterr().out
+    assert "1 MB skipped" in out
+    assert "50 MB skipped" not in out
+
+
+# ── a cap that ISN'T a whole number of MB must never be reported by ──────
+# truncating/rounding to one -- 512 KiB must say "512 KB", not "0 MB", and
+# 1.5 MiB must say "1536 KB", not "1 MB" (both would previously happen
+# from a plain `config.max_seg_scan // (1024*1024)` integer division).
+
+def test_oversized_segment_note_exact_for_sub_megabyte_threshold(monkeypatch, capsys):
+    monkeypatch.setattr(yara_hunt, "YARA_MAX_SEG_SCAN", 512 * 1024)   # 512 KiB
+    seg_va, seg_fo = 0x42000, 0x4200
+    huge_size = yara_hunt.YARA_MAX_SEG_SCAN + 1
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, huge_size)
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({})
+        yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    out = capsys.readouterr().out
+    assert "512 KB skipped" in out
+    assert "0 MB skipped" not in out
+
+
+def test_oversized_segment_note_exact_for_one_and_a_half_mb_threshold(monkeypatch, capsys):
+    monkeypatch.setattr(yara_hunt, "YARA_MAX_SEG_SCAN", int(1.5 * 1024 * 1024))   # 1.5 MiB
+    seg_va, seg_fo = 0x43000, 0x4300
+    huge_size = yara_hunt.YARA_MAX_SEG_SCAN + 1
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, huge_size)
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({})
+        yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    out = capsys.readouterr().out
+    assert "1536 KB skipped" in out
+    assert "1 MB skipped" not in out

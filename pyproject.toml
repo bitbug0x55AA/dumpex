@@ -34,7 +34,7 @@ include = ["dumpex*"]
 # The single canonical copy of the TTP rule defaults / YARA rules — not
 # duplicated anywhere else in the repo — so `pip install dumpex` works
 # standalone with no rules/ directory living next to whatever script
-# invoked it. dumpex/rules_pkg/loader.py and dumpex/hunt/yara_hunt.py both
+# invoked it. dumpex/rules_pkg/loader.py and dumpex/hunt/yara_hunt/ both
 # resolve this via importlib.resources ahead of any dev-tree/user-override
 # path (script dir / cwd).
 "dumpex.rules_pkg" = ["data/rules.yaml", "data/yara/*.yar"]

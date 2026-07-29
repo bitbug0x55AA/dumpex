@@ -9,7 +9,7 @@ this test makes the same expectation an explicit, enforced regression
 rather than a quiet fallback).
 
 Only covers hunters on the shared Finding/tag model (injection, cs-beacon,
-pipe, stomping, encoding, hollowing) -- yara_hunt.py reports "matches",
+pipe, stomping, encoding, hollowing) -- yara_hunt reports "matches",
 not tag=observation/lead/detection Finding objects, and is architecturally
 a different (legacy) model; out of scope here.
 """

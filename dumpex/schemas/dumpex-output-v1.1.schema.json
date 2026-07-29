@@ -165,7 +165,7 @@
     },
 
     "yaraHunterResult": {
-      "description": "yara_hunt.py's own matches/rules_hit shape -- only hunterResultBase's fields (status/score/coverage_status/verdict_level) are guaranteed; it does not emit confidence/findings/lead_count/review_priority, so those are not required (and not modeled) here. additionalProperties stays true for matches/rules_hit/scan_complete/coverage and similar yara-specific fields.",
+      "description": "yara_hunt's own matches/rules_hit shape -- only hunterResultBase's fields (status/score/coverage_status/verdict_level) are guaranteed; it does not emit confidence/findings/lead_count/review_priority, so those are not required (and not modeled) here. additionalProperties stays true for matches/rules_hit/scan_complete/coverage and similar yara-specific fields.",
       "allOf": [
         { "$ref": "#/$defs/hunterResultBase" }
       ]

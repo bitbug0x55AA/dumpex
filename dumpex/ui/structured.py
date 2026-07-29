@@ -391,7 +391,7 @@ class StructuredOutput:
                 # "verdict_level" (clean/possible/likely/high), "confidence"
                 # (none/low/medium/high), and "coverage_status" (complete/
                 # partial/not_evaluated), all computed independently of
-                # score — yara_hunt.py is still on the legacy model and
+                # score — yara_hunt is still on the legacy model and
                 # falls back to the score/max_score heuristic below.
                 hunter_verdict_level   = findings.get("verdict_level")
                 hunter_confidence      = findings.get("confidence")
@@ -465,7 +465,7 @@ class StructuredOutput:
                     "coverage_reason": coverage_reason,
                     # Only populated for hunters on the shared Finding model
                     # (see dumpex.hunt._finding.lead_count/.review_priority)
-                    # — "" for legacy hunters (yara_hunt.py) rather than 0/
+                    # — "" for legacy hunters (yara_hunt) rather than 0/
                     # "none", so a consumer can't mistake "field not
                     # computed" for "computed as zero/none".
                     "lead_count": findings.get("lead_count", ""),
