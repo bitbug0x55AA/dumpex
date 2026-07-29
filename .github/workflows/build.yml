@@ -23,8 +23,37 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Validate release version matches package version
+        # The workflow_dispatch input is free-text — nothing before this
+        # stopped someone from typing "v2.1.0" while pyproject.toml and
+        # dumpex/__init__.py were still stuck at 2.0.0, tagging a release
+        # whose artifacts (wheel/sdist filenames, meta.tool.version in
+        # --json output) silently disagreed with the tag. Fail fast here
+        # instead of shipping that mismatch.
+        shell: pwsh
+        run: |
+          $inputVersion = "${{ github.event.inputs.version }}"
+          if ($inputVersion -notmatch '^v(\d+\.\d+\.\d+)$') {
+            throw "Release version input must look like 'vX.Y.Z' (got '$inputVersion')"
+          }
+          $expected = $Matches[1]
+
+          $pyprojectVersion = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          $initVersion = (Select-String -Path dumpex/__init__.py -Pattern '^__version__ = "(.+)"').Matches[0].Groups[1].Value
+
+          if ($pyprojectVersion -ne $expected) {
+            throw "pyproject.toml version ($pyprojectVersion) does not match release input ($expected)"
+          }
+          if ($initVersion -ne $expected) {
+            throw "dumpex/__init__.py __version__ ($initVersion) does not match release input ($expected)"
+          }
+          Write-Host "Version check passed: $expected"
+
       - name: Install dependencies
-        run: python -m pip install pyinstaller -e ".[full]"
+        run: python -m pip install pyinstaller -e ".[full,dev]"
+
+      - name: Run tests before packaging
+        run: pytest
 
       - name: Build EXE
         # Keep the resources inside their real Python package. Both the
@@ -74,6 +103,7 @@ jobs:
           tag_name: ${{ github.event.inputs.version }}
           name: Dumpex ${{ github.event.inputs.version }}
           prerelease: ${{ github.event.inputs.prerelease }}
+          generate_release_notes: true
           files: |
             dist/dumpex.exe
             dist/dumpex-output-v1.1.schema.json

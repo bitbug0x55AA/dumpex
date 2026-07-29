@@ -29,7 +29,7 @@ result sections:
     "schema_version": "1.1",
     "tool": {
       "name": "dumpex",
-      "version": "2.0.0"
+      "version": "2.1.0"
     },
     "execution": {
       "started_at": "2026-07-26T01:00:00Z",
