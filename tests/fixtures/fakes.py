@@ -2,7 +2,7 @@
 Lightweight fakes for exercising dumpex.hunt.* modules without a real
 .dmp file. Plain classes, no framework dependency of their own — matches
 this project's own dependency-light philosophy (dumpex's own runtime
-deps are just minidump/colorama, with pyyaml/yara-python optional).
+deps are just minidump/colorama/pyyaml, with yara-python optional).
 
 Every class here mirrors just the attributes the hunt modules actually
 read off the real `minidump` library objects (MinidumpMemoryInfo,

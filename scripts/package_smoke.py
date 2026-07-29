@@ -62,14 +62,19 @@ def main() -> None:
         _fail("dumpex/rules_pkg/data/rules.yaml not found via importlib.resources")
     rules_yaml.read_text(encoding="utf-8")
 
+    # Exact filenames, not just a count -- a count-only check would still
+    # pass if a rule file were accidentally dropped from packaging at the
+    # same time an unrelated new one was added, which is exactly the kind
+    # of packaging drift this smoke test exists to catch.
+    expected_yar_files = {"cs_indicators.yar", "lateral_movement.yar", "suspicious_memory.yar"}
     yara_dir = importlib.resources.files("dumpex.rules_pkg").joinpath("data", "yara")
     if not yara_dir.is_dir():
         _fail("dumpex/rules_pkg/data/yara directory not found via importlib.resources")
-    yar_files = sorted(p.name for p in yara_dir.iterdir()
-                        if p.name.endswith((".yar", ".yara")))
-    if len(yar_files) < 3:
-        _fail(f"expected at least 3 packaged .yar files, found: {yar_files}")
-    print(f"packaged YARA rule files: {yar_files}")
+    yar_files = {p.name for p in yara_dir.iterdir() if p.name.endswith((".yar", ".yara"))}
+    if yar_files != expected_yar_files:
+        _fail(f"packaged YARA rule files mismatch: expected {sorted(expected_yar_files)}, "
+              f"found {sorted(yar_files)}")
+    print(f"packaged YARA rule files: {sorted(yar_files)}")
 
     schema_path = importlib.resources.files("dumpex.schemas").joinpath(
         "dumpex-output-v1.1.schema.json")

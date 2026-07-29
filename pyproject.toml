@@ -31,12 +31,19 @@ where = ["."]
 include = ["dumpex*"]
 
 [tool.setuptools.package-data]
-# The single canonical copy of the TTP rule defaults / YARA rules — not
-# duplicated anywhere else in the repo — so `pip install dumpex` works
-# standalone with no rules/ directory living next to whatever script
-# invoked it. dumpex/rules_pkg/loader.py and dumpex/hunt/yara_hunt/ both
-# resolve this via importlib.resources ahead of any dev-tree/user-override
-# path (script dir / cwd).
+# The packaged canonical copy of the TTP rule defaults / YARA rules, so
+# `pip install dumpex` works standalone with no rules/ directory living
+# next to whatever script invoked it. dumpex/rules_pkg/loader.py and
+# dumpex/hunt/yara_hunt/ both resolve this via importlib.resources ahead
+# of any dev-tree/user-override path (script dir / cwd).
+#
+# dumpex/rules_pkg/loader.py's _DEFAULT_RULES is a separate, hardcoded
+# emergency-only fallback for when this packaged copy can't be read at
+# all (corrupted install, missing package data) — not a second source of
+# truth. tests/unit/test_rules_loader.py's
+# test_packaged_rules_match_builtin_fallback enforces that the two stay
+# identical; update _DEFAULT_RULES in the same change if you edit
+# rules.yaml, or that test will fail.
 "dumpex.rules_pkg" = ["data/rules.yaml", "data/yara/*.yar"]
 "dumpex.schemas" = ["*.schema.json"]
 
