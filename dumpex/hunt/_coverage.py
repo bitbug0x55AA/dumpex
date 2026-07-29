@@ -13,7 +13,8 @@ answer the same two questions at the end of a scan:
 Before this module existed, each hunter hand-rolled the same two
 if/elif chains separately (stomping.py, pipe.py, encoding.py each wrote
 an near-identical copy; injection.py used a similarly-shaped but
-differently-named helper). That duplication is exactly how the four
+differently-named helper — this history predates the injection.py ->
+dumpex/hunt/injection/ package split). That duplication is exactly how the four
 hunters' coverage semantics could quietly drift apart from each other —
 `derive_coverage_status()` and `derive_status()` are the single place
 this reduction happens now; every hunter calls these two functions

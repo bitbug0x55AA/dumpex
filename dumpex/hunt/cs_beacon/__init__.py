@@ -131,10 +131,10 @@ def _hunt_cs_beacon(mf: MinidumpFile, verbose: bool = False) -> dict:
     regions = get_memory_regions(mf)
     thread_contexts = get_thread_contexts(mf)
 
-    # ThreadList/CONTEXT coverage — the same explicit counts injection.py
+    # ThreadList/CONTEXT coverage — the same explicit counts dumpex/hunt/injection/
     # tracks (see its coverage["contexts_missing"]): a bare "did any thread
     # context parse" boolean can't distinguish "every thread's context
-    # parsed" from "1 out of 200 did". Unlike injection.py, RIP/EIP is NOT
+    # parsed" from "1 out of 200 did". Unlike dumpex/hunt/injection/, RIP/EIP is NOT
     # the only path to this hunter's top tier (score 2 also comes from
     # executable+private region protection alone — see
     # context._cs_context_corroborates), so an incomplete thread-context

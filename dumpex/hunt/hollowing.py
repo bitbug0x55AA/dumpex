@@ -36,7 +36,7 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
 
     DETECTED requires correlation, not a single flag: anchor 1
     (MEM_PRIVATE) firing together with EITHER anchor 2 (MZ wiped) or
-    corroborator 3 (RWX) — mirrors injection.py's own RWX+hidden-PE
+    corroborator 3 (RWX) — mirrors dumpex/hunt/injection/'s own RWX+hidden-PE
     same-allocation correlation requirement. A single signal alone
     (including anchor 2 by itself, or either corroborator alone) is
     reported as a lead, not a detection — see

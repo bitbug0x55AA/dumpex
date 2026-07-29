@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from dumpex.ui.colors import RED, YELLOW, DIM
 
 # ── PE structural validation ─────────────────────────────────────────────
-# Used by hunt/injection.py (structural "is this really a PE header" check,
+# Used by hunt/injection/ (structural "is this really a PE header" check,
 # replacing a bare MZ-prefix scan) and hunt/stomping.py (section table for
 # disk-declared-vs-live-memory comparison). Deliberately hand-rolled rather
 # than depending on pefile: only the handful of fixed-offset fields these

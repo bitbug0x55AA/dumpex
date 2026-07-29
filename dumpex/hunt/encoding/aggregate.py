@@ -344,7 +344,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
     if all_shellcode_hits:
         # A bare 6-byte prefix match is weak on its own, but one sitting
         # inside a region that's ALSO executable+private (the same
-        # combination injection.py/hollowing.py treat as suspicious) is a
+        # combination dumpex/hunt/injection/ and hollowing.py treat as suspicious) is a
         # meaningfully stronger combination than either signal alone —
         # still not structural proof (no section table, no entry-point
         # check), so this stays tag=LEAD and never touches score, but the
@@ -377,7 +377,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
                            f"{len(all_shellcode_hits)} match(es) sit inside a region that is "
                            f"ALSO executable+private (MEM_PRIVATE + one of "
                            f"{', '.join(susp_prots)}) — the same combination "
-                           f"injection.py/hollowing.py treat as suspicious on its own — worth "
+                           f"dumpex/hunt/injection/ and hollowing.py treat as suspicious on its own — worth "
                            f"an analyst's closer look even though it still isn't structural proof.")
         findings_list.append(Finding(
             check="obfuscation.shellcode_bootstrap_lead",

@@ -628,7 +628,7 @@ def _hunt_pipe(mf: MinidumpFile, verbose: bool = False) -> dict:
                     break
 
         # StartAddress proximity is collected but NEVER scored — it's
-        # where a thread began, not where it is now (see hunt/injection.py
+        # where a thread began, not where it is now (see dumpex/hunt/injection/
         # for the same distinction), and is reported as a lead only.
         if rip_hit is None:
             for ti in infos:

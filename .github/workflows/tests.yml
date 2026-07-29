@@ -49,7 +49,6 @@ jobs:
         # coverage shouldn't either.
         if: always()
         run: |
-          coverage report --include="dumpex/hunt/injection.py"  --fail-under=75
           coverage report --include="dumpex/hunt/stomping.py"   --fail-under=75
           coverage report --include="dumpex/hunt/pipe.py"       --fail-under=73
           coverage report --include="dumpex/core/pe_utils.py"   --fail-under=56
@@ -87,3 +86,13 @@ jobs:
           coverage report --include="dumpex/hunt/cs_beacon/aggregate.py"   --fail-under=90
           coverage report --include="dumpex/hunt/cs_beacon/parser.py"      --fail-under=30
           coverage report --include="dumpex/hunt/cs_beacon/presentation.py" --fail-under=40
+          # dumpex/hunt/injection/*: same reasoning -- injection.py is a
+          # package now, not a single file.
+          coverage report --include="dumpex/hunt/injection/__init__.py"     --fail-under=95
+          coverage report --include="dumpex/hunt/injection/config.py"      --fail-under=95
+          coverage report --include="dumpex/hunt/injection/models.py"      --fail-under=95
+          coverage report --include="dumpex/hunt/injection/correlation.py" --fail-under=80
+          coverage report --include="dumpex/hunt/injection/memory_scan.py" --fail-under=80
+          coverage report --include="dumpex/hunt/injection/aggregate.py"   --fail-under=80
+          coverage report --include="dumpex/hunt/injection/thread_scan.py" --fail-under=70
+          coverage report --include="dumpex/hunt/injection/presentation.py" --fail-under=60

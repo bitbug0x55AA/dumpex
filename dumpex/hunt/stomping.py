@@ -93,7 +93,7 @@ _VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "high"}
 # place to encode that judgment call.
 
 PE_VALIDATE_READ_MAX = 4096   # bytes read from each module base to parse its
-                               # own header + section table (see injection.py)
+                               # own header + section table (see dumpex/hunt/injection/)
 
 REF_FILE_MAX_READ = 64 * 1024 * 1024   # cap on a --ref-dir reference file read;
                                         # legitimate DLLs/EXEs are far smaller,

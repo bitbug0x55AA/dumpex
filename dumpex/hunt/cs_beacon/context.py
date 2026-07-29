@@ -24,7 +24,7 @@ def _cs_context_corroborates(hit_region, regions: list, thread_contexts: list) -
          checked by AllocationBase, not the narrower single MemoryInfo
          sub-region, since one VirtualAlloc can be split into multiple
          sub-regions with different protections (mirrors how
-         hunt/injection.py groups RWX+PE hits by allocation).
+         dumpex/hunt/injection/ groups RWX+PE hits by allocation).
 
     hit_region may be None (VA not covered by MemoryInfoListStream) —
     both signals are then unavailable and this returns (False, []).
