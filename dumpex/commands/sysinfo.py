@@ -264,13 +264,19 @@ def collect_pid(mf: MinidumpFile) -> CommandResult:
     exception_source  = observe_source("exception", present=bool(exc), items=[exc] if exc else [])
     sources = {"misc_info": misc_info_source, "threads": threads_source, "exception": exception_source}
 
-    all_absent = not mf.misc_info and not mf.threads and not exc
-    if pid is None and not completeness_checks and not all_absent:
+    if pid is None and not completeness_checks:
         # A source object can be present yet contribute nothing usable
         # (e.g. mf.threads exists but its own .threads list is empty, or
         # the exception stream exists but carries no ThreadId) -- neither
         # fallback above appended a limitation in that case, which would
-        # otherwise leave a non-complete status with empty reasons.
+        # otherwise leave a non-complete status with empty reasons. Added
+        # unconditionally (not gated on an independently-recomputed
+        # "are all three sources absent" check) -- if they really are all
+        # absent, build_coverage_report's own not_evaluated branch (see
+        # evaluation_sources below) reads `sources` directly and returns
+        # before ever looking at completeness_checks, so this entry is
+        # simply never used in that case rather than needing to be kept
+        # in sync with a second, separately-computed condition.
         completeness_checks.append(
             CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info"))
 

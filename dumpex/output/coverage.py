@@ -195,6 +195,12 @@ LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
 LIMITATION_SOURCE_KEY_MISMATCH = LimitationCode.SOURCE_KEY_MISMATCH
 
+# PID_SOURCES_ABSENT's rendered sentence names these three sources
+# explicitly and only these -- it must never be selected for, or attached
+# to, any other source combination (that would render a sentence naming
+# streams that aren't actually the ones being described).
+_PID_SOURCES_ABSENT_SOURCES = ("misc_info", "threads", "exception")
+
 
 @dataclass(frozen=True)
 class CoverageLimitation:
@@ -246,16 +252,48 @@ class CoverageLimitation:
             raise ValueError(
                 "CoverageLimitation(code=MODULE_CLASSIFICATION_UNAVAILABLE) is a fixed sentence "
                 f"about ModuleListStream specifically -- source must be 'modules', got {self.source!r}")
-        if self.code == LimitationCode.PID_THREAD_LIST_FALLBACK and not self.related_tids:
-            raise ValueError(
-                "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires non-empty related_tids")
-        if self.code == LimitationCode.PID_EXCEPTION_TID_FALLBACK and self.thread_id is None:
-            raise ValueError(
-                "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires thread_id")
         if self.code == LimitationCode.PEB_UNAVAILABLE and self.source != "peb":
             raise ValueError(
                 "CoverageLimitation(code=PEB_UNAVAILABLE) is a fixed sentence about PEB "
                 f"specifically -- source must be 'peb', got {self.source!r}")
+        if (self.code == LimitationCode.PID_SOURCES_ABSENT
+                and self.related_sources != _PID_SOURCES_ABSENT_SOURCES):
+            raise ValueError(
+                "CoverageLimitation(code=PID_SOURCES_ABSENT) is a fixed sentence naming "
+                f"MiscInfo/thread list/exception stream specifically -- related_sources must be "
+                f"{_PID_SOURCES_ABSENT_SOURCES!r}, got {self.related_sources!r}")
+
+        if self.code == LimitationCode.PID_THREAD_LIST_FALLBACK:
+            if self.source != "misc_info":
+                raise ValueError(
+                    "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires source='misc_info', "
+                    f"got {self.source!r}")
+            if self.counterpart_source != "threads":
+                raise ValueError(
+                    "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires "
+                    f"counterpart_source='threads', got {self.counterpart_source!r}")
+            if not self.related_tids or any(
+                    not isinstance(t, int) or isinstance(t, bool) or t <= 0 for t in self.related_tids):
+                raise ValueError(
+                    "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires related_tids to be "
+                    f"a non-empty tuple of positive integers, got {self.related_tids!r}")
+        elif self.related_tids:
+            raise ValueError(
+                f"related_tids is only valid for PID_THREAD_LIST_FALLBACK, not {self.code.value}")
+
+        if self.code == LimitationCode.PID_EXCEPTION_TID_FALLBACK:
+            if self.source != "exception":
+                raise ValueError(
+                    "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires source='exception', "
+                    f"got {self.source!r}")
+            if (not isinstance(self.thread_id, int) or isinstance(self.thread_id, bool)
+                    or self.thread_id <= 0):
+                raise ValueError(
+                    "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires thread_id to be "
+                    f"a positive integer, got {self.thread_id!r}")
+        elif self.thread_id is not None:
+            raise ValueError(
+                f"thread_id is only valid for PID_EXCEPTION_TID_FALLBACK, not {self.code.value}")
 
 
 # Human names for known sources, used only by render_limitation() below.
@@ -528,6 +566,10 @@ class EvaluationRequirement:
             raise ValueError(
                 f"EvaluationRequirement.all_absent_code={code.value!r} is not valid for "
                 f"{len(self.sources)} source(s) -- must be one of {[c.value for c in allowed]}")
+        if code == LimitationCode.PID_SOURCES_ABSENT and self.sources != _PID_SOURCES_ABSENT_SOURCES:
+            raise ValueError(
+                f"EvaluationRequirement.all_absent_code=PID_SOURCES_ABSENT requires sources == "
+                f"{_PID_SOURCES_ABSENT_SOURCES!r}, got {self.sources!r}")
         object.__setattr__(self, "all_absent_code", code)
 
 
@@ -614,6 +656,30 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
                 raise ValueError(
                     f"SOURCE_KEY_MISMATCH.affected_count must be None or > 0, "
                     f"got {check.affected_count!r} (source={check.source!r})")
+
+        elif check.code == LimitationCode.PID_THREAD_LIST_FALLBACK:
+            # Unlike SOURCE_KEY_MISMATCH, `source` (misc_info) being
+            # unusable is this fallback's entire trigger condition -- but
+            # `counterpart_source` (threads) supplying the actual TID list
+            # must be genuinely present, and the TID count claimed must
+            # match what the source itself reports, or the two are two
+            # independent, driftable claims about the same fact.
+            threads_obs = sources["threads"]
+            if threads_obs.state != SourceState.PRESENT:
+                raise ValueError(
+                    f"PID_THREAD_LIST_FALLBACK requires threads to be present, "
+                    f"got {threads_obs.state.value}")
+            if len(check.related_tids) != threads_obs.record_count:
+                raise ValueError(
+                    f"PID_THREAD_LIST_FALLBACK.related_tids has {len(check.related_tids)} "
+                    f"entries, but threads reports record_count={threads_obs.record_count}")
+
+        elif check.code == LimitationCode.PID_EXCEPTION_TID_FALLBACK:
+            exception_obs = sources["exception"]
+            if exception_obs.state != SourceState.PRESENT:
+                raise ValueError(
+                    f"PID_EXCEPTION_TID_FALLBACK requires exception to be present, "
+                    f"got {exception_obs.state.value}")
 
 
 def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequirement | None",

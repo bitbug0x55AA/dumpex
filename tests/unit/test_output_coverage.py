@@ -586,7 +586,8 @@ def test_coverage_limitation_normalizes_list_related_tids_to_tuple():
 
 
 def test_render_limitation_pid_sources_absent():
-    limitation = CoverageLimitation(code=LimitationCode.PID_SOURCES_ABSENT, source="misc_info")
+    limitation = CoverageLimitation(code=LimitationCode.PID_SOURCES_ABSENT, source="misc_info",
+                                     related_sources=("misc_info", "threads", "exception"))
     assert render_limitation(limitation) == (
         "MiscInfo, thread list, and exception stream are all absent from this "
         "dump; PID could not be evaluated")
@@ -633,6 +634,97 @@ def test_evaluation_requirement_pid_sources_absent_valid_for_three_sources():
     req = EvaluationRequirement(sources=("misc_info", "threads", "exception"),
                                  all_absent_code=LimitationCode.PID_SOURCES_ABSENT)
     assert req.all_absent_code == LimitationCode.PID_SOURCES_ABSENT
+
+
+def test_evaluation_requirement_rejects_pid_sources_absent_with_wrong_source_set():
+    # PID_SOURCES_ABSENT's sentence names MiscInfo/thread list/exception
+    # stream specifically -- any other 2+ source combination must not be
+    # allowed to select it (it would render a sentence naming streams
+    # that aren't the ones actually being described).
+    with pytest.raises(ValueError, match="PID_SOURCES_ABSENT"):
+        EvaluationRequirement(sources=("a", "b"), all_absent_code=LimitationCode.PID_SOURCES_ABSENT)
+
+
+def test_coverage_limitation_pid_sources_absent_requires_exact_related_sources():
+    with pytest.raises(ValueError, match="PID_SOURCES_ABSENT"):
+        CoverageLimitation(code=LimitationCode.PID_SOURCES_ABSENT, source="misc_info",
+                            related_sources=("a", "b"))
+
+
+def test_coverage_limitation_pid_thread_list_fallback_requires_correct_source():
+    with pytest.raises(ValueError, match="misc_info"):
+        CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="threads",
+                            counterpart_source="threads", related_tids=(1,))
+
+
+def test_coverage_limitation_pid_thread_list_fallback_requires_correct_counterpart():
+    with pytest.raises(ValueError, match="counterpart_source"):
+        CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                            counterpart_source="exception", related_tids=(1,))
+
+
+def test_coverage_limitation_pid_thread_list_fallback_rejects_non_integer_tid():
+    with pytest.raises(ValueError, match="positive integers"):
+        CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                            counterpart_source="threads", related_tids=("x",))
+
+
+def test_coverage_limitation_pid_thread_list_fallback_rejects_negative_tid():
+    with pytest.raises(ValueError, match="positive integers"):
+        CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                            counterpart_source="threads", related_tids=(-1,))
+
+
+def test_coverage_limitation_pid_exception_tid_fallback_requires_correct_source():
+    with pytest.raises(ValueError, match="exception"):
+        CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="threads",
+                            thread_id=9)
+
+
+def test_coverage_limitation_pid_exception_tid_fallback_rejects_non_integer():
+    with pytest.raises(ValueError, match="positive integer"):
+        CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception",
+                            thread_id="x")
+
+
+def test_coverage_limitation_rejects_related_tids_on_non_matching_code():
+    with pytest.raises(ValueError, match="related_tids"):
+        CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception",
+                            thread_id=9, related_tids=(1, 2))
+
+
+def test_coverage_limitation_rejects_thread_id_on_non_matching_code():
+    with pytest.raises(ValueError, match="thread_id"):
+        CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                            counterpart_source="threads", related_tids=(1,), thread_id=9)
+
+
+def test_build_coverage_report_rejects_pid_thread_list_fallback_when_threads_absent():
+    misc_info_obs = SourceObservation(name="misc_info", state=SOURCE_ABSENT)
+    threads_obs = SourceObservation(name="threads", state=SOURCE_ABSENT)
+    limitation = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                                     counterpart_source="threads", related_tids=(1,))
+    with pytest.raises(ValueError, match="requires threads to be present"):
+        build_coverage_report({"misc_info": misc_info_obs, "threads": threads_obs},
+                               completeness_checks=[limitation])
+
+
+def test_build_coverage_report_rejects_pid_thread_list_fallback_count_mismatch():
+    misc_info_obs = SourceObservation(name="misc_info", state=SOURCE_ABSENT)
+    threads_obs = SourceObservation(name="threads", state=SOURCE_PRESENT, record_count=3)
+    limitation = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                                     counterpart_source="threads", related_tids=(1, 2))   # only 2, not 3
+    with pytest.raises(ValueError, match="record_count"):
+        build_coverage_report({"misc_info": misc_info_obs, "threads": threads_obs},
+                               completeness_checks=[limitation])
+
+
+def test_build_coverage_report_rejects_pid_exception_tid_fallback_when_exception_absent():
+    exception_obs = SourceObservation(name="exception", state=SOURCE_ABSENT)
+    limitation = CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception",
+                                     thread_id=9)
+    with pytest.raises(ValueError, match="requires exception to be present"):
+        build_coverage_report({"exception": exception_obs}, completeness_checks=[limitation])
 
 
 def test_build_coverage_report_rejects_unknown_counterpart_source():
