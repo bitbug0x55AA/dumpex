@@ -47,8 +47,7 @@ _UNSUPPORTED_STRUCTURED_MODES = frozenset({"diff", "report", "extract", "strings
 # EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED and the status->code mapping
 # itself (exit_code_for) live in dumpex.output.coverage, not here --
 # that's the single place a coverage status becomes a process exit code,
-# reused by both the CommandResult-based path (list/modules/threads/peb/
-# pid) and the still-tuple-based path (sysinfo) below.
+# used by _apply_command_result() below for all six of these commands.
 
 
 def _selected_run_mode(args) -> str:
@@ -304,20 +303,15 @@ def _run(args, mf, out, cmd_label) -> "int | None":
     error)."""
     exit_code = None
 
-    def _apply_v2_result(kind, records, coverage_status, coverage_reasons):
-        """Still-tuple-based path -- sysinfo hasn't migrated onto
-        dumpex.output.command_result.CommandResult yet."""
-        if out:
-            out.set_result(kind, records, coverage_status, coverage_reasons)
-        return exit_code_for(coverage_status)
-
     def _apply_command_result(result):
-        """CommandResult-based path -- list/modules/threads/peb/pid, migrated onto
-        dumpex.output.coverage/.command_result (see those modules).
-        Routed through set_command_result(), which -- unlike set_result()
-        -- forwards every CommandResult field (execution_status,
-        diagnostics, artifacts) instead of dropping the ones set_result()'s
-        narrower signature has no parameter for."""
+        """CommandResult-based path -- all six v2-routed recon commands
+        are migrated onto dumpex.output.coverage/.command_result (see
+        those modules). Routed through set_command_result(), which --
+        unlike the narrower set_result() (kept for direct CSV/collector
+        tests, but no longer called by any command here) -- forwards every
+        CommandResult field (execution_status, diagnostics, artifacts)
+        instead of dropping the ones a narrower signature has no
+        parameter for."""
         if out:
             out.set_command_result(result)
         return exit_code_for(result.coverage.status)
@@ -333,7 +327,7 @@ def _run(args, mf, out, cmd_label) -> "int | None":
     elif args.pid:
         exit_code = _apply_command_result(cmd_pid(mf))
     elif args.sysinfo:
-        exit_code = _apply_v2_result("sysinfo", *cmd_sysinfo(mf))
+        exit_code = _apply_command_result(cmd_sysinfo(mf))
     elif args.report:
         if not args.report_tid and not args.report_addr and not args.report_string:
             print(RED("[!] --report requires at least one of: --report-tid, --report-addr, --report-string"))

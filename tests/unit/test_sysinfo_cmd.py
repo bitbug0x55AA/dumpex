@@ -6,13 +6,19 @@ from tests.fixtures.fakes import (
 )
 
 from dumpex.commands.sysinfo import (
-    collect_sysinfo, render_sysinfo_console, cmd_sysinfo,
+    collect_sysinfo, render_sysinfo_console, cmd_sysinfo, sysinfo_source_present,
     collect_pid, render_pid_console, cmd_pid,
 )
 from dumpex.output.coverage import LimitationCode
 
 
 # ── --sysinfo ────────────────────────────────────────────────────────────
+# collect_sysinfo() returns a dumpex.output.command_result.CommandResult
+# (migrated onto the shared coverage core in dumpex.output.coverage);
+# accessed via attributes, never unpacked as a tuple. peb_present/
+# threads_present/modules_present -- extra rendering context this command
+# needs -- are derived via sysinfo_source_present() rather than returned
+# separately.
 
 def test_collect_sysinfo_normal_is_complete():
     mf = FakeMF()
@@ -21,38 +27,53 @@ def test_collect_sysinfo_normal_is_complete():
     mf.peb = Peb(0x140000000, r"C:\test.exe")
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.modules = FakeStream([Module(0, 0, "a")], "modules")
-    records, status, reasons, peb_present, threads_present, modules_present = collect_sysinfo(mf)
-    assert status == "complete"
-    assert reasons == []
-    assert peb_present is True
-    rec = records[0]
+    result = collect_sysinfo(mf)
+    assert result.coverage.status == "complete"
+    assert result.coverage.reasons == []
+    assert sysinfo_source_present(result.coverage, "peb") is True
+    rec = result.records[0]
     assert rec.pid == 1234
     assert isinstance(rec.pid, int)
     assert rec.os == "Windows 10"
     assert rec.thread_count == 1
     assert rec.module_count == 1
+    assert result.summary == {"count": 1}
 
 
 def test_collect_sysinfo_missing_streams_is_partial():
-    records, status, reasons, peb_present, threads_present, modules_present = \
-        collect_sysinfo(FakeMF())
-    assert status == "partial"
+    result = collect_sysinfo(FakeMF())
+    assert result.coverage.status == "partial"
     # sysinfo, misc_info, peb, threads, modules all missing
-    assert len(reasons) == 5
-    assert peb_present is False
-    rec = records[0]
+    assert result.coverage.reasons == [
+        "SystemInfoStream not present",
+        "MiscInfo stream not present",
+        "PEB not available (requires sysinfo + thread list)",
+        "ThreadListStream not present (thread_count unavailable)",
+        "ModuleListStream not present (module_count unavailable)",
+    ]
+    assert sysinfo_source_present(result.coverage, "peb") is False
+    rec = result.records[0]
     assert rec.pid is None
     assert rec.os is None
     assert rec.hostname is None   # never "" or "(unknown)"
     assert rec.thread_count is None   # never 0 when the stream itself is absent
     assert rec.module_count is None
 
+    codes = [l.code for l in result.coverage.limitations]
+    assert codes == [
+        LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE,
+        LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE,
+        LimitationCode.SYSINFO_PEB_UNAVAILABLE,
+        LimitationCode.SYSINFO_THREADS_UNAVAILABLE,
+        LimitationCode.SYSINFO_MODULES_UNAVAILABLE,
+    ]
+
 
 def test_collect_sysinfo_windows_11_misdetection_fix():
     mf = FakeMF()
     mf.sysinfo = SysInfo(build_number=22631, operating_system="Windows 10")
-    records, *_ = collect_sysinfo(mf)
-    assert records[0].os == "Windows 11"
+    result = collect_sysinfo(mf)
+    assert result.records[0].os == "Windows 11"
 
 
 def test_render_sysinfo_console_does_not_crash(capsys):
@@ -62,18 +83,21 @@ def test_render_sysinfo_console_does_not_crash(capsys):
     mf.peb = Peb(0x140000000, r"C:\test.exe")
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.modules = FakeStream([Module(0, 0, "a")], "modules")
-    records, status, reasons, peb_present, threads_present, modules_present = collect_sysinfo(mf)
-    render_sysinfo_console(records[0], peb_present, threads_present, modules_present)
+    result = collect_sysinfo(mf)
+    peb_present     = sysinfo_source_present(result.coverage, "peb")
+    threads_present = sysinfo_source_present(result.coverage, "threads")
+    modules_present = sysinfo_source_present(result.coverage, "modules")
+    render_sysinfo_console(result.records[0], peb_present, threads_present, modules_present)
     out = capsys.readouterr().out
     assert "SYSTEM INFO" in out
     assert "1234" in out
     assert "Threads in dump" in out
 
 
-def test_cmd_sysinfo_returns_three_tuple(capsys):
-    records, status, reasons = cmd_sysinfo(FakeMF())
-    assert len(records) == 1
-    assert status == "partial"
+def test_cmd_sysinfo_returns_command_result(capsys):
+    result = cmd_sysinfo(FakeMF())
+    assert len(result.records) == 1
+    assert result.coverage.status == "partial"
     capsys.readouterr()
 
 

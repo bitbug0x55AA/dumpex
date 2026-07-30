@@ -140,15 +140,17 @@ def test_sysinfo_normal_validates(validator):
     mf.peb = Peb(0x140000000, r"C:\test.exe")
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.modules = FakeStream([Module(0, 0, "a")], "modules")
-    records, status, reasons, *_ = collect_sysinfo(mf)
-    doc = _validate(validator, "sysinfo", records, status, reasons)
+    result = collect_sysinfo(mf)
+    doc = _validate(validator, "sysinfo", result.records, result.coverage.status,
+                     result.coverage.reasons)
     assert doc["result"]["coverage"]["status"] == "complete"
 
 
 def test_sysinfo_partial_missing_streams_validates(validator):
-    records, status, reasons, *_ = collect_sysinfo(FakeMF())
-    assert status == "partial"
-    doc = _validate(validator, "sysinfo", records, status, reasons)
+    result = collect_sysinfo(FakeMF())
+    assert result.coverage.status == "partial"
+    doc = _validate(validator, "sysinfo", result.records, result.coverage.status,
+                     result.coverage.reasons)
     assert doc["result"]["coverage"]["reasons"]
 
 

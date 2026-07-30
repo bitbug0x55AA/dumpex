@@ -189,6 +189,18 @@ class LimitationCode(str, Enum):
     # ^ pid is None, at least one of the three sources exists, but
     # neither fallback above produced anything usable -- fully fixed
     # sentence, no fields.
+    SYSINFO_SYSTEM_INFO_UNAVAILABLE = "SYSINFO_SYSTEM_INFO_UNAVAILABLE"
+    SYSINFO_MISC_INFO_UNAVAILABLE   = "SYSINFO_MISC_INFO_UNAVAILABLE"
+    SYSINFO_PEB_UNAVAILABLE         = "SYSINFO_PEB_UNAVAILABLE"
+    SYSINFO_THREADS_UNAVAILABLE     = "SYSINFO_THREADS_UNAVAILABLE"
+    SYSINFO_MODULES_UNAVAILABLE     = "SYSINFO_MODULES_UNAVAILABLE"
+    # ^ --sysinfo's five independent per-source absence reasons. Each is
+    # its own dedicated, fully fixed sentence -- none matches the generic
+    # SOURCE_ABSENT template's exact punctuation ("X not present in this
+    # dump"), and SYSINFO_PEB_UNAVAILABLE's wording ("PEB not available
+    # (requires sysinfo + thread list)") differs from --peb's own
+    # PEB_UNAVAILABLE text, so it needs a distinctly-named code rather
+    # than reusing that one.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -200,6 +212,22 @@ LIMITATION_SOURCE_KEY_MISMATCH = LimitationCode.SOURCE_KEY_MISMATCH
 # to, any other source combination (that would render a sentence naming
 # streams that aren't actually the ones being described).
 _PID_SOURCES_ABSENT_SOURCES = ("misc_info", "threads", "exception")
+
+# Codes whose rendered text is a fully fixed sentence about ONE specific
+# source -- construction requires `source` to match exactly, since using
+# any of these with a different source would render a sentence describing
+# a stream other than the one actually observed. One shared check instead
+# of a growing pile of near-identical per-code `if` blocks as more
+# commands migrate.
+_FIXED_SOURCE_CODES = {
+    LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE: "modules",
+    LimitationCode.PEB_UNAVAILABLE: "peb",
+    LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE: "sysinfo",
+    LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE: "misc_info",
+    LimitationCode.SYSINFO_PEB_UNAVAILABLE: "peb",
+    LimitationCode.SYSINFO_THREADS_UNAVAILABLE: "threads",
+    LimitationCode.SYSINFO_MODULES_UNAVAILABLE: "modules",
+}
 
 
 @dataclass(frozen=True)
@@ -248,14 +276,10 @@ class CoverageLimitation:
         if self.code == LimitationCode.SOURCE_GROUP_ABSENT and len(self.related_sources) < 2:
             raise ValueError(
                 "CoverageLimitation(code=SOURCE_GROUP_ABSENT) requires >= 2 related_sources")
-        if self.code == LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE and self.source != "modules":
+        if self.code in _FIXED_SOURCE_CODES and self.source != _FIXED_SOURCE_CODES[self.code]:
             raise ValueError(
-                "CoverageLimitation(code=MODULE_CLASSIFICATION_UNAVAILABLE) is a fixed sentence "
-                f"about ModuleListStream specifically -- source must be 'modules', got {self.source!r}")
-        if self.code == LimitationCode.PEB_UNAVAILABLE and self.source != "peb":
-            raise ValueError(
-                "CoverageLimitation(code=PEB_UNAVAILABLE) is a fixed sentence about PEB "
-                f"specifically -- source must be 'peb', got {self.source!r}")
+                f"CoverageLimitation(code={self.code.value}) is a fixed sentence -- source must "
+                f"be {_FIXED_SOURCE_CODES[self.code]!r}, got {self.source!r}")
         if self.code == LimitationCode.PID_SOURCES_ABSENT:
             if self.related_sources != _PID_SOURCES_ABSENT_SOURCES:
                 raise ValueError(
@@ -400,6 +424,21 @@ def render_limitation(limitation: CoverageLimitation) -> str:
         return ("PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data "
                 "was available from the thread list or exception stream")
 
+    if code == LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE:
+        return "SystemInfoStream not present"
+
+    if code == LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE:
+        return "MiscInfo stream not present"
+
+    if code == LimitationCode.SYSINFO_PEB_UNAVAILABLE:
+        return "PEB not available (requires sysinfo + thread list)"
+
+    if code == LimitationCode.SYSINFO_THREADS_UNAVAILABLE:
+        return "ThreadListStream not present (thread_count unavailable)"
+
+    if code == LimitationCode.SYSINFO_MODULES_UNAVAILABLE:
+        return "ModuleListStream not present (module_count unavailable)"
+
     raise AssertionError(f"unhandled limitation code: {code!r}")   # unreachable: LimitationCode is closed
 
 
@@ -446,8 +485,16 @@ class CoverageReport:
 # absent_code (e.g. SOURCE_KEY_MISMATCH, which describes a PRESENT
 # source's partial mismatch, not an absent one) could render nonsense
 # like "some dump(s) missing from ModuleListStream" for a plain absence.
-_ABSENT_CAPABLE_CODES = (LimitationCode.SOURCE_ABSENT, LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE,
-                          LimitationCode.PEB_UNAVAILABLE)
+_ABSENT_CAPABLE_CODES = (
+    LimitationCode.SOURCE_ABSENT,
+    LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE,
+    LimitationCode.PEB_UNAVAILABLE,
+    LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE,
+    LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE,
+    LimitationCode.SYSINFO_PEB_UNAVAILABLE,
+    LimitationCode.SYSINFO_THREADS_UNAVAILABLE,
+    LimitationCode.SYSINFO_MODULES_UNAVAILABLE,
+)
 
 
 @dataclass(frozen=True)

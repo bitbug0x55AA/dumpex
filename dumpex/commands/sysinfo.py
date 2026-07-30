@@ -3,12 +3,20 @@ import os
 import datetime
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, GREEN, YELLOW
-from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.output.records import SysInfoRecord, PidRecord
 from dumpex.output.coverage import (
-    observe_source, build_coverage_report, EvaluationRequirement, CoverageLimitation, LimitationCode,
+    observe_source, build_coverage_report, EvaluationRequirement, SourceRequirement,
+    CoverageLimitation, LimitationCode, SourceState,
 )
 from dumpex.output.command_result import CommandResult
+
+
+def sysinfo_source_present(coverage, name: str) -> bool:
+    """True when `name` (one of sysinfo/misc_info/peb/threads/modules)
+    was present -- derived from the CoverageReport's own source state
+    rather than a separately-returned flag, matching threads.py's/
+    peb.py's is-present helpers."""
+    return coverage.sources[name].state != SourceState.ABSENT
 
 
 def _os_display_name(si) -> str:
@@ -31,13 +39,21 @@ def _os_display_name(si) -> str:
 
 # ── --sysinfo ────────────────────────────────────────────────────────────
 
-def collect_sysinfo(mf: MinidumpFile):
+def collect_sysinfo(mf: MinidumpFile) -> CommandResult:
     """
-    Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons) -- records is a single-element list (see the v2
-    migration plan's "always a records array" convention, even for a
-    one-record result). 'partial' coverage when the sysinfo/misc-info/PEB
-    streams are individually missing.
+    Pure data, no printing. Returns a CommandResult[SysInfoRecord] --
+    records is a single-element list even for this one-record result.
+    'partial' coverage when the sysinfo/misc-info/PEB/threads/modules
+    streams are individually missing; never 'not_evaluated' (no
+    evaluation_sources given) since --sysinfo always has at least
+    dump_file (derived from the dump path itself, never dependent on any
+    of these five streams) to report -- unlike --pid, a single-purpose
+    command that reports nothing at all when all its sources are absent.
+    Each of the five completeness checks below uses its own dedicated
+    code: none of these five reasons matches the generic SOURCE_ABSENT
+    template's exact wording ("X not present in this dump"), and
+    SYSINFO_PEB_UNAVAILABLE's text differs from --peb's own
+    PEB_UNAVAILABLE, so it isn't reused across commands.
     """
     si  = mf.sysinfo
     mi  = mf.misc_info
@@ -98,26 +114,29 @@ def collect_sysinfo(mf: MinidumpFile):
         module_count=(len(mf.modules.modules) if mf.modules else None),
     )
 
-    missing = []
-    if not si:
-        missing.append("SystemInfoStream not present")
-    if not mi:
-        missing.append("MiscInfo stream not present")
-    if not peb:
-        missing.append("PEB not available (requires sysinfo + thread list)")
-    if not mf.threads:
-        missing.append("ThreadListStream not present (thread_count unavailable)")
-    if not mf.modules:
-        missing.append("ModuleListStream not present (module_count unavailable)")
-    # Deliberately always evaluated=True, even when every one of si/mi/peb/
-    # threads/modules is missing -- unlike --pid (a single-purpose command
-    # that reports nothing at all when all its sources are absent),
-    # --sysinfo always has at least dump_file (derived from the dump path
-    # itself, never dependent on any of these streams) to report. It did
-    # not fail to evaluate; it evaluated every source and found none of
-    # them present, which is exactly what 'partial' + these reasons says.
-    coverage_status = derive_coverage_status(evaluated=True, complete=not missing)
-    return [record], coverage_status, missing, bool(peb), bool(mf.threads), bool(mf.modules)
+    si_source      = observe_source("sysinfo", present=bool(si), items=[si] if si else [])
+    mi_source      = observe_source("misc_info", present=bool(mi), items=[mi] if mi else [])
+    peb_source     = observe_source("peb", present=bool(peb), items=[peb] if peb else [])
+    threads_source = observe_source("threads", present=bool(mf.threads),
+                                     items=(mf.threads.threads if mf.threads else []))
+    modules_source = observe_source("modules", present=bool(mf.modules),
+                                     items=(mf.modules.modules if mf.modules else []))
+    sources = {
+        "sysinfo": si_source, "misc_info": mi_source, "peb": peb_source,
+        "threads": threads_source, "modules": modules_source,
+    }
+
+    coverage = build_coverage_report(
+        sources,
+        completeness_checks=[
+            SourceRequirement("sysinfo", absent_code=LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE),
+            SourceRequirement("misc_info", absent_code=LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE),
+            SourceRequirement("peb", absent_code=LimitationCode.SYSINFO_PEB_UNAVAILABLE),
+            SourceRequirement("threads", absent_code=LimitationCode.SYSINFO_THREADS_UNAVAILABLE),
+            SourceRequirement("modules", absent_code=LimitationCode.SYSINFO_MODULES_UNAVAILABLE),
+        ],
+    )
+    return CommandResult(kind="sysinfo", records=[record], coverage=coverage, summary={"count": 1})
 
 
 def render_sysinfo_console(record: SysInfoRecord, peb_present: bool,
@@ -175,11 +194,13 @@ def render_sysinfo_console(record: SysInfoRecord, peb_present: bool,
     print()
 
 
-def cmd_sysinfo(mf: MinidumpFile):
-    records, coverage_status, coverage_reasons, peb_present, threads_present, modules_present = \
-        collect_sysinfo(mf)
-    render_sysinfo_console(records[0], peb_present, threads_present, modules_present)
-    return records, coverage_status, coverage_reasons
+def cmd_sysinfo(mf: MinidumpFile) -> CommandResult:
+    result = collect_sysinfo(mf)
+    peb_present     = sysinfo_source_present(result.coverage, "peb")
+    threads_present = sysinfo_source_present(result.coverage, "threads")
+    modules_present = sysinfo_source_present(result.coverage, "modules")
+    render_sysinfo_console(result.records[0], peb_present, threads_present, modules_present)
+    return result
 
 
 # ── --pid ────────────────────────────────────────────────────────────────

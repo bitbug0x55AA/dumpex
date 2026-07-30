@@ -13,7 +13,9 @@ import tempfile
 import pytest
 
 import dumpex.cli as cli
-from tests.fixtures.fakes import FakeMF, Module, Thread, Ctx, FakeStream, Peb, MiscInfo, ExceptionStream
+from tests.fixtures.fakes import (
+    FakeMF, Module, Thread, Ctx, FakeStream, Peb, MiscInfo, ExceptionStream, SysInfo,
+)
 
 
 def _run(monkeypatch, argv):
@@ -232,6 +234,64 @@ def test_pid_all_absent_json_is_not_evaluated(monkeypatch, tmp_path):
         assert doc["result"]["coverage"]["reasons"] == [
             "MiscInfo, thread list, and exception stream are all absent from this "
             "dump; PID could not be evaluated"]
+    finally:
+        os.remove(dump_path)
+
+
+def test_sysinfo_missing_streams_json_produces_v2_shaped_document_via_command_result_adapter(
+        monkeypatch, tmp_path):
+    # sysinfo.py's collect_sysinfo is migrated onto CommandResult -- the
+    # last of the six original recon commands to migrate. Proves the real
+    # CLI path (cli.main -> _apply_command_result ->
+    # V2Output.set_command_result) for the "all five sources missing"
+    # case, whose five dedicated codes never render as not_evaluated
+    # (dump_file is always real).
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # sysinfo/misc_info/peb/threads/modules all absent
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--sysinfo", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_PARTIAL == 3
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "sysinfo"
+        assert doc["result"]["execution_status"] == "completed"
+        assert doc["result"]["coverage"]["status"] == "partial"
+        assert doc["result"]["coverage"]["reasons"] == [
+            "SystemInfoStream not present",
+            "MiscInfo stream not present",
+            "PEB not available (requires sysinfo + thread list)",
+            "ThreadListStream not present (thread_count unavailable)",
+            "ModuleListStream not present (module_count unavailable)",
+        ]
+        assert doc["result"]["data"]["records"][0]["dump_file"] is not None
+    finally:
+        os.remove(dump_path)
+
+
+def test_sysinfo_normal_json_produces_complete_status(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.sysinfo = SysInfo()
+        mf.misc_info = MiscInfo(process_id=1234)
+        mf.peb = Peb(0x140000000, r"C:\test.exe")
+        mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+        mf.modules = FakeStream([Module(0, 0, "a")], "modules")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--sysinfo", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "sysinfo"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        assert doc["result"]["coverage"]["reasons"] == []
     finally:
         os.remove(dump_path)
 
