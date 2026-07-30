@@ -3,10 +3,7 @@ from dumpex.ui.colors import BOLD, RED, GREEN
 from dumpex.core.memory import get_memory_regions, prot_str
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
 from dumpex.output.records import MemoryRegionRecord, hex_address
-from dumpex.output.coverage import (
-    observe_source, CoverageLimitation, build_coverage_report,
-    SOURCE_ABSENT, LIMITATION_SOURCE_ABSENT,
-)
+from dumpex.output.coverage import observe_source, build_coverage_report
 from dumpex.output.command_result import CommandResult
 
 
@@ -42,12 +39,11 @@ def collect_regions(mf, filter_prot=None) -> CommandResult:
         ))
 
     source = observe_source("memory_info", present=stream_present, items=raw_regions)
-    limitations = (
-        [CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="memory_info", scope="dump")]
-        if source.state == SOURCE_ABSENT else []
+    coverage = build_coverage_report(
+        {"memory_info": source},
+        evaluation_sources={"memory_info"},
+        completeness_required_sources={"memory_info"},
     )
-    coverage = build_coverage_report({"memory_info": source}, limitations,
-                                      required_sources={"memory_info"})
     return CommandResult(kind="memory_regions", records=records, coverage=coverage,
                           summary={"count": len(records)})
 

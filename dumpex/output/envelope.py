@@ -11,9 +11,11 @@ emits a single-element evidence array.
 execution_status ("completed"/"partial"/"failed") and coverage.status
 ("complete"/"partial"/"not_evaluated") are kept as two independent axes
 -- a command can finish (execution_status="completed") while still
-reporting incomplete evidence (coverage.status="partial"). coverage's
-vocabulary is imported from dumpex.hunt._coverage, not redefined, so the
-two output contracts never drift on what "partial"/"complete" mean.
+reporting incomplete evidence (coverage.status="partial").
+EXECUTION_COMPLETED/PARTIAL/FAILED are imported from
+dumpex.output.coverage (the neutral command/domain-layer vocabulary
+module), not defined here, so this wire-format layer depends on the
+domain model rather than the other way around.
 """
 import os
 import platform
@@ -22,18 +24,14 @@ import importlib.metadata
 from dataclasses import dataclass, field
 
 from dumpex.core.evidence import sha256_file
-from dumpex.hunt._coverage import derive_coverage_status   # re-exported below
+from dumpex.output.coverage import EXECUTION_COMPLETED, EXECUTION_PARTIAL, EXECUTION_FAILED
 
 __all__ = [
     "SCHEMA_VERSION", "EXECUTION_COMPLETED", "EXECUTION_PARTIAL", "EXECUTION_FAILED",
-    "derive_coverage_status", "build_meta_v2", "Result", "Envelope",
+    "build_meta_v2", "Result", "Envelope",
 ]
 
 SCHEMA_VERSION = "2.0"
-
-EXECUTION_COMPLETED = "completed"
-EXECUTION_PARTIAL   = "partial"
-EXECUTION_FAILED    = "failed"
 
 # CLI options whose VALUE is a filesystem path -- same redaction concern
 # as dumpex.ui.structured's _PATH_OPTION_KEYS, kept as its own copy here

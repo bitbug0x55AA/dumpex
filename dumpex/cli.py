@@ -314,12 +314,12 @@ def _run(args, mf, out, cmd_label) -> "int | None":
     def _apply_command_result(result):
         """CommandResult-based path -- list/modules, migrated onto
         dumpex.output.coverage/.command_result (see those modules).
-        set_result() itself is unchanged: this only unpacks the richer
-        CommandResult into the exact same call the tuple-based path above
-        already made, so the JSON/CSV wire format is unaffected."""
+        Routed through set_command_result(), which -- unlike set_result()
+        -- forwards every CommandResult field (execution_status,
+        diagnostics, artifacts) instead of dropping the ones set_result()'s
+        narrower signature has no parameter for."""
         if out:
-            out.set_result(result.kind, result.records, result.coverage.status,
-                            result.coverage.reasons, result.summary or None)
+            out.set_command_result(result)
         return exit_code_for(result.coverage.status)
 
     if args.list:

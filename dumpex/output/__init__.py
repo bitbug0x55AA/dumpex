@@ -11,9 +11,14 @@ Layout:
                 MemoryRegionRecord, SysInfoRecord, PidRecord, PebRecord,
                 Diagnostic) -- plain dataclasses with an explicit
                 to_dict(), the same house style as dumpex.hunt._finding.Finding.
-  envelope.py   meta/result/envelope construction; execution_status and
-                coverage-status vocabulary (the latter reused from
-                dumpex.hunt._coverage, not redefined).
+  coverage.py   command/domain-layer coverage model (SourceObservation,
+                CoverageLimitation, CoverageReport, build_coverage_report)
+                and the neutral EXECUTION_*/exit-code vocabulary --
+                imports nothing from envelope.py or dumpex.hunt.*.
+  command_result.py  CommandResult[T], the per-command return type a
+                migrated collect_*() builds; feeds V2Output.set_command_result().
+  envelope.py   meta/result/envelope construction; execution_status
+                vocabulary imported from coverage.py, not redefined here.
   serializer.py to_json(): a STRICT encoder that raises on any type it
                 doesn't explicitly know, unlike structured.py's permissive
                 str(obj) fallback.

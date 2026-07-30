@@ -34,13 +34,20 @@ class V2Output:
         self._result             = None
         self._diagnostics_warnings = []
         self._diagnostics_errors   = []
+        self._artifacts            = []
 
     def set_result(self, kind: str, records: list, coverage_status: str,
                     coverage_reasons: list = None, summary: dict = None) -> None:
         """`records` is a list of record dataclass instances (ModuleRecord,
         ThreadRecord, ...) -- converted to plain dicts here via each
         record's own to_dict(), so every consumer downstream of this call
-        (serializer, CSV export) only ever sees plain JSON-safe data."""
+        (serializer, CSV export) only ever sees plain JSON-safe data.
+
+        Used by commands not yet migrated onto CommandResult (threads/
+        sysinfo/pid/peb) -- always reports execution_status="completed"
+        and never adds diagnostics/artifacts, since those commands have
+        no way to populate either yet. Migrated commands should call
+        set_command_result() instead, which doesn't have that limitation."""
         record_dicts = [r.to_dict() for r in records]
         self._result = Result(
             kind=kind,
@@ -50,6 +57,33 @@ class V2Output:
             summary=dict(summary) if summary is not None else {"count": len(record_dicts)},
             records=record_dicts,
         )
+
+    def set_command_result(self, result) -> None:
+        """The full-fidelity counterpart to set_result(): consumes every
+        dumpex.output.command_result.CommandResult field instead of
+        silently dropping execution_status/diagnostics/artifacts the way
+        routing a CommandResult through set_result()'s narrower signature
+        used to. `result` is duck-typed (not type-hinted as
+        CommandResult) to avoid this module importing command_result.py,
+        which itself imports this module's sibling envelope.py --
+        without a hard import dependency between the two."""
+        record_dicts = [r.to_dict() for r in result.records]
+        self._result = Result(
+            kind=result.kind,
+            execution_status=result.execution_status,
+            coverage_status=result.coverage.status,
+            coverage_reasons=list(result.coverage.reasons),
+            summary=dict(result.summary) if result.summary else {"count": len(record_dicts)},
+            records=record_dicts,
+        )
+        for d in result.diagnostics:
+            d_dict = d.to_dict() if hasattr(d, "to_dict") else d
+            if d_dict.get("severity") == SEVERITY_ERROR:
+                self._diagnostics_errors.append(d_dict)
+            else:
+                self._diagnostics_warnings.append(d_dict)
+        self._artifacts.extend(
+            a.to_dict() if hasattr(a, "to_dict") else a for a in result.artifacts)
 
     def add_diagnostic(self, severity: str, message: str, code: str = None) -> None:
         d = Diagnostic(severity=severity, message=message, code=code).to_dict()
@@ -74,7 +108,7 @@ class V2Output:
             analyst=self._analyst, redact_paths=self._redact_paths,
             started_at=self._started_at, finished_at=finished_at,
         )
-        return Envelope(meta=meta, result=self._result, artifacts=[],
+        return Envelope(meta=meta, result=self._result, artifacts=list(self._artifacts),
                          diagnostics_warnings=list(self._diagnostics_warnings),
                          diagnostics_errors=list(self._diagnostics_errors))
 

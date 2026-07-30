@@ -8,10 +8,14 @@ special-casing was prone to.
 """
 import csv
 import io
+import json
 
 from dumpex.output.envelope import Result
 from dumpex.output.csv_export import records_to_rows
 from dumpex.output.collector import V2Output
+from dumpex.output.command_result import CommandResult
+from dumpex.output.coverage import CoverageReport, COVERAGE_COMPLETE
+from dumpex.output.records import Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR
 
 
 def test_records_to_rows_returns_the_records_list_verbatim():
@@ -109,6 +113,82 @@ def test_peb_environment_variables_broken_out_into_own_table(tmp_path):
     records_file = next(f for f in out_dir.glob("*.csv") if f.name.endswith("_records.csv"))
     rows = list(csv.DictReader(io.StringIO(records_file.read_text(encoding="utf-8"))))
     assert "environment_variables" not in rows[0]   # broken out, not duplicated in main row
+
+
+# ── set_command_result: must not drop execution_status/diagnostics/
+# artifacts the way routing a CommandResult through set_result() used to
+# (P1 review fix) ──────────────────────────────────────────────────────
+
+def test_set_command_result_forwards_execution_status(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="modules", options={})
+    result = CommandResult(kind="modules", records=_fake_records(),
+                            coverage=CoverageReport(status=COVERAGE_COMPLETE),
+                            execution_status="partial")
+
+    out.set_command_result(result)
+    doc = json.loads(out.to_json())
+
+    assert doc["result"]["execution_status"] == "partial"
+
+
+def test_set_command_result_forwards_diagnostics_by_severity(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="modules", options={})
+    result = CommandResult(
+        kind="modules", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE),
+        diagnostics=[
+            Diagnostic(severity=SEVERITY_WARNING, message="w1"),
+            Diagnostic(severity=SEVERITY_ERROR, message="e1"),
+        ],
+    )
+
+    out.set_command_result(result)
+    doc = json.loads(out.to_json())
+
+    assert [d["message"] for d in doc["diagnostics"]["warnings"]] == ["w1"]
+    assert [d["message"] for d in doc["diagnostics"]["errors"]] == ["e1"]
+
+
+def test_set_command_result_forwards_artifacts(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="modules", options={})
+    result = CommandResult(kind="modules", records=_fake_records(),
+                            coverage=CoverageReport(status=COVERAGE_COMPLETE),
+                            artifacts=[{"id": "a1", "path": "x.bin"}])
+
+    out.set_command_result(result)
+    doc = json.loads(out.to_json())
+
+    assert doc["artifacts"] == [{"id": "a1", "path": "x.bin"}]
+
+
+def test_set_command_result_defaults_match_set_result_for_list_modules_shape(tmp_path):
+    # list_cmd.py/modules.py never populate execution_status/diagnostics/
+    # artifacts -- confirms routing them through set_command_result()
+    # instead of set_result() produces an identical result/artifacts/
+    # diagnostics shape (meta.execution timestamps naturally differ
+    # between two separate calls, so those are excluded from comparison).
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+
+    out_a = V2Output(str(dump_path), command="modules", options={})
+    out_a.set_result("modules", _fake_records(), "complete")
+    doc_a = json.loads(out_a.to_json())
+
+    out_b = V2Output(str(dump_path), command="modules", options={})
+    out_b.set_command_result(CommandResult(
+        kind="modules", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+    doc_b = json.loads(out_b.to_json())
+
+    assert doc_a["result"] == doc_b["result"]
+    assert doc_a["artifacts"] == doc_b["artifacts"]
+    assert doc_a["diagnostics"] == doc_b["diagnostics"]
 
 
 class _FakeRecord:

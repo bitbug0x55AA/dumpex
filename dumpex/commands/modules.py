@@ -4,10 +4,7 @@ from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
 from dumpex.core.memory import get_modules
 from dumpex.core.pe_utils import _pe_timestamp_to_str, _version_str
 from dumpex.output.records import ModuleRecord, hex_address
-from dumpex.output.coverage import (
-    observe_source, CoverageLimitation, build_coverage_report,
-    SOURCE_ABSENT, LIMITATION_SOURCE_ABSENT,
-)
+from dumpex.output.coverage import observe_source, build_coverage_report
 from dumpex.output.command_result import CommandResult
 
 # Console badge per anomaly_flags entry -- kept as a small lookup table
@@ -66,12 +63,11 @@ def collect_modules(mf) -> CommandResult:
         ))
 
     source = observe_source("modules", present=stream_present, items=raw_modules)
-    limitations = (
-        [CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules", scope="dump")]
-        if source.state == SOURCE_ABSENT else []
+    coverage = build_coverage_report(
+        {"modules": source},
+        evaluation_sources={"modules"},
+        completeness_required_sources={"modules"},
     )
-    coverage = build_coverage_report({"modules": source}, limitations,
-                                      required_sources={"modules"})
     return CommandResult(kind="modules", records=records, coverage=coverage,
                           summary={"count": len(records)})
 
