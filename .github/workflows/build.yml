@@ -11,27 +11,41 @@ on:
         type: boolean
         default: false
 
+concurrency:
+  group: release-${{ github.event.inputs.version }}
+  cancel-in-progress: false
+
 jobs:
   build-windows:
     runs-on: windows-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
       - name: Validate release version matches package version
+        id: release_version
         # The workflow_dispatch input is free text. Validate it before
         # tagging so the release name, wheel/sdist filenames, and
         # meta.tool.version in --json output cannot silently disagree.
         shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.version }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          $inputVersion = "${{ github.event.inputs.version }}"
-          if ($inputVersion -notmatch '^v(\d+\.\d+\.\d+)$') {
-            throw "Release version input must look like 'vX.Y.Z' (got '$inputVersion')"
+          if ($env:GITHUB_REF_NAME -ne $env:DEFAULT_BRANCH) {
+            throw "Releases must be dispatched from '$env:DEFAULT_BRANCH' (got '$env:GITHUB_REF_NAME')"
+          }
+          if ($env:RELEASE_TAG -notmatch '^v(\d+\.\d+\.\d+)$') {
+            throw "Release version input must look like 'vX.Y.Z' (got '$env:RELEASE_TAG')"
           }
           $expected = $Matches[1]
 
@@ -44,10 +58,20 @@ jobs:
           if ($initVersion -ne $expected) {
             throw "dumpex/__init__.py __version__ ($initVersion) does not match release input ($expected)"
           }
+
+          $existingTag = git tag --list $env:RELEASE_TAG
+          if ($existingTag) {
+            $tagCommit = git rev-list -n 1 $env:RELEASE_TAG
+            if ($tagCommit -ne $env:GITHUB_SHA) {
+              throw "Existing tag $env:RELEASE_TAG points to $tagCommit, not workflow commit $env:GITHUB_SHA"
+            }
+          }
+
+          "version=$expected" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
           Write-Host "Version check passed: $expected"
 
       - name: Install dependencies
-        run: python -m pip install pyinstaller -e ".[full,dev]"
+        run: python -m pip install "pyinstaller==6.21.0" -e ".[full,dev]"
 
       - name: Run tests before packaging
         run: pytest
@@ -101,23 +125,112 @@ jobs:
           Copy-Item NOTICE dist/NOTICE
           Copy-Item THIRD_PARTY_NOTICES dist/THIRD_PARTY_NOTICES
           Copy-Item CREDITS dist/CREDITS
-          python scripts/collect_dependency_licenses.py dist/third-party-licenses
+          python scripts/collect_dependency_licenses.py `
+            dist/third-party-licenses `
+            --include-distribution PyInstaller `
+            --include-python-license
           Compress-Archive `
             -Path dist/third-party-licenses/* `
             -DestinationPath dist/dumpex-third-party-licenses.zip
+          python -m pip list --format=freeze |
+            Set-Content -LiteralPath dist/BUILD-DEPENDENCIES.txt -Encoding utf8
 
-      - name: Create Release and Upload EXE
+      - name: Create complete versioned Windows bundle
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
+          RELEASE_TAG: ${{ github.event.inputs.version }}
+          REPOSITORY: ${{ github.repository }}
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          $bundleName = "dumpex-v$env:RELEASE_VERSION-windows-x64"
+          $bundleDir = "dist/$bundleName"
+
+          New-Item -ItemType Directory -Path $bundleDir | Out-Null
+          Copy-Item dist/dumpex.exe $bundleDir/dumpex.exe
+          Copy-Item dist/dumpex-output-v1.1.schema.json $bundleDir/dumpex-output-v1.1.schema.json
+          Copy-Item dist/LICENSE $bundleDir/LICENSE
+          Copy-Item dist/NOTICE $bundleDir/NOTICE
+          Copy-Item dist/THIRD_PARTY_NOTICES $bundleDir/THIRD_PARTY_NOTICES
+          Copy-Item dist/CREDITS $bundleDir/CREDITS
+          Copy-Item dist/BUILD-DEPENDENCIES.txt $bundleDir/BUILD-DEPENDENCIES.txt
+          Copy-Item `
+            -LiteralPath dist/third-party-licenses `
+            -Destination $bundleDir/third-party-licenses `
+            -Recurse
+
+          @(
+            "dumpex v$env:RELEASE_VERSION source code"
+            "==========================="
+            ""
+            "Release tag:"
+            "https://github.com/$env:REPOSITORY/tree/$env:RELEASE_TAG"
+            ""
+            "Exact build commit:"
+            "https://github.com/$env:REPOSITORY/commit/$env:BUILD_SHA"
+            ""
+            "The MPL-2.0-covered Source Code Form is available from the release tag above."
+          ) | Set-Content -LiteralPath dist/SOURCE.txt -Encoding utf8
+          Copy-Item dist/SOURCE.txt $bundleDir/SOURCE.txt
+
+          Compress-Archive `
+            -Path "$bundleDir/*" `
+            -DestinationPath "dist/$bundleName.zip"
+
+      - name: Generate SHA-256 checksums
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
+        run: |
+          $hashTargets = @(
+            "dist/dumpex-v$env:RELEASE_VERSION-windows-x64.zip",
+            "dist/dumpex.exe",
+            "dist/dumpex-output-v1.1.schema.json",
+            "dist/LICENSE",
+            "dist/NOTICE",
+            "dist/THIRD_PARTY_NOTICES",
+            "dist/CREDITS",
+            "dist/SOURCE.txt",
+            "dist/BUILD-DEPENDENCIES.txt",
+            "dist/dumpex-third-party-licenses.zip"
+          )
+          $checksumLines = foreach ($path in $hashTargets) {
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path -Leaf $path)"
+          }
+          $checksumLines |
+            Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8
+
+      - name: Attest the complete Windows bundle
+        uses: actions/attest@v4
+        with:
+          subject-path: dist/dumpex-v${{ steps.release_version.outputs.version }}-windows-x64.zip
+
+      - name: Create Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.version }}
+          target_commitish: ${{ github.sha }}
           name: Dumpex ${{ github.event.inputs.version }}
           prerelease: ${{ github.event.inputs.prerelease }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
+          body: |
+            Windows users should download
+            `dumpex-v${{ steps.release_version.outputs.version }}-windows-x64.zip`.
+            It contains the executable, MPL-2.0/source notice, output schema,
+            and all collected third-party license files.
+
+            Exact source: https://github.com/${{ github.repository }}/tree/${{ github.event.inputs.version }}
           files: |
+            dist/dumpex-v${{ steps.release_version.outputs.version }}-windows-x64.zip
             dist/dumpex.exe
             dist/dumpex-output-v1.1.schema.json
             dist/LICENSE
             dist/NOTICE
             dist/THIRD_PARTY_NOTICES
             dist/CREDITS
+            dist/SOURCE.txt
+            dist/BUILD-DEPENDENCIES.txt
             dist/dumpex-third-party-licenses.zip
+            dist/SHA256SUMS.txt

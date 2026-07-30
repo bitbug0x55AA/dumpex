@@ -13,6 +13,7 @@ from importlib import metadata
 from pathlib import Path
 import re
 import shutil
+import sys
 
 from packaging.markers import default_environment
 from packaging.requirements import Requirement
@@ -75,23 +76,89 @@ def _is_notice_file(path: Path) -> bool:
     )
 
 
-def collect(output_dir: Path) -> None:
-    """Copy dependency license files and write a versioned index."""
+def _selected_distributions(
+    extra_distributions: tuple[str, ...],
+) -> list[metadata.Distribution]:
+    """Return runtime dependencies plus explicitly embedded build tools.
+
+    Build tools are not traversed recursively: their own code may contribute
+    bootloaders or runtime hooks to the frozen executable, while their Python
+    dependencies are normally used only during the build.
+    """
+    selected = {
+        canonicalize_name(distribution.metadata["Name"]): distribution
+        for distribution in _runtime_distributions()
+    }
+    for name in extra_distributions:
+        distribution = metadata.distribution(name)
+        canonical_name = canonicalize_name(distribution.metadata["Name"])
+        selected.setdefault(canonical_name, distribution)
+
+    return sorted(
+        selected.values(),
+        key=lambda distribution: canonicalize_name(
+            distribution.metadata["Name"]
+        ),
+    )
+
+
+def _python_license_path() -> Path:
+    """Locate the license shipped with the CPython used for the build."""
+    roots = tuple(
+        dict.fromkeys(
+            (
+                Path(sys.base_prefix),
+                Path(sys.prefix),
+                Path(sys.executable).resolve().parent,
+            )
+        )
+    )
+    for root in roots:
+        for filename in ("LICENSE.txt", "LICENSE"):
+            candidate = root / filename
+            if candidate.is_file():
+                return candidate
+    searched = ", ".join(str(root) for root in roots)
+    raise RuntimeError(f"CPython license file not found under: {searched}")
+
+
+def collect(
+    output_dir: Path,
+    *,
+    extra_distributions: tuple[str, ...] = (),
+    include_python_license: bool = False,
+) -> None:
+    """Copy dependency/toolchain license files and write a versioned index."""
     output_dir = output_dir.resolve()
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True)
 
     index_lines = [
-        "Runtime dependency licenses",
-        "===========================",
+        "Bundled dependency and toolchain licenses",
+        "==========================================",
         "",
         "These are the license and notice files shipped by the installed",
         "distributions used to build the dumpex executable.",
         "",
     ]
 
-    for distribution in _runtime_distributions():
+    if include_python_license:
+        python_version = ".".join(str(part) for part in sys.version_info[:3])
+        python_dir = output_dir / f"Python-{python_version}"
+        python_dir.mkdir()
+        python_license = _python_license_path()
+        destination = python_dir / python_license.name
+        shutil.copyfile(python_license, destination)
+        index_lines.extend(
+            (
+                f"Python {python_version}",
+                f"  {python_dir.name}/{destination.name}",
+                "",
+            )
+        )
+
+    for distribution in _selected_distributions(extra_distributions):
         package_name = distribution.metadata["Name"]
         version = distribution.version
         safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", package_name)
@@ -132,8 +199,27 @@ def main() -> None:
         type=Path,
         help="directory to replace with the collected dependency notices",
     )
+    parser.add_argument(
+        "--include-distribution",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "also collect notices for an installed build tool whose code is "
+            "embedded in the executable (repeatable)"
+        ),
+    )
+    parser.add_argument(
+        "--include-python-license",
+        action="store_true",
+        help="include the license shipped with the CPython build runtime",
+    )
     args = parser.parse_args()
-    collect(args.output_dir)
+    collect(
+        args.output_dir,
+        extra_distributions=tuple(args.include_distribution),
+        include_python_license=args.include_python_license,
+    )
 
 
 if __name__ == "__main__":
