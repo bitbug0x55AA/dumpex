@@ -256,12 +256,17 @@ class CoverageLimitation:
             raise ValueError(
                 "CoverageLimitation(code=PEB_UNAVAILABLE) is a fixed sentence about PEB "
                 f"specifically -- source must be 'peb', got {self.source!r}")
-        if (self.code == LimitationCode.PID_SOURCES_ABSENT
-                and self.related_sources != _PID_SOURCES_ABSENT_SOURCES):
-            raise ValueError(
-                "CoverageLimitation(code=PID_SOURCES_ABSENT) is a fixed sentence naming "
-                f"MiscInfo/thread list/exception stream specifically -- related_sources must be "
-                f"{_PID_SOURCES_ABSENT_SOURCES!r}, got {self.related_sources!r}")
+        if self.code == LimitationCode.PID_SOURCES_ABSENT:
+            if self.related_sources != _PID_SOURCES_ABSENT_SOURCES:
+                raise ValueError(
+                    "CoverageLimitation(code=PID_SOURCES_ABSENT) is a fixed sentence naming "
+                    f"MiscInfo/thread list/exception stream specifically -- related_sources must "
+                    f"be {_PID_SOURCES_ABSENT_SOURCES!r}, got {self.related_sources!r}")
+            if self.source != _PID_SOURCES_ABSENT_SOURCES[0]:
+                raise ValueError(
+                    f"CoverageLimitation(code=PID_SOURCES_ABSENT) requires source == "
+                    f"{_PID_SOURCES_ABSENT_SOURCES[0]!r} (consistent with related_sources), "
+                    f"got {self.source!r}")
 
         if self.code == LimitationCode.PID_THREAD_LIST_FALLBACK:
             if self.source != "misc_info":

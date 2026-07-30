@@ -651,6 +651,15 @@ def test_coverage_limitation_pid_sources_absent_requires_exact_related_sources()
                             related_sources=("a", "b"))
 
 
+def test_coverage_limitation_pid_sources_absent_requires_source_consistent_with_related_sources():
+    # related_sources alone being correct isn't enough -- `source` must
+    # also agree with it, or the object is internally self-contradictory
+    # even though nothing in the normal reducer path would ever produce it.
+    with pytest.raises(ValueError, match="misc_info"):
+        CoverageLimitation(code=LimitationCode.PID_SOURCES_ABSENT, source="wrong",
+                            related_sources=("misc_info", "threads", "exception"))
+
+
 def test_coverage_limitation_pid_thread_list_fallback_requires_correct_source():
     with pytest.raises(ValueError, match="misc_info"):
         CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="threads",
