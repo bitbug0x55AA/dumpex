@@ -461,17 +461,31 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
                 f"got {check.affected_count!r} (source={check.source!r})")
 
 
-def _derive_required_source_limitation(obs: SourceObservation,
-                                        req: "SourceRequirement | None") -> "CoverageLimitation | None":
+def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequirement | None",
+                                        sources: dict) -> "CoverageLimitation | None":
     req = req or SourceRequirement(source=obs.name)
     if obs.state == SourceState.ABSENT:
         if req.counterpart_source and req.affected_count == 0:
-            # The counterpart genuinely has zero entries (e.g. threads.py's
-            # ThreadInfoListStream present but reporting no real threads) --
-            # nothing was actually affected by this source's absence, so
-            # there is no real coverage gap to report. Without this, the
-            # rendered text would be a nonsensical "0 thing(s) present in
-            # COUNTERPART but missing from SOURCE".
+            # affected_count=0 only means "nothing was actually affected"
+            # if the counterpart ITSELF confirms zero entries -- checked
+            # against its real SourceObservation, not taken on faith from
+            # the caller's count. A counterpart that's PRESENT with real
+            # records (or ABSENT/FAILED, telling us nothing) does NOT
+            # justify suppressing this source's absence; that would hide
+            # a genuine gap behind a caller's inconsistent count.
+            counterpart_obs = sources[req.counterpart_source]
+            if counterpart_obs.state != SourceState.PRESENT_EMPTY:
+                raise ValueError(
+                    f"SourceRequirement({obs.name!r}) has affected_count=0 but counterpart "
+                    f"{req.counterpart_source!r} is {counterpart_obs.state.value!r}, not "
+                    f"present_empty -- affected_count=0 must reflect the counterpart genuinely "
+                    f"reporting zero entries, not be asserted independently of its real state")
+            # Counterpart genuinely has zero entries (e.g. threads.py's
+            # ThreadInfoListStream present but reporting no real threads)
+            # -- nothing was actually affected by this source's absence,
+            # so there is no real coverage gap to report. Without this,
+            # the rendered text would be a nonsensical "0 thing(s) present
+            # in COUNTERPART but missing from SOURCE".
             return None
         return CoverageLimitation(code=req.absent_code, source=obs.name,
                                    scope=req.scope or "dump",
@@ -554,7 +568,7 @@ def build_coverage_report(
             continue
         req = check if isinstance(check, SourceRequirement) else None
         name = check.source if isinstance(check, SourceRequirement) else check
-        limitation = _derive_required_source_limitation(sources[name], req)
+        limitation = _derive_required_source_limitation(sources[name], req, sources)
         if limitation is not None:
             limitations.append(limitation)
 

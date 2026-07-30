@@ -294,6 +294,36 @@ def test_source_requirement_counterpart_variant_with_zero_affected_count_is_supp
     assert report.limitations == []
 
 
+def test_zero_affected_count_suppression_rejects_counterpart_with_real_records():
+    # affected_count=0 must be corroborated by the counterpart's OWN
+    # SourceObservation, not taken on faith -- a counterpart that's
+    # genuinely PRESENT with real records contradicts "nothing affected"
+    # and must not silently suppress a genuine absence.
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_PRESENT, record_count=1)
+    req = SourceRequirement("a", counterpart_source="b", affected_count=0)
+    with pytest.raises(ValueError, match="present_empty"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
+
+
+def test_zero_affected_count_suppression_rejects_failed_counterpart():
+    # A FAILED counterpart tells us nothing about how many entries it
+    # would have had -- it must not be treated as confirming zero.
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_FAILED)
+    req = SourceRequirement("a", counterpart_source="b", affected_count=0)
+    with pytest.raises(ValueError, match="present_empty"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
+
+
+def test_zero_affected_count_suppression_rejects_absent_counterpart():
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_ABSENT)
+    req = SourceRequirement("a", counterpart_source="b", affected_count=0)
+    with pytest.raises(ValueError, match="present_empty"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
+
+
 def test_source_requirement_dedicated_code_variant():
     obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
     req = SourceRequirement("modules", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE)
