@@ -293,7 +293,15 @@ def render_threads_console(records, degraded: bool, has_times: bool,
             print(f"  {'UserTime':<16} {_duration_100ns_to_str(rec.user_time_100ns)}")
 
     if not has_times and not degraded:
-        print(f"\n  {DIM('[~] CreateTime/ExitTime not available — dump was produced without ThreadInfoList stream.')}")
+        # NOT the same claim as the degraded-mode banner above: degraded
+        # means ThreadInfoListStream itself is absent, but this branch
+        # also fires when the stream IS present and every real entry's
+        # CreateTime just happens to be zero/unset (some minidump
+        # producers never populate it even though the stream exists) --
+        # a neutral "not available in the captured data" is accurate in
+        # both cases, whereas naming ThreadInfoListStream specifically
+        # would be wrong for the "stream present, empty timestamps" one.
+        print(f"\n  {DIM('[~] CreateTime/ExitTime not available in the captured ThreadInfo data.')}")
 
     print(f"\n{GREEN(f'[+] {len(records)} thread(s).')}")
 

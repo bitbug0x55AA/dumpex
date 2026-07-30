@@ -182,6 +182,24 @@ def test_render_threads_console_mixed_records_do_not_misrender_has_times(capsys)
     assert "still running" not in tid2_block
 
 
+def test_render_threads_console_stream_present_but_timestamps_empty_is_neutral(capsys):
+    # ThreadInfoListStream genuinely IS present (not degraded -- some
+    # minidump producers just never populate CreateTime/ExitTime even
+    # when the stream exists). The note printed here must not claim the
+    # stream is absent, since it isn't.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")   # CreateTime defaults to None
+    records, status, reasons, degraded, has_times = collect_threads(mf)
+    assert degraded is False   # the stream itself is present
+    assert has_times is False
+
+    render_threads_console(records, degraded, has_times, reasons)
+    out = capsys.readouterr().out
+    assert "not available in the captured ThreadInfo data" in out
+    assert "without ThreadInfoList stream" not in out   # would misreport a present stream as absent
+
+
 def test_cmd_threads_returns_three_tuple_matching_cli_contract(capsys):
     mf = FakeMF()
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
