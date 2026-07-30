@@ -2,14 +2,17 @@
 from dumpex.ui.colors import BOLD, RED, GREEN
 from dumpex.core.memory import get_memory_regions, prot_str
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
-from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.output.records import MemoryRegionRecord, hex_address
+from dumpex.output.coverage import (
+    observe_source, CoverageLimitation, build_coverage_report,
+    SOURCE_ABSENT, LIMITATION_SOURCE_ABSENT,
+)
+from dumpex.output.command_result import CommandResult
 
 
-def collect_regions(mf, filter_prot=None):
+def collect_regions(mf, filter_prot=None) -> CommandResult:
     """
-    Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons).
+    Pure data, no printing. Returns a CommandResult[MemoryRegionRecord].
 
     get_memory_regions() returns [] both when MemoryInfoListStream is
     entirely absent from the dump AND when it's present but genuinely
@@ -17,12 +20,15 @@ def collect_regions(mf, filter_prot=None):
     stream must report 'not_evaluated', not 'complete' with zero
     regions: the latter would read as "we looked at every region and
     there are none," which is a materially different (and false)
-    statement about coverage.
+    statement about coverage. See dumpex.output.coverage for the shared
+    model this now derives from (validated first here and on --modules
+    before threads/sysinfo/pid/peb migrate onto it too).
     """
+    raw_regions = get_memory_regions(mf)   # [] if absent OR present-empty
     stream_present = bool(mf.memory_info)
 
     records = []
-    for r in get_memory_regions(mf):
+    for r in raw_regions:
         p = prot_str(r.Protect)
         if filter_prot and filter_prot.upper() not in p.upper():
             continue
@@ -35,12 +41,15 @@ def collect_regions(mf, filter_prot=None):
             suspicious=any(s in p for s in SUSPICIOUS_PROTS),
         ))
 
-    if not stream_present:
-        coverage_status = derive_coverage_status(evaluated=False, complete=False)
-        return records, coverage_status, ["MemoryInfoListStream not present in this dump"]
-
-    coverage_status = derive_coverage_status(evaluated=True, complete=True)
-    return records, coverage_status, []
+    source = observe_source("memory_info", present=stream_present, items=raw_regions)
+    limitations = (
+        [CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="memory_info", scope="dump")]
+        if source.state == SOURCE_ABSENT else []
+    )
+    coverage = build_coverage_report({"memory_info": source}, limitations,
+                                      required_sources={"memory_info"})
+    return CommandResult(kind="memory_regions", records=records, coverage=coverage,
+                          summary={"count": len(records)})
 
 
 def render_regions_console(records) -> None:
@@ -52,7 +61,7 @@ def render_regions_console(records) -> None:
     print(f"\n{GREEN(f'[+] {len(records)} region(s) shown.')}")
 
 
-def cmd_list(mf, filter_prot=None):
-    records, coverage_status, coverage_reasons = collect_regions(mf, filter_prot)
-    render_regions_console(records)
-    return records, coverage_status, coverage_reasons
+def cmd_list(mf, filter_prot=None) -> CommandResult:
+    result = collect_regions(mf, filter_prot)
+    render_regions_console(result.records)
+    return result

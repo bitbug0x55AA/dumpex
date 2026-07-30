@@ -3,8 +3,12 @@ import ntpath
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
 from dumpex.core.memory import get_modules
 from dumpex.core.pe_utils import _pe_timestamp_to_str, _version_str
-from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.output.records import ModuleRecord, hex_address
+from dumpex.output.coverage import (
+    observe_source, CoverageLimitation, build_coverage_report,
+    SOURCE_ABSENT, LIMITATION_SOURCE_ABSENT,
+)
+from dumpex.output.command_result import CommandResult
 
 # Console badge per anomaly_flags entry -- kept as a small lookup table
 # decoupled from record-building, replacing the colored_flags list that
@@ -15,20 +19,21 @@ _ANOMALY_BADGES = {
 }
 
 
-def collect_modules(mf):
+def collect_modules(mf) -> CommandResult:
     """
-    Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons).
+    Pure data, no printing. Returns a CommandResult[ModuleRecord].
 
     get_modules() returns [] both when ModuleListStream is entirely
     absent from the dump AND when it's present but genuinely empty --
     those are not the same claim. A dump captured without this stream
-    must report 'not_evaluated', not 'complete' with zero modules.
+    must report 'not_evaluated', not 'complete' with zero modules. See
+    dumpex.output.coverage for the shared model this now derives from.
     """
+    raw_modules = get_modules(mf)   # [] if absent OR present-empty
     stream_present = bool(mf.modules)
 
     records = []
-    for m in sorted(get_modules(mf), key=lambda x: x.baseaddress):
+    for m in sorted(raw_modules, key=lambda x: x.baseaddress):
         # Module paths recorded in a minidump are from the ORIGINAL Windows
         # system (e.g. "C:\Windows\System32\foo.dll") -- os.path.basename
         # only splits on "/" on a POSIX analysis host, so it returns the
@@ -60,12 +65,15 @@ def collect_modules(mf):
             anomaly_flags=anomaly_flags,
         ))
 
-    if not stream_present:
-        coverage_status = derive_coverage_status(evaluated=False, complete=False)
-        return records, coverage_status, ["ModuleListStream not present in this dump"]
-
-    coverage_status = derive_coverage_status(evaluated=True, complete=True)
-    return records, coverage_status, []
+    source = observe_source("modules", present=stream_present, items=raw_modules)
+    limitations = (
+        [CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules", scope="dump")]
+        if source.state == SOURCE_ABSENT else []
+    )
+    coverage = build_coverage_report({"modules": source}, limitations,
+                                      required_sources={"modules"})
+    return CommandResult(kind="modules", records=records, coverage=coverage,
+                          summary={"count": len(records)})
 
 
 def render_modules_console(records) -> None:
@@ -85,7 +93,7 @@ def render_modules_console(records) -> None:
     print(f"\n{GREEN(f'[+] {len(records)} module(s).')}")
 
 
-def cmd_modules(mf):
-    records, coverage_status, coverage_reasons = collect_modules(mf)
-    render_modules_console(records)
-    return records, coverage_status, coverage_reasons
+def cmd_modules(mf) -> CommandResult:
+    result = collect_modules(mf)
+    render_modules_console(result.records)
+    return result

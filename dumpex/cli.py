@@ -10,6 +10,7 @@ from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
 from dumpex.rules_pkg.loader import get_rules, configure_rules_source
 from dumpex.ui.structured import StructuredOutput, _ANSI_RE
 from dumpex.output import V2Output
+from dumpex.output.coverage import EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED, exit_code_for
 from dumpex.core.safe_io import check_not_dump_path, AtomicTextTee
 
 from dumpex.commands.list_cmd import cmd_list
@@ -43,15 +44,11 @@ _UNSUPPORTED_STRUCTURED_MODES = frozenset({"diff", "report", "extract", "strings
 # folding --report/--hunt into this same convention is a later,
 # cross-cutting decision, not made here for just these six commands.
 #
-# Mirrors coverage_status's own three-value vocabulary
-# (dumpex.hunt._coverage.derive_coverage_status) one-for-one -- a command
-# that never had the ONE stream it needed at all (not_evaluated) must not
-# collapse onto the same exit code as one that ran but hit a partial gap;
-# collapsing the two would make "we have literally nothing" and "we have
-# most of it" indistinguishable to a script checking `$?` alone.
-EXIT_OK            = 0
-EXIT_PARTIAL       = 3
-EXIT_NOT_EVALUATED = 4
+# EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED and the status->code mapping
+# itself (exit_code_for) live in dumpex.output.coverage, not here --
+# that's the single place a coverage status becomes a process exit code,
+# reused by both the CommandResult-based path (list/modules) and the
+# still-tuple-based path (threads/pid/sysinfo/peb) below.
 
 
 def _selected_run_mode(args) -> str:
@@ -308,18 +305,27 @@ def _run(args, mf, out, cmd_label) -> "int | None":
     exit_code = None
 
     def _apply_v2_result(kind, records, coverage_status, coverage_reasons):
+        """Still-tuple-based path -- threads/peb/pid/sysinfo haven't
+        migrated onto dumpex.output.command_result.CommandResult yet."""
         if out:
             out.set_result(kind, records, coverage_status, coverage_reasons)
-        if coverage_status == "not_evaluated":
-            return EXIT_NOT_EVALUATED
-        if coverage_status == "partial":
-            return EXIT_PARTIAL
-        return EXIT_OK
+        return exit_code_for(coverage_status)
+
+    def _apply_command_result(result):
+        """CommandResult-based path -- list/modules, migrated onto
+        dumpex.output.coverage/.command_result (see those modules).
+        set_result() itself is unchanged: this only unpacks the richer
+        CommandResult into the exact same call the tuple-based path above
+        already made, so the JSON/CSV wire format is unaffected."""
+        if out:
+            out.set_result(result.kind, result.records, result.coverage.status,
+                            result.coverage.reasons, result.summary or None)
+        return exit_code_for(result.coverage.status)
 
     if args.list:
-        exit_code = _apply_v2_result("memory_regions", *cmd_list(mf, args.filter))
+        exit_code = _apply_command_result(cmd_list(mf, args.filter))
     elif args.modules:
-        exit_code = _apply_v2_result("modules", *cmd_modules(mf))
+        exit_code = _apply_command_result(cmd_modules(mf))
     elif args.threads:
         exit_code = _apply_v2_result("threads", *cmd_threads(mf))
     elif args.peb:

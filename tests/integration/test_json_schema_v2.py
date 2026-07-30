@@ -72,16 +72,18 @@ def test_memory_regions_normal_validates(validator):
     mf.memory_info = FakeStream(
         [Region(0x1000, 0x1000, 0x2000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
         "infos")
-    records, status, reasons = collect_regions(mf)
-    doc = _validate(validator, "memory_regions", records, status, reasons)
+    result = collect_regions(mf)
+    doc = _validate(validator, "memory_regions", result.records, result.coverage.status,
+                     result.coverage.reasons)
     assert doc["result"]["execution_status"] == "completed"
     assert doc["result"]["coverage"]["status"] == "complete"
 
 
 def test_memory_regions_empty_validates(validator):
-    records, status, reasons = collect_regions(FakeMF())
-    assert records == []
-    _validate(validator, "memory_regions", records, status, reasons)
+    result = collect_regions(FakeMF())
+    assert result.records == []
+    _validate(validator, "memory_regions", result.records, result.coverage.status,
+              result.coverage.reasons)
 
 
 # ── modules ────────────────────────────────────────────────────────────
@@ -90,13 +92,13 @@ def test_modules_normal_validates(validator):
     mf = FakeMF()
     mf.modules = FakeStream([Module(0x140000000, 0x5000, r"C:\Windows\System32\ntdll.dll")],
                              "modules")
-    records, status, reasons = collect_modules(mf)
-    _validate(validator, "modules", records, status, reasons)
+    result = collect_modules(mf)
+    _validate(validator, "modules", result.records, result.coverage.status, result.coverage.reasons)
 
 
 def test_modules_empty_validates(validator):
-    records, status, reasons = collect_modules(FakeMF())
-    _validate(validator, "modules", records, status, reasons)
+    result = collect_modules(FakeMF())
+    _validate(validator, "modules", result.records, result.coverage.status, result.coverage.reasons)
 
 
 # ── threads ────────────────────────────────────────────────────────────

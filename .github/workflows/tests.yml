@@ -146,6 +146,14 @@ jobs:
           coverage report --include="dumpex/output/csv_export.py"    --fail-under=90
           coverage report --include="dumpex/output/envelope.py"      --fail-under=85
           coverage report --include="dumpex/output/collector.py"     --fail-under=80
+          # dumpex/output/coverage.py + command_result.py: the first-class
+          # coverage/provenance core (SourceObservation, CoverageLimitation,
+          # CoverageReport, CommandResult, exit_code_for), validated so far
+          # by migrating --list/--modules onto it; table-driven tests cover
+          # every source state and both limitation-rendering paths, hence
+          # the tight gates.
+          coverage report --include="dumpex/output/coverage.py"       --fail-under=95
+          coverage report --include="dumpex/output/command_result.py" --fail-under=95
           # dumpex/commands/{list_cmd,modules,threads,sysinfo,peb}.py: the
           # six recon commands' collect_*()/render_*_console() split.
           # collect_*() (the part that matters for --json/--csv output) is
