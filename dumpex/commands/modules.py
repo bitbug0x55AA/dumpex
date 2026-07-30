@@ -65,8 +65,8 @@ def collect_modules(mf) -> CommandResult:
     source = observe_source("modules", present=stream_present, items=raw_modules)
     coverage = build_coverage_report(
         {"modules": source},
-        evaluation_sources={"modules"},
-        completeness_required_sources={"modules"},
+        evaluation_sources=("modules",),
+        completeness_checks=["modules"],
     )
     return CommandResult(kind="modules", records=records, coverage=coverage,
                           summary={"count": len(records)})

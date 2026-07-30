@@ -2,9 +2,8 @@
 First-class coverage/provenance model, extracted from the ad hoc
 bool(mf.X)-check-plus-hand-written-reason-string pattern every recon
 command previously hand-rolled independently (see dumpex/commands/
-list_cmd.py, modules.py, threads.py, sysinfo.py, peb.py -- the last three
-still use that older pattern; this module is validated on list/modules
-first before they migrate).
+list_cmd.py, modules.py, threads.py, sysinfo.py, peb.py -- the last two
+still use that older pattern).
 
 Layered as: SourceObservation (what state was ONE underlying minidump
 stream in) -> CoverageLimitation (one specific, machine-readable way
@@ -13,6 +12,35 @@ hand-written string at the call site) -> CoverageReport (the reduction of
 all of a command's sources + limitations into one status) -> a single
 exit_code_for() mapping, so "which status becomes which process exit
 code" is defined exactly once.
+
+The reducer (build_coverage_report) is the single place that turns a
+SourceObservation's state into a CoverageLimitation for a source a
+command requires for completeness -- a command supplies WHICH sources it
+requires (as a plain source name or a SourceRequirement, when it needs a
+specific wording variant) via `completeness_checks`, never a hand-built
+SOURCE_ABSENT/SOURCE_FAILED CoverageLimitation itself. This is what
+prevents the "two sources of truth" bug this module exists to close: a
+caller cannot forget to keep a hand-written limitations list in sync with
+its own SourceObservations, because the caller never builds that
+particular kind of limitation at all -- only the reducer does, reading
+the SAME SourceObservation the caller already had to construct. The only
+limitation kind a caller still builds directly is SOURCE_KEY_MISMATCH (a
+genuine cross-source business-logic fact -- e.g. two streams describing
+the same entities disagreeing on which keys exist -- that the reducer
+cannot infer from source state alone).
+
+There is deliberately no free-text escape hatch (no "detail string a
+command composes itself and the model renders verbatim"): every
+CoverageLimitation's text is produced by a specific, hardcoded branch of
+render_limitation() selected by its `code`, parametrized only by
+structured fields (source names, field-name tuples, counts). A command
+whose existing wording doesn't fit an existing code's template gets a
+new, purpose-built code and template here, in this module, reviewable
+and testable alongside every other one -- never a caller-composed string
+smuggled through an opaque field. See threads.py for how a command with
+several bespoke reason strings (a field-impact SOURCE_ABSENT variant, a
+two-way SOURCE_KEY_MISMATCH, a dedicated MODULE_CLASSIFICATION_UNAVAILABLE
+template) is expressed entirely through structured parameters.
 
 This is also the neutral vocabulary home for EXECUTION_* (execution
 status: completed/partial/failed, independent of coverage status) --
@@ -126,50 +154,63 @@ class LimitationCode(str, Enum):
     SOURCE_KEY_MISMATCH = "SOURCE_KEY_MISMATCH"   # e.g. two sources describing the
                                                     # same entities disagree on which
                                                     # keys (TIDs, names, ...) exist
-    CUSTOM              = "CUSTOM"   # pre-composed text a command builds itself, for
-                                       # a reason that doesn't fit the structured
-                                       # templates above -- render_limitation() returns
-                                       # `detail` verbatim. A deliberate, narrow escape
-                                       # hatch (one specific enum value, not "any code
-                                       # goes"): use it when a command's existing,
-                                       # already-shipped wording is more specific than
-                                       # the generic templates can reproduce (e.g.
-                                       # threads.py's degraded/TID-mismatch reasons),
-                                       # not as a way to skip writing a proper template.
+    SOURCE_GROUP_ABSENT = "SOURCE_GROUP_ABSENT"    # every source in an evaluation
+                                                    # group is absent -- see
+                                                    # build_coverage_report's
+                                                    # not_evaluated branch
+    MODULE_CLASSIFICATION_UNAVAILABLE = "MODULE_CLASSIFICATION_UNAVAILABLE"
+    # ^ ModuleListStream absent: a specific, fully fixed sentence (not a
+    # generic template) about why a start-address-to-module classification
+    # can't be attempted. New sources/codes are added here, fully spelled
+    # out, as commands migrate and need wording an existing template can't
+    # produce -- never passed in as caller-composed free text.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
 LIMITATION_SOURCE_KEY_MISMATCH = LimitationCode.SOURCE_KEY_MISMATCH
-LIMITATION_CUSTOM              = LimitationCode.CUSTOM
 
 
 @dataclass(frozen=True)
 class CoverageLimitation:
     """One specific, machine-readable way coverage fell short. `scope`
-    names the granularity affected (e.g. "dump", "thread", "module");
-    `affected_count`/`unavailable_fields` are optional detail a renderer
-    or a future JSON `limitations` array can use. Human text is never
-    written at the call site -- see render_limitation(). `code` is a
-    closed vocabulary (unlike `source`, which stays open) since every
-    branch of render_limitation() is hand-written per code; an unrecognized
-    code would otherwise silently render as vague fallback text instead of
-    failing at construction time."""
+    names the granularity affected (e.g. "dump", "thread", "module").
+    `unavailable_fields`/`available_fields` are a SOURCE_ABSENT limitation's
+    optional field-level impact (which fields become unavailable, and
+    which stay available from another source) -- e.g. threads.py's
+    "ThreadInfoListStream not present; StartAddress/.../unavailable
+    (TID/.../only)". `counterpart_source` is SOURCE_KEY_MISMATCH's other
+    source (the one the affected entities ARE present in).
+    `related_sources` is SOURCE_GROUP_ABSENT's full source list, in
+    caller-declared order. Human text is never written at the call site
+    -- see render_limitation(). `code` is a closed vocabulary (unlike
+    `source`, which stays open) since every branch of render_limitation()
+    is hand-written per code; an unrecognized code would otherwise
+    silently render as vague fallback text instead of failing at
+    construction time."""
     code: LimitationCode
     source: str
     scope: "str | None" = None
     affected_count: "int | None" = None
     unavailable_fields: tuple = field(default_factory=tuple)
-    detail: "str | None" = None
+    available_fields: tuple = field(default_factory=tuple)
+    counterpart_source: "str | None" = None
+    related_sources: tuple = field(default_factory=tuple)
+    detail: "str | None" = None   # SOURCE_FAILED only: the underlying error text
 
     def __post_init__(self):
         object.__setattr__(self, "code", LimitationCode(self.code))
         if not self.source:
             raise ValueError("CoverageLimitation.source must be a non-empty string")
-        if self.code == LimitationCode.CUSTOM and not self.detail:
-            raise ValueError("CoverageLimitation(code=CUSTOM) requires a non-empty detail")
         if not isinstance(self.unavailable_fields, tuple):
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
+        if not isinstance(self.available_fields, tuple):
+            object.__setattr__(self, "available_fields", tuple(self.available_fields))
+        if not isinstance(self.related_sources, tuple):
+            object.__setattr__(self, "related_sources", tuple(self.related_sources))
+        if self.code == LimitationCode.SOURCE_GROUP_ABSENT and len(self.related_sources) < 2:
+            raise ValueError(
+                "CoverageLimitation(code=SOURCE_GROUP_ABSENT) requires >= 2 related_sources")
 
 
 # Human names for known sources, used only by render_limitation() below.
@@ -193,14 +234,19 @@ def _display_name(source: str) -> str:
 
 def render_limitation(limitation: CoverageLimitation) -> str:
     """The ONE place a CoverageLimitation becomes human text. Must
-    reproduce today's exact, already-shipped strings for the sources
-    already migrated onto this model (memory_info/modules) so JSON
-    output is unchanged; new sources/codes can extend this as they're
-    migrated without touching any call site that already relies on it."""
+    reproduce today's exact, already-shipped strings for every source
+    already migrated onto this model so JSON output is unchanged; new
+    sources/codes can extend this as they're migrated without touching
+    any call site that already relies on it."""
     name = _display_name(limitation.source)
     code = limitation.code
 
     if code == LimitationCode.SOURCE_ABSENT:
+        if limitation.unavailable_fields:
+            avail = (f" ({'/'.join(limitation.available_fields)} only)"
+                      if limitation.available_fields else "")
+            return (f"{name} not present; {'/'.join(limitation.unavailable_fields)} "
+                    f"unavailable{avail}")
         return f"{name} not present in this dump"
 
     if code == LimitationCode.SOURCE_FAILED:
@@ -209,13 +255,23 @@ def render_limitation(limitation: CoverageLimitation) -> str:
 
     if code == LimitationCode.SOURCE_KEY_MISMATCH:
         count = limitation.affected_count if limitation.affected_count is not None else "some"
-        fields = (f" ({', '.join(limitation.unavailable_fields)} unavailable for those)"
-                   if limitation.unavailable_fields else "")
         scope = limitation.scope or "item"
+        fields = (f" ({'/'.join(limitation.unavailable_fields)} unavailable for those)"
+                   if limitation.unavailable_fields else "")
+        if limitation.counterpart_source:
+            counterpart_name = _display_name(limitation.counterpart_source)
+            return f"{count} {scope}(s) present in {counterpart_name} but missing from {name}{fields}"
         return f"{count} {scope}(s) missing from {name}{fields}"
 
-    if code == LimitationCode.CUSTOM:
-        return limitation.detail   # non-empty, enforced in CoverageLimitation.__post_init__
+    if code == LimitationCode.SOURCE_GROUP_ABSENT:
+        names = [_display_name(s) for s in limitation.related_sources]
+        if len(names) == 2:
+            return f"Neither {names[0]} nor {names[1]} present in this dump"
+        return f"None of {', '.join(names)} present in this dump"
+
+    if code == LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE:
+        return (f"{name} not present; thread backing-module classification unavailable "
+                f"(cannot confirm whether a start address is backed by a known module)")
 
     raise AssertionError(f"unhandled limitation code: {code!r}")   # unreachable: LimitationCode is closed
 
@@ -255,123 +311,152 @@ class CoverageReport:
         return [render_limitation(l) for l in self.limitations]
 
 
-_RESERVED_EXTRA_LIMITATION_CODES = (LimitationCode.SOURCE_ABSENT, LimitationCode.SOURCE_FAILED)
+@dataclass(frozen=True)
+class SourceRequirement:
+    """One entry in a command's `completeness_checks`: 'this source is
+    required for a complete result.' If its observed state is
+    SOURCE_ABSENT/SOURCE_FAILED, build_coverage_report() derives a
+    CoverageLimitation from the SourceObservation itself -- the caller
+    never builds that limitation by hand, closing the two-sources-of-
+    truth gap a bare `if absent: limitations.append(...)` would reopen.
+
+    `absent_code` lets a command select a specific SOURCE_ABSENT-family
+    rendering instead of the plain "not present in this dump" default --
+    either SOURCE_ABSENT with unavailable_fields/available_fields (a
+    field-level impact variant), or a fully bespoke, dedicated code such
+    as MODULE_CLASSIFICATION_UNAVAILABLE. Either way the actual text is
+    produced by render_limitation(), never composed here or by the
+    caller."""
+    source: str
+    absent_code: LimitationCode = LimitationCode.SOURCE_ABSENT
+    unavailable_fields: tuple = field(default_factory=tuple)
+    available_fields: tuple = field(default_factory=tuple)
+
+    def __post_init__(self):
+        object.__setattr__(self, "absent_code", LimitationCode(self.absent_code))
+        if not isinstance(self.unavailable_fields, tuple):
+            object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
+        if not isinstance(self.available_fields, tuple):
+            object.__setattr__(self, "available_fields", tuple(self.available_fields))
 
 
-def _validate_build_coverage_report_inputs(sources, evaluation_sources,
-                                            completeness_required_sources, extra_limitations):
-    """Enforces the split between reducer-derived and caller-supplied
-    limitations at the boundary, rather than leaving it as a convention a
-    caller could violate: a caller putting SOURCE_ABSENT/SOURCE_FAILED
-    into `extra_limitations` for a source ALSO in
-    `completeness_required_sources` would recreate the two-sources-of-
-    truth bug this module exists to remove (a duplicate limitation, and a
-    duplicate reason string, for the same fact)."""
+def _completeness_check_source_name(check) -> str:
+    if isinstance(check, CoverageLimitation):
+        return check.source
+    if isinstance(check, SourceRequirement):
+        return check.source
+    return check   # bare source-name string
+
+
+def _validate_build_coverage_report_inputs(sources, evaluation_sources, completeness_checks):
     for key, obs in sources.items():
         if obs.name != key:
             raise ValueError(
                 f"sources[{key!r}].name is {obs.name!r} -- the dict key and the "
                 f"SourceObservation's own name must match")
 
-    referenced = evaluation_sources | completeness_required_sources
+    referenced = set(evaluation_sources) | {
+        _completeness_check_source_name(c) for c in completeness_checks
+    }
     unknown = referenced - sources.keys()
     if unknown:
-        raise ValueError(f"evaluation_sources/completeness_required_sources reference "
+        raise ValueError(f"evaluation_sources/completeness_checks reference "
                           f"unknown source(s) not present in `sources`: {sorted(unknown)}")
 
-    for limitation in extra_limitations:
-        if limitation.code in _RESERVED_EXTRA_LIMITATION_CODES:
+    for check in completeness_checks:
+        if isinstance(check, CoverageLimitation) and check.code in (
+                LimitationCode.SOURCE_ABSENT, LimitationCode.SOURCE_FAILED):
             raise ValueError(
-                f"extra_limitations must not contain {limitation.code.value} "
-                f"(source={limitation.source!r}) -- that limitation kind is derived "
-                f"automatically from completeness_required_sources, never caller-supplied")
+                f"completeness_checks must not contain a pre-built {check.code.value} "
+                f"CoverageLimitation (source={check.source!r}) -- pass the bare source name "
+                f"or a SourceRequirement instead, so it's derived from the SourceObservation "
+                f"itself rather than hand-built")
 
 
-def _derive_required_source_limitation(source: SourceObservation) -> "CoverageLimitation | None":
-    if source.state == SourceState.ABSENT:
-        return CoverageLimitation(code=LimitationCode.SOURCE_ABSENT, source=source.name, scope="dump")
-    if source.state == SourceState.FAILED:
-        return CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source=source.name,
-                                   scope="dump", detail=source.detail)
+def _derive_required_source_limitation(obs: SourceObservation,
+                                        req: "SourceRequirement | None") -> "CoverageLimitation | None":
+    req = req or SourceRequirement(source=obs.name)
+    if obs.state == SourceState.ABSENT:
+        return CoverageLimitation(code=req.absent_code, source=obs.name, scope="dump",
+                                   unavailable_fields=req.unavailable_fields,
+                                   available_fields=req.available_fields)
+    if obs.state == SourceState.FAILED:
+        return CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source=obs.name,
+                                   scope="dump", detail=obs.detail)
     return None
 
 
 def build_coverage_report(
     sources: dict,
     *,
-    evaluation_sources: "set | None" = None,
-    completeness_required_sources: "set | None" = None,
-    extra_limitations: "list | None" = None,
+    evaluation_sources: "tuple | None" = None,
+    completeness_checks: "list | None" = None,
 ) -> CoverageReport:
     """
     The single reduction rule every command's coverage status derives
-    from. Unlike the prior version of this function, it does NOT trust a
-    caller-supplied `limitations` list for required-source absence/
-    failure -- it derives those limitations itself from `sources`, so a
-    caller that forgets to keep a hand-built limitations list in sync
-    with its own SourceObservations can no longer produce a silent,
-    false "complete" result (the exact bug this replaces: `modules`
-    observed as SOURCE_FAILED with no limitation passed in used to
-    reduce to COVERAGE_COMPLETE).
+    from.
 
-      - `evaluation_sources`: if given and non-empty, and EVERY one of
-        those sources is SOURCE_ABSENT, the command had literally
-        nothing to evaluate: not_evaluated, regardless of any other
-        limitation. (list/modules: {"memory_info"}. threads: {"threads",
-        "thread_info"}. sysinfo: set() -- never not_evaluated, because
-        dump_file is always real regardless of which of its 5 sources
-        exist. pid: its 3 sources, same all-absent rule as threads.)
+      - `evaluation_sources`: an ORDERED tuple of source names (order
+        matters -- it drives SOURCE_GROUP_ABSENT's wording below). If
+        given and non-empty, and EVERY one of those sources is
+        SOURCE_ABSENT, the command had literally nothing to evaluate:
+        not_evaluated, regardless of completeness_checks. A single-source
+        group renders as plain SOURCE_ABSENT ("X not present in this
+        dump" -- list/modules: ("memory_info",)); a multi-source group
+        renders as SOURCE_GROUP_ABSENT ("Neither X nor Y present in this
+        dump" for 2, "None of X, Y, Z present in this dump" for more --
+        threads: ("threads", "thread_info")). Either way this is
+        generated automatically here, never by the caller. A required
+        source that's SOURCE_FAILED (not ABSENT) never triggers
+        not_evaluated by itself -- evaluation was attempted and hit an
+        error, which is partial territory, not never evaluated.
 
-      - `completeness_required_sources`: for each of these whose
-        observed state is SOURCE_ABSENT or SOURCE_FAILED, a
-        CoverageLimitation is derived automatically here
-        (LIMITATION_SOURCE_ABSENT / LIMITATION_SOURCE_FAILED) and folded
-        into the report. Callers must NOT hand-construct these two
-        limitation kinds themselves -- that would recreate the two-
-        sources-of-truth bug this split exists to remove. Usually equal
-        to `evaluation_sources`, but they answer different questions:
-        evaluation_sources gates "was there anything to look at" (only
-        matters when ALL are absent); completeness_required_sources
-        gates "is what we found the full picture" (any ONE missing/
-        failed already contributes a limitation).
-
-      - `extra_limitations`: caller-supplied limitations for anything
-        the reducer cannot infer from source states alone (e.g.
-        LIMITATION_SOURCE_KEY_MISMATCH across two present sources that
-        disagree on which entities exist) -- the only limitation kind a
-        caller is still responsible for constructing directly.
+      - `completeness_checks`: an ORDERED list, each entry one of:
+          * a bare source-name string, or a SourceRequirement -- the
+            reducer derives a SOURCE_ABSENT/SOURCE_FAILED
+            CoverageLimitation from that source's OWN SourceObservation
+            automatically (see SourceRequirement for how to select a
+            richer wording than the plain default), or contributes
+            nothing if the source is present.
+          * an already-built CoverageLimitation (SOURCE_KEY_MISMATCH is
+            the only code allowed here -- a genuine cross-source fact
+            the reducer cannot infer from source state alone).
+        Final `limitations` preserves this exact order, so a command's
+        existing reason ordering survives the migration unchanged.
 
     Status: evaluation_sources (if non-empty) all SOURCE_ABSENT ->
-    not_evaluated. Else: any limitation (derived or extra) -> partial.
-    Else -> complete. A required source that's SOURCE_FAILED (not
-    ABSENT) never triggers not_evaluated by itself -- evaluation was
-    attempted and hit an error, which is partial territory, not never
-    evaluated.
+    not_evaluated. Else: any limitation -> partial. Else -> complete.
     """
-    evaluation_sources = evaluation_sources or set()
-    completeness_required_sources = completeness_required_sources or set()
-    extra_limitations = list(extra_limitations) if extra_limitations else []
+    evaluation_sources = tuple(evaluation_sources) if evaluation_sources else ()
+    completeness_checks = list(completeness_checks) if completeness_checks else []
 
-    _validate_build_coverage_report_inputs(
-        sources, evaluation_sources, completeness_required_sources, extra_limitations)
-
-    derived = []
-    for name in completeness_required_sources:
-        limitation = _derive_required_source_limitation(sources[name])
-        if limitation is not None:
-            derived.append(limitation)
-
-    limitations = derived + extra_limitations
+    _validate_build_coverage_report_inputs(sources, evaluation_sources, completeness_checks)
 
     if evaluation_sources and all(
         sources[name].state == SourceState.ABSENT for name in evaluation_sources
     ):
-        status = CoverageStatus.NOT_EVALUATED
-    elif limitations:
-        status = CoverageStatus.PARTIAL
-    else:
-        status = CoverageStatus.COMPLETE
+        if len(evaluation_sources) == 1:
+            group_limitation = CoverageLimitation(
+                code=LimitationCode.SOURCE_ABSENT, source=evaluation_sources[0], scope="dump")
+        else:
+            group_limitation = CoverageLimitation(
+                code=LimitationCode.SOURCE_GROUP_ABSENT, source=evaluation_sources[0],
+                related_sources=evaluation_sources)
+        return CoverageReport(status=CoverageStatus.NOT_EVALUATED, sources=sources,
+                               limitations=[group_limitation])
 
+    limitations = []
+    for check in completeness_checks:
+        if isinstance(check, CoverageLimitation):
+            limitations.append(check)
+            continue
+        req = check if isinstance(check, SourceRequirement) else None
+        name = check.source if isinstance(check, SourceRequirement) else check
+        limitation = _derive_required_source_limitation(sources[name], req)
+        if limitation is not None:
+            limitations.append(limitation)
+
+    status = CoverageStatus.PARTIAL if limitations else CoverageStatus.COMPLETE
     return CoverageReport(status=status, sources=sources, limitations=limitations)
 
 

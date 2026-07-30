@@ -99,6 +99,43 @@ def test_modules_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         os.remove(dump_path)
 
 
+def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(monkeypatch, tmp_path):
+    # threads.py is migrated onto CommandResult (unlike this file's other
+    # v2 commands at the time this test was added) -- this proves the
+    # real CLI path (cli.main -> _apply_command_result ->
+    # V2Output.set_command_result, not the older set_result adapter)
+    # actually gets exercised end to end, not just collect_threads()
+    # called directly in a unit test.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--threads", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_PARTIAL == 3   # degraded: no thread_info stream
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == "2.0"
+        assert doc["result"]["kind"] == "threads"
+        assert doc["result"]["execution_status"] == "completed"
+        assert doc["result"]["coverage"]["status"] == "partial"
+        assert doc["result"]["coverage"]["reasons"] == [
+            "ThreadInfoListStream not present; StartAddress/CreateTime/ExitTime/KernelTime/"
+            "UserTime unavailable (TID/SuspendCount/Priority/TEB only)",
+            "ModuleListStream not present; thread backing-module classification unavailable "
+            "(cannot confirm whether a start address is backed by a known module)",
+        ]
+        assert doc["result"]["data"]["records"][0]["tid"] == 1
+        assert doc["artifacts"] == []
+        assert doc["diagnostics"] == {"warnings": [], "errors": []}
+    finally:
+        os.remove(dump_path)
+
+
 def test_hunt_json_still_produces_v1_1_shaped_document(monkeypatch, tmp_path):
     dump_path = _make_dump_file()
     try:

@@ -41,8 +41,8 @@ def collect_regions(mf, filter_prot=None) -> CommandResult:
     source = observe_source("memory_info", present=stream_present, items=raw_regions)
     coverage = build_coverage_report(
         {"memory_info": source},
-        evaluation_sources={"memory_info"},
-        completeness_required_sources={"memory_info"},
+        evaluation_sources=("memory_info",),
+        completeness_checks=["memory_info"],
     )
     return CommandResult(kind="memory_regions", records=records, coverage=coverage,
                           summary={"count": len(records)})
