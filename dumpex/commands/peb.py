@@ -7,8 +7,6 @@ from dumpex.output.coverage import (
 )
 from dumpex.output.command_result import CommandResult
 
-_PEB_MISSING_REASON = "PEB could not be parsed (missing sysinfo or thread list in dump)"
-
 
 def peb_is_present(coverage) -> bool:
     """True when mf.peb itself was present -- derived from the
@@ -71,9 +69,14 @@ def collect_peb(mf: MinidumpFile) -> CommandResult:
     return CommandResult(kind="peb", records=[record], coverage=coverage, summary={"count": 1})
 
 
-def render_peb_console(record: PebRecord, peb_present: bool) -> None:
+def render_peb_console(record: PebRecord, peb_present: bool, coverage_reasons: list = None) -> None:
     if not peb_present:
-        print(f"[!] {_PEB_MISSING_REASON}")
+        # coverage_reasons is the same rendered text JSON reports, sourced
+        # from coverage.py's PEB_UNAVAILABLE template -- printed here
+        # rather than duplicated as a separate literal, so console and
+        # JSON can never drift apart on this wording.
+        for reason in (coverage_reasons or []):
+            print(f"[!] {reason}")
         return
 
     print(f"\n{BOLD('═══ PEB ═══')}")
@@ -97,5 +100,5 @@ def render_peb_console(record: PebRecord, peb_present: bool) -> None:
 
 def cmd_peb(mf: MinidumpFile) -> CommandResult:
     result = collect_peb(mf)
-    render_peb_console(result.records[0], peb_is_present(result.coverage))
+    render_peb_console(result.records[0], peb_is_present(result.coverage), result.coverage.reasons)
     return result

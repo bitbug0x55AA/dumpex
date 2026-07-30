@@ -293,6 +293,51 @@ def test_evaluation_requirement_normalizes_list_sources_to_tuple():
     assert req.sources == ("a", "b")
 
 
+# ── EvaluationRequirement: source-count/code combination validation ─────
+# Each of these reproduces a real bug: a single-source-only code (which
+# renders from `source` alone, ignoring every other group member) used
+# with a 2+-source group would silently drop everything but the first
+# source from the rendered text.
+
+def test_evaluation_requirement_rejects_single_source_code_for_multi_source_group():
+    with pytest.raises(ValueError, match="not valid for 2 source"):
+        EvaluationRequirement(sources=("peb", "threads"),
+                               all_absent_code=LimitationCode.PEB_UNAVAILABLE)
+
+
+def test_evaluation_requirement_rejects_plain_source_absent_for_multi_source_group():
+    with pytest.raises(ValueError, match="not valid for 2 source"):
+        EvaluationRequirement(sources=("peb", "threads"),
+                               all_absent_code=LimitationCode.SOURCE_ABSENT)
+
+
+def test_evaluation_requirement_rejects_group_code_for_single_source():
+    with pytest.raises(ValueError, match="not valid for 1 source"):
+        EvaluationRequirement(sources=("peb",), all_absent_code=LimitationCode.SOURCE_GROUP_ABSENT)
+
+
+def test_evaluation_requirement_rejects_duplicate_sources():
+    with pytest.raises(ValueError, match="duplicates"):
+        EvaluationRequirement(sources=("peb", "peb"))
+
+
+def test_evaluation_requirement_rejects_empty_string_source():
+    with pytest.raises(ValueError, match="non-empty strings"):
+        EvaluationRequirement(sources=("peb", ""))
+
+
+def test_evaluation_requirement_rejects_all_absent_code_with_empty_sources():
+    with pytest.raises(ValueError, match="empty sources"):
+        EvaluationRequirement(sources=(), all_absent_code=LimitationCode.PEB_UNAVAILABLE)
+
+
+def test_evaluation_requirement_empty_sources_with_no_code_is_fine():
+    # sysinfo's shape: no evaluation group at all, no code to select.
+    req = EvaluationRequirement(sources=())
+    assert req.sources == ()
+    assert req.all_absent_code is None
+
+
 def test_only_one_of_several_evaluation_sources_absent_is_partial_via_completeness_checks():
     obs_a = SourceObservation(name="threads", state=SOURCE_PRESENT, record_count=2)
     obs_b = SourceObservation(name="thread_info", state=SOURCE_ABSENT)

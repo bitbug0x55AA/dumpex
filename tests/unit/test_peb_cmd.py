@@ -70,7 +70,7 @@ def test_render_peb_console_normal_does_not_crash(capsys):
 
 def test_render_peb_console_missing_prints_error_line(capsys):
     result = collect_peb(FakeMF())
-    render_peb_console(result.records[0], peb_is_present(result.coverage))
+    render_peb_console(result.records[0], peb_is_present(result.coverage), result.coverage.reasons)
     out = capsys.readouterr().out
     assert "PEB could not be parsed" in out
 

@@ -43,10 +43,10 @@ class V2Output:
         record's own to_dict(), so every consumer downstream of this call
         (serializer, CSV export) only ever sees plain JSON-safe data.
 
-        Used by commands not yet migrated onto CommandResult (threads/
-        sysinfo/pid/peb) -- always reports execution_status="completed"
-        and never adds diagnostics/artifacts, since those commands have
-        no way to populate either yet. Migrated commands should call
+        Used by commands not yet migrated onto CommandResult (sysinfo/
+        pid) -- always reports execution_status="completed" and never
+        adds diagnostics/artifacts, since those commands have no way to
+        populate either yet. Migrated commands should call
         set_command_result() instead, which doesn't have that limitation."""
         record_dicts = [r.to_dict() for r in records]
         self._result = Result(

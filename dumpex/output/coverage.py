@@ -2,8 +2,9 @@
 First-class coverage/provenance model, extracted from the ad hoc
 bool(mf.X)-check-plus-hand-written-reason-string pattern every recon
 command previously hand-rolled independently (see dumpex/commands/
-list_cmd.py, modules.py, threads.py, sysinfo.py, peb.py -- the last two
-still use that older pattern).
+list_cmd.py, modules.py, threads.py, peb.py, sysinfo.py -- the last one
+holds both --sysinfo and --pid, neither yet migrated off that older
+pattern).
 
 Layered as: SourceObservation (what state was ONE underlying minidump
 stream in) -> CoverageLimitation (one specific, machine-readable way
@@ -402,11 +403,20 @@ class SourceRequirement:
             object.__setattr__(self, "available_fields", tuple(self.available_fields))
 
 
-# Codes EvaluationRequirement.all_absent_code may select: everything
-# SourceRequirement.absent_code allows (a single-source group can use a
-# dedicated per-source template), plus SOURCE_GROUP_ABSENT itself (the
-# multi-source default, selectable explicitly rather than only implicitly).
-_EVALUATION_ABSENT_CODES = _ABSENT_CAPABLE_CODES + (LimitationCode.SOURCE_GROUP_ABSENT,)
+# Codes EvaluationRequirement.all_absent_code may select for a
+# SINGLE-source group: everything SourceRequirement.absent_code allows --
+# each of these renders from `source` alone, ignoring any other group
+# members, which is exactly why they must NEVER be used for a 2+-source
+# group (that would silently drop every source but the first from the
+# rendered text -- the bug this validation exists to prevent).
+_SINGLE_SOURCE_EVALUATION_CODES = _ABSENT_CAPABLE_CODES
+
+# Codes valid for a MULTI-source (2+) group: each of these either
+# enumerates every member in its rendered text (SOURCE_GROUP_ABSENT) or is
+# a fully-fixed sentence that represents the group AS A WHOLE by
+# definition (a future PID_SOURCES_ABSENT belongs here, not in the
+# single-source set above, once PID migrates).
+_GROUP_EVALUATION_CODES = (LimitationCode.SOURCE_GROUP_ABSENT,)
 
 
 @dataclass(frozen=True)
@@ -430,20 +440,46 @@ class EvaluationRequirement:
     existing, already-shipped wording needs a dedicated code instead
     (e.g. PID's 3-source "MiscInfo, thread list, and exception stream
     are all absent ..." sentence, which fits neither automatic
-    template)."""
+    template).
+
+    Validated as a whole, not just per-field, because `all_absent_code`'s
+    validity depends on how many sources there are: a single-source-only
+    code (e.g. PEB_UNAVAILABLE) used with a 2+-source group would render
+    text that silently ignores every source but the first, and a
+    multi-source code (SOURCE_GROUP_ABSENT) used with zero or one source
+    is either meaningless or already rejected elsewhere
+    (CoverageLimitation itself requires >= 2 related_sources for it)."""
     sources: tuple
     all_absent_code: "LimitationCode | None" = None
 
     def __post_init__(self):
         if not isinstance(self.sources, tuple):
             object.__setattr__(self, "sources", tuple(self.sources))
-        if self.all_absent_code is not None:
-            code = LimitationCode(self.all_absent_code)
-            if code not in _EVALUATION_ABSENT_CODES:
+
+        if not self.sources:
+            if self.all_absent_code is not None:
                 raise ValueError(
-                    f"EvaluationRequirement.all_absent_code must be one of "
-                    f"{[c.value for c in _EVALUATION_ABSENT_CODES]}, got {code.value!r}")
-            object.__setattr__(self, "all_absent_code", code)
+                    "EvaluationRequirement with empty sources cannot set all_absent_code "
+                    "-- there is no group for it to describe")
+            return
+
+        if any(not s for s in self.sources):
+            raise ValueError(
+                f"EvaluationRequirement.sources must be non-empty strings, got {self.sources!r}")
+        if len(set(self.sources)) != len(self.sources):
+            raise ValueError(
+                f"EvaluationRequirement.sources must not contain duplicates, got {self.sources!r}")
+
+        if self.all_absent_code is None:
+            return
+        code = LimitationCode(self.all_absent_code)
+        allowed = (_SINGLE_SOURCE_EVALUATION_CODES if len(self.sources) == 1
+                   else _GROUP_EVALUATION_CODES)
+        if code not in allowed:
+            raise ValueError(
+                f"EvaluationRequirement.all_absent_code={code.value!r} is not valid for "
+                f"{len(self.sources)} source(s) -- must be one of {[c.value for c in allowed]}")
+        object.__setattr__(self, "all_absent_code", code)
 
 
 # The only code a caller may hand-build directly into completeness_checks

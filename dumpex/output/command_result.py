@@ -2,8 +2,8 @@
 CommandResult[T] -- what a migrated command's collect_*() function
 returns, replacing the ad hoc 3-to-6-element positional tuple every
 recon command currently returns (see dumpex/commands/list_cmd.py,
-modules.py, threads.py, sysinfo.py, peb.py -- the last three are not yet
-migrated onto this).
+modules.py, threads.py, peb.py, sysinfo.py -- the last one holds both
+--sysinfo and --pid, neither yet migrated onto this).
 
 Deliberately separate from dumpex.output.envelope's Result/Envelope
 (the wire-format dataclasses the serializer/schema actually consume):
