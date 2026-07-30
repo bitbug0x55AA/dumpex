@@ -104,6 +104,13 @@ def collect_sysinfo(mf: MinidumpFile):
         missing.append("ThreadListStream not present (thread_count unavailable)")
     if not mf.modules:
         missing.append("ModuleListStream not present (module_count unavailable)")
+    # Deliberately always evaluated=True, even when every one of si/mi/peb/
+    # threads/modules is missing -- unlike --pid (a single-purpose command
+    # that reports nothing at all when all its sources are absent),
+    # --sysinfo always has at least dump_file (derived from the dump path
+    # itself, never dependent on any of these streams) to report. It did
+    # not fail to evaluate; it evaluated every source and found none of
+    # them present, which is exactly what 'partial' + these reasons says.
     coverage_status = derive_coverage_status(evaluated=True, complete=not missing)
     return [record], coverage_status, missing, bool(peb), bool(mf.threads), bool(mf.modules)
 
@@ -187,9 +194,12 @@ def collect_pid(mf: MinidumpFile):
 
     Pure data, no printing. Returns (records, coverage_status,
     coverage_reasons) -- 'complete' only when MiscInfo directly supplied
-    the PID; any fallback path is 'partial' (reuses the same human-
-    readable explanations the console has always shown, now surfaced as
-    coverage_reasons instead of only being printed).
+    the PID; 'partial' when a weaker fallback path was used (reuses the
+    same human-readable explanations the console has always shown, now
+    surfaced as coverage_reasons instead of only being printed);
+    'not_evaluated' when none of the three sources (MiscInfo, thread
+    list, exception stream) are present in the dump at all -- there is
+    nothing to fall back to, not merely an unreliable answer.
     """
     pid      = None
     source   = None
@@ -229,10 +239,22 @@ def collect_pid(mf: MinidumpFile):
     record = PidRecord(
         pid=pid,
         source=source,
-        thread_count=len(threads),
+        # None (not 0) when ThreadListStream itself is absent -- "no
+        # thread list captured" and "thread list captured, zero threads"
+        # are not the same claim (same rule as SysInfoRecord.thread_count).
+        thread_count=(len(threads) if mf.threads else None),
         exc_tid=exc_tid,
     )
-    coverage_status = derive_coverage_status(evaluated=True, complete=(pid is not None))
+
+    if pid is not None:
+        coverage_status = derive_coverage_status(evaluated=True, complete=True)
+    elif not mf.misc_info and not mf.threads and not exc:
+        # Literally none of the three sources exist in this dump -- there
+        # is nothing to have even attempted a fallback with, not merely
+        # an unreliable answer from a weaker source.
+        coverage_status = derive_coverage_status(evaluated=False, complete=False)
+    else:
+        coverage_status = derive_coverage_status(evaluated=True, complete=False)
     return [record], coverage_status, warnings
 
 

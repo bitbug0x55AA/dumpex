@@ -12,14 +12,17 @@ def collect_peb(mf: MinidumpFile):
     Pure data, no printing. Returns (records, coverage_status,
     coverage_reasons, peb_present). Unlike the old cmd_peb (which
     returned nothing at all when PEB couldn't be parsed), this always
-    reports a PebRecord -- all fields None, coverage 'partial' --
-    so `--peb --json out.json` on a dump without a PEB still produces a
-    valid, schema-conformant result instead of silently no-op'ing.
+    reports a PebRecord -- all fields None -- so `--peb --json out.json`
+    on a dump without a PEB still produces a valid, schema-conformant
+    result instead of silently no-op'ing. `--peb` has exactly one data
+    source (mf.peb itself); when it's absent there is nothing to report
+    at all, not merely an incomplete subset -- 'not_evaluated', not
+    'partial' (which would imply some real data was still gathered).
     """
     peb = mf.peb
     if not peb:
         record = PebRecord()
-        coverage_status = derive_coverage_status(evaluated=True, complete=False)
+        coverage_status = derive_coverage_status(evaluated=False, complete=False)
         return [record], coverage_status, [_PEB_MISSING_REASON], False
 
     env_vars = None

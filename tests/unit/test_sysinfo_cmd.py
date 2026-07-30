@@ -113,12 +113,22 @@ def test_collect_pid_fallback_to_exception_stream():
 
 
 def test_collect_pid_nothing_available():
+    # None of MiscInfo/thread list/exception stream present at all --
+    # nothing to even attempt a fallback with.
     records, status, reasons = collect_pid(FakeMF())
-    assert status == "partial"
+    assert status == "not_evaluated"
     assert reasons == []
     rec = records[0]
     assert rec.pid is None
-    assert rec.thread_count == 0
+    assert rec.thread_count is None   # never 0 when ThreadListStream itself is absent
+
+
+def test_collect_pid_threads_present_but_misc_info_absent_is_partial():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+    records, status, reasons = collect_pid(mf)
+    assert status == "partial"   # a real (if weaker) source was available
+    assert records[0].thread_count == 1
 
 
 def test_render_pid_console_no_pid_no_warnings(capsys):

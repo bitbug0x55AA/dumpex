@@ -20,6 +20,17 @@ _MODULES_UNAVAILABLE_REASON = (
 )
 
 
+def _missing_from_info_reason(n: int) -> str:
+    return (f"{n} thread(s) present in ThreadListStream but missing from "
+            f"ThreadInfoListStream (StartAddress/CreateTime/ExitTime/KernelTime/"
+            f"UserTime unavailable for those)")
+
+
+def _missing_from_base_reason(n: int) -> str:
+    return (f"{n} thread(s) present in ThreadInfoListStream but missing from "
+            f"ThreadListStream (SuspendCount/Priority/TEB unavailable for those)")
+
+
 class _RawThreadInfo:
     """
     Stand-in for a MINIDUMP_THREAD_INFO record, built from the base
@@ -50,23 +61,64 @@ def collect_threads(mf):
     ThreadInfoListStream was present, and whether any thread reports
     timing fields at all), consumed only by render_threads_console;
     cli.py only ever sees the first three (see cmd_threads below).
+
+    ThreadListStream and ThreadInfoListStream are two independent,
+    independently-optional streams describing the same threads. Neither
+    stream's mere PRESENCE tells you the two actually agree on which
+    TIDs exist -- a dump can have both streams and still have a TID in
+    one that's absent from the other (a stream that's present but
+    reports fewer threads than the other, or a genuinely inconsistent
+    capture). Building the record set from ONE stream's TID list alone
+    would silently drop threads the other stream knows about, and would
+    report 'complete' coverage for a dump where the two streams actually
+    disagree. Records are built from the UNION of both streams' TIDs;
+    whichever stream is missing a given TID has its own fields filled in
+    via _RawThreadInfo's None placeholders for that thread specifically,
+    and the mismatch count is a coverage_reason -- not silently absorbed
+    into either "complete" or a single all-or-nothing 'degraded' flag.
     """
     base_threads_present = bool(mf.threads)
     info_stream_present  = bool(mf.thread_info)
     modules_available    = bool(mf.modules)
 
     threads_by_tid = {t.ThreadId: t for t in (mf.threads.threads if mf.threads else [])}
-    infos   = get_thread_infos(mf)
+    real_infos_by_tid = {ti.ThreadId: ti for ti in get_thread_infos(mf)}
     modules = get_modules(mf)
 
-    # ThreadInfoListStream is an optional MiniDumpWriteDump capture flag
-    # (MiniDumpWithThreadInfo) — its absence is common, not corruption.
-    # Falling straight through to "0 thread(s)" when the base ThreadListStream
-    # actually has entries would misreport a dump that simply wasn't captured
-    # with that extra stream as having no threads at all.
+    if not base_threads_present and not info_stream_present:
+        # Neither stream exists at all -- there is no thread data of any
+        # kind to report, not "0 threads, fully evaluated."
+        coverage_status = derive_coverage_status(evaluated=False, complete=False)
+        return [], coverage_status, [_NEITHER_STREAM_REASON], False, False
+
+    # Whole-stream absence (the common, expected "not captured with
+    # MiniDumpWithThreadInfo" case) is still tracked separately from a
+    # per-TID mismatch between two streams that ARE both present, since
+    # it gets its own specific, more actionable console message below.
     degraded = not info_stream_present and base_threads_present
-    if degraded:
-        infos = [_RawThreadInfo(tid) for tid in threads_by_tid]
+
+    all_tids = list(threads_by_tid.keys())
+    for tid in real_infos_by_tid:
+        if tid not in threads_by_tid:
+            all_tids.append(tid)
+
+    missing_from_info = 0   # TID in ThreadListStream, absent from ThreadInfoListStream
+    missing_from_base = 0   # TID in ThreadInfoListStream, absent from ThreadListStream
+    infos = []
+    for tid in all_tids:
+        ti = real_infos_by_tid.get(tid)
+        if ti is None:
+            if info_stream_present and not degraded:
+                # ThreadInfoListStream exists (and isn't entirely absent)
+                # but doesn't cover this specific TID -- a genuine
+                # per-thread gap, counted once via the whole-stream
+                # 'degraded' reason instead when the stream is absent
+                # altogether.
+                missing_from_info += 1
+            ti = _RawThreadInfo(tid)
+        elif tid not in threads_by_tid and info_stream_present:
+            missing_from_base += 1
+        infos.append(ti)
 
     has_times = any(getattr(ti, "CreateTime", None) for ti in infos)
 
@@ -125,15 +177,13 @@ def collect_threads(mf):
             teb=hex_address(teb) if teb else None,
         ))
 
-    if not base_threads_present and not info_stream_present:
-        # Neither stream exists at all -- there is no thread data of any
-        # kind to report, not "0 threads, fully evaluated."
-        coverage_status = derive_coverage_status(evaluated=False, complete=False)
-        return records, coverage_status, [_NEITHER_STREAM_REASON], degraded, has_times
-
     gaps = []
     if degraded:
         gaps.append(_DEGRADED_REASON)
+    if missing_from_info:
+        gaps.append(_missing_from_info_reason(missing_from_info))
+    if missing_from_base:
+        gaps.append(_missing_from_base_reason(missing_from_base))
     if not modules_available:
         gaps.append(_MODULES_UNAVAILABLE_REASON)
 
@@ -141,13 +191,23 @@ def collect_threads(mf):
     return records, coverage_status, gaps, degraded, has_times
 
 
-def render_threads_console(records, degraded: bool, has_times: bool) -> None:
+def render_threads_console(records, degraded: bool, has_times: bool,
+                            coverage_reasons: list = None) -> None:
     if degraded:
         print(YELLOW(
             "  [~] ThreadInfoListStream not present in this dump — falling back to the\n"
             "      base ThreadListStream. StartAddress / CreateTime / ExitTime / Kernel-\n"
             "      UserTime are NOT available in this mode (only TID / SuspendCount /\n"
             "      Priority / TEB, from the raw thread record).\n"))
+
+    # Every OTHER coverage gap (a per-TID mismatch between the two thread
+    # streams, or a missing ModuleListStream) gets a plain warning line --
+    # the degraded banner above already covers its own specific reason,
+    # so it's skipped here to avoid printing the same fact twice.
+    for reason in (coverage_reasons or []):
+        if reason == _DEGRADED_REASON:
+            continue
+        print(YELLOW(f"  [~] {reason}\n"))
 
     for rec in records:
         flag_tag = f"[{rec.flags[0]}]" if rec.flags else ""
@@ -213,5 +273,5 @@ def render_threads_console(records, degraded: bool, has_times: bool) -> None:
 
 def cmd_threads(mf):
     records, coverage_status, coverage_reasons, degraded, has_times = collect_threads(mf)
-    render_threads_console(records, degraded, has_times)
+    render_threads_console(records, degraded, has_times, coverage_reasons)
     return records, coverage_status, coverage_reasons

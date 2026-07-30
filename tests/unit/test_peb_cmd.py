@@ -22,9 +22,11 @@ def test_collect_peb_normal_is_complete():
     assert rec.environment_variables == [{"name": "PATH", "value": r"C:\Windows"}]
 
 
-def test_collect_peb_missing_is_partial_all_fields_none():
+def test_collect_peb_missing_is_not_evaluated_all_fields_none():
+    # --peb has exactly one data source; when it's absent there is
+    # nothing to report at all, not merely an incomplete subset.
     records, status, reasons, present = collect_peb(FakeMF())
-    assert status == "partial"
+    assert status == "not_evaluated"
     assert present is False
     assert reasons == ["PEB could not be parsed (missing sysinfo or thread list in dump)"]
     rec = records[0]
