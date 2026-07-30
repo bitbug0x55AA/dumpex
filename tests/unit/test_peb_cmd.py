@@ -6,10 +6,13 @@ see that module and dumpex.output.command_result); accessed via
 attributes, never unpacked as a tuple. peb_present -- extra rendering
 context this command needs -- is derived via peb_is_present() rather
 than returned separately."""
+import pytest
+
 from tests.fixtures.fakes import Peb, FakeMF
 
 from dumpex.commands.peb import collect_peb, render_peb_console, cmd_peb, peb_is_present
 from dumpex.output.coverage import LimitationCode
+from dumpex.output.records import PebRecord
 
 
 def test_collect_peb_normal_is_complete():
@@ -62,7 +65,7 @@ def test_render_peb_console_normal_does_not_crash(capsys):
     mf.peb = Peb(0x140000000, r"C:\test.exe",
                  environment_variables=[{"name": "PATH", "value": "C:\\"}])
     result = collect_peb(mf)
-    render_peb_console(result.records[0], peb_is_present(result.coverage))
+    render_peb_console(result.records[0], result.coverage)
     out = capsys.readouterr().out
     assert "PEB" in out
     assert "PATH=C:\\" in out
@@ -70,9 +73,17 @@ def test_render_peb_console_normal_does_not_crash(capsys):
 
 def test_render_peb_console_missing_prints_error_line(capsys):
     result = collect_peb(FakeMF())
-    render_peb_console(result.records[0], peb_is_present(result.coverage), result.coverage.reasons)
+    render_peb_console(result.records[0], result.coverage)
     out = capsys.readouterr().out
     assert "PEB could not be parsed" in out
+
+
+def test_render_peb_console_requires_coverage_report_not_bare_bool():
+    # render_peb_console takes the whole CoverageReport (not a separate
+    # present/reasons pair) so a stale call site can't silently no-op --
+    # passing anything else fails loudly instead.
+    with pytest.raises(AttributeError):
+        render_peb_console(PebRecord(), False)
 
 
 def test_cmd_peb_returns_command_result(capsys):

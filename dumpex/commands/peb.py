@@ -69,13 +69,18 @@ def collect_peb(mf: MinidumpFile) -> CommandResult:
     return CommandResult(kind="peb", records=[record], coverage=coverage, summary={"count": 1})
 
 
-def render_peb_console(record: PebRecord, peb_present: bool, coverage_reasons: list = None) -> None:
-    if not peb_present:
-        # coverage_reasons is the same rendered text JSON reports, sourced
-        # from coverage.py's PEB_UNAVAILABLE template -- printed here
-        # rather than duplicated as a separate literal, so console and
-        # JSON can never drift apart on this wording.
-        for reason in (coverage_reasons or []):
+def render_peb_console(record: PebRecord, coverage) -> None:
+    """Takes the whole CoverageReport, not a (present, reasons) pair --
+    peb_present and the reason text both derive from it here, so there is
+    no way to call this with one but not the other (a stale two-argument
+    call site silently printing nothing, as an earlier (present, reasons)
+    split with a defaulted reasons param allowed)."""
+    if not peb_is_present(coverage):
+        # The same rendered text JSON reports, sourced from coverage.py's
+        # PEB_UNAVAILABLE template -- printed here rather than duplicated
+        # as a separate literal, so console and JSON can never drift
+        # apart on this wording.
+        for reason in coverage.reasons:
             print(f"[!] {reason}")
         return
 
@@ -100,5 +105,5 @@ def render_peb_console(record: PebRecord, peb_present: bool, coverage_reasons: l
 
 def cmd_peb(mf: MinidumpFile) -> CommandResult:
     result = collect_peb(mf)
-    render_peb_console(result.records[0], peb_is_present(result.coverage), result.coverage.reasons)
+    render_peb_console(result.records[0], result.coverage)
     return result

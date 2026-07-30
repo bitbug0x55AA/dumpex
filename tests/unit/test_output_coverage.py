@@ -326,6 +326,18 @@ def test_evaluation_requirement_rejects_empty_string_source():
         EvaluationRequirement(sources=("peb", ""))
 
 
+def test_evaluation_requirement_rejects_non_string_source():
+    # `not s` alone would accept a truthy non-string (e.g. 123) -- must
+    # reject anything that isn't actually a str, not just falsy values.
+    with pytest.raises(ValueError, match="non-empty strings"):
+        EvaluationRequirement(sources=(123,))
+
+
+def test_coverage_limitation_rejects_non_string_source():
+    with pytest.raises(ValueError, match="non-empty string"):
+        CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source=123)
+
+
 def test_evaluation_requirement_rejects_all_absent_code_with_empty_sources():
     with pytest.raises(ValueError, match="empty sources"):
         EvaluationRequirement(sources=(), all_absent_code=LimitationCode.PEB_UNAVAILABLE)

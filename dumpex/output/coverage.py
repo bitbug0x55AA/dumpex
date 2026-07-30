@@ -206,7 +206,7 @@ class CoverageLimitation:
 
     def __post_init__(self):
         object.__setattr__(self, "code", LimitationCode(self.code))
-        if not self.source:
+        if not isinstance(self.source, str) or not self.source:
             raise ValueError("CoverageLimitation.source must be a non-empty string")
         if not isinstance(self.unavailable_fields, tuple):
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
@@ -463,7 +463,7 @@ class EvaluationRequirement:
                     "-- there is no group for it to describe")
             return
 
-        if any(not s for s in self.sources):
+        if any(not isinstance(s, str) or not s for s in self.sources):
             raise ValueError(
                 f"EvaluationRequirement.sources must be non-empty strings, got {self.sources!r}")
         if len(set(self.sources)) != len(self.sources):
