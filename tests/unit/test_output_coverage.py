@@ -21,7 +21,7 @@ import pytest
 
 from dumpex.output.coverage import (
     SourceObservation, observe_source, CoverageLimitation, render_limitation,
-    CoverageReport, SourceRequirement, build_coverage_report, exit_code_for,
+    CoverageReport, SourceRequirement, EvaluationRequirement, build_coverage_report, exit_code_for,
     SourceState, CoverageStatus, LimitationCode,
     SOURCE_ABSENT, SOURCE_PRESENT_EMPTY, SOURCE_PRESENT, SOURCE_FAILED,
     LIMITATION_SOURCE_ABSENT, LIMITATION_SOURCE_FAILED, LIMITATION_SOURCE_KEY_MISMATCH,
@@ -230,6 +230,67 @@ def test_single_evaluation_source_absent_renders_plain_source_absent_not_group()
     limitation = report.limitations[0]
     assert limitation.code == LimitationCode.SOURCE_ABSENT
     assert report.reasons == ["MemoryInfoListStream not present in this dump"]
+
+
+# ── EvaluationRequirement: group-level all_absent_code override ─────────
+
+def test_evaluation_requirement_single_source_dedicated_code():
+    # A single-source group can still select a dedicated code (e.g. a
+    # future PEB migration's PEB_UNAVAILABLE) instead of the plain
+    # SOURCE_ABSENT default -- proven here with an existing dedicated
+    # code (MODULE_CLASSIFICATION_UNAVAILABLE) so this test doesn't
+    # depend on a future command's vocabulary.
+    obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
+    report = build_coverage_report(
+        {"modules": obs},
+        evaluation_sources=EvaluationRequirement(
+            sources=("modules",), all_absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE),
+    )
+    assert report.status == COVERAGE_NOT_EVALUATED
+    limitation = report.limitations[0]
+    assert limitation.code == LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE
+    assert report.reasons == [
+        "ModuleListStream not present; thread backing-module classification unavailable "
+        "(cannot confirm whether a start address is backed by a known module)"]
+
+
+def test_evaluation_requirement_explicit_group_absent_matches_automatic_default():
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_ABSENT)
+    auto = build_coverage_report({"a": obs_a, "b": obs_b}, evaluation_sources=("a", "b"))
+    explicit = build_coverage_report(
+        {"a": obs_a, "b": obs_b},
+        evaluation_sources=EvaluationRequirement(sources=("a", "b"),
+                                                  all_absent_code=LimitationCode.SOURCE_GROUP_ABSENT))
+    assert auto.reasons == explicit.reasons
+    assert auto.limitations[0].code == explicit.limitations[0].code == LimitationCode.SOURCE_GROUP_ABSENT
+
+
+def test_evaluation_requirement_group_code_not_pinned_to_first_source():
+    # The whole point of EvaluationRequirement: a group-level code must
+    # not depend on which source happens to be sources[0] -- reordering
+    # the tuple must not change which code applies.
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_ABSENT)
+    forward = build_coverage_report(
+        {"a": obs_a, "b": obs_b},
+        evaluation_sources=EvaluationRequirement(sources=("a", "b"),
+                                                  all_absent_code=LimitationCode.SOURCE_GROUP_ABSENT))
+    backward = build_coverage_report(
+        {"a": obs_a, "b": obs_b},
+        evaluation_sources=EvaluationRequirement(sources=("b", "a"),
+                                                  all_absent_code=LimitationCode.SOURCE_GROUP_ABSENT))
+    assert forward.limitations[0].code == backward.limitations[0].code == LimitationCode.SOURCE_GROUP_ABSENT
+
+
+def test_evaluation_requirement_rejects_invalid_all_absent_code():
+    with pytest.raises(ValueError, match="all_absent_code"):
+        EvaluationRequirement(sources=("a", "b"), all_absent_code=LimitationCode.SOURCE_KEY_MISMATCH)
+
+
+def test_evaluation_requirement_normalizes_list_sources_to_tuple():
+    req = EvaluationRequirement(sources=["a", "b"])
+    assert req.sources == ("a", "b")
 
 
 def test_only_one_of_several_evaluation_sources_absent_is_partial_via_completeness_checks():
@@ -441,6 +502,11 @@ def test_source_requirement_module_classification_requires_modules_source():
 def test_coverage_limitation_module_classification_requires_modules_source():
     with pytest.raises(ValueError, match="modules"):
         CoverageLimitation(code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE, source="threads")
+
+
+def test_coverage_limitation_peb_unavailable_requires_peb_source():
+    with pytest.raises(ValueError, match="peb"):
+        CoverageLimitation(code=LimitationCode.PEB_UNAVAILABLE, source="modules")
 
 
 def test_build_coverage_report_rejects_unknown_counterpart_source():

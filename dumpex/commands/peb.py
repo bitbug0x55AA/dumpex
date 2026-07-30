@@ -1,29 +1,49 @@
 """--peb command."""
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD
-from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.output.records import PebRecord, hex_address
+from dumpex.output.coverage import (
+    observe_source, build_coverage_report, EvaluationRequirement, LimitationCode, SourceState,
+)
+from dumpex.output.command_result import CommandResult
 
 _PEB_MISSING_REASON = "PEB could not be parsed (missing sysinfo or thread list in dump)"
 
 
-def collect_peb(mf: MinidumpFile):
+def peb_is_present(coverage) -> bool:
+    """True when mf.peb itself was present -- derived from the
+    CoverageReport's own source state rather than a separately-returned
+    flag, matching threads.py's thread_info_is_degraded() pattern."""
+    return coverage.sources["peb"].state != SourceState.ABSENT
+
+
+def collect_peb(mf: MinidumpFile) -> CommandResult:
     """
-    Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons, peb_present). Unlike the old cmd_peb (which
-    returned nothing at all when PEB couldn't be parsed), this always
-    reports a PebRecord -- all fields None -- so `--peb --json out.json`
-    on a dump without a PEB still produces a valid, schema-conformant
-    result instead of silently no-op'ing. `--peb` has exactly one data
-    source (mf.peb itself); when it's absent there is nothing to report
-    at all, not merely an incomplete subset -- 'not_evaluated', not
-    'partial' (which would imply some real data was still gathered).
+    Pure data, no printing. Returns a CommandResult[PebRecord]. Unlike
+    the old cmd_peb (which returned nothing at all when PEB couldn't be
+    parsed), this always reports a PebRecord -- all fields None -- so
+    `--peb --json out.json` on a dump without a PEB still produces a
+    valid, schema-conformant result instead of silently no-op'ing.
+    `--peb` has exactly one data source (mf.peb itself); when it's
+    absent there is nothing to report at all, not merely an incomplete
+    subset -- 'not_evaluated', not 'partial' (which would imply some
+    real data was still gathered). The not_evaluated reason
+    ("PEB could not be parsed (missing sysinfo or thread list in dump)")
+    doesn't fit the generic "X not present in this dump" template, so it
+    uses a dedicated code (PEB_UNAVAILABLE) via EvaluationRequirement
+    rather than the automatic single-source default.
     """
     peb = mf.peb
+    peb_source = observe_source("peb", present=bool(peb), items=[peb] if peb else [])
+    sources = {"peb": peb_source}
+
     if not peb:
-        record = PebRecord()
-        coverage_status = derive_coverage_status(evaluated=False, complete=False)
-        return [record], coverage_status, [_PEB_MISSING_REASON], False
+        coverage = build_coverage_report(
+            sources,
+            evaluation_sources=EvaluationRequirement(
+                sources=("peb",), all_absent_code=LimitationCode.PEB_UNAVAILABLE),
+        )
+        return CommandResult(kind="peb", records=[PebRecord()], coverage=coverage, summary={"count": 1})
 
     env_vars = None
     if peb.environment_variables:
@@ -47,8 +67,8 @@ def collect_peb(mf: MinidumpFile):
         standard_error=(hex_address(peb.standard_error) if peb.standard_error is not None else None),
         environment_variables=env_vars,
     )
-    coverage_status = derive_coverage_status(evaluated=True, complete=True)
-    return [record], coverage_status, [], True
+    coverage = build_coverage_report(sources, evaluation_sources=("peb",))
+    return CommandResult(kind="peb", records=[record], coverage=coverage, summary={"count": 1})
 
 
 def render_peb_console(record: PebRecord, peb_present: bool) -> None:
@@ -75,7 +95,7 @@ def render_peb_console(record: PebRecord, peb_present: bool) -> None:
             print(f"    {env['name']}={env['value']}")
 
 
-def cmd_peb(mf: MinidumpFile):
-    records, coverage_status, coverage_reasons, peb_present = collect_peb(mf)
-    render_peb_console(records[0], peb_present)
-    return records, coverage_status, coverage_reasons
+def cmd_peb(mf: MinidumpFile) -> CommandResult:
+    result = collect_peb(mf)
+    render_peb_console(result.records[0], peb_is_present(result.coverage))
+    return result

@@ -182,18 +182,17 @@ def test_pid_empty_validates(validator):
 def test_peb_normal_validates(validator):
     mf = FakeMF()
     mf.peb = Peb(0x140000000, r"C:\test.exe")
-    records, status, reasons, _present = collect_peb(mf)
-    doc = _validate(validator, "peb", records, status, reasons)
+    result = collect_peb(mf)
+    doc = _validate(validator, "peb", result.records, result.coverage.status, result.coverage.reasons)
     assert doc["result"]["coverage"]["status"] == "complete"
 
 
 def test_peb_missing_is_not_evaluated_and_validates(validator):
     # --peb has exactly one data source; when it's absent there is
     # nothing to report at all, not merely an incomplete subset.
-    records, status, reasons, present = collect_peb(FakeMF())
-    assert status == "not_evaluated"
-    assert present is False
-    doc = _validate(validator, "peb", records, status, reasons)
+    result = collect_peb(FakeMF())
+    assert result.coverage.status == "not_evaluated"
+    doc = _validate(validator, "peb", result.records, result.coverage.status, result.coverage.reasons)
     assert doc["result"]["coverage"]["reasons"]
 
 

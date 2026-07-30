@@ -13,7 +13,7 @@ import tempfile
 import pytest
 
 import dumpex.cli as cli
-from tests.fixtures.fakes import FakeMF, Module, Thread, Ctx, FakeStream
+from tests.fixtures.fakes import FakeMF, Module, Thread, Ctx, FakeStream, Peb
 
 
 def _run(monkeypatch, argv):
@@ -132,6 +132,52 @@ def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(mon
         assert doc["result"]["data"]["records"][0]["tid"] == 1
         assert doc["artifacts"] == []
         assert doc["diagnostics"] == {"warnings": [], "errors": []}
+    finally:
+        os.remove(dump_path)
+
+
+def test_peb_missing_json_produces_v2_shaped_document_via_command_result_adapter(monkeypatch, tmp_path):
+    # peb.py is migrated onto CommandResult -- proves the real CLI path
+    # (cli.main -> _apply_command_result -> V2Output.set_command_result)
+    # for the not_evaluated / dedicated-code (PEB_UNAVAILABLE) case.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # no mf.peb at all
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--peb", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == "2.0"
+        assert doc["result"]["kind"] == "peb"
+        assert doc["result"]["execution_status"] == "completed"
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        assert doc["result"]["coverage"]["reasons"] == [
+            "PEB could not be parsed (missing sysinfo or thread list in dump)"]
+        assert doc["result"]["data"]["records"][0]["peb_address"] is None
+    finally:
+        os.remove(dump_path)
+
+
+def test_peb_present_json_produces_complete_status(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.peb = Peb(0x140000000, r"C:\test.exe")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--peb", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "peb"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        assert doc["result"]["coverage"]["reasons"] == []
     finally:
         os.remove(dump_path)
 

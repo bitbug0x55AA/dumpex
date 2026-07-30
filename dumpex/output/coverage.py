@@ -164,6 +164,11 @@ class LimitationCode(str, Enum):
     # can't be attempted. New sources/codes are added here, fully spelled
     # out, as commands migrate and need wording an existing template can't
     # produce -- never passed in as caller-composed free text.
+    PEB_UNAVAILABLE = "PEB_UNAVAILABLE"
+    # ^ PEB absent: --peb's single-source not_evaluated case, whose
+    # existing wording ("PEB could not be parsed (missing sysinfo or
+    # thread list in dump)") explains WHY in terms other streams, not
+    # just "not present in this dump" -- fully fixed, no interpolation.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -215,6 +220,10 @@ class CoverageLimitation:
             raise ValueError(
                 "CoverageLimitation(code=MODULE_CLASSIFICATION_UNAVAILABLE) is a fixed sentence "
                 f"about ModuleListStream specifically -- source must be 'modules', got {self.source!r}")
+        if self.code == LimitationCode.PEB_UNAVAILABLE and self.source != "peb":
+            raise ValueError(
+                "CoverageLimitation(code=PEB_UNAVAILABLE) is a fixed sentence about PEB "
+                f"specifically -- source must be 'peb', got {self.source!r}")
 
 
 # Human names for known sources, used only by render_limitation() below.
@@ -294,6 +303,9 @@ def render_limitation(limitation: CoverageLimitation) -> str:
         return (f"{name} not present; thread backing-module classification unavailable "
                 f"(cannot confirm whether a start address is backed by a known module)")
 
+    if code == LimitationCode.PEB_UNAVAILABLE:
+        return "PEB could not be parsed (missing sysinfo or thread list in dump)"
+
     raise AssertionError(f"unhandled limitation code: {code!r}")   # unreachable: LimitationCode is closed
 
 
@@ -340,7 +352,8 @@ class CoverageReport:
 # absent_code (e.g. SOURCE_KEY_MISMATCH, which describes a PRESENT
 # source's partial mismatch, not an absent one) could render nonsense
 # like "some dump(s) missing from ModuleListStream" for a plain absence.
-_ABSENT_CAPABLE_CODES = (LimitationCode.SOURCE_ABSENT, LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE)
+_ABSENT_CAPABLE_CODES = (LimitationCode.SOURCE_ABSENT, LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE,
+                          LimitationCode.PEB_UNAVAILABLE)
 
 
 @dataclass(frozen=True)
@@ -387,6 +400,50 @@ class SourceRequirement:
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
         if not isinstance(self.available_fields, tuple):
             object.__setattr__(self, "available_fields", tuple(self.available_fields))
+
+
+# Codes EvaluationRequirement.all_absent_code may select: everything
+# SourceRequirement.absent_code allows (a single-source group can use a
+# dedicated per-source template), plus SOURCE_GROUP_ABSENT itself (the
+# multi-source default, selectable explicitly rather than only implicitly).
+_EVALUATION_ABSENT_CODES = _ABSENT_CAPABLE_CODES + (LimitationCode.SOURCE_GROUP_ABSENT,)
+
+
+@dataclass(frozen=True)
+class EvaluationRequirement:
+    """Declares the group of sources build_coverage_report checks for
+    "was there anything to evaluate at all" -- not_evaluated fires when
+    EVERY one of `sources` is SOURCE_ABSENT. This is its OWN type,
+    separate from SourceRequirement (which describes ONE source's
+    completeness), because the resulting limitation is a fact about the
+    GROUP as a whole, not about any single member: pinning a custom
+    `all_absent_code` to "whichever source happens to be listed first"
+    would make a group-level fact depend on an arbitrary member source,
+    which is exactly the kind of ambiguity this split avoids.
+
+    `all_absent_code` defaults to None, meaning "pick the usual automatic
+    default": plain SOURCE_ABSENT for a single source (list/modules'
+    shape) or SOURCE_GROUP_ABSENT for two or more (threads' shape) --
+    passing a bare tuple of source names to `evaluation_sources` gets
+    exactly this default behavior, unchanged from before this type
+    existed. Set `all_absent_code` explicitly only when a command's
+    existing, already-shipped wording needs a dedicated code instead
+    (e.g. PID's 3-source "MiscInfo, thread list, and exception stream
+    are all absent ..." sentence, which fits neither automatic
+    template)."""
+    sources: tuple
+    all_absent_code: "LimitationCode | None" = None
+
+    def __post_init__(self):
+        if not isinstance(self.sources, tuple):
+            object.__setattr__(self, "sources", tuple(self.sources))
+        if self.all_absent_code is not None:
+            code = LimitationCode(self.all_absent_code)
+            if code not in _EVALUATION_ABSENT_CODES:
+                raise ValueError(
+                    f"EvaluationRequirement.all_absent_code must be one of "
+                    f"{[c.value for c in _EVALUATION_ABSENT_CODES]}, got {code.value!r}")
+            object.__setattr__(self, "all_absent_code", code)
 
 
 # The only code a caller may hand-build directly into completeness_checks
@@ -509,11 +566,13 @@ def build_coverage_report(
     The single reduction rule every command's coverage status derives
     from.
 
-      - `evaluation_sources`: an ORDERED tuple of source names (order
-        matters -- it drives SOURCE_GROUP_ABSENT's wording below). If
-        given and non-empty, and EVERY one of those sources is
-        SOURCE_ABSENT, the command had literally nothing to evaluate:
-        not_evaluated, regardless of completeness_checks. A single-source
+      - `evaluation_sources`: either an ORDERED tuple of source names, or
+        an EvaluationRequirement (when a command needs a dedicated
+        all-absent code instead of the automatic default -- see that
+        class). If the resulting source group is non-empty and EVERY one
+        of those sources is SOURCE_ABSENT, the command had literally
+        nothing to evaluate: not_evaluated, regardless of
+        completeness_checks. With the automatic default: a single-source
         group renders as plain SOURCE_ABSENT ("X not present in this
         dump" -- list/modules: ("memory_info",)); a multi-source group
         renders as SOURCE_GROUP_ABSENT ("Neither X nor Y present in this
@@ -531,33 +590,36 @@ def build_coverage_report(
             automatically (see SourceRequirement for how to select a
             richer wording than the plain default), or contributes
             nothing if the source is present.
-          * an already-built CoverageLimitation with code SOURCE_KEY_MISMATCH
-            (the only code a caller may hand-build here -- a genuine
-            cross-source fact the reducer cannot infer from source state
-            alone; every other code is rejected, so a caller can't force
-            e.g. a MODULE_CLASSIFICATION_UNAVAILABLE limitation the
-            reducer never actually checked against modules' real state).
+          * an already-built CoverageLimitation with a code in
+            `_CALLER_BUILDABLE_COMPLETENESS_CODES` (a genuine business
+            fact the reducer cannot infer from source state alone; every
+            other code is rejected, so a caller can't force e.g. a
+            MODULE_CLASSIFICATION_UNAVAILABLE limitation the reducer
+            never actually checked against modules' real state).
         Final `limitations` preserves this exact order, so a command's
         existing reason ordering survives the migration unchanged.
 
     Status: evaluation_sources (if non-empty) all SOURCE_ABSENT ->
     not_evaluated. Else: any limitation -> partial. Else -> complete.
     """
-    evaluation_sources = tuple(evaluation_sources) if evaluation_sources else ()
+    if isinstance(evaluation_sources, EvaluationRequirement):
+        eval_req = evaluation_sources
+    else:
+        eval_req = EvaluationRequirement(sources=tuple(evaluation_sources) if evaluation_sources else ())
     completeness_checks = list(completeness_checks) if completeness_checks else []
 
-    _validate_build_coverage_report_inputs(sources, evaluation_sources, completeness_checks)
+    _validate_build_coverage_report_inputs(sources, eval_req.sources, completeness_checks)
 
-    if evaluation_sources and all(
-        sources[name].state == SourceState.ABSENT for name in evaluation_sources
+    if eval_req.sources and all(
+        sources[name].state == SourceState.ABSENT for name in eval_req.sources
     ):
-        if len(evaluation_sources) == 1:
-            group_limitation = CoverageLimitation(
-                code=LimitationCode.SOURCE_ABSENT, source=evaluation_sources[0], scope="dump")
-        else:
-            group_limitation = CoverageLimitation(
-                code=LimitationCode.SOURCE_GROUP_ABSENT, source=evaluation_sources[0],
-                related_sources=evaluation_sources)
+        code = eval_req.all_absent_code
+        if code is None:
+            code = (LimitationCode.SOURCE_ABSENT if len(eval_req.sources) == 1
+                     else LimitationCode.SOURCE_GROUP_ABSENT)
+        related = eval_req.sources if len(eval_req.sources) >= 2 else ()
+        group_limitation = CoverageLimitation(
+            code=code, source=eval_req.sources[0], scope="dump", related_sources=related)
         return CoverageReport(status=CoverageStatus.NOT_EVALUATED, sources=sources,
                                limitations=[group_limitation])
 
