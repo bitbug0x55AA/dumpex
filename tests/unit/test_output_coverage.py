@@ -313,6 +313,87 @@ def test_coverage_report_reasons_property_renders_every_limitation_in_order():
     ]
 
 
+# ── CoverageReport.status: closed vocabulary, validated + normalized ────
+
+def test_coverage_report_rejects_invalid_status():
+    with pytest.raises(ValueError, match="unknown coverage status"):
+        CoverageReport(status="bogus")
+
+
+def test_coverage_report_normalizes_bare_string_status():
+    report = CoverageReport(status="complete")
+    assert report.status == CoverageStatus.COMPLETE
+    assert isinstance(report.status, CoverageStatus)
+
+
+# ── build_coverage_report: input validation at the boundary ─────────────
+
+def test_build_coverage_report_rejects_source_absent_in_extra_limitations():
+    # A caller putting SOURCE_ABSENT into extra_limitations for a source
+    # also in completeness_required_sources would duplicate the
+    # reducer's own derived limitation -- rejected outright rather than
+    # silently producing two copies of the same reason.
+    obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
+    with pytest.raises(ValueError, match="SOURCE_ABSENT"):
+        build_coverage_report(
+            {"modules": obs},
+            completeness_required_sources={"modules"},
+            extra_limitations=[CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules")],
+        )
+
+
+def test_build_coverage_report_rejects_source_failed_in_extra_limitations():
+    obs = SourceObservation(name="modules", state=SOURCE_FAILED)
+    with pytest.raises(ValueError, match="SOURCE_FAILED"):
+        build_coverage_report(
+            {"modules": obs},
+            completeness_required_sources={"modules"},
+            extra_limitations=[CoverageLimitation(code=LIMITATION_SOURCE_FAILED, source="modules")],
+        )
+
+
+def test_build_coverage_report_rejects_source_absent_in_extra_limitations_even_without_policy():
+    # The rejection is unconditional -- SOURCE_ABSENT/SOURCE_FAILED are
+    # reserved codes in extra_limitations regardless of whether the
+    # source happens to also be in completeness_required_sources.
+    obs = SourceObservation(name="modules", state=SOURCE_PRESENT, record_count=1)
+    with pytest.raises(ValueError, match="SOURCE_ABSENT"):
+        build_coverage_report(
+            {"modules": obs},
+            extra_limitations=[CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules")],
+        )
+
+
+def test_build_coverage_report_rejects_unknown_source_in_evaluation_sources():
+    obs = SourceObservation(name="modules", state=SOURCE_PRESENT, record_count=1)
+    with pytest.raises(ValueError, match="unknown source"):
+        build_coverage_report({"modules": obs}, evaluation_sources={"nonexistent"})
+
+
+def test_build_coverage_report_rejects_unknown_source_in_completeness_required_sources():
+    obs = SourceObservation(name="modules", state=SOURCE_PRESENT, record_count=1)
+    with pytest.raises(ValueError, match="unknown source"):
+        build_coverage_report({"modules": obs}, completeness_required_sources={"nonexistent"})
+
+
+def test_build_coverage_report_rejects_sources_key_name_mismatch():
+    # sources dict key and SourceObservation.name diverging would let
+    # evaluation_sources/completeness_required_sources silently key off
+    # the wrong observation.
+    obs = SourceObservation(name="modules", state=SOURCE_PRESENT, record_count=1)
+    with pytest.raises(ValueError, match="modules"):
+        build_coverage_report({"wrong_key": obs}, completeness_required_sources={"wrong_key"})
+
+
+def test_build_coverage_report_key_mismatch_still_valid_with_no_policy_refs():
+    # extra_limitations-only usage (e.g. threads' key-mismatch shape)
+    # doesn't reference `sources` by key at all, but the name/key
+    # consistency check still runs against every entry in `sources`.
+    obs = SourceObservation(name="wrong_name", state=SOURCE_PRESENT, record_count=1)
+    with pytest.raises(ValueError, match="wrong_name"):
+        build_coverage_report({"source_a": obs})
+
+
 # ── exit_code_for ────────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("status,expected_code", [

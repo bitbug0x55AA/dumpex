@@ -22,7 +22,7 @@ and the dependency direction is command/domain model -> output adapter
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
-from dumpex.output.coverage import CoverageReport, EXECUTION_COMPLETED
+from dumpex.output.coverage import CoverageReport, EXECUTION_COMPLETED, ExecutionStatus
 
 T = TypeVar("T")
 
@@ -38,3 +38,9 @@ class CommandResult(Generic[T]):
                                                          # migrated command yet -- plumbing
                                                          # for a future one that needs it
     artifacts: list = field(default_factory=list)
+
+    def __post_init__(self):
+        try:
+            self.execution_status = ExecutionStatus(self.execution_status)
+        except ValueError:
+            raise ValueError(f"unknown execution status: {self.execution_status!r}") from None

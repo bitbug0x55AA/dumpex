@@ -224,6 +224,12 @@ class CoverageReport:
     sources: dict = field(default_factory=dict)       # {name: SourceObservation}
     limitations: list = field(default_factory=list)   # list[CoverageLimitation]
 
+    def __post_init__(self):
+        try:
+            self.status = CoverageStatus(self.status)
+        except ValueError:
+            raise ValueError(f"unknown coverage status: {self.status!r}") from None
+
     @property
     def reasons(self) -> list:
         """Backward-compatible flat text list -- exactly today's v2 JSON
@@ -231,6 +237,38 @@ class CoverageReport:
         lets the wire format stay byte-identical while limitations become
         the real, structured source of truth internally."""
         return [render_limitation(l) for l in self.limitations]
+
+
+_RESERVED_EXTRA_LIMITATION_CODES = (LimitationCode.SOURCE_ABSENT, LimitationCode.SOURCE_FAILED)
+
+
+def _validate_build_coverage_report_inputs(sources, evaluation_sources,
+                                            completeness_required_sources, extra_limitations):
+    """Enforces the split between reducer-derived and caller-supplied
+    limitations at the boundary, rather than leaving it as a convention a
+    caller could violate: a caller putting SOURCE_ABSENT/SOURCE_FAILED
+    into `extra_limitations` for a source ALSO in
+    `completeness_required_sources` would recreate the two-sources-of-
+    truth bug this module exists to remove (a duplicate limitation, and a
+    duplicate reason string, for the same fact)."""
+    for key, obs in sources.items():
+        if obs.name != key:
+            raise ValueError(
+                f"sources[{key!r}].name is {obs.name!r} -- the dict key and the "
+                f"SourceObservation's own name must match")
+
+    referenced = evaluation_sources | completeness_required_sources
+    unknown = referenced - sources.keys()
+    if unknown:
+        raise ValueError(f"evaluation_sources/completeness_required_sources reference "
+                          f"unknown source(s) not present in `sources`: {sorted(unknown)}")
+
+    for limitation in extra_limitations:
+        if limitation.code in _RESERVED_EXTRA_LIMITATION_CODES:
+            raise ValueError(
+                f"extra_limitations must not contain {limitation.code.value} "
+                f"(source={limitation.source!r}) -- that limitation kind is derived "
+                f"automatically from completeness_required_sources, never caller-supplied")
 
 
 def _derive_required_source_limitation(source: SourceObservation) -> "CoverageLimitation | None":
@@ -297,6 +335,9 @@ def build_coverage_report(
     evaluation_sources = evaluation_sources or set()
     completeness_required_sources = completeness_required_sources or set()
     extra_limitations = list(extra_limitations) if extra_limitations else []
+
+    _validate_build_coverage_report_inputs(
+        sources, evaluation_sources, completeness_required_sources, extra_limitations)
 
     derived = []
     for name in completeness_required_sources:

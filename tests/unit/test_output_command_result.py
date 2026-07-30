@@ -3,9 +3,13 @@ generic per-command return type replacing the ad hoc positional tuple
 every recon command used to return."""
 import inspect
 
+import pytest
+
 import dumpex.output.command_result as command_result_mod
 from dumpex.output.command_result import CommandResult
-from dumpex.output.coverage import CoverageReport, COVERAGE_COMPLETE, EXECUTION_COMPLETED
+from dumpex.output.coverage import (
+    CoverageReport, COVERAGE_COMPLETE, EXECUTION_COMPLETED, ExecutionStatus,
+)
 
 
 def test_command_result_module_does_not_import_envelope_or_hunt():
@@ -48,3 +52,18 @@ def test_command_result_mutable_defaults_are_not_shared_between_instances():
     r2 = CommandResult(kind="b", records=[], coverage=CoverageReport(status=COVERAGE_COMPLETE))
     r1.diagnostics.append("x")
     assert r2.diagnostics == []
+
+
+def test_command_result_rejects_invalid_execution_status():
+    with pytest.raises(ValueError, match="unknown execution status"):
+        CommandResult(kind="modules", records=[],
+                      coverage=CoverageReport(status=COVERAGE_COMPLETE),
+                      execution_status="bogus")
+
+
+def test_command_result_normalizes_bare_string_execution_status():
+    result = CommandResult(kind="modules", records=[],
+                            coverage=CoverageReport(status=COVERAGE_COMPLETE),
+                            execution_status="partial")
+    assert result.execution_status == ExecutionStatus.PARTIAL
+    assert isinstance(result.execution_status, ExecutionStatus)
