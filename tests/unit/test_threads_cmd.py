@@ -90,6 +90,22 @@ def test_collect_threads_present_but_empty_streams_is_complete():
     assert thread_info_is_degraded(result.coverage) is False
 
 
+def test_collect_threads_base_absent_but_info_stream_present_empty_is_complete():
+    # ThreadListStream is entirely absent, but ThreadInfoListStream IS
+    # present and confirms there are genuinely zero threads -- nothing
+    # was actually affected by ThreadListStream's absence (0 threads x
+    # missing SuspendCount/Priority/TEB = no real gap), so this must be
+    # 'complete', not 'partial' with a nonsensical "0 thread(s) present
+    # in ThreadInfoListStream but missing from ThreadListStream" reason.
+    mf = FakeMF()
+    mf.thread_info = FakeStream([], "infos")
+    mf.modules = FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules")
+    result = collect_threads(mf)
+    assert result.records == []
+    assert result.coverage.status == "complete"
+    assert result.coverage.reasons == []
+
+
 def test_collect_threads_neither_stream_present_is_not_evaluated():
     # Neither ThreadListStream nor ThreadInfoListStream present at all --
     # must not be indistinguishable from "complete, zero threads."

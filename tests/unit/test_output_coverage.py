@@ -282,6 +282,18 @@ def test_source_requirement_counterpart_variant_renders_and_is_structured():
     assert report.reasons == ["2 widget(s) present in b but missing from a (x/y unavailable for those)"]
 
 
+def test_source_requirement_counterpart_variant_with_zero_affected_count_is_suppressed():
+    # If the counterpart genuinely has zero entries, nothing was actually
+    # affected by this source's absence -- no real coverage gap, so no
+    # limitation at all (not a "0 thing(s) present..." nonsense reason).
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_PRESENT_EMPTY, record_count=0)
+    req = SourceRequirement("a", counterpart_source="b", affected_count=0)
+    report = build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
+    assert report.status == COVERAGE_COMPLETE
+    assert report.limitations == []
+
+
 def test_source_requirement_dedicated_code_variant():
     obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
     req = SourceRequirement("modules", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE)
@@ -414,6 +426,63 @@ def test_build_coverage_report_rejects_unknown_counterpart_source_on_prebuilt_li
                                      counterpart_source="nonexistent")
     with pytest.raises(ValueError, match="unknown source"):
         build_coverage_report({"a": obs_a}, completeness_checks=[limitation])
+
+
+def test_build_coverage_report_rejects_key_mismatch_with_absent_source():
+    # A mismatch claims both sides are genuinely present but disagree on
+    # keys -- if `source` is actually ABSENT, that's not a mismatch, it's
+    # an absence, and must go through SourceRequirement auto-derivation
+    # (the exact bug the threads-absent fix closed) instead of being
+    # smuggled in as a hand-built SOURCE_KEY_MISMATCH.
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                                     counterpart_source="b", affected_count=1)
+    with pytest.raises(ValueError, match="a.*absent"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[limitation])
+
+
+def test_build_coverage_report_rejects_key_mismatch_with_failed_source():
+    obs_a = SourceObservation(name="a", state=SOURCE_FAILED)
+    obs_b = SourceObservation(name="b", state=SOURCE_PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                                     counterpart_source="b")
+    with pytest.raises(ValueError, match="a.*failed"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[limitation])
+
+
+def test_build_coverage_report_rejects_key_mismatch_with_absent_counterpart():
+    obs_a = SourceObservation(name="a", state=SOURCE_PRESENT, record_count=1)
+    obs_b = SourceObservation(name="b", state=SOURCE_ABSENT)
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                                     counterpart_source="b", affected_count=1)
+    with pytest.raises(ValueError, match="b.*absent"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[limitation])
+
+
+def test_build_coverage_report_rejects_key_mismatch_with_zero_affected_count():
+    obs_a = SourceObservation(name="a", state=SOURCE_PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                                     affected_count=0)
+    with pytest.raises(ValueError, match="affected_count"):
+        build_coverage_report({"a": obs_a}, completeness_checks=[limitation])
+
+
+def test_build_coverage_report_rejects_key_mismatch_with_negative_affected_count():
+    obs_a = SourceObservation(name="a", state=SOURCE_PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                                     affected_count=-1)
+    with pytest.raises(ValueError, match="affected_count"):
+        build_coverage_report({"a": obs_a}, completeness_checks=[limitation])
+
+
+def test_build_coverage_report_accepts_key_mismatch_with_none_affected_count():
+    # None ("some item(s)...") remains legitimate -- only a given
+    # non-positive count is rejected.
+    obs_a = SourceObservation(name="a", state=SOURCE_PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a")
+    report = build_coverage_report({"a": obs_a}, completeness_checks=[limitation])
+    assert report.reasons == ["some item(s) missing from a"]
 
 
 # ── multi-source key mismatch (the threads shape) ────────────────────────

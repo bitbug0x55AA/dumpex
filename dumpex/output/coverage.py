@@ -432,7 +432,9 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
                           f"unknown source(s) not present in `sources`: {sorted(unknown)}")
 
     for check in completeness_checks:
-        if isinstance(check, CoverageLimitation) and check.code not in _CALLER_BUILDABLE_COMPLETENESS_CODES:
+        if not isinstance(check, CoverageLimitation):
+            continue
+        if check.code not in _CALLER_BUILDABLE_COMPLETENESS_CODES:
             raise ValueError(
                 f"completeness_checks must not contain a pre-built {check.code.value} "
                 f"CoverageLimitation (source={check.source!r}) -- only "
@@ -440,12 +442,37 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
                 f"anything describing source absence must be a bare source name or "
                 f"SourceRequirement instead, so it's derived from the SourceObservation "
                 f"itself rather than hand-asserted")
+        # A SOURCE_KEY_MISMATCH claims two sources are both genuinely
+        # present but disagree on keys -- if either side is actually
+        # ABSENT/FAILED, that's not a mismatch, it's an absence, and must
+        # go through SourceRequirement auto-derivation instead (see the
+        # threads-absent fix this guards against regressing).
+        for side, name in (("source", check.source), ("counterpart_source", check.counterpart_source)):
+            if name is None:
+                continue
+            if sources[name].state in (SourceState.ABSENT, SourceState.FAILED):
+                raise ValueError(
+                    f"SOURCE_KEY_MISMATCH.{side}={name!r} is {sources[name].state.value} -- "
+                    f"a key mismatch requires both sides to be present; an absent/failed source "
+                    f"must be expressed via a bare source name or SourceRequirement instead")
+        if check.affected_count is not None and check.affected_count <= 0:
+            raise ValueError(
+                f"SOURCE_KEY_MISMATCH.affected_count must be None or > 0, "
+                f"got {check.affected_count!r} (source={check.source!r})")
 
 
 def _derive_required_source_limitation(obs: SourceObservation,
                                         req: "SourceRequirement | None") -> "CoverageLimitation | None":
     req = req or SourceRequirement(source=obs.name)
     if obs.state == SourceState.ABSENT:
+        if req.counterpart_source and req.affected_count == 0:
+            # The counterpart genuinely has zero entries (e.g. threads.py's
+            # ThreadInfoListStream present but reporting no real threads) --
+            # nothing was actually affected by this source's absence, so
+            # there is no real coverage gap to report. Without this, the
+            # rendered text would be a nonsensical "0 thing(s) present in
+            # COUNTERPART but missing from SOURCE".
+            return None
         return CoverageLimitation(code=req.absent_code, source=obs.name,
                                    scope=req.scope or "dump",
                                    unavailable_fields=req.unavailable_fields,
