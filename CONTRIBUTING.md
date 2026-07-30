@@ -58,6 +58,15 @@ cases.
   implementation detail.
 - Do not add real case dumps or unlicensed signatures to the repository.
 
+## Licensing contributions
+
+Except where a file clearly states otherwise, dumpex is licensed under the
+Mozilla Public License 2.0 (`MPL-2.0`). By submitting a contribution, you agree
+to license it under MPL-2.0 and represent that you have sufficient rights to
+do so. Do not submit third-party code, signatures, or other material unless
+its license is documented and compatible with the project; add required
+attribution and license text to `CREDITS` and `THIRD_PARTY_NOTICES`.
+
 ## Rules and package data
 
 The canonical packaged resources are:

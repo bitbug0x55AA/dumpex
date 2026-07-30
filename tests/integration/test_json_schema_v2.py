@@ -206,7 +206,7 @@ def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
             "schema_version": "2.0",
-            "tool": {"name": "dumpex", "version": "2.1.0"},
+            "tool": {"name": "dumpex", "version": "3.0.0"},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
             "evidence": [{"id": "primary", "role": "primary"}],

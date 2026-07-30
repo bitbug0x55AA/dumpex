@@ -1,88 +1,109 @@
 CREDITS
 =======
 
-Dumpex — Windows Minidump Analysis & DFIR Triage Tool
+dumpex — Windows Minidump Analysis & DFIR Triage Tool
 Copyright (c) 2026 Juana Fan (Tao Fan)
 
-
-This project incorporates work from the following sources. This file is the
-project's authoritative attribution and nature-of-use record.
-
-
-────────────────────────────────────────────────────────────────────────────────
-Didier Stevens — 1768.py
-────────────────────────────────────────────────────────────────────────────────
-
-  Description : Cobalt Strike beacon configuration analyser
-  Author      : Didier Stevens <https://blog.didierstevens.com/>
-  URL         : https://github.com/DidierStevens/DidierStevensSuite
-  License     : Public Domain
-                "Source code put in the public domain by Didier Stevens,
-                 no Copyright"
-
-  Used in     : dumpex/hunt/cs_beacon/scanner.py (XOR marker search, segment/
-                candidate scanning algorithm)
-                dumpex/hunt/cs_beacon/parser.py (TLV parser, Malleable C2
-                instruction decoder, CS version estimator, config sanity check)
-                dumpex/hunt/cs_beacon/schema.py (config field identifier table,
-                beacon/proxy type lookup tables)
-                dumpex/rules_pkg/data/yara/cs_indicators.yar
-                (CS_Beacon_Config_XOR69,
-                CS_Beacon_Config_XOR2E)
-  Used in     : dumpex/hunt/encoding/sleep_mask.py (Layer 0 — _scan_sleep_mask and helpers)
-                [cs-analyze-processdump.py and 1768.py]
-
-  Nature of use:
-    The beacon config detection algorithm (XOR marker search, segment/candidate scanning), TLV field parser, Malleable C2 instruction decoder, config field identifier table, beacon/proxy type lookup tables, CS version estimator, and config sanity check logic in dumpex/hunt/cs_beacon/ are adapted from the corresponding functions in 1768.py. The XOR-encoded signature byte patterns in cs_indicators.yar are derived from the same work. dumpex/hunt/cs_beacon/der.py's PublicKey field validation (full DER structure/length checking against the rsaEncryption OID) is Dumpex's own hardening added on top of 1768.py's simpler "308" hex-prefix check — it is not itself derived from 1768.py.
+This file records the provenance and nature of use of third-party material.
+Required third-party license text is reproduced in THIRD_PARTY_NOTICES.
 
 
-────────────────────────────────────────────────────────────────────────────────
+Didier Stevens — 1768.py and cs-analyze-processdump.py
+------------------------------------------------------
+
+Description
+  Cobalt Strike beacon configuration analysis and Sleep Mask XOR-key recovery.
+
+Author
+  Didier Stevens <https://blog.didierstevens.com/>
+
+Sources
+  https://github.com/DidierStevens/DidierStevensSuite/blob/master/1768.py
+  https://github.com/DidierStevens/DidierStevensSuite/blob/master/cs-analyze-processdump.py
+
+License
+  Public Domain:
+  "Source code put in the public domain by Didier Stevens, no Copyright"
+
+Used in
+  dumpex/hunt/cs_beacon/scanner.py
+  dumpex/hunt/cs_beacon/parser.py
+  dumpex/hunt/cs_beacon/schema.py
+  dumpex/hunt/encoding/sleep_mask.py
+  dumpex/rules_pkg/data/yara/cs_indicators.yar
+
+Nature of use
+  The beacon configuration candidate scan, TLV parser, field tables, Malleable
+  C2 instruction decoder, version estimator, sanity checks, and XOR-encoded
+  configuration markers are adapted from 1768.py.
+
+  The 13-byte Sleep Mask XOR-key recovery approach and validation marker are
+  adapted from cs-analyze-processdump.py. dumpex adds bounded scanning,
+  coverage reporting, classification, and integration with its own hunt model.
+
+  dumpex/hunt/cs_beacon/der.py adds full DER structure and length validation
+  against the rsaEncryption OID; that hardening is original to dumpex rather
+  than adapted from the simpler prefix check in 1768.py.
+
+
 Elastic Security
-────────────────────────────────────────────────────────────────────────────────
+----------------
 
-  Description : Public research on detecting Cobalt Strike with memory
-                signatures, including Sleep Mask deobfuscation byte patterns
-  Author      : Elastic Security
-  URL         : https://www.elastic.co/blog/detecting-cobalt-strike-with-memory-signatures
-  License     : Published as public security research
+Description
+  Public research explaining Cobalt Strike in-memory signatures and Sleep Mask
+  behavior.
 
-  Used in     : dumpex/rules_pkg/data/yara/cs_indicators.yar
-                (CS_SleepMask_64bit,
-                CS_SleepMask_32bit)
+Author
+  Elastic Security
 
-  Nature of use:
-    The byte sequences in the CS_SleepMask_64bit and CS_SleepMask_32bit YARA rules are based on signatures published in the referenced blog post.
+Source
+  https://www.elastic.co/blog/detecting-cobalt-strike-with-memory-signatures
+
+Nature of use
+  Contextual research reference only. dumpex does not distribute the x86 or
+  x64 YARA byte signatures published in the article because the article does
+  not state an open-source license for those signatures.
 
 
-────────────────────────────────────────────────────────────────────────────────
 NVISO Labs
-────────────────────────────────────────────────────────────────────────────────
+----------
 
-  Description : Public research series on Cobalt Strike beacon memory
-                structures and config extraction
-  Author      : NVISO Labs
-  URL         : https://blog.nviso.eu/
-  License     : Published as public security research
+Description
+  Public research series on Cobalt Strike beacon memory structures and
+  configuration extraction.
 
-  Used in     : dumpex/hunt/cs_beacon/ (contextual reference)
+Author
+  NVISO Labs
 
-  Nature of use:
-    The NVISO Labs blog series informed the overall design approach for Cobalt Strike beacon config extraction in dumpex/hunt/cs_beacon/. No code or signatures were directly copied.
+Source
+  https://blog.nviso.eu/
+
+Nature of use
+  Contextual research reference. No NVISO code or signatures are copied into
+  dumpex.
 
 
-────────────────────────────────────────────────────────────────────────────────
 Stephen Fewer — ReflectiveDLLInjection
-────────────────────────────────────────────────────────────────────────────────
+--------------------------------------
 
-  Description : Reflective DLL injection proof-of-concept; source of the
-                well-known LoadLibraryA and GetProcAddress hash constants
-                used in reflective loaders
-  Author      : Stephen Fewer
-  URL         : https://github.com/stephenfewer/ReflectiveDLLInjection
-  License     : Public Domain
+Description
+  Reflective DLL injection proof of concept and the source of well-known
+  LoadLibraryA and GetProcAddress hash constants used by reflective loaders.
 
-  Used in     : dumpex/rules_pkg/data/yara/suspicious_memory.yar
-                (Reflective_Loader_Signature)
+Author
+  Stephen Fewer
 
-  Nature of use:
-    The hash constant values (0x4EC20EEC for LoadLibraryA, 0x7CB89778 for GetProcAddress) used in the Reflective_Loader_Signature YARA rule are derived from the public ReflectiveDLLInjection implementation.
+Source
+  https://github.com/stephenfewer/ReflectiveDLLInjection
+
+License
+  BSD 3-Clause. The complete notice is reproduced in THIRD_PARTY_NOTICES.
+
+Used in
+  dumpex/rules_pkg/data/yara/suspicious_memory.yar
+  (Reflective_Loader_Signature)
+
+Nature of use
+  The hash constants 0x4EC20EEC (LoadLibraryA) and 0x7CB89778
+  (GetProcAddress) are derived from the ReflectiveDLLInjection
+  implementation.

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. v2.0.0)'
+        description: 'Release version (e.g. v3.0.0)'
         required: true
       prerelease:
         description: 'Mark as pre-release?'
@@ -24,12 +24,9 @@ jobs:
           python-version: '3.12'
 
       - name: Validate release version matches package version
-        # The workflow_dispatch input is free-text — nothing before this
-        # stopped someone from typing "v2.1.0" while pyproject.toml and
-        # dumpex/__init__.py were still stuck at 2.0.0, tagging a release
-        # whose artifacts (wheel/sdist filenames, meta.tool.version in
-        # --json output) silently disagreed with the tag. Fail fast here
-        # instead of shipping that mismatch.
+        # The workflow_dispatch input is free text. Validate it before
+        # tagging so the release name, wheel/sdist filenames, and
+        # meta.tool.version in --json output cannot silently disagree.
         shell: pwsh
         run: |
           $inputVersion = "${{ github.event.inputs.version }}"
@@ -97,6 +94,18 @@ jobs:
           python -c "import json; json.load(open('dumpex/schemas/dumpex-output-v1.1.schema.json', encoding='utf-8'))"
           Copy-Item dumpex/schemas/dumpex-output-v1.1.schema.json dist/dumpex-output-v1.1.schema.json
 
+      - name: Stage license, source, and dependency notices
+        shell: pwsh
+        run: |
+          Copy-Item LICENSE dist/LICENSE
+          Copy-Item NOTICE dist/NOTICE
+          Copy-Item THIRD_PARTY_NOTICES dist/THIRD_PARTY_NOTICES
+          Copy-Item CREDITS dist/CREDITS
+          python scripts/collect_dependency_licenses.py dist/third-party-licenses
+          Compress-Archive `
+            -Path dist/third-party-licenses/* `
+            -DestinationPath dist/dumpex-third-party-licenses.zip
+
       - name: Create Release and Upload EXE
         uses: softprops/action-gh-release@v2
         with:
@@ -107,3 +116,8 @@ jobs:
           files: |
             dist/dumpex.exe
             dist/dumpex-output-v1.1.schema.json
+            dist/LICENSE
+            dist/NOTICE
+            dist/THIRD_PARTY_NOTICES
+            dist/CREDITS
+            dist/dumpex-third-party-licenses.zip

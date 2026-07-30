@@ -193,8 +193,9 @@ for the test layout and optional private-corpus workflow.
 ## Acknowledgements
 
 dumpex incorporates and references public defensive research by Didier
-Stevens, Elastic Security, NVISO Labs, and Stephen Fewer. Full attribution and
-license details are maintained in [`CREDITS`](CREDITS).
+Stevens, Elastic Security, NVISO Labs, and Stephen Fewer. Full provenance is
+maintained in [`CREDITS`](CREDITS), with required license text in
+[`THIRD_PARTY_NOTICES`](THIRD_PARTY_NOTICES).
 
 ## Disclaimer
 
@@ -208,4 +209,7 @@ Developed by Juana (Tao Fan), a cyber security analyst specializing in DFIR,
 threat hunting, operational malware analysis, and detection engineering.
 Connect on [LinkedIn](https://www.linkedin.com/in/tao-f-272929229).
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [Mozilla Public License 2.0](LICENSE). Modifications to
+MPL-covered files must remain available under MPL-2.0 when distributed; those
+files may still be combined with separate proprietary files in a larger work.
+See [`NOTICE`](NOTICE) for the source-code offer and license-transition note.

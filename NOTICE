@@ -1,0 +1,30 @@
+dumpex source-code and licensing notice
+=======================================
+
+Copyright (c) 2026 Juana Fan (Tao Fan)
+
+Except for material identified in THIRD_PARTY_NOTICES, the Source Code Form
+of dumpex is subject to the Mozilla Public License, version 2.0. A copy of the
+license is provided in LICENSE.
+
+The corresponding source code for an official release is available from the
+tag matching that release at:
+
+    https://github.com/bitbug0x55AA/dumpex
+
+GitHub release pages also provide source archives for their associated tags.
+
+License transition
+------------------
+
+Versions and commits published before the repository's MPL-2.0 transition
+remain available under the MIT terms that accompanied those versions and
+commits. This does not make the current MPL-covered changes available under
+MIT.
+
+Third-party material
+--------------------
+
+Required notices for incorporated third-party material are provided in
+THIRD_PARTY_NOTICES. Research provenance and non-code acknowledgements are
+recorded in CREDITS.

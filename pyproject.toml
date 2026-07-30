@@ -1,12 +1,18 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "dumpex"
-version = "2.1.0"
+version = "3.0.0"
 description = "Minidump memory extractor and DFIR triage tool"
+license = "MPL-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "CREDITS"]
 requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+]
 dependencies = [
     "minidump",
     "colorama>=0.4.6",
@@ -21,6 +27,7 @@ dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "jsonschema>=4.0",
+    "packaging>=24.0",
 ]
 
 [project.scripts]

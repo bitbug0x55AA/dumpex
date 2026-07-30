@@ -4,9 +4,10 @@ Verifies that a `pip install dist/*.whl` (or the sdist equivalent) is
 actually self-contained: the installed package is really being imported
 from site-packages (not shadowed by a same-named source directory), its
 packaged resources (rules.yaml, the YARA rule files, the JSON output
-schema) are readable via importlib.resources, the rules loader picks up
-the packaged rules.yaml rather than silently falling back to the
-built-in emergency defaults, and the CLI entry point runs.
+schema) are readable via importlib.resources, its MPL-2.0 metadata and
+license/notice files are present, the rules loader picks up the packaged
+rules.yaml rather than silently falling back to the built-in emergency
+defaults, and the CLI entry point runs.
 
 Deliberately NOT a pytest test: it must run standalone, with no pytest
 and no dependency on this repository's source tree, from a fresh venv
@@ -54,6 +55,24 @@ def main() -> None:
                                    or install_path.startswith(repo_root + os.sep)):
         _fail(f"dumpex imported from inside the repo checkout ({repo_root}), "
               f"not from the installed wheel/sdist: {install_path}")
+
+    import importlib.metadata
+
+    distribution = importlib.metadata.distribution("dumpex")
+    if distribution.metadata.get("License-Expression") != "MPL-2.0":
+        _fail("installed package metadata does not declare License-Expression: MPL-2.0")
+
+    required_notice_files = {"LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "CREDITS"}
+    installed_notice_files = {
+        os.path.basename(str(file))
+        for file in (distribution.files or ())
+        if ".dist-info/licenses/" in str(file).replace("\\", "/")
+    }
+    missing_notice_files = required_notice_files - installed_notice_files
+    if missing_notice_files:
+        _fail(f"installed package is missing license/notice files: "
+              f"{sorted(missing_notice_files)}")
+    print(f"packaged license/notice files: {sorted(required_notice_files)}")
 
     import importlib.resources
 
