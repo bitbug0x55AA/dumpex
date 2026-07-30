@@ -108,8 +108,9 @@ def test_threads_normal_validates(validator):
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")
     mf.modules = FakeStream([Module(0x7ffe0000, 0x1000, "legit.dll")], "modules")
-    records, status, reasons, *_ = collect_threads(mf)
-    doc = _validate(validator, "threads", records, status, reasons)
+    result = collect_threads(mf)
+    doc = _validate(validator, "threads", result.records, result.coverage.status,
+                     result.coverage.reasons)
     assert doc["result"]["coverage"]["status"] == "complete"
     assert doc["result"]["data"]["records"][0]["module_context"] == "resolved"
 
@@ -117,16 +118,17 @@ def test_threads_normal_validates(validator):
 def test_threads_degraded_is_partial_and_validates(validator):
     mf = FakeMF()
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")   # no thread_info stream
-    records, status, reasons, *_ = collect_threads(mf)
-    assert status == "partial"
-    doc = _validate(validator, "threads", records, status, reasons)
+    result = collect_threads(mf)
+    assert result.coverage.status == "partial"
+    doc = _validate(validator, "threads", result.records, result.coverage.status,
+                     result.coverage.reasons)
     assert doc["result"]["coverage"]["status"] == "partial"
     assert doc["result"]["coverage"]["reasons"]
 
 
 def test_threads_empty_validates(validator):
-    records, status, reasons, *_ = collect_threads(FakeMF())
-    _validate(validator, "threads", records, status, reasons)
+    result = collect_threads(FakeMF())
+    _validate(validator, "threads", result.records, result.coverage.status, result.coverage.reasons)
 
 
 # ── sysinfo ────────────────────────────────────────────────────────────

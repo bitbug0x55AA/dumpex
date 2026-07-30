@@ -126,11 +126,22 @@ class LimitationCode(str, Enum):
     SOURCE_KEY_MISMATCH = "SOURCE_KEY_MISMATCH"   # e.g. two sources describing the
                                                     # same entities disagree on which
                                                     # keys (TIDs, names, ...) exist
+    CUSTOM              = "CUSTOM"   # pre-composed text a command builds itself, for
+                                       # a reason that doesn't fit the structured
+                                       # templates above -- render_limitation() returns
+                                       # `detail` verbatim. A deliberate, narrow escape
+                                       # hatch (one specific enum value, not "any code
+                                       # goes"): use it when a command's existing,
+                                       # already-shipped wording is more specific than
+                                       # the generic templates can reproduce (e.g.
+                                       # threads.py's degraded/TID-mismatch reasons),
+                                       # not as a way to skip writing a proper template.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
 LIMITATION_SOURCE_KEY_MISMATCH = LimitationCode.SOURCE_KEY_MISMATCH
+LIMITATION_CUSTOM              = LimitationCode.CUSTOM
 
 
 @dataclass(frozen=True)
@@ -155,6 +166,8 @@ class CoverageLimitation:
         object.__setattr__(self, "code", LimitationCode(self.code))
         if not self.source:
             raise ValueError("CoverageLimitation.source must be a non-empty string")
+        if self.code == LimitationCode.CUSTOM and not self.detail:
+            raise ValueError("CoverageLimitation(code=CUSTOM) requires a non-empty detail")
         if not isinstance(self.unavailable_fields, tuple):
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
 
@@ -200,6 +213,9 @@ def render_limitation(limitation: CoverageLimitation) -> str:
                    if limitation.unavailable_fields else "")
         scope = limitation.scope or "item"
         return f"{count} {scope}(s) missing from {name}{fields}"
+
+    if code == LimitationCode.CUSTOM:
+        return limitation.detail   # non-empty, enforced in CoverageLimitation.__post_init__
 
     raise AssertionError(f"unhandled limitation code: {code!r}")   # unreachable: LimitationCode is closed
 

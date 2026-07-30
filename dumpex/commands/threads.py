@@ -3,11 +3,14 @@ import ntpath
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import get_modules, get_thread_infos, addr_to_module
 from dumpex.core.pe_utils import _filetime_to_str, _dumpflags_str, _duration_100ns_to_str
-from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.output.records import (
     ThreadRecord, hex_address,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
+from dumpex.output.coverage import (
+    observe_source, build_coverage_report, CoverageLimitation, LimitationCode, SourceState,
+)
+from dumpex.output.command_result import CommandResult
 
 _NEITHER_STREAM_REASON = "Neither ThreadListStream nor ThreadInfoListStream present in this dump"
 _DEGRADED_REASON = (
@@ -53,14 +56,39 @@ class _RawThreadInfo:
         self.DumpFlags     = None
 
 
-def collect_threads(mf):
+def thread_info_is_degraded(coverage) -> bool:
+    """True when ThreadInfoListStream itself is absent while the base
+    ThreadListStream is present -- the common, expected "not captured
+    with MiniDumpWithThreadInfo" case, tracked separately from a per-TID
+    mismatch between two streams that ARE both present (see
+    collect_threads' docstring). Derived from the CoverageReport's own
+    per-source state rather than threaded through as a separate return
+    value, so collect_threads' return type stays a plain CommandResult."""
+    return (coverage.sources["thread_info"].state == SourceState.ABSENT
+            and coverage.sources["threads"].state != SourceState.ABSENT)
+
+
+def thread_records_have_times(records) -> bool:
+    """True if any built record carries a create_time. Equivalent to
+    collect_threads' internal has_times (which gates whether
+    create_time/exit_time get populated AT ALL for real, non-placeholder
+    entries) once records already exist: has_times is True iff at least
+    one real entry had a truthy CreateTime, in which case every real
+    entry's create_time is a formatted string, not None -- so this can be
+    recovered from the records themselves instead of a separate return
+    value."""
+    return any(rec.create_time is not None for rec in records)
+
+
+def collect_threads(mf) -> CommandResult:
     """
-    Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons, degraded, has_times) -- degraded/has_times are
-    extra rendering context specific to this command (whether
-    ThreadInfoListStream was present, and whether any thread reports
-    timing fields at all), consumed only by render_threads_console;
-    cli.py only ever sees the first three (see cmd_threads below).
+    Pure data, no printing. Returns a CommandResult[ThreadRecord].
+    `degraded`/`has_times` -- extra rendering context specific to this
+    command (whether ThreadInfoListStream was present, and whether any
+    thread reports timing fields at all), consumed only by
+    render_threads_console -- are derived from the result via
+    thread_info_is_degraded()/thread_records_have_times() rather than
+    returned separately (see cmd_threads below).
 
     ThreadListStream and ThreadInfoListStream are two independent,
     independently-optional streams describing the same threads. Neither
@@ -74,8 +102,18 @@ def collect_threads(mf):
     disagree. Records are built from the UNION of both streams' TIDs;
     whichever stream is missing a given TID has its own fields filled in
     via _RawThreadInfo's None placeholders for that thread specifically,
-    and the mismatch count is a coverage_reason -- not silently absorbed
+    and the mismatch count is a coverage reason -- not silently absorbed
     into either "complete" or a single all-or-nothing 'degraded' flag.
+
+    Every reason string here is built with LimitationCode.CUSTOM rather
+    than the generic SOURCE_ABSENT/SOURCE_KEY_MISMATCH templates in
+    dumpex.output.coverage: this command's existing, already-shipped
+    wording (e.g. "Neither ThreadListStream nor ThreadInfoListStream
+    present in this dump") is more specific than those generic templates
+    can reproduce, and migrating onto the shared model must not change
+    JSON output. completeness_required_sources is therefore left empty --
+    the reducer never auto-derives a limitation here, every one is
+    supplied via extra_limitations instead.
     """
     base_threads_present = bool(mf.threads)
     info_stream_present  = bool(mf.thread_info)
@@ -85,11 +123,23 @@ def collect_threads(mf):
     real_infos_by_tid = {ti.ThreadId: ti for ti in get_thread_infos(mf)}
     modules = get_modules(mf)
 
+    threads_source      = observe_source("threads", present=base_threads_present,
+                                          items=list(threads_by_tid.values()))
+    thread_info_source  = observe_source("thread_info", present=info_stream_present,
+                                          items=list(real_infos_by_tid.values()))
+    modules_source       = observe_source("modules", present=modules_available, items=modules)
+    sources = {"threads": threads_source, "thread_info": thread_info_source, "modules": modules_source}
+
     if not base_threads_present and not info_stream_present:
         # Neither stream exists at all -- there is no thread data of any
         # kind to report, not "0 threads, fully evaluated."
-        coverage_status = derive_coverage_status(evaluated=False, complete=False)
-        return [], coverage_status, [_NEITHER_STREAM_REASON], False, False
+        coverage = build_coverage_report(
+            sources,
+            evaluation_sources={"threads", "thread_info"},
+            extra_limitations=[CoverageLimitation(code=LimitationCode.CUSTOM, source="threads",
+                                                   detail=_NEITHER_STREAM_REASON)],
+        )
+        return CommandResult(kind="threads", records=[], coverage=coverage, summary={"count": 0})
 
     # Whole-stream absence (the common, expected "not captured with
     # MiniDumpWithThreadInfo" case) is still tracked separately from a
@@ -199,18 +249,29 @@ def collect_threads(mf):
             teb=hex_address(teb) if teb else None,
         ))
 
-    gaps = []
+    extra_limitations = []
     if degraded:
-        gaps.append(_DEGRADED_REASON)
+        extra_limitations.append(CoverageLimitation(code=LimitationCode.CUSTOM, source="thread_info",
+                                                      detail=_DEGRADED_REASON))
     if missing_from_info:
-        gaps.append(_missing_from_info_reason(missing_from_info))
+        extra_limitations.append(CoverageLimitation(
+            code=LimitationCode.CUSTOM, source="thread_info",
+            detail=_missing_from_info_reason(missing_from_info)))
     if missing_from_base:
-        gaps.append(_missing_from_base_reason(missing_from_base))
+        extra_limitations.append(CoverageLimitation(
+            code=LimitationCode.CUSTOM, source="threads",
+            detail=_missing_from_base_reason(missing_from_base)))
     if not modules_available:
-        gaps.append(_MODULES_UNAVAILABLE_REASON)
+        extra_limitations.append(CoverageLimitation(code=LimitationCode.CUSTOM, source="modules",
+                                                      detail=_MODULES_UNAVAILABLE_REASON))
 
-    coverage_status = derive_coverage_status(evaluated=True, complete=not gaps)
-    return records, coverage_status, gaps, degraded, has_times
+    coverage = build_coverage_report(
+        sources,
+        evaluation_sources={"threads", "thread_info"},
+        extra_limitations=extra_limitations,
+    )
+    return CommandResult(kind="threads", records=records, coverage=coverage,
+                          summary={"count": len(records)})
 
 
 def render_threads_console(records, degraded: bool, has_times: bool,
@@ -306,7 +367,9 @@ def render_threads_console(records, degraded: bool, has_times: bool,
     print(f"\n{GREEN(f'[+] {len(records)} thread(s).')}")
 
 
-def cmd_threads(mf):
-    records, coverage_status, coverage_reasons, degraded, has_times = collect_threads(mf)
-    render_threads_console(records, degraded, has_times, coverage_reasons)
-    return records, coverage_status, coverage_reasons
+def cmd_threads(mf) -> CommandResult:
+    result = collect_threads(mf)
+    degraded  = thread_info_is_degraded(result.coverage)
+    has_times = thread_records_have_times(result.records)
+    render_threads_console(result.records, degraded, has_times, result.coverage.reasons)
+    return result
