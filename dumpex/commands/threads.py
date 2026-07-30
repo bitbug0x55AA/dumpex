@@ -250,12 +250,26 @@ def collect_threads(mf) -> CommandResult:
 
     # Ordered exactly like the reasons this command has always shipped:
     # thread_info's own absence (if any) first, then either TID-mismatch
-    # direction (if any), then modules' absence last. thread_info/modules
-    # entries are SourceRequirements -- the reducer derives their
-    # limitation (or none at all) from the SourceObservations built
-    # above; only the TID-mismatch entries are hand-built CoverageLimitations,
-    # since a cross-source key mismatch isn't something the reducer can
-    # infer from source state alone.
+    # direction (if any), then threads' own absence (if any -- same
+    # position missing_from_base's reason used to occupy, since the two
+    # are mutually exclusive: missing_from_base only fires when threads
+    # is genuinely PRESENT but partially mismatched), then modules'
+    # absence last.
+    #
+    # thread_info/threads/modules entries are SourceRequirements -- the
+    # reducer derives their limitation (or none at all) from the
+    # SourceObservations built above; only the TID-mismatch entries are
+    # hand-built CoverageLimitations, since a cross-source key mismatch
+    # isn't something the reducer can infer from source state alone.
+    #
+    # missing_from_base is gated on base_threads_present specifically so
+    # a fully-absent ThreadListStream never renders as SOURCE_KEY_MISMATCH
+    # (a PARTIAL mismatch between two present sources) -- it goes through
+    # the "threads" SourceRequirement below instead, which the reducer
+    # only fires when threads.state is genuinely ABSENT, producing the
+    # correct SOURCE_ABSENT code with the SAME "N present in
+    # ThreadInfoListStream but missing from ThreadListStream (...)"
+    # wording via counterpart_source/affected_count/unavailable_fields.
     completeness_checks = [
         SourceRequirement("thread_info", absent_code=LimitationCode.SOURCE_ABSENT,
                            unavailable_fields=_THREAD_INFO_ONLY_FIELDS,
@@ -266,11 +280,14 @@ def collect_threads(mf) -> CommandResult:
             code=LimitationCode.SOURCE_KEY_MISMATCH, source="thread_info",
             counterpart_source="threads", scope="thread", affected_count=missing_from_info,
             unavailable_fields=_THREAD_INFO_ONLY_FIELDS))
-    if missing_from_base:
+    if base_threads_present and missing_from_base:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SOURCE_KEY_MISMATCH, source="threads",
             counterpart_source="thread_info", scope="thread", affected_count=missing_from_base,
             unavailable_fields=_THREAD_BASE_ONLY_FIELDS))
+    completeness_checks.append(SourceRequirement(
+        "threads", absent_code=LimitationCode.SOURCE_ABSENT, counterpart_source="thread_info",
+        scope="thread", affected_count=missing_from_base, unavailable_fields=_THREAD_BASE_ONLY_FIELDS))
     completeness_checks.append(
         SourceRequirement("modules", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE))
 

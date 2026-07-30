@@ -211,6 +211,10 @@ class CoverageLimitation:
         if self.code == LimitationCode.SOURCE_GROUP_ABSENT and len(self.related_sources) < 2:
             raise ValueError(
                 "CoverageLimitation(code=SOURCE_GROUP_ABSENT) requires >= 2 related_sources")
+        if self.code == LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE and self.source != "modules":
+            raise ValueError(
+                "CoverageLimitation(code=MODULE_CLASSIFICATION_UNAVAILABLE) is a fixed sentence "
+                f"about ModuleListStream specifically -- source must be 'modules', got {self.source!r}")
 
 
 # Human names for known sources, used only by render_limitation() below.
@@ -232,6 +236,22 @@ def _display_name(source: str) -> str:
     return _SOURCE_DISPLAY_NAMES.get(source, source)
 
 
+def _render_present_in_but_missing_from(name: str, limitation: CoverageLimitation) -> str:
+    """Shared by SOURCE_ABSENT (when a required source turns out entirely
+    absent but a counterpart source's records reveal exactly how many
+    entities are affected -- e.g. threads.py's ThreadListStream) and
+    SOURCE_KEY_MISMATCH (when both sources are present but their key sets
+    partially disagree). Same wording either way: what actually happened
+    to the underlying source (fully absent vs. partially mismatched)
+    surfaces through `code`, not through different text."""
+    count = limitation.affected_count if limitation.affected_count is not None else "some"
+    scope = limitation.scope or "item"
+    fields = (f" ({'/'.join(limitation.unavailable_fields)} unavailable for those)"
+               if limitation.unavailable_fields else "")
+    counterpart_name = _display_name(limitation.counterpart_source)
+    return f"{count} {scope}(s) present in {counterpart_name} but missing from {name}{fields}"
+
+
 def render_limitation(limitation: CoverageLimitation) -> str:
     """The ONE place a CoverageLimitation becomes human text. Must
     reproduce today's exact, already-shipped strings for every source
@@ -242,6 +262,8 @@ def render_limitation(limitation: CoverageLimitation) -> str:
     code = limitation.code
 
     if code == LimitationCode.SOURCE_ABSENT:
+        if limitation.counterpart_source:
+            return _render_present_in_but_missing_from(name, limitation)
         if limitation.unavailable_fields:
             avail = (f" ({'/'.join(limitation.available_fields)} only)"
                       if limitation.available_fields else "")
@@ -254,13 +276,12 @@ def render_limitation(limitation: CoverageLimitation) -> str:
         return f"{name} present but could not be read{detail}"
 
     if code == LimitationCode.SOURCE_KEY_MISMATCH:
+        if limitation.counterpart_source:
+            return _render_present_in_but_missing_from(name, limitation)
         count = limitation.affected_count if limitation.affected_count is not None else "some"
         scope = limitation.scope or "item"
         fields = (f" ({'/'.join(limitation.unavailable_fields)} unavailable for those)"
                    if limitation.unavailable_fields else "")
-        if limitation.counterpart_source:
-            counterpart_name = _display_name(limitation.counterpart_source)
-            return f"{count} {scope}(s) present in {counterpart_name} but missing from {name}{fields}"
         return f"{count} {scope}(s) missing from {name}{fields}"
 
     if code == LimitationCode.SOURCE_GROUP_ABSENT:
@@ -311,6 +332,17 @@ class CoverageReport:
         return [render_limitation(l) for l in self.limitations]
 
 
+# The closed set of codes a SourceRequirement's absent_code may select --
+# every one of these means, semantically, "this source turned out to be
+# absent" (in some rendering variant). Extend this explicitly, alongside
+# a new LimitationCode member, as a future command needs another
+# dedicated absence template -- never open it up generically, or a typo'd
+# absent_code (e.g. SOURCE_KEY_MISMATCH, which describes a PRESENT
+# source's partial mismatch, not an absent one) could render nonsense
+# like "some dump(s) missing from ModuleListStream" for a plain absence.
+_ABSENT_CAPABLE_CODES = (LimitationCode.SOURCE_ABSENT, LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE)
+
+
 @dataclass(frozen=True)
 class SourceRequirement:
     """One entry in a command's `completeness_checks`: 'this source is
@@ -320,24 +352,52 @@ class SourceRequirement:
     never builds that limitation by hand, closing the two-sources-of-
     truth gap a bare `if absent: limitations.append(...)` would reopen.
 
-    `absent_code` lets a command select a specific SOURCE_ABSENT-family
-    rendering instead of the plain "not present in this dump" default --
-    either SOURCE_ABSENT with unavailable_fields/available_fields (a
-    field-level impact variant), or a fully bespoke, dedicated code such
-    as MODULE_CLASSIFICATION_UNAVAILABLE. Either way the actual text is
-    produced by render_limitation(), never composed here or by the
-    caller."""
+    `absent_code` lets a command select a specific absence rendering
+    instead of the plain "not present in this dump" default -- restricted
+    to `_ABSENT_CAPABLE_CODES` (SOURCE_ABSENT, or a dedicated code such as
+    MODULE_CLASSIFICATION_UNAVAILABLE), never a code describing something
+    other than absence. `counterpart_source`/`affected_count`/`scope` let
+    a fully-absent source still be reported with the wording of "N things
+    present in COUNTERPART but missing from SOURCE" -- e.g. threads.py's
+    ThreadListStream, entirely absent while ThreadInfoListStream has real
+    entries, must render (and be coded) as SOURCE_ABSENT for ThreadListStream
+    with that count/counterpart attached, not as a SOURCE_KEY_MISMATCH
+    (which would misrepresent a fully-absent source as merely partially
+    mismatched). Either way the actual text is produced by
+    render_limitation(), never composed here or by the caller."""
     source: str
     absent_code: LimitationCode = LimitationCode.SOURCE_ABSENT
     unavailable_fields: tuple = field(default_factory=tuple)
     available_fields: tuple = field(default_factory=tuple)
+    counterpart_source: "str | None" = None
+    affected_count: "int | None" = None
+    scope: "str | None" = None
 
     def __post_init__(self):
         object.__setattr__(self, "absent_code", LimitationCode(self.absent_code))
+        if self.absent_code not in _ABSENT_CAPABLE_CODES:
+            raise ValueError(
+                f"SourceRequirement.absent_code must be one of "
+                f"{[c.value for c in _ABSENT_CAPABLE_CODES]}, got {self.absent_code.value!r}")
+        if self.absent_code == LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE and self.source != "modules":
+            raise ValueError(
+                "SourceRequirement(absent_code=MODULE_CLASSIFICATION_UNAVAILABLE) "
+                f"requires source='modules', got {self.source!r}")
         if not isinstance(self.unavailable_fields, tuple):
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
         if not isinstance(self.available_fields, tuple):
             object.__setattr__(self, "available_fields", tuple(self.available_fields))
+
+
+# The only code a caller may hand-build directly into completeness_checks
+# (as opposed to a bare source name / SourceRequirement, which the reducer
+# turns into a limitation itself). Everything else -- SOURCE_ABSENT/
+# SOURCE_FAILED (must be derived from a SourceObservation, never hand-
+# asserted), SOURCE_GROUP_ABSENT (only the not_evaluated branch produces
+# this), MODULE_CLASSIFICATION_UNAVAILABLE (only SourceRequirement's
+# absent_code produces this) -- is rejected, so a caller can't force a
+# limitation the reducer never actually verified against source state.
+_CALLER_BUILDABLE_COMPLETENESS_CODES = (LimitationCode.SOURCE_KEY_MISMATCH,)
 
 
 def _completeness_check_source_name(check) -> str:
@@ -348,6 +408,12 @@ def _completeness_check_source_name(check) -> str:
     return check   # bare source-name string
 
 
+def _completeness_check_counterpart(check) -> "str | None":
+    if isinstance(check, (CoverageLimitation, SourceRequirement)):
+        return check.counterpart_source
+    return None
+
+
 def _validate_build_coverage_report_inputs(sources, evaluation_sources, completeness_checks):
     for key, obs in sources.items():
         if obs.name != key:
@@ -355,31 +421,37 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
                 f"sources[{key!r}].name is {obs.name!r} -- the dict key and the "
                 f"SourceObservation's own name must match")
 
-    referenced = set(evaluation_sources) | {
-        _completeness_check_source_name(c) for c in completeness_checks
-    }
+    referenced = (
+        set(evaluation_sources)
+        | {_completeness_check_source_name(c) for c in completeness_checks}
+        | {c for c in (_completeness_check_counterpart(chk) for chk in completeness_checks) if c}
+    )
     unknown = referenced - sources.keys()
     if unknown:
         raise ValueError(f"evaluation_sources/completeness_checks reference "
                           f"unknown source(s) not present in `sources`: {sorted(unknown)}")
 
     for check in completeness_checks:
-        if isinstance(check, CoverageLimitation) and check.code in (
-                LimitationCode.SOURCE_ABSENT, LimitationCode.SOURCE_FAILED):
+        if isinstance(check, CoverageLimitation) and check.code not in _CALLER_BUILDABLE_COMPLETENESS_CODES:
             raise ValueError(
                 f"completeness_checks must not contain a pre-built {check.code.value} "
-                f"CoverageLimitation (source={check.source!r}) -- pass the bare source name "
-                f"or a SourceRequirement instead, so it's derived from the SourceObservation "
-                f"itself rather than hand-built")
+                f"CoverageLimitation (source={check.source!r}) -- only "
+                f"{[c.value for c in _CALLER_BUILDABLE_COMPLETENESS_CODES]} may be hand-built; "
+                f"anything describing source absence must be a bare source name or "
+                f"SourceRequirement instead, so it's derived from the SourceObservation "
+                f"itself rather than hand-asserted")
 
 
 def _derive_required_source_limitation(obs: SourceObservation,
                                         req: "SourceRequirement | None") -> "CoverageLimitation | None":
     req = req or SourceRequirement(source=obs.name)
     if obs.state == SourceState.ABSENT:
-        return CoverageLimitation(code=req.absent_code, source=obs.name, scope="dump",
+        return CoverageLimitation(code=req.absent_code, source=obs.name,
+                                   scope=req.scope or "dump",
                                    unavailable_fields=req.unavailable_fields,
-                                   available_fields=req.available_fields)
+                                   available_fields=req.available_fields,
+                                   counterpart_source=req.counterpart_source,
+                                   affected_count=req.affected_count)
     if obs.state == SourceState.FAILED:
         return CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source=obs.name,
                                    scope="dump", detail=obs.detail)
@@ -418,9 +490,12 @@ def build_coverage_report(
             automatically (see SourceRequirement for how to select a
             richer wording than the plain default), or contributes
             nothing if the source is present.
-          * an already-built CoverageLimitation (SOURCE_KEY_MISMATCH is
-            the only code allowed here -- a genuine cross-source fact
-            the reducer cannot infer from source state alone).
+          * an already-built CoverageLimitation with code SOURCE_KEY_MISMATCH
+            (the only code a caller may hand-build here -- a genuine
+            cross-source fact the reducer cannot infer from source state
+            alone; every other code is rejected, so a caller can't force
+            e.g. a MODULE_CLASSIFICATION_UNAVAILABLE limitation the
+            reducer never actually checked against modules' real state).
         Final `limitations` preserves this exact order, so a command's
         existing reason ordering survives the migration unchanged.
 

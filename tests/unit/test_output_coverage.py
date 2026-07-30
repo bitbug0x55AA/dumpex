@@ -264,6 +264,24 @@ def test_source_requirement_field_impact_variant_renders_and_is_structured():
         "ThreadInfoListStream not present; StartAddress/CreateTime unavailable (TID/Priority only)"]
 
 
+def test_source_requirement_counterpart_variant_renders_and_is_structured():
+    # A source that's fully ABSENT can still be reported with the "N
+    # present in COUNTERPART but missing from SOURCE" wording (threads.py's
+    # ThreadListStream shape) -- code stays SOURCE_ABSENT (the source
+    # really is absent), not SOURCE_KEY_MISMATCH.
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_PRESENT, record_count=2)
+    req = SourceRequirement("a", counterpart_source="b", scope="widget", affected_count=2,
+                             unavailable_fields=("x", "y"))
+    report = build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
+    limitation = report.limitations[0]
+    assert limitation.code == LimitationCode.SOURCE_ABSENT
+    assert limitation.counterpart_source == "b"
+    assert limitation.affected_count == 2
+    assert limitation.unavailable_fields == ("x", "y")
+    assert report.reasons == ["2 widget(s) present in b but missing from a (x/y unavailable for those)"]
+
+
 def test_source_requirement_dedicated_code_variant():
     obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
     req = SourceRequirement("modules", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE)
@@ -337,6 +355,65 @@ def test_build_coverage_report_rejects_sources_key_name_mismatch():
     obs = SourceObservation(name="modules", state=SOURCE_PRESENT, record_count=1)
     with pytest.raises(ValueError, match="modules"):
         build_coverage_report({"wrong_key": obs}, completeness_checks=["wrong_key"])
+
+
+def test_build_coverage_report_rejects_prebuilt_module_classification_even_if_present():
+    # Only SOURCE_KEY_MISMATCH may be hand-built into completeness_checks
+    # -- a caller must not be able to force a MODULE_CLASSIFICATION_UNAVAILABLE
+    # limitation (or any other code) regardless of the source's real
+    # state, bypassing the check the reducer would otherwise perform.
+    obs = SourceObservation(name="modules", state=SOURCE_PRESENT, record_count=1)
+    prebuilt = CoverageLimitation(code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE, source="modules")
+    with pytest.raises(ValueError, match="MODULE_CLASSIFICATION_UNAVAILABLE"):
+        build_coverage_report({"modules": obs}, completeness_checks=[prebuilt])
+
+
+def test_build_coverage_report_rejects_prebuilt_source_group_absent():
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_ABSENT)
+    prebuilt = CoverageLimitation(code=LimitationCode.SOURCE_GROUP_ABSENT, source="a",
+                                   related_sources=("a", "b"))
+    with pytest.raises(ValueError, match="SOURCE_GROUP_ABSENT"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[prebuilt])
+
+
+def test_source_requirement_rejects_semantically_wrong_absent_code():
+    # SOURCE_KEY_MISMATCH describes a PRESENT source's partial mismatch,
+    # not an absence -- selecting it as absent_code would render nonsense
+    # ("some dump(s) missing from ModuleListStream") if the source turned
+    # out absent.
+    with pytest.raises(ValueError, match="absent_code"):
+        SourceRequirement(source="modules", absent_code=LimitationCode.SOURCE_KEY_MISMATCH)
+
+
+def test_source_requirement_rejects_source_group_absent_as_absent_code():
+    with pytest.raises(ValueError, match="absent_code"):
+        SourceRequirement(source="modules", absent_code=LimitationCode.SOURCE_GROUP_ABSENT)
+
+
+def test_source_requirement_module_classification_requires_modules_source():
+    with pytest.raises(ValueError, match="modules"):
+        SourceRequirement(source="threads", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE)
+
+
+def test_coverage_limitation_module_classification_requires_modules_source():
+    with pytest.raises(ValueError, match="modules"):
+        CoverageLimitation(code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE, source="threads")
+
+
+def test_build_coverage_report_rejects_unknown_counterpart_source():
+    obs = SourceObservation(name="threads", state=SOURCE_ABSENT)
+    req = SourceRequirement("threads", counterpart_source="nonexistent")
+    with pytest.raises(ValueError, match="unknown source"):
+        build_coverage_report({"threads": obs}, completeness_checks=[req])
+
+
+def test_build_coverage_report_rejects_unknown_counterpart_source_on_prebuilt_limitation():
+    obs_a = SourceObservation(name="a", state=SOURCE_PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                                     counterpart_source="nonexistent")
+    with pytest.raises(ValueError, match="unknown source"):
+        build_coverage_report({"a": obs_a}, completeness_checks=[limitation])
 
 
 # ── multi-source key mismatch (the threads shape) ────────────────────────

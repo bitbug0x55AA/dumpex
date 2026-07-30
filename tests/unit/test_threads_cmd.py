@@ -13,6 +13,7 @@ from dumpex.commands.threads import (
     collect_threads, render_threads_console, cmd_threads,
     thread_info_is_degraded, thread_records_have_times,
 )
+from dumpex.output.coverage import LimitationCode
 from dumpex.output.records import (
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
@@ -131,6 +132,22 @@ def test_collect_threads_base_list_missing_info_stream_has_threads():
     assert any("missing from ThreadListStream" in r for r in result.coverage.reasons)
     assert all(r.suspend_count is None for r in result.records)
 
+    # ThreadListStream is entirely ABSENT here, not merely partially
+    # mismatched with a present ThreadInfoListStream -- the limitation's
+    # code must say SOURCE_ABSENT (a real fact about the source itself,
+    # discoverable by a consumer scanning for absent sources), not
+    # SOURCE_KEY_MISMATCH (which would misrepresent a fully-absent source
+    # as a partial disagreement between two present ones), even though
+    # the rendered text is identical to what a genuine key mismatch would
+    # produce.
+    limitation = result.coverage.limitations[0]
+    assert limitation.code == LimitationCode.SOURCE_ABSENT
+    assert limitation.source == "threads"
+    assert limitation.counterpart_source == "thread_info"
+    assert limitation.affected_count == 2
+    assert limitation.unavailable_fields == ("SuspendCount", "Priority", "TEB")
+    assert result.coverage.sources["threads"].state == "absent"
+
 
 def test_collect_threads_both_present_mismatched_tid_sets_are_unioned():
     mf = FakeMF()
@@ -146,6 +163,14 @@ def test_collect_threads_both_present_mismatched_tid_sets_are_unioned():
     # tid 1 is real in both streams and must be fully resolved
     rec1 = next(r for r in result.records if r.tid == 1)
     assert rec1.start_address is not None
+
+    # Both streams are genuinely PRESENT here (just partially mismatched)
+    # -- unlike the fully-absent-ThreadListStream case above, both
+    # limitations must be true SOURCE_KEY_MISMATCH, not SOURCE_ABSENT.
+    codes = {l.code for l in result.coverage.limitations}
+    assert codes == {LimitationCode.SOURCE_KEY_MISMATCH}
+    assert result.coverage.sources["threads"].state == "present"
+    assert result.coverage.sources["thread_info"].state == "present"
 
 
 def test_render_threads_console_normal_does_not_crash(capsys):
