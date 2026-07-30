@@ -566,6 +566,75 @@ def test_coverage_limitation_peb_unavailable_requires_peb_source():
         CoverageLimitation(code=LimitationCode.PEB_UNAVAILABLE, source="modules")
 
 
+# ── PID-specific codes: field-combination validation ─────────────────────
+
+def test_coverage_limitation_pid_thread_list_fallback_requires_related_tids():
+    with pytest.raises(ValueError, match="related_tids"):
+        CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                            counterpart_source="threads")
+
+
+def test_coverage_limitation_pid_exception_tid_fallback_requires_thread_id():
+    with pytest.raises(ValueError, match="thread_id"):
+        CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception")
+
+
+def test_coverage_limitation_normalizes_list_related_tids_to_tuple():
+    limitation = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                                     counterpart_source="threads", related_tids=[1, 2, 3])
+    assert limitation.related_tids == (1, 2, 3)
+
+
+def test_render_limitation_pid_sources_absent():
+    limitation = CoverageLimitation(code=LimitationCode.PID_SOURCES_ABSENT, source="misc_info")
+    assert render_limitation(limitation) == (
+        "MiscInfo, thread list, and exception stream are all absent from this "
+        "dump; PID could not be evaluated")
+
+
+def test_render_limitation_pid_thread_list_fallback_truncates_after_eight():
+    limitation = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                                     counterpart_source="threads",
+                                     related_tids=tuple(range(1, 11)))   # 10 tids
+    text = render_limitation(limitation)
+    assert text == (
+        "MiscInfo stream absent — PID not directly recoverable from thread list.\n"
+        "    10 thread(s) found: 0x1, 0x2, 0x3, 0x4, 0x5, 0x6, 0x7, 0x8 …")
+
+
+def test_render_limitation_pid_exception_tid_fallback():
+    limitation = CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception",
+                                     thread_id=9)
+    assert render_limitation(limitation) == (
+        "Exception stream present: faulting TID = 0x9 (this is a Thread ID, not a Process ID)")
+
+
+def test_render_limitation_pid_no_usable_fallback():
+    limitation = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info")
+    assert render_limitation(limitation) == (
+        "PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data "
+        "was available from the thread list or exception stream")
+
+
+def test_build_coverage_report_allows_pid_fallback_codes_with_absent_source():
+    # Unlike SOURCE_KEY_MISMATCH, PID_THREAD_LIST_FALLBACK's source
+    # (misc_info) is EXPECTED to not have yielded a usable PID -- that's
+    # the fallback's entire trigger condition, not an error.
+    misc_info_obs = SourceObservation(name="misc_info", state=SOURCE_ABSENT)
+    threads_obs = SourceObservation(name="threads", state=SOURCE_PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                                     counterpart_source="threads", related_tids=(1,))
+    report = build_coverage_report({"misc_info": misc_info_obs, "threads": threads_obs},
+                                    completeness_checks=[limitation])
+    assert report.status == COVERAGE_PARTIAL
+
+
+def test_evaluation_requirement_pid_sources_absent_valid_for_three_sources():
+    req = EvaluationRequirement(sources=("misc_info", "threads", "exception"),
+                                 all_absent_code=LimitationCode.PID_SOURCES_ABSENT)
+    assert req.all_absent_code == LimitationCode.PID_SOURCES_ABSENT
+
+
 def test_build_coverage_report_rejects_unknown_counterpart_source():
     obs = SourceObservation(name="threads", state=SOURCE_ABSENT)
     req = SourceRequirement("threads", counterpart_source="nonexistent")

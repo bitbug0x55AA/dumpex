@@ -47,8 +47,8 @@ _UNSUPPORTED_STRUCTURED_MODES = frozenset({"diff", "report", "extract", "strings
 # EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED and the status->code mapping
 # itself (exit_code_for) live in dumpex.output.coverage, not here --
 # that's the single place a coverage status becomes a process exit code,
-# reused by both the CommandResult-based path (list/modules/threads/peb)
-# and the still-tuple-based path (pid/sysinfo) below.
+# reused by both the CommandResult-based path (list/modules/threads/peb/
+# pid) and the still-tuple-based path (sysinfo) below.
 
 
 def _selected_run_mode(args) -> str:
@@ -305,14 +305,14 @@ def _run(args, mf, out, cmd_label) -> "int | None":
     exit_code = None
 
     def _apply_v2_result(kind, records, coverage_status, coverage_reasons):
-        """Still-tuple-based path -- pid/sysinfo haven't migrated onto
+        """Still-tuple-based path -- sysinfo hasn't migrated onto
         dumpex.output.command_result.CommandResult yet."""
         if out:
             out.set_result(kind, records, coverage_status, coverage_reasons)
         return exit_code_for(coverage_status)
 
     def _apply_command_result(result):
-        """CommandResult-based path -- list/modules/threads/peb, migrated onto
+        """CommandResult-based path -- list/modules/threads/peb/pid, migrated onto
         dumpex.output.coverage/.command_result (see those modules).
         Routed through set_command_result(), which -- unlike set_result()
         -- forwards every CommandResult field (execution_status,
@@ -331,7 +331,7 @@ def _run(args, mf, out, cmd_label) -> "int | None":
     elif args.peb:
         exit_code = _apply_command_result(cmd_peb(mf))
     elif args.pid:
-        exit_code = _apply_v2_result("pid", *cmd_pid(mf))
+        exit_code = _apply_command_result(cmd_pid(mf))
     elif args.sysinfo:
         exit_code = _apply_v2_result("sysinfo", *cmd_sysinfo(mf))
     elif args.report:

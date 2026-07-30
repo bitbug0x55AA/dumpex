@@ -157,8 +157,8 @@ def test_sysinfo_partial_missing_streams_validates(validator):
 def test_pid_normal_via_misc_info_validates(validator):
     mf = FakeMF()
     mf.misc_info = MiscInfo(process_id=4321)
-    records, status, reasons = collect_pid(mf)
-    doc = _validate(validator, "pid", records, status, reasons)
+    result = collect_pid(mf)
+    doc = _validate(validator, "pid", result.records, result.coverage.status, result.coverage.reasons)
     assert doc["result"]["coverage"]["status"] == "complete"
 
 
@@ -166,15 +166,15 @@ def test_pid_fallback_partial_validates(validator):
     mf = FakeMF()
     mf.threads = FakeStream([Thread(9, Ctx(0))], "threads")
     mf.exception = ExceptionStream(9)
-    records, status, reasons = collect_pid(mf)
-    assert status == "partial"
-    doc = _validate(validator, "pid", records, status, reasons)
+    result = collect_pid(mf)
+    assert result.coverage.status == "partial"
+    doc = _validate(validator, "pid", result.records, result.coverage.status, result.coverage.reasons)
     assert doc["result"]["coverage"]["reasons"]
 
 
 def test_pid_empty_validates(validator):
-    records, status, reasons = collect_pid(FakeMF())
-    _validate(validator, "pid", records, status, reasons)
+    result = collect_pid(FakeMF())
+    _validate(validator, "pid", result.records, result.coverage.status, result.coverage.reasons)
 
 
 # ── peb ────────────────────────────────────────────────────────────────

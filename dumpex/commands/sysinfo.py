@@ -5,15 +5,10 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, GREEN, YELLOW
 from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.output.records import SysInfoRecord, PidRecord
-
-_PID_NOT_EVALUATED_REASON = (
-    "MiscInfo, thread list, and exception stream are all absent from this "
-    "dump; PID could not be evaluated"
+from dumpex.output.coverage import (
+    observe_source, build_coverage_report, EvaluationRequirement, CoverageLimitation, LimitationCode,
 )
-_PID_PARTIAL_NO_DETAIL_REASON = (
-    "PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data "
-    "was available from the thread list or exception stream"
-)
+from dumpex.output.command_result import CommandResult
 
 
 def _os_display_name(si) -> str:
@@ -189,7 +184,7 @@ def cmd_sysinfo(mf: MinidumpFile):
 
 # ── --pid ────────────────────────────────────────────────────────────────
 
-def collect_pid(mf: MinidumpFile):
+def collect_pid(mf: MinidumpFile) -> CommandResult:
     """
     Report the Process ID recorded in the minidump.
 
@@ -202,18 +197,28 @@ def collect_pid(mf: MinidumpFile):
       3. Exception stream    – contains ThreadId; used purely as a last resort
          (gives TID, not PID, so it is labelled accordingly)
 
-    Pure data, no printing. Returns (records, coverage_status,
-    coverage_reasons) -- 'complete' only when MiscInfo directly supplied
-    the PID; 'partial' when a weaker fallback path was used (reuses the
-    same human-readable explanations the console has always shown, now
-    surfaced as coverage_reasons instead of only being printed);
-    'not_evaluated' when none of the three sources (MiscInfo, thread
-    list, exception stream) are present in the dump at all -- there is
-    nothing to fall back to, not merely an unreliable answer.
+    Pure data, no printing. Returns a CommandResult[PidRecord] --
+    'complete' only when MiscInfo directly supplied the PID; 'partial'
+    when a weaker fallback path was used (reuses the same human-readable
+    explanations the console has always shown, now rendered from
+    dumpex.output.coverage's PID_THREAD_LIST_FALLBACK/
+    PID_EXCEPTION_TID_FALLBACK/PID_NO_USABLE_FALLBACK codes instead of
+    hand-composed here); 'not_evaluated' when none of the three sources
+    are present in the dump at all -- there is nothing to fall back to,
+    not merely an unreliable answer (PID_SOURCES_ABSENT, via
+    EvaluationRequirement, since the wording doesn't fit the generic
+    3-source SOURCE_GROUP_ABSENT template).
+
+    The two fallback limitations (thread-list cross-check, exception TID)
+    are hand-built CoverageLimitations, not derived by the reducer --
+    "MiscInfo didn't yield a usable PID" isn't a plain source-absence fact
+    the reducer can infer from SourceObservation state alone (MiscInfo
+    can be present yet lack a ProcessId), so this is business logic only
+    the command itself can determine, same as threads.py's TID-mismatch
+    limitations.
     """
-    pid      = None
-    source   = None
-    warnings = []
+    pid    = None
+    source = None
 
     # ── 1. MiscInfo (most reliable) ──────────────────────────────────────
     mi = mf.misc_info
@@ -221,30 +226,28 @@ def collect_pid(mf: MinidumpFile):
         pid    = mi.ProcessId
         source = "MINIDUMP_MISC_INFO (ProcessId field)"
 
-    # ── 2. Thread list cross-check / fallback ────────────────────────────
     threads = mf.threads.threads if mf.threads else []
-    if threads and pid is None:
-        tids = [t.ThreadId for t in threads]
-        warnings.append(
-            f"MiscInfo stream absent — PID not directly recoverable from thread list.\n"
-            f"    {len(tids)} thread(s) found: "
-            + ", ".join(f"0x{t:x}" for t in tids[:8])
-            + (" …" if len(tids) > 8 else "")
-        )
-
-    # ── 3. Exception stream – last resort (gives TID, not PID) ───────────
     exc = getattr(mf, "exception", None)
     exc_tid = None
+
+    completeness_checks = []
+
+    # ── 2. Thread list cross-check / fallback ────────────────────────────
+    if threads and pid is None:
+        tids = [t.ThreadId for t in threads]
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+            counterpart_source="threads", related_tids=tuple(tids)))
+
+    # ── 3. Exception stream – last resort (gives TID, not PID) ───────────
     if exc and pid is None:
         try:
             exc_tid = exc.ThreadId
         except AttributeError:
             pass
         if exc_tid:
-            warnings.append(
-                f"Exception stream present: faulting TID = 0x{exc_tid:x} "
-                f"(this is a Thread ID, not a Process ID)"
-            )
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception", thread_id=exc_tid))
 
     record = PidRecord(
         pid=pid,
@@ -256,28 +259,29 @@ def collect_pid(mf: MinidumpFile):
         exc_tid=exc_tid,
     )
 
-    if pid is not None:
-        coverage_status = derive_coverage_status(evaluated=True, complete=True)
-    elif not mf.misc_info and not mf.threads and not exc:
-        # Literally none of the three sources exist in this dump -- there
-        # is nothing to have even attempted a fallback with, not merely
-        # an unreliable answer from a weaker source. warnings is empty at
-        # this point (neither the thread-list nor exception-stream
-        # branches above ever ran), so a stable reason is added here --
-        # coverage_reasons must never be empty for a non-complete status.
-        coverage_status = derive_coverage_status(evaluated=False, complete=False)
-        warnings.append(_PID_NOT_EVALUATED_REASON)
-    else:
+    misc_info_source = observe_source("misc_info", present=bool(mi), items=[mi] if mi else [])
+    threads_source    = observe_source("threads", present=bool(mf.threads), items=threads)
+    exception_source  = observe_source("exception", present=bool(exc), items=[exc] if exc else [])
+    sources = {"misc_info": misc_info_source, "threads": threads_source, "exception": exception_source}
+
+    all_absent = not mf.misc_info and not mf.threads and not exc
+    if pid is None and not completeness_checks and not all_absent:
         # A source object can be present yet contribute nothing usable
         # (e.g. mf.threads exists but its own .threads list is empty, or
         # the exception stream exists but carries no ThreadId) -- neither
-        # branch above appends a warning in that case, which would
-        # otherwise leave a non-complete status with empty reasons here
-        # too. Same invariant as the not_evaluated branch: never silent.
-        coverage_status = derive_coverage_status(evaluated=True, complete=False)
-        if not warnings:
-            warnings.append(_PID_PARTIAL_NO_DETAIL_REASON)
-    return [record], coverage_status, warnings
+        # fallback above appended a limitation in that case, which would
+        # otherwise leave a non-complete status with empty reasons.
+        completeness_checks.append(
+            CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info"))
+
+    coverage = build_coverage_report(
+        sources,
+        evaluation_sources=EvaluationRequirement(
+            sources=("misc_info", "threads", "exception"),
+            all_absent_code=LimitationCode.PID_SOURCES_ABSENT),
+        completeness_checks=completeness_checks,
+    )
+    return CommandResult(kind="pid", records=[record], coverage=coverage, summary={"count": 1})
 
 
 def render_pid_console(record: PidRecord, coverage_reasons: list) -> None:
@@ -298,7 +302,7 @@ def render_pid_console(record: PidRecord, coverage_reasons: list) -> None:
     print()
 
 
-def cmd_pid(mf: MinidumpFile):
-    records, coverage_status, coverage_reasons = collect_pid(mf)
-    render_pid_console(records[0], coverage_reasons)
-    return records, coverage_status, coverage_reasons
+def cmd_pid(mf: MinidumpFile) -> CommandResult:
+    result = collect_pid(mf)
+    render_pid_console(result.records[0], result.coverage.reasons)
+    return result

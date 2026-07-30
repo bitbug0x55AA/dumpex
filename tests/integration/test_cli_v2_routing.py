@@ -13,7 +13,7 @@ import tempfile
 import pytest
 
 import dumpex.cli as cli
-from tests.fixtures.fakes import FakeMF, Module, Thread, Ctx, FakeStream, Peb
+from tests.fixtures.fakes import FakeMF, Module, Thread, Ctx, FakeStream, Peb, MiscInfo, ExceptionStream
 
 
 def _run(monkeypatch, argv):
@@ -178,6 +178,60 @@ def test_peb_present_json_produces_complete_status(monkeypatch, tmp_path):
         assert doc["result"]["kind"] == "peb"
         assert doc["result"]["coverage"]["status"] == "complete"
         assert doc["result"]["coverage"]["reasons"] == []
+    finally:
+        os.remove(dump_path)
+
+
+def test_pid_fallback_json_produces_v2_shaped_document_via_command_result_adapter(monkeypatch, tmp_path):
+    # sysinfo.py's collect_pid is migrated onto CommandResult -- proves the
+    # real CLI path (cli.main -> _apply_command_result ->
+    # V2Output.set_command_result) for the thread-list/exception-stream
+    # fallback (structured PID_THREAD_LIST_FALLBACK/PID_EXCEPTION_TID_FALLBACK
+    # limitations) case.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.threads = FakeStream([Thread(9, Ctx(0))], "threads")
+        mf.exception = ExceptionStream(9)
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--pid", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_PARTIAL == 3
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "pid"
+        assert doc["result"]["execution_status"] == "completed"
+        assert doc["result"]["coverage"]["status"] == "partial"
+        assert doc["result"]["coverage"]["reasons"] == [
+            "MiscInfo stream absent — PID not directly recoverable from thread list.\n"
+            "    1 thread(s) found: 0x9",
+            "Exception stream present: faulting TID = 0x9 (this is a Thread ID, not a Process ID)",
+        ]
+        assert doc["result"]["data"]["records"][0]["exc_tid"] == 9
+    finally:
+        os.remove(dump_path)
+
+
+def test_pid_all_absent_json_is_not_evaluated(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # misc_info/threads/exception all absent
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--pid", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        assert doc["result"]["coverage"]["reasons"] == [
+            "MiscInfo, thread list, and exception stream are all absent from this "
+            "dump; PID could not be evaluated"]
     finally:
         os.remove(dump_path)
 
