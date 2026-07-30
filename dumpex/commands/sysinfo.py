@@ -2,9 +2,19 @@
 import os
 import datetime
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
+from dumpex.ui.colors import BOLD, DIM, GREEN, YELLOW
 from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.output.records import SysInfoRecord, PidRecord
+
+_PID_NOT_EVALUATED_REASON = (
+    "MiscInfo, thread list, and exception stream are all absent from this "
+    "dump; PID could not be evaluated"
+)
+_PID_PARTIAL_NO_DETAIL_REASON = (
+    "PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data "
+    "was available from the thread list or exception stream"
+)
+
 
 def _os_display_name(si) -> str:
     """
@@ -251,10 +261,22 @@ def collect_pid(mf: MinidumpFile):
     elif not mf.misc_info and not mf.threads and not exc:
         # Literally none of the three sources exist in this dump -- there
         # is nothing to have even attempted a fallback with, not merely
-        # an unreliable answer from a weaker source.
+        # an unreliable answer from a weaker source. warnings is empty at
+        # this point (neither the thread-list nor exception-stream
+        # branches above ever ran), so a stable reason is added here --
+        # coverage_reasons must never be empty for a non-complete status.
         coverage_status = derive_coverage_status(evaluated=False, complete=False)
+        warnings.append(_PID_NOT_EVALUATED_REASON)
     else:
+        # A source object can be present yet contribute nothing usable
+        # (e.g. mf.threads exists but its own .threads list is empty, or
+        # the exception stream exists but carries no ThreadId) -- neither
+        # branch above appends a warning in that case, which would
+        # otherwise leave a non-complete status with empty reasons here
+        # too. Same invariant as the not_evaluated branch: never silent.
         coverage_status = derive_coverage_status(evaluated=True, complete=False)
+        if not warnings:
+            warnings.append(_PID_PARTIAL_NO_DETAIL_REASON)
     return [record], coverage_status, warnings
 
 
@@ -272,9 +294,6 @@ def render_pid_console(record: PidRecord, coverage_reasons: list) -> None:
 
     for w in coverage_reasons:
         print(f"\n  {YELLOW('[~]')} {w}")
-
-    if record.pid is None and not coverage_reasons:
-        print(f"  {RED('[!] Could not determine PID — dump may lack MiscInfo, thread list, and exception stream.')}")
 
     print()
 

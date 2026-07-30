@@ -86,6 +86,55 @@ def test_collect_threads_neither_stream_present_is_not_evaluated():
     assert reasons == ["Neither ThreadListStream nor ThreadInfoListStream present in this dump"]
 
 
+# ── dual-stream TID-set mismatch (collector) ──────────────────────────────
+
+def test_collect_threads_info_stream_present_but_empty_does_not_drop_base_threads():
+    # ThreadInfoListStream is present (not absent -> not the 'degraded'
+    # path) but reports zero entries, while the base ThreadListStream has
+    # real threads. Those threads must still be reported, with a gap.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0)), Thread(2, Ctx(0))], "threads")
+    mf.thread_info = FakeStream([], "infos")
+    mf.modules = FakeStream([], "modules")
+    records, status, reasons, degraded, has_times = collect_threads(mf)
+    assert degraded is False   # the stream itself isn't absent, just empty
+    assert len(records) == 2
+    assert status == "partial"
+    assert any("missing from ThreadInfoListStream" in r for r in reasons)
+    assert all(r.start_address is None for r in records)   # no ThreadInfo entry for either
+
+
+def test_collect_threads_base_list_missing_info_stream_has_threads():
+    # The reverse: ThreadInfoListStream has real entries but the base
+    # ThreadListStream is entirely absent -- SuspendCount/Priority/TEB
+    # must be unavailable, with a gap reported (not silently 'complete').
+    mf = FakeMF()
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000), ThreadInfo(2, 0x7fff0000)], "infos")
+    mf.modules = FakeStream([], "modules")
+    records, status, reasons, degraded, has_times = collect_threads(mf)
+    assert degraded is False   # ThreadInfoListStream itself IS present
+    assert len(records) == 2
+    assert status == "partial"
+    assert any("missing from ThreadListStream" in r for r in reasons)
+    assert all(r.suspend_count is None for r in records)
+
+
+def test_collect_threads_both_present_mismatched_tid_sets_are_unioned():
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0)), Thread(2, Ctx(0)), Thread(3, Ctx(0))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000), ThreadInfo(4, 0x7fff0000)], "infos")
+    mf.modules = FakeStream([], "modules")
+    records, status, reasons, degraded, has_times = collect_threads(mf)
+    tids = sorted(r.tid for r in records)
+    assert tids == [1, 2, 3, 4]   # union, not either stream's list alone
+    assert status == "partial"
+    assert any("missing from ThreadInfoListStream" in r for r in reasons)   # tids 2, 3
+    assert any("missing from ThreadListStream" in r for r in reasons)      # tid 4
+    # tid 1 is real in both streams and must be fully resolved
+    rec1 = next(r for r in records if r.tid == 1)
+    assert rec1.start_address is not None
+
+
 def test_render_threads_console_normal_does_not_crash(capsys):
     mf = FakeMF()
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
@@ -105,6 +154,32 @@ def test_render_threads_console_degraded_prints_warning_banner(capsys):
     out = capsys.readouterr().out
     assert "ThreadInfoListStream not present" in out
     assert "unavailable" in out
+
+
+# ── has_times must be per-record, not a single dump-wide flag ────────────
+
+def test_render_threads_console_mixed_records_do_not_misrender_has_times(capsys):
+    # TID 1 has a REAL ThreadInfoListStream entry with a real CreateTime;
+    # TID 2 is only in the base ThreadListStream (missing from
+    # ThreadInfoListStream). Dump-wide has_times is True (tid 1 has a
+    # timestamp), but tid 2's block must not borrow that and print a
+    # bogus "Created"/"Exited: still running" for data it doesn't have.
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(1, Ctx(0)), Thread(2, Ctx(0))], "threads")
+    mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000, create_time=133000000000000000)],
+                                 "infos")
+    records, status, reasons, degraded, has_times = collect_threads(mf)
+    assert has_times is True
+    rec1 = next(r for r in records if r.tid == 1)
+    rec2 = next(r for r in records if r.tid == 2)
+    assert rec1.create_time is not None
+    assert rec2.create_time is None   # must not inherit has_times=True from rec1
+
+    render_threads_console(records, degraded, has_times, reasons)
+    out = capsys.readouterr().out
+    tid2_block = out.split("0x2")[1].split("TID")[0]
+    assert "Created" not in tid2_block
+    assert "still running" not in tid2_block
 
 
 def test_cmd_threads_returns_three_tuple_matching_cli_contract(capsys):

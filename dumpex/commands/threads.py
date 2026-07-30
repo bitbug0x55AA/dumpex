@@ -104,7 +104,15 @@ def collect_threads(mf):
 
     missing_from_info = 0   # TID in ThreadListStream, absent from ThreadInfoListStream
     missing_from_base = 0   # TID in ThreadInfoListStream, absent from ThreadListStream
-    infos = []
+    # (ti, is_placeholder) pairs -- is_placeholder marks a _RawThreadInfo
+    # synthesized because this specific TID has no ThreadInfoListStream
+    # entry (whether because the whole stream is absent, or just this
+    # one TID is missing from an otherwise-present stream). Tracked
+    # per-record, not as a single dump-wide flag: a merged result can
+    # freely mix real entries and placeholders, and a placeholder must
+    # never be rendered as if it were a real "no timestamp recorded"
+    # answer -- see has_times' per-record use below.
+    entries = []
     for tid in all_tids:
         ti = real_infos_by_tid.get(tid)
         if ti is None:
@@ -116,14 +124,24 @@ def collect_threads(mf):
                 # altogether.
                 missing_from_info += 1
             ti = _RawThreadInfo(tid)
-        elif tid not in threads_by_tid and info_stream_present:
+            entries.append((ti, True))
+            continue
+        if tid not in threads_by_tid and info_stream_present:
             missing_from_base += 1
-        infos.append(ti)
+        entries.append((ti, False))
 
-    has_times = any(getattr(ti, "CreateTime", None) for ti in infos)
+    # Dump-wide: does ThreadInfoListStream carry meaningful timing data
+    # at all (some minidump producers leave CreateTime/ExitTime zeroed
+    # even when the stream itself is present)? Only checked over REAL
+    # entries -- a placeholder's CreateTime is always None and must not
+    # be able to suppress this for the whole result on its own, nor
+    # (see the per-record gating below) borrow a "yes" from unrelated
+    # real threads elsewhere in the same result.
+    has_times = any(getattr(ti, "CreateTime", None) for ti, is_placeholder in entries
+                     if not is_placeholder)
 
     records = []
-    for ti in infos:
+    for ti, is_placeholder in entries:
         sa  = ti.StartAddress   # may be None in degraded mode — do not coerce to 0
 
         module_context = None   # start address itself unknown -- module context is moot
@@ -153,10 +171,14 @@ def collect_threads(mf):
         exit_status = getattr(ti, "ExitStatus", None)
         exited      = flag_tag == "[EXITED]"
 
+        # A placeholder never gets a create_time/exit_time value, no
+        # matter what has_times says about the rest of the result -- it
+        # has no real ThreadInfoListStream entry at all, which is not
+        # the same claim as "this stream reports no timestamp."
         create_time = (_filetime_to_str(getattr(ti, "CreateTime", 0) or 0)
-                       if has_times else None)
+                       if (has_times and not is_placeholder) else None)
         exit_time   = (_filetime_to_str(getattr(ti, "ExitTime", 0) or 0)
-                       if (has_times and exited) else None)
+                       if (has_times and not is_placeholder and exited) else None)
 
         records.append(ThreadRecord(
             tid=ti.ThreadId,
@@ -250,7 +272,12 @@ def render_threads_console(records, degraded: bool, has_times: bool,
             print(f"  {'Priority':<16} {rec.priority}")
         if rec.teb:
             print(f"  {'TEB':<16} {rec.teb}")
-        if has_times:
+        if rec.create_time is not None:
+            # Gated on THIS record's own create_time, not the dump-wide
+            # has_times flag -- a merged result can mix real
+            # ThreadInfoListStream entries with placeholder threads that
+            # have none at all, and a placeholder must never print
+            # "Exited: (still running)" as if that had been confirmed.
             print(f"  {'Created':<16} {rec.create_time}")
             if exited:
                 print(f"  {'Exited':<16} {YELLOW(rec.exit_time)}")

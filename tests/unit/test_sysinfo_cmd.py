@@ -117,10 +117,21 @@ def test_collect_pid_nothing_available():
     # nothing to even attempt a fallback with.
     records, status, reasons = collect_pid(FakeMF())
     assert status == "not_evaluated"
-    assert reasons == []
+    assert reasons and "could not be evaluated" in reasons[0]   # never left empty
     rec = records[0]
     assert rec.pid is None
     assert rec.thread_count is None   # never 0 when ThreadListStream itself is absent
+
+
+def test_collect_pid_partial_status_never_has_empty_reasons():
+    # mf.threads is present as a stream object but reports zero threads,
+    # and there's no exception stream -- neither fallback branch appends
+    # a warning on its own, so this exercises the safety-net reason.
+    mf = FakeMF()
+    mf.threads = FakeStream([], "threads")
+    records, status, reasons = collect_pid(mf)
+    assert status == "partial"
+    assert reasons   # must never be empty for a non-complete status
 
 
 def test_collect_pid_threads_present_but_misc_info_absent_is_partial():
@@ -131,11 +142,12 @@ def test_collect_pid_threads_present_but_misc_info_absent_is_partial():
     assert records[0].thread_count == 1
 
 
-def test_render_pid_console_no_pid_no_warnings(capsys):
+def test_render_pid_console_not_evaluated_prints_the_stable_reason(capsys):
     records, status, reasons = collect_pid(FakeMF())
     render_pid_console(records[0], reasons)
     out = capsys.readouterr().out
-    assert "Could not determine PID" in out
+    assert "ProcessId not found" in out
+    assert "could not be evaluated" in out
 
 
 def test_cmd_pid_returns_three_tuple(capsys):

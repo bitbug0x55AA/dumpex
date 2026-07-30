@@ -40,10 +40,22 @@ class Module:
 
 
 class ThreadInfo:
-    """Stand-in for MinidumpThreadInfo (ThreadInfoListStream entry)."""
-    def __init__(self, tid, start_address):
+    """Stand-in for MinidumpThreadInfo (ThreadInfoListStream entry).
+    CreateTime/ExitTime/KernelTime/UserTime/ExitStatus/DumpFlags are all
+    optional (default None, matching "not read off this fixture at all"
+    via dumpex.commands.threads' getattr(..., default) calls) -- pass
+    create_time explicitly to build a "real" entry with actual timing
+    data, e.g. for a mixed real+placeholder ThreadRecord test."""
+    def __init__(self, tid, start_address, *, create_time=None, exit_time=None,
+                 kernel_time=None, user_time=None, exit_status=None, dump_flags=None):
         self.ThreadId     = tid
         self.StartAddress = start_address
+        self.CreateTime   = create_time
+        self.ExitTime     = exit_time
+        self.KernelTime   = kernel_time
+        self.UserTime     = user_time
+        self.ExitStatus   = exit_status
+        self.DumpFlags    = dump_flags
 
 
 class Ctx:
