@@ -232,26 +232,32 @@ def commit_output(temp_path, requested_path, suffix: str, cmd_label: str,
 
 # ── Write-then-commit convenience wrappers ───────────────────────────────
 
-def _mkstemp_text(directory: Path, encoding: str = "utf-8"):
+def _mkstemp_text(directory: Path, encoding: str = "utf-8",
+                  newline: "str | None" = None):
     directory.mkdir(parents=True, exist_ok=True)
     fd, tmp_path = tempfile.mkstemp(dir=str(directory), prefix=".dumpex-", suffix=".tmp")
-    return os.fdopen(fd, "w", encoding=encoding), tmp_path
+    return os.fdopen(fd, "w", encoding=encoding, newline=newline), tmp_path
 
 
 def write_text_to_target(requested_path, text: str, suffix: str, cmd_label: str,
                           dump_path, force: bool, label: str = "",
-                          encoding: str = "utf-8") -> Path:
+                          encoding: str = "utf-8",
+                          newline: "str | None" = None) -> Path:
     """
     Full pipeline for a --json/--csv/--txt single-generated-name output:
     write `text` to a scratch temp file (in whatever directory the final
     output will end up in), then commit_output() it onto requested_path.
     Nothing is ever created at/near the final path until the content is
     complete and ready to commit in one atomic step.
+
+    `newline` is forwarded to the text stream. CSV callers pass "" so
+    their explicitly selected line terminator reaches disk unchanged on
+    every platform.
     """
     p = Path(requested_path)
     is_dir_target = str(requested_path).endswith(('/', '\\')) or p.is_dir()
     directory = p if is_dir_target else (p.parent if str(p.parent) else Path("."))
-    fh, tmp_path = _mkstemp_text(directory, encoding)
+    fh, tmp_path = _mkstemp_text(directory, encoding, newline)
     try:
         fh.write(text)
         fh.close()
@@ -270,11 +276,13 @@ def write_text_to_target(requested_path, text: str, suffix: str, cmd_label: str,
 
 def write_text_to_directory(directory, text: str, stem: str, suffix: str,
                              dump_path, force: bool, label: str = "",
-                             encoding: str = "utf-8") -> Path:
+                             encoding: str = "utf-8",
+                             newline: "str | None" = None) -> Path:
     """Like write_text_to_target, but for CSV's per-table directory case
-    where the stem is a table name, not a timestamp — see commit_to_directory."""
+    where the stem is a table name, not a timestamp — see commit_to_directory.
+    `newline` has the same pass-through semantics as write_text_to_target."""
     d = Path(directory)
-    fh, tmp_path = _mkstemp_text(d, encoding)
+    fh, tmp_path = _mkstemp_text(d, encoding, newline)
     try:
         fh.write(text)
         fh.close()

@@ -35,6 +35,9 @@ def test_write_csv_single_file_mode(tmp_path):
     csv_path = tmp_path / "out.csv"
     out.write_csv(str(csv_path), cmd_label="modules")
 
+    raw = csv_path.read_bytes()
+    assert b"\r" not in raw
+    assert raw.endswith(b"\n\n")
     text = csv_path.read_text(encoding="utf-8")
     assert "## modules / summary" in text
     assert "## modules / records" in text
@@ -58,6 +61,7 @@ def test_write_csv_directory_mode_creates_one_file_per_table(tmp_path):
     assert any("summary" in f for f in csv_files)
     assert any("records" in f for f in csv_files)
     records_file = next(f for f in out_dir.glob("*.csv") if "records" in f.name)
+    assert b"\r" not in records_file.read_bytes()
     rows = list(csv.DictReader(io.StringIO(records_file.read_text(encoding="utf-8"))))
     assert len(rows) == 2
 

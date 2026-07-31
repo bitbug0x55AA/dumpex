@@ -9,6 +9,22 @@ from dumpex.hunt.encoding.models import Hit, EntropyHit
 from tests.fixtures.fakes import Region
 
 
+def test_legacy_csv_writes_canonical_lf_bytes(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = StructuredOutput(str(dump_path), mf=None)
+    out.add("modules", [{"name": "a.dll"}])
+
+    csv_path = tmp_path / "out.csv"
+    out.write_csv(str(csv_path), cmd_label="modules")
+    assert csv_path.read_bytes() == b"## modules / modules\nname\na.dll\n\n"
+
+    csv_dir = tmp_path / "tables"
+    out.write_csv(str(csv_dir) + "/", cmd_label="modules")
+    table_path = next(csv_dir.glob("*.csv"))
+    assert table_path.read_bytes() == b"name\na.dll\n"
+
+
 # ── stomping 1/2 stays at its own verdict_level in the summary row, ───────
 # not re-derived/inflated by structured.py ─────────────────────────────────
 

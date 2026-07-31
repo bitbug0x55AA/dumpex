@@ -322,13 +322,15 @@ class StructuredOutput:
                         continue
                     buf.write(f"## {section} / {table_name}\n")
                     writer = csv.DictWriter(buf, fieldnames=rows[0].keys(),
-                                           extrasaction="ignore")
+                                           extrasaction="ignore",
+                                           lineterminator="\n")
                     writer.writeheader()
                     writer.writerows(rows)
                     buf.write("\n")
                     total_rows += len(rows)
             p = write_text_to_target(path, buf.getvalue(), ".csv", cmd_label,
-                                      self._dump_path_abs, force, "--csv output")
+                                      self._dump_path_abs, force, "--csv output",
+                                      newline="")
             print(DIM(f"  [·] CSV  written → {p}  ({total_rows} row(s) across all tables, {summarize_file(p)})"))
             return
 
@@ -341,12 +343,14 @@ class StructuredOutput:
                 stem = f"dumpex_{label}{section}_{table_name}"
                 buf = io.StringIO()
                 writer = csv.DictWriter(buf, fieldnames=rows[0].keys(),
-                                       extrasaction="ignore")
+                                       extrasaction="ignore",
+                                       lineterminator="\n")
                 writer.writeheader()
                 writer.writerows(rows)
                 fname = write_text_to_directory(p_in, buf.getvalue(), stem, ".csv",
                                                  self._dump_path_abs, force,
-                                                 f"CSV table output ({stem}.csv)")
+                                                 f"CSV table output ({stem}.csv)",
+                                                 newline="")
                 print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s), {summarize_file(fname)})"))
 
     def _section_to_tables(self, section: str, data) -> dict:
