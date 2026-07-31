@@ -954,6 +954,41 @@ def test_build_coverage_report_allows_source_absent_with_counterpart_genuinely_p
     assert report.status == COVERAGE_PARTIAL
 
 
+def test_build_coverage_report_rejects_source_absent_affected_count_mismatching_counterpart():
+    # source is entirely absent -- EVERY record in a genuinely-present
+    # counterpart is, by definition, affected. affected_count is never
+    # derived from counterpart_obs.record_count automatically (it's
+    # whatever the caller passed), so nothing else keeps the two in sync.
+    modules_obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
+    other_obs = SourceObservation(name="other", state=SOURCE_PRESENT, record_count=2)
+    req = SourceRequirement("modules", counterpart_source="other", affected_count=99)
+    with pytest.raises(ValueError, match="record_count"):
+        build_coverage_report({"modules": modules_obs, "other": other_obs},
+                               completeness_checks=[req])
+
+
+def test_build_coverage_report_allows_source_absent_without_explicit_affected_count():
+    # affected_count is optional even with a real counterpart_source (the
+    # renderer falls back to "some item(s)...") -- only an EXPLICIT,
+    # mismatching count is rejected, not the absence of one.
+    modules_obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
+    other_obs = SourceObservation(name="other", state=SOURCE_PRESENT, record_count=2)
+    req = SourceRequirement("modules", counterpart_source="other")
+    report = build_coverage_report({"modules": modules_obs, "other": other_obs},
+                                    completeness_checks=[req])
+    assert report.status == COVERAGE_PARTIAL
+
+
+def test_coverage_limitation_source_absent_rejects_available_fields_with_counterpart_source():
+    # Exact repro from review round 3: _render_source_absent branches on
+    # counterpart_source FIRST, so available_fields is silently ignored
+    # whenever it's set, regardless of unavailable_fields also being set.
+    with pytest.raises(ValueError, match="counterpart_source"):
+        CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="threads",
+                            counterpart_source="thread_info",
+                            unavailable_fields=("StartAddress",), available_fields=("TID",))
+
+
 def test_coverage_limitation_scope_allowed_for_auto_derived_fixed_sentence_code():
     # Unlike PID_NO_USABLE_FALLBACK (never auto-derived, never allows
     # scope -- see above), SYSINFO_MISC_INFO_UNAVAILABLE IS reached via

@@ -495,9 +495,22 @@ def _validate_source_absent_fields(limitation: "CoverageLimitation") -> None:
             "CoverageLimitation(code=SOURCE_ABSENT) requires counterpart_source when "
             f"affected_count is set, got affected_count={limitation.affected_count!r} with "
             f"counterpart_source=None")
-    # Symmetric to unavailable_fields requiring available_fields the other
-    # way: available_fields ("X/Y only") only makes sense alongside the
-    # unavailable_fields it's contrasted against in the rendered text.
+    # _render_source_absent branches on counterpart_source FIRST -- when
+    # it's set, available_fields is never reached at all (that branch
+    # only ever reads affected_count/scope/unavailable_fields via
+    # _render_present_in_but_missing_from); available_fields is only
+    # consumed in the OTHER branch (no counterpart_source, unavailable_
+    # fields set, "X unavailable (Y only)"). So available_fields requires
+    # BOTH unavailable_fields set AND counterpart_source unset -- having
+    # unavailable_fields alone (the check below) is necessary but not
+    # sufficient, since counterpart_source being set would still route
+    # away from the branch that reads available_fields at all.
+    if limitation.available_fields and limitation.counterpart_source is not None:
+        raise ValueError(
+            "CoverageLimitation(code=SOURCE_ABSENT) requires counterpart_source to be unset "
+            f"when available_fields is set, got available_fields={limitation.available_fields!r} "
+            f"with counterpart_source={limitation.counterpart_source!r} -- the counterpart branch "
+            f"never reads available_fields")
     if limitation.available_fields and not limitation.unavailable_fields:
         raise ValueError(
             "CoverageLimitation(code=SOURCE_ABSENT) requires unavailable_fields when "
@@ -526,6 +539,19 @@ def _validate_source_absent_against_sources(limitation: "CoverageLimitation", so
         raise ValueError(
             f"SOURCE_ABSENT.counterpart_source={limitation.counterpart_source!r} claims records "
             f"present there, but its own state is {counterpart_obs.state.value!r}, not present")
+    # source is entirely absent, so EVERY one of the counterpart's records
+    # is, by definition, "present in counterpart but missing from source"
+    # -- an explicit affected_count must equal that total exactly, or the
+    # two numbers are free to drift apart with nothing keeping them in
+    # sync (affected_count itself is never independently derived from
+    # counterpart_obs.record_count -- it's whatever the caller passed).
+    if (limitation.affected_count is not None
+            and limitation.affected_count != counterpart_obs.record_count):
+        raise ValueError(
+            f"SOURCE_ABSENT.affected_count={limitation.affected_count!r} does not match "
+            f"counterpart_source={limitation.counterpart_source!r}'s record_count="
+            f"{counterpart_obs.record_count!r} -- source is entirely absent, so every one of "
+            f"the counterpart's records is affected, and the two counts must agree")
 
 
 def _validate_pid_thread_list_fallback_fields(limitation: "CoverageLimitation") -> None:
@@ -789,7 +815,7 @@ class CoverageLimitation:
                 raise ValueError(
                     f"CoverageLimitation(code={self.code.value}) does not use {field_name} "
                     f"-- got {value!r}; only {sorted(spec.allowed_fields)} may be set on this "
-                    f"code besides code/source/scope")
+                    f"code besides code/source")
 
     def to_dict(self) -> dict:
         """Every field, always -- no per-code custom shaping. Matches the

@@ -337,11 +337,21 @@ def test_source_observation_invalid_state_is_rejected(validator):
 # JSON Schema fragments they're supposed to produce ($defs/sourceObservation,
 # $defs/coverageLimitation) are two independent descriptions of the same
 # shape -- nothing forces them to agree just because both exist. These
-# tests close that gap from both directions: every real to_dict() output
-# must validate, and the domain-invalid shapes the Python model itself
-# refuses to construct must ALSO be rejected by the schema directly (in
-# case some future producer builds the JSON without going through these
-# classes at all).
+# tests close that gap from both directions where the schema CAN express
+# the same rule: every real to_dict() output must validate, and the
+# domain-invalid shapes the Python model itself refuses to construct
+# must ALSO be rejected by the schema directly (in case some future
+# producer builds the JSON without going through these classes at all).
+#
+# This is NOT full parity, and no test here claims otherwise: standard
+# JSON Schema cannot express "these two field VALUES must differ"
+# (CoverageLimitation's source != counterpart_source) or a check against
+# a DIFFERENT object entirely outside this fragment (counterpart_source's
+# own record_count in result.coverage.sources, a sibling key the
+# coverageLimitation fragment never sees in isolation) -- those stay
+# Python-only, enforced in CoverageLimitation.__post_init__ and
+# _validate_source_absent_against_sources, with their own dedicated unit
+# tests in test_output_coverage.py instead of here.
 
 @pytest.mark.parametrize("state,record_count", [
     ("absent", None), ("failed", None), ("present_empty", 0), ("present", 1), ("present", 5),
@@ -410,24 +420,38 @@ def test_coverage_limitation_non_positive_related_tid_rejected_by_schema(
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 
-# ── coverageLimitation's per-code allOf/if-then (review round 2, P1) ──────
+# ── coverageLimitation's per-code allOf/if-then (review round 2/3, P1) ────
 # The Python model (CoverageLimitation.__post_init__) already refuses to
-# construct a shape where a code's disallowed fields are set -- these
-# tests prove the schema independently rejects the same shape too, for a
+# construct a shape where a code's disallowed fields are set, or where a
+# code-specific field-shape/dependency rule is violated -- these tests
+# prove the schema independently rejects the same shapes too, for a
 # hand-built JSON document that never went through the Python model at
 # all (the exact scenario the schema is the last line of defense for).
+# Each test below isolates exactly ONE violated rule -- bundling several
+# wrong fields into one document (as the very first version of these
+# tests did) proves only that AT LEAST ONE of them was caught, not that
+# each one individually is; a single test with several unrelated invalid
+# fields set would still pass even if all but one of the corresponding
+# `then` constraints were missing or wrong.
 
-def test_coverage_limitation_pid_no_usable_fallback_contradictory_shape_rejected_by_schema(
+def test_coverage_limitation_pid_no_usable_fallback_wrong_source_rejected_by_schema(
         coverage_limitation_schema):
-    # Exact repro from review: a hand-built document naming the wrong
-    # source and carrying fields this fixed sentence's renderer never
-    # reads must fail schema validation, not just Python construction.
-    doc = {
-        "code": "PID_NO_USABLE_FALLBACK", "source": "modules", "scope": "module",
-        "affected_count": 7, "unavailable_fields": ["BogusField"], "available_fields": [],
-        "counterpart_source": None, "related_sources": [], "related_tids": [],
-        "thread_id": None, "detail": "contradictory",
-    }
+    doc = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info").to_dict()
+    doc["source"] = "modules"
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_pid_no_usable_fallback_nonnull_scope_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info").to_dict()
+    doc["scope"] = "module"
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_pid_no_usable_fallback_nonnull_affected_count_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info").to_dict()
+    doc["affected_count"] = 7
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 
@@ -435,6 +459,72 @@ def test_coverage_limitation_pid_no_usable_fallback_correct_shape_accepted_by_sc
         coverage_limitation_schema):
     doc = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info").to_dict()
     jsonschema.validate(doc, coverage_limitation_schema)
+
+
+def test_coverage_limitation_source_group_absent_single_related_source_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.SOURCE_GROUP_ABSENT, source="a",
+                              related_sources=["a", "b"]).to_dict()
+    doc["related_sources"] = ["a"]
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_pid_sources_absent_wrong_related_sources_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_SOURCES_ABSENT, source="misc_info",
+                              related_sources=["misc_info", "threads", "exception"]).to_dict()
+    doc["related_sources"] = ["misc_info", "threads"]
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_pid_thread_list_fallback_missing_counterpart_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                              counterpart_source="threads", related_tids=[1]).to_dict()
+    doc["counterpart_source"] = None
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_pid_thread_list_fallback_empty_related_tids_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                              counterpart_source="threads", related_tids=[1]).to_dict()
+    doc["related_tids"] = []
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_pid_exception_tid_fallback_null_thread_id_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception",
+                              thread_id=9).to_dict()
+    doc["thread_id"] = None
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_source_absent_count_without_counterpart_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.SOURCE_ABSENT, source="modules").to_dict()
+    doc["affected_count"] = 3
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_source_absent_available_without_unavailable_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.SOURCE_ABSENT, source="modules").to_dict()
+    doc["available_fields"] = ["TID"]
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_source_absent_available_with_counterpart_rejected_by_schema(
+        coverage_limitation_schema):
+    # available_fields alongside unavailable_fields alone isn't enough --
+    # _render_source_absent branches on counterpart_source FIRST, so
+    # available_fields is unused whenever it's set too.
+    doc = CoverageLimitation(code=LimitationCode.SOURCE_ABSENT, source="modules",
+                              unavailable_fields=["StartAddress"]).to_dict()
+    doc["available_fields"] = ["TID"]
+    doc["counterpart_source"] = "other"
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 
 def test_coverage_limitation_unknown_future_code_stays_open_in_schema(coverage_limitation_schema):
