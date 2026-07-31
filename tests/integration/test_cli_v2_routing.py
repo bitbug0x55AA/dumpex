@@ -14,7 +14,8 @@ import pytest
 
 import dumpex.cli as cli
 from tests.fixtures.fakes import (
-    FakeMF, Module, Thread, Ctx, FakeStream, Peb, MiscInfo, ExceptionStream, SysInfo,
+    FakeMF, Module, Region, Thread, ThreadInfo, Ctx, FakeStream, Peb, MiscInfo,
+    ExceptionStream, SysInfo,
 )
 
 
@@ -97,6 +98,112 @@ def test_modules_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         assert doc["result"]["kind"] == "modules"
         assert doc["result"]["data"]["records"][0]["name"] == "ntdll.dll"
         assert "hunt" not in doc
+    finally:
+        os.remove(dump_path)
+
+
+def test_list_json_produces_v2_shaped_document(monkeypatch, tmp_path):
+    # --list had zero CLI-integration-level coverage before this test --
+    # only collect_regions()/cmd_list() were exercised directly in
+    # tests/unit/test_list_cmd.py.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.memory_info = FakeStream(
+            [Region(0x1000, 0x1000, 0x2000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+            "infos")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--list", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "memory_regions"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        assert doc["result"]["data"]["records"][0]["base_address"] == "0x0000000000001000"
+    finally:
+        os.remove(dump_path)
+
+
+def test_list_missing_stream_json_is_not_evaluated(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # MemoryInfoListStream absent entirely
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--list", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        assert doc["result"]["data"]["records"] == []
+    finally:
+        os.remove(dump_path)
+
+
+def test_threads_complete_json_exits_zero(monkeypatch, tmp_path):
+    # Fills the missing "threads, fully complete" exit-code combo -- the
+    # existing threads tests here only cover the degraded/partial case.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.threads     = FakeStream([Thread(1, Ctx(0))], "threads")
+        mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")
+        mf.modules     = FakeStream([Module(0x7ffe0000, 0x1000, "legit.dll")], "modules")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--threads", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["coverage"]["status"] == "complete"
+        assert doc["result"]["data"]["records"][0]["tid"] == 1
+    finally:
+        os.remove(dump_path)
+
+
+def test_threads_neither_stream_present_json_is_not_evaluated(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # neither ThreadListStream nor ThreadInfoListStream present
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--threads", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        assert doc["result"]["coverage"]["reasons"] == [
+            "Neither ThreadListStream nor ThreadInfoListStream present in this dump"]
+    finally:
+        os.remove(dump_path)
+
+
+def test_pid_complete_via_misc_info_json_exits_zero(monkeypatch, tmp_path):
+    # Fills the missing "pid, complete via MiscInfo" exit-code combo --
+    # the existing pid tests here only cover the fallback/not_evaluated
+    # cases.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.misc_info = MiscInfo(process_id=100)
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--pid", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["coverage"]["status"] == "complete"
+        assert doc["result"]["data"]["records"][0]["pid"] == 100
     finally:
         os.remove(dump_path)
 
