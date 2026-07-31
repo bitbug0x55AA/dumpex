@@ -337,8 +337,8 @@
         "available_fields":    { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "counterpart_source":  { "type": ["string", "null"], "minLength": 1 },
         "related_sources":     { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "related_tids":        { "type": "array", "items": { "type": "integer" } },
-        "thread_id":           { "type": ["integer", "null"] },
+        "related_tids":        { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "thread_id":           { "type": ["integer", "null"], "minimum": 1 },
         "detail":              { "type": ["string", "null"], "minLength": 1 }
       }
     },

@@ -141,13 +141,24 @@ def _require_optional_positive_int(value, field_name: str) -> None:
             f"{field_name} must be None or a plain positive int (not bool), got {value!r}")
 
 
+def _normalize_tuple(value, field_name: str) -> tuple:
+    # Restricted to list/tuple specifically, not "anything iterable":
+    # tuple(value) would otherwise also accept a bare string (silently
+    # exploding "ab" into ('a', 'b') instead of raising on what's almost
+    # always a forgotten [ ] at the call site), a set/dict (whose
+    # iteration order is hash-dependent -- process-randomized in Python
+    # for str keys -- so the resulting tuple order, and therefore the
+    # rendered reason text/JSON array/frozen-test snapshot, could drift
+    # between runs), or a one-shot generator (works once, then silently
+    # empty on a second read of the same field).
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(
+            f"{field_name} must be a list or tuple, got {type(value).__name__}")
+    return tuple(value)
+
+
 def _normalize_non_empty_str_tuple(value, field_name: str) -> tuple:
-    # A bare string is iterable, so tuple("abc") silently produces
-    # ('a', 'b', 'c') instead of raising -- exactly the kind of "typo'd a
-    # missing [ ]" bug this rejects up front, before it reaches tuple().
-    if isinstance(value, str):
-        raise ValueError(f"{field_name} must be a list/tuple of strings, not a bare string")
-    value = tuple(value)
+    value = _normalize_tuple(value, field_name)
     if any(not isinstance(v, str) or not v for v in value):
         raise ValueError(f"{field_name} must contain only non-empty strings, got {value!r}")
     return value
@@ -355,8 +366,8 @@ class CoverageLimitation:
             self.available_fields, "CoverageLimitation.available_fields"))
         object.__setattr__(self, "related_sources", _normalize_non_empty_str_tuple(
             self.related_sources, "CoverageLimitation.related_sources"))
-        if not isinstance(self.related_tids, tuple):
-            object.__setattr__(self, "related_tids", tuple(self.related_tids))
+        object.__setattr__(self, "related_tids",
+                            _normalize_tuple(self.related_tids, "CoverageLimitation.related_tids"))
         if self.code == LimitationCode.SOURCE_GROUP_ABSENT and len(self.related_sources) < 2:
             raise ValueError(
                 "CoverageLimitation(code=SOURCE_GROUP_ABSENT) requires >= 2 related_sources")

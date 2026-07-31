@@ -207,6 +207,28 @@ def test_coverage_limitation_rejects_bare_string_as_unavailable_fields():
                             unavailable_fields="ab")
 
 
+def test_coverage_limitation_rejects_set_as_unavailable_fields():
+    # set iteration order is hash-randomized per process in Python (for
+    # str keys) -- silently accepting one here would let the rendered
+    # reason text, the JSON array, and any frozen-output test drift
+    # between runs/processes for no reason visible in the source.
+    with pytest.raises(ValueError, match="unavailable_fields"):
+        CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
+                            unavailable_fields={"CreateTime", "ExitTime"})
+
+
+def test_coverage_limitation_rejects_generator_as_related_sources():
+    with pytest.raises(ValueError, match="related_sources"):
+        CoverageLimitation(code=LimitationCode.SOURCE_GROUP_ABSENT, source="threads",
+                            related_sources=(s for s in ["threads", "thread_info"]))
+
+
+def test_coverage_limitation_rejects_set_as_related_tids():
+    with pytest.raises(ValueError, match="related_tids"):
+        CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                            counterpart_source="threads", related_tids={9, 10})
+
+
 def test_coverage_limitation_accepts_list_for_unavailable_fields_and_normalizes_to_tuple():
     limitation = CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
                                      unavailable_fields=["a", "b"])

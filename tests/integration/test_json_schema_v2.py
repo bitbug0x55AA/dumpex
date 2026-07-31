@@ -388,6 +388,28 @@ def test_coverage_limitation_minimal_shape_rejected_by_schema(coverage_limitatio
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 
+@pytest.mark.parametrize("thread_id", [0, -1, True])
+def test_coverage_limitation_non_positive_thread_id_rejected_by_schema(
+        thread_id, coverage_limitation_schema):
+    # The Python model already refuses to construct one of these (see
+    # test_output_coverage.py) -- this proves the schema independently
+    # rejects the same shape too, in case a future producer builds the
+    # JSON without going through CoverageLimitation at all.
+    doc = CoverageLimitation(code=LimitationCode.PID_EXCEPTION_TID_FALLBACK,
+                              source="exception", thread_id=9).to_dict()
+    doc["thread_id"] = thread_id
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+@pytest.mark.parametrize("related_tids", [[0], [-1], [9, True], [9, 0]])
+def test_coverage_limitation_non_positive_related_tid_rejected_by_schema(
+        related_tids, coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+                              counterpart_source="threads", related_tids=[9]).to_dict()
+    doc["related_tids"] = related_tids
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
 def test_real_artifact_and_diagnostic_instances_validate_in_full_envelope(validator):
     # Routes real Artifact/Diagnostic instances through the actual
     # CommandResult -> V2Output.set_command_result() -> to_json() path
