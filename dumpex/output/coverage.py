@@ -144,6 +144,22 @@ def _require_optional_positive_int(value, field_name: str) -> None:
             f"{field_name} must be None or a plain positive int (not bool), got {value!r}")
 
 
+def _require_optional_nonnegative_int(value, field_name: str) -> None:
+    # Distinct from _require_optional_positive_int above: SourceRequirement.
+    # affected_count's own legal range includes exactly 0 (the caller's
+    # explicit assertion that a counterpart_source is genuinely present_
+    # empty, checked against its real SourceObservation in _derive_
+    # required_source_limitation) -- unlike CoverageLimitation.
+    # affected_count, which can never actually be constructed as 0 (a
+    # SourceRequirement with a valid affected_count=0 either gets
+    # suppressed to no limitation at all, or raises, before a
+    # CoverageLimitation is ever built from it).
+    if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 0):
+        raise ValueError(
+            f"{field_name} must be None or a plain non-negative int (not bool), got {value!r}")
+
+
 def _normalize_tuple(value, field_name: str) -> tuple:
     # Restricted to list/tuple specifically, not "anything iterable":
     # tuple(value) would otherwise also accept a bare string (silently
@@ -929,6 +945,15 @@ class SourceRequirement:
             raise ValueError(
                 f"SourceRequirement(absent_code={self.absent_code.value}) requires "
                 f"source={_FIXED_SOURCE_CODES[self.absent_code]!r}, got {self.source!r}")
+        # 0 is legal here (unlike CoverageLimitation.affected_count) --
+        # it's the caller's explicit assertion that counterpart_source is
+        # genuinely present_empty, checked against its real
+        # SourceObservation in _derive_required_source_limitation.
+        # Validated here, at construction time, so a bad value (a
+        # negative count, a string, a bool) fails immediately rather than
+        # silently reaching that check's `== 0`/`!= 0` comparisons, where
+        # a non-zero-but-still-wrong value could slip past undetected.
+        _require_optional_nonnegative_int(self.affected_count, "SourceRequirement.affected_count")
         if not isinstance(self.unavailable_fields, tuple):
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
         if not isinstance(self.available_fields, tuple):
@@ -1081,31 +1106,37 @@ def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequi
             # positive int (see _require_optional_positive_int), by
             # design: "nothing affected" is expressed as no limitation at
             # all (return None below), never as a limitation whose count
-            # happens to be 0. So an explicit 0 is handled as its own
-            # up-front case, checked against the counterpart's real state
-            # rather than taken on faith, regardless of what that state
-            # actually is (present_empty confirms it; anything else
-            # contradicts it).
-            if req.affected_count == 0:
-                if counterpart_obs.state != SourceState.PRESENT_EMPTY:
-                    raise ValueError(
-                        f"SourceRequirement({obs.name!r}) has affected_count=0 but counterpart "
-                        f"{req.counterpart_source!r} is {counterpart_obs.state.value!r}, not "
-                        f"present_empty -- affected_count=0 must reflect the counterpart "
-                        f"genuinely reporting zero entries, not be asserted independently of "
-                        f"its real state")
-                return None
+            # happens to be 0. So a present_empty counterpart -- the only
+            # state that legitimately means "nothing affected" -- is
+            # handled as its own up-front case, checked BOTH ways: it
+            # must suppress only when the caller's own affected_count
+            # agrees (None or exactly 0), not for an arbitrary value the
+            # caller happened to pass (SourceRequirement.affected_count's
+            # own shape validation already excludes bool/negative/non-int
+            # values -- this checks the remaining case, a positive int
+            # that contradicts a counterpart confirmed to have zero
+            # entries, e.g. affected_count=5 must not be silently
+            # swallowed just because req.affected_count != 0 was the only
+            # thing previously checked here).
             if counterpart_obs.state == SourceState.PRESENT_EMPTY:
-                # Caller didn't explicitly assert affected_count=0 (that
-                # case is handled above), but the counterpart is
-                # genuinely empty anyway -- same "nothing was actually
-                # affected" conclusion, so there is no real coverage gap
-                # to report. Without this, deriving straight from
-                # counterpart_obs.record_count below would try to
-                # construct affected_count=0 directly and hit the same
-                # positive-int shape rule that makes explicit 0 special
-                # in the first place.
+                if req.affected_count not in (None, 0):
+                    raise ValueError(
+                        f"SourceRequirement({obs.name!r}) has affected_count="
+                        f"{req.affected_count!r} but counterpart {req.counterpart_source!r} is "
+                        f"present_empty (0 records) -- affected_count must reflect the "
+                        f"counterpart genuinely reporting zero entries, not be asserted "
+                        f"independently of its real state")
                 return None
+            if req.affected_count == 0:
+                # counterpart is NOT present_empty (excluded above) -- an
+                # explicit 0 contradicts whatever its real state actually
+                # is (PRESENT with real records, ABSENT, or FAILED).
+                raise ValueError(
+                    f"SourceRequirement({obs.name!r}) has affected_count=0 but counterpart "
+                    f"{req.counterpart_source!r} is {counterpart_obs.state.value!r}, not "
+                    f"present_empty -- affected_count=0 must reflect the counterpart "
+                    f"genuinely reporting zero entries, not be asserted independently of "
+                    f"its real state")
             # source is entirely absent, so EVERY one of the counterpart's
             # records is, by definition, affected -- affected_count is
             # DERIVED from counterpart_obs.record_count when the caller

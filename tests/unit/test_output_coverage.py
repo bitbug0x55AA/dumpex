@@ -584,6 +584,30 @@ def test_source_requirement_counterpart_variant_with_omitted_affected_count_and_
     assert report.limitations == []
 
 
+@pytest.mark.parametrize("bad_count", [-1, "bad", True])
+def test_source_requirement_rejects_invalid_affected_count_shape(bad_count):
+    # Caught at SourceRequirement construction time, before it ever
+    # reaches _derive_required_source_limitation's own == 0 / != 0
+    # comparisons -- a bool would otherwise silently coerce (True == 1),
+    # and a negative int or a string would otherwise reach comparisons
+    # that were never designed to validate an arbitrary caller value.
+    with pytest.raises(ValueError, match="affected_count"):
+        SourceRequirement("a", counterpart_source="b", affected_count=bad_count)
+
+
+def test_build_coverage_report_rejects_nonzero_affected_count_against_present_empty_counterpart():
+    # Exact repro from review: a positive affected_count must not be
+    # silently swallowed by present_empty suppression just because it
+    # isn't literally 0 -- a caller explicitly claiming "5 affected" when
+    # the counterpart itself reports zero records is a real
+    # inconsistency, not something to treat as "nothing to report".
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_PRESENT_EMPTY, record_count=0)
+    req = SourceRequirement("a", counterpart_source="b", affected_count=5)
+    with pytest.raises(ValueError, match="present_empty"):
+        build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
+
+
 def test_zero_affected_count_suppression_rejects_counterpart_with_real_records():
     # affected_count=0 must be corroborated by the counterpart's OWN
     # SourceObservation, not taken on faith -- a counterpart that's
