@@ -90,6 +90,20 @@ class SourceState(str, Enum):
     PRESENT       = "present"         # stream present, reports >=1 items
     FAILED        = "failed"          # stream present but reading/parsing it raised
 
+    # FAILED is a real, first-class state this model supports (see
+    # build_coverage_report's not_evaluated branch and render_limitation's
+    # SOURCE_FAILED template) -- but is currently N/A for all six of
+    # dumpex's original recon commands (list/modules/threads/peb/pid/
+    # sysinfo): none of their mf.<stream> attribute accesses are wrapped
+    # in a try/except, so a parsing error there propagates as a fatal,
+    # uncaught exception (crashing before open_dump even returns) rather
+    # than becoming a SOURCE_FAILED SourceObservation. FAILED is reserved
+    # for a future command whose source access can genuinely raise and
+    # recover (e.g. comparison/diff reading two dumps, where one side
+    # failing shouldn't abort the other) -- a caller must construct
+    # SourceObservation(state=FAILED, ...) itself (see observe_source's
+    # own docstring); nothing here does it automatically.
+
 
 SOURCE_ABSENT        = SourceState.ABSENT
 SOURCE_PRESENT_EMPTY = SourceState.PRESENT_EMPTY
