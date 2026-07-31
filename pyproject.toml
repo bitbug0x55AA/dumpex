@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dumpex"
-version = "3.0.0"
+version = "3.0.1"
 description = "Minidump memory extractor and DFIR triage tool"
 license = "MPL-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "CREDITS"]
