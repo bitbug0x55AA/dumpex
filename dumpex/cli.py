@@ -306,12 +306,9 @@ def _run(args, mf, out, cmd_label) -> "int | None":
     def _apply_command_result(result):
         """CommandResult-based path -- all six v2-routed recon commands
         are migrated onto dumpex.output.coverage/.command_result (see
-        those modules). Routed through set_command_result(), which --
-        unlike the narrower set_result() (kept for direct CSV/collector
-        tests, but no longer called by any command here) -- forwards every
-        CommandResult field (execution_status, diagnostics, artifacts)
-        instead of dropping the ones a narrower signature has no
-        parameter for."""
+        those modules). Routed through set_command_result(), which
+        forwards every CommandResult field (execution_status, structured
+        coverage, diagnostics, artifacts)."""
         if out:
             out.set_command_result(result)
         return exit_code_for(result.coverage.status)

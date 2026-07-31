@@ -144,6 +144,14 @@ class SourceObservation:
                     f"SourceObservation {self.name!r}: record_count must be > 0 "
                     f"for state=present, got {self.record_count!r}")
 
+    def to_dict(self) -> dict:
+        """`name` is deliberately excluded -- the wire representation is a
+        dict keyed by name (coverage.sources[name] = {...}), same as this
+        object already lives in CoverageReport.sources, so repeating the
+        name inside its own value would be redundant."""
+        return {"state": self.state.value, "record_count": self.record_count,
+                "detail": self.detail}
+
 
 def observe_source(name: str, *, present: bool, items: list = None) -> SourceObservation:
     """The absent/present_empty/present inference every command
@@ -337,6 +345,26 @@ class CoverageLimitation:
         elif self.thread_id is not None:
             raise ValueError(
                 f"thread_id is only valid for PID_EXCEPTION_TID_FALLBACK, not {self.code.value}")
+
+    def to_dict(self) -> dict:
+        """Every field, always -- no per-code custom shaping. Matches the
+        same "always emit the full fixed field set, null/[] where unset"
+        convention every record dataclass's own to_dict() already follows
+        (e.g. ModuleRecord.to_dict() always emits checksum: None), rather
+        than a bespoke wire shape per code."""
+        return {
+            "code": self.code.value,
+            "source": self.source,
+            "scope": self.scope,
+            "affected_count": self.affected_count,
+            "unavailable_fields": list(self.unavailable_fields),
+            "available_fields": list(self.available_fields),
+            "counterpart_source": self.counterpart_source,
+            "related_sources": list(self.related_sources),
+            "related_tids": list(self.related_tids),
+            "thread_id": self.thread_id,
+            "detail": self.detail,
+        }
 
 
 # Human names for known sources, used only by render_limitation() below.

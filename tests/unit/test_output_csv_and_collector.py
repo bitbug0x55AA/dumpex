@@ -30,7 +30,8 @@ def test_write_csv_single_file_mode(tmp_path):
     dump_path = tmp_path / "sample.dmp"
     dump_path.write_bytes(b"fake")
     out = V2Output(str(dump_path), command="modules", options={})
-    out.set_result("modules", _fake_records(), "complete")
+    out.set_command_result(CommandResult(
+        kind="modules", records=_fake_records(), coverage=CoverageReport(status=COVERAGE_COMPLETE)))
 
     csv_path = tmp_path / "out.csv"
     out.write_csv(str(csv_path), cmd_label="modules")
@@ -53,7 +54,8 @@ def test_write_csv_directory_mode_creates_one_file_per_table(tmp_path):
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     out = V2Output(str(dump_path), command="modules", options={})
-    out.set_result("modules", _fake_records(), "complete")
+    out.set_command_result(CommandResult(
+        kind="modules", records=_fake_records(), coverage=CoverageReport(status=COVERAGE_COMPLETE)))
 
     out.write_csv(str(out_dir) + "/", cmd_label="modules")
 
@@ -74,7 +76,8 @@ def test_write_csv_with_no_records_still_writes_a_summary_table(tmp_path, capsys
     dump_path.write_bytes(b"fake")
     out_dir = tmp_path / "out"
     out = V2Output(str(dump_path), command="modules", options={})
-    out.set_result("modules", [], "complete")
+    out.set_command_result(CommandResult(
+        kind="modules", records=[], coverage=CoverageReport(status=COVERAGE_COMPLETE)))
 
     out.write_csv(str(out_dir) + "/", cmd_label="modules")
 
@@ -90,7 +93,9 @@ def test_list_typed_field_becomes_json_cell_not_python_repr(tmp_path):
     dump_path = tmp_path / "sample.dmp"
     dump_path.write_bytes(b"fake")
     out = V2Output(str(dump_path), command="threads", options={})
-    out.set_result("threads", [_FakeThreadRecord(["EXITED"])], "complete")
+    out.set_command_result(CommandResult(
+        kind="threads", records=[_FakeThreadRecord(["EXITED"])],
+        coverage=CoverageReport(status=COVERAGE_COMPLETE)))
 
     csv_path = tmp_path / "out.csv"
     out.write_csv(str(csv_path), cmd_label="threads")
@@ -108,7 +113,9 @@ def test_peb_environment_variables_broken_out_into_own_table(tmp_path):
     dump_path.write_bytes(b"fake")
     out_dir = tmp_path / "out"
     out = V2Output(str(dump_path), command="peb", options={})
-    out.set_result("peb", [_FakePebRecord([{"name": "PATH", "value": "C:\\Windows"}])], "complete")
+    out.set_command_result(CommandResult(
+        kind="peb", records=[_FakePebRecord([{"name": "PATH", "value": "C:\\Windows"}])],
+        coverage=CoverageReport(status=COVERAGE_COMPLETE)))
 
     out.write_csv(str(out_dir) + "/", cmd_label="peb")
 
@@ -171,28 +178,30 @@ def test_set_command_result_forwards_artifacts(tmp_path):
     assert doc["artifacts"] == [{"id": "a1", "path": "x.bin"}]
 
 
-def test_set_command_result_defaults_match_set_result_for_list_modules_shape(tmp_path):
+def test_set_command_result_minimal_produces_expected_shape(tmp_path):
     # list_cmd.py/modules.py never populate execution_status/diagnostics/
-    # artifacts -- confirms routing them through set_command_result()
-    # instead of set_result() produces an identical result/artifacts/
-    # diagnostics shape (meta.execution timestamps naturally differ
-    # between two separate calls, so those are excluded from comparison).
+    # artifacts, nor coverage.sources/limitations -- a CommandResult built
+    # with only kind/records/coverage (every other field left at its own
+    # default) must still produce the full, correctly-shaped document,
+    # including empty (not missing) sources/limitations/artifacts/
+    # diagnostics.
     dump_path = tmp_path / "sample.dmp"
     dump_path.write_bytes(b"fake")
 
-    out_a = V2Output(str(dump_path), command="modules", options={})
-    out_a.set_result("modules", _fake_records(), "complete")
-    doc_a = json.loads(out_a.to_json())
-
-    out_b = V2Output(str(dump_path), command="modules", options={})
-    out_b.set_command_result(CommandResult(
+    out = V2Output(str(dump_path), command="modules", options={})
+    out.set_command_result(CommandResult(
         kind="modules", records=_fake_records(),
         coverage=CoverageReport(status=COVERAGE_COMPLETE)))
-    doc_b = json.loads(out_b.to_json())
+    doc = json.loads(out.to_json())
 
-    assert doc_a["result"] == doc_b["result"]
-    assert doc_a["artifacts"] == doc_b["artifacts"]
-    assert doc_a["diagnostics"] == doc_b["diagnostics"]
+    assert doc["result"]["kind"] == "modules"
+    assert doc["result"]["execution_status"] == "completed"
+    assert doc["result"]["coverage"] == {
+        "status": "complete", "reasons": [], "sources": {}, "limitations": []}
+    assert doc["result"]["summary"] == {"count": 2}
+    assert doc["result"]["data"]["records"] == [{"name": "a.dll"}, {"name": "b.dll"}]
+    assert doc["artifacts"] == []
+    assert doc["diagnostics"] == {"warnings": [], "errors": []}
 
 
 class _FakeRecord:

@@ -151,22 +151,32 @@ def build_meta_v2(*, dump_path_abs: str, dump_file_name: str, command: "str | No
 @dataclass
 class Result:
     """result.* -- already-serializable pieces only (records must be
-    plain dicts by construction time; see collector.V2Output.set_result,
-    which calls each record's own to_dict() before building this)."""
-    kind:              str
-    execution_status:  str
-    coverage_status:   str
-    coverage_reasons:  list = field(default_factory=list)
-    summary:           dict = field(default_factory=dict)
-    records:           list = field(default_factory=list)
+    plain dicts by construction time; see collector.V2Output.
+    set_command_result, which calls each record's own to_dict() before
+    building this). coverage_sources/coverage_limitations are likewise
+    pre-dict-ified by the caller (dumpex.output.coverage's
+    SourceObservation.to_dict()/CoverageLimitation.to_dict()) -- this
+    dataclass never imports dumpex.output.coverage itself, matching the
+    existing rule that this wire-format layer depends on the domain
+    model, not the reverse."""
+    kind:                str
+    execution_status:    str
+    coverage_status:     str
+    coverage_reasons:    list = field(default_factory=list)
+    coverage_sources:    dict = field(default_factory=dict)
+    coverage_limitations: list = field(default_factory=list)
+    summary:             dict = field(default_factory=dict)
+    records:             list = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
             "kind":             self.kind,
             "execution_status": self.execution_status,
             "coverage": {
-                "status":  self.coverage_status,
-                "reasons": list(self.coverage_reasons),
+                "status":       self.coverage_status,
+                "reasons":      list(self.coverage_reasons),
+                "sources":      dict(self.coverage_sources),
+                "limitations":  list(self.coverage_limitations),
             },
             "summary": dict(self.summary),
             "data":    {"records": list(self.records)},

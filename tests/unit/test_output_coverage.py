@@ -104,6 +104,17 @@ def test_source_observation_is_frozen():
         obs.name = "other"
 
 
+def test_source_observation_to_dict_excludes_name():
+    obs = SourceObservation(name="modules", state=SourceState.PRESENT, record_count=3)
+    assert obs.to_dict() == {"state": "present", "record_count": 3, "detail": None}
+    assert "name" not in obs.to_dict()
+
+
+def test_source_observation_to_dict_failed_includes_detail():
+    obs = SourceObservation(name="peb", state=SourceState.FAILED, detail="parse boom")
+    assert obs.to_dict() == {"state": "failed", "record_count": None, "detail": "parse boom"}
+
+
 # ── CoverageLimitation: code is a closed vocabulary, source stays open ──
 
 def test_coverage_limitation_rejects_invalid_code():
@@ -140,6 +151,26 @@ def test_coverage_limitation_is_frozen():
     limitation = CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules")
     with pytest.raises(Exception):
         limitation.source = "other"
+
+
+def test_coverage_limitation_to_dict_minimal_emits_every_field():
+    limitation = CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules")
+    assert limitation.to_dict() == {
+        "code": "SOURCE_ABSENT", "source": "modules", "scope": None,
+        "affected_count": None, "unavailable_fields": [], "available_fields": [],
+        "counterpart_source": None, "related_sources": [], "related_tids": [],
+        "thread_id": None, "detail": None,
+    }
+
+
+def test_coverage_limitation_to_dict_converts_tuples_to_lists():
+    limitation = CoverageLimitation(
+        code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
+        counterpart_source="threads", related_tids=(9, 10))
+    d = limitation.to_dict()
+    assert d["related_tids"] == [9, 10]
+    assert isinstance(d["related_tids"], list)
+    assert d["counterpart_source"] == "threads"
 
 
 # ── SourceRequirement ─────────────────────────────────────────────────

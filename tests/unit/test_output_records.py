@@ -5,7 +5,7 @@ hex_address()'s normalization (fixed-width, zero-padded, lowercase).
 """
 from dumpex.output.records import (
     MemoryRegionRecord, ModuleRecord, ThreadRecord, SysInfoRecord, PidRecord, PebRecord,
-    Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address,
+    Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address, Artifact,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
 
@@ -187,3 +187,21 @@ def test_diagnostic_to_dict():
 def test_diagnostic_code_defaults_to_none():
     d = Diagnostic(severity=SEVERITY_ERROR, message="boom").to_dict()
     assert d["code"] is None
+
+
+# ── Artifact ──────────────────────────────────────────────────────────────
+
+def test_artifact_to_dict():
+    a = Artifact(id="a1", kind="extracted_region", path="region_0x1000.bin",
+                 size_bytes=4096, sha256="deadbeef", description="RWX region")
+    assert a.to_dict() == {"id": "a1", "kind": "extracted_region",
+                            "path": "region_0x1000.bin", "size_bytes": 4096,
+                            "sha256": "deadbeef", "description": "RWX region"}
+
+
+def test_artifact_optional_fields_default_to_none():
+    a = Artifact(id="a1", kind="extracted_region", path="region_0x1000.bin")
+    d = a.to_dict()
+    assert d["size_bytes"] is None
+    assert d["sha256"] is None
+    assert d["description"] is None

@@ -866,6 +866,151 @@ SCENARIOS = [
 ]
 
 
+# ── frozen coverage.sources/coverage.limitations, keyed by scenario name ──
+# Kept separate from SCENARIOS above (rather than folded into each
+# scenario's `result` literal) so the console/CSV/exit-code table added
+# first stays untouched -- these two structured fields were added later,
+# once coverage.py grew to_dict() methods and collector.py started
+# forwarding them onto the wire (see dumpex.output.envelope.Result).
+# Every value captured by actually running the scenario's own mf_builder
+# through collect_*() -- not hand-derived -- then merged onto `result`
+# in test_compat_freeze() below.
+
+def _src(state, count=None, detail=None):
+    return {"state": state, "record_count": count, "detail": detail}
+
+
+def _lim(code, source, **kw):
+    d = {"scope": None, "affected_count": None, "unavailable_fields": [],
+         "available_fields": [], "counterpart_source": None, "related_sources": [],
+         "related_tids": [], "thread_id": None, "detail": None}
+    d.update(kw)
+    d["code"] = code
+    d["source"] = source
+    return d
+
+
+_COVERAGE_SOURCES_AND_LIMITATIONS = {
+    "list_absent": (
+        {"memory_info": _src("absent")},
+        [_lim("SOURCE_ABSENT", "memory_info", scope="dump")],
+    ),
+    "list_present_empty": ({"memory_info": _src("present_empty", 0)}, []),
+    "list_present": ({"memory_info": _src("present", 1)}, []),
+    "modules_absent": (
+        {"modules": _src("absent")},
+        [_lim("SOURCE_ABSENT", "modules", scope="dump")],
+    ),
+    "modules_present_empty": ({"modules": _src("present_empty", 0)}, []),
+    "modules_present": ({"modules": _src("present", 1)}, []),
+    "peb_absent": (
+        {"peb": _src("absent")},
+        [_lim("PEB_UNAVAILABLE", "peb", scope="dump")],
+    ),
+    "peb_present": ({"peb": _src("present", 1)}, []),
+    "threads_all_absent": (
+        {"threads": _src("absent"), "thread_info": _src("absent"), "modules": _src("absent")},
+        [_lim("SOURCE_GROUP_ABSENT", "threads", scope="dump",
+              related_sources=["threads", "thread_info"])],
+    ),
+    "threads_degraded": (
+        {"threads": _src("present", 1), "thread_info": _src("absent"), "modules": _src("absent")},
+        [_lim("SOURCE_ABSENT", "thread_info", scope="dump",
+              unavailable_fields=["StartAddress", "CreateTime", "ExitTime", "KernelTime",
+                                   "UserTime"],
+              available_fields=["TID", "SuspendCount", "Priority", "TEB"]),
+         _lim("MODULE_CLASSIFICATION_UNAVAILABLE", "modules", scope="dump")],
+    ),
+    "threads_present_empty": (
+        {"threads": _src("present_empty", 0), "thread_info": _src("present_empty", 0),
+         "modules": _src("present_empty", 0)},
+        [],
+    ),
+    "threads_complete": (
+        {"threads": _src("present", 1), "thread_info": _src("present", 1),
+         "modules": _src("present", 1)},
+        [],
+    ),
+    "threads_tid_mismatch": (
+        {"threads": _src("present", 3), "thread_info": _src("present", 2),
+         "modules": _src("present_empty", 0)},
+        [_lim("SOURCE_KEY_MISMATCH", "thread_info", scope="thread", affected_count=2,
+              unavailable_fields=["StartAddress", "CreateTime", "ExitTime", "KernelTime",
+                                   "UserTime"],
+              counterpart_source="threads"),
+         _lim("SOURCE_KEY_MISMATCH", "threads", scope="thread", affected_count=1,
+              unavailable_fields=["SuspendCount", "Priority", "TEB"],
+              counterpart_source="thread_info")],
+    ),
+    "pid_all_absent": (
+        {"misc_info": _src("absent"), "threads": _src("absent"), "exception": _src("absent")},
+        [_lim("PID_SOURCES_ABSENT", "misc_info", scope="dump",
+              related_sources=["misc_info", "threads", "exception"])],
+    ),
+    "pid_complete": (
+        {"misc_info": _src("present", 1), "threads": _src("absent"), "exception": _src("absent")},
+        [],
+    ),
+    "pid_thread_fallback": (
+        {"misc_info": _src("absent"), "threads": _src("present", 2), "exception": _src("absent")},
+        [_lim("PID_THREAD_LIST_FALLBACK", "misc_info", counterpart_source="threads",
+              related_tids=[9, 10])],
+    ),
+    "pid_exception_fallback": (
+        {"misc_info": _src("absent"), "threads": _src("present", 1),
+         "exception": _src("present", 1)},
+        [_lim("PID_THREAD_LIST_FALLBACK", "misc_info", counterpart_source="threads",
+              related_tids=[9]),
+         _lim("PID_EXCEPTION_TID_FALLBACK", "exception", thread_id=9)],
+    ),
+    "pid_no_usable_fallback": (
+        {"misc_info": _src("absent"), "threads": _src("present_empty", 0),
+         "exception": _src("absent")},
+        [_lim("PID_NO_USABLE_FALLBACK", "misc_info")],
+    ),
+    "sysinfo_all_absent": (
+        {"sysinfo": _src("absent"), "misc_info": _src("absent"), "peb": _src("absent"),
+         "threads": _src("absent"), "modules": _src("absent")},
+        [_lim("SYSINFO_SYSTEM_INFO_UNAVAILABLE", "sysinfo", scope="dump"),
+         _lim("SYSINFO_MISC_INFO_UNAVAILABLE", "misc_info", scope="dump"),
+         _lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump"),
+         _lim("SYSINFO_THREADS_UNAVAILABLE", "threads", scope="dump"),
+         _lim("SYSINFO_MODULES_UNAVAILABLE", "modules", scope="dump")],
+    ),
+    "sysinfo_missing_sysinfo_only": (
+        {"sysinfo": _src("absent"), "misc_info": _src("present", 1), "peb": _src("present", 1),
+         "threads": _src("present", 1), "modules": _src("present", 1)},
+        [_lim("SYSINFO_SYSTEM_INFO_UNAVAILABLE", "sysinfo", scope="dump")],
+    ),
+    "sysinfo_missing_misc_info_only": (
+        {"sysinfo": _src("present", 1), "misc_info": _src("absent"), "peb": _src("present", 1),
+         "threads": _src("present", 1), "modules": _src("present", 1)},
+        [_lim("SYSINFO_MISC_INFO_UNAVAILABLE", "misc_info", scope="dump")],
+    ),
+    "sysinfo_missing_peb_only": (
+        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1), "peb": _src("absent"),
+         "threads": _src("present", 1), "modules": _src("present", 1)},
+        [_lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump")],
+    ),
+    "sysinfo_missing_threads_only": (
+        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1),
+         "peb": _src("present", 1), "threads": _src("absent"), "modules": _src("present", 1)},
+        [_lim("SYSINFO_THREADS_UNAVAILABLE", "threads", scope="dump")],
+    ),
+    "sysinfo_missing_modules_only": (
+        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1),
+         "peb": _src("present", 1), "threads": _src("present", 1), "modules": _src("absent")},
+        [_lim("SYSINFO_MODULES_UNAVAILABLE", "modules", scope="dump")],
+    ),
+    "sysinfo_complete": (
+        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1),
+         "peb": _src("present", 1), "threads": _src("present", 1),
+         "modules": _src("present", 1)},
+        [],
+    ),
+}
+
+
 def _expected_meta(argv0: str) -> dict:
     return {
         "schema_version": "2.0",
@@ -894,6 +1039,10 @@ def test_compat_freeze(monkeypatch, tmp_path, capsys, name, argv, mf_builder, ex
     actual_exit, doc, csv_text, dump_path_abs = _run(monkeypatch, tmp_path, argv, mf_builder())
     actual_console = _normalize_console(capsys.readouterr().out, str(tmp_path))
     _normalize_doc(doc, dump_path_abs)
+
+    sources, limitations = _COVERAGE_SOURCES_AND_LIMITATIONS[name]
+    result = dict(result)
+    result["coverage"] = dict(result["coverage"], sources=sources, limitations=limitations)
 
     expected_doc = {"meta": _expected_meta(argv[0]), "result": result,
                      "artifacts": [], "diagnostics": {"warnings": [], "errors": []}}

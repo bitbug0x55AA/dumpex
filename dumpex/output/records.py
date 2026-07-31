@@ -255,3 +255,29 @@ class Diagnostic:
 
     def to_dict(self) -> dict:
         return {"severity": self.severity, "message": self.message, "code": self.code}
+
+
+@dataclass
+class Artifact:
+    """One entry in the top-level `artifacts` array -- an output file the
+    tool itself produced (e.g. an extracted memory region), distinct from
+    meta.evidence (which describes the INPUT dump(s)). Field naming
+    mirrors meta.evidence's own id/path/size_bytes/sha256 shape. Not yet
+    populated by any of the six v2-routed recon commands -- extract.py/
+    report.py (the eventual producers) are still v1.1 console-only today
+    and only ever concatenate size+hash into a print string via
+    dumpex.core.safe_io.summarize_bytes(), with no structured shape at
+    all -- this type exists so a future migration has something typed to
+    build instead of a bare dict."""
+    id:          str
+    kind:        str            # open vocabulary (e.g. "extracted_region") -- mirrors
+                                  # dumpex.output.coverage's `source` staying open too
+    path:        str
+    size_bytes:  "int | None" = None
+    sha256:      "str | None" = None
+    description: "str | None" = None
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "kind": self.kind, "path": self.path,
+                "size_bytes": self.size_bytes, "sha256": self.sha256,
+                "description": self.description}

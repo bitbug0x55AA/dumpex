@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dumpex.ui.colors import DIM
 from dumpex.core.safe_io import write_text_to_target, write_text_to_directory, summarize_file
-from dumpex.output.envelope import build_meta_v2, Result, Envelope, EXECUTION_COMPLETED
+from dumpex.output.envelope import build_meta_v2, Result, Envelope
 from dumpex.output.serializer import to_json as _serialize_envelope
 from dumpex.output.csv_export import build_tables
 from dumpex.output.records import Diagnostic, SEVERITY_ERROR
@@ -36,44 +36,25 @@ class V2Output:
         self._diagnostics_errors   = []
         self._artifacts            = []
 
-    def set_result(self, kind: str, records: list, coverage_status: str,
-                    coverage_reasons: list = None, summary: dict = None) -> None:
-        """`records` is a list of record dataclass instances (ModuleRecord,
-        ThreadRecord, ...) -- converted to plain dicts here via each
-        record's own to_dict(), so every consumer downstream of this call
-        (serializer, CSV export) only ever sees plain JSON-safe data.
-
-        No production command calls this anymore (all six recon commands
-        are migrated onto CommandResult and use set_command_result()
-        instead) -- kept for direct CSV/collector unit tests, and always
-        reports execution_status="completed" with no diagnostics/artifacts,
-        since a raw (kind, records, status, reasons) call site has no way
-        to supply either."""
-        record_dicts = [r.to_dict() for r in records]
-        self._result = Result(
-            kind=kind,
-            execution_status=EXECUTION_COMPLETED,
-            coverage_status=coverage_status,
-            coverage_reasons=list(coverage_reasons) if coverage_reasons else [],
-            summary=dict(summary) if summary is not None else {"count": len(record_dicts)},
-            records=record_dicts,
-        )
-
     def set_command_result(self, result) -> None:
-        """The full-fidelity counterpart to set_result(): consumes every
-        dumpex.output.command_result.CommandResult field instead of
-        silently dropping execution_status/diagnostics/artifacts the way
-        routing a CommandResult through set_result()'s narrower signature
-        used to. `result` is duck-typed (not type-hinted as
-        CommandResult) to avoid this module importing command_result.py,
-        which itself imports this module's sibling envelope.py --
-        without a hard import dependency between the two."""
+        """The single way a command populates this collector's result --
+        consumes every dumpex.output.command_result.CommandResult field
+        (execution_status, structured coverage, diagnostics, artifacts),
+        converting each nested value's own to_dict() before storing it, so
+        every consumer downstream of this call (serializer, CSV export)
+        only ever sees plain JSON-safe data. `result` is duck-typed (not
+        type-hinted as CommandResult) to avoid this module importing
+        command_result.py, which itself imports this module's sibling
+        envelope.py -- without a hard import dependency between the two."""
         record_dicts = [r.to_dict() for r in result.records]
         self._result = Result(
             kind=result.kind,
             execution_status=result.execution_status,
             coverage_status=result.coverage.status,
             coverage_reasons=list(result.coverage.reasons),
+            coverage_sources={name: obs.to_dict()
+                               for name, obs in result.coverage.sources.items()},
+            coverage_limitations=[lim.to_dict() for lim in result.coverage.limitations],
             summary=dict(result.summary) if result.summary else {"count": len(record_dicts)},
             records=record_dicts,
         )

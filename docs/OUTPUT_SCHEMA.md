@@ -264,7 +264,11 @@ root:
   "result": {
     "kind": "modules",
     "execution_status": "completed",
-    "coverage": { "status": "complete", "reasons": [] },
+    "coverage": {
+      "status": "complete", "reasons": [],
+      "sources": { "modules": { "state": "present", "record_count": 42, "detail": null } },
+      "limitations": []
+    },
     "summary": { "count": 42 },
     "data": { "records": [ "...": "one canonical record per item" ] }
   },
@@ -296,6 +300,35 @@ a verdict:
 - **verdict/confidence** — not applicable to these six commands at all;
   that concept stays scoped to `--report`/`--hunt`, which reason about
   evidence, not just list it.
+
+`coverage.reasons` is a flat, human-readable text array — fine for
+printing, not for programmatic filtering. `coverage.sources` and
+`coverage.limitations` expose the same facts structurally, for a
+consumer that wants to act on them without string-matching:
+
+- **`coverage.sources`** — one entry per underlying minidump stream this
+  command consulted, keyed by source name (`"memory_info"`, `"threads"`,
+  `"misc_info"`, ...). Each value is `{"state", "record_count", "detail"}`
+  — `state` is one of `"absent"` / `"present_empty"` / `"present"` /
+  `"failed"` (`"failed"` is reserved for a future command whose source
+  access can genuinely raise and recover; none of these six ever produces
+  it today — a read failure crashes the whole command instead). This is
+  exactly `dumpex.output.coverage.SourceObservation`, one per source.
+- **`coverage.limitations`** — an array of structured, machine-readable
+  gaps; `coverage.reasons` is rendered from this list, one string per
+  entry, in the same order. Each entry always has `code` and `source`;
+  every other field (`scope`, `affected_count`, `unavailable_fields`,
+  `counterpart_source`, `related_sources`, `related_tids`, `thread_id`,
+  `detail`) is populated only when that particular `code` uses it,
+  `null`/`[]` otherwise. `code` is intentionally a plain string, not a
+  fixed enum in the schema — the underlying vocabulary
+  (`dumpex.output.coverage.LimitationCode`) grows as more commands
+  migrate, and this schema doesn't need a version bump every time a new
+  code is added.
+
+Both fields are optional (a producer that doesn't populate them is still
+a schema-valid document) and additive to `schema_version: "2.0"` — no
+version bump, per the versioning rule above.
 
 `result.data.records` is always an array of one canonical record type per
 `kind` (`memory_regions` → `MemoryRegionRecord`, `modules` →
@@ -332,6 +365,16 @@ data at all" from "some data, degraded" without parsing JSON at all. This
 convention is scoped to these six commands only; every other command's
 exit-code behavior (`0` on completion, an uncaught exception's default
 nonzero on a fatal error) is unchanged.
+
+`artifacts` (top-level, a sibling of `result`) is an output file the tool
+itself produced — e.g. an extracted memory region — distinct from
+`meta.evidence`, which describes the *input* dump(s). Each entry is
+`{"id", "kind", "path", "size_bytes", "sha256", "description"}`
+(`dumpex.output.records.Artifact`), field naming mirroring
+`meta.evidence`'s own `id`/`path`/`size_bytes`/`sha256` shape. None of
+these six commands populates it today — it stays `[]` — the type exists
+so a future `--extract`/`--report` migration has a typed shape to build
+instead of a bare dict.
 
 `--diff`/`--report`/`--extract`/`--strings` do not produce structured
 output yet. Passing `--json`/`--csv` with one of them is rejected before
