@@ -570,6 +570,20 @@ def test_source_requirement_counterpart_variant_with_zero_affected_count_is_supp
     assert report.limitations == []
 
 
+def test_source_requirement_counterpart_variant_with_omitted_affected_count_and_empty_counterpart_is_suppressed():
+    # Same suppression as above, but the caller didn't explicitly assert
+    # affected_count=0 -- omitting it entirely while the counterpart
+    # genuinely has zero entries must reach the same "nothing to report"
+    # conclusion, not attempt to derive and construct affected_count=0
+    # directly (which CoverageLimitation's own shape check would reject).
+    obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
+    obs_b = SourceObservation(name="b", state=SOURCE_PRESENT_EMPTY, record_count=0)
+    req = SourceRequirement("a", counterpart_source="b")
+    report = build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
+    assert report.status == COVERAGE_COMPLETE
+    assert report.limitations == []
+
+
 def test_zero_affected_count_suppression_rejects_counterpart_with_real_records():
     # affected_count=0 must be corroborated by the counterpart's OWN
     # SourceObservation, not taken on faith -- a counterpart that's
@@ -588,7 +602,7 @@ def test_zero_affected_count_suppression_rejects_failed_counterpart():
     obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
     obs_b = SourceObservation(name="b", state=SOURCE_FAILED)
     req = SourceRequirement("a", counterpart_source="b", affected_count=0)
-    with pytest.raises(ValueError, match="present_empty"):
+    with pytest.raises(ValueError, match="not present"):
         build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
 
 
@@ -596,7 +610,7 @@ def test_zero_affected_count_suppression_rejects_absent_counterpart():
     obs_a = SourceObservation(name="a", state=SOURCE_ABSENT)
     obs_b = SourceObservation(name="b", state=SOURCE_ABSENT)
     req = SourceRequirement("a", counterpart_source="b", affected_count=0)
-    with pytest.raises(ValueError, match="present_empty"):
+    with pytest.raises(ValueError, match="not present"):
         build_coverage_report({"a": obs_a, "b": obs_b}, completeness_checks=[req])
 
 
@@ -967,16 +981,24 @@ def test_build_coverage_report_rejects_source_absent_affected_count_mismatching_
                                completeness_checks=[req])
 
 
-def test_build_coverage_report_allows_source_absent_without_explicit_affected_count():
-    # affected_count is optional even with a real counterpart_source (the
-    # renderer falls back to "some item(s)...") -- only an EXPLICIT,
-    # mismatching count is rejected, not the absence of one.
+def test_build_coverage_report_derives_affected_count_from_counterpart_when_omitted():
+    # affected_count is optional with a real counterpart_source -- the
+    # reducer DERIVES the exact count from counterpart_obs.record_count
+    # rather than leaving it None (source is entirely absent, so every
+    # one of the counterpart's records is, by definition, affected).
+    # scope stays None when the caller doesn't supply one (no forced
+    # "dump" default in this branch), so the rendered text falls back to
+    # the renderer's own generic "item" wording.
     modules_obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
     other_obs = SourceObservation(name="other", state=SOURCE_PRESENT, record_count=2)
     req = SourceRequirement("modules", counterpart_source="other")
     report = build_coverage_report({"modules": modules_obs, "other": other_obs},
                                     completeness_checks=[req])
     assert report.status == COVERAGE_PARTIAL
+    limitation = report.limitations[0]
+    assert limitation.affected_count == 2
+    assert limitation.scope is None
+    assert report.reasons == ["2 item(s) present in other but missing from ModuleListStream"]
 
 
 def test_coverage_limitation_source_absent_rejects_available_fields_with_counterpart_source():

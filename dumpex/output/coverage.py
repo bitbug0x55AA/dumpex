@@ -1074,33 +1074,70 @@ def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequi
                                         sources: dict) -> "CoverageLimitation | None":
     req = req or SourceRequirement(source=obs.name)
     if obs.state == SourceState.ABSENT:
-        if req.counterpart_source and req.affected_count == 0:
-            # affected_count=0 only means "nothing was actually affected"
-            # if the counterpart ITSELF confirms zero entries -- checked
-            # against its real SourceObservation, not taken on faith from
-            # the caller's count. A counterpart that's PRESENT with real
-            # records (or ABSENT/FAILED, telling us nothing) does NOT
-            # justify suppressing this source's absence; that would hide
-            # a genuine gap behind a caller's inconsistent count.
+        if req.counterpart_source:
             counterpart_obs = sources[req.counterpart_source]
-            if counterpart_obs.state != SourceState.PRESENT_EMPTY:
-                raise ValueError(
-                    f"SourceRequirement({obs.name!r}) has affected_count=0 but counterpart "
-                    f"{req.counterpart_source!r} is {counterpart_obs.state.value!r}, not "
-                    f"present_empty -- affected_count=0 must reflect the counterpart genuinely "
-                    f"reporting zero entries, not be asserted independently of its real state")
-            # Counterpart genuinely has zero entries (e.g. threads.py's
-            # ThreadInfoListStream present but reporting no real threads)
-            # -- nothing was actually affected by this source's absence,
-            # so there is no real coverage gap to report. Without this,
-            # the rendered text would be a nonsensical "0 thing(s) present
-            # in COUNTERPART but missing from SOURCE".
-            return None
+            # affected_count=0 can never be constructed directly --
+            # CoverageLimitation.affected_count only accepts None or a
+            # positive int (see _require_optional_positive_int), by
+            # design: "nothing affected" is expressed as no limitation at
+            # all (return None below), never as a limitation whose count
+            # happens to be 0. So an explicit 0 is handled as its own
+            # up-front case, checked against the counterpart's real state
+            # rather than taken on faith, regardless of what that state
+            # actually is (present_empty confirms it; anything else
+            # contradicts it).
+            if req.affected_count == 0:
+                if counterpart_obs.state != SourceState.PRESENT_EMPTY:
+                    raise ValueError(
+                        f"SourceRequirement({obs.name!r}) has affected_count=0 but counterpart "
+                        f"{req.counterpart_source!r} is {counterpart_obs.state.value!r}, not "
+                        f"present_empty -- affected_count=0 must reflect the counterpart "
+                        f"genuinely reporting zero entries, not be asserted independently of "
+                        f"its real state")
+                return None
+            if counterpart_obs.state == SourceState.PRESENT_EMPTY:
+                # Caller didn't explicitly assert affected_count=0 (that
+                # case is handled above), but the counterpart is
+                # genuinely empty anyway -- same "nothing was actually
+                # affected" conclusion, so there is no real coverage gap
+                # to report. Without this, deriving straight from
+                # counterpart_obs.record_count below would try to
+                # construct affected_count=0 directly and hit the same
+                # positive-int shape rule that makes explicit 0 special
+                # in the first place.
+                return None
+            # source is entirely absent, so EVERY one of the counterpart's
+            # records is, by definition, affected -- affected_count is
+            # DERIVED from counterpart_obs.record_count when the caller
+            # doesn't supply one, rather than left None. counterpart_obs.
+            # record_count is itself None for ABSENT/FAILED (present_
+            # empty is already excluded above), which is fine:
+            # _validate_limitation_against_sources below is the single
+            # place that rejects a non-PRESENT counterpart or a caller-
+            # supplied count that doesn't match the derived one -- not
+            # duplicated here, so there's exactly one rule to update if
+            # it ever needs to change.
+            affected_count = (req.affected_count if req.affected_count is not None
+                               else counterpart_obs.record_count)
+            # scope stays whatever the caller passed (None if omitted,
+            # rendering as the generic "item" default) -- unlike the
+            # plain-absence branch below, nothing here forces a "dump"
+            # default: none of today's six commands' counterpart_source
+            # call sites rely on it (all three pass an explicit entity
+            # scope, e.g. threads.py's scope="thread").
+            limitation = CoverageLimitation(code=req.absent_code, source=obs.name,
+                                             scope=req.scope,
+                                             unavailable_fields=req.unavailable_fields,
+                                             available_fields=req.available_fields,
+                                             counterpart_source=req.counterpart_source,
+                                             affected_count=affected_count)
+            _validate_limitation_against_sources(limitation, sources)
+            return limitation
         limitation = CoverageLimitation(code=req.absent_code, source=obs.name,
                                          scope=req.scope or "dump",
                                          unavailable_fields=req.unavailable_fields,
                                          available_fields=req.available_fields,
-                                         counterpart_source=req.counterpart_source,
+                                         counterpart_source=None,
                                          affected_count=req.affected_count)
         _validate_limitation_against_sources(limitation, sources)
         return limitation
