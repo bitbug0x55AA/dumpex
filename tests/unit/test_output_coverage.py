@@ -245,11 +245,15 @@ def test_coverage_limitation_accepts_list_for_unavailable_fields_and_normalizes_
     assert limitation.unavailable_fields == ("a", "b")
 
 
-def test_coverage_limitation_accepts_list_for_available_fields_and_related_sources():
-    limitation = CoverageLimitation(code=LimitationCode.SOURCE_GROUP_ABSENT, source="threads",
-                                     available_fields=["TID"],
-                                     related_sources=["threads", "thread_info"])
+def test_coverage_limitation_accepts_list_for_available_fields_and_normalizes_to_tuple():
+    limitation = CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules",
+                                     available_fields=["TID"])
     assert limitation.available_fields == ("TID",)
+
+
+def test_coverage_limitation_accepts_list_for_related_sources_and_normalizes_to_tuple():
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_GROUP_ABSENT, source="threads",
+                                     related_sources=["threads", "thread_info"])
     assert limitation.related_sources == ("threads", "thread_info")
 
 
@@ -809,6 +813,66 @@ def test_render_limitation_pid_no_usable_fallback():
     assert render_limitation(limitation) == (
         "PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data "
         "was available from the thread list or exception stream")
+
+
+# ── _CodeSpec.allowed_fields: machine fields must not contradict the
+# rendered text -- a code whose renderer never reads a field must reject
+# that field being set, not silently ignore it.
+
+def test_coverage_limitation_pid_no_usable_fallback_rejects_contradictory_fields():
+    # Exact repro from review: PID_NO_USABLE_FALLBACK's own enum comment
+    # says "fully fixed sentence, no fields" -- nothing previously
+    # enforced that, so this combination used to construct successfully,
+    # get accepted by the reducer, validate against the schema, and
+    # render the fixed sentence while silently ignoring every field below.
+    with pytest.raises(ValueError, match="affected_count"):
+        CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="modules",
+                            scope="module", affected_count=7,
+                            unavailable_fields=("BogusField",), detail="contradictory")
+
+
+@pytest.mark.parametrize("field_name,kwargs", [
+    ("counterpart_source", dict(counterpart_source="threads")),
+    ("affected_count", dict(affected_count=1)),
+    ("unavailable_fields", dict(unavailable_fields=("X",))),
+    ("available_fields", dict(available_fields=("X",))),
+    ("related_sources", dict(related_sources=("a", "b"))),
+    ("related_tids", dict(related_tids=(1,))),
+    ("thread_id", dict(thread_id=1)),
+    ("detail", dict(detail="x")),
+])
+def test_coverage_limitation_peb_unavailable_rejects_every_unrelated_field(field_name, kwargs):
+    with pytest.raises(ValueError, match=field_name):
+        CoverageLimitation(code=LimitationCode.PEB_UNAVAILABLE, source="peb", **kwargs)
+
+
+def test_coverage_limitation_source_key_mismatch_rejects_related_tids():
+    # SOURCE_KEY_MISMATCH is caller_buildable like the PID fallback codes,
+    # but shares none of their fields -- related_tids belongs only to
+    # PID_THREAD_LIST_FALLBACK.
+    with pytest.raises(ValueError, match="related_tids"):
+        CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a", related_tids=(1,))
+
+
+def test_coverage_limitation_source_group_absent_rejects_affected_count():
+    with pytest.raises(ValueError, match="affected_count"):
+        CoverageLimitation(code=LimitationCode.SOURCE_GROUP_ABSENT, source="a",
+                            related_sources=("a", "b"), affected_count=1)
+
+
+def test_coverage_limitation_sysinfo_fixed_text_code_rejects_detail():
+    with pytest.raises(ValueError, match="detail"):
+        CoverageLimitation(code=LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE, source="misc_info",
+                            detail="should not be allowed")
+
+
+def test_coverage_limitation_scope_allowed_regardless_of_allowed_fields():
+    # scope is a universal classification tag (every derivation path sets
+    # it unconditionally) unlike the other structured fields -- confirm
+    # it's never rejected even for a fully-fixed-sentence code.
+    limitation = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info",
+                                     scope="dump")
+    assert limitation.scope == "dump"
 
 
 def test_build_coverage_report_allows_pid_fallback_codes_with_absent_source():

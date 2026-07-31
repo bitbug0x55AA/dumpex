@@ -24,11 +24,13 @@ prevents the "two sources of truth" bug this module exists to close: a
 caller cannot forget to keep a hand-written limitations list in sync with
 its own SourceObservations, because the caller never builds that
 particular kind of limitation at all -- only the reducer does, reading
-the SAME SourceObservation the caller already had to construct. The only
-limitation kind a caller still builds directly is SOURCE_KEY_MISMATCH (a
-genuine cross-source business-logic fact -- e.g. two streams describing
-the same entities disagreeing on which keys exist -- that the reducer
-cannot infer from source state alone).
+the SAME SourceObservation the caller already had to construct. The
+limitation kinds a caller still builds directly are the ones marked
+caller_buildable in _CODE_SPECS (SOURCE_KEY_MISMATCH and the PID_*
+fallback codes) -- genuine cross-source business facts (e.g. two streams
+describing the same entities disagreeing on which keys exist, or a
+weaker fallback source substituting for one that yielded nothing usable)
+that the reducer cannot infer from source state alone.
 
 There is deliberately no free-text escape hatch (no "detail string a
 command composes itself and the model renders verbatim"): every
@@ -386,6 +388,19 @@ class _CodeSpec:
     # Cross-source validation (needs the `sources` dict), invoked from
     # _validate_build_coverage_report_inputs for caller-buildable codes.
     validate_against_sources: Optional[Callable[["CoverageLimitation", dict], None]] = None
+    # The structured fields (see _STRUCTURED_FIELD_DEFAULTS below) this
+    # code's renderer/semantics actually consumes -- every OTHER
+    # structured field must stay at its default. Without this, a caller
+    # can attach contradictory data a fixed-sentence renderer silently
+    # ignores (e.g. affected_count/unavailable_fields/detail all set on
+    # PID_NO_USABLE_FALLBACK, whose own enum comment says "fully fixed
+    # sentence, no fields" -- nothing previously enforced that). `scope`
+    # is deliberately NOT one of these: every derivation path
+    # (_derive_required_source_limitation, build_coverage_report's
+    # not_evaluated branch) unconditionally sets scope="dump" regardless
+    # of code, so it's a universal classification tag, not a per-code
+    # semantic field the way the others are.
+    allowed_fields: frozenset = frozenset()
 
 
 def _render_source_absent(limitation: "CoverageLimitation") -> str:
@@ -563,14 +578,18 @@ def _validate_pid_exception_tid_fallback_against_sources(limitation: "CoverageLi
 
 _CODE_SPECS = {
     LimitationCode.SOURCE_ABSENT: _CodeSpec(
-        render=_render_source_absent, absent_capable=True),
+        render=_render_source_absent, absent_capable=True,
+        allowed_fields=frozenset({
+            "affected_count", "unavailable_fields", "available_fields", "counterpart_source"})),
     LimitationCode.SOURCE_FAILED: _CodeSpec(
-        render=_render_source_failed),
+        render=_render_source_failed, allowed_fields=frozenset({"detail"})),
     LimitationCode.SOURCE_KEY_MISMATCH: _CodeSpec(
         render=_render_source_key_mismatch, caller_buildable=True,
-        validate_against_sources=_validate_source_key_mismatch_against_sources),
+        validate_against_sources=_validate_source_key_mismatch_against_sources,
+        allowed_fields=frozenset({"affected_count", "unavailable_fields", "counterpart_source"})),
     LimitationCode.SOURCE_GROUP_ABSENT: _CodeSpec(
-        render=_render_source_group_absent, min_related_sources=2, group_capable=True),
+        render=_render_source_group_absent, min_related_sources=2, group_capable=True,
+        allowed_fields=frozenset({"related_sources"})),
     LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE: _CodeSpec(
         render=_render_module_classification_unavailable, fixed_source="modules",
         absent_capable=True),
@@ -579,15 +598,18 @@ _CODE_SPECS = {
         fixed_source="peb", absent_capable=True),
     LimitationCode.PID_SOURCES_ABSENT: _CodeSpec(
         render=_render_pid_sources_absent, fixed_related_sources=_PID_SOURCES_ABSENT_SOURCES,
-        group_capable=True, validate_fields=_validate_pid_sources_absent_fields),
+        group_capable=True, validate_fields=_validate_pid_sources_absent_fields,
+        allowed_fields=frozenset({"related_sources"})),
     LimitationCode.PID_THREAD_LIST_FALLBACK: _CodeSpec(
         render=_render_pid_thread_list_fallback,
         caller_buildable=True, validate_fields=_validate_pid_thread_list_fallback_fields,
-        validate_against_sources=_validate_pid_thread_list_fallback_against_sources),
+        validate_against_sources=_validate_pid_thread_list_fallback_against_sources,
+        allowed_fields=frozenset({"counterpart_source", "related_tids"})),
     LimitationCode.PID_EXCEPTION_TID_FALLBACK: _CodeSpec(
         render=_render_pid_exception_tid_fallback,
         caller_buildable=True, validate_fields=_validate_pid_exception_tid_fallback_fields,
-        validate_against_sources=_validate_pid_exception_tid_fallback_against_sources),
+        validate_against_sources=_validate_pid_exception_tid_fallback_against_sources,
+        allowed_fields=frozenset({"thread_id"})),
     LimitationCode.PID_NO_USABLE_FALLBACK: _CodeSpec(
         render=_render_pid_no_usable_fallback, caller_buildable=True),
     LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE: _CodeSpec(
@@ -625,6 +647,21 @@ _CALLER_BUILDABLE_COMPLETENESS_CODES = tuple(
 # group (that would silently drop every source but the first from the
 # rendered text -- the bug this validation exists to prevent).
 _SINGLE_SOURCE_EVALUATION_CODES = _ABSENT_CAPABLE_CODES
+
+# Every CoverageLimitation field besides code/source/scope, and the value
+# it must hold unless the code's own _CodeSpec.allowed_fields says
+# otherwise -- see _CodeSpec.allowed_fields' docstring for why `scope`
+# isn't in this map.
+_STRUCTURED_FIELD_DEFAULTS = {
+    "affected_count": None,
+    "unavailable_fields": (),
+    "available_fields": (),
+    "counterpart_source": None,
+    "related_sources": (),
+    "related_tids": (),
+    "thread_id": None,
+    "detail": None,
+}
 
 
 @dataclass(frozen=True)
@@ -693,16 +730,21 @@ class CoverageLimitation:
         if spec.validate_fields is not None:
             spec.validate_fields(self)
 
-        # related_tids/thread_id each have exactly one owning code --
-        # fixed structural facts about which fields exist, not something
-        # that grows per code the way the registry above does, so kept
-        # as direct checks rather than another _CodeSpec field.
-        if self.related_tids and self.code != LimitationCode.PID_THREAD_LIST_FALLBACK:
-            raise ValueError(
-                f"related_tids is only valid for PID_THREAD_LIST_FALLBACK, not {self.code.value}")
-        if self.thread_id is not None and self.code != LimitationCode.PID_EXCEPTION_TID_FALLBACK:
-            raise ValueError(
-                f"thread_id is only valid for PID_EXCEPTION_TID_FALLBACK, not {self.code.value}")
+        # Every structured field this code's spec doesn't list in
+        # allowed_fields must stay at its default -- closes the gap where
+        # e.g. affected_count/unavailable_fields/detail could be attached
+        # to PID_NO_USABLE_FALLBACK (or any other fixed-sentence code)
+        # and silently ignored by its renderer, leaving the machine
+        # fields and the human text contradicting each other.
+        for field_name, default in _STRUCTURED_FIELD_DEFAULTS.items():
+            if field_name in spec.allowed_fields:
+                continue
+            value = getattr(self, field_name)
+            if value != default:
+                raise ValueError(
+                    f"CoverageLimitation(code={self.code.value}) does not use {field_name} "
+                    f"-- got {value!r}; only {sorted(spec.allowed_fields)} may be set on this "
+                    f"code besides code/source/scope")
 
     def to_dict(self) -> dict:
         """Every field, always -- no per-code custom shaping. Matches the
@@ -882,10 +924,11 @@ class EvaluationRequirement:
             raise ValueError(
                 f"EvaluationRequirement.all_absent_code={code.value!r} is not valid for "
                 f"{len(self.sources)} source(s) -- must be one of {[c.value for c in allowed]}")
-        if code == LimitationCode.PID_SOURCES_ABSENT and self.sources != _PID_SOURCES_ABSENT_SOURCES:
+        fixed_related_sources = _CODE_SPECS[code].fixed_related_sources
+        if fixed_related_sources is not None and self.sources != fixed_related_sources:
             raise ValueError(
-                f"EvaluationRequirement.all_absent_code=PID_SOURCES_ABSENT requires sources == "
-                f"{_PID_SOURCES_ABSENT_SOURCES!r}, got {self.sources!r}")
+                f"EvaluationRequirement.all_absent_code={code.value} requires sources == "
+                f"{fixed_related_sources!r}, got {self.sources!r}")
         if code in _FIXED_SOURCE_CODES and self.sources[0] != _FIXED_SOURCE_CODES[code]:
             raise ValueError(
                 f"EvaluationRequirement.all_absent_code={code.value} requires "
