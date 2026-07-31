@@ -8,6 +8,7 @@ special-casing was prone to.
 """
 import csv
 import io
+import os
 import json
 
 import pytest
@@ -236,6 +237,11 @@ def test_v2output_requires_dump_path_or_evidence():
 
 
 def test_v2output_from_evidence_produces_two_element_evidence_array(tmp_path):
+    # kind="modules" deliberately -- "comparison" isn't a schema-registered
+    # result.kind yet (that's Phase C's PR2); a real schema-validating
+    # round trip for this same construction lives in
+    # tests/integration/test_json_schema_v2.py, where kind="comparison"
+    # would validate for the wrong reason (or not at all).
     from dumpex.output.envelope import EvidenceInput
 
     dump_a = tmp_path / "baseline.dmp"
@@ -246,9 +252,9 @@ def test_v2output_from_evidence_produces_two_element_evidence_array(tmp_path):
     out = V2Output.from_evidence([
         EvidenceInput(id="baseline", role="baseline", path=str(dump_a)),
         EvidenceInput(id="target", role="target", path=str(dump_b)),
-    ], command="comparison", options={})
+    ], command="modules", options={})
     out.set_command_result(CommandResult(
-        kind="comparison", records=_fake_records(),
+        kind="modules", records=_fake_records(),
         coverage=CoverageReport(status=COVERAGE_COMPLETE)))
     doc = json.loads(out.to_json())
 
@@ -256,7 +262,117 @@ def test_v2output_from_evidence_produces_two_element_evidence_array(tmp_path):
     baseline, target = doc["meta"]["evidence"]
     assert baseline["id"] == baseline["role"] == "baseline"
     assert target["id"] == target["role"] == "target"
-    assert doc["result"]["kind"] == "comparison"
+    assert doc["result"]["kind"] == "modules"
+
+
+def test_v2output_from_evidence_requires_nonempty_list():
+    from dumpex.output.envelope import EvidenceInput
+    with pytest.raises(ValueError, match="at least one"):
+        V2Output.from_evidence([])
+
+
+def test_v2output_rejects_both_dump_path_and_evidence(tmp_path):
+    from dumpex.output.envelope import EvidenceInput
+    dump = tmp_path / "sample.dmp"
+    dump.write_bytes(b"x")
+    with pytest.raises(TypeError, match="both"):
+        V2Output(str(dump), evidence=[EvidenceInput(id="a", role="a", path=str(dump))])
+
+
+def test_v2output_from_evidence_rejects_duplicate_ids(tmp_path):
+    from dumpex.output.envelope import EvidenceInput
+    dump_a = tmp_path / "a.dmp"
+    dump_a.write_bytes(b"a")
+    dump_b = tmp_path / "b.dmp"
+    dump_b.write_bytes(b"b")
+    with pytest.raises(ValueError, match="unique"):
+        V2Output.from_evidence([
+            EvidenceInput(id="same", role="baseline", path=str(dump_a)),
+            EvidenceInput(id="same", role="target", path=str(dump_b)),
+        ])
+
+
+def test_v2output_from_evidence_rejects_bare_dict_entries():
+    with pytest.raises(TypeError, match="EvidenceInput"):
+        V2Output.from_evidence([{"id": "a", "role": "a", "path": "x"}])
+
+
+# ── V2Output write_json/write_csv refuse to overwrite ANY evidence path ──
+# (Phase C review finding: an evidence=-constructed instance previously
+# passed dump_path_abs=None into the safe-write layer, silently disabling
+# the guard entirely for both baseline and target.)
+
+def _comparison_output(dump_a, dump_b):
+    from dumpex.output.envelope import EvidenceInput
+    out = V2Output.from_evidence([
+        EvidenceInput(id="baseline", role="baseline", path=str(dump_a)),
+        EvidenceInput(id="target", role="target", path=str(dump_b)),
+    ], command="modules", options={})
+    out.set_command_result(CommandResult(
+        kind="modules", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+    return out
+
+
+@pytest.mark.parametrize("which", ["baseline", "target"])
+def test_write_json_refuses_to_overwrite_either_evidence_path(tmp_path, which):
+    dump_a = tmp_path / "baseline.dmp"
+    dump_a.write_bytes(b"BASELINE CONTENT")
+    dump_b = tmp_path / "target.dmp"
+    dump_b.write_bytes(b"TARGET CONTENT")
+    out = _comparison_output(dump_a, dump_b)
+    target_path = dump_a if which == "baseline" else dump_b
+    original = target_path.read_bytes()
+
+    with pytest.raises(SystemExit):
+        out.write_json(str(target_path), force=True)
+    assert target_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("which", ["baseline", "target"])
+def test_write_csv_single_file_refuses_to_overwrite_either_evidence_path(tmp_path, which):
+    # write_csv's single-file vs. directory mode is chosen by the
+    # REQUESTED path's own ".csv" suffix (see V2Output.write_csv), not by
+    # what the evidence file happens to be named -- so exercising single-
+    # file mode against an evidence path requires the evidence path
+    # itself to end in ".csv" (an arbitrary but legal evidence filename
+    # for this test; nothing about EvidenceInput requires a ".dmp" name).
+    dump_a = tmp_path / "baseline.csv"
+    dump_a.write_bytes(b"BASELINE CONTENT")
+    dump_b = tmp_path / "target.csv"
+    dump_b.write_bytes(b"TARGET CONTENT")
+    out = _comparison_output(dump_a, dump_b)
+    target_path = dump_a if which == "baseline" else dump_b
+    original = target_path.read_bytes()
+
+    with pytest.raises(SystemExit):
+        out.write_csv(str(target_path), force=True)
+    assert target_path.read_bytes() == original
+
+
+@pytest.mark.parametrize("which", ["baseline", "target"])
+def test_write_csv_directory_mode_refuses_to_overwrite_either_evidence_path(tmp_path, which):
+    # Directory mode's per-table filename is deterministic --
+    # dumpex_{kind}_{table_name}.csv (no cmd_label, no timestamp; see
+    # V2Output.write_csv) -- so a genuine collision is reproduced by
+    # pointing an evidence path at exactly that name inside the output
+    # directory, rather than needing to predict a timestamp.
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    colliding_name = "dumpex_modules_summary.csv"
+    colliding_path = out_dir / colliding_name
+    other_path = tmp_path / "other.dmp"
+
+    dump_a = colliding_path if which == "baseline" else other_path
+    dump_b = other_path if which == "baseline" else colliding_path
+    dump_a.write_bytes(b"BASELINE CONTENT")
+    dump_b.write_bytes(b"TARGET CONTENT")
+    out = _comparison_output(dump_a, dump_b)
+    original = colliding_path.read_bytes()
+
+    with pytest.raises(SystemExit):
+        out.write_csv(str(out_dir) + os.sep, force=True)
+    assert colliding_path.read_bytes() == original
 
 
 class _FakeRecord:

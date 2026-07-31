@@ -159,6 +159,18 @@ def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | 
         raise TypeError(
             "build_meta_v2() requires either dump_path_abs (single-dump commands) or "
             "evidence (multi-dump commands) -- got neither")
+    if evidence is not None and not evidence:
+        # meta.evidence's own schema requires minItems: 1 -- an empty
+        # list here would build {"evidence": []}, a document that names
+        # SCHEMA_VERSION but can't actually pass the schema it claims to
+        # follow (the same failure mode this function's own docstring
+        # above describes for tool/execution/runtime, just for a caller
+        # error instead of a runtime exception). V2Output's own
+        # constructor already rejects this before ever reaching here;
+        # this is the same check for any other/future caller of
+        # build_meta_v2() directly.
+        raise ValueError(
+            "build_meta_v2(evidence=...) requires at least one entry, got an empty list")
 
     meta = {"schema_version": SCHEMA_VERSION}
 

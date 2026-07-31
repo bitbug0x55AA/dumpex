@@ -59,21 +59,35 @@ def resolve_or_none(path) -> Path | None:
 
 def check_not_dump_path(out_path, dump_path, label: str):
     """
-    Refuse if out_path resolves to the same file as dump_path.
+    Refuse if out_path resolves to the same file as ANY of dump_path.
+
+    dump_path is either a single path (str/Path -- the original, still
+    most common case: one command, one input dump) or an iterable of
+    paths (a comparison command with a baseline AND a target dump, each
+    equally real evidence that must never be overwritten). A bare string
+    is deliberately NOT treated as "an iterable of characters" here --
+    isinstance(dump_path, (str, Path)) is checked explicitly first, since
+    Python strings are iterable and would otherwise silently explode into
+    single-character "paths" that can never collide with anything,
+    defeating the whole check.
 
     Callers must invoke this against the LITERAL path about to be written,
     at commit time — never against a directory or pattern that merely
     produced that path, and never skip it for --force. MinidumpFile reads
     are lazy/on-demand against the still-open file handle for the life of
     the process (not a one-time upfront slurp), so there is no point in
-    program execution where overwriting the dump path becomes safe.
+    program execution where overwriting any protected input path becomes
+    safe -- force must never be able to lift this specific check.
     """
-    out_resolved  = resolve_or_none(out_path)
-    dump_resolved = resolve_or_none(dump_path)
-    if out_resolved is not None and out_resolved == dump_resolved:
-        print(RED(f"[!] Refusing to write {label} to the same path as the input dump: {out_path}"))
-        print(DIM(f"    This would destroy the evidence file. Choose a different output path."))
-        sys.exit(1)
+    out_resolved = resolve_or_none(out_path)
+    if out_resolved is None:
+        return
+    dump_paths = [dump_path] if isinstance(dump_path, (str, Path)) else list(dump_path)
+    for dp in dump_paths:
+        if out_resolved == resolve_or_none(dp):
+            print(RED(f"[!] Refusing to write {label} to the same path as the input dump: {out_path}"))
+            print(DIM(f"    This would destroy the evidence file. Choose a different output path."))
+            sys.exit(1)
 
 
 def summarize_bytes(data: bytes) -> str:

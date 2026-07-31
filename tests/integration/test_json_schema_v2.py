@@ -575,3 +575,33 @@ def test_sanity_the_minimal_valid_doc_itself_validates(validator):
     thread_doc = _minimal_valid_doc(kind="threads")
     thread_doc["result"]["data"]["records"] = [_minimal_thread_record()]
     assert validator.is_valid(thread_doc)
+
+
+# ── multi-evidence V2Output.from_evidence() (Phase C, PR1) ────────────────
+# kind="modules" here deliberately -- "comparison" is not yet a
+# schema-registered result.kind (that's PR2), so a document built with
+# it would validate for the wrong reason (or not at all). The point of
+# this test is proving the EVIDENCE ARRAY produced by from_evidence()
+# satisfies the real schema end to end, not exercising a not-yet-real kind.
+
+def test_v2output_from_evidence_full_envelope_validates_against_schema(validator):
+    from dumpex.output.envelope import EvidenceInput
+
+    dump_a = _make_dump_file()
+    dump_b = _make_dump_file()
+    try:
+        out = V2Output.from_evidence([
+            EvidenceInput(id="baseline", role="baseline", path=dump_a),
+            EvidenceInput(id="target", role="target", path=dump_b),
+        ], command="modules", options={"verbose": False})
+        out.set_command_result(CommandResult(
+            kind="modules", records=[], coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+        doc = json.loads(out.to_json())
+        errors = sorted(validator.iter_errors(doc), key=str)
+        assert not errors, "\n".join(str(e) for e in errors)
+        assert len(doc["meta"]["evidence"]) == 2
+        assert doc["meta"]["evidence"][0]["id"] == "baseline"
+        assert doc["meta"]["evidence"][1]["id"] == "target"
+    finally:
+        os.remove(dump_a)
+        os.remove(dump_b)

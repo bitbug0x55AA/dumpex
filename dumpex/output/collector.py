@@ -23,21 +23,49 @@ class V2Output:
                  options: dict = None, case_id: str = None, analyst: str = None,
                  redact_paths: bool = False, started_at: "datetime.datetime" = None,
                  evidence: "list[EvidenceInput] | None" = None):
-        if evidence is None and dump_path is None:
+        if (dump_path is None) == (evidence is None):
+            # Both None -> nothing to build meta from. Both given ->
+            # genuinely ambiguous (which one wins?) and, worse, silently
+            # dropping dump_path here would ALSO silently drop it from
+            # self._protected_paths below -- disabling write_json/
+            # write_csv's overwrite guard for a path the caller clearly
+            # considered real input. Exactly one is required, always.
             raise TypeError(
-                "V2Output requires either dump_path (single-dump commands) or evidence "
-                "(multi-dump commands) -- got neither")
+                "V2Output requires exactly one of dump_path (single-dump commands) or "
+                "evidence (multi-dump commands), got "
+                + ("neither" if dump_path is None else "both"))
         if evidence is not None:
+            if not evidence:
+                raise ValueError(
+                    "V2Output(evidence=...) requires at least one EvidenceInput -- an "
+                    "empty list would produce meta.evidence=[], which violates the v2 "
+                    "schema's minItems: 1")
+            for ei in evidence:
+                if not isinstance(ei, EvidenceInput):
+                    raise TypeError(
+                        f"V2Output(evidence=...) entries must be EvidenceInput instances, "
+                        f"got {type(ei).__name__} -- a bare dict would otherwise reach "
+                        f"build_meta_v2 and fail with an unrelated AttributeError instead "
+                        f"of a clear message at the actual point of misuse")
+            ids = [ei.id for ei in evidence]
+            if len(set(ids)) != len(ids):
+                raise ValueError(
+                    f"V2Output(evidence=...) entries must have unique id values (role "
+                    f"may repeat), got ids={ids!r} -- id is a stable identifier a future "
+                    f"comparison record could reference, so a duplicate would make that "
+                    f"reference ambiguous")
             # No single canonical dump path exists for a multi-evidence
             # (e.g. comparison) instance -- see write_json/write_csv
             # below for the one place this matters today.
             self._dump_path_abs  = None
             self._dump_file_name = None
             self._evidence        = list(evidence)
+            self._protected_paths = [os.path.abspath(ei.path) for ei in evidence]
         else:
             self._dump_path_abs  = os.path.abspath(dump_path)
             self._dump_file_name = os.path.basename(dump_path)
             self._evidence        = None
+            self._protected_paths = [self._dump_path_abs]
         self._command        = command
         self._options        = dict(options) if options else {}
         self._case_id        = case_id
@@ -140,18 +168,15 @@ class V2Output:
         return _serialize_envelope(self._build_envelope())
 
     def write_json(self, path: str, cmd_label: str = "", force: bool = False) -> None:
-        # self._dump_path_abs is None for an evidence=-constructed (e.g.
-        # future comparison) instance -- write_text_to_target's
-        # check_not_dump_path guard against overwriting the INPUT dump
-        # silently becomes a no-op in that case (resolve_or_none(None)
-        # swallows it), rather than raising. Not fixed here: this class
-        # doesn't yet have any evidence=-constructed caller (no command
-        # writes --json/--csv for a comparison today), and deciding
-        # whether the guard should cover baseline, target, or both is a
-        # question for whoever wires that command's CLI/--json/--csv
-        # handling, not something to silently resolve in this PR.
+        # self._protected_paths covers every real input -- a single dump
+        # path for the six existing commands, or every evidence entry's
+        # path for an evidence=-constructed (e.g. comparison) instance,
+        # so check_not_dump_path (inside write_text_to_target) refuses to
+        # overwrite ANY of them, baseline or target, exactly like today's
+        # single-dump-path guard -- see safe_io.check_not_dump_path's own
+        # docstring for why this can never be lifted by --force.
         p = write_text_to_target(path, self.to_json(), ".json", cmd_label,
-                                  self._dump_path_abs, force, "--json output")
+                                  self._protected_paths, force, "--json output")
         print(DIM(f"  [·] JSON written → {p}  ({summarize_file(p)})"))
 
     def write_csv(self, path: str, cmd_label: str = "", force: bool = False) -> None:
@@ -181,7 +206,7 @@ class V2Output:
                 buf.write("\n")
                 total_rows += len(rows)
             p = write_text_to_target(path, buf.getvalue(), ".csv", cmd_label,
-                                      self._dump_path_abs, force, "--csv output",
+                                      self._protected_paths, force, "--csv output",
                                       newline="")
             print(DIM(f"  [·] CSV  written → {p}  "
                       f"({total_rows} row(s) across all tables, {summarize_file(p)})"))
@@ -200,7 +225,7 @@ class V2Output:
             writer.writeheader()
             writer.writerows(rows)
             fname = write_text_to_directory(p_in, buf.getvalue(), stem, ".csv",
-                                             self._dump_path_abs, force,
+                                             self._protected_paths, force,
                                              f"CSV table output ({stem}.csv)",
                                              newline="")
             print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s), {summarize_file(fname)})"))

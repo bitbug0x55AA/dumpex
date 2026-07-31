@@ -132,6 +132,17 @@ def test_build_meta_v2_requires_dump_path_abs_or_evidence(tmp_path):
         build_meta_v2(**_meta_kwargs())
 
 
+def test_build_meta_v2_rejects_empty_evidence_list(tmp_path):
+    # meta.evidence's own schema requires minItems: 1 -- {"evidence": []}
+    # would build a document that names schema_version but can't
+    # actually pass the schema it claims to follow. V2Output's own
+    # constructor already rejects this before ever reaching build_meta_v2
+    # (see test_v2output_from_evidence_requires_nonempty_list); this is
+    # the same check for any other caller of build_meta_v2() directly.
+    with pytest.raises(ValueError, match="at least one"):
+        build_meta_v2(evidence=[], **_meta_kwargs())
+
+
 def test_build_meta_v2_evidence_list_produces_one_entry_per_input(tmp_path):
     dump_a = tmp_path / "baseline.dmp"
     dump_a.write_bytes(b"aaa")
