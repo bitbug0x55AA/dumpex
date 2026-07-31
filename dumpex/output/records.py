@@ -246,11 +246,16 @@ SEVERITY_WARNING = "warning"
 SEVERITY_ERROR   = "error"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Diagnostic:
     """One entry in result.diagnostics.warnings/.errors -- structured,
     not a bare string, so a consumer can filter/triage without parsing
-    free text."""
+    free text. Frozen: a plain (mutable) dataclass would let a caller
+    construct a valid instance, then mutate a field past __post_init__'s
+    own validation (e.g. `d.severity = "critical"`) before it reaches
+    collector.py's set_command_result() -- CommandResult's isinstance
+    check only confirms the TYPE at construction time, not that the
+    fields are still valid by the time .to_dict() is actually called."""
     severity: str            # SEVERITY_WARNING / SEVERITY_ERROR
     message:  str
     code:     "str | None" = None
@@ -269,7 +274,7 @@ class Diagnostic:
         return {"severity": self.severity, "message": self.message, "code": self.code}
 
 
-@dataclass
+@dataclass(frozen=True)
 class Artifact:
     """One entry in the top-level `artifacts` array -- an output file the
     tool itself produced (e.g. an extracted memory region), distinct from
@@ -284,7 +289,10 @@ class Artifact:
     entry reaches `artifacts` on the wire -- dumpex.output.collector.
     V2Output.set_command_result() calls .to_dict() unconditionally (no
     duck-typed dict passthrough), so a caller can't smuggle a shape this
-    class doesn't validate."""
+    class doesn't validate. Frozen for the same reason as Diagnostic --
+    otherwise a valid instance could be mutated past its own
+    __post_init__ checks after CommandResult's isinstance check already
+    passed."""
     id:          str
     kind:        str            # open vocabulary (e.g. "extracted_region") -- mirrors
                                   # dumpex.output.coverage's `source` staying open too

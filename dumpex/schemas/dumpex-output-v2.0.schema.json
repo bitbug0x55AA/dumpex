@@ -290,13 +290,14 @@
     },
 
     "diagnosticEntry": {
+      "description": "Matches dumpex.output.records.Diagnostic.to_dict(), which always emits all three fields -- `code` is required (it's always a key in the dict), just nullable.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["severity", "message"],
+      "required": ["severity", "message", "code"],
       "properties": {
         "severity": { "enum": ["warning", "error"] },
-        "message":  { "type": "string" },
-        "code":     { "type": ["string", "null"] }
+        "message":  { "type": "string", "minLength": 1 },
+        "code":     { "type": ["string", "null"], "minLength": 1 }
       }
     },
 
@@ -308,7 +309,7 @@
       "properties": {
         "state":        { "enum": ["absent", "present_empty", "present", "failed"] },
         "record_count": { "type": ["integer", "null"] },
-        "detail":       { "type": ["string", "null"] }
+        "detail":       { "type": ["string", "null"], "minLength": 1 }
       },
       "allOf": [
         { "if": { "properties": { "state": { "enum": ["absent", "failed"] } } },
@@ -328,31 +329,31 @@
                    "available_fields", "counterpart_source", "related_sources",
                    "related_tids", "thread_id", "detail"],
       "properties": {
-        "code":                { "type": "string" },
-        "source":              { "type": "string" },
-        "scope":               { "type": ["string", "null"] },
+        "code":                { "type": "string", "minLength": 1 },
+        "source":              { "type": "string", "minLength": 1 },
+        "scope":               { "type": ["string", "null"], "minLength": 1 },
         "affected_count":      { "type": ["integer", "null"], "minimum": 1 },
-        "unavailable_fields":  { "type": "array", "items": { "type": "string" } },
-        "available_fields":    { "type": "array", "items": { "type": "string" } },
-        "counterpart_source":  { "type": ["string", "null"] },
-        "related_sources":     { "type": "array", "items": { "type": "string" } },
+        "unavailable_fields":  { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "available_fields":    { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "counterpart_source":  { "type": ["string", "null"], "minLength": 1 },
+        "related_sources":     { "type": "array", "items": { "type": "string", "minLength": 1 } },
         "related_tids":        { "type": "array", "items": { "type": "integer" } },
         "thread_id":           { "type": ["integer", "null"] },
-        "detail":              { "type": ["string", "null"] }
+        "detail":              { "type": ["string", "null"], "minLength": 1 }
       }
     },
 
     "artifact": {
-      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Not yet populated by any of the six v2-routed recon commands; the type exists so a future producer (extract/report, once migrated) has a typed shape to build.",
+      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Not yet populated by any of the six v2-routed recon commands; the type exists so a future producer (extract/report, once migrated) has a typed shape to build. Matches dumpex.output.records.Artifact.to_dict(), which always emits all six fields -- `required` covers all of them, not just id/kind/path.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "path"],
+      "required": ["id", "kind", "path", "size_bytes", "sha256", "description"],
       "properties": {
-        "id":          { "type": "string" },
-        "kind":        { "type": "string" },
-        "path":        { "type": "string" },
-        "size_bytes":  { "type": ["integer", "null"] },
-        "sha256":      { "type": ["string", "null"] },
+        "id":          { "type": "string", "minLength": 1 },
+        "kind":        { "type": "string", "minLength": 1 },
+        "path":        { "type": "string", "minLength": 1 },
+        "size_bytes":  { "type": ["integer", "null"], "minimum": 0 },
+        "sha256":      { "type": ["string", "null"], "minLength": 1 },
         "description": { "type": ["string", "null"] }
       }
     }

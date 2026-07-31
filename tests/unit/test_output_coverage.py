@@ -108,6 +108,24 @@ def test_source_observation_rejects_bool_record_count(state, record_count):
         SourceObservation(name="modules", state=state, record_count=record_count)
 
 
+def test_source_observation_rejects_float_record_count():
+    # A float (e.g. 1.5) passes every existing "!= 0"/"<= 0"/truthiness
+    # comparison but is not a real int -- the JSON Schema's "integer"
+    # type rejects it.
+    with pytest.raises(ValueError, match="record_count"):
+        SourceObservation(name="modules", state=SourceState.PRESENT, record_count=1.5)
+
+
+def test_source_observation_rejects_non_string_detail():
+    with pytest.raises(ValueError, match="detail"):
+        SourceObservation(name="modules", state=SourceState.FAILED, detail=123)
+
+
+def test_source_observation_rejects_empty_name():
+    with pytest.raises(ValueError, match="name"):
+        SourceObservation(name="", state=SourceState.ABSENT)
+
+
 def test_source_observation_is_frozen():
     obs = SourceObservation(name="modules", state=SourceState.ABSENT)
     with pytest.raises(Exception):
@@ -150,6 +168,43 @@ def test_coverage_limitation_rejects_non_positive_affected_count():
     with pytest.raises(ValueError, match="affected_count"):
         CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
                             counterpart_source="threads", affected_count=0)
+
+
+def test_coverage_limitation_rejects_non_string_scope():
+    with pytest.raises(ValueError, match="scope"):
+        CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules", scope=123)
+
+
+def test_coverage_limitation_rejects_non_string_counterpart_source():
+    with pytest.raises(ValueError, match="counterpart_source"):
+        CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
+                            counterpart_source=123)
+
+
+def test_coverage_limitation_rejects_non_string_detail():
+    with pytest.raises(ValueError, match="detail"):
+        CoverageLimitation(code=LIMITATION_SOURCE_FAILED, source="modules", detail=123)
+
+
+def test_coverage_limitation_rejects_non_string_element_in_unavailable_fields():
+    with pytest.raises(ValueError, match="unavailable_fields"):
+        CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
+                            unavailable_fields=[123])
+
+
+def test_coverage_limitation_rejects_non_string_element_in_related_sources():
+    with pytest.raises(ValueError, match="related_sources"):
+        CoverageLimitation(code=LimitationCode.SOURCE_GROUP_ABSENT, source="threads",
+                            related_sources=["threads", 123])
+
+
+def test_coverage_limitation_rejects_bare_string_as_unavailable_fields():
+    # A bare string is iterable -- tuple("ab") would silently become
+    # ('a', 'b') instead of raising on what's almost certainly a
+    # forgotten [ ] at the call site.
+    with pytest.raises(ValueError, match="unavailable_fields"):
+        CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
+                            unavailable_fields="ab")
 
 
 def test_coverage_limitation_accepts_list_for_unavailable_fields_and_normalizes_to_tuple():

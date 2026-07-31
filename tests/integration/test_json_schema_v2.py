@@ -32,7 +32,11 @@ from dumpex.commands.modules import collect_modules
 from dumpex.commands.threads import collect_threads
 from dumpex.commands.sysinfo import collect_sysinfo, collect_pid
 from dumpex.commands.peb import collect_peb
-from dumpex.output.coverage import SourceObservation, CoverageLimitation, LimitationCode
+from dumpex.output.coverage import (
+    SourceObservation, CoverageLimitation, LimitationCode, CoverageReport, COVERAGE_COMPLETE,
+)
+from dumpex.output.command_result import CommandResult
+from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR
 
 
 @pytest.fixture(scope="module")
@@ -382,6 +386,32 @@ def test_coverage_limitation_minimal_shape_rejected_by_schema(coverage_limitatio
     # CoverageLimitation.to_dict() always emits is required.
     doc = {"code": "SOURCE_ABSENT", "source": "modules"}
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_real_artifact_and_diagnostic_instances_validate_in_full_envelope(validator):
+    # Routes real Artifact/Diagnostic instances through the actual
+    # CommandResult -> V2Output.set_command_result() -> to_json() path
+    # (not a hand-built dict) and validates the WHOLE envelope --
+    # confirms the tightened artifact/diagnosticEntry $defs agree with
+    # what these two classes' own to_dict() actually produces.
+    result = CommandResult(
+        kind="modules", records=[],
+        coverage=CoverageReport(status=COVERAGE_COMPLETE),
+        diagnostics=[
+            Diagnostic(severity=SEVERITY_WARNING, message="w1", code="W001"),
+            Diagnostic(severity=SEVERITY_ERROR, message="e1"),
+        ],
+        artifacts=[
+            Artifact(id="a1", kind="extracted_region", path="region_0x1000.bin",
+                     size_bytes=4096, sha256="deadbeef", description="RWX region"),
+            Artifact(id="a2", kind="extracted_region", path="region_0x2000.bin"),
+        ],
+    )
+    doc = _validate(validator, result)
+    assert doc["artifacts"][0]["kind"] == "extracted_region"
+    assert doc["artifacts"][1]["size_bytes"] is None
+    assert doc["diagnostics"]["warnings"][0]["code"] == "W001"
+    assert doc["diagnostics"]["errors"][0]["code"] is None
 
 
 def test_sanity_the_minimal_valid_doc_itself_validates(validator):

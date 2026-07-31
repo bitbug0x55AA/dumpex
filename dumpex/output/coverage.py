@@ -111,6 +111,48 @@ SOURCE_PRESENT       = SourceState.PRESENT
 SOURCE_FAILED        = SourceState.FAILED
 
 
+# ── Shared field-shape validators ─────────────────────────────────────────
+# Every wire-bound string/int/tuple field on SourceObservation and
+# CoverageLimitation is validated through exactly one of these, rather
+# than each field growing its own hand-rolled check -- the JSON Schema's
+# corresponding $defs (sourceObservation/coverageLimitation) enforce the
+# identical constraints on the other side, and drift between the two
+# is what lets the Python model construct an object whose to_dict()
+# the schema then rejects.
+
+def _require_non_empty_str(value, field_name: str) -> None:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{field_name} must be a non-empty string, got {value!r}")
+
+
+def _require_optional_str(value, field_name: str) -> None:
+    if value is not None and (not isinstance(value, str) or not value):
+        raise ValueError(f"{field_name} must be None or a non-empty string, got {value!r}")
+
+
+def _require_optional_positive_int(value, field_name: str) -> None:
+    # bool is a subclass of int in Python (True == 1, False == 0), so a
+    # plain `isinstance(value, int)` or `value <= 0` check would silently
+    # accept a bool -- explicitly excluded, since the JSON Schema's
+    # "integer" type rejects `true`/`false` on the wire.
+    if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value <= 0):
+        raise ValueError(
+            f"{field_name} must be None or a plain positive int (not bool), got {value!r}")
+
+
+def _normalize_non_empty_str_tuple(value, field_name: str) -> tuple:
+    # A bare string is iterable, so tuple("abc") silently produces
+    # ('a', 'b', 'c') instead of raising -- exactly the kind of "typo'd a
+    # missing [ ]" bug this rejects up front, before it reaches tuple().
+    if isinstance(value, str):
+        raise ValueError(f"{field_name} must be a list/tuple of strings, not a bare string")
+    value = tuple(value)
+    if any(not isinstance(v, str) or not v for v in value):
+        raise ValueError(f"{field_name} must contain only non-empty strings, got {value!r}")
+    return value
+
+
 @dataclass(frozen=True)
 class SourceObservation:
     """The state of ONE underlying minidump stream ("source"), as
@@ -125,19 +167,22 @@ class SourceObservation:
     detail: "str | None" = None   # error text, meaningful only when state == FAILED
 
     def __post_init__(self):
+        _require_non_empty_str(self.name, "SourceObservation.name")
         state = SourceState(self.state)
         object.__setattr__(self, "state", state)
 
-        # bool is a subclass of int in Python (True == 1, False == 0), so
-        # every check below (`!= 0`, `<= 0`, truthiness) would silently
-        # accept a bool in place of a real record_count -- explicitly
-        # excluded up front, since the JSON Schema's "integer" type
-        # rejects `true`/`false` and the wire value must actually round-
-        # trip through it.
-        if self.record_count is not None and isinstance(self.record_count, bool):
+        # record_count must be a plain int (bool excluded -- see
+        # _require_optional_positive_int's docstring) or None; unlike
+        # affected_count this may legitimately be 0 (present_empty), so
+        # the shared positive-int helper doesn't apply here -- checked
+        # directly instead of relying on the state-specific comparisons
+        # below to catch a non-int (e.g. a float slips past `<= 0`).
+        if self.record_count is not None and (
+                not isinstance(self.record_count, int) or isinstance(self.record_count, bool)):
             raise ValueError(
                 f"SourceObservation {self.name!r}: record_count must be a plain int "
-                f"or None, not bool ({self.record_count!r})")
+                f"(not bool) or None, got {self.record_count!r}")
+        _require_optional_str(self.detail, f"SourceObservation {self.name!r}: detail")
 
         if state in (SourceState.ABSENT, SourceState.FAILED):
             if self.record_count is not None:
@@ -296,26 +341,20 @@ class CoverageLimitation:
 
     def __post_init__(self):
         object.__setattr__(self, "code", LimitationCode(self.code))
-        if not isinstance(self.source, str) or not self.source:
-            raise ValueError("CoverageLimitation.source must be a non-empty string")
+        _require_non_empty_str(self.source, "CoverageLimitation.source")
         # affected_count always means "count of affected items" whenever
         # it's set, regardless of code -- validated once here rather than
-        # per-code, the same way `source` is. bool is explicitly excluded
-        # (it's a subclass of int in Python, so `True <= 0` is False and
-        # would otherwise slip past a plain positivity check) since the
-        # JSON Schema's "integer" type rejects `true`/`false`.
-        if self.affected_count is not None and (
-                not isinstance(self.affected_count, int) or isinstance(self.affected_count, bool)
-                or self.affected_count <= 0):
-            raise ValueError(
-                f"CoverageLimitation.affected_count must be None or a positive int, "
-                f"got {self.affected_count!r}")
-        if not isinstance(self.unavailable_fields, tuple):
-            object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
-        if not isinstance(self.available_fields, tuple):
-            object.__setattr__(self, "available_fields", tuple(self.available_fields))
-        if not isinstance(self.related_sources, tuple):
-            object.__setattr__(self, "related_sources", tuple(self.related_sources))
+        # per-code, the same way `source` is.
+        _require_optional_positive_int(self.affected_count, "CoverageLimitation.affected_count")
+        _require_optional_str(self.scope, "CoverageLimitation.scope")
+        _require_optional_str(self.counterpart_source, "CoverageLimitation.counterpart_source")
+        _require_optional_str(self.detail, "CoverageLimitation.detail")
+        object.__setattr__(self, "unavailable_fields", _normalize_non_empty_str_tuple(
+            self.unavailable_fields, "CoverageLimitation.unavailable_fields"))
+        object.__setattr__(self, "available_fields", _normalize_non_empty_str_tuple(
+            self.available_fields, "CoverageLimitation.available_fields"))
+        object.__setattr__(self, "related_sources", _normalize_non_empty_str_tuple(
+            self.related_sources, "CoverageLimitation.related_sources"))
         if not isinstance(self.related_tids, tuple):
             object.__setattr__(self, "related_tids", tuple(self.related_tids))
         if self.code == LimitationCode.SOURCE_GROUP_ABSENT and len(self.related_sources) < 2:

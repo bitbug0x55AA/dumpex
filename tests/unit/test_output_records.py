@@ -191,6 +191,16 @@ def test_diagnostic_code_defaults_to_none():
     assert d["code"] is None
 
 
+def test_diagnostic_is_frozen():
+    # Otherwise a valid Diagnostic could be mutated past its own
+    # __post_init__ checks (e.g. d.severity = "critical") after
+    # CommandResult's isinstance check already passed, reaching the wire
+    # in a shape the schema rejects.
+    d = Diagnostic(severity=SEVERITY_WARNING, message="x")
+    with pytest.raises(Exception):
+        d.severity = "critical"
+
+
 def test_diagnostic_rejects_invalid_severity():
     with pytest.raises(ValueError, match="severity"):
         Diagnostic(severity="critical", message="boom")
@@ -207,6 +217,12 @@ def test_diagnostic_rejects_empty_code():
 
 
 # ── Artifact ──────────────────────────────────────────────────────────────
+
+def test_artifact_is_frozen():
+    a = Artifact(id="a1", kind="extracted_region", path="x.bin")
+    with pytest.raises(Exception):
+        a.size_bytes = True
+
 
 def test_artifact_to_dict():
     a = Artifact(id="a1", kind="extracted_region", path="region_0x1000.bin",
