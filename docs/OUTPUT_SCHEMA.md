@@ -52,7 +52,7 @@ result sections:
     "schema_version": "1.1",
     "tool": {
       "name": "dumpex",
-      "version": "3.0.0"
+      "version": "3.0.1"
     },
     "execution": {
       "started_at": "2026-07-26T01:00:00Z",
@@ -252,7 +252,7 @@ root:
 {
   "meta": {
     "schema_version": "2.0",
-    "tool": { "name": "dumpex", "version": "3.0.0" },
+    "tool": { "name": "dumpex", "version": "3.0.1" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
       { "id": "primary", "role": "primary", "file_name": "sample.dmp",
