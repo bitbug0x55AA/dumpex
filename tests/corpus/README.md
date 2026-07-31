@@ -60,12 +60,14 @@ Without the environment variable, the module skips before reading any sample.
 1. Decide whether the sample is a known-clean negative or malicious positive.
 2. Copy the matching `manifest.example.yaml` to `manifest.yaml`.
 3. Place the DMP under that category's ignored `samples/` directory.
-4. Record its SHA-256, source, authorization, capture metadata, and stable
+4. Give it a stable, non-sensitive ID that does not contain a customer, case,
+   host, or analyst name; this ID can appear in CI and JUnit output.
+5. Record its SHA-256, source, authorization, capture metadata, and stable
    expected results.
-5. For evil samples, derive `ground_truth.detected_hunts` from evidence
+6. For evil samples, derive `ground_truth.detected_hunts` from evidence
    independent of dumpex: a controlled technique, trusted sandbox telemetry,
    an authoritative challenge write-up, or manual reverse engineering.
-6. Run the category manifest before promoting it into the private corpus.
+7. Run the category manifest before promoting it into the private corpus.
 
 Do not generate expected results by copying the current dumpex output. That
 would make the detector its own oracle and hide false negatives.
@@ -95,6 +97,70 @@ policy:
 The integration harness validates these policies before testing results. See
 the category README and example manifest for the fields required on each
 sample.
+
+The machine-readable contract is
+[`manifest-v2.schema.json`](manifest-v2.schema.json). The stricter
+`scripts/corpus_manager.py` validation additionally checks unique IDs, safe
+relative paths, SHA-256 content, category policy, and independent evil-sample
+ground truth.
+
+## Private corpus automation
+
+`.github/workflows/corpus.yml` runs the corpus gates on a protected,
+self-hosted Windows runner. It supports manual dispatch and a weekly schedule,
+and refuses to execute from anything other than the repository's default
+branch. It never executes submitted EXE files.
+
+Configure the GitHub environment and runner before enabling the workflow:
+
+1. Create a protected GitHub environment named `malware-lab` and require
+   reviewer approval for access.
+2. Register an isolated runner with the labels `windows`, `x64`,
+   `dumpex-corpus`, and `isolated`. Do not assign fork PR jobs to it.
+3. Set the environment variable `DUMPEX_CORPUS_SOURCE` to a read-only private
+   corpus directory accessible to that runner.
+4. Optionally set `DUMPEX_CORPUS_VERSION`. When set, the workflow reads that
+   named child directory below `DUMPEX_CORPUS_SOURCE`.
+
+The private source has the same category layout as the ignored mount:
+
+```text
+private-corpus/
+  2026.08.1/                 # optional version directory
+    clean/
+      manifest.yaml
+      samples/*.dmp
+    evil/
+      manifest.yaml
+      samples/*.dmp
+```
+
+The workflow currently requires the `evil` corpus because no clean DMP has
+been promoted yet. Once at least one reviewed clean sample exists, add
+`--require-kind clean` to the materialization step so both FP and FN coverage
+are mandatory.
+
+The manager validates the private source before copying only manifest-referenced
+files into `tests/corpus`. It refuses stale destination data and removes the
+materialized manifests and samples in an `always()` cleanup step:
+
+```powershell
+python scripts/corpus_manager.py validate `
+  --root D:\private-corpus\2026.08.1 `
+  --require-kind evil
+
+python scripts/corpus_manager.py cleanup --root tests/corpus --yes
+
+python scripts/corpus_manager.py materialize `
+  --source D:\private-corpus `
+  --version 2026.08.1 `
+  --destination tests/corpus `
+  --require-kind evil
+```
+
+CI uploads only JUnit assertions. Hunter console rendering is suppressed
+during corpus tests because it may contain strings recovered from private
+process memory.
 
 ## Evidence handling
 

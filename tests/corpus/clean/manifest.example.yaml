@@ -9,7 +9,8 @@ policy:
 samples:
   - id: clean_notepad_win11_01
     file: samples/notepad.dmp
-    sha256: "REPLACE_WITH_REAL_SHA256"
+    # Valid-shape placeholder; replace with the DMP's real SHA-256.
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
     category: clean
     source: "Controlled clean-lab capture"
     authorization: "Internal defensive validation lab"

@@ -1,0 +1,183 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bitbug0x55AA/dumpex/tests/corpus/manifest-v2.schema.json",
+  "title": "dumpex private corpus manifest v2",
+  "type": "object",
+  "required": ["version", "kind", "policy", "samples"],
+  "properties": {
+    "version": {
+      "const": 2
+    },
+    "kind": {
+      "enum": ["clean", "evil"]
+    },
+    "policy": {
+      "type": "object"
+    },
+    "samples": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/sample"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "clean"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "policy": {
+            "type": "object",
+            "required": ["false_positive"],
+            "properties": {
+              "false_positive": {
+                "type": "object",
+                "required": ["max_detected_hunts"],
+                "properties": {
+                  "max_detected_hunts": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "policy": {
+            "type": "object",
+            "required": ["false_negative"],
+            "properties": {
+              "false_negative": {
+                "type": "object",
+                "required": ["require_ground_truth_detection"],
+                "properties": {
+                  "require_ground_truth_detection": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "hunter": {
+      "enum": [
+        "injection",
+        "hollowing",
+        "stomping",
+        "pipe",
+        "cs-beacon",
+        "yara",
+        "obfuscation"
+      ]
+    },
+    "huntAssertion": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "enum": [
+            "DETECTED",
+            "NOT_DETECTED_IN_SCANNED_SCOPE",
+            "INCONCLUSIVE",
+            "NOT_EVALUATED"
+          ]
+        },
+        "coverage_status": {
+          "enum": ["complete", "partial", "not_evaluated"]
+        },
+        "min_score": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "sample": {
+      "type": "object",
+      "required": [
+        "id",
+        "file",
+        "sha256",
+        "category",
+        "source",
+        "authorization"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "file": {
+          "type": "string",
+          "pattern": "^samples[/\\\\]"
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "authorization": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capture": {
+          "type": "object"
+        },
+        "ground_truth": {
+          "type": "object",
+          "required": ["detected_hunts", "basis"],
+          "properties": {
+            "detected_hunts": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "$ref": "#/$defs/hunter"
+              }
+            },
+            "basis": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "expected": {
+          "type": "object",
+          "properties": {
+            "hunt": {
+              "type": "object",
+              "propertyNames": {
+                "$ref": "#/$defs/hunter"
+              },
+              "additionalProperties": {
+                "$ref": "#/$defs/huntAssertion"
+              }
+            }
+          }
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

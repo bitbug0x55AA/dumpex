@@ -36,9 +36,11 @@ requires no malware corpus, external fixture download, or network access.
 | `tests/fixtures/fakes.py` | Synthetic minidump and PE builders |
 | `tests/corpus/` | Optional local tests against analyst-authorized real samples |
 
-The optional corpus is intentionally absent from CI. Follow
-[`tests/corpus/README.md`](tests/corpus/README.md) to use a private,
-authorized sample set locally. Never commit sensitive or malicious case
+The default public CI suite intentionally has no private corpus dependency.
+The separate protected `.github/workflows/corpus.yml` workflow can materialize
+an authorized corpus on an isolated self-hosted runner for manual and scheduled
+FP/FN regression. Follow [`tests/corpus/README.md`](tests/corpus/README.md) for
+local use and runner configuration. Never commit sensitive or malicious case
 evidence.
 
 `tests/conftest.py` resets module-level thread-context monkeypatch points
@@ -85,6 +87,10 @@ introduce a second canonical rules tree.
 `.github/workflows/tests.yml` runs tests on the minimum supported Python
 version and a current Python version for pushes and pull requests. Coverage is
 gated by the threshold in `pyproject.toml`.
+
+`.github/workflows/corpus.yml` is a separate private-data boundary. It must
+remain restricted to the default branch and a protected, isolated self-hosted
+runner; do not expose it to fork pull-request code or upload raw corpus output.
 
 The PyInstaller workflow should collect `dumpex.rules_pkg` package data rather
 than copying an unrelated top-level rules directory. Packaging changes should

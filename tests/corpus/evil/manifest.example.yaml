@@ -9,7 +9,8 @@ policy:
 samples:
   - id: injected_beacon_01
     file: samples/injected_beacon.dmp
-    sha256: "REPLACE_WITH_REAL_SHA256"
+    # Valid-shape placeholder; replace with the DMP's real SHA-256.
+    sha256: "0000000000000000000000000000000000000000000000000000000000000000"
     category: malicious
     source: "Authorized malware-analysis lab capture"
     authorization: "Written authorization reference"

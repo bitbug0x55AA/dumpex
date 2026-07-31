@@ -5,8 +5,10 @@ Opt-in validation against private real-dump corpora.
 directory mode discovers ``clean/manifest.yaml`` and ``evil/manifest.yaml``.
 The default suite still has no corpus or network dependency.
 """
+from contextlib import redirect_stderr, redirect_stdout
 from functools import lru_cache
 import hashlib
+import io
 import os
 
 import pytest
@@ -85,7 +87,11 @@ def _sample_path(sample):
 def _all_hunt_results(sample_id):
     sample = _SAMPLE_BY_ID[sample_id]
     mf = open_dump(_sample_path(sample))
-    return cmd_hunt(mf, "all", verbose=False)
+    # Hunt renderers can include strings recovered from process memory.
+    # Corpus CI publishes only assertion failures and JUnit metadata, never
+    # raw hunter console output from private dumps.
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return cmd_hunt(mf, "all", verbose=False)
 
 
 def test_manifest_versions_and_fp_fn_policies():
