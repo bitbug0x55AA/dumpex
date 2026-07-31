@@ -72,7 +72,13 @@ def collect_modules(mf) -> CommandResult:
                           summary={"count": len(records)})
 
 
-def render_modules_console(records) -> None:
+def render_modules_console(records, coverage) -> None:
+    """Takes the whole CoverageReport, not just `records` -- see
+    list_cmd.py's render_regions_console for why a stream that's absent
+    entirely (not_evaluated) must not look identical to one that's
+    genuinely present and empty (complete)."""
+    for reason in coverage.reasons:
+        print(YELLOW(f"  [~] {reason}"))
     for rec in records:
         badges = [_ANOMALY_BADGES[f]() for f in rec.anomaly_flags if f in _ANOMALY_BADGES]
         flag_str = "  " + " ".join(badges) if badges else ""
@@ -91,5 +97,5 @@ def render_modules_console(records) -> None:
 
 def cmd_modules(mf) -> CommandResult:
     result = collect_modules(mf)
-    render_modules_console(result.records)
+    render_modules_console(result.records, result.coverage)
     return result

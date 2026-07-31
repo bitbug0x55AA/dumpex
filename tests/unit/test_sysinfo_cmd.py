@@ -9,7 +9,11 @@ from dumpex.commands.sysinfo import (
     collect_sysinfo, render_sysinfo_console, cmd_sysinfo, sysinfo_source_present,
     collect_pid, render_pid_console, cmd_pid,
 )
-from dumpex.output.coverage import LimitationCode
+from dumpex.output.coverage import (
+    LimitationCode, CoverageReport, CoverageLimitation, SourceObservation, SourceState,
+    COVERAGE_PARTIAL,
+)
+from dumpex.output.records import SysInfoRecord
 
 
 # ── --sysinfo ────────────────────────────────────────────────────────────
@@ -100,6 +104,40 @@ def test_render_sysinfo_console_partial_missing_streams_does_not_crash(capsys):
     assert "Threads in dump" not in out    # threads absent -- gated field must not print
     assert "Modules in dump" not in out    # modules absent -- gated field must not print
     assert "Image Path" not in out         # peb absent -- gated fields must not print
+
+
+# ── [P1 review fix] FAILED must not be treated as "present" ──────────────
+# None of collect_sysinfo's five sources have a path today that produces
+# SourceState.FAILED (none of mf.sysinfo/misc_info/peb/threads/modules
+# access is wrapped in a try/except), but sysinfo_source_present() must
+# still handle it correctly per the coverage model's own vocabulary --
+# constructed directly here rather than through collect_sysinfo().
+
+def test_sysinfo_source_present_false_for_failed_source():
+    coverage = CoverageReport(
+        status=COVERAGE_PARTIAL,
+        sources={"peb": SourceObservation(name="peb", state=SourceState.FAILED)},
+        limitations=[CoverageLimitation(
+            code=LimitationCode.SOURCE_FAILED, source="peb", detail="parse boom")],
+    )
+    assert sysinfo_source_present(coverage, "peb") is False
+
+
+def test_render_sysinfo_console_failed_peb_prints_reason_not_gated_fields(capsys):
+    coverage = CoverageReport(
+        status=COVERAGE_PARTIAL,
+        sources={
+            "peb":     SourceObservation(name="peb", state=SourceState.FAILED),
+            "threads": SourceObservation(name="threads", state=SourceState.ABSENT),
+            "modules": SourceObservation(name="modules", state=SourceState.ABSENT),
+        },
+        limitations=[CoverageLimitation(
+            code=LimitationCode.SOURCE_FAILED, source="peb", detail="parse boom")],
+    )
+    render_sysinfo_console(SysInfoRecord(), coverage)
+    out = capsys.readouterr().out
+    assert "PEB present but could not be read: parse boom" in out
+    assert "Image Path" not in out   # peb FAILED, not present -- gated fields must not print
 
 
 def test_cmd_sysinfo_returns_command_result(capsys):

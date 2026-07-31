@@ -11,7 +11,10 @@ import pytest
 from tests.fixtures.fakes import Peb, FakeMF
 
 from dumpex.commands.peb import collect_peb, render_peb_console, cmd_peb, peb_is_present
-from dumpex.output.coverage import LimitationCode
+from dumpex.output.coverage import (
+    LimitationCode, CoverageReport, CoverageLimitation, SourceObservation, SourceState,
+    COVERAGE_PARTIAL,
+)
 from dumpex.output.records import PebRecord
 
 
@@ -84,6 +87,34 @@ def test_render_peb_console_requires_coverage_report_not_bare_bool():
     # passing anything else fails loudly instead.
     with pytest.raises(AttributeError):
         render_peb_console(PebRecord(), False)
+
+
+# ── [P1 review fix] FAILED must not be treated as "present" ──────────────
+# collect_peb() has no path today that produces SourceState.FAILED (mf.peb
+# access isn't wrapped in a try/except), but peb_is_present() and
+# render_peb_console() must still handle it correctly per the coverage
+# model's own vocabulary (see dumpex.output.coverage's SOURCE_FAILED) --
+# constructed directly here rather than through collect_peb().
+
+def _failed_peb_coverage(detail="parse boom") -> CoverageReport:
+    return CoverageReport(
+        status=COVERAGE_PARTIAL,
+        sources={"peb": SourceObservation(name="peb", state=SourceState.FAILED)},
+        limitations=[CoverageLimitation(
+            code=LimitationCode.SOURCE_FAILED, source="peb", detail=detail)],
+    )
+
+
+def test_peb_is_present_false_for_failed_source():
+    assert peb_is_present(_failed_peb_coverage()) is False
+
+
+def test_render_peb_console_failed_prints_reason_not_fake_data(capsys):
+    coverage = _failed_peb_coverage()
+    render_peb_console(PebRecord(), coverage)
+    out = capsys.readouterr().out
+    assert "PEB present but could not be read: parse boom" in out
+    assert "PEB Address" not in out   # must not render the all-None "present" branch
 
 
 def test_cmd_peb_returns_command_result(capsys):

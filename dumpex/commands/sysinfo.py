@@ -13,10 +13,14 @@ from dumpex.output.command_result import CommandResult
 
 def sysinfo_source_present(coverage, name: str) -> bool:
     """True when `name` (one of sysinfo/misc_info/peb/threads/modules)
-    was present -- derived from the CoverageReport's own source state
-    rather than a separately-returned flag, matching threads.py's/
-    peb.py's is-present helpers."""
-    return coverage.sources[name].state != SourceState.ABSENT
+    was present AND readable -- derived from the CoverageReport's own
+    source state rather than a separately-returned flag, matching
+    threads.py's/peb.py's is-present helpers. Deliberately PRESENT/
+    PRESENT_EMPTY only, not `!= ABSENT`: a FAILED source did not
+    successfully yield data, so treating it as "present" here would
+    render whatever partial/None fields it left behind as a genuine
+    answer instead of surfacing the SOURCE_FAILED reason."""
+    return coverage.sources[name].state in (SourceState.PRESENT, SourceState.PRESENT_EMPTY)
 
 
 def _os_display_name(si) -> str:
@@ -149,6 +153,8 @@ def render_sysinfo_console(record: SysInfoRecord, coverage) -> None:
     modules_present = sysinfo_source_present(coverage, "modules")
 
     print(f"\n{BOLD('═══ SYSTEM INFO ═══')}")
+    for reason in coverage.reasons:
+        print(YELLOW(f"  [~] {reason}"))
 
     # ── OS ──────────────────────────────────────────────────────────────
     print(f"\n  {BOLD('Operating System')}")

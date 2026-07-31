@@ -9,10 +9,15 @@ from dumpex.output.command_result import CommandResult
 
 
 def peb_is_present(coverage) -> bool:
-    """True when mf.peb itself was present -- derived from the
-    CoverageReport's own source state rather than a separately-returned
-    flag, matching threads.py's thread_info_is_degraded() pattern."""
-    return coverage.sources["peb"].state != SourceState.ABSENT
+    """True when mf.peb itself was present AND readable -- derived from
+    the CoverageReport's own source state rather than a separately-
+    returned flag, matching threads.py's thread_info_is_degraded()
+    pattern. Deliberately PRESENT/PRESENT_EMPTY only, not `!= ABSENT`:
+    a FAILED source was NOT successfully read (it raised while parsing),
+    so treating it as "present" here would render a record's all-None
+    fields as if they were a genuine (if uninformative) answer instead
+    of surfacing the SOURCE_FAILED reason below."""
+    return coverage.sources["peb"].state in (SourceState.PRESENT, SourceState.PRESENT_EMPTY)
 
 
 def collect_peb(mf: MinidumpFile) -> CommandResult:

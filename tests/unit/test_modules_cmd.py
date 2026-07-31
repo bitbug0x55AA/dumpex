@@ -72,7 +72,7 @@ def test_render_modules_console_does_not_crash(capsys):
     mf.modules = FakeStream(
         [Module(0x140000000, 0x5000, r"C:\Windows\System32\ntdll.dll")], "modules")
     result = collect_modules(mf)
-    render_modules_console(result.records)
+    render_modules_console(result.records, result.coverage)
     out = capsys.readouterr().out
     assert "ntdll.dll" in out
     assert "1 module(s)" in out
@@ -82,8 +82,18 @@ def test_render_modules_console_present_empty_does_not_crash(capsys):
     mf = FakeMF()
     mf.modules = FakeStream([], "modules")   # stream present, genuinely zero modules
     result = collect_modules(mf)
-    render_modules_console(result.records)
+    render_modules_console(result.records, result.coverage)
     out = capsys.readouterr().out
+    assert "0 module(s)" in out
+
+
+def test_render_modules_console_missing_stream_prints_the_reason(capsys):
+    # [P1 review fix] see test_list_cmd.py's identical fix for
+    # render_regions_console -- render_modules_console() had the same gap.
+    result = collect_modules(FakeMF())
+    render_modules_console(result.records, result.coverage)
+    out = capsys.readouterr().out
+    assert "ModuleListStream not present in this dump" in out
     assert "0 module(s)" in out
 
 

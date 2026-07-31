@@ -1,5 +1,5 @@
 """--list command."""
-from dumpex.ui.colors import BOLD, RED, GREEN
+from dumpex.ui.colors import BOLD, RED, GREEN, YELLOW
 from dumpex.core.memory import get_memory_regions, prot_str
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
 from dumpex.output.records import MemoryRegionRecord, hex_address
@@ -48,7 +48,16 @@ def collect_regions(mf, filter_prot=None) -> CommandResult:
                           summary={"count": len(records)})
 
 
-def render_regions_console(records) -> None:
+def render_regions_console(records, coverage) -> None:
+    """Takes the whole CoverageReport, not just `records` -- otherwise a
+    MemoryInfoListStream that's absent entirely (not_evaluated, zero
+    records) is visually indistinguishable from one that's genuinely
+    present and empty (complete, zero records): both used to print the
+    same green "[+] 0 region(s) shown." with no warning at all. Matches
+    render_threads_console's contract of printing every coverage reason
+    up front."""
+    for reason in coverage.reasons:
+        print(YELLOW(f"  [~] {reason}"))
     print(f"\n{BOLD('Address'):<24} {BOLD('Size'):<14} {BOLD('State'):<14} {BOLD('Protection'):<32} {BOLD('Type')}")
     print("─" * 100)
     for rec in records:
@@ -59,5 +68,5 @@ def render_regions_console(records) -> None:
 
 def cmd_list(mf, filter_prot=None) -> CommandResult:
     result = collect_regions(mf, filter_prot)
-    render_regions_console(result.records)
+    render_regions_console(result.records, result.coverage)
     return result

@@ -67,7 +67,7 @@ def test_render_regions_console_does_not_crash(capsys):
         [Region(0x1000, 0x1000, 0x2000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
         "infos")
     result = collect_regions(mf)
-    render_regions_console(result.records)
+    render_regions_console(result.records, result.coverage)
     out = capsys.readouterr().out
     assert "0x0000000000001000" in out
     assert "1 region(s) shown" in out
@@ -77,8 +77,21 @@ def test_render_regions_console_present_empty_does_not_crash(capsys):
     mf = FakeMF()
     mf.memory_info = FakeStream([], "infos")   # stream present, genuinely zero regions
     result = collect_regions(mf)
-    render_regions_console(result.records)
+    render_regions_console(result.records, result.coverage)
     out = capsys.readouterr().out
+    assert "0 region(s) shown" in out
+
+
+def test_render_regions_console_missing_stream_prints_the_reason(capsys):
+    # [P1 review fix] render_regions_console() used to take only `records`,
+    # so a MemoryInfoListStream that's absent entirely (not_evaluated, zero
+    # records) printed the exact same "[+] 0 region(s) shown." as a stream
+    # that's genuinely present and empty (complete, zero records) -- no
+    # warning at all, indistinguishable from a real "zero regions" answer.
+    result = collect_regions(FakeMF())
+    render_regions_console(result.records, result.coverage)
+    out = capsys.readouterr().out
+    assert "MemoryInfoListStream not present in this dump" in out
     assert "0 region(s) shown" in out
 
 
