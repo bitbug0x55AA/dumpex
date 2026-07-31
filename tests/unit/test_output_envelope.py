@@ -6,9 +6,11 @@ the meta-construction failure net.
 """
 import datetime
 
+import pytest
+
 import dumpex.output.envelope as envelope_mod
 from dumpex.output.envelope import (
-    build_meta_v2, Result, Envelope, SCHEMA_VERSION,
+    build_meta_v2, Result, Envelope, SCHEMA_VERSION, EvidenceInput,
     EXECUTION_COMPLETED, EXECUTION_PARTIAL, EXECUTION_FAILED,
 )
 
@@ -102,6 +104,127 @@ def test_meta_evidence_construction_failure_stays_schema_shaped(monkeypatch, tmp
     # every other block still built normally
     assert meta["tool"]["name"] == "dumpex"
     assert meta["execution"]["command"] == "modules"
+
+
+# ── EvidenceInput / multi-evidence build_meta_v2(evidence=...) ────────────
+# Phase C groundwork: a future comparison command builds two EvidenceInputs
+# (baseline/target) instead of relying on the single dump_path_abs/
+# dump_file_name form every existing single-dump command still uses
+# unchanged (see the tests above, none of which pass evidence=).
+
+def _meta_kwargs(**overrides):
+    kwargs = dict(
+        command="comparison", options={}, case_id=None, analyst=None, redact_paths=False,
+        started_at=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc),
+        finished_at=datetime.datetime(2026, 1, 1, 0, 0, 1, tzinfo=datetime.timezone.utc),
+    )
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_evidence_input_rejects_empty_fields():
+    with pytest.raises(ValueError, match="path"):
+        EvidenceInput(id="baseline", role="baseline", path="")
+
+
+def test_build_meta_v2_requires_dump_path_abs_or_evidence(tmp_path):
+    with pytest.raises(TypeError, match="evidence"):
+        build_meta_v2(**_meta_kwargs())
+
+
+def test_build_meta_v2_evidence_list_produces_one_entry_per_input(tmp_path):
+    dump_a = tmp_path / "baseline.dmp"
+    dump_a.write_bytes(b"aaa")
+    dump_b = tmp_path / "target.dmp"
+    dump_b.write_bytes(b"bbbbb")
+    meta = build_meta_v2(evidence=[
+        EvidenceInput(id="baseline", role="baseline", path=str(dump_a)),
+        EvidenceInput(id="target", role="target", path=str(dump_b)),
+    ], **_meta_kwargs())
+    assert len(meta["evidence"]) == 2
+    baseline, target = meta["evidence"]
+    assert baseline["id"] == baseline["role"] == "baseline"
+    assert baseline["file_name"] == "baseline.dmp"
+    assert baseline["size_bytes"] == 3
+    assert len(baseline["sha256"]) == 64
+    assert target["id"] == target["role"] == "target"
+    assert target["file_name"] == "target.dmp"
+    assert target["size_bytes"] == 5
+
+
+def test_build_meta_v2_evidence_list_respects_redact_paths_per_entry(tmp_path):
+    dump_a = tmp_path / "baseline.dmp"
+    dump_a.write_bytes(b"a")
+    dump_b = tmp_path / "target.dmp"
+    dump_b.write_bytes(b"b")
+    meta = build_meta_v2(evidence=[
+        EvidenceInput(id="baseline", role="baseline", path=str(dump_a)),
+        EvidenceInput(id="target", role="target", path=str(dump_b)),
+    ], **_meta_kwargs(redact_paths=True))
+    assert "path" not in meta["evidence"][0]
+    assert "path" not in meta["evidence"][1]
+    assert meta["evidence"][0]["file_name"] == "baseline.dmp"
+
+
+def test_build_meta_v2_evidence_entry_failure_does_not_blank_the_other_entry(tmp_path, monkeypatch):
+    # The critical isolation case: baseline's stat fails, target must
+    # still be fully populated -- NOT the single-entry behavior where
+    # one try/except around the whole call would have blanked everything.
+    dump_a = tmp_path / "baseline.dmp"   # never created -- os.path.getsize fails
+    dump_b = tmp_path / "target.dmp"
+    dump_b.write_bytes(b"target content")
+    meta = build_meta_v2(evidence=[
+        EvidenceInput(id="baseline", role="baseline", path=str(dump_a)),
+        EvidenceInput(id="target", role="target", path=str(dump_b)),
+    ], **_meta_kwargs())
+    baseline, target = meta["evidence"]
+    assert baseline["size_bytes"] is None
+    assert "error" in baseline
+    assert target["size_bytes"] == len(b"target content")
+    assert "error" not in target
+    assert len(target["sha256"]) == 64
+
+
+def test_build_meta_v2_evidence_entry_unexpected_exception_isolated_with_id_role_preserved(
+        tmp_path, monkeypatch):
+    # Beyond _evidence_entry's own internal OSError/hash-failure handling:
+    # something else raising entirely (e.g. os.path.basename choking)
+    # must still produce a schema-shaped fallback entry carrying the
+    # original id/role, not crash the whole evidence array.
+    dump_b = tmp_path / "target.dmp"
+    dump_b.write_bytes(b"target content")
+
+    def _boom(path):
+        if "baseline" in str(path):
+            raise RuntimeError("simulated failure")
+        return "target.dmp"
+    monkeypatch.setattr(envelope_mod.os.path, "basename", _boom)
+    meta = build_meta_v2(evidence=[
+        EvidenceInput(id="baseline", role="baseline", path="baseline.dmp"),
+        EvidenceInput(id="target", role="target", path=str(dump_b)),
+    ], **_meta_kwargs())
+    baseline, target = meta["evidence"]
+    assert baseline == {"id": "baseline", "role": "baseline",
+                         "error": "evidence metadata failed: simulated failure"}
+    assert target["file_name"] == "target.dmp"
+    assert "error" not in target
+
+
+def test_build_meta_v2_without_evidence_is_byte_identical_to_before_phase_c(tmp_path):
+    # Omitting evidence= must reproduce today's single-primary-entry
+    # shape exactly -- this is what keeps all six existing commands
+    # (which never pass evidence=) fully unaffected by this change.
+    dump = tmp_path / "sample.dmp"
+    dump.write_bytes(b"fake dump content")
+    meta = build_meta_v2(dump_path_abs=str(dump), dump_file_name="sample.dmp",
+                          **_meta_kwargs(command="modules"))
+    assert len(meta["evidence"]) == 1
+    entry = meta["evidence"][0]
+    assert entry["id"] == "primary"
+    assert entry["role"] == "primary"
+    assert entry["file_name"] == "sample.dmp"
+    assert entry["size_bytes"] == len(b"fake dump content")
+    assert len(entry["sha256"]) == 64
 
 
 # ── execution_status / coverage stay independent axes ────────────────────

@@ -225,6 +225,40 @@ def test_set_command_result_minimal_produces_expected_shape(tmp_path):
     assert doc["diagnostics"] == {"warnings": [], "errors": []}
 
 
+# ── V2Output multi-evidence construction (Phase C groundwork) ────────────
+# No current command calls from_evidence() -- these tests pin the
+# capability itself (a future comparison command's one-line integration
+# point), independent of whether any command uses it yet.
+
+def test_v2output_requires_dump_path_or_evidence():
+    with pytest.raises(TypeError, match="evidence"):
+        V2Output()
+
+
+def test_v2output_from_evidence_produces_two_element_evidence_array(tmp_path):
+    from dumpex.output.envelope import EvidenceInput
+
+    dump_a = tmp_path / "baseline.dmp"
+    dump_a.write_bytes(b"aaa")
+    dump_b = tmp_path / "target.dmp"
+    dump_b.write_bytes(b"bbbbb")
+
+    out = V2Output.from_evidence([
+        EvidenceInput(id="baseline", role="baseline", path=str(dump_a)),
+        EvidenceInput(id="target", role="target", path=str(dump_b)),
+    ], command="comparison", options={})
+    out.set_command_result(CommandResult(
+        kind="comparison", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+    doc = json.loads(out.to_json())
+
+    assert len(doc["meta"]["evidence"]) == 2
+    baseline, target = doc["meta"]["evidence"]
+    assert baseline["id"] == baseline["role"] == "baseline"
+    assert target["id"] == target["role"] == "target"
+    assert doc["result"]["kind"] == "comparison"
+
+
 class _FakeRecord:
     def __init__(self, name):
         self._name = name

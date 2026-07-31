@@ -4,9 +4,12 @@ Mirrors dumpex/ui/structured.py's StructuredOutput._tool_meta/
 _execution_meta/_runtime_meta/_evidence_meta (same failure-isolation
 style: a failure computing one piece of meta must never take down the
 rest, or the actual result), but meta.evidence is a LIST here, not a
-single object -- so a future comparison command (baseline + target
-dumps) doesn't force a second breaking meta change. This PR always
-emits a single-element evidence array.
+single object -- so a comparison command (baseline + target dumps)
+doesn't force a second breaking meta change. Every one of the six
+original recon commands still emits a single-element evidence array
+(build_meta_v2's dump_path_abs/dump_file_name form); build_meta_v2's
+evidence= parameter is the multi-entry form Phase C adds for that
+future comparison command -- see EvidenceInput below.
 
 execution_status ("completed"/"partial"/"failed") and coverage.status
 ("complete"/"partial"/"not_evaluated") are kept as two independent axes
@@ -28,7 +31,7 @@ from dumpex.output.coverage import EXECUTION_COMPLETED, EXECUTION_PARTIAL, EXECU
 
 __all__ = [
     "SCHEMA_VERSION", "EXECUTION_COMPLETED", "EXECUTION_PARTIAL", "EXECUTION_FAILED",
-    "build_meta_v2", "Result", "Envelope",
+    "EvidenceInput", "build_meta_v2", "Result", "Envelope",
 ]
 
 SCHEMA_VERSION = "2.0"
@@ -71,6 +74,31 @@ def _runtime_meta() -> dict:
     return info
 
 
+@dataclass(frozen=True)
+class EvidenceInput:
+    """One dump file for meta.evidence -- the multi-entry counterpart to
+    build_meta_v2's dump_path_abs/dump_file_name single-entry form. A
+    comparison command builds two of these (e.g. id="baseline",
+    role="baseline" / id="target", role="target") and passes them as
+    build_meta_v2's evidence= list; a single-dump recon command keeps
+    using dump_path_abs/dump_file_name unchanged and never constructs
+    one of these at all. id/role are deliberately separate fields (not
+    collapsed into one) for the same reason the six existing commands'
+    hardcoded "primary"/"primary" pair keeps them separate: id is a
+    stable identifier a future record could reference, role is the
+    human-facing label -- they happen to coincide in every case that
+    exists today, but nothing requires that."""
+    id:   str
+    role: str
+    path: str
+
+    def __post_init__(self):
+        for field_name in ("id", "role", "path"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"EvidenceInput.{field_name} must be a non-empty string")
+
+
 def _evidence_entry(dump_path_abs: str, dump_file_name: str, id_: str, role: str,
                      redact_paths: bool) -> dict:
     entry = {"id": id_, "role": role, "file_name": dump_file_name}
@@ -89,7 +117,27 @@ def _evidence_entry(dump_path_abs: str, dump_file_name: str, id_: str, role: str
     return entry
 
 
-def build_meta_v2(*, dump_path_abs: str, dump_file_name: str, command: "str | None",
+def _safe_evidence_entry(ei: EvidenceInput, redact_paths: bool) -> dict:
+    """Wraps _evidence_entry in its OWN try/except, isolated per entry --
+    unlike the single-entry case (where one try/except around the whole
+    call is enough because there's only one entry to lose), a multi-
+    entry evidence list must not let one side's unexpected failure (not
+    just the OSError/hash-Exception _evidence_entry already handles
+    internally, but anything else, e.g. a bad path type slipping past
+    EvidenceInput's own validation) blank out an already-successful
+    sibling entry -- see SourceState.FAILED's own docstring in
+    coverage.py for the same "one side failing shouldn't abort the
+    other" principle applied to comparison/diff source reads."""
+    try:
+        return _evidence_entry(os.path.abspath(ei.path), os.path.basename(ei.path),
+                                ei.id, ei.role, redact_paths)
+    except Exception as e:
+        return {"id": ei.id, "role": ei.role, "error": f"evidence metadata failed: {e}"}
+
+
+def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | None" = None,
+                   evidence: "list[EvidenceInput] | None" = None,
+                   command: "str | None",
                    options: dict, case_id: "str | None", analyst: "str | None",
                    redact_paths: bool, started_at: "datetime.datetime",
                    finished_at: "datetime.datetime") -> dict:
@@ -107,6 +155,11 @@ def build_meta_v2(*, dump_path_abs: str, dump_file_name: str, command: "str | No
     key added alongside (additionalProperties is not restricted on these
     objects) so the failure is visible rather than merely papered over.
     """
+    if evidence is None and dump_path_abs is None:
+        raise TypeError(
+            "build_meta_v2() requires either dump_path_abs (single-dump commands) or "
+            "evidence (multi-dump commands) -- got neither")
+
     meta = {"schema_version": SCHEMA_VERSION}
 
     try:
@@ -133,12 +186,20 @@ def build_meta_v2(*, dump_path_abs: str, dump_file_name: str, command: "str | No
             "error": f"execution metadata failed: {e}",
         }
 
-    try:
-        meta["evidence"] = [_evidence_entry(dump_path_abs, dump_file_name, "primary", "primary",
-                                             redact_paths)]
-    except Exception as e:
-        meta["evidence"] = [{"id": "primary", "role": "primary",
-                              "error": f"evidence metadata failed: {e}"}]
+    if evidence is not None:
+        # Each entry is isolated in _safe_evidence_entry itself (not one
+        # try/except wrapping the whole list) -- see that function's own
+        # docstring for why: a comparison's baseline/target sides must
+        # not let one side's failure blank out the other's already-
+        # successful entry.
+        meta["evidence"] = [_safe_evidence_entry(ei, redact_paths) for ei in evidence]
+    else:
+        try:
+            meta["evidence"] = [_evidence_entry(dump_path_abs, dump_file_name, "primary", "primary",
+                                                 redact_paths)]
+        except Exception as e:
+            meta["evidence"] = [{"id": "primary", "role": "primary",
+                                  "error": f"evidence metadata failed: {e}"}]
 
     try:
         meta["runtime"] = _runtime_meta()

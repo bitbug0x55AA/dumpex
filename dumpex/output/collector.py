@@ -12,18 +12,32 @@ from pathlib import Path
 
 from dumpex.ui.colors import DIM
 from dumpex.core.safe_io import write_text_to_target, write_text_to_directory, summarize_file
-from dumpex.output.envelope import build_meta_v2, Result, Envelope
+from dumpex.output.envelope import build_meta_v2, Result, Envelope, EvidenceInput
 from dumpex.output.serializer import to_json as _serialize_envelope
 from dumpex.output.csv_export import build_tables
 from dumpex.output.records import Diagnostic, SEVERITY_ERROR
 
 
 class V2Output:
-    def __init__(self, dump_path: str, mf=None, *, command: str = None,
+    def __init__(self, dump_path: "str | None" = None, mf=None, *, command: str = None,
                  options: dict = None, case_id: str = None, analyst: str = None,
-                 redact_paths: bool = False, started_at: "datetime.datetime" = None):
-        self._dump_path_abs  = os.path.abspath(dump_path)
-        self._dump_file_name = os.path.basename(dump_path)
+                 redact_paths: bool = False, started_at: "datetime.datetime" = None,
+                 evidence: "list[EvidenceInput] | None" = None):
+        if evidence is None and dump_path is None:
+            raise TypeError(
+                "V2Output requires either dump_path (single-dump commands) or evidence "
+                "(multi-dump commands) -- got neither")
+        if evidence is not None:
+            # No single canonical dump path exists for a multi-evidence
+            # (e.g. comparison) instance -- see write_json/write_csv
+            # below for the one place this matters today.
+            self._dump_path_abs  = None
+            self._dump_file_name = None
+            self._evidence        = list(evidence)
+        else:
+            self._dump_path_abs  = os.path.abspath(dump_path)
+            self._dump_file_name = os.path.basename(dump_path)
+            self._evidence        = None
         self._command        = command
         self._options        = dict(options) if options else {}
         self._case_id        = case_id
@@ -35,6 +49,21 @@ class V2Output:
         self._diagnostics_warnings = []
         self._diagnostics_errors   = []
         self._artifacts            = []
+
+    @classmethod
+    def from_evidence(cls, evidence: "list[EvidenceInput]", *, command: str = None,
+                       options: dict = None, case_id: str = None, analyst: str = None,
+                       redact_paths: bool = False,
+                       started_at: "datetime.datetime" = None) -> "V2Output":
+        """The multi-evidence counterpart to V2Output(dump_path, ...) --
+        the exact seam a future comparison command calls: open both
+        dumps, build one EvidenceInput per side (e.g. id="baseline"/
+        id="target"), and construct via this classmethod instead of the
+        single dump_path constructor. No current command calls this;
+        it exists so that migration is a one-line change when it
+        happens, not a V2Output redesign."""
+        return cls(evidence=evidence, command=command, options=options, case_id=case_id,
+                    analyst=analyst, redact_paths=redact_paths, started_at=started_at)
 
     def set_command_result(self, result) -> None:
         """The single way a command populates this collector's result --
@@ -89,12 +118,20 @@ class V2Output:
 
     def _build_envelope(self) -> Envelope:
         finished_at = datetime.datetime.now(datetime.timezone.utc)
-        meta = build_meta_v2(
-            dump_path_abs=self._dump_path_abs, dump_file_name=self._dump_file_name,
-            command=self._command, options=self._options, case_id=self._case_id,
-            analyst=self._analyst, redact_paths=self._redact_paths,
-            started_at=self._started_at, finished_at=finished_at,
-        )
+        if self._evidence is not None:
+            meta = build_meta_v2(
+                evidence=self._evidence,
+                command=self._command, options=self._options, case_id=self._case_id,
+                analyst=self._analyst, redact_paths=self._redact_paths,
+                started_at=self._started_at, finished_at=finished_at,
+            )
+        else:
+            meta = build_meta_v2(
+                dump_path_abs=self._dump_path_abs, dump_file_name=self._dump_file_name,
+                command=self._command, options=self._options, case_id=self._case_id,
+                analyst=self._analyst, redact_paths=self._redact_paths,
+                started_at=self._started_at, finished_at=finished_at,
+            )
         return Envelope(meta=meta, result=self._result, artifacts=list(self._artifacts),
                          diagnostics_warnings=list(self._diagnostics_warnings),
                          diagnostics_errors=list(self._diagnostics_errors))
@@ -103,6 +140,16 @@ class V2Output:
         return _serialize_envelope(self._build_envelope())
 
     def write_json(self, path: str, cmd_label: str = "", force: bool = False) -> None:
+        # self._dump_path_abs is None for an evidence=-constructed (e.g.
+        # future comparison) instance -- write_text_to_target's
+        # check_not_dump_path guard against overwriting the INPUT dump
+        # silently becomes a no-op in that case (resolve_or_none(None)
+        # swallows it), rather than raising. Not fixed here: this class
+        # doesn't yet have any evidence=-constructed caller (no command
+        # writes --json/--csv for a comparison today), and deciding
+        # whether the guard should cover baseline, target, or both is a
+        # question for whoever wires that command's CLI/--json/--csv
+        # handling, not something to silently resolve in this PR.
         p = write_text_to_target(path, self.to_json(), ".json", cmd_label,
                                   self._dump_path_abs, force, "--json output")
         print(DIM(f"  [·] JSON written → {p}  ({summarize_file(p)})"))
