@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release version (e.g. v3.0.1)'
+        description: 'Release version (format: vX.Y.Z)'
         required: true
       prerelease:
         description: 'Mark as pre-release?'
@@ -31,11 +31,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Validate release version matches package version
+      - name: Validate release request
         id: release_version
-        # The workflow_dispatch input is free text. Validate it before
-        # tagging so the release name, wheel/sdist filenames, and
-        # meta.tool.version in --json output cannot silently disagree.
+        # The workflow_dispatch input becomes the build-time package version.
+        # Validate it before passing it to setuptools-scm and creating a tag.
         shell: pwsh
         env:
           RELEASE_TAG: ${{ github.event.inputs.version }}
@@ -49,16 +48,6 @@ jobs:
           }
           $expected = $Matches[1]
 
-          $pyprojectVersion = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
-          $initVersion = (Select-String -Path dumpex/__init__.py -Pattern '^__version__ = "(.+)"').Matches[0].Groups[1].Value
-
-          if ($pyprojectVersion -ne $expected) {
-            throw "pyproject.toml version ($pyprojectVersion) does not match release input ($expected)"
-          }
-          if ($initVersion -ne $expected) {
-            throw "dumpex/__init__.py __version__ ($initVersion) does not match release input ($expected)"
-          }
-
           $existingTag = git tag --list $env:RELEASE_TAG
           if ($existingTag) {
             $tagCommit = git rev-list -n 1 $env:RELEASE_TAG
@@ -68,10 +57,23 @@ jobs:
           }
 
           "version=$expected" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "SETUPTOOLS_SCM_PRETEND_VERSION_FOR_DUMPEX=$expected" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           Write-Host "Version check passed: $expected"
 
       - name: Install dependencies
         run: python -m pip install "pyinstaller==6.21.0" -e ".[full,dev]"
+
+      - name: Verify resolved package version
+        shell: pwsh
+        env:
+          EXPECTED_VERSION: ${{ steps.release_version.outputs.version }}
+        run: |
+          $resolvedVersion = python -c "import dumpex; print(dumpex.__version__)"
+          if ($resolvedVersion -ne $env:EXPECTED_VERSION) {
+            throw "Resolved package version ($resolvedVersion) does not match release input ($env:EXPECTED_VERSION)"
+          }
+          Write-Host "Resolved package version: $resolvedVersion"
 
       - name: Run tests before packaging
         run: pytest

@@ -238,7 +238,7 @@ string in its own place instead.
 {
   "meta": {
     "schema_version": "1.1",
-    "tool": { "name": "dumpex", "version": "3.0.1" },
+    "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:12:01Z",
       "finished_at": "2026-03-14T09:12:03Z",

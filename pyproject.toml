@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools>=77"]
+requires = ["setuptools>=80", "setuptools-scm>=10.2,<11"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "dumpex"
-version = "3.0.0"
+dynamic = ["version"]
 description = "Minidump memory extractor and DFIR triage tool"
 license = "MPL-2.0"
 license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "CREDITS"]
@@ -53,6 +53,13 @@ include = ["dumpex*"]
 # rules.yaml, or that test will fail.
 "dumpex.rules_pkg" = ["data/rules.yaml", "data/yara/*.yar"]
 "dumpex.schemas" = ["*.schema.json"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["__pycache__/*", "*.pyc", "*.pyo"]
+
+[tool.setuptools_scm]
+version_file = "dumpex/_version.py"
+fallback_version = "0+unknown"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

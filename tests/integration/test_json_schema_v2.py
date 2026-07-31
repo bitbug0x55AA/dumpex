@@ -16,6 +16,7 @@ import os
 import tempfile
 
 import pytest
+import dumpex
 
 jsonschema = pytest.importorskip("jsonschema")
 
@@ -208,7 +209,7 @@ def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
             "schema_version": "2.0",
-            "tool": {"name": "dumpex", "version": "3.0.0"},
+            "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
             "evidence": [{"id": "primary", "role": "primary"}],
