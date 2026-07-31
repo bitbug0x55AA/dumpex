@@ -129,9 +129,6 @@ jobs:
             dist/third-party-licenses `
             --include-distribution PyInstaller `
             --include-python-license
-          Compress-Archive `
-            -Path dist/third-party-licenses/* `
-            -DestinationPath dist/dumpex-third-party-licenses.zip
           python -m pip list --format=freeze |
             Set-Content -LiteralPath dist/BUILD-DEPENDENCIES.txt -Encoding utf8
 
@@ -182,23 +179,9 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
         run: |
-          $hashTargets = @(
-            "dist/dumpex-v$env:RELEASE_VERSION-windows-x64.zip",
-            "dist/dumpex.exe",
-            "dist/dumpex-output-v1.1.schema.json",
-            "dist/LICENSE",
-            "dist/NOTICE",
-            "dist/THIRD_PARTY_NOTICES",
-            "dist/CREDITS",
-            "dist/SOURCE.txt",
-            "dist/BUILD-DEPENDENCIES.txt",
-            "dist/dumpex-third-party-licenses.zip"
-          )
-          $checksumLines = foreach ($path in $hashTargets) {
-            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $(Split-Path -Leaf $path)"
-          }
-          $checksumLines |
+          $bundle = "dist/dumpex-v$env:RELEASE_VERSION-windows-x64.zip"
+          $hash = (Get-FileHash -LiteralPath $bundle -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $(Split-Path -Leaf $bundle)" |
             Set-Content -LiteralPath dist/SHA256SUMS.txt -Encoding utf8
 
       - name: Attest the complete Windows bundle
@@ -224,13 +207,4 @@ jobs:
             Exact source: https://github.com/${{ github.repository }}/tree/${{ github.event.inputs.version }}
           files: |
             dist/dumpex-v${{ steps.release_version.outputs.version }}-windows-x64.zip
-            dist/dumpex.exe
-            dist/dumpex-output-v1.1.schema.json
-            dist/LICENSE
-            dist/NOTICE
-            dist/THIRD_PARTY_NOTICES
-            dist/CREDITS
-            dist/SOURCE.txt
-            dist/BUILD-DEPENDENCIES.txt
-            dist/dumpex-third-party-licenses.zip
             dist/SHA256SUMS.txt
