@@ -27,6 +27,7 @@ from dumpex.output.coverage import (
     LIMITATION_SOURCE_ABSENT, LIMITATION_SOURCE_FAILED, LIMITATION_SOURCE_KEY_MISMATCH,
     COVERAGE_COMPLETE, COVERAGE_PARTIAL, COVERAGE_NOT_EVALUATED,
     EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED,
+    _FIXED_SOURCE_CODES,
 )
 
 
@@ -554,6 +555,56 @@ def test_source_requirement_rejects_source_group_absent_as_absent_code():
 def test_source_requirement_module_classification_requires_modules_source():
     with pytest.raises(ValueError, match="modules"):
         SourceRequirement(source="threads", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE)
+
+
+# ── _FIXED_SOURCE_CODES: every fixed-sentence code, checked at EVERY
+# construction path (SourceRequirement, EvaluationRequirement, and
+# CoverageLimitation itself) -- a caller must not be able to pair one of
+# these codes with the wrong source through any of the three, since doing
+# so produces dump-content-dependent behavior (silently "complete" when
+# the mismatched source happens to be present, a ValueError buried deep
+# inside CoverageLimitation construction only when it's absent).
+
+@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+def test_source_requirement_rejects_mismatched_fixed_source_code(code, correct_source):
+    wrong_source = "definitely_not_" + correct_source
+    with pytest.raises(ValueError, match=correct_source):
+        SourceRequirement(source=wrong_source, absent_code=code)
+
+
+@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+def test_source_requirement_accepts_correct_fixed_source_code(code, correct_source):
+    req = SourceRequirement(source=correct_source, absent_code=code)
+    assert req.absent_code == code
+
+
+@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+def test_evaluation_requirement_rejects_mismatched_fixed_source_code(code, correct_source):
+    wrong_source = "definitely_not_" + correct_source
+    with pytest.raises(ValueError, match=correct_source):
+        EvaluationRequirement(sources=(wrong_source,), all_absent_code=code)
+
+
+@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+def test_evaluation_requirement_accepts_correct_fixed_source_code(code, correct_source):
+    req = EvaluationRequirement(sources=(correct_source,), all_absent_code=code)
+    assert req.all_absent_code == code
+
+
+@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+def test_coverage_limitation_rejects_mismatched_fixed_source_code(code, correct_source):
+    wrong_source = "definitely_not_" + correct_source
+    with pytest.raises(ValueError, match=correct_source):
+        CoverageLimitation(code=code, source=wrong_source)
+
+
+def test_bug_repro_source_requirement_with_wrong_code_no_longer_silently_diverges():
+    # The exact reproduction from review: constructing this used to
+    # succeed, then behave differently depending on whether `modules`
+    # happened to be present (silent complete) or absent (crash deep in
+    # CoverageLimitation) in the dump being analyzed.
+    with pytest.raises(ValueError, match="sysinfo"):
+        SourceRequirement("modules", absent_code=LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE)
 
 
 def test_coverage_limitation_module_classification_requires_modules_source():

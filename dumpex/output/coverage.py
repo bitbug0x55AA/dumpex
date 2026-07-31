@@ -3,8 +3,8 @@ First-class coverage/provenance model, extracted from the ad hoc
 bool(mf.X)-check-plus-hand-written-reason-string pattern every recon
 command previously hand-rolled independently (see dumpex/commands/
 list_cmd.py, modules.py, threads.py, peb.py, sysinfo.py -- the last one
-holds both --sysinfo and --pid, neither yet migrated off that older
-pattern).
+holds both --sysinfo and --pid). All six of dumpex's original recon
+commands are migrated onto this model.
 
 Layered as: SourceObservation (what state was ONE underlying minidump
 stream in) -> CoverageLimitation (one specific, machine-readable way
@@ -533,10 +533,11 @@ class SourceRequirement:
             raise ValueError(
                 f"SourceRequirement.absent_code must be one of "
                 f"{[c.value for c in _ABSENT_CAPABLE_CODES]}, got {self.absent_code.value!r}")
-        if self.absent_code == LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE and self.source != "modules":
+        if (self.absent_code in _FIXED_SOURCE_CODES
+                and self.source != _FIXED_SOURCE_CODES[self.absent_code]):
             raise ValueError(
-                "SourceRequirement(absent_code=MODULE_CLASSIFICATION_UNAVAILABLE) "
-                f"requires source='modules', got {self.source!r}")
+                f"SourceRequirement(absent_code={self.absent_code.value}) requires "
+                f"source={_FIXED_SOURCE_CODES[self.absent_code]!r}, got {self.source!r}")
         if not isinstance(self.unavailable_fields, tuple):
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
         if not isinstance(self.available_fields, tuple):
@@ -622,6 +623,10 @@ class EvaluationRequirement:
             raise ValueError(
                 f"EvaluationRequirement.all_absent_code=PID_SOURCES_ABSENT requires sources == "
                 f"{_PID_SOURCES_ABSENT_SOURCES!r}, got {self.sources!r}")
+        if code in _FIXED_SOURCE_CODES and self.sources[0] != _FIXED_SOURCE_CODES[code]:
+            raise ValueError(
+                f"EvaluationRequirement.all_absent_code={code.value} requires "
+                f"sources[0]={_FIXED_SOURCE_CODES[code]!r}, got {self.sources[0]!r}")
         object.__setattr__(self, "all_absent_code", code)
 
 
