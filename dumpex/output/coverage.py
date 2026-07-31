@@ -65,6 +65,7 @@ this module.
 """
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Callable, Optional
 
 # ── Execution status (independent axis from coverage status: a command
 # can finish, execution_status=EXECUTION_COMPLETED, while still
@@ -302,21 +303,328 @@ LIMITATION_SOURCE_KEY_MISMATCH = LimitationCode.SOURCE_KEY_MISMATCH
 # streams that aren't actually the ones being described).
 _PID_SOURCES_ABSENT_SOURCES = ("misc_info", "threads", "exception")
 
-# Codes whose rendered text is a fully fixed sentence about ONE specific
-# source -- construction requires `source` to match exactly, since using
-# any of these with a different source would render a sentence describing
-# a stream other than the one actually observed. One shared check instead
-# of a growing pile of near-identical per-code `if` blocks as more
-# commands migrate.
-_FIXED_SOURCE_CODES = {
-    LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE: "modules",
-    LimitationCode.PEB_UNAVAILABLE: "peb",
-    LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE: "sysinfo",
-    LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE: "misc_info",
-    LimitationCode.SYSINFO_PEB_UNAVAILABLE: "peb",
-    LimitationCode.SYSINFO_THREADS_UNAVAILABLE: "threads",
-    LimitationCode.SYSINFO_MODULES_UNAVAILABLE: "modules",
+# Human names for known sources, used only by the render_* functions
+# below. Kept separate from the bare source key (e.g. "memory_info") so
+# the rendered text stays exactly what analysts/consumers already see in
+# existing JSON output ("MemoryInfoListStream", not "memory_info").
+_SOURCE_DISPLAY_NAMES = {
+    "memory_info": "MemoryInfoListStream",
+    "modules":     "ModuleListStream",
+    "threads":     "ThreadListStream",
+    "thread_info": "ThreadInfoListStream",
+    "misc_info":   "MiscInfo stream",
+    "exception":   "Exception stream",
+    "peb":         "PEB",
 }
+
+
+def _display_name(source: str) -> str:
+    return _SOURCE_DISPLAY_NAMES.get(source, source)
+
+
+def _render_present_in_but_missing_from(name: str, limitation: "CoverageLimitation") -> str:
+    """Shared by SOURCE_ABSENT (when a required source turns out entirely
+    absent but a counterpart source's records reveal exactly how many
+    entities are affected -- e.g. threads.py's ThreadListStream) and
+    SOURCE_KEY_MISMATCH (when both sources are present but their key sets
+    partially disagree). Same wording either way: what actually happened
+    to the underlying source (fully absent vs. partially mismatched)
+    surfaces through `code`, not through different text."""
+    count = limitation.affected_count if limitation.affected_count is not None else "some"
+    scope = limitation.scope or "item"
+    fields = (f" ({'/'.join(limitation.unavailable_fields)} unavailable for those)"
+               if limitation.unavailable_fields else "")
+    counterpart_name = _display_name(limitation.counterpart_source)
+    return f"{count} {scope}(s) present in {counterpart_name} but missing from {name}{fields}"
+
+
+# ── Per-code registry ──────────────────────────────────────────────────
+# Every LimitationCode's rules used to be scattered across five places
+# (a fixed-source dict, an absent-capable tuple, a group-capable tuple, a
+# caller-buildable tuple, and per-code branches split between this
+# class's __post_init__ and _validate_build_coverage_report_inputs) --
+# each new code meant touching up to five separate spots, easy to
+# under-update (exactly the pattern that caused the PID trust-boundary
+# bugs this module was hardened against earlier). _CODE_SPECS is the one
+# place a code's full contract lives: who may construct it, which source
+# it's pinned to (if any), whether it's usable for an absent/group
+# evaluation or a hand-built completeness check, its shape-only field
+# validation, and its cross-source validation.
+#
+# Adding a new LimitationCode always means adding one _CODE_SPECS entry
+# here -- test_output_coverage.py enforces this mechanically
+# (set(_CODE_SPECS) == set(LimitationCode)), but that only catches a
+# missing entry, not a wrong one: a new code's own source/field/state
+# contract still needs its own dedicated tests, following the existing
+# PID_*/SYSINFO_* tests in test_output_coverage.py as the pattern.
+@dataclass(frozen=True)
+class _CodeSpec:
+    render: Callable[["CoverageLimitation"], str]
+    # Fully fixed-sentence codes about ONE specific source -- construction
+    # requires `source` to match exactly (a mismatch would render a
+    # sentence describing a stream other than the one actually observed).
+    fixed_source: Optional[str] = None
+    # PID_SOURCES_ABSENT's exact 3-tuple -- related_sources must equal
+    # this precisely, since the rendered sentence names those three
+    # streams specifically.
+    fixed_related_sources: Optional[tuple] = None
+    # SOURCE_GROUP_ABSENT: related_sources must have at least this many
+    # entries for the "None/Neither of ..." wording to make sense.
+    min_related_sources: Optional[int] = None
+    # Usable as SourceRequirement.absent_code, or a single-source
+    # EvaluationRequirement.all_absent_code.
+    absent_capable: bool = False
+    # Usable as a multi-source (2+) EvaluationRequirement.all_absent_code.
+    group_capable: bool = False
+    # Usable as a caller-hand-built CoverageLimitation in
+    # completeness_checks (a genuine business fact the reducer cannot
+    # infer from source state alone).
+    caller_buildable: bool = False
+    # Shape-only per-code field validation (no `sources` dict needed),
+    # invoked from CoverageLimitation.__post_init__.
+    validate_fields: Optional[Callable[["CoverageLimitation"], None]] = None
+    # Cross-source validation (needs the `sources` dict), invoked from
+    # _validate_build_coverage_report_inputs for caller-buildable codes.
+    validate_against_sources: Optional[Callable[["CoverageLimitation", dict], None]] = None
+
+
+def _render_source_absent(limitation: "CoverageLimitation") -> str:
+    name = _display_name(limitation.source)
+    if limitation.counterpart_source:
+        return _render_present_in_but_missing_from(name, limitation)
+    if limitation.unavailable_fields:
+        avail = (f" ({'/'.join(limitation.available_fields)} only)"
+                  if limitation.available_fields else "")
+        return (f"{name} not present; {'/'.join(limitation.unavailable_fields)} "
+                f"unavailable{avail}")
+    return f"{name} not present in this dump"
+
+
+def _render_source_failed(limitation: "CoverageLimitation") -> str:
+    name = _display_name(limitation.source)
+    detail = f": {limitation.detail}" if limitation.detail else ""
+    return f"{name} present but could not be read{detail}"
+
+
+def _render_source_key_mismatch(limitation: "CoverageLimitation") -> str:
+    name = _display_name(limitation.source)
+    if limitation.counterpart_source:
+        return _render_present_in_but_missing_from(name, limitation)
+    count = limitation.affected_count if limitation.affected_count is not None else "some"
+    scope = limitation.scope or "item"
+    fields = (f" ({'/'.join(limitation.unavailable_fields)} unavailable for those)"
+               if limitation.unavailable_fields else "")
+    return f"{count} {scope}(s) missing from {name}{fields}"
+
+
+def _render_source_group_absent(limitation: "CoverageLimitation") -> str:
+    names = [_display_name(s) for s in limitation.related_sources]
+    if len(names) == 2:
+        return f"Neither {names[0]} nor {names[1]} present in this dump"
+    return f"None of {', '.join(names)} present in this dump"
+
+
+def _render_module_classification_unavailable(limitation: "CoverageLimitation") -> str:
+    name = _display_name(limitation.source)
+    return (f"{name} not present; thread backing-module classification unavailable "
+            f"(cannot confirm whether a start address is backed by a known module)")
+
+
+def _render_pid_sources_absent(limitation: "CoverageLimitation") -> str:
+    return ("MiscInfo, thread list, and exception stream are all absent from this "
+            "dump; PID could not be evaluated")
+
+
+def _render_pid_thread_list_fallback(limitation: "CoverageLimitation") -> str:
+    tids = limitation.related_tids
+    shown = ", ".join(f"0x{t:x}" for t in tids[:8])
+    suffix = " …" if len(tids) > 8 else ""
+    return (f"MiscInfo stream absent — PID not directly recoverable from thread list.\n"
+            f"    {len(tids)} thread(s) found: {shown}{suffix}")
+
+
+def _render_pid_exception_tid_fallback(limitation: "CoverageLimitation") -> str:
+    return (f"Exception stream present: faulting TID = 0x{limitation.thread_id:x} "
+            f"(this is a Thread ID, not a Process ID)")
+
+
+def _render_pid_no_usable_fallback(limitation: "CoverageLimitation") -> str:
+    return ("PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data "
+            "was available from the thread list or exception stream")
+
+
+def _render_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
+    """Factory for the fully fixed-sentence codes (no field
+    interpolation at all) -- avoids five near-identical one-line lambdas."""
+    return lambda limitation: text
+
+
+def _validate_pid_thread_list_fallback_fields(limitation: "CoverageLimitation") -> None:
+    # Deliberately NOT expressed via the generic `fixed_source` field:
+    # this code is caller_buildable (only ever hand-built directly), never
+    # absent_capable -- putting it in `_FIXED_SOURCE_CODES` would wrongly
+    # make it eligible for SourceRequirement/EvaluationRequirement's
+    # fixed-source checks, which only apply to absent-capable codes.
+    if limitation.source != "misc_info":
+        raise ValueError(
+            "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires source='misc_info', "
+            f"got {limitation.source!r}")
+    if limitation.counterpart_source != "threads":
+        raise ValueError(
+            "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires "
+            f"counterpart_source='threads', got {limitation.counterpart_source!r}")
+    if not limitation.related_tids or any(
+            not isinstance(t, int) or isinstance(t, bool) or t <= 0
+            for t in limitation.related_tids):
+        raise ValueError(
+            "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires related_tids to be "
+            f"a non-empty tuple of positive integers, got {limitation.related_tids!r}")
+
+
+def _validate_pid_exception_tid_fallback_fields(limitation: "CoverageLimitation") -> None:
+    # Deliberately NOT expressed via the generic `fixed_source` field --
+    # same reasoning as PID_THREAD_LIST_FALLBACK above.
+    if limitation.source != "exception":
+        raise ValueError(
+            "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires source='exception', "
+            f"got {limitation.source!r}")
+    if (not isinstance(limitation.thread_id, int) or isinstance(limitation.thread_id, bool)
+            or limitation.thread_id <= 0):
+        raise ValueError(
+            "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires thread_id to be "
+            f"a positive integer, got {limitation.thread_id!r}")
+
+
+def _validate_pid_sources_absent_fields(limitation: "CoverageLimitation") -> None:
+    # Deliberately NOT expressed via the generic `fixed_source` field:
+    # PID_SOURCES_ABSENT is group_capable (only ever selected via a
+    # 3-source EvaluationRequirement), never absent_capable -- putting it
+    # in `_FIXED_SOURCE_CODES` would wrongly make it eligible for
+    # SourceRequirement/single-source EvaluationRequirement's fixed-
+    # source checks, which only apply to genuinely single-source codes.
+    # `related_sources`'s exact-match is handled generically via
+    # fixed_related_sources; only the source-consistent-with-
+    # related_sources[0] check belongs here.
+    if limitation.source != _PID_SOURCES_ABSENT_SOURCES[0]:
+        raise ValueError(
+            f"CoverageLimitation(code=PID_SOURCES_ABSENT) requires source == "
+            f"{_PID_SOURCES_ABSENT_SOURCES[0]!r} (consistent with related_sources), "
+            f"got {limitation.source!r}")
+
+
+def _validate_source_key_mismatch_against_sources(limitation: "CoverageLimitation",
+                                                    sources: dict) -> None:
+    # A SOURCE_KEY_MISMATCH claims two sources are both genuinely present
+    # but disagree on keys -- if either side is actually ABSENT/FAILED,
+    # that's not a mismatch, it's an absence, and must go through
+    # SourceRequirement auto-derivation instead (see the threads-absent
+    # fix this guards against regressing). This does NOT generalize to
+    # every caller-buildable code: PID_THREAD_LIST_FALLBACK's source
+    # ("misc_info") is EXPECTED to not have yielded a usable PID -- that
+    # is the fallback's entire trigger condition, not an error.
+    for side, name in (("source", limitation.source),
+                        ("counterpart_source", limitation.counterpart_source)):
+        if name is None:
+            continue
+        if sources[name].state in (SourceState.ABSENT, SourceState.FAILED):
+            raise ValueError(
+                f"SOURCE_KEY_MISMATCH.{side}={name!r} is {sources[name].state.value} -- "
+                f"a key mismatch requires both sides to be present; an absent/failed source "
+                f"must be expressed via a bare source name or SourceRequirement instead")
+
+
+def _validate_pid_thread_list_fallback_against_sources(limitation: "CoverageLimitation",
+                                                          sources: dict) -> None:
+    # Unlike SOURCE_KEY_MISMATCH, `source` (misc_info) being unusable is
+    # this fallback's entire trigger condition -- but `counterpart_source`
+    # (threads) supplying the actual TID list must be genuinely present,
+    # and the TID count claimed must match what the source itself
+    # reports, or the two are two independent, driftable claims about the
+    # same fact.
+    threads_obs = sources["threads"]
+    if threads_obs.state != SourceState.PRESENT:
+        raise ValueError(
+            f"PID_THREAD_LIST_FALLBACK requires threads to be present, "
+            f"got {threads_obs.state.value}")
+    if len(limitation.related_tids) != threads_obs.record_count:
+        raise ValueError(
+            f"PID_THREAD_LIST_FALLBACK.related_tids has {len(limitation.related_tids)} "
+            f"entries, but threads reports record_count={threads_obs.record_count}")
+
+
+def _validate_pid_exception_tid_fallback_against_sources(limitation: "CoverageLimitation",
+                                                            sources: dict) -> None:
+    exception_obs = sources["exception"]
+    if exception_obs.state != SourceState.PRESENT:
+        raise ValueError(
+            f"PID_EXCEPTION_TID_FALLBACK requires exception to be present, "
+            f"got {exception_obs.state.value}")
+
+
+_CODE_SPECS = {
+    LimitationCode.SOURCE_ABSENT: _CodeSpec(
+        render=_render_source_absent, absent_capable=True),
+    LimitationCode.SOURCE_FAILED: _CodeSpec(
+        render=_render_source_failed),
+    LimitationCode.SOURCE_KEY_MISMATCH: _CodeSpec(
+        render=_render_source_key_mismatch, caller_buildable=True,
+        validate_against_sources=_validate_source_key_mismatch_against_sources),
+    LimitationCode.SOURCE_GROUP_ABSENT: _CodeSpec(
+        render=_render_source_group_absent, min_related_sources=2, group_capable=True),
+    LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE: _CodeSpec(
+        render=_render_module_classification_unavailable, fixed_source="modules",
+        absent_capable=True),
+    LimitationCode.PEB_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("PEB could not be parsed (missing sysinfo or thread list in dump)"),
+        fixed_source="peb", absent_capable=True),
+    LimitationCode.PID_SOURCES_ABSENT: _CodeSpec(
+        render=_render_pid_sources_absent, fixed_related_sources=_PID_SOURCES_ABSENT_SOURCES,
+        group_capable=True, validate_fields=_validate_pid_sources_absent_fields),
+    LimitationCode.PID_THREAD_LIST_FALLBACK: _CodeSpec(
+        render=_render_pid_thread_list_fallback,
+        caller_buildable=True, validate_fields=_validate_pid_thread_list_fallback_fields,
+        validate_against_sources=_validate_pid_thread_list_fallback_against_sources),
+    LimitationCode.PID_EXCEPTION_TID_FALLBACK: _CodeSpec(
+        render=_render_pid_exception_tid_fallback,
+        caller_buildable=True, validate_fields=_validate_pid_exception_tid_fallback_fields,
+        validate_against_sources=_validate_pid_exception_tid_fallback_against_sources),
+    LimitationCode.PID_NO_USABLE_FALLBACK: _CodeSpec(
+        render=_render_pid_no_usable_fallback, caller_buildable=True),
+    LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("SystemInfoStream not present"),
+        fixed_source="sysinfo", absent_capable=True),
+    LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("MiscInfo stream not present"),
+        fixed_source="misc_info", absent_capable=True),
+    LimitationCode.SYSINFO_PEB_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("PEB not available (requires sysinfo + thread list)"),
+        fixed_source="peb", absent_capable=True),
+    LimitationCode.SYSINFO_THREADS_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("ThreadListStream not present (thread_count unavailable)"),
+        fixed_source="threads", absent_capable=True),
+    LimitationCode.SYSINFO_MODULES_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("ModuleListStream not present (module_count unavailable)"),
+        fixed_source="modules", absent_capable=True),
+}
+
+# Derived collections -- every other call site (SourceRequirement,
+# EvaluationRequirement, CoverageLimitation, _validate_build_coverage_
+# report_inputs) reads from these instead of hand-maintaining its own
+# copy, so _CODE_SPECS above is the single place a code's membership in
+# any of these groups is decided.
+_FIXED_SOURCE_CODES = {code: spec.fixed_source for code, spec in _CODE_SPECS.items()
+                        if spec.fixed_source is not None}
+_ABSENT_CAPABLE_CODES = tuple(code for code, spec in _CODE_SPECS.items() if spec.absent_capable)
+_GROUP_EVALUATION_CODES = tuple(code for code, spec in _CODE_SPECS.items() if spec.group_capable)
+_CALLER_BUILDABLE_COMPLETENESS_CODES = tuple(
+    code for code, spec in _CODE_SPECS.items() if spec.caller_buildable)
+# Codes EvaluationRequirement.all_absent_code may select for a
+# SINGLE-source group: everything SourceRequirement.absent_code allows --
+# each of these renders from `source` alone, ignoring any other group
+# members, which is exactly why they must NEVER be used for a 2+-source
+# group (that would silently drop every source but the first from the
+# rendered text -- the bug this validation exists to prevent).
+_SINGLE_SOURCE_EVALUATION_CODES = _ABSENT_CAPABLE_CODES
 
 
 @dataclass(frozen=True)
@@ -368,54 +676,31 @@ class CoverageLimitation:
             self.related_sources, "CoverageLimitation.related_sources"))
         object.__setattr__(self, "related_tids",
                             _normalize_tuple(self.related_tids, "CoverageLimitation.related_tids"))
-        if self.code == LimitationCode.SOURCE_GROUP_ABSENT and len(self.related_sources) < 2:
+        spec = _CODE_SPECS[self.code]
+        if spec.min_related_sources is not None and len(self.related_sources) < spec.min_related_sources:
             raise ValueError(
-                "CoverageLimitation(code=SOURCE_GROUP_ABSENT) requires >= 2 related_sources")
-        if self.code in _FIXED_SOURCE_CODES and self.source != _FIXED_SOURCE_CODES[self.code]:
+                f"CoverageLimitation(code={self.code.value}) requires >= "
+                f"{spec.min_related_sources} related_sources")
+        if spec.fixed_source is not None and self.source != spec.fixed_source:
             raise ValueError(
                 f"CoverageLimitation(code={self.code.value}) is a fixed sentence -- source must "
-                f"be {_FIXED_SOURCE_CODES[self.code]!r}, got {self.source!r}")
-        if self.code == LimitationCode.PID_SOURCES_ABSENT:
-            if self.related_sources != _PID_SOURCES_ABSENT_SOURCES:
-                raise ValueError(
-                    "CoverageLimitation(code=PID_SOURCES_ABSENT) is a fixed sentence naming "
-                    f"MiscInfo/thread list/exception stream specifically -- related_sources must "
-                    f"be {_PID_SOURCES_ABSENT_SOURCES!r}, got {self.related_sources!r}")
-            if self.source != _PID_SOURCES_ABSENT_SOURCES[0]:
-                raise ValueError(
-                    f"CoverageLimitation(code=PID_SOURCES_ABSENT) requires source == "
-                    f"{_PID_SOURCES_ABSENT_SOURCES[0]!r} (consistent with related_sources), "
-                    f"got {self.source!r}")
+                f"be {spec.fixed_source!r}, got {self.source!r}")
+        if spec.fixed_related_sources is not None and self.related_sources != spec.fixed_related_sources:
+            raise ValueError(
+                f"CoverageLimitation(code={self.code.value}) is a fixed sentence naming "
+                f"MiscInfo/thread list/exception stream specifically -- related_sources must "
+                f"be {spec.fixed_related_sources!r}, got {self.related_sources!r}")
+        if spec.validate_fields is not None:
+            spec.validate_fields(self)
 
-        if self.code == LimitationCode.PID_THREAD_LIST_FALLBACK:
-            if self.source != "misc_info":
-                raise ValueError(
-                    "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires source='misc_info', "
-                    f"got {self.source!r}")
-            if self.counterpart_source != "threads":
-                raise ValueError(
-                    "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires "
-                    f"counterpart_source='threads', got {self.counterpart_source!r}")
-            if not self.related_tids or any(
-                    not isinstance(t, int) or isinstance(t, bool) or t <= 0 for t in self.related_tids):
-                raise ValueError(
-                    "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires related_tids to be "
-                    f"a non-empty tuple of positive integers, got {self.related_tids!r}")
-        elif self.related_tids:
+        # related_tids/thread_id each have exactly one owning code --
+        # fixed structural facts about which fields exist, not something
+        # that grows per code the way the registry above does, so kept
+        # as direct checks rather than another _CodeSpec field.
+        if self.related_tids and self.code != LimitationCode.PID_THREAD_LIST_FALLBACK:
             raise ValueError(
                 f"related_tids is only valid for PID_THREAD_LIST_FALLBACK, not {self.code.value}")
-
-        if self.code == LimitationCode.PID_EXCEPTION_TID_FALLBACK:
-            if self.source != "exception":
-                raise ValueError(
-                    "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires source='exception', "
-                    f"got {self.source!r}")
-            if (not isinstance(self.thread_id, int) or isinstance(self.thread_id, bool)
-                    or self.thread_id <= 0):
-                raise ValueError(
-                    "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires thread_id to be "
-                    f"a positive integer, got {self.thread_id!r}")
-        elif self.thread_id is not None:
+        if self.thread_id is not None and self.code != LimitationCode.PID_EXCEPTION_TID_FALLBACK:
             raise ValueError(
                 f"thread_id is only valid for PID_EXCEPTION_TID_FALLBACK, not {self.code.value}")
 
@@ -440,121 +725,15 @@ class CoverageLimitation:
         }
 
 
-# Human names for known sources, used only by render_limitation() below.
-# Kept separate from the bare source key (e.g. "memory_info") so the
-# rendered text stays exactly what analysts/consumers already see in
-# existing JSON output ("MemoryInfoListStream", not "memory_info").
-_SOURCE_DISPLAY_NAMES = {
-    "memory_info": "MemoryInfoListStream",
-    "modules":     "ModuleListStream",
-    "threads":     "ThreadListStream",
-    "thread_info": "ThreadInfoListStream",
-    "misc_info":   "MiscInfo stream",
-    "exception":   "Exception stream",
-    "peb":         "PEB",
-}
-
-
-def _display_name(source: str) -> str:
-    return _SOURCE_DISPLAY_NAMES.get(source, source)
-
-
-def _render_present_in_but_missing_from(name: str, limitation: CoverageLimitation) -> str:
-    """Shared by SOURCE_ABSENT (when a required source turns out entirely
-    absent but a counterpart source's records reveal exactly how many
-    entities are affected -- e.g. threads.py's ThreadListStream) and
-    SOURCE_KEY_MISMATCH (when both sources are present but their key sets
-    partially disagree). Same wording either way: what actually happened
-    to the underlying source (fully absent vs. partially mismatched)
-    surfaces through `code`, not through different text."""
-    count = limitation.affected_count if limitation.affected_count is not None else "some"
-    scope = limitation.scope or "item"
-    fields = (f" ({'/'.join(limitation.unavailable_fields)} unavailable for those)"
-               if limitation.unavailable_fields else "")
-    counterpart_name = _display_name(limitation.counterpart_source)
-    return f"{count} {scope}(s) present in {counterpart_name} but missing from {name}{fields}"
-
-
 def render_limitation(limitation: CoverageLimitation) -> str:
-    """The ONE place a CoverageLimitation becomes human text. Must
-    reproduce today's exact, already-shipped strings for every source
-    already migrated onto this model so JSON output is unchanged; new
-    sources/codes can extend this as they're migrated without touching
-    any call site that already relies on it."""
-    name = _display_name(limitation.source)
-    code = limitation.code
-
-    if code == LimitationCode.SOURCE_ABSENT:
-        if limitation.counterpart_source:
-            return _render_present_in_but_missing_from(name, limitation)
-        if limitation.unavailable_fields:
-            avail = (f" ({'/'.join(limitation.available_fields)} only)"
-                      if limitation.available_fields else "")
-            return (f"{name} not present; {'/'.join(limitation.unavailable_fields)} "
-                    f"unavailable{avail}")
-        return f"{name} not present in this dump"
-
-    if code == LimitationCode.SOURCE_FAILED:
-        detail = f": {limitation.detail}" if limitation.detail else ""
-        return f"{name} present but could not be read{detail}"
-
-    if code == LimitationCode.SOURCE_KEY_MISMATCH:
-        if limitation.counterpart_source:
-            return _render_present_in_but_missing_from(name, limitation)
-        count = limitation.affected_count if limitation.affected_count is not None else "some"
-        scope = limitation.scope or "item"
-        fields = (f" ({'/'.join(limitation.unavailable_fields)} unavailable for those)"
-                   if limitation.unavailable_fields else "")
-        return f"{count} {scope}(s) missing from {name}{fields}"
-
-    if code == LimitationCode.SOURCE_GROUP_ABSENT:
-        names = [_display_name(s) for s in limitation.related_sources]
-        if len(names) == 2:
-            return f"Neither {names[0]} nor {names[1]} present in this dump"
-        return f"None of {', '.join(names)} present in this dump"
-
-    if code == LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE:
-        return (f"{name} not present; thread backing-module classification unavailable "
-                f"(cannot confirm whether a start address is backed by a known module)")
-
-    if code == LimitationCode.PEB_UNAVAILABLE:
-        return "PEB could not be parsed (missing sysinfo or thread list in dump)"
-
-    if code == LimitationCode.PID_SOURCES_ABSENT:
-        return ("MiscInfo, thread list, and exception stream are all absent from this "
-                "dump; PID could not be evaluated")
-
-    if code == LimitationCode.PID_THREAD_LIST_FALLBACK:
-        tids = limitation.related_tids
-        shown = ", ".join(f"0x{t:x}" for t in tids[:8])
-        suffix = " …" if len(tids) > 8 else ""
-        return (f"MiscInfo stream absent — PID not directly recoverable from thread list.\n"
-                f"    {len(tids)} thread(s) found: {shown}{suffix}")
-
-    if code == LimitationCode.PID_EXCEPTION_TID_FALLBACK:
-        return (f"Exception stream present: faulting TID = 0x{limitation.thread_id:x} "
-                f"(this is a Thread ID, not a Process ID)")
-
-    if code == LimitationCode.PID_NO_USABLE_FALLBACK:
-        return ("PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data "
-                "was available from the thread list or exception stream")
-
-    if code == LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE:
-        return "SystemInfoStream not present"
-
-    if code == LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE:
-        return "MiscInfo stream not present"
-
-    if code == LimitationCode.SYSINFO_PEB_UNAVAILABLE:
-        return "PEB not available (requires sysinfo + thread list)"
-
-    if code == LimitationCode.SYSINFO_THREADS_UNAVAILABLE:
-        return "ThreadListStream not present (thread_count unavailable)"
-
-    if code == LimitationCode.SYSINFO_MODULES_UNAVAILABLE:
-        return "ModuleListStream not present (module_count unavailable)"
-
-    raise AssertionError(f"unhandled limitation code: {code!r}")   # unreachable: LimitationCode is closed
+    """The ONE place a CoverageLimitation becomes human text -- a thin
+    dispatch onto the code's own _CodeSpec.render (see _CODE_SPECS,
+    defined above CoverageLimitation). Must reproduce today's exact,
+    already-shipped strings for every source already migrated onto this
+    model so JSON output is unchanged; new sources/codes can extend
+    _CODE_SPECS as they're migrated without touching any call site that
+    already relies on this function."""
+    return _CODE_SPECS[limitation.code].render(limitation)
 
 
 # ── Coverage report ──────────────────────────────────────────────────────
@@ -594,26 +773,6 @@ class CoverageReport:
         `coverage.sources`/`coverage.limitations` are new, additive
         fields alongside it; see envelope.Result/collector.py.)"""
         return [render_limitation(l) for l in self.limitations]
-
-
-# The closed set of codes a SourceRequirement's absent_code may select --
-# every one of these means, semantically, "this source turned out to be
-# absent" (in some rendering variant). Extend this explicitly, alongside
-# a new LimitationCode member, as a future command needs another
-# dedicated absence template -- never open it up generically, or a typo'd
-# absent_code (e.g. SOURCE_KEY_MISMATCH, which describes a PRESENT
-# source's partial mismatch, not an absent one) could render nonsense
-# like "some dump(s) missing from ModuleListStream" for a plain absence.
-_ABSENT_CAPABLE_CODES = (
-    LimitationCode.SOURCE_ABSENT,
-    LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE,
-    LimitationCode.PEB_UNAVAILABLE,
-    LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE,
-    LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE,
-    LimitationCode.SYSINFO_PEB_UNAVAILABLE,
-    LimitationCode.SYSINFO_THREADS_UNAVAILABLE,
-    LimitationCode.SYSINFO_MODULES_UNAVAILABLE,
-)
 
 
 @dataclass(frozen=True)
@@ -661,21 +820,6 @@ class SourceRequirement:
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
         if not isinstance(self.available_fields, tuple):
             object.__setattr__(self, "available_fields", tuple(self.available_fields))
-
-
-# Codes EvaluationRequirement.all_absent_code may select for a
-# SINGLE-source group: everything SourceRequirement.absent_code allows --
-# each of these renders from `source` alone, ignoring any other group
-# members, which is exactly why they must NEVER be used for a 2+-source
-# group (that would silently drop every source but the first from the
-# rendered text -- the bug this validation exists to prevent).
-_SINGLE_SOURCE_EVALUATION_CODES = _ABSENT_CAPABLE_CODES
-
-# Codes valid for a MULTI-source (2+) group: each of these either
-# enumerates every member in its rendered text (SOURCE_GROUP_ABSENT) or is
-# a fully-fixed sentence that represents the group AS A WHOLE by
-# definition (PID_SOURCES_ABSENT: misc_info/threads/exception all absent).
-_GROUP_EVALUATION_CODES = (LimitationCode.SOURCE_GROUP_ABSENT, LimitationCode.PID_SOURCES_ABSENT)
 
 
 @dataclass(frozen=True)
@@ -749,24 +893,6 @@ class EvaluationRequirement:
         object.__setattr__(self, "all_absent_code", code)
 
 
-# Codes a caller may hand-build directly into completeness_checks (as
-# opposed to a bare source name / SourceRequirement, which the reducer
-# turns into a limitation itself) -- genuine business facts the reducer
-# cannot infer from source state alone. Everything else -- SOURCE_ABSENT/
-# SOURCE_FAILED (must be derived from a SourceObservation, never hand-
-# asserted), SOURCE_GROUP_ABSENT/PID_SOURCES_ABSENT (only the
-# not_evaluated branch produces these), MODULE_CLASSIFICATION_UNAVAILABLE/
-# PEB_UNAVAILABLE (only SourceRequirement's absent_code produces these) --
-# is rejected, so a caller can't force a limitation the reducer never
-# actually verified against source state.
-_CALLER_BUILDABLE_COMPLETENESS_CODES = (
-    LimitationCode.SOURCE_KEY_MISMATCH,
-    LimitationCode.PID_THREAD_LIST_FALLBACK,
-    LimitationCode.PID_EXCEPTION_TID_FALLBACK,
-    LimitationCode.PID_NO_USABLE_FALLBACK,
-)
-
-
 def _completeness_check_source_name(check) -> str:
     if isinstance(check, CoverageLimitation):
         return check.source
@@ -809,52 +935,14 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
                 f"anything describing source absence must be a bare source name or "
                 f"SourceRequirement instead, so it's derived from the SourceObservation "
                 f"itself rather than hand-asserted")
-        if check.code == LimitationCode.SOURCE_KEY_MISMATCH:
-            # A SOURCE_KEY_MISMATCH claims two sources are both genuinely
-            # present but disagree on keys -- if either side is actually
-            # ABSENT/FAILED, that's not a mismatch, it's an absence, and
-            # must go through SourceRequirement auto-derivation instead
-            # (see the threads-absent fix this guards against
-            # regressing). This does NOT generalize to every caller-
-            # buildable code: PID_THREAD_LIST_FALLBACK's source
-            # ("misc_info") is EXPECTED to not have yielded a usable PID
-            # -- that is the fallback's entire trigger condition, not an
-            # error.
-            for side, name in (("source", check.source), ("counterpart_source", check.counterpart_source)):
-                if name is None:
-                    continue
-                if sources[name].state in (SourceState.ABSENT, SourceState.FAILED):
-                    raise ValueError(
-                        f"SOURCE_KEY_MISMATCH.{side}={name!r} is {sources[name].state.value} -- "
-                        f"a key mismatch requires both sides to be present; an absent/failed source "
-                        f"must be expressed via a bare source name or SourceRequirement instead")
-            # affected_count's own None-or-positive-int shape is already
-            # enforced generically by CoverageLimitation.__post_init__ at
-            # construction time -- nothing left to check here.
-
-        elif check.code == LimitationCode.PID_THREAD_LIST_FALLBACK:
-            # Unlike SOURCE_KEY_MISMATCH, `source` (misc_info) being
-            # unusable is this fallback's entire trigger condition -- but
-            # `counterpart_source` (threads) supplying the actual TID list
-            # must be genuinely present, and the TID count claimed must
-            # match what the source itself reports, or the two are two
-            # independent, driftable claims about the same fact.
-            threads_obs = sources["threads"]
-            if threads_obs.state != SourceState.PRESENT:
-                raise ValueError(
-                    f"PID_THREAD_LIST_FALLBACK requires threads to be present, "
-                    f"got {threads_obs.state.value}")
-            if len(check.related_tids) != threads_obs.record_count:
-                raise ValueError(
-                    f"PID_THREAD_LIST_FALLBACK.related_tids has {len(check.related_tids)} "
-                    f"entries, but threads reports record_count={threads_obs.record_count}")
-
-        elif check.code == LimitationCode.PID_EXCEPTION_TID_FALLBACK:
-            exception_obs = sources["exception"]
-            if exception_obs.state != SourceState.PRESENT:
-                raise ValueError(
-                    f"PID_EXCEPTION_TID_FALLBACK requires exception to be present, "
-                    f"got {exception_obs.state.value}")
+        # affected_count's own None-or-positive-int shape (and every other
+        # generic field shape) is already enforced by CoverageLimitation.
+        # __post_init__ at construction time -- only cross-source checks
+        # (which need `sources`, not available at construction time)
+        # remain here, one per caller-buildable code, in _CODE_SPECS.
+        validate_against_sources = _CODE_SPECS[check.code].validate_against_sources
+        if validate_against_sources is not None:
+            validate_against_sources(check, sources)
 
 
 def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequirement | None",

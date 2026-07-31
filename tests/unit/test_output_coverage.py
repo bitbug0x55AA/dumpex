@@ -27,8 +27,18 @@ from dumpex.output.coverage import (
     LIMITATION_SOURCE_ABSENT, LIMITATION_SOURCE_FAILED, LIMITATION_SOURCE_KEY_MISMATCH,
     COVERAGE_COMPLETE, COVERAGE_PARTIAL, COVERAGE_NOT_EVALUATED,
     EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED,
-    _FIXED_SOURCE_CODES,
+    _FIXED_SOURCE_CODES, _CODE_SPECS,
 )
+
+
+# ── _CODE_SPECS registry ─────────────────────────────────────────────────
+# Mechanically catches "added a new LimitationCode member but forgot to
+# register its spec" -- it does NOT catch a wrong spec (wrong fixed_source,
+# missing validate_fields, etc.): a new code's own source/field/state
+# contract still needs its own dedicated tests, following the existing
+# PID_*/SYSINFO_* tests below as the pattern.
+def test_every_limitation_code_has_a_registered_spec():
+    assert set(_CODE_SPECS) == set(LimitationCode)
 
 
 # ── observe_source ─────────────────────────────────────────────────────
