@@ -139,8 +139,15 @@ def collect_sysinfo(mf: MinidumpFile) -> CommandResult:
     return CommandResult(kind="sysinfo", records=[record], coverage=coverage, summary={"count": 1})
 
 
-def render_sysinfo_console(record: SysInfoRecord, peb_present: bool,
-                            threads_present: bool, modules_present: bool) -> None:
+def render_sysinfo_console(record: SysInfoRecord, coverage) -> None:
+    """Takes the whole CoverageReport, not three separately-derived
+    presence booleans -- each is recomputed here via
+    sysinfo_source_present() rather than trusted from a stale call site,
+    matching peb.py's render_peb_console(record, coverage) contract."""
+    peb_present     = sysinfo_source_present(coverage, "peb")
+    threads_present = sysinfo_source_present(coverage, "threads")
+    modules_present = sysinfo_source_present(coverage, "modules")
+
     print(f"\n{BOLD('═══ SYSTEM INFO ═══')}")
 
     # ── OS ──────────────────────────────────────────────────────────────
@@ -196,10 +203,7 @@ def render_sysinfo_console(record: SysInfoRecord, peb_present: bool,
 
 def cmd_sysinfo(mf: MinidumpFile) -> CommandResult:
     result = collect_sysinfo(mf)
-    peb_present     = sysinfo_source_present(result.coverage, "peb")
-    threads_present = sysinfo_source_present(result.coverage, "threads")
-    modules_present = sysinfo_source_present(result.coverage, "modules")
-    render_sysinfo_console(result.records[0], peb_present, threads_present, modules_present)
+    render_sysinfo_console(result.records[0], result.coverage)
     return result
 
 
@@ -311,7 +315,10 @@ def collect_pid(mf: MinidumpFile) -> CommandResult:
     return CommandResult(kind="pid", records=[record], coverage=coverage, summary={"count": 1})
 
 
-def render_pid_console(record: PidRecord, coverage_reasons: list) -> None:
+def render_pid_console(record: PidRecord, coverage) -> None:
+    """Takes the whole CoverageReport, not a bare reasons list -- matches
+    peb.py's render_peb_console(record, coverage) contract, so a stale
+    call site can't pass a mismatched/incomplete reasons list."""
     print(f"\n{BOLD('═══ PROCESS ID ═══')}")
 
     if record.pid is not None:
@@ -323,7 +330,7 @@ def render_pid_console(record: PidRecord, coverage_reasons: list) -> None:
     else:
         print(f"  {YELLOW('[!] ProcessId not found in MiscInfo stream.')}")
 
-    for w in coverage_reasons:
+    for w in coverage.reasons:
         print(f"\n  {YELLOW('[~]')} {w}")
 
     print()
@@ -331,5 +338,5 @@ def render_pid_console(record: PidRecord, coverage_reasons: list) -> None:
 
 def cmd_pid(mf: MinidumpFile) -> CommandResult:
     result = collect_pid(mf)
-    render_pid_console(result.records[0], result.coverage.reasons)
+    render_pid_console(result.records[0], result.coverage)
     return result

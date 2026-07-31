@@ -73,6 +73,15 @@ def test_render_regions_console_does_not_crash(capsys):
     assert "1 region(s) shown" in out
 
 
+def test_render_regions_console_present_empty_does_not_crash(capsys):
+    mf = FakeMF()
+    mf.memory_info = FakeStream([], "infos")   # stream present, genuinely zero regions
+    result = collect_regions(mf)
+    render_regions_console(result.records)
+    out = capsys.readouterr().out
+    assert "0 region(s) shown" in out
+
+
 def test_cmd_list_returns_command_result(capsys):
     mf = FakeMF()
     mf.memory_info = FakeStream(

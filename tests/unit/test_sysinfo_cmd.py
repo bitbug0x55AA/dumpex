@@ -84,14 +84,22 @@ def test_render_sysinfo_console_does_not_crash(capsys):
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.modules = FakeStream([Module(0, 0, "a")], "modules")
     result = collect_sysinfo(mf)
-    peb_present     = sysinfo_source_present(result.coverage, "peb")
-    threads_present = sysinfo_source_present(result.coverage, "threads")
-    modules_present = sysinfo_source_present(result.coverage, "modules")
-    render_sysinfo_console(result.records[0], peb_present, threads_present, modules_present)
+    render_sysinfo_console(result.records[0], result.coverage)
     out = capsys.readouterr().out
     assert "SYSTEM INFO" in out
     assert "1234" in out
     assert "Threads in dump" in out
+
+
+def test_render_sysinfo_console_partial_missing_streams_does_not_crash(capsys):
+    result = collect_sysinfo(FakeMF())
+    render_sysinfo_console(result.records[0], result.coverage)
+    out = capsys.readouterr().out
+    assert "SYSTEM INFO" in out
+    assert "sysinfo stream not available" in out
+    assert "Threads in dump" not in out    # threads absent -- gated field must not print
+    assert "Modules in dump" not in out    # modules absent -- gated field must not print
+    assert "Image Path" not in out         # peb absent -- gated fields must not print
 
 
 def test_cmd_sysinfo_returns_command_result(capsys):
@@ -191,10 +199,32 @@ def test_collect_pid_threads_present_but_misc_info_absent_is_partial():
 
 def test_render_pid_console_not_evaluated_prints_the_stable_reason(capsys):
     result = collect_pid(FakeMF())
-    render_pid_console(result.records[0], result.coverage.reasons)
+    render_pid_console(result.records[0], result.coverage)
     out = capsys.readouterr().out
     assert "ProcessId not found" in out
     assert "could not be evaluated" in out
+
+
+def test_render_pid_console_complete_via_misc_info(capsys):
+    mf = FakeMF()
+    mf.misc_info = MiscInfo(process_id=4321)
+    result = collect_pid(mf)
+    render_pid_console(result.records[0], result.coverage)
+    out = capsys.readouterr().out
+    assert "4321" in out
+    assert "0x10e1" in out   # hex(4321)
+    assert "MINIDUMP_MISC_INFO" in out
+    assert "[~]" not in out   # complete -- no warning lines
+
+
+def test_render_pid_console_partial_fallback_prints_warning(capsys):
+    mf = FakeMF()
+    mf.threads = FakeStream([Thread(9, Ctx(0))], "threads")
+    result = collect_pid(mf)
+    render_pid_console(result.records[0], result.coverage)
+    out = capsys.readouterr().out
+    assert "ProcessId not found" in out
+    assert "thread list" in out
 
 
 def test_cmd_pid_returns_command_result(capsys):

@@ -194,21 +194,28 @@ def test_render_threads_console_normal_does_not_crash(capsys):
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")
     result = collect_threads(mf)
-    degraded = thread_info_is_degraded(result.coverage)
-    has_times = thread_records_have_times(result.records)
-    render_threads_console(result.records, degraded, has_times)
+    render_threads_console(result.records, result.coverage)
     out = capsys.readouterr().out
     assert "0x1" in out
     assert "1 thread(s)" in out
+
+
+def test_render_threads_console_present_empty_does_not_crash(capsys):
+    mf = FakeMF()
+    mf.threads = FakeStream([], "threads")
+    mf.thread_info = FakeStream([], "infos")
+    mf.modules = FakeStream([], "modules")
+    result = collect_threads(mf)
+    render_threads_console(result.records, result.coverage)
+    out = capsys.readouterr().out
+    assert "0 thread(s)" in out
 
 
 def test_render_threads_console_degraded_prints_warning_banner(capsys):
     mf = FakeMF()
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     result = collect_threads(mf)
-    degraded = thread_info_is_degraded(result.coverage)
-    has_times = thread_records_have_times(result.records)
-    render_threads_console(result.records, degraded, has_times)
+    render_threads_console(result.records, result.coverage)
     out = capsys.readouterr().out
     assert "ThreadInfoListStream not present" in out
     assert "unavailable" in out
@@ -227,15 +234,13 @@ def test_render_threads_console_mixed_records_do_not_misrender_has_times(capsys)
     mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000, create_time=133000000000000000)],
                                  "infos")
     result = collect_threads(mf)
-    degraded = thread_info_is_degraded(result.coverage)
-    has_times = thread_records_have_times(result.records)
-    assert has_times is True
+    assert thread_records_have_times(result.records) is True
     rec1 = next(r for r in result.records if r.tid == 1)
     rec2 = next(r for r in result.records if r.tid == 2)
     assert rec1.create_time is not None
     assert rec2.create_time is None   # must not inherit has_times=True from rec1
 
-    render_threads_console(result.records, degraded, has_times, result.coverage.reasons)
+    render_threads_console(result.records, result.coverage)
     out = capsys.readouterr().out
     tid2_block = out.split("0x2")[1].split("TID")[0]
     assert "Created" not in tid2_block
@@ -251,12 +256,10 @@ def test_render_threads_console_stream_present_but_timestamps_empty_is_neutral(c
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000)], "infos")   # CreateTime defaults to None
     result = collect_threads(mf)
-    degraded = thread_info_is_degraded(result.coverage)
-    has_times = thread_records_have_times(result.records)
-    assert degraded is False   # the stream itself is present
-    assert has_times is False
+    assert thread_info_is_degraded(result.coverage) is False   # the stream itself is present
+    assert thread_records_have_times(result.records) is False
 
-    render_threads_console(result.records, degraded, has_times, result.coverage.reasons)
+    render_threads_console(result.records, result.coverage)
     out = capsys.readouterr().out
     assert "not available in the captured ThreadInfo data" in out
     assert "without ThreadInfoList stream" not in out   # would misreport a present stream as absent

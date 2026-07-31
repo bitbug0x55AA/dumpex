@@ -78,6 +78,15 @@ def test_render_modules_console_does_not_crash(capsys):
     assert "1 module(s)" in out
 
 
+def test_render_modules_console_present_empty_does_not_crash(capsys):
+    mf = FakeMF()
+    mf.modules = FakeStream([], "modules")   # stream present, genuinely zero modules
+    result = collect_modules(mf)
+    render_modules_console(result.records)
+    out = capsys.readouterr().out
+    assert "0 module(s)" in out
+
+
 def test_cmd_modules_returns_command_result(capsys):
     mf = FakeMF()
     mf.modules = FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules")

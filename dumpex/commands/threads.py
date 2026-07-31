@@ -300,8 +300,17 @@ def collect_threads(mf) -> CommandResult:
                           summary={"count": len(records)})
 
 
-def render_threads_console(records, degraded: bool, has_times: bool,
-                            coverage_reasons: list = None) -> None:
+def render_threads_console(records, coverage) -> None:
+    """Takes the whole records list and CoverageReport, not a
+    (degraded, has_times, reasons) triple derived from them separately --
+    both are recomputed here via thread_info_is_degraded()/
+    thread_records_have_times() rather than trusted from a stale call
+    site, matching peb.py's render_peb_console(record, coverage)
+    contract."""
+    degraded = thread_info_is_degraded(coverage)
+    has_times = thread_records_have_times(records)
+    coverage_reasons = coverage.reasons
+
     if degraded:
         print(YELLOW(
             "  [~] ThreadInfoListStream not present in this dump — falling back to the\n"
@@ -395,7 +404,5 @@ def render_threads_console(records, degraded: bool, has_times: bool,
 
 def cmd_threads(mf) -> CommandResult:
     result = collect_threads(mf)
-    degraded  = thread_info_is_degraded(result.coverage)
-    has_times = thread_records_have_times(result.records)
-    render_threads_console(result.records, degraded, has_times, result.coverage.reasons)
+    render_threads_console(result.records, result.coverage)
     return result
