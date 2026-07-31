@@ -27,8 +27,18 @@ from dumpex.output.coverage import (
     LIMITATION_SOURCE_ABSENT, LIMITATION_SOURCE_FAILED, LIMITATION_SOURCE_KEY_MISMATCH,
     COVERAGE_COMPLETE, COVERAGE_PARTIAL, COVERAGE_NOT_EVALUATED,
     EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED,
-    _FIXED_SOURCE_CODES, _CODE_SPECS,
+    _FIXED_SOURCE_CODES, _CODE_SPECS, _ABSENT_CAPABLE_CODES,
 )
+
+# _FIXED_SOURCE_CODES now also covers caller_buildable/group_capable-only
+# codes (e.g. PID_NO_USABLE_FALLBACK) whose fixed source is enforced at
+# CoverageLimitation-construction time but which SourceRequirement/
+# EvaluationRequirement must never accept regardless of source (they're
+# not absent_capable) -- filtered down to the subset actually selectable
+# through those two for the parametrized tests below that exercise them.
+_ABSENT_CAPABLE_FIXED_SOURCE_CODES = [
+    (code, source) for code, source in _FIXED_SOURCE_CODES.items() if code in _ABSENT_CAPABLE_CODES
+]
 
 
 # ── _CODE_SPECS registry ─────────────────────────────────────────────────
@@ -247,7 +257,7 @@ def test_coverage_limitation_accepts_list_for_unavailable_fields_and_normalizes_
 
 def test_coverage_limitation_accepts_list_for_available_fields_and_normalizes_to_tuple():
     limitation = CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules",
-                                     available_fields=["TID"])
+                                     unavailable_fields=["StartAddress"], available_fields=["TID"])
     assert limitation.available_fields == ("TID",)
 
 
@@ -711,28 +721,38 @@ def test_source_requirement_module_classification_requires_modules_source():
 # so produces dump-content-dependent behavior (silently "complete" when
 # the mismatched source happens to be present, a ValueError buried deep
 # inside CoverageLimitation construction only when it's absent).
+#
+# The four tests below use _ABSENT_CAPABLE_FIXED_SOURCE_CODES rather than
+# the full _FIXED_SOURCE_CODES: PID_NO_USABLE_FALLBACK/PID_THREAD_LIST_
+# FALLBACK/PID_EXCEPTION_TID_FALLBACK/PID_SOURCES_ABSENT also pin a fixed
+# source (checked at CoverageLimitation-construction time, see the
+# dedicated PID_* tests further down) but are caller_buildable/
+# group_capable-only, never selectable via SourceRequirement.absent_code
+# or a single-source EvaluationRequirement.all_absent_code -- passing them
+# here would test the wrong rejection reason (not-absent-capable, not
+# wrong-source).
 
-@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+@pytest.mark.parametrize("code,correct_source", _ABSENT_CAPABLE_FIXED_SOURCE_CODES)
 def test_source_requirement_rejects_mismatched_fixed_source_code(code, correct_source):
     wrong_source = "definitely_not_" + correct_source
     with pytest.raises(ValueError, match=correct_source):
         SourceRequirement(source=wrong_source, absent_code=code)
 
 
-@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+@pytest.mark.parametrize("code,correct_source", _ABSENT_CAPABLE_FIXED_SOURCE_CODES)
 def test_source_requirement_accepts_correct_fixed_source_code(code, correct_source):
     req = SourceRequirement(source=correct_source, absent_code=code)
     assert req.absent_code == code
 
 
-@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+@pytest.mark.parametrize("code,correct_source", _ABSENT_CAPABLE_FIXED_SOURCE_CODES)
 def test_evaluation_requirement_rejects_mismatched_fixed_source_code(code, correct_source):
     wrong_source = "definitely_not_" + correct_source
     with pytest.raises(ValueError, match=correct_source):
         EvaluationRequirement(sources=(wrong_source,), all_absent_code=code)
 
 
-@pytest.mark.parametrize("code,correct_source", list(_FIXED_SOURCE_CODES.items()))
+@pytest.mark.parametrize("code,correct_source", _ABSENT_CAPABLE_FIXED_SOURCE_CODES)
 def test_evaluation_requirement_accepts_correct_fixed_source_code(code, correct_source):
     req = EvaluationRequirement(sources=(correct_source,), all_absent_code=code)
     assert req.all_absent_code == code
@@ -819,16 +839,38 @@ def test_render_limitation_pid_no_usable_fallback():
 # rendered text -- a code whose renderer never reads a field must reject
 # that field being set, not silently ignore it.
 
-def test_coverage_limitation_pid_no_usable_fallback_rejects_contradictory_fields():
+def test_coverage_limitation_pid_no_usable_fallback_rejects_contradictory_bundle():
     # Exact repro from review: PID_NO_USABLE_FALLBACK's own enum comment
     # says "fully fixed sentence, no fields" -- nothing previously
     # enforced that, so this combination used to construct successfully,
     # get accepted by the reducer, validate against the schema, and
     # render the fixed sentence while silently ignoring every field below.
-    with pytest.raises(ValueError, match="affected_count"):
+    # (Which specific field trips the check first isn't the point here --
+    # see the two tests below for source/scope isolated individually, per
+    # review round 2's ask.)
+    with pytest.raises(ValueError):
         CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="modules",
                             scope="module", affected_count=7,
                             unavailable_fields=("BogusField",), detail="contradictory")
+
+
+def test_coverage_limitation_pid_no_usable_fallback_rejects_wrong_source_alone():
+    # Isolated from scope/affected_count/etc: source="modules" alone (a
+    # real source name, just not the one this fixed sentence claims) must
+    # be rejected on its own, not only when bundled with other bad fields.
+    with pytest.raises(ValueError, match="misc_info"):
+        CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="modules")
+
+
+def test_coverage_limitation_pid_no_usable_fallback_rejects_scope_alone():
+    # Isolated from source/affected_count/etc: with the correct source,
+    # scope alone must still be rejected -- unlike SOURCE_ABSENT/SOURCE_
+    # FAILED/the group codes, this code is never reached via auto-
+    # derivation (which is the only thing that ever sets scope), so it
+    # has no legitimate use for it.
+    with pytest.raises(ValueError, match="scope"):
+        CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info",
+                            scope="module")
 
 
 @pytest.mark.parametrize("field_name,kwargs", [
@@ -866,12 +908,60 @@ def test_coverage_limitation_sysinfo_fixed_text_code_rejects_detail():
                             detail="should not be allowed")
 
 
-def test_coverage_limitation_scope_allowed_regardless_of_allowed_fields():
-    # scope is a universal classification tag (every derivation path sets
-    # it unconditionally) unlike the other structured fields -- confirm
-    # it's never rejected even for a fully-fixed-sentence code.
-    limitation = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info",
-                                     scope="dump")
+# ── SOURCE_ABSENT: field-combination validation (review round 2, P2) ─────
+# allowed_fields alone only says WHICH fields a code may touch, not which
+# COMBINATIONS are coherent -- affected_count/available_fields only mean
+# anything paired with their counterpart field, and counterpart_source
+# claims a fact about another source that must be independently checked
+# against that source's own real state.
+
+def test_coverage_limitation_source_absent_rejects_affected_count_without_counterpart():
+    with pytest.raises(ValueError, match="counterpart_source"):
+        CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules", affected_count=3)
+
+
+def test_coverage_limitation_source_absent_rejects_available_fields_without_unavailable_fields():
+    with pytest.raises(ValueError, match="unavailable_fields"):
+        CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules",
+                            available_fields=("TID",))
+
+
+def test_coverage_limitation_source_absent_rejects_source_equal_to_counterpart():
+    with pytest.raises(ValueError, match="counterpart_source"):
+        CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="modules",
+                            counterpart_source="modules")
+
+
+def test_build_coverage_report_rejects_source_absent_counterpart_not_actually_present():
+    # SourceRequirement's counterpart_source claims "N present in
+    # COUNTERPART but missing from SOURCE" -- if the counterpart is
+    # itself absent (tells us nothing, contradicts the claim outright),
+    # that must be caught, not silently rendered as a confident count.
+    modules_obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
+    other_obs = SourceObservation(name="other", state=SOURCE_ABSENT)
+    req = SourceRequirement("modules", counterpart_source="other", affected_count=2)
+    with pytest.raises(ValueError, match="not present"):
+        build_coverage_report({"modules": modules_obs, "other": other_obs},
+                               completeness_checks=[req])
+
+
+def test_build_coverage_report_allows_source_absent_with_counterpart_genuinely_present():
+    modules_obs = SourceObservation(name="modules", state=SOURCE_ABSENT)
+    other_obs = SourceObservation(name="other", state=SOURCE_PRESENT, record_count=2)
+    req = SourceRequirement("modules", counterpart_source="other", affected_count=2)
+    report = build_coverage_report({"modules": modules_obs, "other": other_obs},
+                                    completeness_checks=[req])
+    assert report.status == COVERAGE_PARTIAL
+
+
+def test_coverage_limitation_scope_allowed_for_auto_derived_fixed_sentence_code():
+    # Unlike PID_NO_USABLE_FALLBACK (never auto-derived, never allows
+    # scope -- see above), SYSINFO_MISC_INFO_UNAVAILABLE IS reached via
+    # SourceRequirement -> _derive_required_source_limitation, which
+    # unconditionally sets scope="dump" regardless of code -- so it must
+    # allow scope even though its own renderer never reads it either.
+    limitation = CoverageLimitation(code=LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE,
+                                     source="misc_info", scope="dump")
     assert limitation.scope == "dump"
 
 

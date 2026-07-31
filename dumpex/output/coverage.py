@@ -394,12 +394,23 @@ class _CodeSpec:
     # can attach contradictory data a fixed-sentence renderer silently
     # ignores (e.g. affected_count/unavailable_fields/detail all set on
     # PID_NO_USABLE_FALLBACK, whose own enum comment says "fully fixed
-    # sentence, no fields" -- nothing previously enforced that). `scope`
-    # is deliberately NOT one of these: every derivation path
-    # (_derive_required_source_limitation, build_coverage_report's
-    # not_evaluated branch) unconditionally sets scope="dump" regardless
-    # of code, so it's a universal classification tag, not a per-code
-    # semantic field the way the others are.
+    # sentence, no fields" -- nothing previously enforced that).
+    #
+    # `scope` is included here like any other field, NOT unconditionally
+    # exempted: codes reached via an auto-derivation path
+    # (_derive_required_source_limitation for absent_capable codes,
+    # build_coverage_report's not_evaluated branch for group_capable
+    # codes) always end up with scope="dump" unless the caller overrides
+    # it via SourceRequirement.scope, regardless of whether the renderer
+    # actually reads it -- so those codes list "scope" in allowed_fields.
+    # A caller_buildable-ONLY code (PID_THREAD_LIST_FALLBACK/
+    # PID_EXCEPTION_TID_FALLBACK/PID_NO_USABLE_FALLBACK) is never reached
+    # through that path and never receives scope from any production call
+    # site, so it does NOT list "scope" -- confirmed empirically: the only
+    # call sites (sysinfo.py's collect_pid) never pass scope= to any of
+    # the three. SOURCE_KEY_MISMATCH is caller_buildable too but DOES list
+    # "scope" since it's a real, rendered part of its text
+    # (threads.py passes scope="thread" explicitly).
     allowed_fields: frozenset = frozenset()
 
 
@@ -474,16 +485,56 @@ def _render_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
     return lambda limitation: text
 
 
-def _validate_pid_thread_list_fallback_fields(limitation: "CoverageLimitation") -> None:
-    # Deliberately NOT expressed via the generic `fixed_source` field:
-    # this code is caller_buildable (only ever hand-built directly), never
-    # absent_capable -- putting it in `_FIXED_SOURCE_CODES` would wrongly
-    # make it eligible for SourceRequirement/EvaluationRequirement's
-    # fixed-source checks, which only apply to absent-capable codes.
-    if limitation.source != "misc_info":
+def _validate_source_absent_fields(limitation: "CoverageLimitation") -> None:
+    # affected_count only means anything paired with a counterpart (it's
+    # "N present in counterpart but missing from source") -- a bare count
+    # with no counterpart is meaningless and the renderer never reads it
+    # in that shape (falls through to the plain "not present" sentence).
+    if limitation.affected_count is not None and limitation.counterpart_source is None:
         raise ValueError(
-            "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires source='misc_info', "
-            f"got {limitation.source!r}")
+            "CoverageLimitation(code=SOURCE_ABSENT) requires counterpart_source when "
+            f"affected_count is set, got affected_count={limitation.affected_count!r} with "
+            f"counterpart_source=None")
+    # Symmetric to unavailable_fields requiring available_fields the other
+    # way: available_fields ("X/Y only") only makes sense alongside the
+    # unavailable_fields it's contrasted against in the rendered text.
+    if limitation.available_fields and not limitation.unavailable_fields:
+        raise ValueError(
+            "CoverageLimitation(code=SOURCE_ABSENT) requires unavailable_fields when "
+            f"available_fields is set, got available_fields={limitation.available_fields!r} "
+            f"with unavailable_fields=()")
+    if limitation.counterpart_source is not None and limitation.counterpart_source == limitation.source:
+        raise ValueError(
+            "CoverageLimitation(code=SOURCE_ABSENT) requires counterpart_source to differ from "
+            f"source -- both are {limitation.source!r}, which would render as present in X but "
+            f"missing from that same X")
+
+
+def _validate_source_absent_against_sources(limitation: "CoverageLimitation", sources: dict) -> None:
+    # A SOURCE_ABSENT limitation with counterpart_source claims "N items
+    # present in COUNTERPART but missing from SOURCE" -- that claim is
+    # only true if the counterpart itself is genuinely present with real
+    # records. (A PRESENT_EMPTY counterpart with affected_count == 0 is
+    # the "nothing was actually affected" case _derive_required_source_
+    # limitation already short-circuits to None before ever constructing
+    # this object -- so anything that reaches here with a counterpart
+    # must be backed by a counterpart that's truly PRESENT.)
+    if limitation.counterpart_source is None:
+        return
+    counterpart_obs = sources[limitation.counterpart_source]
+    if counterpart_obs.state != SourceState.PRESENT:
+        raise ValueError(
+            f"SOURCE_ABSENT.counterpart_source={limitation.counterpart_source!r} claims records "
+            f"present there, but its own state is {counterpart_obs.state.value!r}, not present")
+
+
+def _validate_pid_thread_list_fallback_fields(limitation: "CoverageLimitation") -> None:
+    # `source == "misc_info"` is enforced generically via this code's own
+    # fixed_source (see _CODE_SPECS) -- putting a fixed_source on a
+    # caller_buildable/group_capable-only code does NOT make it eligible
+    # for SourceRequirement/EvaluationRequirement (both gate on
+    # absent_capable/group_capable membership first, before ever
+    # consulting a fixed source), so it's safe to declare here too.
     if limitation.counterpart_source != "threads":
         raise ValueError(
             "CoverageLimitation(code=PID_THREAD_LIST_FALLBACK) requires "
@@ -497,34 +548,13 @@ def _validate_pid_thread_list_fallback_fields(limitation: "CoverageLimitation") 
 
 
 def _validate_pid_exception_tid_fallback_fields(limitation: "CoverageLimitation") -> None:
-    # Deliberately NOT expressed via the generic `fixed_source` field --
-    # same reasoning as PID_THREAD_LIST_FALLBACK above.
-    if limitation.source != "exception":
-        raise ValueError(
-            "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires source='exception', "
-            f"got {limitation.source!r}")
+    # `source == "exception"` is enforced generically via fixed_source --
+    # see _validate_pid_thread_list_fallback_fields's comment above.
     if (not isinstance(limitation.thread_id, int) or isinstance(limitation.thread_id, bool)
             or limitation.thread_id <= 0):
         raise ValueError(
             "CoverageLimitation(code=PID_EXCEPTION_TID_FALLBACK) requires thread_id to be "
             f"a positive integer, got {limitation.thread_id!r}")
-
-
-def _validate_pid_sources_absent_fields(limitation: "CoverageLimitation") -> None:
-    # Deliberately NOT expressed via the generic `fixed_source` field:
-    # PID_SOURCES_ABSENT is group_capable (only ever selected via a
-    # 3-source EvaluationRequirement), never absent_capable -- putting it
-    # in `_FIXED_SOURCE_CODES` would wrongly make it eligible for
-    # SourceRequirement/single-source EvaluationRequirement's fixed-
-    # source checks, which only apply to genuinely single-source codes.
-    # `related_sources`'s exact-match is handled generically via
-    # fixed_related_sources; only the source-consistent-with-
-    # related_sources[0] check belongs here.
-    if limitation.source != _PID_SOURCES_ABSENT_SOURCES[0]:
-        raise ValueError(
-            f"CoverageLimitation(code=PID_SOURCES_ABSENT) requires source == "
-            f"{_PID_SOURCES_ABSENT_SOURCES[0]!r} (consistent with related_sources), "
-            f"got {limitation.source!r}")
 
 
 def _validate_source_key_mismatch_against_sources(limitation: "CoverageLimitation",
@@ -579,54 +609,66 @@ def _validate_pid_exception_tid_fallback_against_sources(limitation: "CoverageLi
 _CODE_SPECS = {
     LimitationCode.SOURCE_ABSENT: _CodeSpec(
         render=_render_source_absent, absent_capable=True,
+        validate_fields=_validate_source_absent_fields,
+        validate_against_sources=_validate_source_absent_against_sources,
         allowed_fields=frozenset({
-            "affected_count", "unavailable_fields", "available_fields", "counterpart_source"})),
+            "scope", "affected_count", "unavailable_fields", "available_fields",
+            "counterpart_source"})),
     LimitationCode.SOURCE_FAILED: _CodeSpec(
-        render=_render_source_failed, allowed_fields=frozenset({"detail"})),
+        render=_render_source_failed, allowed_fields=frozenset({"scope", "detail"})),
     LimitationCode.SOURCE_KEY_MISMATCH: _CodeSpec(
         render=_render_source_key_mismatch, caller_buildable=True,
         validate_against_sources=_validate_source_key_mismatch_against_sources,
-        allowed_fields=frozenset({"affected_count", "unavailable_fields", "counterpart_source"})),
+        allowed_fields=frozenset({
+            "scope", "affected_count", "unavailable_fields", "counterpart_source"})),
     LimitationCode.SOURCE_GROUP_ABSENT: _CodeSpec(
         render=_render_source_group_absent, min_related_sources=2, group_capable=True,
-        allowed_fields=frozenset({"related_sources"})),
+        allowed_fields=frozenset({"scope", "related_sources"})),
     LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE: _CodeSpec(
         render=_render_module_classification_unavailable, fixed_source="modules",
-        absent_capable=True),
+        absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.PEB_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("PEB could not be parsed (missing sysinfo or thread list in dump)"),
-        fixed_source="peb", absent_capable=True),
+        fixed_source="peb", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.PID_SOURCES_ABSENT: _CodeSpec(
-        render=_render_pid_sources_absent, fixed_related_sources=_PID_SOURCES_ABSENT_SOURCES,
-        group_capable=True, validate_fields=_validate_pid_sources_absent_fields,
-        allowed_fields=frozenset({"related_sources"})),
+        render=_render_pid_sources_absent, fixed_source=_PID_SOURCES_ABSENT_SOURCES[0],
+        fixed_related_sources=_PID_SOURCES_ABSENT_SOURCES, group_capable=True,
+        allowed_fields=frozenset({"scope", "related_sources"})),
     LimitationCode.PID_THREAD_LIST_FALLBACK: _CodeSpec(
-        render=_render_pid_thread_list_fallback,
+        render=_render_pid_thread_list_fallback, fixed_source="misc_info",
         caller_buildable=True, validate_fields=_validate_pid_thread_list_fallback_fields,
         validate_against_sources=_validate_pid_thread_list_fallback_against_sources,
+        # No "scope": never rendered, and never set by the one production
+        # call site (sysinfo.py's collect_pid) -- unlike SOURCE_ABSENT/
+        # SOURCE_FAILED/SOURCE_KEY_MISMATCH/the group codes, this one is
+        # never reached through an auto-derivation path that would
+        # otherwise force scope="dump" on it regardless of code.
         allowed_fields=frozenset({"counterpart_source", "related_tids"})),
     LimitationCode.PID_EXCEPTION_TID_FALLBACK: _CodeSpec(
-        render=_render_pid_exception_tid_fallback,
+        render=_render_pid_exception_tid_fallback, fixed_source="exception",
         caller_buildable=True, validate_fields=_validate_pid_exception_tid_fallback_fields,
         validate_against_sources=_validate_pid_exception_tid_fallback_against_sources,
-        allowed_fields=frozenset({"thread_id"})),
+        allowed_fields=frozenset({"thread_id"})),   # no "scope" -- see PID_THREAD_LIST_FALLBACK above
     LimitationCode.PID_NO_USABLE_FALLBACK: _CodeSpec(
-        render=_render_pid_no_usable_fallback, caller_buildable=True),
+        render=_render_pid_no_usable_fallback, fixed_source="misc_info", caller_buildable=True),
+        # allowed_fields defaults to empty: no "scope" either -- this
+        # code's own enum comment says "fully fixed sentence, no fields",
+        # and sysinfo.py's one call site never sets scope on it.
     LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("SystemInfoStream not present"),
-        fixed_source="sysinfo", absent_capable=True),
+        fixed_source="sysinfo", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("MiscInfo stream not present"),
-        fixed_source="misc_info", absent_capable=True),
+        fixed_source="misc_info", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.SYSINFO_PEB_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("PEB not available (requires sysinfo + thread list)"),
-        fixed_source="peb", absent_capable=True),
+        fixed_source="peb", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.SYSINFO_THREADS_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("ThreadListStream not present (thread_count unavailable)"),
-        fixed_source="threads", absent_capable=True),
+        fixed_source="threads", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.SYSINFO_MODULES_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("ModuleListStream not present (module_count unavailable)"),
-        fixed_source="modules", absent_capable=True),
+        fixed_source="modules", absent_capable=True, allowed_fields=frozenset({"scope"})),
 }
 
 # Derived collections -- every other call site (SourceRequirement,
@@ -648,11 +690,14 @@ _CALLER_BUILDABLE_COMPLETENESS_CODES = tuple(
 # rendered text -- the bug this validation exists to prevent).
 _SINGLE_SOURCE_EVALUATION_CODES = _ABSENT_CAPABLE_CODES
 
-# Every CoverageLimitation field besides code/source/scope, and the value
-# it must hold unless the code's own _CodeSpec.allowed_fields says
-# otherwise -- see _CodeSpec.allowed_fields' docstring for why `scope`
-# isn't in this map.
+# Every CoverageLimitation field besides code/source, and the value it
+# must hold unless the code's own _CodeSpec.allowed_fields says
+# otherwise -- see _CodeSpec.allowed_fields' docstring for the per-code
+# reasoning (including why "scope" is here despite most codes allowing
+# it: those are the ones reached via auto-derivation, which always sets
+# it, not a blanket exemption).
 _STRUCTURED_FIELD_DEFAULTS = {
+    "scope": None,
     "affected_count": None,
     "unavailable_fields": (),
     "available_fields": (),
@@ -983,9 +1028,20 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
         # __post_init__ at construction time -- only cross-source checks
         # (which need `sources`, not available at construction time)
         # remain here, one per caller-buildable code, in _CODE_SPECS.
-        validate_against_sources = _CODE_SPECS[check.code].validate_against_sources
-        if validate_against_sources is not None:
-            validate_against_sources(check, sources)
+        _validate_limitation_against_sources(check, sources)
+
+
+def _validate_limitation_against_sources(limitation: CoverageLimitation, sources: dict) -> None:
+    """The one place a constructed CoverageLimitation's cross-source
+    checks run, regardless of HOW it was constructed -- a caller-built
+    limitation goes through _validate_build_coverage_report_inputs before
+    ever being handed here, but a reducer-derived one (SOURCE_ABSENT/
+    SOURCE_FAILED via _derive_required_source_limitation, or the
+    not_evaluated branch's group limitation) has no other checkpoint,
+    so both paths call this rather than only the caller-buildable one."""
+    validate_against_sources = _CODE_SPECS[limitation.code].validate_against_sources
+    if validate_against_sources is not None:
+        validate_against_sources(limitation, sources)
 
 
 def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequirement | None",
@@ -1014,12 +1070,14 @@ def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequi
             # the rendered text would be a nonsensical "0 thing(s) present
             # in COUNTERPART but missing from SOURCE".
             return None
-        return CoverageLimitation(code=req.absent_code, source=obs.name,
-                                   scope=req.scope or "dump",
-                                   unavailable_fields=req.unavailable_fields,
-                                   available_fields=req.available_fields,
-                                   counterpart_source=req.counterpart_source,
-                                   affected_count=req.affected_count)
+        limitation = CoverageLimitation(code=req.absent_code, source=obs.name,
+                                         scope=req.scope or "dump",
+                                         unavailable_fields=req.unavailable_fields,
+                                         available_fields=req.available_fields,
+                                         counterpart_source=req.counterpart_source,
+                                         affected_count=req.affected_count)
+        _validate_limitation_against_sources(limitation, sources)
+        return limitation
     if obs.state == SourceState.FAILED:
         return CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source=obs.name,
                                    scope="dump", detail=obs.detail)
@@ -1090,6 +1148,7 @@ def build_coverage_report(
         related = eval_req.sources if len(eval_req.sources) >= 2 else ()
         group_limitation = CoverageLimitation(
             code=code, source=eval_req.sources[0], scope="dump", related_sources=related)
+        _validate_limitation_against_sources(group_limitation, sources)
         return CoverageReport(status=CoverageStatus.NOT_EVALUATED, sources=sources,
                                limitations=[group_limitation])
 

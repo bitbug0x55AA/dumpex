@@ -322,7 +322,7 @@
     },
 
     "coverageLimitation": {
-      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does.",
+      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does. `allOf` below additionally constrains each KNOWN code's disallowed fields to their default (null/[]) and, where applicable, pins `source` to that code's fixed value -- mirrors dumpex.output.coverage._CODE_SPECS.allowed_fields/fixed_source exactly (each `if` matches only that one `code` value, so an unrecognized future code matches none of them and stays fully open; `code` itself remains a plain string, not an enum).",
       "type": "object",
       "additionalProperties": false,
       "required": ["code", "source", "scope", "affected_count", "unavailable_fields",
@@ -340,7 +340,39 @@
         "related_tids":        { "type": "array", "items": { "type": "integer", "minimum": 1 } },
         "thread_id":           { "type": ["integer", "null"], "minimum": 1 },
         "detail":              { "type": ["string", "null"], "minLength": 1 }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "code": { "const": "SOURCE_ABSENT" } } },
+          "then": { "properties": { "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_FAILED" } } },
+          "then": { "properties": { "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_KEY_MISMATCH" } } },
+          "then": { "properties": { "available_fields": { "const": [] }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_GROUP_ABSENT" } } },
+          "then": { "properties": { "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "MODULE_CLASSIFICATION_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PEB_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "peb" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_SOURCES_ABSENT" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_THREAD_LIST_FALLBACK" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "related_sources": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_EXCEPTION_TID_FALLBACK" } } },
+          "then": { "properties": { "source": { "const": "exception" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_NO_USABLE_FALLBACK" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_SYSTEM_INFO_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "sysinfo" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_MISC_INFO_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_PEB_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "peb" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_THREADS_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "threads" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_MODULES_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } }
+      ]
     },
 
     "artifact": {

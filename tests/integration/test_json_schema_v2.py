@@ -410,6 +410,48 @@ def test_coverage_limitation_non_positive_related_tid_rejected_by_schema(
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 
+# ── coverageLimitation's per-code allOf/if-then (review round 2, P1) ──────
+# The Python model (CoverageLimitation.__post_init__) already refuses to
+# construct a shape where a code's disallowed fields are set -- these
+# tests prove the schema independently rejects the same shape too, for a
+# hand-built JSON document that never went through the Python model at
+# all (the exact scenario the schema is the last line of defense for).
+
+def test_coverage_limitation_pid_no_usable_fallback_contradictory_shape_rejected_by_schema(
+        coverage_limitation_schema):
+    # Exact repro from review: a hand-built document naming the wrong
+    # source and carrying fields this fixed sentence's renderer never
+    # reads must fail schema validation, not just Python construction.
+    doc = {
+        "code": "PID_NO_USABLE_FALLBACK", "source": "modules", "scope": "module",
+        "affected_count": 7, "unavailable_fields": ["BogusField"], "available_fields": [],
+        "counterpart_source": None, "related_sources": [], "related_tids": [],
+        "thread_id": None, "detail": "contradictory",
+    }
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_pid_no_usable_fallback_correct_shape_accepted_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info").to_dict()
+    jsonschema.validate(doc, coverage_limitation_schema)
+
+
+def test_coverage_limitation_unknown_future_code_stays_open_in_schema(coverage_limitation_schema):
+    # `code` deliberately stays a plain string, not an enum, so a future
+    # LimitationCode the schema hasn't been updated for isn't rejected
+    # outright -- none of the per-code `if` branches match an unlisted
+    # value, so it's validated only against the generic per-field types,
+    # same as before this allOf block existed.
+    doc = {
+        "code": "SOME_FUTURE_CODE", "source": "anything", "scope": "whatever",
+        "affected_count": 99, "unavailable_fields": [], "available_fields": [],
+        "counterpart_source": None, "related_sources": [], "related_tids": [],
+        "thread_id": None, "detail": "free text",
+    }
+    jsonschema.validate(doc, coverage_limitation_schema)
+
+
 def test_real_artifact_and_diagnostic_instances_validate_in_full_envelope(validator):
     # Routes real Artifact/Diagnostic instances through the actual
     # CommandResult -> V2Output.set_command_result() -> to_json() path
