@@ -8,3 +8,10 @@ dist/
 .coverage
 htmlcov/
 dumpex/_version.py
+
+# Private real-dump corpora. Keep documentation and manifest.example.yaml
+# tracked, but never add real dumps or manifests containing case metadata.
+/tests/corpus/clean/manifest.yaml
+/tests/corpus/clean/samples/
+/tests/corpus/evil/manifest.yaml
+/tests/corpus/evil/samples/

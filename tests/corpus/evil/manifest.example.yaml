@@ -1,0 +1,33 @@
+# Copy to manifest.yaml. The real manifest and samples/ are ignored by Git.
+
+version: 2
+kind: evil
+policy:
+  false_negative:
+    require_ground_truth_detection: true
+
+samples:
+  - id: injected_beacon_01
+    file: samples/injected_beacon.dmp
+    sha256: "REPLACE_WITH_REAL_SHA256"
+    category: malicious
+    source: "Authorized malware-analysis lab capture"
+    authorization: "Written authorization reference"
+    capture:
+      tool: "ProcDump -ma"
+      os: "Windows 11 23H2 x64"
+      captured_at: "2026-01-01T00:00:00Z"
+      process: "target process containing an independently verified beacon"
+    ground_truth:
+      detected_hunts:
+        - injection
+        - cs-beacon
+      basis: "Independent sandbox telemetry and analyst validation"
+    expected:
+      hunt:
+        injection:
+          status: DETECTED
+          min_score: 1
+        cs-beacon:
+          status: DETECTED
+          min_score: 1

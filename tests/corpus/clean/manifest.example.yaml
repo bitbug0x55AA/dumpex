@@ -1,0 +1,24 @@
+# Copy to manifest.yaml. The real manifest and samples/ are ignored by Git.
+
+version: 2
+kind: clean
+policy:
+  false_positive:
+    max_detected_hunts: 0
+
+samples:
+  - id: clean_notepad_win11_01
+    file: samples/notepad.dmp
+    sha256: "REPLACE_WITH_REAL_SHA256"
+    category: clean
+    source: "Controlled clean-lab capture"
+    authorization: "Internal defensive validation lab"
+    capture:
+      tool: "ProcDump -ma"
+      os: "Windows 11 23H2 x64"
+      captured_at: "2026-01-01T00:00:00Z"
+      process: "notepad.exe with no injected payload"
+    expected:
+      hunt:
+        injection:
+          coverage_status: complete

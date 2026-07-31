@@ -1,74 +1,103 @@
 # Real-dump validation corpus
 
-Every test elsewhere in this repo builds its own synthetic PE header /
-minidump object graph (see `tests/fixtures/fakes.py`) — that's deliberate,
-so `pytest` from a bare checkout needs no external fixtures, network
-access, or malware corpus (see `tests/conftest.py`). It also means the
-whole suite has never been validated against a **real** Windows minidump,
-synthetic or malicious, captured by a real tool against a real process.
+The default test suite builds synthetic PE headers and minidump object graphs.
+This directory provides the optional second layer: validation against private,
+analyst-authorized Windows process dumps captured from real software.
 
-This directory is the harness for that second, optional layer of
-validation. It is **not** wired into the default `pytest` run and adds no
-dependency to the base dev install — `tests/integration/test_corpus.py`
-skips itself entirely unless a manifest is explicitly configured.
+Real dumps are never committed. They may contain malware bytes, hostnames,
+usernames, internal addresses, credentials, or other sensitive process memory.
+Only the harness, documentation, and example manifests belong in Git.
 
-## Why this isn't just committed to the repo
+## Layout
 
-A real corpus needs, at minimum:
+Clean and malicious evidence are managed independently:
 
-- **Clean** baseline dumps (ordinary processes, no injection/hollowing/
-  beacon activity) — to catch false positives.
-- **Malicious** dumps (real injection, stomping, C2 pipes, or a real
-  Cobalt Strike / other framework beacon) — to catch false negatives.
-- **Missing-stream** dumps (captured without `MiniDumpWithHandleData`,
-  without `MiniDumpWithFullMemory`, etc.) — to validate the
-  coverage/INCONCLUSIVE machinery against dumps that are genuinely
-  incomplete, not just synthetically constructed to look that way.
-- **Corrupted / truncated** dumps — to validate `open_dump()`'s failure
-  handling (see `tests/unit/test_open_dump.py` for the synthetic version
-  of this) against whatever a real truncated capture actually looks like.
-- **Short-read** dumps — a real dump where the underlying capture tool
-  legitimately returned less than a declared region/segment size.
+```text
+tests/corpus/
+  clean/
+    README.md
+    manifest.example.yaml
+    manifest.yaml            # ignored
+    samples/                 # ignored
+  evil/
+    README.md
+    manifest.example.yaml
+    manifest.yaml            # ignored
+    samples/                 # ignored
+```
 
-A malicious sample is, definitionally, live or previously-live malware.
-Committing it to a public (or even a shared internal) git history is a
-liability regardless of how it's licensed, and clean/malicious captures
-from a real environment can carry hostnames, usernames, internal IPs, and
-other case-sensitive material that has no business in version control.
-This directory is therefore just the **shape** (manifest schema,
-harness, documentation) — the actual `manifest.yaml` and `samples/`
-directory are `.gitignore`d and live outside this repo (a private corpus
-repo, an internal file share, a case evidence store — wherever your
-org's authorized-sample handling policy says they belong).
+- `clean/` is the false-positive corpus. A clean sample fails the suite if any
+  hunter returns `DETECTED`.
+- `evil/` is the false-negative corpus. Each sample declares the hunters that
+  independent ground truth says must return `DETECTED`.
 
-## Setting it up
+Coverage and exact-result assertions remain separate from FP/FN policy.
+`DETECTED` with partial coverage is still a true positive. `INCONCLUSIVE`,
+`NOT_EVALUATED`, and `NOT_DETECTED_IN_SCANNED_SCOPE` all count as a miss when a
+hunter is listed in `ground_truth.detected_hunts`.
 
-1. Assemble your own private sample set under a directory of your choosing
-   (referred to below as `$CORPUS_DIR`), organized however you like —
-   the manifest's `file` field is a path relative to the manifest itself.
-2. Copy `manifest.example.yaml` to `$CORPUS_DIR/manifest.yaml` and fill in
-   one entry per sample: `sha256` (see below), `category`, `source`,
-   `authorization`, `capture` params, and `expected` results.
-3. Compute each sample's sha256 and paste it into the manifest —
-   `sha256sum sample.dmp` or `python3 -c "import hashlib,sys;
-   print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest())"
-   sample.dmp`. The test harness verifies this against the actual file
-   on every run — a stale/substituted sample fails loudly instead of
-   silently validating against the wrong bytes.
-4. Point the harness at it:
-   ```
-   export DUMPEX_CORPUS_MANIFEST=$CORPUS_DIR/manifest.yaml
-   pytest tests/integration/test_corpus.py -v
-   ```
-   Without that environment variable set, `test_corpus.py` is skipped —
-   it never runs by accident, and CI (which has no access to any private
-   corpus) always skips it too.
+## Running the corpus
 
-## Authorization
+Point `DUMPEX_CORPUS_MANIFEST` at one manifest:
 
-Every entry's `source` and `authorization` fields exist because a
-malicious sample must have a clear, written chain of custody: where it
-came from, under what engagement/case, and what authorizes analyzing and
-storing it. Don't add a sample you can't fill those in for truthfully.
-See `manifest.example.yaml` for the exact fields and an example of each
-of the five minimum categories above.
+```powershell
+$env:DUMPEX_CORPUS_MANIFEST = "tests\corpus\evil\manifest.yaml"
+pytest tests/integration/test_corpus.py -v
+```
+
+To run every private manifest currently present, point it at this directory:
+
+```powershell
+$env:DUMPEX_CORPUS_MANIFEST = "tests\corpus"
+pytest tests/integration/test_corpus.py -v
+```
+
+Directory mode discovers `clean/manifest.yaml` and `evil/manifest.yaml`.
+Without the environment variable, the module skips before reading any sample.
+
+## Adding a sample
+
+1. Decide whether the sample is a known-clean negative or malicious positive.
+2. Copy the matching `manifest.example.yaml` to `manifest.yaml`.
+3. Place the DMP under that category's ignored `samples/` directory.
+4. Record its SHA-256, source, authorization, capture metadata, and stable
+   expected results.
+5. For evil samples, derive `ground_truth.detected_hunts` from evidence
+   independent of dumpex: a controlled technique, trusted sandbox telemetry,
+   an authoritative challenge write-up, or manual reverse engineering.
+6. Run the category manifest before promoting it into the private corpus.
+
+Do not generate expected results by copying the current dumpex output. That
+would make the detector its own oracle and hide false negatives.
+
+## Manifest policy
+
+Version 2 manifests carry a category-level policy:
+
+```yaml
+version: 2
+kind: clean  # or evil
+policy:
+  false_positive:
+    max_detected_hunts: 0
+```
+
+or:
+
+```yaml
+version: 2
+kind: evil
+policy:
+  false_negative:
+    require_ground_truth_detection: true
+```
+
+The integration harness validates these policies before testing results. See
+the category README and example manifest for the fields required on each
+sample.
+
+## Evidence handling
+
+Every entry must have truthful `source` and `authorization` fields. Preserve
+the original artifact separately, hash every DMP, restrict corpus access, and
+do not put either clean or malicious process memory in public CI artifacts.
