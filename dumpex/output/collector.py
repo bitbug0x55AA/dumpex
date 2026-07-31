@@ -59,13 +59,18 @@ class V2Output:
             records=record_dicts,
         )
         for d in result.diagnostics:
-            d_dict = d.to_dict() if hasattr(d, "to_dict") else d
+            # No dict-passthrough fallback: CommandResult.__post_init__
+            # already rejects anything that isn't a real Diagnostic
+            # instance, so .to_dict() is always safe to call directly --
+            # a bare dict here would have bypassed Diagnostic's own
+            # validation and could reach the wire in a schema-invalid
+            # shape (e.g. missing `severity`).
+            d_dict = d.to_dict()
             if d_dict.get("severity") == SEVERITY_ERROR:
                 self._diagnostics_errors.append(d_dict)
             else:
                 self._diagnostics_warnings.append(d_dict)
-        self._artifacts.extend(
-            a.to_dict() if hasattr(a, "to_dict") else a for a in result.artifacts)
+        self._artifacts.extend(a.to_dict() for a in result.artifacts)
 
     def add_diagnostic(self, severity: str, message: str, code: str = None) -> None:
         d = Diagnostic(severity=severity, message=message, code=code).to_dict()

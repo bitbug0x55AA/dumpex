@@ -16,8 +16,10 @@ JSON integer, never a hex string. Missing values are always None, never
 is free to format any of these ints as hex text for display -- that is a
 presentation choice independent of the record's own field type.
 
-StringRecord/ArtifactRecord (extraction) are intentionally not defined
-yet -- see dumpex/output/__init__.py's docstring; they are PR3 scope.
+StringRecord (extraction, for a future --strings migration) is
+intentionally not defined yet. Artifact (below) IS defined -- its wire
+shape needed locking in ahead of a future --extract/--report migration --
+but isn't populated by any command yet.
 """
 from dataclasses import dataclass, field
 
@@ -253,6 +255,16 @@ class Diagnostic:
     message:  str
     code:     "str | None" = None
 
+    def __post_init__(self):
+        if self.severity not in (SEVERITY_WARNING, SEVERITY_ERROR):
+            raise ValueError(
+                f"Diagnostic.severity must be {SEVERITY_WARNING!r} or {SEVERITY_ERROR!r}, "
+                f"got {self.severity!r}")
+        if not isinstance(self.message, str) or not self.message:
+            raise ValueError("Diagnostic.message must be a non-empty string")
+        if self.code is not None and (not isinstance(self.code, str) or not self.code):
+            raise ValueError("Diagnostic.code must be None or a non-empty string")
+
     def to_dict(self) -> dict:
         return {"severity": self.severity, "message": self.message, "code": self.code}
 
@@ -268,7 +280,11 @@ class Artifact:
     and only ever concatenate size+hash into a print string via
     dumpex.core.safe_io.summarize_bytes(), with no structured shape at
     all -- this type exists so a future migration has something typed to
-    build instead of a bare dict."""
+    build instead of a bare dict. Constructing one is the ONLY way an
+    entry reaches `artifacts` on the wire -- dumpex.output.collector.
+    V2Output.set_command_result() calls .to_dict() unconditionally (no
+    duck-typed dict passthrough), so a caller can't smuggle a shape this
+    class doesn't validate."""
     id:          str
     kind:        str            # open vocabulary (e.g. "extracted_region") -- mirrors
                                   # dumpex.output.coverage's `source` staying open too
@@ -276,6 +292,21 @@ class Artifact:
     size_bytes:  "int | None" = None
     sha256:      "str | None" = None
     description: "str | None" = None
+
+    def __post_init__(self):
+        for field_name in ("id", "kind", "path"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value:
+                raise ValueError(f"Artifact.{field_name} must be a non-empty string")
+        if self.size_bytes is not None and (
+                not isinstance(self.size_bytes, int) or isinstance(self.size_bytes, bool)
+                or self.size_bytes < 0):
+            raise ValueError(
+                f"Artifact.size_bytes must be None or a non-negative int, got {self.size_bytes!r}")
+        if self.sha256 is not None and (not isinstance(self.sha256, str) or not self.sha256):
+            raise ValueError("Artifact.sha256 must be None or a non-empty string")
+        if self.description is not None and not isinstance(self.description, str):
+            raise ValueError("Artifact.description must be None or a string")
 
     def to_dict(self) -> dict:
         return {"id": self.id, "kind": self.kind, "path": self.path,

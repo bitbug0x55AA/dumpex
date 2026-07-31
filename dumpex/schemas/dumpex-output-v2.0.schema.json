@@ -301,25 +301,37 @@
     },
 
     "sourceObservation": {
+      "description": "Matches dumpex.output.coverage.SourceObservation.to_dict(), which always emits all three fields -- `required` covers all of them, not just `state`, and the record_count<->state invariant (None for absent/failed, exactly 0 for present_empty, >=1 for present) is frozen structurally below, mirroring the same invariant SourceObservation.__post_init__ enforces in Python.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["state"],
+      "required": ["state", "record_count", "detail"],
       "properties": {
         "state":        { "enum": ["absent", "present_empty", "present", "failed"] },
         "record_count": { "type": ["integer", "null"] },
         "detail":       { "type": ["string", "null"] }
-      }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "enum": ["absent", "failed"] } } },
+          "then": { "properties": { "record_count": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "present_empty" } } },
+          "then": { "properties": { "record_count": { "const": 0 } } } },
+        { "if": { "properties": { "state": { "const": "present" } } },
+          "then": { "properties": { "record_count": { "type": "integer", "minimum": 1 } } } }
+      ]
     },
 
     "coverageLimitation": {
+      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["code", "source"],
+      "required": ["code", "source", "scope", "affected_count", "unavailable_fields",
+                   "available_fields", "counterpart_source", "related_sources",
+                   "related_tids", "thread_id", "detail"],
       "properties": {
         "code":                { "type": "string" },
         "source":              { "type": "string" },
         "scope":               { "type": ["string", "null"] },
-        "affected_count":      { "type": ["integer", "null"] },
+        "affected_count":      { "type": ["integer", "null"], "minimum": 1 },
         "unavailable_fields":  { "type": "array", "items": { "type": "string" } },
         "available_fields":    { "type": "array", "items": { "type": "string" } },
         "counterpart_source":  { "type": ["string", "null"] },

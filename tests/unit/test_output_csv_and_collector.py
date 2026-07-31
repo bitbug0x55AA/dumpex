@@ -10,12 +10,14 @@ import csv
 import io
 import json
 
+import pytest
+
 from dumpex.output.envelope import Result
 from dumpex.output.csv_export import records_to_rows
 from dumpex.output.collector import V2Output
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport, COVERAGE_COMPLETE
-from dumpex.output.records import Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR
+from dumpex.output.records import Diagnostic, Artifact, SEVERITY_WARNING, SEVERITY_ERROR
 
 
 def test_records_to_rows_returns_the_records_list_verbatim():
@@ -168,14 +170,33 @@ def test_set_command_result_forwards_artifacts(tmp_path):
     dump_path = tmp_path / "sample.dmp"
     dump_path.write_bytes(b"fake")
     out = V2Output(str(dump_path), command="modules", options={})
-    result = CommandResult(kind="modules", records=_fake_records(),
-                            coverage=CoverageReport(status=COVERAGE_COMPLETE),
-                            artifacts=[{"id": "a1", "path": "x.bin"}])
+    result = CommandResult(
+        kind="modules", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE),
+        artifacts=[Artifact(id="a1", kind="extracted_region", path="x.bin")])
 
     out.set_command_result(result)
     doc = json.loads(out.to_json())
 
-    assert doc["artifacts"] == [{"id": "a1", "path": "x.bin"}]
+    assert doc["artifacts"] == [{"id": "a1", "kind": "extracted_region", "path": "x.bin",
+                                  "size_bytes": None, "sha256": None, "description": None}]
+
+
+def test_command_result_rejects_bare_dict_artifact():
+    # A bare dict would bypass Artifact's own validation (required
+    # `kind`, type checks) and could reach the wire in a shape the JSON
+    # Schema rejects -- must fail loudly at construction time instead.
+    with pytest.raises(TypeError, match="Artifact"):
+        CommandResult(kind="modules", records=_fake_records(),
+                      coverage=CoverageReport(status=COVERAGE_COMPLETE),
+                      artifacts=[{"id": "a1", "path": "x.bin"}])
+
+
+def test_command_result_rejects_bare_dict_diagnostic():
+    with pytest.raises(TypeError, match="Diagnostic"):
+        CommandResult(kind="modules", records=_fake_records(),
+                      coverage=CoverageReport(status=COVERAGE_COMPLETE),
+                      diagnostics=[{"severity": "warning", "message": "x"}])
 
 
 def test_set_command_result_minimal_produces_expected_shape(tmp_path):

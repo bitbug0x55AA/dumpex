@@ -318,9 +318,10 @@ consumer that wants to act on them without string-matching:
   gaps; `coverage.reasons` is rendered from this list, one string per
   entry, in the same order. Each entry always has `code` and `source`;
   every other field (`scope`, `affected_count`, `unavailable_fields`,
-  `counterpart_source`, `related_sources`, `related_tids`, `thread_id`,
-  `detail`) is populated only when that particular `code` uses it,
-  `null`/`[]` otherwise. `code` is intentionally a plain string, not a
+  `available_fields`, `counterpart_source`, `related_sources`,
+  `related_tids`, `thread_id`, `detail`) is populated only when that
+  particular `code` uses it, `null`/`[]` otherwise. `code` is
+  intentionally a plain string, not a
   fixed enum in the schema — the underlying vocabulary
   (`dumpex.output.coverage.LimitationCode`) grows as more commands
   migrate, and this schema doesn't need a version bump every time a new

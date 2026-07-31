@@ -3,6 +3,8 @@ Unit tests for dumpex.output.records -- the v2 canonical record
 dataclasses. Covers to_dict() shapes, the None-not-"" convention, and
 hex_address()'s normalization (fixed-width, zero-padded, lowercase).
 """
+import pytest
+
 from dumpex.output.records import (
     MemoryRegionRecord, ModuleRecord, ThreadRecord, SysInfoRecord, PidRecord, PebRecord,
     Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address, Artifact,
@@ -189,6 +191,21 @@ def test_diagnostic_code_defaults_to_none():
     assert d["code"] is None
 
 
+def test_diagnostic_rejects_invalid_severity():
+    with pytest.raises(ValueError, match="severity"):
+        Diagnostic(severity="critical", message="boom")
+
+
+def test_diagnostic_rejects_empty_message():
+    with pytest.raises(ValueError, match="message"):
+        Diagnostic(severity=SEVERITY_WARNING, message="")
+
+
+def test_diagnostic_rejects_empty_code():
+    with pytest.raises(ValueError, match="code"):
+        Diagnostic(severity=SEVERITY_WARNING, message="x", code="")
+
+
 # ── Artifact ──────────────────────────────────────────────────────────────
 
 def test_artifact_to_dict():
@@ -205,3 +222,33 @@ def test_artifact_optional_fields_default_to_none():
     assert d["size_bytes"] is None
     assert d["sha256"] is None
     assert d["description"] is None
+
+
+@pytest.mark.parametrize("field_name", ["id", "kind", "path"])
+def test_artifact_rejects_empty_required_field(field_name):
+    kwargs = {"id": "a1", "kind": "extracted_region", "path": "x.bin"}
+    kwargs[field_name] = ""
+    with pytest.raises(ValueError, match=field_name):
+        Artifact(**kwargs)
+
+
+def test_artifact_rejects_bool_size_bytes():
+    # bool is a subclass of int in Python -- explicitly excluded, since
+    # the JSON Schema's "integer" type rejects `true`/`false`.
+    with pytest.raises(ValueError, match="size_bytes"):
+        Artifact(id="a1", kind="extracted_region", path="x.bin", size_bytes=True)
+
+
+def test_artifact_rejects_negative_size_bytes():
+    with pytest.raises(ValueError, match="size_bytes"):
+        Artifact(id="a1", kind="extracted_region", path="x.bin", size_bytes=-1)
+
+
+def test_artifact_rejects_empty_sha256():
+    with pytest.raises(ValueError, match="sha256"):
+        Artifact(id="a1", kind="extracted_region", path="x.bin", sha256="")
+
+
+def test_artifact_rejects_non_string_description():
+    with pytest.raises(ValueError, match="description"):
+        Artifact(id="a1", kind="extracted_region", path="x.bin", description=123)

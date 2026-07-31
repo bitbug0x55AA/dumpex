@@ -98,6 +98,16 @@ def test_source_observation_accepts_bare_string_state():
     assert obs.state == SourceState.ABSENT
 
 
+@pytest.mark.parametrize("state,record_count", [
+    (SourceState.PRESENT, True),         # bool is a subclass of int (True > 0 passes
+                                           # a naive positivity check) -- must still reject
+    (SourceState.PRESENT_EMPTY, False),   # False == 0 passes a naive equality check
+])
+def test_source_observation_rejects_bool_record_count(state, record_count):
+    with pytest.raises(ValueError, match="bool"):
+        SourceObservation(name="modules", state=state, record_count=record_count)
+
+
 def test_source_observation_is_frozen():
     obs = SourceObservation(name="modules", state=SourceState.ABSENT)
     with pytest.raises(Exception):
@@ -125,6 +135,21 @@ def test_coverage_limitation_rejects_invalid_code():
 def test_coverage_limitation_rejects_empty_source():
     with pytest.raises(ValueError):
         CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="")
+
+
+def test_coverage_limitation_rejects_bool_affected_count():
+    # bool is a subclass of int (True <= 0 is False, so a naive
+    # positivity check would silently accept it) -- must still reject,
+    # since the JSON Schema's "integer" type rejects true/false.
+    with pytest.raises(ValueError, match="affected_count"):
+        CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
+                            counterpart_source="threads", affected_count=True)
+
+
+def test_coverage_limitation_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="affected_count"):
+        CoverageLimitation(code=LIMITATION_SOURCE_KEY_MISMATCH, source="modules",
+                            counterpart_source="threads", affected_count=0)
 
 
 def test_coverage_limitation_accepts_list_for_unavailable_fields_and_normalizes_to_tuple():
@@ -866,19 +891,19 @@ def test_build_coverage_report_rejects_key_mismatch_with_absent_counterpart():
 
 
 def test_build_coverage_report_rejects_key_mismatch_with_zero_affected_count():
-    obs_a = SourceObservation(name="a", state=SOURCE_PRESENT, record_count=1)
-    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
-                                     affected_count=0)
+    # Now caught at CoverageLimitation construction time itself (a
+    # generic, code-independent invariant) rather than only once it
+    # reaches build_coverage_report -- fails at the earliest possible
+    # point instead of letting an invalid object exist even transiently.
     with pytest.raises(ValueError, match="affected_count"):
-        build_coverage_report({"a": obs_a}, completeness_checks=[limitation])
+        CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                            affected_count=0)
 
 
 def test_build_coverage_report_rejects_key_mismatch_with_negative_affected_count():
-    obs_a = SourceObservation(name="a", state=SOURCE_PRESENT, record_count=1)
-    limitation = CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
-                                     affected_count=-1)
     with pytest.raises(ValueError, match="affected_count"):
-        build_coverage_report({"a": obs_a}, completeness_checks=[limitation])
+        CoverageLimitation(code=LimitationCode.SOURCE_KEY_MISMATCH, source="a",
+                            affected_count=-1)
 
 
 def test_build_coverage_report_accepts_key_mismatch_with_none_affected_count():

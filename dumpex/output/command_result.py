@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
 from dumpex.output.coverage import CoverageReport, EXECUTION_COMPLETED, ExecutionStatus
+from dumpex.output.records import Diagnostic, Artifact
 
 T = TypeVar("T")
 
@@ -38,10 +39,28 @@ class CommandResult(Generic[T]):
     diagnostics: list = field(default_factory=list)   # list[Diagnostic], unused by any
                                                          # migrated command yet -- plumbing
                                                          # for a future one that needs it
-    artifacts: list = field(default_factory=list)
+    artifacts: list = field(default_factory=list)      # list[Artifact], likewise unused today
 
     def __post_init__(self):
         try:
             self.execution_status = ExecutionStatus(self.execution_status)
         except ValueError:
             raise ValueError(f"unknown execution status: {self.execution_status!r}") from None
+        # Only a real Diagnostic/Artifact instance is accepted here -- a
+        # bare dict would bypass those classes' own __post_init__
+        # validation (required fields, type checks) and could reach the
+        # wire in a shape the JSON Schema rejects (e.g. an artifact
+        # missing `kind`). collector.py's set_command_result() calls
+        # .to_dict() unconditionally, so anything that isn't one of these
+        # two types fails loudly here, at construction time, rather than
+        # producing a schema-invalid document much later.
+        for d in self.diagnostics:
+            if not isinstance(d, Diagnostic):
+                raise TypeError(
+                    f"CommandResult.diagnostics entries must be Diagnostic instances, "
+                    f"got {type(d).__name__}")
+        for a in self.artifacts:
+            if not isinstance(a, Artifact):
+                raise TypeError(
+                    f"CommandResult.artifacts entries must be Artifact instances, "
+                    f"got {type(a).__name__}")

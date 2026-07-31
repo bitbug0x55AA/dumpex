@@ -128,6 +128,17 @@ class SourceObservation:
         state = SourceState(self.state)
         object.__setattr__(self, "state", state)
 
+        # bool is a subclass of int in Python (True == 1, False == 0), so
+        # every check below (`!= 0`, `<= 0`, truthiness) would silently
+        # accept a bool in place of a real record_count -- explicitly
+        # excluded up front, since the JSON Schema's "integer" type
+        # rejects `true`/`false` and the wire value must actually round-
+        # trip through it.
+        if self.record_count is not None and isinstance(self.record_count, bool):
+            raise ValueError(
+                f"SourceObservation {self.name!r}: record_count must be a plain int "
+                f"or None, not bool ({self.record_count!r})")
+
         if state in (SourceState.ABSENT, SourceState.FAILED):
             if self.record_count is not None:
                 raise ValueError(
@@ -287,6 +298,18 @@ class CoverageLimitation:
         object.__setattr__(self, "code", LimitationCode(self.code))
         if not isinstance(self.source, str) or not self.source:
             raise ValueError("CoverageLimitation.source must be a non-empty string")
+        # affected_count always means "count of affected items" whenever
+        # it's set, regardless of code -- validated once here rather than
+        # per-code, the same way `source` is. bool is explicitly excluded
+        # (it's a subclass of int in Python, so `True <= 0` is False and
+        # would otherwise slip past a plain positivity check) since the
+        # JSON Schema's "integer" type rejects `true`/`false`.
+        if self.affected_count is not None and (
+                not isinstance(self.affected_count, int) or isinstance(self.affected_count, bool)
+                or self.affected_count <= 0):
+            raise ValueError(
+                f"CoverageLimitation.affected_count must be None or a positive int, "
+                f"got {self.affected_count!r}")
         if not isinstance(self.unavailable_fields, tuple):
             object.__setattr__(self, "unavailable_fields", tuple(self.unavailable_fields))
         if not isinstance(self.available_fields, tuple):
@@ -514,8 +537,12 @@ class CoverageReport:
     def reasons(self) -> list:
         """Backward-compatible flat text list -- exactly today's v2 JSON
         `coverage.reasons` array, rendered from limitations. This is what
-        lets the wire format stay byte-identical while limitations become
-        the real, structured source of truth internally."""
+        keeps `coverage.reasons`' own text byte-identical to what it was
+        before `sources`/`limitations` existed, while limitations become
+        the real, structured source of truth internally. (The wire format
+        as a WHOLE is no longer byte-identical to that point in time --
+        `coverage.sources`/`coverage.limitations` are new, additive
+        fields alongside it; see envelope.Result/collector.py.)"""
         return [render_limitation(l) for l in self.limitations]
 
 
@@ -751,10 +778,9 @@ def _validate_build_coverage_report_inputs(sources, evaluation_sources, complete
                         f"SOURCE_KEY_MISMATCH.{side}={name!r} is {sources[name].state.value} -- "
                         f"a key mismatch requires both sides to be present; an absent/failed source "
                         f"must be expressed via a bare source name or SourceRequirement instead")
-            if check.affected_count is not None and check.affected_count <= 0:
-                raise ValueError(
-                    f"SOURCE_KEY_MISMATCH.affected_count must be None or > 0, "
-                    f"got {check.affected_count!r} (source={check.source!r})")
+            # affected_count's own None-or-positive-int shape is already
+            # enforced generically by CoverageLimitation.__post_init__ at
+            # construction time -- nothing left to check here.
 
         elif check.code == LimitationCode.PID_THREAD_LIST_FALLBACK:
             # Unlike SOURCE_KEY_MISMATCH, `source` (misc_info) being

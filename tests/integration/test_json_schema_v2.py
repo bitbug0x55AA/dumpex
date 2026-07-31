@@ -32,6 +32,7 @@ from dumpex.commands.modules import collect_modules
 from dumpex.commands.threads import collect_threads
 from dumpex.commands.sysinfo import collect_sysinfo, collect_pid
 from dumpex.commands.peb import collect_peb
+from dumpex.output.coverage import SourceObservation, CoverageLimitation, LimitationCode
 
 
 @pytest.fixture(scope="module")
@@ -44,6 +45,16 @@ def schema():
 def validator(schema):
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema)
+
+
+@pytest.fixture(scope="module")
+def source_observation_schema(schema):
+    return schema["$defs"]["sourceObservation"]
+
+
+@pytest.fixture(scope="module")
+def coverage_limitation_schema(schema):
+    return schema["$defs"]["coverageLimitation"]
 
 
 def _make_dump_file() -> str:
@@ -315,6 +326,62 @@ def test_source_observation_invalid_state_is_rejected(validator):
     doc = _minimal_valid_doc()
     doc["result"]["coverage"]["sources"] = {"modules": {"state": "not_a_real_state"}}
     assert not validator.is_valid(doc)
+
+
+# ── Python model <-> JSON Schema alignment ───────────────────────────────
+# The Python dataclasses (SourceObservation/CoverageLimitation) and the
+# JSON Schema fragments they're supposed to produce ($defs/sourceObservation,
+# $defs/coverageLimitation) are two independent descriptions of the same
+# shape -- nothing forces them to agree just because both exist. These
+# tests close that gap from both directions: every real to_dict() output
+# must validate, and the domain-invalid shapes the Python model itself
+# refuses to construct must ALSO be rejected by the schema directly (in
+# case some future producer builds the JSON without going through these
+# classes at all).
+
+@pytest.mark.parametrize("state,record_count", [
+    ("absent", None), ("failed", None), ("present_empty", 0), ("present", 1), ("present", 5),
+])
+def test_source_observation_to_dict_validates_for_every_state(
+        state, record_count, source_observation_schema):
+    obs = SourceObservation(name="x", state=state, record_count=record_count)
+    jsonschema.validate(obs.to_dict(), source_observation_schema)
+
+
+@pytest.mark.parametrize("doc", [
+    {"state": "present", "record_count": 0, "detail": None},        # present must be >= 1
+    {"state": "absent", "record_count": 3, "detail": None},         # absent must be null
+    {"state": "present", "record_count": True, "detail": None},     # bool, not a real int
+    {"state": "present_empty", "record_count": False, "detail": None},  # bool, not a real int
+    {"state": "present_empty", "record_count": 1, "detail": None},  # present_empty must be exactly 0
+    {"state": "modules"},                                            # missing record_count/detail
+])
+def test_source_observation_domain_invalid_shapes_rejected_by_schema(
+        doc, source_observation_schema):
+    assert not jsonschema.Draft202012Validator(source_observation_schema).is_valid(doc)
+
+
+@pytest.mark.parametrize("code,kwargs", [
+    (LimitationCode.SOURCE_ABSENT, dict(source="modules", scope="dump")),
+    (LimitationCode.SOURCE_GROUP_ABSENT,
+     dict(source="threads", scope="dump", related_sources=["threads", "thread_info"])),
+    (LimitationCode.PID_THREAD_LIST_FALLBACK,
+     dict(source="misc_info", counterpart_source="threads", related_tids=[1, 2])),
+    (LimitationCode.PID_EXCEPTION_TID_FALLBACK, dict(source="exception", thread_id=9)),
+])
+def test_coverage_limitation_to_dict_validates_for_representative_codes(
+        code, kwargs, coverage_limitation_schema):
+    limitation = CoverageLimitation(code=code, **kwargs)
+    jsonschema.validate(limitation.to_dict(), coverage_limitation_schema)
+
+
+def test_coverage_limitation_minimal_shape_rejected_by_schema(coverage_limitation_schema):
+    # Same fact as test_limitation_missing_required_source_is_rejected
+    # above, checked directly against the fragment rather than a full
+    # envelope -- code/source alone is not enough; every field
+    # CoverageLimitation.to_dict() always emits is required.
+    doc = {"code": "SOURCE_ABSENT", "source": "modules"}
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 
 def test_sanity_the_minimal_valid_doc_itself_validates(validator):
