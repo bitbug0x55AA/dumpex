@@ -111,6 +111,11 @@ self-hosted Windows runner. It supports manual dispatch and a weekly schedule,
 and refuses to execute from anything other than the repository's default
 branch. It never executes submitted EXE files.
 
+Because the canonical dumpex repository is public, the workflow also refuses
+to schedule its runner job unless it is running from a private repository.
+Run it only from a private automation mirror. Never register an ordinary
+persistent self-hosted runner directly with the public repository.
+
 Configure the GitHub environment and runner before enabling the workflow:
 
 1. Create a protected GitHub environment named `malware-lab` and require

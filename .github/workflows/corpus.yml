@@ -20,6 +20,10 @@ permissions:
 
 jobs:
   corpus:
+    # GitHub recommends against attaching ordinary self-hosted runners to
+    # public repositories. Run this workflow from a private automation mirror
+    # (or an organization runner group restricted to this exact workflow).
+    if: github.event.repository.private == true
     # This runner must not accept fork PR workloads or execute submitted EXEs.
     # It analyzes DMP data only and should be disposable or restored after use.
     runs-on: [self-hosted, windows, x64, dumpex-corpus, isolated]

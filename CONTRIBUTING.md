@@ -39,9 +39,11 @@ requires no malware corpus, external fixture download, or network access.
 The default public CI suite intentionally has no private corpus dependency.
 The separate protected `.github/workflows/corpus.yml` workflow can materialize
 an authorized corpus on an isolated self-hosted runner for manual and scheduled
-FP/FN regression. Follow [`tests/corpus/README.md`](tests/corpus/README.md) for
-local use and runner configuration. Never commit sensitive or malicious case
-evidence.
+FP/FN regression. The canonical repository is public, so the runner job is
+hard-gated to private repositories and should run from a private automation
+mirror. The tracked corpus contract and command reference are documented in
+[`tests/corpus/README.md`](tests/corpus/README.md). Never commit sensitive or
+malicious case evidence or private operations material.
 
 `tests/conftest.py` resets module-level thread-context monkeypatch points
 before and after tests so synthetic instruction pointers do not leak between

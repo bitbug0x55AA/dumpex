@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 *.egg-info/
+.venv/
 build/
 dist/
 .pytest_cache/
@@ -15,3 +16,7 @@ dumpex/_version.py
 /tests/corpus/clean/samples/
 /tests/corpus/evil/manifest.yaml
 /tests/corpus/evil/samples/
+
+# Local-only corpus operations material. This may contain private environment
+# details and must never be committed or published.
+/tests/corpus/private/

@@ -177,3 +177,12 @@ def test_cleanup_requires_tracked_mount_shape(tmp_path):
 
 def test_all_hunter_names_stay_aligned_with_corpus_contract():
     assert corpus_manager.HUNTERS == set(HUNTS)
+
+
+def test_private_corpus_workflow_cannot_schedule_runner_from_public_repo():
+    workflow = (
+        Path(__file__).parents[2] / ".github" / "workflows" / "corpus.yml"
+    ).read_text(encoding="utf-8")
+    assert "if: github.event.repository.private == true" in workflow
+    assert "pull_request:" not in workflow
+    assert "pull_request_target:" not in workflow
