@@ -868,3 +868,18 @@ def test_memory_diff_record_empty_protect_rejected_by_schema(memory_diff_record_
            "type_before": None, "type_after": "MEM_PRIVATE",
            "suspicious_before": None, "suspicious_after": False}
     assert not memory_diff_record_schema.is_valid(doc)
+
+
+def test_memory_diff_record_null_base_address_rejected_by_schema(memory_diff_record_schema):
+    # Regression: base_address is memory_diff's match key -- it can never
+    # legitimately be null (unlike moduleDiffRecord/threadDiffRecord's
+    # OWN address fields, which reuse the same hexAddress $ref precisely
+    # because they CAN be null on the missing side). Reusing hexAddress
+    # bare here let a null base_address through the schema even though
+    # MemoryDiffRecord.__post_init__ already rejects it outright.
+    doc = {"entity_type": "memory_region", "change_type": "added", "base_address": None,
+           "size_before": None, "size_after": 4096,
+           "protect_before": None, "protect_after": "PAGE_READWRITE",
+           "type_before": None, "type_after": "MEM_PRIVATE",
+           "suspicious_before": None, "suspicious_after": False}
+    assert not memory_diff_record_schema.is_valid(doc)

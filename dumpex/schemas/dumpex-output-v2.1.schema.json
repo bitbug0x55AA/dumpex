@@ -292,7 +292,7 @@
       "properties": {
         "entity_type":        { "const": "memory_region" },
         "change_type":        { "enum": ["added", "removed", "protection_changed"] },
-        "base_address":       { "$ref": "#/$defs/hexAddress" },
+        "base_address":       { "$ref": "#/$defs/hexAddress", "not": { "const": null } },
         "size_before":        { "type": ["integer", "null"] },
         "size_after":         { "type": ["integer", "null"] },
         "protect_before":     { "type": ["string", "null"], "minLength": 1 },
