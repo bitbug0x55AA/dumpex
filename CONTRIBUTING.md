@@ -45,6 +45,18 @@ mirror. The tracked corpus contract and command reference are documented in
 [`tests/corpus/README.md`](tests/corpus/README.md). Never commit sensitive or
 malicious case evidence or private operations material.
 
+Every push and pull request is checked by the `Repository Leak Scan` workflow.
+It applies dumpex-specific privacy rules to the tracked snapshot and runs
+Gitleaks against the complete Git history. Run the repository policy check
+locally before committing with:
+
+```bash
+python scripts/repo_privacy_scan.py
+```
+
+Findings intentionally omit matched text. Treat any credential that reached a
+commit as compromised: revoke or rotate it before considering history cleanup.
+
 `tests/conftest.py` resets module-level thread-context monkeypatch points
 before and after tests so synthetic instruction pointers do not leak between
 cases.

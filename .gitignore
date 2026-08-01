@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 *.egg-info/
 .venv/
+.claude/settings.local.json
 build/
 dist/
 .pytest_cache/
