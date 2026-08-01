@@ -1339,12 +1339,19 @@ def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
     with its own report).
 
     Merges every report's `sources` dict and concatenates `limitations`
-    in input order. Source keys must not collide across reports -- by
-    construction, per-entity source names are namespaced (e.g.
+    in input order. Source keys are normally namespaced per entity (e.g.
     "baseline.modules" vs "target.modules", or "baseline.modules" vs
-    "baseline.thread_info"), so a genuine collision means two reports
-    describe the same source under the same name, and silently letting
-    one overwrite the other would drop that source's real state.
+    "baseline.thread_info") and so don't collide -- but the SAME physical
+    source can legitimately be read by more than one entity's collector
+    (e.g. a comparison's thread diff also consults target.modules to
+    resolve an added thread's backing module, the same stream the module
+    diff itself already reads as its own primary source). Two reports
+    naming the same source are only accepted when their SourceObservation
+    values genuinely AGREE (the same underlying stream, observed twice,
+    can't disagree with itself) -- a mismatch means two reports are
+    describing different realities under the same name, which is a real
+    bug, not a legitimate shared read, and is rejected rather than
+    silently letting one side's observation overwrite the other's.
 
     Status is the confirmed cross-entity rule: NOT_EVALUATED iff EVERY
     report is NOT_EVALUATED (unanimous -- one entity that's merely weak
@@ -1360,14 +1367,15 @@ def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
     sources = {}
     limitations = []
     for r in reports:
-        collision = set(sources) & set(r.sources)
-        if collision:
-            raise ValueError(
-                f"combine_coverage_reports() got overlapping source name(s) "
-                f"{sorted(collision)} across reports -- per-entity source names must be "
-                f"namespaced (e.g. 'baseline.modules' vs 'target.modules') so cross-entity "
-                f"aggregation never silently drops one side's SourceObservation")
-        sources.update(r.sources)
+        for name, obs in r.sources.items():
+            if name in sources and sources[name].to_dict() != obs.to_dict():
+                raise ValueError(
+                    f"combine_coverage_reports() got conflicting SourceObservation values for "
+                    f"source {name!r} across reports: {sources[name].to_dict()!r} != "
+                    f"{obs.to_dict()!r} -- two reports naming the same source must describe it "
+                    f"identically, or the merged sources dict cannot represent one coherent "
+                    f"fact about it")
+            sources[name] = obs
         limitations.extend(r.limitations)
 
     statuses = {r.status for r in reports}

@@ -161,6 +161,16 @@ def test_build_tables_comparison_kind_splits_by_entity_type():
     assert tables["memory_diffs"] == []
 
 
+def test_build_tables_comparison_kind_raises_on_unrecognized_entity_type():
+    # A future 4th entity type added to the tagged union without updating
+    # build_tables() must fail loudly, not silently vanish from every
+    # table while summary.count still reports the true total.
+    result = Result(kind="comparison", execution_status="completed", coverage_status="complete",
+                     records=[{"entity_type": "some_future_entity", "change_type": "added"}])
+    with pytest.raises(ValueError, match="some_future_entity"):
+        build_tables(result)
+
+
 def test_write_csv_directory_mode_comparison_writes_per_entity_files_not_records(tmp_path):
     dump_a = tmp_path / "a.dmp"; dump_a.write_bytes(b"a")
     dump_b = tmp_path / "b.dmp"; dump_b.write_bytes(b"b")

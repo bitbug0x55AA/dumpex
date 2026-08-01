@@ -1543,8 +1543,24 @@ def test_combine_coverage_reports_merges_sources_and_concatenates_limitations_in
     assert [l.source for l in combined.limitations] == ["a", "b"]
 
 
-def test_combine_coverage_reports_rejects_overlapping_source_names():
-    r1 = _report(COVERAGE_COMPLETE, "shared")
-    r2 = _report(COVERAGE_COMPLETE, "shared")
-    with pytest.raises(ValueError, match="overlapping"):
+def test_combine_coverage_reports_allows_identical_duplicate_source_observation():
+    # The SAME physical source can legitimately be read by more than one
+    # entity's collector (e.g. a comparison's thread diff also consults
+    # target.modules to resolve a backing module, the same stream the
+    # module diff itself already reads as its own primary source) --
+    # two reports naming it identically must merge cleanly, not collide.
+    r1 = _report(COVERAGE_COMPLETE, "shared", record_count=3)
+    r2 = _report(COVERAGE_COMPLETE, "shared", record_count=3)
+    combined = combine_coverage_reports([r1, r2])
+    assert combined.sources["shared"].record_count == 3
+
+
+def test_combine_coverage_reports_rejects_conflicting_source_observation():
+    # Two reports naming the SAME source but disagreeing on its state is
+    # a real bug (the same underlying stream can't disagree with itself)
+    # -- unlike the identical-duplicate case above, this must be rejected
+    # rather than letting one silently overwrite the other.
+    r1 = _report(COVERAGE_COMPLETE, "shared", record_count=1)
+    r2 = _report(COVERAGE_COMPLETE, "shared", record_count=2)
+    with pytest.raises(ValueError, match="conflicting"):
         combine_coverage_reports([r1, r2])

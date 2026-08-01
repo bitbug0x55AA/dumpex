@@ -105,11 +105,30 @@ def build_tables(result) -> dict:
     mode), exactly mirroring how 'records' itself is always present but
     silently unwritten when empty for the other six kinds."""
     if result.kind == "comparison":
+        module_diffs = diff_rows_for_entity(result, "module")
+        thread_diffs = diff_rows_for_entity(result, "thread")
+        memory_diffs = diff_rows_for_entity(result, "memory_region")
+        partitioned = len(module_diffs) + len(thread_diffs) + len(memory_diffs)
+        if partitioned != len(result.records):
+            # A record whose entity_type isn't one of the three known
+            # values (a future entity type added to the tagged union
+            # without updating this function) would otherwise vanish from
+            # every table with no error at all -- summary's own `count`
+            # would still show the true total, silently contradicting the
+            # (empty) per-entity tables underneath it. Failing loudly here
+            # is what forces this function to be updated the day a fourth
+            # entity type is ever added, instead of quietly losing rows.
+            unknown = {r.get("entity_type") for r in result.records} - {
+                "module", "thread", "memory_region"}
+            raise ValueError(
+                f"build_tables(kind='comparison') partitioned {partitioned} of "
+                f"{len(result.records)} records by entity_type -- unrecognized "
+                f"entity_type value(s): {sorted(unknown)!r}")
         return {
             "summary":      summary_rows(result),
-            "module_diffs": diff_rows_for_entity(result, "module"),
-            "thread_diffs": diff_rows_for_entity(result, "thread"),
-            "memory_diffs": diff_rows_for_entity(result, "memory_region"),
+            "module_diffs": module_diffs,
+            "thread_diffs": thread_diffs,
+            "memory_diffs": memory_diffs,
         }
     tables = {
         "summary": summary_rows(result),

@@ -365,3 +365,155 @@ def test_memory_diff_record_removed_has_no_after_values():
                             suspicious_before=False, suspicious_after=None)
     assert rec.size_after is None and rec.protect_after is None
     assert rec.type_after is None and rec.suspicious_after is None
+
+
+# ── Diff record __post_init__ validation (Phase C review round 1) ────────
+# Frozen dataclasses -- a construction-time rejection is the ONLY way to
+# get an invalid instance, since a valid one can no longer be mutated
+# into an invalid one afterward.
+
+def test_module_diff_record_is_frozen():
+    rec = ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="a.dll",
+                            full_path_before=None, full_path_after="C:\\a.dll",
+                            base_address_before=None, base_address_after=hex_address(0x1000))
+    with pytest.raises(Exception):
+        rec.entity_type = "bogus"
+    with pytest.raises(Exception):
+        rec.name = "b.dll"
+
+
+def test_module_diff_record_rejects_invalid_change_type():
+    with pytest.raises(ValueError, match="change_type"):
+        ModuleDiffRecord(change_type="bogus", name="a.dll",
+                          full_path_before=None, full_path_after=None,
+                          base_address_before=None, base_address_after=hex_address(0x1000))
+
+
+def test_module_diff_record_rejects_empty_name():
+    with pytest.raises(ValueError, match="name"):
+        ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="",
+                          full_path_before=None, full_path_after=None,
+                          base_address_before=None, base_address_after=hex_address(0x1000))
+
+
+def test_module_diff_record_added_rejects_a_before_value():
+    with pytest.raises(ValueError, match="added"):
+        ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="a.dll",
+                          full_path_before="C:\\a.dll", full_path_after=None,
+                          base_address_before=None, base_address_after=hex_address(0x1000))
+
+
+def test_module_diff_record_added_requires_base_address_after():
+    with pytest.raises(ValueError, match="base_address_after"):
+        ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="a.dll",
+                          full_path_before=None, full_path_after=None,
+                          base_address_before=None, base_address_after=None)
+
+
+def test_module_diff_record_removed_rejects_an_after_value():
+    with pytest.raises(ValueError, match="removed"):
+        ModuleDiffRecord(change_type=MODULE_DIFF_REMOVED, name="a.dll",
+                          full_path_before=None, full_path_after="C:\\a.dll",
+                          base_address_before=hex_address(0x1000), base_address_after=None)
+
+
+def test_module_diff_record_removed_requires_base_address_before():
+    with pytest.raises(ValueError, match="base_address_before"):
+        ModuleDiffRecord(change_type=MODULE_DIFF_REMOVED, name="a.dll",
+                          full_path_before=None, full_path_after=None,
+                          base_address_before=None, base_address_after=None)
+
+
+def test_module_diff_record_rebased_requires_both_base_addresses():
+    with pytest.raises(ValueError, match="rebased"):
+        ModuleDiffRecord(change_type=MODULE_DIFF_REBASED, name="a.dll",
+                          full_path_before=None, full_path_after=None,
+                          base_address_before=hex_address(0x1000), base_address_after=None)
+
+
+def test_thread_diff_record_is_frozen():
+    rec = ThreadDiffRecord(change_type=THREAD_DIFF_REMOVED, tid=1,
+                            start_address_before=hex_address(0x1000), start_address_after=None)
+    with pytest.raises(Exception):
+        rec.tid = 2
+
+
+def test_thread_diff_record_rejects_invalid_change_type():
+    with pytest.raises(ValueError, match="change_type"):
+        ThreadDiffRecord(change_type="bogus", tid=1,
+                          start_address_before=None, start_address_after=None)
+
+
+def test_thread_diff_record_rejects_non_int_tid():
+    with pytest.raises(ValueError, match="tid"):
+        ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=True,
+                          start_address_before=None, start_address_after=hex_address(0x1000))
+
+
+def test_thread_diff_record_added_rejects_start_address_before():
+    with pytest.raises(ValueError, match="added"):
+        ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=1,
+                          start_address_before=hex_address(0x1000),
+                          start_address_after=hex_address(0x2000))
+
+
+def test_thread_diff_record_removed_rejects_backing_module_after():
+    with pytest.raises(ValueError, match="removed"):
+        ThreadDiffRecord(change_type=THREAD_DIFF_REMOVED, tid=1,
+                          start_address_before=hex_address(0x1000), start_address_after=None,
+                          backing_module_after="a.dll")
+
+
+def test_memory_diff_record_is_frozen():
+    rec = MemoryDiffRecord(change_type=MEMORY_DIFF_ADDED, base_address=hex_address(0x1000),
+                            size_before=None, size_after=0x1000,
+                            protect_before=None, protect_after="PAGE_READWRITE",
+                            type_before=None, type_after="MEM_PRIVATE",
+                            suspicious_before=None, suspicious_after=False)
+    with pytest.raises(Exception):
+        rec.base_address = hex_address(0x2000)
+
+
+def test_memory_diff_record_rejects_invalid_change_type():
+    with pytest.raises(ValueError, match="change_type"):
+        MemoryDiffRecord(change_type="bogus", base_address=hex_address(0x1000),
+                          size_before=None, size_after=None,
+                          protect_before=None, protect_after=None,
+                          type_before=None, type_after=None,
+                          suspicious_before=None, suspicious_after=None)
+
+
+def test_memory_diff_record_rejects_empty_base_address():
+    with pytest.raises(ValueError, match="base_address"):
+        MemoryDiffRecord(change_type=MEMORY_DIFF_ADDED, base_address="",
+                          size_before=None, size_after=0x1000,
+                          protect_before=None, protect_after="PAGE_READWRITE",
+                          type_before=None, type_after="MEM_PRIVATE",
+                          suspicious_before=None, suspicious_after=False)
+
+
+def test_memory_diff_record_added_rejects_a_before_value():
+    with pytest.raises(ValueError, match="added"):
+        MemoryDiffRecord(change_type=MEMORY_DIFF_ADDED, base_address=hex_address(0x1000),
+                          size_before=0x1000, size_after=0x1000,
+                          protect_before="PAGE_READWRITE", protect_after="PAGE_READWRITE",
+                          type_before="MEM_PRIVATE", type_after="MEM_PRIVATE",
+                          suspicious_before=False, suspicious_after=False)
+
+
+def test_memory_diff_record_removed_rejects_an_after_value():
+    with pytest.raises(ValueError, match="removed"):
+        MemoryDiffRecord(change_type=MEMORY_DIFF_REMOVED, base_address=hex_address(0x1000),
+                          size_before=0x1000, size_after=0x1000,
+                          protect_before="PAGE_READWRITE", protect_after="PAGE_READWRITE",
+                          type_before="MEM_PRIVATE", type_after="MEM_PRIVATE",
+                          suspicious_before=False, suspicious_after=False)
+
+
+def test_memory_diff_record_protection_changed_requires_both_protect_values():
+    with pytest.raises(ValueError, match="protection_changed"):
+        MemoryDiffRecord(change_type=MEMORY_DIFF_PROTECTION_CHANGED, base_address=hex_address(0x1000),
+                          size_before=0x1000, size_after=0x1000,
+                          protect_before="PAGE_READWRITE", protect_after=None,
+                          type_before="MEM_PRIVATE", type_after="MEM_PRIVATE",
+                          suspicious_before=False, suspicious_after=False)

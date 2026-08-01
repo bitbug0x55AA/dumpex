@@ -1,5 +1,6 @@
 """Core memory helpers: address translation, region lookup, module lookup."""
 import os
+import ntpath
 import sys
 import re
 from pathlib import Path
@@ -147,8 +148,17 @@ def get_handles(mf: MinidumpFile) -> list:
 
 
 def module_name_only(full_path: str) -> str:
-    """Extract just the filename from a full module path."""
-    return os.path.basename(full_path).lower() if full_path else ""
+    """Extract just the filename from a full module path. Module paths
+    recorded in a minidump are always Windows paths (e.g.
+    "C:\\Windows\\System32\\foo.dll") regardless of the host OS this tool
+    runs on -- os.path.basename only splits on "/" on a POSIX analysis
+    host, silently returning the whole backslash-separated string
+    unchanged there and breaking cross-dump module matching (the same
+    module at two different directories would compare unequal). Uses
+    ntpath.basename, not os.path.basename, for the same reason
+    dumpex.commands.modules/threads and dumpex.hunt.stomping.memory_scan's
+    own _module_basename already do."""
+    return ntpath.basename(full_path).lower() if full_path else ""
 
 
 def addr_to_module(addr: int, modules: list):

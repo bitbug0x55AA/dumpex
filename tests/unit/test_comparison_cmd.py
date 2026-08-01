@@ -57,6 +57,47 @@ def test_collect_module_diff_both_absent_produces_two_limitations():
     assert {l.source for l in coverage.limitations} == {"baseline.modules", "target.modules"}
 
 
+def test_collect_module_diff_same_basename_different_directory_reports_rebased():
+    # Regression for module_name_only()'s cross-platform bug: the same
+    # module relocated to a different directory between two dumps must
+    # still match by basename alone (ntpath.basename, not os.path.
+    # basename) and report as "rebased," not a spurious removed+added
+    # pair -- see dumpex/core/memory.py's module_name_only().
+    mf_baseline = FakeMF()
+    mf_baseline.modules = FakeStream(
+        [Module(0x1000, 0x1000, r"C:\Program Files\App\a.dll")], "modules")
+    mf_target = FakeMF()
+    mf_target.modules = FakeStream(
+        [Module(0x9000, 0x1000, r"C:\Windows\System32\a.dll")], "modules")
+
+    records, coverage = collect_module_diff(mf_baseline, mf_target)
+    assert len(records) == 1
+    assert records[0].change_type == "rebased"
+    assert records[0].name == "a.dll"
+
+
+def test_collect_module_diff_multiple_anonymous_modules_do_not_collide():
+    # Regression: module_name_only(None) == "" for every anonymous
+    # module -- using that alone as a dict key would silently collide,
+    # keeping only the last one and dropping the rest from the diff.
+    mf_baseline = FakeMF()
+    mf_baseline.modules = FakeStream([], "modules")
+    mf_target = FakeMF()
+    mf_target.modules = FakeStream([
+        Module(0x1000, 0x1000, None), Module(0x2000, 0x1000, ""),
+    ], "modules")
+
+    records, coverage = collect_module_diff(mf_baseline, mf_target)
+    assert coverage.status == "complete"
+    assert len(records) == 2   # neither anonymous module was dropped
+    assert {r.base_address_after for r in records} == {
+        "0x0000000000001000", "0x0000000000002000"}
+    # Wire name is always a non-empty string (v2.1 schema requires it),
+    # never the raw "" module_name_only() would have produced.
+    assert all(r.name == "(unnamed)" for r in records)
+    assert all(r.full_path_after is None for r in records)
+
+
 def test_collect_module_diff_baseline_present_empty_treats_all_target_as_added():
     # The confirmed "missing != empty" rule: a present-but-empty baseline
     # is evaluable (diffed against an empty set), unlike an absent one.
@@ -73,6 +114,71 @@ def test_collect_module_diff_baseline_present_empty_treats_all_target_as_added()
 
 
 # ── collect_thread_diff ───────────────────────────────────────────────────
+
+def test_collect_thread_diff_added_with_unknown_start_address_stays_null_not_fabricated():
+    # Regression: StartAddress=None must never be folded to 0 -- doing so
+    # would feed a fabricated address into addr_to_module() and could
+    # produce MODULE_CONTEXT_UNREGISTERED, a real "confirmed not backed
+    # by any module" DFIR signal, for a thread whose address was simply
+    # never known at all.
+    mf_baseline = FakeMF()
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_target = FakeMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, None)], "infos")
+    mf_target.modules = FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules")
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)
+    assert coverage.status == "complete"
+    added = records[0]
+    assert added.start_address_after is None
+    assert added.backing_module_after is None
+    assert added.backing_module_context is None
+
+
+def test_collect_thread_diff_removed_with_unknown_start_address_stays_null():
+    mf_baseline = FakeMF()
+    mf_baseline.thread_info = FakeStream([ThreadInfo(1, None)], "infos")
+    mf_target = FakeMF()
+    mf_target.thread_info = FakeStream([], "infos")
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)
+    assert coverage.status == "complete"
+    assert records[0].start_address_before is None
+
+
+def test_collect_thread_diff_target_modules_absent_is_partial_not_complete():
+    # Regression: an added thread with a KNOWN start address that can't
+    # be resolved because target.modules is absent must not report
+    # coverage="complete" -- that would silently contradict
+    # backing_module_context="unavailable" on the record itself.
+    mf_baseline = FakeMF()
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_target = FakeMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, 0x1000)], "infos")
+    # mf_target.modules deliberately left unset (absent)
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)
+    assert coverage.status == "partial"
+    assert coverage.reasons == ["target ModuleListStream not present in this dump"]
+    assert coverage.sources["target.modules"].state == "absent"
+    assert records[0].backing_module_context == MODULE_CONTEXT_UNAVAILABLE
+
+
+def test_collect_thread_diff_target_modules_not_consulted_when_no_added_thread_has_address():
+    # target.modules must only be registered as a coverage source when it
+    # would actually be consulted -- an added thread with an UNKNOWN
+    # start address never looks at it, so its absence must not affect
+    # coverage at all.
+    mf_baseline = FakeMF()
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_target = FakeMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, None)], "infos")
+    # mf_target.modules deliberately left unset (absent)
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)
+    assert coverage.status == "complete"
+    assert "target.modules" not in coverage.sources
+
 
 def test_collect_thread_diff_added_resolves_backing_module_against_target():
     mf_baseline = FakeMF()
@@ -231,6 +337,11 @@ def test_collect_comparison_all_mode_combines_every_entity():
     result = collect_comparison(mf_baseline, mf_target, mode="all")
     assert result.coverage.status == "complete"
     assert {r.entity_type for r in result.records} == {"module", "thread", "memory_region"}
+    # target.modules is legitimately read by BOTH collect_module_diff (its
+    # own primary source) and collect_thread_diff (to resolve the added
+    # thread's backing module) -- combine_coverage_reports must merge
+    # this shared source cleanly rather than raising a spurious collision.
+    assert result.coverage.sources["target.modules"].state == "present"
 
 
 def test_collect_comparison_all_mode_one_not_evaluated_entity_is_partial_overall():

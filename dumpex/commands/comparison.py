@@ -56,11 +56,42 @@ from dumpex.output.command_result import CommandResult
 _DIFF_MODES = ("modules", "threads", "memory", "all")
 
 
+def _module_match_key(m) -> str:
+    """The cross-dump matching key for one module -- module_name_only()
+    when the module has a real name, or an address-qualified key when it
+    doesn't. module_name_only() returns "" for an anonymous module (no
+    name at all, or an empty one), and "" alone would collide across
+    EVERY anonymous module in the same dump -- {module_name_only(m.name):
+    m for m in raw_...} would then silently keep only the last one,
+    dropping every other anonymous module's diff entirely. Two anonymous
+    modules can never share a base address within one dump, so this key
+    is always unique there. Across dumps, an anonymous module's
+    address-qualified key differs whenever its address differs, so it can
+    never be matched as "rebased" -- the conservative, correct choice,
+    since nothing else identifies it as "the same" module between two
+    captures (unlike a named module, whose key is stable across dumps by
+    construction)."""
+    name_key = module_name_only(m.name)
+    return name_key if name_key else f"<unnamed@0x{m.baseaddress:016x}>"
+
+
+def _module_display_name(m) -> str:
+    """The wire `name` field -- module_name_only() when available, else
+    the same "(unnamed)" placeholder dumpex.commands.modules.py's
+    ModuleRecord.name already uses for an anonymous module, so `name`
+    always stays a non-empty string (required by the v2.1 schema) without
+    leaking _module_match_key's internal address-qualified form onto the
+    wire."""
+    return module_name_only(m.name) or "(unnamed)"
+
+
 def collect_module_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     """(records, coverage) -- ported from diff.py's diff_modules. Matches
-    modules by module_name_only(m.name), exactly like the console
-    version. Returns ([], coverage) without attempting a diff at all when
-    either side's ModuleListStream is entirely absent."""
+    modules by _module_match_key(m) (module_name_only(m.name), same as
+    the console version, for a named module), exactly like the console
+    version for named modules -- see _module_match_key's own docstring
+    for anonymous ones. Returns ([], coverage) without attempting a diff
+    at all when either side's ModuleListStream is entirely absent."""
     raw_baseline = get_modules(mf_baseline)
     raw_target = get_modules(mf_target)
 
@@ -77,8 +108,8 @@ def collect_module_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     if coverage.status == COVERAGE_NOT_EVALUATED:
         return [], coverage
 
-    mods_baseline = {module_name_only(m.name): m for m in raw_baseline}
-    mods_target = {module_name_only(m.name): m for m in raw_target}
+    mods_baseline = {_module_match_key(m): m for m in raw_baseline}
+    mods_target = {_module_match_key(m): m for m in raw_target}
     added = set(mods_target) - set(mods_baseline)
     removed = set(mods_baseline) - set(mods_target)
     rebased = [n for n in (set(mods_baseline) & set(mods_target))
@@ -88,19 +119,19 @@ def collect_module_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     for n in sorted(added):
         m = mods_target[n]
         records.append(ModuleDiffRecord(
-            change_type=MODULE_DIFF_ADDED, name=n,
+            change_type=MODULE_DIFF_ADDED, name=_module_display_name(m),
             full_path_before=None, full_path_after=m.name or None,
             base_address_before=None, base_address_after=hex_address(m.baseaddress)))
     for n in sorted(removed):
         m = mods_baseline[n]
         records.append(ModuleDiffRecord(
-            change_type=MODULE_DIFF_REMOVED, name=n,
+            change_type=MODULE_DIFF_REMOVED, name=_module_display_name(m),
             full_path_before=m.name or None, full_path_after=None,
             base_address_before=hex_address(m.baseaddress), base_address_after=None))
     for n in sorted(rebased):
         ma, mb = mods_baseline[n], mods_target[n]
         records.append(ModuleDiffRecord(
-            change_type=MODULE_DIFF_REBASED, name=n,
+            change_type=MODULE_DIFF_REBASED, name=_module_display_name(mb),
             full_path_before=ma.name or None, full_path_after=mb.name or None,
             base_address_before=hex_address(ma.baseaddress),
             base_address_after=hex_address(mb.baseaddress)))
@@ -112,9 +143,37 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     ThreadInfoListStream (mf.thread_info), not the base ThreadListStream --
     diff_threads itself only ever reads get_thread_infos(). A removed
     thread never gets a backing_module_before -- diff_threads never
-    attempts baseline-side module resolution either."""
+    attempts baseline-side module resolution either.
+
+    Unlike diff_threads' own console rendering (`sa = ti.StartAddress or
+    0`, which folds "unknown" and "genuinely 0" into the same printed
+    "0x0"), a missing StartAddress is never coerced to 0 here: doing so
+    would feed a fabricated address into addr_to_module() and could
+    produce MODULE_CONTEXT_UNREGISTERED -- a real, confirmed "this thread
+    is not backed by any known module" DFIR signal -- for a thread whose
+    address was simply never known at all. start_address_*/
+    backing_module_after/backing_module_context all stay null when
+    StartAddress itself is null, mirroring ThreadRecord's own module_context
+    convention (see records.py).
+
+    target.modules is only read, and only registered as a coverage
+    source, when at least one ADDED thread has a known StartAddress
+    (removed threads never need it -- see above). Registering it
+    unconditionally would silently mismatch "coverage says complete" with
+    a backing_module_context that says "unavailable" whenever
+    ModuleListStream happens to be missing from a dump with no added
+    threads at all to explain it; registering it only when it's actually
+    consulted keeps the two in sync -- an absent target.modules makes
+    coverage partial (with its own reason) exactly when a
+    backing_module_context could actually come back "unavailable"."""
     raw_baseline = get_thread_infos(mf_baseline)
     raw_target = get_thread_infos(mf_target)
+
+    ta = {ti.ThreadId: ti for ti in raw_baseline}
+    tb = {ti.ThreadId: ti for ti in raw_target}
+    added = set(tb) - set(ta)
+    removed = set(ta) - set(tb)
+    needs_target_modules = any(tb[tid].StartAddress is not None for tid in added)
 
     sources = {
         "baseline.thread_info": observe_source(
@@ -122,41 +181,47 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         "target.thread_info": observe_source(
             "target.thread_info", present=bool(mf_target.thread_info), items=raw_target),
     }
-    coverage = build_coverage_report(sources, evaluation_groups=[
-        EvaluationRequirement(("baseline.thread_info",)),
-        EvaluationRequirement(("target.thread_info",)),
-    ])
+    modules_target_available = bool(mf_target.modules)
+    modules_target = get_modules(mf_target)
+    completeness_checks = None
+    if needs_target_modules:
+        sources["target.modules"] = observe_source(
+            "target.modules", present=modules_target_available, items=modules_target)
+        completeness_checks = ["target.modules"]
+
+    coverage = build_coverage_report(
+        sources,
+        evaluation_groups=[EvaluationRequirement(("baseline.thread_info",)),
+                            EvaluationRequirement(("target.thread_info",))],
+        completeness_checks=completeness_checks,
+    )
     if coverage.status == COVERAGE_NOT_EVALUATED:
         return [], coverage
 
-    ta = {ti.ThreadId: ti for ti in raw_baseline}
-    tb = {ti.ThreadId: ti for ti in raw_target}
-    modules_target = get_modules(mf_target)
-    modules_target_available = bool(mf_target.modules)
-
-    added = set(tb) - set(ta)
-    removed = set(ta) - set(tb)
-
     records = []
     for tid in sorted(added):
-        sa = tb[tid].StartAddress or 0
-        mod = addr_to_module(sa, modules_target)
-        if mod is not None:
-            backing_module_after = ntpath.basename(mod.name)
-            backing_module_context = MODULE_CONTEXT_RESOLVED
-        elif modules_target_available:
+        sa = tb[tid].StartAddress
+        if sa is None:
             backing_module_after = None
-            backing_module_context = MODULE_CONTEXT_UNREGISTERED
+            backing_module_context = None
         else:
-            backing_module_after = None
-            backing_module_context = MODULE_CONTEXT_UNAVAILABLE
+            mod = addr_to_module(sa, modules_target)
+            if mod is not None:
+                backing_module_after = ntpath.basename(mod.name)
+                backing_module_context = MODULE_CONTEXT_RESOLVED
+            elif modules_target_available:
+                backing_module_after = None
+                backing_module_context = MODULE_CONTEXT_UNREGISTERED
+            else:
+                backing_module_after = None
+                backing_module_context = MODULE_CONTEXT_UNAVAILABLE
         records.append(ThreadDiffRecord(
             change_type=THREAD_DIFF_ADDED, tid=tid,
             start_address_before=None, start_address_after=hex_address(sa),
             backing_module_after=backing_module_after,
             backing_module_context=backing_module_context))
     for tid in sorted(removed):
-        sa = ta[tid].StartAddress or 0
+        sa = ta[tid].StartAddress
         records.append(ThreadDiffRecord(
             change_type=THREAD_DIFF_REMOVED, tid=tid,
             start_address_before=hex_address(sa), start_address_after=None))

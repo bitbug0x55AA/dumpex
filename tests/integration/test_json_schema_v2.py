@@ -732,6 +732,19 @@ def test_module_diff_record_rebased_valid_shape_accepted(module_diff_record_sche
     assert module_diff_record_schema.is_valid(doc)
 
 
+def test_module_diff_record_anonymous_added_module_accepted(module_diff_record_schema):
+    # Regression: an anonymous module (no name at all) has a real
+    # base_address but no full_path -- the schema must not require
+    # full_path_after to be non-null for "added" (only base_address is
+    # the field a module diff actually always has).
+    from dumpex.output.records import ModuleDiffRecord, MODULE_DIFF_ADDED
+    doc = ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="(unnamed)",
+                            full_path_before=None, full_path_after=None,
+                            base_address_before=None,
+                            base_address_after="0x0000000000001000").to_dict()
+    assert module_diff_record_schema.is_valid(doc)
+
+
 def test_thread_diff_record_removed_with_a_backing_module_rejected(thread_diff_record_schema):
     from dumpex.output.records import ThreadDiffRecord, THREAD_DIFF_REMOVED
     doc = ThreadDiffRecord(change_type=THREAD_DIFF_REMOVED, tid=1,

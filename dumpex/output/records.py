@@ -256,20 +256,57 @@ class PebRecord:
 MODULE_DIFF_ADDED   = "added"
 MODULE_DIFF_REMOVED = "removed"
 MODULE_DIFF_REBASED = "rebased"
+_MODULE_DIFF_CHANGE_TYPES = (MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF_REBASED)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ModuleDiffRecord:
     """One added/removed/rebased module between two dumps -- ported from
-    diff_modules' own module_name_only(m.name)-keyed added/removed/
-    rebased set logic."""
+    diff_modules' own module-name-keyed added/removed/rebased set logic
+    (see dumpex.commands.comparison._module_match_key for how the actual
+    match key differs from `name` for an anonymous module). Frozen, with
+    __post_init__ enforcing the same before/after null-pairing per
+    change_type the v2.1 schema's moduleDiffRecord allOf already
+    enforces on the wire -- catches a construction bug at the Python
+    layer instead of only at schema-validation time, and stops a valid
+    instance from being mutated into an invalid one after the fact."""
     change_type:         str   # MODULE_DIFF_ADDED / _REMOVED / _REBASED
-    name:                 str   # module_name_only(m.name) -- the match key
+    name:                 str   # display name -- "(unnamed)" for an anonymous module,
+                                  # never the raw (possibly colliding) match key
     full_path_before:     "str | None"
     full_path_after:      "str | None"
     base_address_before:  "str | None"
     base_address_after:   "str | None"
-    entity_type: str = "module"
+    entity_type: str = field(default="module", init=False)
+
+    def __post_init__(self):
+        if self.change_type not in _MODULE_DIFF_CHANGE_TYPES:
+            raise ValueError(
+                f"ModuleDiffRecord.change_type must be one of {_MODULE_DIFF_CHANGE_TYPES}, "
+                f"got {self.change_type!r}")
+        if not isinstance(self.name, str) or not self.name:
+            raise ValueError("ModuleDiffRecord.name must be a non-empty string")
+        if self.change_type == MODULE_DIFF_ADDED:
+            if self.full_path_before is not None or self.base_address_before is not None:
+                raise ValueError(
+                    "ModuleDiffRecord(change_type='added') must not carry a before value -- "
+                    "there is no baseline-side module to report one from")
+            if self.base_address_after is None:
+                raise ValueError(
+                    "ModuleDiffRecord(change_type='added') requires base_address_after")
+        elif self.change_type == MODULE_DIFF_REMOVED:
+            if self.full_path_after is not None or self.base_address_after is not None:
+                raise ValueError(
+                    "ModuleDiffRecord(change_type='removed') must not carry an after value -- "
+                    "there is no target-side module to report one from")
+            if self.base_address_before is None:
+                raise ValueError(
+                    "ModuleDiffRecord(change_type='removed') requires base_address_before")
+        else:   # rebased
+            if self.base_address_before is None or self.base_address_after is None:
+                raise ValueError(
+                    "ModuleDiffRecord(change_type='rebased') requires both "
+                    "base_address_before and base_address_after")
 
     def to_dict(self) -> dict:
         return {
@@ -285,9 +322,10 @@ class ModuleDiffRecord:
 
 THREAD_DIFF_ADDED   = "added"
 THREAD_DIFF_REMOVED = "removed"
+_THREAD_DIFF_CHANGE_TYPES = (THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED)
 
 
-@dataclass
+@dataclass(frozen=True)
 class ThreadDiffRecord:
     """One added/removed thread between two dumps -- ported from
     diff_threads' own TID-keyed added/removed set logic. diff_threads has
@@ -302,14 +340,37 @@ class ThreadDiffRecord:
     vocabulary (see above) so a comparison result distinguishes
     "confirmed not backed by any module" (a real signal) from "target's
     ModuleListStream itself wasn't available to check against" (not a
-    confirmed anomaly), the same way --threads already does."""
+    confirmed anomaly), the same way --threads already does. Frozen, with
+    __post_init__ enforcing the same invariants the v2.1 schema's
+    threadDiffRecord allOf already enforces on the wire."""
     change_type:             str   # THREAD_DIFF_ADDED / THREAD_DIFF_REMOVED
     tid:                      int
     start_address_before:     "str | None"
     start_address_after:      "str | None"
     backing_module_after:     "str | None" = None
     backing_module_context:   "str | None" = None
-    entity_type: str = "thread"
+    entity_type: str = field(default="thread", init=False)
+
+    def __post_init__(self):
+        if self.change_type not in _THREAD_DIFF_CHANGE_TYPES:
+            raise ValueError(
+                f"ThreadDiffRecord.change_type must be one of {_THREAD_DIFF_CHANGE_TYPES}, "
+                f"got {self.change_type!r}")
+        if not isinstance(self.tid, int) or isinstance(self.tid, bool):
+            raise ValueError(f"ThreadDiffRecord.tid must be a plain int, got {self.tid!r}")
+        if self.change_type == THREAD_DIFF_ADDED:
+            if self.start_address_before is not None:
+                raise ValueError(
+                    "ThreadDiffRecord(change_type='added') must not carry "
+                    "start_address_before -- there is no baseline-side thread to report one from")
+        else:   # removed
+            if (self.start_address_after is not None or self.backing_module_after is not None
+                    or self.backing_module_context is not None):
+                raise ValueError(
+                    "ThreadDiffRecord(change_type='removed') must not carry "
+                    "start_address_after/backing_module_after/backing_module_context -- "
+                    "diff_threads never attempts target-side/backing-module resolution "
+                    "for a removed thread")
 
     def to_dict(self) -> dict:
         return {
@@ -326,9 +387,10 @@ class ThreadDiffRecord:
 MEMORY_DIFF_ADDED              = "added"
 MEMORY_DIFF_REMOVED            = "removed"
 MEMORY_DIFF_PROTECTION_CHANGED = "protection_changed"
+_MEMORY_DIFF_CHANGE_TYPES = (MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED)
 
 
-@dataclass
+@dataclass(frozen=True)
 class MemoryDiffRecord:
     """One added/removed/protection-changed memory region between two
     dumps -- ported from diff_memory's own BaseAddress-keyed added/
@@ -338,7 +400,9 @@ class MemoryDiffRecord:
     diff_memory's own 4-tier rwx/exec/notable/noise console
     categorization, which stays a future console-renderer concern -- the
     same line MemoryRegionRecord.suspicious already draws between
-    structured data and presentation."""
+    structured data and presentation. Frozen, with __post_init__
+    enforcing the same invariants the v2.1 schema's memoryDiffRecord
+    allOf already enforces on the wire."""
     change_type:         str   # MEMORY_DIFF_ADDED / _REMOVED / _PROTECTION_CHANGED
     base_address:         str   # BaseAddress -- the match key
     size_before:           "int | None"
@@ -349,7 +413,32 @@ class MemoryDiffRecord:
     type_after:                "str | None"
     suspicious_before:          "bool | None"
     suspicious_after:            "bool | None"
-    entity_type: str = "memory_region"
+    entity_type: str = field(default="memory_region", init=False)
+
+    def __post_init__(self):
+        if self.change_type not in _MEMORY_DIFF_CHANGE_TYPES:
+            raise ValueError(
+                f"MemoryDiffRecord.change_type must be one of {_MEMORY_DIFF_CHANGE_TYPES}, "
+                f"got {self.change_type!r}")
+        if not isinstance(self.base_address, str) or not self.base_address:
+            raise ValueError("MemoryDiffRecord.base_address must be a non-empty string")
+        if self.change_type == MEMORY_DIFF_ADDED:
+            if any(v is not None for v in (self.size_before, self.protect_before,
+                                             self.type_before, self.suspicious_before)):
+                raise ValueError(
+                    "MemoryDiffRecord(change_type='added') must not carry a before value -- "
+                    "there is no baseline-side region to report one from")
+        elif self.change_type == MEMORY_DIFF_REMOVED:
+            if any(v is not None for v in (self.size_after, self.protect_after,
+                                             self.type_after, self.suspicious_after)):
+                raise ValueError(
+                    "MemoryDiffRecord(change_type='removed') must not carry an after value -- "
+                    "there is no target-side region to report one from")
+        else:   # protection_changed
+            if self.protect_before is None or self.protect_after is None:
+                raise ValueError(
+                    "MemoryDiffRecord(change_type='protection_changed') requires both "
+                    "protect_before and protect_after")
 
     def to_dict(self) -> dict:
         return {

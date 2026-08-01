@@ -211,7 +211,7 @@
     },
 
     "moduleDiffRecord": {
-      "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic.",
+      "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic. `name` is always a non-empty string (\"(unnamed)\" for an anonymous module -- see dumpex.commands.comparison._module_display_name), but full_path_before/full_path_after are only forced null on the side that genuinely has no entry -- the PRESENT side's full_path may legitimately be null too (an anonymous module has a real base_address but no name at all), so only base_address is required non-null for added/removed. `full_path_before`/`full_path_after` are otherwise unconstrained by change_type: address identifies a module diff, not path.",
       "type": "object",
       "additionalProperties": false,
       "required": ["entity_type", "change_type", "name", "full_path_before", "full_path_after",
@@ -230,18 +230,14 @@
           "then": { "properties": {
             "full_path_before":    { "const": null },
             "base_address_before": { "const": null },
-            "full_path_after":     { "not": { "const": null } },
             "base_address_after":  { "not": { "const": null } } } } },
         { "if": { "properties": { "change_type": { "const": "removed" } } },
           "then": { "properties": {
             "full_path_after":     { "const": null },
             "base_address_after":  { "const": null },
-            "full_path_before":    { "not": { "const": null } },
             "base_address_before": { "not": { "const": null } } } } },
         { "if": { "properties": { "change_type": { "const": "rebased" } } },
           "then": { "properties": {
-            "full_path_before":    { "not": { "const": null } },
-            "full_path_after":     { "not": { "const": null } },
             "base_address_before": { "not": { "const": null } },
             "base_address_after":  { "not": { "const": null } } } } }
       ]
