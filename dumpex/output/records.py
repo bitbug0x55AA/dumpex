@@ -533,6 +533,10 @@ class MemoryDiffRecord:
                     "MemoryDiffRecord(change_type='protection_changed') requires "
                     "protect_before != protect_after -- a region whose protection didn't "
                     "change isn't 'protection_changed'")
+            if self.suspicious_before is None or self.suspicious_after is None:
+                raise ValueError(
+                    "MemoryDiffRecord(change_type='protection_changed') requires both "
+                    "suspicious_before and suspicious_after")
 
     def to_dict(self) -> dict:
         return {

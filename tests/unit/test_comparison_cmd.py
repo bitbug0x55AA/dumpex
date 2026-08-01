@@ -227,6 +227,28 @@ def test_collect_thread_diff_added_resolves_backing_module_against_target():
     assert added.backing_module_context == MODULE_CONTEXT_RESOLVED
 
 
+@pytest.mark.parametrize("anonymous_name", [None, ""])
+def test_collect_thread_diff_added_resolved_against_an_anonymous_module(anonymous_name):
+    # Regression: an added thread's start address can fall inside a REAL
+    # module that simply has no name recorded (mod.name is None or "") --
+    # ntpath.basename(None) raises TypeError outright, and basename-ing
+    # "" would produce another "" that the wire's non-empty-string
+    # contract for backing_module_after rejects. Must fall back to the
+    # same "(unnamed)" placeholder ModuleRecord/ModuleDiffRecord already
+    # use for a nameless module, not crash or emit "".
+    mf_baseline = FakeMF()
+    mf_baseline.thread_info = FakeStream([ThreadInfo(1, 0x1000)], "infos")
+    mf_target = FakeMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, 0x1000), ThreadInfo(2, 0x5000)], "infos")
+    mf_target.modules = FakeStream([Module(0x5000, 0x1000, anonymous_name)], "modules")
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)
+    assert coverage.status == "complete"
+    added = records[0]
+    assert added.backing_module_context == MODULE_CONTEXT_RESOLVED
+    assert added.backing_module_after == "(unnamed)"
+
+
 def test_collect_thread_diff_added_unregistered_when_modules_present_but_unmatched():
     mf_baseline = FakeMF()
     mf_baseline.thread_info = FakeStream([], "infos")   # present, genuinely empty -- evaluable

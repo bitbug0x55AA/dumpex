@@ -643,3 +643,44 @@ def test_memory_diff_record_protection_changed_rejects_identical_protect():
                           protect_before="PAGE_READWRITE", protect_after="PAGE_READWRITE",
                           type_before="MEM_PRIVATE", type_after="MEM_PRIVATE",
                           suspicious_before=False, suspicious_after=True)
+
+
+def test_memory_diff_record_protection_changed_requires_suspicious_values():
+    # Regression: the v2.1 schema already requires suspicious_before/
+    # suspicious_after non-null for protection_changed, but the Python
+    # model didn't check either -- a document Python happily built and
+    # to_dict()'d could never actually pass its own schema.
+    with pytest.raises(ValueError, match="suspicious_before"):
+        MemoryDiffRecord(change_type=MEMORY_DIFF_PROTECTION_CHANGED, base_address=hex_address(0x1000),
+                          size_before=None, size_after=None,
+                          protect_before="PAGE_READWRITE", protect_after="PAGE_EXECUTE_READWRITE",
+                          type_before=None, type_after=None,
+                          suspicious_before=None, suspicious_after=None)
+
+
+def test_module_diff_record_rejects_empty_string_full_path():
+    # Regression: the new field-shape validators reject "" for these
+    # optional string fields, but the v2.1 schema itself only gained the
+    # matching minLength: 1 constraint in this same review round -- both
+    # now agree that "" is never a legitimate stand-in for "no value."
+    with pytest.raises(ValueError, match="full_path_before"):
+        ModuleDiffRecord(change_type=MODULE_DIFF_REBASED, name="a.dll",
+                          full_path_before="", full_path_after="x",
+                          base_address_before=hex_address(0x1000),
+                          base_address_after=hex_address(0x2000))
+
+
+def test_thread_diff_record_rejects_empty_string_backing_module_after():
+    with pytest.raises(ValueError, match="backing_module_after"):
+        ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=1,
+                          start_address_before=None, start_address_after=hex_address(0x1000),
+                          backing_module_after="", backing_module_context=MODULE_CONTEXT_RESOLVED)
+
+
+def test_memory_diff_record_rejects_empty_string_protect():
+    with pytest.raises(ValueError, match="protect_after"):
+        MemoryDiffRecord(change_type=MEMORY_DIFF_ADDED, base_address=hex_address(0x1000),
+                          size_before=None, size_after=100,
+                          protect_before=None, protect_after="",
+                          type_before=None, type_after="MEM_PRIVATE",
+                          suspicious_before=None, suspicious_after=False)

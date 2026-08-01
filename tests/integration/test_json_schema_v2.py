@@ -827,3 +827,44 @@ def test_memory_diff_record_added_valid_shape_accepted(memory_diff_record_schema
         type_before=None, type_after="MEM_PRIVATE",
         suspicious_before=None, suspicious_after=False).to_dict()
     assert memory_diff_record_schema.is_valid(doc)
+
+
+def test_memory_diff_record_protection_changed_null_suspicious_rejected(memory_diff_record_schema):
+    from dumpex.output.records import MemoryDiffRecord, MEMORY_DIFF_PROTECTION_CHANGED
+    doc = MemoryDiffRecord(
+        change_type=MEMORY_DIFF_PROTECTION_CHANGED, base_address="0x0000000000001000",
+        size_before=4096, size_after=4096,
+        protect_before="PAGE_READWRITE", protect_after="PAGE_EXECUTE_READWRITE",
+        type_before="MEM_PRIVATE", type_after="MEM_PRIVATE",
+        suspicious_before=False, suspicious_after=True).to_dict()
+    doc["suspicious_before"] = None
+    doc["suspicious_after"] = None
+    assert not memory_diff_record_schema.is_valid(doc)
+
+
+# ── empty string "" is never a legitimate stand-in for "no value" ────────
+# (Phase C review round 3) -- these optional string fields only gained
+# minLength: 1 in this same round, matching the stricter check the Python
+# model's own field-shape validators had already started enforcing.
+
+def test_module_diff_record_empty_full_path_rejected_by_schema(module_diff_record_schema):
+    doc = {"entity_type": "module", "change_type": "rebased", "name": "a.dll",
+           "full_path_before": "", "full_path_after": "x",
+           "base_address_before": "0x0000000000001000", "base_address_after": "0x0000000000002000"}
+    assert not module_diff_record_schema.is_valid(doc)
+
+
+def test_thread_diff_record_empty_backing_module_after_rejected_by_schema(thread_diff_record_schema):
+    doc = {"entity_type": "thread", "change_type": "added", "tid": 1,
+           "start_address_before": None, "start_address_after": "0x0000000000001000",
+           "backing_module_after": "", "backing_module_context": "resolved"}
+    assert not thread_diff_record_schema.is_valid(doc)
+
+
+def test_memory_diff_record_empty_protect_rejected_by_schema(memory_diff_record_schema):
+    doc = {"entity_type": "memory_region", "change_type": "added", "base_address": "0x0000000000001000",
+           "size_before": None, "size_after": 4096,
+           "protect_before": None, "protect_after": "",
+           "type_before": None, "type_after": "MEM_PRIVATE",
+           "suspicious_before": None, "suspicious_after": False}
+    assert not memory_diff_record_schema.is_valid(doc)

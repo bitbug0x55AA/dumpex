@@ -231,7 +231,14 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         else:
             mod = addr_to_module(sa, modules_target)
             if mod is not None:
-                backing_module_after = ntpath.basename(mod.name)
+                # mod.name or "(unnamed)" BEFORE ntpath.basename -- same
+                # order modules.py's own ModuleRecord.name uses, and for
+                # the same reason: ntpath.basename(None) raises TypeError
+                # outright (an anonymous module's name is None, not ""),
+                # and basename-ing the empty string would otherwise
+                # produce "" itself, which the wire's non-empty-string
+                # contract for backing_module_after rejects.
+                backing_module_after = ntpath.basename(mod.name or "(unnamed)")
                 backing_module_context = MODULE_CONTEXT_RESOLVED
             elif modules_target_available:
                 backing_module_after = None

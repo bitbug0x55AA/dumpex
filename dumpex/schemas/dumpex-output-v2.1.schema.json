@@ -220,8 +220,8 @@
         "entity_type":         { "const": "module" },
         "change_type":         { "enum": ["added", "removed", "rebased"] },
         "name":                { "type": "string", "minLength": 1 },
-        "full_path_before":    { "type": ["string", "null"] },
-        "full_path_after":     { "type": ["string", "null"] },
+        "full_path_before":    { "type": ["string", "null"], "minLength": 1 },
+        "full_path_after":     { "type": ["string", "null"], "minLength": 1 },
         "base_address_before": { "$ref": "#/$defs/hexAddress" },
         "base_address_after":  { "$ref": "#/$defs/hexAddress" }
       },
@@ -255,7 +255,7 @@
         "tid":                    { "type": "integer" },
         "start_address_before":   { "$ref": "#/$defs/hexAddress" },
         "start_address_after":    { "$ref": "#/$defs/hexAddress" },
-        "backing_module_after":   { "type": ["string", "null"] },
+        "backing_module_after":   { "type": ["string", "null"], "minLength": 1 },
         "backing_module_context": { "enum": ["resolved", "unregistered", "unavailable", null] }
       },
       "allOf": [
@@ -295,10 +295,10 @@
         "base_address":       { "$ref": "#/$defs/hexAddress" },
         "size_before":        { "type": ["integer", "null"] },
         "size_after":         { "type": ["integer", "null"] },
-        "protect_before":     { "type": ["string", "null"] },
-        "protect_after":      { "type": ["string", "null"] },
-        "type_before":        { "type": ["string", "null"] },
-        "type_after":         { "type": ["string", "null"] },
+        "protect_before":     { "type": ["string", "null"], "minLength": 1 },
+        "protect_after":      { "type": ["string", "null"], "minLength": 1 },
+        "type_before":        { "type": ["string", "null"], "minLength": 1 },
+        "type_after":         { "type": ["string", "null"], "minLength": 1 },
         "suspicious_before":  { "type": ["boolean", "null"] },
         "suspicious_after":   { "type": ["boolean", "null"] }
       },
