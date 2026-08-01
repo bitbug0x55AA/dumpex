@@ -765,6 +765,46 @@ def test_thread_diff_record_added_valid_shape_accepted(thread_diff_record_schema
     assert thread_diff_record_schema.is_valid(doc)
 
 
+def test_thread_diff_record_resolved_without_backing_module_rejected(thread_diff_record_schema):
+    from dumpex.output.records import ThreadDiffRecord, THREAD_DIFF_ADDED, MODULE_CONTEXT_RESOLVED
+    doc = ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=1,
+                            start_address_before=None,
+                            start_address_after="0x0000000000001000",
+                            backing_module_after="ntdll.dll",
+                            backing_module_context=MODULE_CONTEXT_RESOLVED).to_dict()
+    doc["backing_module_after"] = None   # resolved must carry a backing module
+    assert not thread_diff_record_schema.is_valid(doc)
+
+
+def test_thread_diff_record_unregistered_with_backing_module_rejected(thread_diff_record_schema):
+    from dumpex.output.records import ThreadDiffRecord, THREAD_DIFF_ADDED, MODULE_CONTEXT_UNREGISTERED
+    doc = ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=1,
+                            start_address_before=None,
+                            start_address_after="0x0000000000001000",
+                            backing_module_after=None,
+                            backing_module_context=MODULE_CONTEXT_UNREGISTERED).to_dict()
+    doc["backing_module_after"] = "ntdll.dll"   # unregistered must never carry one
+    assert not thread_diff_record_schema.is_valid(doc)
+
+
+def test_thread_diff_record_added_null_address_with_module_context_rejected(
+        thread_diff_record_schema):
+    from dumpex.output.records import ThreadDiffRecord, THREAD_DIFF_ADDED
+    doc = ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=1,
+                            start_address_before=None, start_address_after=None).to_dict()
+    doc["backing_module_context"] = "unavailable"   # address unknown -- resolution never attempted
+    assert not thread_diff_record_schema.is_valid(doc)
+
+
+def test_thread_diff_record_added_known_address_without_module_context_rejected(
+        thread_diff_record_schema):
+    from dumpex.output.records import ThreadDiffRecord
+    doc = {"entity_type": "thread", "change_type": "added", "tid": 1,
+           "start_address_before": None, "start_address_after": "0x0000000000001000",
+           "backing_module_after": None, "backing_module_context": None}
+    assert not thread_diff_record_schema.is_valid(doc)
+
+
 def test_memory_diff_record_protection_changed_missing_protect_after_rejected(
         memory_diff_record_schema):
     from dumpex.output.records import MemoryDiffRecord, MEMORY_DIFF_PROTECTION_CHANGED

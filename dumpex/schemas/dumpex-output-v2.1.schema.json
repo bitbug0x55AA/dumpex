@@ -211,7 +211,7 @@
     },
 
     "moduleDiffRecord": {
-      "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic. `name` is always a non-empty string (\"(unnamed)\" for an anonymous module -- see dumpex.commands.comparison._module_display_name), but full_path_before/full_path_after are only forced null on the side that genuinely has no entry -- the PRESENT side's full_path may legitimately be null too (an anonymous module has a real base_address but no name at all), so only base_address is required non-null for added/removed. `full_path_before`/`full_path_after` are otherwise unconstrained by change_type: address identifies a module diff, not path.",
+      "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic. `name` is always a non-empty string (\"(unnamed)\" for an anonymous module -- see dumpex.commands.comparison._module_display_name), but full_path_before/full_path_after are only forced null on the side that genuinely has no entry -- the PRESENT side's full_path may legitimately be null too (an anonymous module has a real base_address but no name at all), so only base_address is required non-null for added/removed. `full_path_before`/`full_path_after` are otherwise unconstrained by change_type: address identifies a module diff, not path. NOT expressed here (Python-only, see ModuleDiffRecord.__post_init__): for `change_type: \"rebased\"`, base_address_before must differ from base_address_after -- JSON Schema cannot compare two sibling field VALUES for inequality within one object.",
       "type": "object",
       "additionalProperties": false,
       "required": ["entity_type", "change_type", "name", "full_path_before", "full_path_after",
@@ -244,7 +244,7 @@
     },
 
     "threadDiffRecord": {
-      "description": "Matches dumpex.output.records.ThreadDiffRecord.to_dict() -- one added/removed thread between two dumps, grounded in dumpex.commands.diff.diff_threads' own TID-keyed set logic. backing_module_after/backing_module_context are only ever populated for 'added' (resolved against the TARGET's module list); diff_threads never attempts baseline-side module resolution for a removed thread.",
+      "description": "Matches dumpex.output.records.ThreadDiffRecord.to_dict() -- one added/removed thread between two dumps, grounded in dumpex.commands.diff.diff_threads' own TID-keyed set logic. backing_module_after/backing_module_context are only ever populated for 'added' (resolved against the TARGET's module list); diff_threads never attempts baseline-side module resolution for a removed thread. For 'added': backing_module_after/backing_module_context are both null exactly when start_address_after itself is null (module resolution is never attempted without a known address); otherwise backing_module_context is always one of resolved/unregistered/unavailable, and backing_module_after is non-null iff backing_module_context is 'resolved'.",
       "type": "object",
       "additionalProperties": false,
       "required": ["entity_type", "change_type", "tid", "start_address_before",
@@ -265,12 +265,25 @@
           "then": { "properties": {
             "start_address_after":    { "const": null },
             "backing_module_after":   { "const": null },
-            "backing_module_context": { "const": null } } } }
+            "backing_module_context": { "const": null } } } },
+        { "if": { "properties": {
+            "change_type": { "const": "added" }, "start_address_after": { "const": null } } },
+          "then": { "properties": {
+            "backing_module_after":   { "const": null },
+            "backing_module_context": { "const": null } } } },
+        { "if": { "properties": {
+            "change_type": { "const": "added" },
+            "start_address_after": { "not": { "const": null } } } },
+          "then": { "properties": { "backing_module_context": { "not": { "const": null } } } } },
+        { "if": { "properties": { "backing_module_context": { "const": "resolved" } } },
+          "then": { "properties": { "backing_module_after": { "not": { "const": null } } } } },
+        { "if": { "properties": { "backing_module_context": { "enum": ["unregistered", "unavailable"] } } },
+          "then": { "properties": { "backing_module_after": { "const": null } } } }
       ]
     },
 
     "memoryDiffRecord": {
-      "description": "Matches dumpex.output.records.MemoryDiffRecord.to_dict() -- one added/removed/protection-changed memory region between two dumps, grounded in dumpex.commands.diff.diff_memory's own BaseAddress-keyed set logic. suspicious_before/_after reuse memoryRegionRecord.suspicious's own semantics rather than diff_memory's own 4-tier console categorization.",
+      "description": "Matches dumpex.output.records.MemoryDiffRecord.to_dict() -- one added/removed/protection-changed memory region between two dumps, grounded in dumpex.commands.diff.diff_memory's own BaseAddress-keyed set logic. suspicious_before/_after reuse memoryRegionRecord.suspicious's own semantics rather than diff_memory's own 4-tier console categorization. NOT expressed here (Python-only, see MemoryDiffRecord.__post_init__): for `change_type: \"protection_changed\"`, protect_before must differ from protect_after -- JSON Schema cannot compare two sibling field VALUES for inequality within one object.",
       "type": "object",
       "additionalProperties": false,
       "required": ["entity_type", "change_type", "base_address", "size_before", "size_after",

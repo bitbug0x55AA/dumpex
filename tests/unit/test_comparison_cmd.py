@@ -159,7 +159,10 @@ def test_collect_thread_diff_target_modules_absent_is_partial_not_complete():
 
     records, coverage = collect_thread_diff(mf_baseline, mf_target)
     assert coverage.status == "partial"
-    assert coverage.reasons == ["target ModuleListStream not present in this dump"]
+    assert coverage.reasons == [
+        "target ModuleListStream not present; backing_module_after/"
+        "backing_module_context unavailable"]
+    assert coverage.limitations[0].scope == "thread"
     assert coverage.sources["target.modules"].state == "absent"
     assert records[0].backing_module_context == MODULE_CONTEXT_UNAVAILABLE
 
@@ -178,6 +181,33 @@ def test_collect_thread_diff_target_modules_not_consulted_when_no_added_thread_h
     records, coverage = collect_thread_diff(mf_baseline, mf_target)
     assert coverage.status == "complete"
     assert "target.modules" not in coverage.sources
+
+
+class _ExplodingModulesMF(FakeMF):
+    """A minidump stand-in whose `.modules` access raises -- reproduces
+    the round-2 finding that mf_target.modules was still read
+    UNCONDITIONALLY (bool(mf_target.modules)/get_modules(mf_target)
+    sitting outside the `if needs_target_modules:` guard), contradicting
+    collect_thread_diff's own docstring claim that it's "only read... when
+    at least one ADDED thread has a known StartAddress." """
+    @property
+    def modules(self):
+        raise RuntimeError("modules stream should not be touched here")
+
+    @modules.setter
+    def modules(self, value):
+        pass
+
+
+def test_collect_thread_diff_does_not_touch_target_modules_when_not_needed():
+    mf_baseline = FakeMF()
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_target = _ExplodingModulesMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, None)], "infos")   # unknown address
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)   # must not raise
+    assert coverage.status == "complete"
+    assert records[0].backing_module_context is None
 
 
 def test_collect_thread_diff_added_resolves_backing_module_against_target():
@@ -370,4 +400,40 @@ def test_collect_comparison_all_mode_unanimous_not_evaluated_stays_not_evaluated
     # Every entity absent on both sides -- unanimous not_evaluated.
     result = collect_comparison(FakeMF(), FakeMF(), mode="all")
     assert result.coverage.status == "not_evaluated"
-    assert result.records == []
+
+
+def test_collect_comparison_all_mode_target_modules_limitations_are_distinguishable():
+    # Regression: when target.modules is needed by BOTH collect_module_diff
+    # (its own primary source) and collect_thread_diff (to classify an
+    # added thread), the two resulting limitations must not be
+    # byte-identical duplicates of the same fact -- thread_diff's own
+    # says WHICH thread-side fields are unavailable, not just that the
+    # stream is absent.
+    mf_baseline = FakeMF()
+    mf_baseline.modules = FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules")
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_baseline.memory_info = FakeStream(
+        [Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")], "infos")
+    mf_target = FakeMF()
+    # mf_target.modules deliberately left unset (absent) -- needed by both
+    # collect_module_diff (its own gate) and collect_thread_diff (to
+    # classify the added thread below).
+    mf_target.thread_info = FakeStream([ThreadInfo(1, 0x2000)], "infos")
+    mf_target.memory_info = FakeStream(
+        [Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")], "infos")
+
+    result = collect_comparison(mf_baseline, mf_target, mode="all")
+    limitations = [l for l in result.coverage.limitations if l.source == "target.modules"]
+    assert len(limitations) == 2
+    # Distinct structured shape -- not two copies of the same fact.
+    assert {l.scope for l in limitations} == {"dump", "thread"}
+    thread_side = next(l for l in limitations if l.scope == "thread")
+    assert set(thread_side.unavailable_fields) == {"backing_module_after", "backing_module_context"}
+    # Distinct rendered text too.
+    assert len(set(result.coverage.reasons)) == len(result.coverage.reasons)
+    # module_diff contributed nothing (not_evaluated), but thread_diff's
+    # own coverage is only "partial" (target.modules is a completeness
+    # check there, not a gate) -- the added thread itself is still
+    # reported, just with an unresolved backing module.
+    assert len(result.records) == 1
+    assert result.records[0].backing_module_context == "unavailable"

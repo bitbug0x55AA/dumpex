@@ -49,7 +49,7 @@ from dumpex.output.records import (
 )
 from dumpex.output.coverage import (
     observe_source, build_coverage_report, combine_coverage_reports,
-    EvaluationRequirement, COVERAGE_NOT_EVALUATED,
+    EvaluationRequirement, SourceRequirement, COVERAGE_NOT_EVALUATED,
 )
 from dumpex.output.command_result import CommandResult
 
@@ -181,13 +181,37 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         "target.thread_info": observe_source(
             "target.thread_info", present=bool(mf_target.thread_info), items=raw_target),
     }
-    modules_target_available = bool(mf_target.modules)
-    modules_target = get_modules(mf_target)
+    modules_target_available = None
+    modules_target = None
     completeness_checks = None
     if needs_target_modules:
+        # mf_target.modules/get_modules(mf_target) are only ever touched
+        # here, inside this branch -- when no added thread has a known
+        # StartAddress, nothing below ever consults modules_target/
+        # modules_target_available (see the "sa is None" branch further
+        # down), so accessing the stream at all would be an unjustified
+        # read of data this call never actually needed.
+        modules_target_available = bool(mf_target.modules)
+        modules_target = get_modules(mf_target)
         sources["target.modules"] = observe_source(
             "target.modules", present=modules_target_available, items=modules_target)
-        completeness_checks = ["target.modules"]
+        # A plain bare-name completeness check here would produce a
+        # SOURCE_ABSENT limitation byte-identical to collect_module_diff's
+        # own ("target ModuleListStream not present in this dump") when
+        # both fire together under collect_comparison(mode="all") --
+        # scope="thread" + unavailable_fields differentiates the two: this
+        # one says WHICH thread-side fields are unavailable as a result,
+        # not just that the stream is absent. affected_count is
+        # deliberately not set -- SOURCE_ABSENT's own contract only
+        # allows it paired with a counterpart_source whose record_count it
+        # must equal exactly (see coverage.py's
+        # _validate_source_absent_against_sources), and no such
+        # counterpart exists here (this fact is about a SUBSET of
+        # target.thread_info's threads -- the added ones with a known
+        # address -- not "every record in some counterpart source").
+        completeness_checks = [SourceRequirement(
+            "target.modules", scope="thread",
+            unavailable_fields=("backing_module_after", "backing_module_context"))]
 
     coverage = build_coverage_report(
         sources,

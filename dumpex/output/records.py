@@ -21,6 +21,7 @@ intentionally not defined yet. Artifact (below) IS defined -- its wire
 shape needed locking in ahead of a future --extract/--report migration --
 but isn't populated by any command yet.
 """
+import re
 from dataclasses import dataclass, field
 
 
@@ -252,6 +253,42 @@ class PebRecord:
 # it (e.g. an "added" module has no full_path_before -- there is no
 # baseline-side module to report one from). No command constructs these
 # yet; see dumpex/commands/comparison.py.
+#
+# Field-shape validators shared by all three -- kept local to this
+# section (not shared with, say, dumpex.output.coverage's own similarly-
+# named helpers) since these two modules are otherwise fully decoupled by
+# design. Each mirrors a constraint the v2.1 schema's own moduleDiffRecord/
+# threadDiffRecord/memoryDiffRecord $defs already enforce on the wire --
+# closing the gap where the Python model could construct (and freely
+# .to_dict()) a shape its own schema rejects.
+
+_HEX_ADDRESS_RE = re.compile(r"^0x[0-9a-f]{16}$")
+
+
+def _require_optional_hex_address(value, field_name: str) -> None:
+    if value is not None and (not isinstance(value, str) or not _HEX_ADDRESS_RE.match(value)):
+        raise ValueError(
+            f"{field_name} must be None or a normalized hex address string (\"0x\" + 16 "
+            f"lowercase hex digits, see hex_address()), got {value!r}")
+
+
+def _require_optional_diff_str(value, field_name: str) -> None:
+    if value is not None and (not isinstance(value, str) or not value):
+        raise ValueError(f"{field_name} must be None or a non-empty string, got {value!r}")
+
+
+def _require_optional_diff_int(value, field_name: str) -> None:
+    # bool is a subclass of int in Python -- explicitly excluded, since
+    # the wire's JSON "integer" type rejects true/false (see hunt/coverage
+    # modules' identical `isinstance(x, bool)` exclusion elsewhere).
+    if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+        raise ValueError(f"{field_name} must be None or a plain int (not bool), got {value!r}")
+
+
+def _require_optional_diff_bool(value, field_name: str) -> None:
+    if value is not None and not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be None or a bool, got {value!r}")
+
 
 MODULE_DIFF_ADDED   = "added"
 MODULE_DIFF_REMOVED = "removed"
@@ -286,6 +323,12 @@ class ModuleDiffRecord:
                 f"got {self.change_type!r}")
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("ModuleDiffRecord.name must be a non-empty string")
+        _require_optional_diff_str(self.full_path_before, "ModuleDiffRecord.full_path_before")
+        _require_optional_diff_str(self.full_path_after, "ModuleDiffRecord.full_path_after")
+        _require_optional_hex_address(self.base_address_before,
+                                       "ModuleDiffRecord.base_address_before")
+        _require_optional_hex_address(self.base_address_after,
+                                       "ModuleDiffRecord.base_address_after")
         if self.change_type == MODULE_DIFF_ADDED:
             if self.full_path_before is not None or self.base_address_before is not None:
                 raise ValueError(
@@ -307,6 +350,10 @@ class ModuleDiffRecord:
                 raise ValueError(
                     "ModuleDiffRecord(change_type='rebased') requires both "
                     "base_address_before and base_address_after")
+            if self.base_address_before == self.base_address_after:
+                raise ValueError(
+                    "ModuleDiffRecord(change_type='rebased') requires base_address_before != "
+                    "base_address_after -- a module whose address didn't change isn't 'rebased'")
 
     def to_dict(self) -> dict:
         return {
@@ -323,6 +370,7 @@ class ModuleDiffRecord:
 THREAD_DIFF_ADDED   = "added"
 THREAD_DIFF_REMOVED = "removed"
 _THREAD_DIFF_CHANGE_TYPES = (THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED)
+_MODULE_CONTEXTS = (MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE)
 
 
 @dataclass(frozen=True)
@@ -358,11 +406,42 @@ class ThreadDiffRecord:
                 f"got {self.change_type!r}")
         if not isinstance(self.tid, int) or isinstance(self.tid, bool):
             raise ValueError(f"ThreadDiffRecord.tid must be a plain int, got {self.tid!r}")
+        _require_optional_hex_address(self.start_address_before,
+                                       "ThreadDiffRecord.start_address_before")
+        _require_optional_hex_address(self.start_address_after,
+                                       "ThreadDiffRecord.start_address_after")
+        _require_optional_diff_str(self.backing_module_after,
+                                    "ThreadDiffRecord.backing_module_after")
+        if self.backing_module_context is not None and self.backing_module_context not in _MODULE_CONTEXTS:
+            raise ValueError(
+                f"ThreadDiffRecord.backing_module_context must be None or one of "
+                f"{_MODULE_CONTEXTS}, got {self.backing_module_context!r}")
         if self.change_type == THREAD_DIFF_ADDED:
             if self.start_address_before is not None:
                 raise ValueError(
                     "ThreadDiffRecord(change_type='added') must not carry "
                     "start_address_before -- there is no baseline-side thread to report one from")
+            if self.start_address_after is None:
+                if self.backing_module_after is not None or self.backing_module_context is not None:
+                    raise ValueError(
+                        "ThreadDiffRecord(change_type='added') with start_address_after=None "
+                        "must not carry backing_module_after/backing_module_context -- module "
+                        "resolution is never attempted when the start address itself is unknown")
+            else:
+                if self.backing_module_context is None:
+                    raise ValueError(
+                        "ThreadDiffRecord(change_type='added') with a known start_address_after "
+                        "requires backing_module_context (module resolution is always attempted "
+                        "once the start address is known)")
+                if self.backing_module_context == MODULE_CONTEXT_RESOLVED:
+                    if self.backing_module_after is None:
+                        raise ValueError(
+                            "ThreadDiffRecord(backing_module_context='resolved') requires "
+                            "backing_module_after")
+                elif self.backing_module_after is not None:
+                    raise ValueError(
+                        f"ThreadDiffRecord(backing_module_context={self.backing_module_context!r}) "
+                        f"must not carry backing_module_after")
         else:   # removed
             if (self.start_address_after is not None or self.backing_module_after is not None
                     or self.backing_module_context is not None):
@@ -420,8 +499,18 @@ class MemoryDiffRecord:
             raise ValueError(
                 f"MemoryDiffRecord.change_type must be one of {_MEMORY_DIFF_CHANGE_TYPES}, "
                 f"got {self.change_type!r}")
-        if not isinstance(self.base_address, str) or not self.base_address:
-            raise ValueError("MemoryDiffRecord.base_address must be a non-empty string")
+        if not isinstance(self.base_address, str) or not _HEX_ADDRESS_RE.match(self.base_address):
+            raise ValueError(
+                f"MemoryDiffRecord.base_address must be a normalized hex address string "
+                f"(\"0x\" + 16 lowercase hex digits, see hex_address()), got {self.base_address!r}")
+        _require_optional_diff_int(self.size_before, "MemoryDiffRecord.size_before")
+        _require_optional_diff_int(self.size_after, "MemoryDiffRecord.size_after")
+        _require_optional_diff_str(self.protect_before, "MemoryDiffRecord.protect_before")
+        _require_optional_diff_str(self.protect_after, "MemoryDiffRecord.protect_after")
+        _require_optional_diff_str(self.type_before, "MemoryDiffRecord.type_before")
+        _require_optional_diff_str(self.type_after, "MemoryDiffRecord.type_after")
+        _require_optional_diff_bool(self.suspicious_before, "MemoryDiffRecord.suspicious_before")
+        _require_optional_diff_bool(self.suspicious_after, "MemoryDiffRecord.suspicious_after")
         if self.change_type == MEMORY_DIFF_ADDED:
             if any(v is not None for v in (self.size_before, self.protect_before,
                                              self.type_before, self.suspicious_before)):
@@ -439,6 +528,11 @@ class MemoryDiffRecord:
                 raise ValueError(
                     "MemoryDiffRecord(change_type='protection_changed') requires both "
                     "protect_before and protect_after")
+            if self.protect_before == self.protect_after:
+                raise ValueError(
+                    "MemoryDiffRecord(change_type='protection_changed') requires "
+                    "protect_before != protect_after -- a region whose protection didn't "
+                    "change isn't 'protection_changed'")
 
     def to_dict(self) -> dict:
         return {
