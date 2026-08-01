@@ -12,7 +12,8 @@ from pathlib import Path
 
 from dumpex.ui.colors import DIM
 from dumpex.core.safe_io import write_text_to_target, write_text_to_directory, summarize_file
-from dumpex.output.envelope import build_meta_v2, Result, Envelope, EvidenceInput
+from dumpex.output.envelope import build_meta_v2, Result, Envelope, EvidenceInput, \
+    _normalize_evidence_inputs
 from dumpex.output.serializer import to_json as _serialize_envelope
 from dumpex.output.csv_export import build_tables
 from dumpex.output.records import Diagnostic, SEVERITY_ERROR
@@ -35,32 +36,22 @@ class V2Output:
                 "evidence (multi-dump commands), got "
                 + ("neither" if dump_path is None else "both"))
         if evidence is not None:
-            if not evidence:
-                raise ValueError(
-                    "V2Output(evidence=...) requires at least one EvidenceInput -- an "
-                    "empty list would produce meta.evidence=[], which violates the v2 "
-                    "schema's minItems: 1")
-            for ei in evidence:
-                if not isinstance(ei, EvidenceInput):
-                    raise TypeError(
-                        f"V2Output(evidence=...) entries must be EvidenceInput instances, "
-                        f"got {type(ei).__name__} -- a bare dict would otherwise reach "
-                        f"build_meta_v2 and fail with an unrelated AttributeError instead "
-                        f"of a clear message at the actual point of misuse")
-            ids = [ei.id for ei in evidence]
-            if len(set(ids)) != len(ids):
-                raise ValueError(
-                    f"V2Output(evidence=...) entries must have unique id values (role "
-                    f"may repeat), got ids={ids!r} -- id is a stable identifier a future "
-                    f"comparison record could reference, so a duplicate would make that "
-                    f"reference ambiguous")
+            # _normalize_evidence_inputs (shared with build_meta_v2, see
+            # envelope.py) rejects a non-list/tuple outright rather than
+            # risking a generator getting silently exhausted by one of
+            # ITS OWN validation passes -- and resolves every entry's
+            # path to absolute exactly once, so the object stored below
+            # and self._protected_paths always agree on which on-disk
+            # file a given entry refers to, even if the process's cwd
+            # changes between construction and to_json()/write_json().
+            evidence = _normalize_evidence_inputs(evidence)
             # No single canonical dump path exists for a multi-evidence
             # (e.g. comparison) instance -- see write_json/write_csv
             # below for the one place this matters today.
             self._dump_path_abs  = None
             self._dump_file_name = None
-            self._evidence        = list(evidence)
-            self._protected_paths = [os.path.abspath(ei.path) for ei in evidence]
+            self._evidence        = evidence
+            self._protected_paths = [ei.path for ei in evidence]
         else:
             self._dump_path_abs  = os.path.abspath(dump_path)
             self._dump_file_name = os.path.basename(dump_path)

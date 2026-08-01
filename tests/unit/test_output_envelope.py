@@ -143,6 +143,60 @@ def test_build_meta_v2_rejects_empty_evidence_list(tmp_path):
         build_meta_v2(evidence=[], **_meta_kwargs())
 
 
+# ── build_meta_v2() is a public export (__all__) -- it must enforce the
+# same construction contract as V2Output, not a looser one a caller could
+# reach by bypassing V2Output entirely. All four cases below used to be
+# silently accepted (or crash with an unrelated AttributeError).
+
+def test_build_meta_v2_rejects_dump_path_abs_and_evidence_together(tmp_path):
+    dump = tmp_path / "sample.dmp"
+    dump.write_bytes(b"x")
+    with pytest.raises(TypeError, match="both"):
+        build_meta_v2(dump_path_abs=str(dump), dump_file_name="sample.dmp",
+                       evidence=[EvidenceInput(id="a", role="a", path=str(dump))],
+                       **_meta_kwargs())
+
+
+def test_build_meta_v2_requires_dump_file_name_alongside_dump_path_abs(tmp_path):
+    dump = tmp_path / "sample.dmp"
+    dump.write_bytes(b"x")
+    with pytest.raises(TypeError, match="dump_file_name"):
+        build_meta_v2(dump_path_abs=str(dump), **_meta_kwargs())
+
+
+def test_build_meta_v2_rejects_duplicate_evidence_ids(tmp_path):
+    dump_a = tmp_path / "a.dmp"
+    dump_a.write_bytes(b"a")
+    dump_b = tmp_path / "b.dmp"
+    dump_b.write_bytes(b"b")
+    with pytest.raises(ValueError, match="unique"):
+        build_meta_v2(evidence=[
+            EvidenceInput(id="same", role="baseline", path=str(dump_a)),
+            EvidenceInput(id="same", role="target", path=str(dump_b)),
+        ], **_meta_kwargs())
+
+
+def test_build_meta_v2_rejects_bare_dict_evidence_entries(tmp_path):
+    with pytest.raises(TypeError, match="EvidenceInput"):
+        build_meta_v2(evidence=[{"id": "a", "role": "a", "path": "x"}], **_meta_kwargs())
+
+
+def test_build_meta_v2_rejects_generator_evidence_argument(tmp_path):
+    # A generator is exhausted by the first of _normalize_evidence_inputs'
+    # several validation passes over it -- silently accepting one would
+    # leave every LATER pass (id-uniqueness, path normalization) and the
+    # final meta["evidence"] list operating on an already-empty sequence,
+    # producing meta.evidence=[] (schema-invalid) from a non-empty input.
+    dump = tmp_path / "sample.dmp"
+    dump.write_bytes(b"x")
+
+    def gen():
+        yield EvidenceInput(id="a", role="a", path=str(dump))
+
+    with pytest.raises(TypeError, match="list or tuple"):
+        build_meta_v2(evidence=gen(), **_meta_kwargs())
+
+
 def test_build_meta_v2_evidence_list_produces_one_entry_per_input(tmp_path):
     dump_a = tmp_path / "baseline.dmp"
     dump_a.write_bytes(b"aaa")

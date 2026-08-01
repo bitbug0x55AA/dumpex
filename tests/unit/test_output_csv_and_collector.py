@@ -297,6 +297,55 @@ def test_v2output_from_evidence_rejects_bare_dict_entries():
         V2Output.from_evidence([{"id": "a", "role": "a", "path": "x"}])
 
 
+def test_v2output_from_evidence_rejects_generator(tmp_path):
+    # A generator would otherwise be silently exhausted by the first of
+    # several validation passes over it (see envelope._normalize_evidence_
+    # inputs), leaving self._evidence and self._protected_paths BOTH
+    # empty from a genuinely non-empty input -- schema-invalid output and
+    # a fully disabled overwrite guard from one construction call.
+    from dumpex.output.envelope import EvidenceInput
+
+    dump = tmp_path / "sample.dmp"
+    dump.write_bytes(b"x")
+
+    def gen():
+        yield EvidenceInput(id="a", role="a", path=str(dump))
+        yield EvidenceInput(id="b", role="b", path=str(dump))
+
+    with pytest.raises(TypeError, match="list or tuple"):
+        V2Output.from_evidence(gen())
+
+
+def test_v2output_evidence_path_stays_stable_across_a_cwd_change(tmp_path, monkeypatch):
+    # EvidenceInput.path is resolved to absolute ONCE, at construction --
+    # a caller passing a relative path, followed by a cwd change before
+    # to_json()/write_json() runs, must not cause metadata and the
+    # overwrite guard to silently disagree about which on-disk file a
+    # given entry refers to.
+    from dumpex.output.envelope import EvidenceInput
+
+    dir_a = tmp_path / "a"
+    dir_a.mkdir()
+    dir_b = tmp_path / "b"
+    dir_b.mkdir()
+    (dir_a / "same.dmp").write_bytes(b"AAAA")
+    (dir_b / "same.dmp").write_bytes(b"BBBB")
+
+    monkeypatch.chdir(dir_a)
+    out = V2Output.from_evidence([EvidenceInput(id="x", role="x", path="same.dmp")],
+                                  command="modules", options={})
+    protected_at_construction = out._protected_paths[0]
+
+    monkeypatch.chdir(dir_b)
+    out.set_command_result(CommandResult(
+        kind="modules", records=[], coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+    doc = json.loads(out.to_json())
+
+    assert out._evidence[0].path == protected_at_construction
+    assert doc["meta"]["evidence"][0]["path"] == str(dir_a / "same.dmp")
+    assert doc["meta"]["evidence"][0]["size_bytes"] == 4   # b"AAAA", not dir_b's b"BBBB"
+
+
 # ── V2Output write_json/write_csv refuse to overwrite ANY evidence path ──
 # (Phase C review finding: an evidence=-constructed instance previously
 # passed dump_path_abs=None into the safe-write layer, silently disabling

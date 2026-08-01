@@ -99,6 +99,61 @@ class EvidenceInput:
                 raise ValueError(f"EvidenceInput.{field_name} must be a non-empty string")
 
 
+def _normalize_evidence_inputs(evidence) -> "list[EvidenceInput]":
+    """The single place an `evidence=` argument is validated and
+    normalized -- shared by build_meta_v2() and V2Output so the two can
+    never drift apart on what counts as valid (a review round found
+    build_meta_v2(), a public __all__ export, silently accepting
+    everything V2Output's own constructor already rejected: duplicate
+    ids, bare dicts, dump_path_abs+evidence together).
+
+    Restricted to list/tuple specifically -- like coverage.py's own
+    _normalize_tuple, for the same reason: a generator would otherwise
+    be silently exhausted by the first of several validation passes this
+    function makes over it (non-empty check, per-entry type check,
+    id-uniqueness check, path normalization), leaving every later pass
+    operating on an already-empty sequence. That exact bug previously
+    produced meta.evidence=[] (violating the schema's minItems: 1) AND
+    an empty _protected_paths (silently disabling the overwrite guard)
+    from a single generator argument -- rejecting non-list/tuple up
+    front closes both at once rather than requiring three separate
+    "did I consume this already" fixes downstream.
+
+    Each returned EvidenceInput has its `path` already resolved to an
+    absolute path, exactly once, here -- the same normalized objects are
+    what both meta construction (_safe_evidence_entry) and overwrite
+    protection (V2Output._protected_paths) read from, so the two can
+    never disagree about which on-disk file a given entry refers to even
+    if the process's current working directory changes between
+    construction and serialization time (os.path.abspath is cwd-relative
+    and was previously being called fresh, a second time, at
+    serialization -- a caller-visible identity drift, not just a
+    cosmetic difference, if cwd changed in between).
+    """
+    if not isinstance(evidence, (list, tuple)):
+        raise TypeError(
+            f"evidence must be a list or tuple of EvidenceInput, got {type(evidence).__name__}")
+    if not evidence:
+        raise ValueError(
+            "evidence requires at least one EvidenceInput -- an empty list would produce "
+            "meta.evidence=[], which violates the v2 schema's minItems: 1")
+    normalized = []
+    for ei in evidence:
+        if not isinstance(ei, EvidenceInput):
+            raise TypeError(
+                f"evidence entries must be EvidenceInput instances, got {type(ei).__name__} -- "
+                f"a bare dict would otherwise reach build_meta_v2 and fail with an unrelated "
+                f"AttributeError instead of a clear message at the actual point of misuse")
+        normalized.append(EvidenceInput(id=ei.id, role=ei.role, path=os.path.abspath(ei.path)))
+    ids = [ei.id for ei in normalized]
+    if len(set(ids)) != len(ids):
+        raise ValueError(
+            f"evidence entries must have unique id values (role may repeat), got ids={ids!r} "
+            f"-- id is a stable identifier a future comparison record could reference, so a "
+            f"duplicate would make that reference ambiguous")
+    return normalized
+
+
 def _evidence_entry(dump_path_abs: str, dump_file_name: str, id_: str, role: str,
                      redact_paths: bool) -> dict:
     entry = {"id": id_, "role": role, "file_name": dump_file_name}
@@ -155,22 +210,25 @@ def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | 
     key added alongside (additionalProperties is not restricted on these
     objects) so the failure is visible rather than merely papered over.
     """
-    if evidence is None and dump_path_abs is None:
+    if (dump_path_abs is None) == (evidence is None):
+        # Both None -> nothing to build meta.evidence from. Both given ->
+        # genuinely ambiguous (a review round found this silently picking
+        # evidence and dropping dump_path_abs entirely, rather than
+        # raising) -- exactly one is required, always, for the same
+        # reason V2Output's own constructor enforces this (see there).
         raise TypeError(
-            "build_meta_v2() requires either dump_path_abs (single-dump commands) or "
-            "evidence (multi-dump commands) -- got neither")
-    if evidence is not None and not evidence:
-        # meta.evidence's own schema requires minItems: 1 -- an empty
-        # list here would build {"evidence": []}, a document that names
-        # SCHEMA_VERSION but can't actually pass the schema it claims to
-        # follow (the same failure mode this function's own docstring
-        # above describes for tool/execution/runtime, just for a caller
-        # error instead of a runtime exception). V2Output's own
-        # constructor already rejects this before ever reaching here;
-        # this is the same check for any other/future caller of
-        # build_meta_v2() directly.
-        raise ValueError(
-            "build_meta_v2(evidence=...) requires at least one entry, got an empty list")
+            "build_meta_v2() requires exactly one of dump_path_abs (single-dump commands) or "
+            "evidence (multi-dump commands), got "
+            + ("neither" if dump_path_abs is None else "both"))
+    if dump_path_abs is not None and not dump_file_name:
+        raise TypeError(
+            "build_meta_v2(dump_path_abs=...) also requires a non-empty dump_file_name")
+    if evidence is not None:
+        # _normalize_evidence_inputs is the single place this validation
+        # (non-empty, real EvidenceInput instances, unique ids, absolute
+        # paths) lives -- shared with V2Output so the two constructors
+        # can never accept a shape the other would reject.
+        evidence = _normalize_evidence_inputs(evidence)
 
     meta = {"schema_version": SCHEMA_VERSION}
 
