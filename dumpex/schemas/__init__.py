@@ -14,7 +14,10 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
     """Path to a packaged schema file, usable as a context manager (works
     whether the package is on disk or inside a zipped wheel). Defaults to
     the v1.1 (--hunt) schema for backward compatibility; pass
-    "dumpex-output-v2.0.schema.json" for the v2 (recon commands) schema."""
+    "dumpex-output-v2.1.schema.json" for the current v2 (recon commands +
+    comparison) schema, or "dumpex-output-v2.0.schema.json" for the frozen
+    historical v2.0 schema (pre-comparison, still valid for validating
+    output produced before schema_version 2.1)."""
     return resources.as_file(
         resources.files(__name__).joinpath(filename)
     )

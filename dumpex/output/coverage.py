@@ -337,7 +337,23 @@ _SOURCE_DISPLAY_NAMES = {
 
 
 def _display_name(source: str) -> str:
-    return _SOURCE_DISPLAY_NAMES.get(source, source)
+    """A bare source name (e.g. "modules") looks up directly. A dotted,
+    entity-namespaced name (e.g. "baseline.modules", introduced for a
+    future comparison command -- see EvaluationRequirement/
+    combine_coverage_reports below) renders as "baseline ModuleListStream"
+    by re-deriving the display name from the suffix after the LAST dot,
+    via rpartition rather than a blanket dot-to-space replacement -- an
+    unrecognized suffix (e.g. "baseline.custom_source") falls through to
+    the raw string unchanged rather than being guessed at. None of
+    today's six recon commands' source names contain a literal ".", so
+    this is a pure extension for them."""
+    direct = _SOURCE_DISPLAY_NAMES.get(source)
+    if direct is not None:
+        return direct
+    prefix, separator, leaf = source.rpartition(".")
+    if separator and prefix and leaf in _SOURCE_DISPLAY_NAMES:
+        return f"{prefix} {_SOURCE_DISPLAY_NAMES[leaf]}"
+    return source
 
 
 def _render_present_in_but_missing_from(name: str, limitation: "CoverageLimitation") -> str:
@@ -1181,7 +1197,8 @@ def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequi
 def build_coverage_report(
     sources: dict,
     *,
-    evaluation_sources: "tuple | None" = None,
+    evaluation_sources: "tuple | EvaluationRequirement | None" = None,
+    evaluation_groups: "list[EvaluationRequirement] | None" = None,
     completeness_checks: "list | None" = None,
 ) -> CoverageReport:
     """
@@ -1205,6 +1222,25 @@ def build_coverage_report(
         not_evaluated by itself -- evaluation was attempted and hit an
         error, which is partial territory, not never evaluated.
 
+      - `evaluation_groups`: a list of EvaluationRequirement, each
+        evaluated as its OWN independent group -- for a command whose
+        coverage depends on more than one such group at once (e.g. a
+        future comparison command checking "baseline.modules" and
+        "target.modules" separately: baseline missing alone must render
+        (and be coded) differently from both sides missing, which a
+        single merged group could not distinguish). Mutually exclusive
+        with `evaluation_sources` (`ValueError` if both are given). A
+        group whose `.sources` is non-empty and every member SOURCE_ABSENT
+        contributes its own limitation -- same automatic code selection
+        as the single-group case above, or the group's own
+        `all_absent_code`. If ANY group fires this way, the result is
+        NOT_EVALUATED with one limitation per absent group, in
+        `evaluation_groups` order, and `completeness_checks` is never
+        consulted -- exactly the single-group short-circuit above,
+        generalized to multiple groups rather than replacing it (a bare
+        `evaluation_sources` tuple/EvaluationRequirement still desugars
+        to this same code path as a one-element group list).
+
       - `completeness_checks`: an ORDERED list, each entry one of:
           * a bare source-name string, or a SourceRequirement -- the
             reducer derives a SOURCE_ABSENT/SOURCE_FAILED
@@ -1221,30 +1257,58 @@ def build_coverage_report(
         Final `limitations` preserves this exact order, so a command's
         existing reason ordering survives the migration unchanged.
 
-    Status: evaluation_sources (if non-empty) all SOURCE_ABSENT ->
-    not_evaluated. Else: any limitation -> partial. Else -> complete.
+    Status: evaluation_sources/evaluation_groups (if any group is
+    non-empty) all SOURCE_ABSENT -> not_evaluated. Else: any limitation ->
+    partial. Else -> complete.
     """
-    if isinstance(evaluation_sources, EvaluationRequirement):
-        eval_req = evaluation_sources
+    if evaluation_sources is not None and evaluation_groups is not None:
+        raise ValueError(
+            "build_coverage_report() accepts at most one of evaluation_sources (a single "
+            "group) or evaluation_groups (multiple independent groups), got both")
+
+    if evaluation_groups is not None:
+        if not isinstance(evaluation_groups, (list, tuple)):
+            raise TypeError(
+                f"evaluation_groups must be a list or tuple of EvaluationRequirement, "
+                f"got {type(evaluation_groups).__name__}")
+        groups = list(evaluation_groups)
+        for g in groups:
+            if not isinstance(g, EvaluationRequirement):
+                raise TypeError(
+                    f"evaluation_groups entries must be EvaluationRequirement instances, "
+                    f"got {type(g).__name__}")
+    elif isinstance(evaluation_sources, EvaluationRequirement):
+        groups = [evaluation_sources]
     else:
-        eval_req = EvaluationRequirement(sources=tuple(evaluation_sources) if evaluation_sources else ())
+        groups = [EvaluationRequirement(
+            sources=tuple(evaluation_sources) if evaluation_sources else ())]
+
     completeness_checks = list(completeness_checks) if completeness_checks else []
 
-    _validate_build_coverage_report_inputs(sources, eval_req.sources, completeness_checks)
+    referenced_sources = set()
+    for g in groups:
+        referenced_sources |= set(g.sources)
+    _validate_build_coverage_report_inputs(sources, referenced_sources, completeness_checks)
 
-    if eval_req.sources and all(
-        sources[name].state == SourceState.ABSENT for name in eval_req.sources
-    ):
-        code = eval_req.all_absent_code
+    absent_group_limitations = []
+    for g in groups:
+        if not g.sources:
+            continue
+        if not all(sources[name].state == SourceState.ABSENT for name in g.sources):
+            continue
+        code = g.all_absent_code
         if code is None:
-            code = (LimitationCode.SOURCE_ABSENT if len(eval_req.sources) == 1
+            code = (LimitationCode.SOURCE_ABSENT if len(g.sources) == 1
                      else LimitationCode.SOURCE_GROUP_ABSENT)
-        related = eval_req.sources if len(eval_req.sources) >= 2 else ()
+        related = g.sources if len(g.sources) >= 2 else ()
         group_limitation = CoverageLimitation(
-            code=code, source=eval_req.sources[0], scope="dump", related_sources=related)
+            code=code, source=g.sources[0], scope="dump", related_sources=related)
         _validate_limitation_against_sources(group_limitation, sources)
+        absent_group_limitations.append(group_limitation)
+
+    if absent_group_limitations:
         return CoverageReport(status=CoverageStatus.NOT_EVALUATED, sources=sources,
-                               limitations=[group_limitation])
+                               limitations=absent_group_limitations)
 
     limitations = []
     for check in completeness_checks:
@@ -1258,6 +1322,61 @@ def build_coverage_report(
             limitations.append(limitation)
 
     status = CoverageStatus.PARTIAL if limitations else CoverageStatus.COMPLETE
+    return CoverageReport(status=status, sources=sources, limitations=limitations)
+
+
+def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
+    """Pure cross-entity reduction -- e.g. a future comparison command's
+    `--diff-mode all`, which runs collect_module_diff/collect_thread_diff/
+    collect_memory_diff independently (each producing its own
+    build_coverage_report() call over its own namespaced sources, such as
+    "baseline.modules"/"target.modules") and needs one overall
+    CoverageReport summarizing all three entities at once. Not a
+    replacement for evaluation_groups above: evaluation_groups combines
+    multiple source GROUPS within a single build_coverage_report() call
+    (one entity, several related sources); this combines multiple already
+    -built REPORTS across independent entities (several entities, each
+    with its own report).
+
+    Merges every report's `sources` dict and concatenates `limitations`
+    in input order. Source keys must not collide across reports -- by
+    construction, per-entity source names are namespaced (e.g.
+    "baseline.modules" vs "target.modules", or "baseline.modules" vs
+    "baseline.thread_info"), so a genuine collision means two reports
+    describe the same source under the same name, and silently letting
+    one overwrite the other would drop that source's real state.
+
+    Status is the confirmed cross-entity rule: NOT_EVALUATED iff EVERY
+    report is NOT_EVALUATED (unanimous -- one entity that's merely weak
+    among otherwise-fine ones must not drag the whole comparison down to
+    "nothing was evaluated at all"); COMPLETE iff EVERY report is
+    COMPLETE; PARTIAL otherwise (covers both "some entities not_evaluated,
+    others fine" and "every entity evaluated but at least one is only
+    partial")."""
+    reports = list(reports)
+    if not reports:
+        raise ValueError("combine_coverage_reports() requires at least one CoverageReport")
+
+    sources = {}
+    limitations = []
+    for r in reports:
+        collision = set(sources) & set(r.sources)
+        if collision:
+            raise ValueError(
+                f"combine_coverage_reports() got overlapping source name(s) "
+                f"{sorted(collision)} across reports -- per-entity source names must be "
+                f"namespaced (e.g. 'baseline.modules' vs 'target.modules') so cross-entity "
+                f"aggregation never silently drops one side's SourceObservation")
+        sources.update(r.sources)
+        limitations.extend(r.limitations)
+
+    statuses = {r.status for r in reports}
+    if statuses == {CoverageStatus.NOT_EVALUATED}:
+        status = CoverageStatus.NOT_EVALUATED
+    elif statuses == {CoverageStatus.COMPLETE}:
+        status = CoverageStatus.COMPLETE
+    else:
+        status = CoverageStatus.PARTIAL
     return CoverageReport(status=status, sources=sources, limitations=limitations)
 
 

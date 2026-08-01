@@ -242,6 +242,131 @@ class PebRecord:
         }
 
 
+# ── Comparison records (Phase C) ────────────────────────────────────────
+# Three tagged-union members for a future comparison command's
+# result.data.records array (kind="comparison") -- entity_type is the
+# discriminator. Fields are grounded directly in dumpex.commands.diff's
+# existing (console-only) diff_modules/diff_threads/diff_memory business
+# logic, not invented: each change_type only carries the before/after
+# values that function's own set-difference logic actually produces for
+# it (e.g. an "added" module has no full_path_before -- there is no
+# baseline-side module to report one from). No command constructs these
+# yet; see dumpex/commands/comparison.py.
+
+MODULE_DIFF_ADDED   = "added"
+MODULE_DIFF_REMOVED = "removed"
+MODULE_DIFF_REBASED = "rebased"
+
+
+@dataclass
+class ModuleDiffRecord:
+    """One added/removed/rebased module between two dumps -- ported from
+    diff_modules' own module_name_only(m.name)-keyed added/removed/
+    rebased set logic."""
+    change_type:         str   # MODULE_DIFF_ADDED / _REMOVED / _REBASED
+    name:                 str   # module_name_only(m.name) -- the match key
+    full_path_before:     "str | None"
+    full_path_after:      "str | None"
+    base_address_before:  "str | None"
+    base_address_after:   "str | None"
+    entity_type: str = "module"
+
+    def to_dict(self) -> dict:
+        return {
+            "entity_type":         self.entity_type,
+            "change_type":         self.change_type,
+            "name":                self.name,
+            "full_path_before":    self.full_path_before,
+            "full_path_after":     self.full_path_after,
+            "base_address_before": self.base_address_before,
+            "base_address_after":  self.base_address_after,
+        }
+
+
+THREAD_DIFF_ADDED   = "added"
+THREAD_DIFF_REMOVED = "removed"
+
+
+@dataclass
+class ThreadDiffRecord:
+    """One added/removed thread between two dumps -- ported from
+    diff_threads' own TID-keyed added/removed set logic. diff_threads has
+    no "changed" category (a TID either exists in both, one, or the
+    other), so change_type is added/removed only. backing_module_after/
+    backing_module_context are populated for "added" only, resolved
+    against the TARGET's module list exactly like diff_threads' own
+    addr_to_module(sa, modules_b) call -- diff_threads never attempts
+    baseline-side module resolution for a removed thread, so there is no
+    backing_module_before field. backing_module_context reuses
+    ThreadRecord's own MODULE_CONTEXT_RESOLVED/_UNREGISTERED/_UNAVAILABLE
+    vocabulary (see above) so a comparison result distinguishes
+    "confirmed not backed by any module" (a real signal) from "target's
+    ModuleListStream itself wasn't available to check against" (not a
+    confirmed anomaly), the same way --threads already does."""
+    change_type:             str   # THREAD_DIFF_ADDED / THREAD_DIFF_REMOVED
+    tid:                      int
+    start_address_before:     "str | None"
+    start_address_after:      "str | None"
+    backing_module_after:     "str | None" = None
+    backing_module_context:   "str | None" = None
+    entity_type: str = "thread"
+
+    def to_dict(self) -> dict:
+        return {
+            "entity_type":            self.entity_type,
+            "change_type":            self.change_type,
+            "tid":                    self.tid,
+            "start_address_before":   self.start_address_before,
+            "start_address_after":    self.start_address_after,
+            "backing_module_after":   self.backing_module_after,
+            "backing_module_context": self.backing_module_context,
+        }
+
+
+MEMORY_DIFF_ADDED              = "added"
+MEMORY_DIFF_REMOVED            = "removed"
+MEMORY_DIFF_PROTECTION_CHANGED = "protection_changed"
+
+
+@dataclass
+class MemoryDiffRecord:
+    """One added/removed/protection-changed memory region between two
+    dumps -- ported from diff_memory's own BaseAddress-keyed added/
+    removed/changed set logic. suspicious_before/_after reuse
+    MemoryRegionRecord.suspicious's own precedent (True iff `protect` is
+    one of dumpex.rules_pkg.loader.SUSPICIOUS_PROTS) rather than
+    diff_memory's own 4-tier rwx/exec/notable/noise console
+    categorization, which stays a future console-renderer concern -- the
+    same line MemoryRegionRecord.suspicious already draws between
+    structured data and presentation."""
+    change_type:         str   # MEMORY_DIFF_ADDED / _REMOVED / _PROTECTION_CHANGED
+    base_address:         str   # BaseAddress -- the match key
+    size_before:           "int | None"
+    size_after:            "int | None"
+    protect_before:         "str | None"
+    protect_after:           "str | None"
+    type_before:              "str | None"
+    type_after:                "str | None"
+    suspicious_before:          "bool | None"
+    suspicious_after:            "bool | None"
+    entity_type: str = "memory_region"
+
+    def to_dict(self) -> dict:
+        return {
+            "entity_type":       self.entity_type,
+            "change_type":       self.change_type,
+            "base_address":      self.base_address,
+            "size_before":       self.size_before,
+            "size_after":        self.size_after,
+            "protect_before":    self.protect_before,
+            "protect_after":     self.protect_after,
+            "type_before":       self.type_before,
+            "type_after":        self.type_after,
+            "suspicious_before": self.suspicious_before,
+            "suspicious_after":  self.suspicious_after,
+        }
+
+
 SEVERITY_WARNING = "warning"
 SEVERITY_ERROR   = "error"
 

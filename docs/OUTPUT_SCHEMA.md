@@ -29,8 +29,18 @@ dumpex currently has two coexisting JSON contracts, not one:
 | Commands | Contract | Schema file |
 |---|---|---|
 | `--hunt` | v1.1 | [`dumpex-output-v1.1.schema.json`](../dumpex/schemas/dumpex-output-v1.1.schema.json) |
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb` | v2.0 | [`dumpex-output-v2.0.schema.json`](../dumpex/schemas/dumpex-output-v2.0.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb` | v2.1 (current) | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) |
+| — (historical) | v2.0 | [`dumpex-output-v2.0.schema.json`](../dumpex/schemas/dumpex-output-v2.0.schema.json) — frozen, kept only to validate output produced before `schema_version 2.1`; no command emits this anymore |
 | `--diff`, `--report`, `--extract`, `--strings` | none yet | — `--json`/`--csv` are rejected up front (before the dump is opened) for these modes |
+
+`schema_version` moved from `"2.0"` to `"2.1"` when `result.kind` gained a
+`"comparison"` value (see "v2 structured output" below) — a new value on an
+existing closed enum always bumps the version per this document's own
+versioning policy, even though the six recon commands' own output is
+otherwise unaffected. `dumpex-output-v2.0.schema.json` stays installed and
+importable via `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")`
+for validating output captured before this change; it is not deleted or
+overwritten, following the same precedent v1.0→v1.1 set.
 
 This split exists because v1.1's root schema requires a top-level `hunt`
 object (`"required": ["meta", "hunt"]`) — the six recon commands never
@@ -251,7 +261,7 @@ root:
 ```json
 {
   "meta": {
-    "schema_version": "2.0",
+    "schema_version": "2.1",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -328,7 +338,7 @@ consumer that wants to act on them without string-matching:
   code is added.
 
 Both fields are optional (a producer that doesn't populate them is still
-a schema-valid document) and additive to `schema_version: "2.0"` — no
+a schema-valid document) and additive to `schema_version: "2.1"` — no
 version bump, per the versioning rule above.
 
 `result.data.records` is always an array of one canonical record type per
@@ -381,6 +391,34 @@ instead of a bare dict.
 output yet. Passing `--json`/`--csv` with one of them is rejected before
 the dump is opened (`parser.error`, exit code `2`), not after a full run
 completes with nothing to write.
+
+### `result.kind == "comparison"` (infrastructure only -- not yet wired to any command)
+
+`schema_version 2.1` adds a `"comparison"` value to `result.kind` and three
+new tagged-union record types for it, grounded in `--diff`'s own (still
+console-only) `diff_modules`/`diff_threads`/`diff_memory` business logic:
+`moduleDiffRecord`, `threadDiffRecord`, `memoryDiffRecord` --
+`entity_type` (`"module"` / `"thread"` / `"memory_region"`) is the
+discriminator a mixed `result.data.records` array uses to tell them apart.
+Each carries `change_type` (`"added"`/`"removed"`/`"rebased"` for modules,
+`"added"`/`"removed"` for threads, `"added"`/`"removed"`/
+`"protection_changed"` for memory regions) plus before/after field pairs --
+only the pair a given `change_type` actually produces is non-null (e.g. an
+`"added"` module has no `full_path_before`, since `diff_modules` never had
+a baseline-side module to report one from). See
+[`dumpex/output/records.py`](../dumpex/output/records.py)'s
+`ModuleDiffRecord`/`ThreadDiffRecord`/`MemoryDiffRecord` for the exact
+field lists, and `dumpex/commands/comparison.py` for the pure
+`collect_module_diff`/`collect_thread_diff`/`collect_memory_diff`/
+`collect_comparison()` functions that build them.
+
+This is capability only: no CLI flag produces `kind: "comparison"` output
+today, `--diff` still only prints to the console, and `--json`/`--csv` are
+still rejected for it exactly as before. `coverage.sources` for a
+comparison result uses dotted, entity-namespaced source names (e.g.
+`"baseline.modules"`/`"target.modules"`) rather than the bare names the
+six single-dump commands use, so a comparison's baseline and target sides
+never collide as coverage facts about the same-named source.
 
 ## Reproducing a run
 

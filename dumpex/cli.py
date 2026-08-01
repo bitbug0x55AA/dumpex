@@ -26,7 +26,7 @@ from dumpex.hunt              import cmd_hunt
 # ── v2 structured-output routing ────────────────────────────────────────
 # --hunt keeps StructuredOutput/dumpex-output-v1.1.schema.json unchanged.
 # These six recon commands are migrated onto the v2 envelope (see
-# dumpex/output/ and dumpex-output-v2.0.schema.json); --diff/--report/
+# dumpex/output/ and dumpex-output-v2.1.schema.json); --diff/--report/
 # --extract/--strings don't produce structured output yet at all (their
 # own canonical records are a later migration) -- requesting --json/--csv
 # with one of them is now rejected up front (see the pre-flight check in

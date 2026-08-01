@@ -9,6 +9,9 @@ from dumpex.output.records import (
     MemoryRegionRecord, ModuleRecord, ThreadRecord, SysInfoRecord, PidRecord, PebRecord,
     Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address, Artifact,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
+    ModuleDiffRecord, MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF_REBASED,
+    ThreadDiffRecord, THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED,
+    MemoryDiffRecord, MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED,
 )
 
 
@@ -268,3 +271,97 @@ def test_artifact_rejects_empty_sha256():
 def test_artifact_rejects_non_string_description():
     with pytest.raises(ValueError, match="description"):
         Artifact(id="a1", kind="extracted_region", path="x.bin", description=123)
+
+
+# ── ModuleDiffRecord / ThreadDiffRecord / MemoryDiffRecord (Phase C, PR2) ─
+# Ported from dumpex.commands.diff's diff_modules/diff_threads/
+# diff_memory -- entity_type is the tagged-union discriminator, present on
+# every record regardless of change_type.
+
+def test_module_diff_record_to_dict_shape_and_entity_type():
+    rec = ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="a.dll",
+                            full_path_before=None, full_path_after="C:\\a.dll",
+                            base_address_before=None, base_address_after=hex_address(0x1000))
+    d = rec.to_dict()
+    assert d["entity_type"] == "module"
+    assert d["change_type"] == "added"
+    assert d["name"] == "a.dll"
+    assert d["full_path_before"] is None
+    assert d["base_address_after"] == hex_address(0x1000)
+
+
+def test_module_diff_record_added_has_no_before_values():
+    rec = ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="a.dll",
+                            full_path_before=None, full_path_after="C:\\a.dll",
+                            base_address_before=None, base_address_after=hex_address(0x1000))
+    assert rec.full_path_before is None and rec.base_address_before is None
+
+
+def test_module_diff_record_removed_has_no_after_values():
+    rec = ModuleDiffRecord(change_type=MODULE_DIFF_REMOVED, name="a.dll",
+                            full_path_before="C:\\a.dll", full_path_after=None,
+                            base_address_before=hex_address(0x1000), base_address_after=None)
+    assert rec.full_path_after is None and rec.base_address_after is None
+
+
+def test_module_diff_record_rebased_has_both_before_and_after():
+    rec = ModuleDiffRecord(change_type=MODULE_DIFF_REBASED, name="a.dll",
+                            full_path_before="C:\\a.dll", full_path_after="C:\\a.dll",
+                            base_address_before=hex_address(0x1000),
+                            base_address_after=hex_address(0x9000))
+    assert rec.base_address_before != rec.base_address_after
+    assert rec.full_path_before is not None and rec.full_path_after is not None
+
+
+def test_thread_diff_record_to_dict_shape_and_entity_type():
+    rec = ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=4,
+                            start_address_before=None, start_address_after=hex_address(0x2000),
+                            backing_module_after="ntdll.dll",
+                            backing_module_context=MODULE_CONTEXT_RESOLVED)
+    d = rec.to_dict()
+    assert d["entity_type"] == "thread"
+    assert d["change_type"] == "added"
+    assert d["tid"] == 4
+    assert d["backing_module_after"] == "ntdll.dll"
+    assert d["backing_module_context"] == "resolved"
+
+
+def test_thread_diff_record_removed_has_no_after_or_backing_module_fields():
+    rec = ThreadDiffRecord(change_type=THREAD_DIFF_REMOVED, tid=4,
+                            start_address_before=hex_address(0x2000), start_address_after=None)
+    assert rec.start_address_after is None
+    assert rec.backing_module_after is None
+    assert rec.backing_module_context is None
+
+
+def test_memory_diff_record_to_dict_shape_and_entity_type():
+    rec = MemoryDiffRecord(change_type=MEMORY_DIFF_PROTECTION_CHANGED, base_address=hex_address(0x1000),
+                            size_before=0x1000, size_after=0x1000,
+                            protect_before="PAGE_READWRITE", protect_after="PAGE_EXECUTE_READWRITE",
+                            type_before="MEM_PRIVATE", type_after="MEM_PRIVATE",
+                            suspicious_before=False, suspicious_after=True)
+    d = rec.to_dict()
+    assert d["entity_type"] == "memory_region"
+    assert d["change_type"] == "protection_changed"
+    assert d["suspicious_before"] is False
+    assert d["suspicious_after"] is True
+
+
+def test_memory_diff_record_added_has_no_before_values():
+    rec = MemoryDiffRecord(change_type=MEMORY_DIFF_ADDED, base_address=hex_address(0x1000),
+                            size_before=None, size_after=0x1000,
+                            protect_before=None, protect_after="PAGE_READWRITE",
+                            type_before=None, type_after="MEM_PRIVATE",
+                            suspicious_before=None, suspicious_after=False)
+    assert rec.size_before is None and rec.protect_before is None
+    assert rec.type_before is None and rec.suspicious_before is None
+
+
+def test_memory_diff_record_removed_has_no_after_values():
+    rec = MemoryDiffRecord(change_type=MEMORY_DIFF_REMOVED, base_address=hex_address(0x1000),
+                            size_before=0x1000, size_after=None,
+                            protect_before="PAGE_READWRITE", protect_after=None,
+                            type_before="MEM_PRIVATE", type_after=None,
+                            suspicious_before=False, suspicious_after=None)
+    assert rec.size_after is None and rec.protect_after is None
+    assert rec.type_after is None and rec.suspicious_after is None

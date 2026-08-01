@@ -21,13 +21,14 @@ import pytest
 
 from dumpex.output.coverage import (
     SourceObservation, observe_source, CoverageLimitation, render_limitation,
-    CoverageReport, SourceRequirement, EvaluationRequirement, build_coverage_report, exit_code_for,
+    CoverageReport, SourceRequirement, EvaluationRequirement, build_coverage_report,
+    combine_coverage_reports, exit_code_for,
     SourceState, CoverageStatus, LimitationCode,
     SOURCE_ABSENT, SOURCE_PRESENT_EMPTY, SOURCE_PRESENT, SOURCE_FAILED,
     LIMITATION_SOURCE_ABSENT, LIMITATION_SOURCE_FAILED, LIMITATION_SOURCE_KEY_MISMATCH,
     COVERAGE_COMPLETE, COVERAGE_PARTIAL, COVERAGE_NOT_EVALUATED,
     EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED,
-    _FIXED_SOURCE_CODES, _CODE_SPECS, _ABSENT_CAPABLE_CODES,
+    _FIXED_SOURCE_CODES, _CODE_SPECS, _ABSENT_CAPABLE_CODES, _display_name,
 )
 
 # _FIXED_SOURCE_CODES now also covers caller_buildable/group_capable-only
@@ -1362,3 +1363,188 @@ def test_coverage_report_normalizes_bare_string_status():
     report = CoverageReport(status="complete")
     assert report.status == CoverageStatus.COMPLETE
     assert isinstance(report.status, CoverageStatus)
+
+
+# ── _display_name: dotted entity-namespaced source names (Phase C, PR2) ──
+# Introduced for a future comparison command's "baseline.modules"/
+# "target.modules"-style source names -- none of today's six recon
+# commands' source names contain a literal ".", so this is a pure
+# extension for them.
+
+def test_display_name_bare_source_unchanged():
+    assert _display_name("modules") == "ModuleListStream"
+
+
+def test_display_name_bare_unknown_source_falls_back_to_raw_string():
+    assert _display_name("totally_unknown") == "totally_unknown"
+
+
+def test_display_name_dotted_known_suffix_renders_prefixed():
+    assert _display_name("baseline.modules") == "baseline ModuleListStream"
+    assert _display_name("target.thread_info") == "target ThreadInfoListStream"
+
+
+def test_display_name_dotted_unknown_suffix_falls_back_to_raw_string():
+    # Only a RECOGNIZED suffix is re-derived -- an unknown one is never
+    # guessed at (no blanket dot-to-space replacement).
+    assert _display_name("baseline.custom_source") == "baseline.custom_source"
+
+
+# ── build_coverage_report: evaluation_groups (Phase C, PR2) ─────────────
+# Multiple INDEPENDENT single-source groups, each evaluated on its own --
+# the comparison-command shape, where "baseline.modules" being entirely
+# absent must make the whole entity not_evaluated even if
+# "target.modules" is present, with its OWN distinguishable limitation
+# (not merged into one group-level fact naming only one side).
+
+def test_evaluation_groups_rejects_evaluation_sources_together():
+    obs = SourceObservation(name="a", state=SOURCE_ABSENT)
+    with pytest.raises(ValueError, match="at most one"):
+        build_coverage_report({"a": obs}, evaluation_sources=("a",),
+                               evaluation_groups=[EvaluationRequirement(("a",))])
+
+
+def test_evaluation_groups_rejects_non_list_tuple():
+    obs = SourceObservation(name="a", state=SOURCE_ABSENT)
+    with pytest.raises(TypeError, match="list or tuple"):
+        build_coverage_report({"a": obs}, evaluation_groups=EvaluationRequirement(("a",)))
+
+
+def test_evaluation_groups_rejects_non_evaluation_requirement_entries():
+    obs = SourceObservation(name="a", state=SOURCE_ABSENT)
+    with pytest.raises(TypeError, match="EvaluationRequirement"):
+        build_coverage_report({"a": obs}, evaluation_groups=[("a",)])
+
+
+def test_evaluation_groups_one_group_absent_other_present_is_not_evaluated_with_one_limitation():
+    baseline_absent = SourceObservation(name="baseline.modules", state=SOURCE_ABSENT)
+    target_present = SourceObservation(name="target.modules", state=SOURCE_PRESENT, record_count=3)
+    report = build_coverage_report(
+        {"baseline.modules": baseline_absent, "target.modules": target_present},
+        evaluation_groups=[EvaluationRequirement(("baseline.modules",)),
+                            EvaluationRequirement(("target.modules",))])
+    assert report.status == COVERAGE_NOT_EVALUATED
+    assert len(report.limitations) == 1
+    assert report.limitations[0].source == "baseline.modules"
+    assert report.reasons == ["baseline ModuleListStream not present in this dump"]
+
+
+def test_evaluation_groups_both_absent_produces_two_distinct_limitations():
+    baseline_absent = SourceObservation(name="baseline.modules", state=SOURCE_ABSENT)
+    target_absent = SourceObservation(name="target.modules", state=SOURCE_ABSENT)
+    report = build_coverage_report(
+        {"baseline.modules": baseline_absent, "target.modules": target_absent},
+        evaluation_groups=[EvaluationRequirement(("baseline.modules",)),
+                            EvaluationRequirement(("target.modules",))])
+    assert report.status == COVERAGE_NOT_EVALUATED
+    assert [l.source for l in report.limitations] == ["baseline.modules", "target.modules"]
+    assert report.reasons == [
+        "baseline ModuleListStream not present in this dump",
+        "target ModuleListStream not present in this dump",
+    ]
+
+
+def test_evaluation_groups_neither_absent_is_evaluated_normally():
+    baseline_present = SourceObservation(name="baseline.modules", state=SOURCE_PRESENT_EMPTY,
+                                          record_count=0)
+    target_present = SourceObservation(name="target.modules", state=SOURCE_PRESENT, record_count=5)
+    report = build_coverage_report(
+        {"baseline.modules": baseline_present, "target.modules": target_present},
+        evaluation_groups=[EvaluationRequirement(("baseline.modules",)),
+                            EvaluationRequirement(("target.modules",))])
+    assert report.status == COVERAGE_COMPLETE
+    assert report.limitations == []
+
+
+def test_evaluation_groups_empty_list_is_evaluated_normally():
+    obs = SourceObservation(name="a", state=SOURCE_ABSENT)
+    report = build_coverage_report({"a": obs}, evaluation_groups=[])
+    assert report.status == COVERAGE_COMPLETE
+    assert report.limitations == []
+
+
+@pytest.mark.parametrize("state,record_count", [
+    (SOURCE_ABSENT, None), (SOURCE_PRESENT_EMPTY, 0), (SOURCE_PRESENT, 3),
+])
+def test_evaluation_groups_single_group_matches_equivalent_evaluation_sources_call(
+        state, record_count):
+    # Backward-compat proof: evaluation_groups=[single group] must desugar
+    # to the IDENTICAL CoverageReport a bare evaluation_sources call
+    # produces, across every source state -- the multi-group
+    # generalization must not change today's single-group behavior at all.
+    obs = SourceObservation(name="memory_info", state=state, record_count=record_count)
+    via_sources = build_coverage_report({"memory_info": obs}, evaluation_sources=("memory_info",),
+                                         completeness_checks=["memory_info"])
+    via_groups = build_coverage_report(
+        {"memory_info": obs}, evaluation_groups=[EvaluationRequirement(("memory_info",))],
+        completeness_checks=["memory_info"])
+    assert via_sources.status == via_groups.status
+    assert via_sources.reasons == via_groups.reasons
+    assert ([l.to_dict() for l in via_sources.limitations]
+            == [l.to_dict() for l in via_groups.limitations])
+
+
+# ── combine_coverage_reports (Phase C, PR2) ──────────────────────────────
+# Pure cross-entity reduction, e.g. a future comparison command's
+# --diff-mode all combining collect_module_diff/collect_thread_diff/
+# collect_memory_diff's three independent CoverageReports into one.
+
+def _report(status, source_name="x", record_count=1):
+    if status == COVERAGE_NOT_EVALUATED:
+        obs = SourceObservation(name=source_name, state=SOURCE_ABSENT)
+        return build_coverage_report({source_name: obs}, evaluation_sources=(source_name,))
+    obs = SourceObservation(name=source_name, state=SOURCE_PRESENT, record_count=record_count)
+    if status == COVERAGE_COMPLETE:
+        return build_coverage_report({source_name: obs})
+    # PARTIAL: the named source is present, but another required source
+    # (this report's own, non-shared "other" companion) is absent.
+    absent_name = source_name + "_other"
+    absent_obs = SourceObservation(name=absent_name, state=SOURCE_ABSENT)
+    return build_coverage_report(
+        {source_name: obs, absent_name: absent_obs}, completeness_checks=[absent_name])
+
+
+def test_combine_coverage_reports_rejects_empty_list():
+    with pytest.raises(ValueError, match="at least one"):
+        combine_coverage_reports([])
+
+
+def test_combine_coverage_reports_unanimous_not_evaluated_is_not_evaluated():
+    combined = combine_coverage_reports([
+        _report(COVERAGE_NOT_EVALUATED, "a"), _report(COVERAGE_NOT_EVALUATED, "b")])
+    assert combined.status == COVERAGE_NOT_EVALUATED
+
+
+def test_combine_coverage_reports_unanimous_complete_is_complete():
+    combined = combine_coverage_reports([
+        _report(COVERAGE_COMPLETE, "a"), _report(COVERAGE_COMPLETE, "b")])
+    assert combined.status == COVERAGE_COMPLETE
+
+
+def test_combine_coverage_reports_one_not_evaluated_among_complete_is_partial_not_not_evaluated():
+    # The confirmed cross-entity rule: one weak entity among otherwise-
+    # fine ones must not drag the whole result down to not_evaluated --
+    # unanimity is required for not_evaluated.
+    combined = combine_coverage_reports([
+        _report(COVERAGE_NOT_EVALUATED, "a"), _report(COVERAGE_COMPLETE, "b")])
+    assert combined.status == COVERAGE_PARTIAL
+
+
+def test_combine_coverage_reports_mixed_partial_and_complete_is_partial():
+    combined = combine_coverage_reports([
+        _report(COVERAGE_PARTIAL, "a"), _report(COVERAGE_COMPLETE, "b")])
+    assert combined.status == COVERAGE_PARTIAL
+
+
+def test_combine_coverage_reports_merges_sources_and_concatenates_limitations_in_order():
+    combined = combine_coverage_reports([
+        _report(COVERAGE_NOT_EVALUATED, "a"), _report(COVERAGE_NOT_EVALUATED, "b")])
+    assert set(combined.sources) == {"a", "b"}
+    assert [l.source for l in combined.limitations] == ["a", "b"]
+
+
+def test_combine_coverage_reports_rejects_overlapping_source_names():
+    r1 = _report(COVERAGE_COMPLETE, "shared")
+    r2 = _report(COVERAGE_COMPLETE, "shared")
+    with pytest.raises(ValueError, match="overlapping"):
+        combine_coverage_reports([r1, r2])

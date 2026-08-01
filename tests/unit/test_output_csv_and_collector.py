@@ -13,12 +13,14 @@ import json
 
 import pytest
 
-from dumpex.output.envelope import Result
-from dumpex.output.csv_export import records_to_rows
+from dumpex.output.envelope import Result, EvidenceInput
+from dumpex.output.csv_export import records_to_rows, build_tables
 from dumpex.output.collector import V2Output
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport, COVERAGE_COMPLETE
 from dumpex.output.records import Diagnostic, Artifact, SEVERITY_WARNING, SEVERITY_ERROR
+from tests.fixtures.fakes import Module, FakeStream, FakeMF
+from dumpex.commands.comparison import collect_comparison
 
 
 def test_records_to_rows_returns_the_records_list_verbatim():
@@ -127,6 +129,57 @@ def test_peb_environment_variables_broken_out_into_own_table(tmp_path):
     records_file = next(f for f in out_dir.glob("*.csv") if f.name.endswith("_records.csv"))
     rows = list(csv.DictReader(io.StringIO(records_file.read_text(encoding="utf-8"))))
     assert "environment_variables" not in rows[0]   # broken out, not duplicated in main row
+
+
+# ── comparison-kind CSV table splitting (Phase C, PR2) ───────────────────
+# A "comparison" result's records are a tagged union (module/thread/
+# memory_region), so the generic "records" table is skipped entirely --
+# see csv_export.build_tables' own kind == "comparison" branch.
+
+def _comparison_result():
+    mf_baseline = FakeMF()
+    mf_baseline.modules = FakeStream([Module(0x1000, 0x1000, r"C:\a.dll")], "modules")
+    mf_target = FakeMF()
+    mf_target.modules = FakeStream([Module(0x2000, 0x1000, r"C:\b.dll")], "modules")
+    return collect_comparison(mf_baseline, mf_target, mode="modules")
+
+
+def test_build_tables_comparison_kind_has_no_generic_records_table():
+    result = Result(kind="comparison", execution_status="completed", coverage_status="complete",
+                     records=[r.to_dict() for r in _comparison_result().records])
+    tables = build_tables(result)
+    assert "records" not in tables
+    assert set(tables) == {"summary", "module_diffs", "thread_diffs", "memory_diffs"}
+
+
+def test_build_tables_comparison_kind_splits_by_entity_type():
+    result = Result(kind="comparison", execution_status="completed", coverage_status="complete",
+                     records=[r.to_dict() for r in _comparison_result().records])
+    tables = build_tables(result)
+    assert len(tables["module_diffs"]) == 2   # a.dll removed from baseline, b.dll added in target
+    assert tables["thread_diffs"] == []
+    assert tables["memory_diffs"] == []
+
+
+def test_write_csv_directory_mode_comparison_writes_per_entity_files_not_records(tmp_path):
+    dump_a = tmp_path / "a.dmp"; dump_a.write_bytes(b"a")
+    dump_b = tmp_path / "b.dmp"; dump_b.write_bytes(b"b")
+    out_dir = tmp_path / "out"
+    out = V2Output.from_evidence(
+        [EvidenceInput(id="baseline", role="baseline", path=str(dump_a)),
+         EvidenceInput(id="target", role="target", path=str(dump_b))],
+        command="comparison", options={})
+    out.set_command_result(_comparison_result())
+
+    out.write_csv(str(out_dir) + "/", cmd_label="comparison")
+
+    csv_files = {f.name for f in out_dir.glob("*.csv")}
+    assert any("module_diffs" in f for f in csv_files)
+    assert not any(f.endswith("_records.csv") for f in csv_files)
+    module_file = next(f for f in out_dir.glob("*.csv") if "module_diffs" in f.name)
+    rows = list(csv.DictReader(io.StringIO(module_file.read_text(encoding="utf-8"))))
+    assert len(rows) == 2
+    assert {row["change_type"] for row in rows} == {"added", "removed"}
 
 
 # ── set_command_result: must not drop execution_status/diagnostics/

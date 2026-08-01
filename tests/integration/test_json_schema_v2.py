@@ -1,11 +1,16 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.0.schema.json for each of the six
+dumpex/schemas/dumpex-output-v2.1.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.1") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
 hand-written fixture JSON, so a shape change in any of them is caught
-here.
+here. dumpex-output-v2.0.schema.json (the frozen historical shape, pre-
+comparison) is also exercised directly (see the "schema version
+history" section below) to prove it still validates a genuine 2.0-era
+document and still rejects a "comparison" kind it was never updated to
+know about.
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -41,8 +46,20 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
+    with schema_path("dumpex-output-v2.1.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_0():
     with schema_path("dumpex-output-v2.0.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_0(schema_v2_0):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_0)
+    return jsonschema.Draft202012Validator(schema_v2_0)
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +76,34 @@ def source_observation_schema(schema):
 @pytest.fixture(scope="module")
 def coverage_limitation_schema(schema):
     return schema["$defs"]["coverageLimitation"]
+
+
+def _fragment_validator(schema, def_name):
+    # Wraps a single $defs entry as its own root document (a $ref sibling
+    # to the same $defs map) rather than validating the extracted dict
+    # directly -- moduleDiffRecord/threadDiffRecord/memoryDiffRecord all
+    # contain "#/$defs/hexAddress" $refs, which only resolve when $defs is
+    # still reachable from the document actually being validated. This is
+    # unlike sourceObservation/coverageLimitation above, whose extracted
+    # fragments happen to contain no $ref at all.
+    wrapper = {"$schema": schema["$schema"], "$ref": f"#/$defs/{def_name}", "$defs": schema["$defs"]}
+    jsonschema.Draft202012Validator.check_schema(wrapper)
+    return jsonschema.Draft202012Validator(wrapper)
+
+
+@pytest.fixture(scope="module")
+def module_diff_record_schema(schema):
+    return _fragment_validator(schema, "moduleDiffRecord")
+
+
+@pytest.fixture(scope="module")
+def thread_diff_record_schema(schema):
+    return _fragment_validator(schema, "threadDiffRecord")
+
+
+@pytest.fixture(scope="module")
+def memory_diff_record_schema(schema):
+    return _fragment_validator(schema, "memoryDiffRecord")
 
 
 def _make_dump_file() -> str:
@@ -231,7 +276,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.0",
+            "schema_version": "2.1",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -578,11 +623,12 @@ def test_sanity_the_minimal_valid_doc_itself_validates(validator):
 
 
 # ── multi-evidence V2Output.from_evidence() (Phase C, PR1) ────────────────
-# kind="modules" here deliberately -- "comparison" is not yet a
-# schema-registered result.kind (that's PR2), so a document built with
-# it would validate for the wrong reason (or not at all). The point of
-# this test is proving the EVIDENCE ARRAY produced by from_evidence()
-# satisfies the real schema end to end, not exercising a not-yet-real kind.
+# kind="modules" here deliberately, even though "comparison" is now a
+# schema-registered result.kind (PR2) -- the point of this specific test
+# is proving the EVIDENCE ARRAY produced by from_evidence() satisfies the
+# real schema end to end, independent of which kind is being reported.
+# See the "kind == comparison" section below for comparisonRecord's own
+# schema coverage.
 
 def test_v2output_from_evidence_full_envelope_validates_against_schema(validator):
     from dumpex.output.envelope import EvidenceInput
@@ -605,3 +651,126 @@ def test_v2output_from_evidence_full_envelope_validates_against_schema(validator
     finally:
         os.remove(dump_a)
         os.remove(dump_b)
+
+
+# ── result.kind == "comparison" (Phase C, PR2) ────────────────────────────
+
+def test_comparison_full_envelope_with_all_three_entity_types_validates(validator):
+    from dumpex.output.envelope import EvidenceInput
+    from dumpex.commands.comparison import collect_comparison
+
+    mf_baseline = FakeMF()
+    mf_baseline.modules = FakeStream([Module(0x1000, 0x1000, r"C:\a.dll")], "modules")
+    mf_baseline.thread_info = FakeStream([ThreadInfo(1, 0x1000)], "infos")
+    mf_baseline.memory_info = FakeStream(
+        [Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")], "infos")
+
+    mf_target = FakeMF()
+    mf_target.modules = FakeStream([Module(0x2000, 0x1000, r"C:\b.dll")], "modules")
+    mf_target.thread_info = FakeStream([ThreadInfo(2, 0x2000)], "infos")
+    mf_target.memory_info = FakeStream(
+        [Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")], "infos")
+
+    result = collect_comparison(mf_baseline, mf_target, mode="all")
+    assert result.coverage.status == "complete"
+
+    dump_a = _make_dump_file()
+    dump_b = _make_dump_file()
+    try:
+        out = V2Output.from_evidence([
+            EvidenceInput(id="baseline", role="baseline", path=dump_a),
+            EvidenceInput(id="target", role="target", path=dump_b),
+        ], command="comparison", options={"verbose": False})
+        out.set_command_result(result)
+        doc = json.loads(out.to_json())
+        errors = sorted(validator.iter_errors(doc), key=str)
+        assert not errors, "\n".join(str(e) for e in errors)
+        entity_types = {r["entity_type"] for r in doc["result"]["data"]["records"]}
+        assert entity_types == {"module", "thread", "memory_region"}
+        assert doc["result"]["coverage"]["sources"]["baseline.modules"]["state"] == "present"
+    finally:
+        os.remove(dump_a)
+        os.remove(dump_b)
+
+
+def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):
+    # dumpex-output-v2.0.schema.json predates "comparison" entirely --
+    # proves the frozen historical schema was never silently updated to
+    # accept it (the whole point of keeping it as its own file).
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.0"
+    doc["result"]["kind"] = "comparison"
+    doc["result"]["data"]["records"] = []
+    assert not validator_v2_0.is_valid(doc)
+
+
+def test_a_genuine_v2_0_era_document_still_validates_against_the_v2_0_schema(validator_v2_0):
+    # The frozen historical schema must keep validating output produced
+    # before schema_version 2.1 existed -- freezing it is only useful if
+    # it still actually works for that purpose.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.0"
+    assert validator_v2_0.is_valid(doc)
+
+
+def test_module_diff_record_added_with_a_before_value_rejected(module_diff_record_schema):
+    from dumpex.output.records import ModuleDiffRecord, MODULE_DIFF_ADDED
+    doc = ModuleDiffRecord(change_type=MODULE_DIFF_ADDED, name="a.dll",
+                            full_path_before=None, full_path_after="C:\\a.dll",
+                            base_address_before=None,
+                            base_address_after="0x0000000000001000").to_dict()
+    doc["full_path_before"] = "C:\\a.dll"   # added must never carry a baseline-side value
+    assert not module_diff_record_schema.is_valid(doc)
+
+
+def test_module_diff_record_rebased_valid_shape_accepted(module_diff_record_schema):
+    from dumpex.output.records import ModuleDiffRecord, MODULE_DIFF_REBASED
+    doc = ModuleDiffRecord(change_type=MODULE_DIFF_REBASED, name="a.dll",
+                            full_path_before="C:\\a.dll", full_path_after="C:\\a.dll",
+                            base_address_before="0x0000000000001000",
+                            base_address_after="0x0000000000009000").to_dict()
+    assert module_diff_record_schema.is_valid(doc)
+
+
+def test_thread_diff_record_removed_with_a_backing_module_rejected(thread_diff_record_schema):
+    from dumpex.output.records import ThreadDiffRecord, THREAD_DIFF_REMOVED
+    doc = ThreadDiffRecord(change_type=THREAD_DIFF_REMOVED, tid=1,
+                            start_address_before="0x0000000000001000",
+                            start_address_after=None).to_dict()
+    doc["backing_module_after"] = "ntdll.dll"   # diff_threads never resolves this for removed
+    assert not thread_diff_record_schema.is_valid(doc)
+
+
+def test_thread_diff_record_added_valid_shape_accepted(thread_diff_record_schema):
+    from dumpex.output.records import ThreadDiffRecord, THREAD_DIFF_ADDED
+    from dumpex.output.records import MODULE_CONTEXT_UNREGISTERED
+    doc = ThreadDiffRecord(change_type=THREAD_DIFF_ADDED, tid=1,
+                            start_address_before=None,
+                            start_address_after="0x0000000000002000",
+                            backing_module_after=None,
+                            backing_module_context=MODULE_CONTEXT_UNREGISTERED).to_dict()
+    assert thread_diff_record_schema.is_valid(doc)
+
+
+def test_memory_diff_record_protection_changed_missing_protect_after_rejected(
+        memory_diff_record_schema):
+    from dumpex.output.records import MemoryDiffRecord, MEMORY_DIFF_PROTECTION_CHANGED
+    doc = MemoryDiffRecord(
+        change_type=MEMORY_DIFF_PROTECTION_CHANGED, base_address="0x0000000000001000",
+        size_before=4096, size_after=4096,
+        protect_before="PAGE_READWRITE", protect_after="PAGE_EXECUTE_READWRITE",
+        type_before="MEM_PRIVATE", type_after="MEM_PRIVATE",
+        suspicious_before=False, suspicious_after=True).to_dict()
+    doc["protect_after"] = None   # protection_changed requires both sides populated
+    assert not memory_diff_record_schema.is_valid(doc)
+
+
+def test_memory_diff_record_added_valid_shape_accepted(memory_diff_record_schema):
+    from dumpex.output.records import MemoryDiffRecord, MEMORY_DIFF_ADDED
+    doc = MemoryDiffRecord(
+        change_type=MEMORY_DIFF_ADDED, base_address="0x0000000000001000",
+        size_before=None, size_after=4096,
+        protect_before=None, protect_after="PAGE_READWRITE",
+        type_before=None, type_after="MEM_PRIVATE",
+        suspicious_before=None, suspicious_after=False).to_dict()
+    assert memory_diff_record_schema.is_valid(doc)

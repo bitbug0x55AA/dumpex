@@ -1,0 +1,514 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.1.schema.json",
+  "title": "dumpex v2 structured output (schema_version 2.1)",
+  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb) plus a future comparison command, via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract). v2.1 adds `result.kind == \"comparison\"` and its three tagged-union record types (moduleDiffRecord/threadDiffRecord/memoryDiffRecord) on top of v2.0's unchanged root shape and six existing record types -- dumpex-output-v2.0.schema.json remains frozen and installable for validating output produced before this addition; no currently-produced document from any of the six original commands is rejected by v2.1 beyond the schema_version string itself. `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. result.data.records[] items ARE typed per kind (see the allOf/if-then block in $defs/result and the record $defs) -- additionalProperties: false on every record type, so a dropped/renamed/retyped field or a stray field from the wrong kind fails validation, not just 'is an array'.",
+  "type": "object",
+  "required": ["meta", "result"],
+  "additionalProperties": true,
+  "properties": {
+    "meta":        { "$ref": "#/$defs/meta" },
+    "result":      { "$ref": "#/$defs/result" },
+    "artifacts":   { "type": "array", "default": [], "items": { "$ref": "#/$defs/artifact" } },
+    "diagnostics": { "$ref": "#/$defs/diagnostics" }
+  },
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "required": ["schema_version", "tool", "execution", "evidence"],
+      "properties": {
+        "schema_version": { "const": "2.1" },
+        "tool": {
+          "type": "object",
+          "required": ["name", "version"],
+          "properties": {
+            "name":    { "type": "string" },
+            "version": { "type": ["string", "null"] }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": ["started_at", "finished_at", "duration_seconds", "command", "options"],
+          "properties": {
+            "started_at":       { "type": "string" },
+            "finished_at":      { "type": "string" },
+            "duration_seconds": { "type": "number" },
+            "command":          { "type": ["string", "null"] },
+            "options":          { "type": "object" },
+            "case_id":          { "type": ["string", "null"] },
+            "analyst":          { "type": ["string", "null"] }
+          }
+        },
+        "evidence": {
+          "description": "One entry per evidence source. A single-dump recon command emits exactly one entry (role: 'primary'); a comparison command emits one per side (e.g. 'baseline'/'target').",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["id", "role"],
+            "properties": {
+              "id":         { "type": "string" },
+              "role":       { "type": "string" },
+              "file_name":  { "type": "string" },
+              "path":       { "type": "string" },
+              "size_bytes": { "type": ["integer", "null"] },
+              "sha256":     { "type": "string" },
+              "error":      { "type": "string" }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "python_version":   { "type": "string" },
+            "minidump_version": { "type": "string" },
+            "yara_version":     { "type": "string" },
+            "pyyaml_version":   { "type": "string" }
+          }
+        }
+      }
+    },
+
+    "hexAddress": {
+      "description": "A memory address/pointer/handle, normalized to a fixed-width (16 hex digit), lowercase, 0x-prefixed string -- or null when there is nothing to report an address for (see dumpex/output/records.py's hex_address()). Never a bare int (uint64 precision isn't safe across all JSON consumers) and never a variable-width string.",
+      "type": ["string", "null"],
+      "pattern": "^0x[0-9a-f]{16}$"
+    },
+
+    "memoryRegionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_address", "size", "state", "protect", "type", "suspicious"],
+      "properties": {
+        "base_address": { "$ref": "#/$defs/hexAddress" },
+        "size":         { "type": ["integer", "null"] },
+        "state":        { "type": ["string", "null"] },
+        "protect":      { "type": ["string", "null"] },
+        "type":         { "type": ["string", "null"] },
+        "suspicious":   { "type": "boolean" }
+      }
+    },
+
+    "moduleRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "full_path", "base_address", "end_address", "size",
+                   "compiled_utc", "file_version", "checksum", "anomaly_flags"],
+      "properties": {
+        "name":          { "type": ["string", "null"] },
+        "full_path":     { "type": ["string", "null"] },
+        "base_address":  { "$ref": "#/$defs/hexAddress" },
+        "end_address":   { "$ref": "#/$defs/hexAddress" },
+        "size":          { "type": ["integer", "null"] },
+        "compiled_utc":  { "type": ["string", "null"] },
+        "file_version":  { "type": ["string", "null"] },
+        "checksum":      { "type": ["integer", "null"] },
+        "anomaly_flags": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "threadRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tid", "start_address", "backing_module", "module_context", "flags",
+                   "create_time", "exit_time", "exit_status", "kernel_time_100ns",
+                   "user_time_100ns", "suspend_count", "priority", "teb"],
+      "properties": {
+        "tid":               { "type": ["integer", "null"] },
+        "start_address":     { "$ref": "#/$defs/hexAddress" },
+        "backing_module":    { "type": ["string", "null"] },
+        "module_context": {
+          "description": "resolved: backed by a known module. unregistered: ModuleListStream was available and this address is confirmed NOT backed by any known module (a real DFIR signal). unavailable: ModuleListStream itself is missing -- can't tell either way, must not be confused with 'unregistered'. null: start_address is itself unknown (module context is moot).",
+          "enum": ["resolved", "unregistered", "unavailable", null]
+        },
+        "flags":             { "type": "array", "items": { "type": "string" } },
+        "create_time":       { "type": ["string", "null"] },
+        "exit_time":         { "type": ["string", "null"] },
+        "exit_status":       { "type": ["integer", "null"] },
+        "kernel_time_100ns": { "type": ["integer", "null"] },
+        "user_time_100ns":   { "type": ["integer", "null"] },
+        "suspend_count":     { "type": ["integer", "null"] },
+        "priority":          { "type": ["integer", "null"] },
+        "teb":               { "$ref": "#/$defs/hexAddress" }
+      }
+    },
+
+    "sysInfoRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dump_file", "hostname", "username", "os", "os_version", "architecture",
+                   "product_type", "pid", "process_start_utc", "image_path", "command_line",
+                   "current_directory", "processors", "cpu_vendor", "cpu_current_mhz",
+                   "cpu_max_mhz", "process_user_time_seconds", "process_kernel_time_seconds",
+                   "thread_count", "module_count"],
+      "properties": {
+        "dump_file":                   { "type": ["string", "null"] },
+        "hostname":                    { "type": ["string", "null"] },
+        "username":                    { "type": ["string", "null"] },
+        "os":                          { "type": ["string", "null"] },
+        "os_version":                  { "type": ["string", "null"] },
+        "architecture":                { "type": ["string", "null"] },
+        "product_type":                { "type": ["string", "null"] },
+        "pid":                         { "type": ["integer", "null"] },
+        "process_start_utc":           { "type": ["string", "null"] },
+        "image_path":                  { "type": ["string", "null"] },
+        "command_line":                { "type": ["string", "null"] },
+        "current_directory":           { "type": ["string", "null"] },
+        "processors":                  { "type": ["integer", "null"] },
+        "cpu_vendor":                  { "type": ["string", "null"] },
+        "cpu_current_mhz":             { "type": ["integer", "null"] },
+        "cpu_max_mhz":                 { "type": ["integer", "null"] },
+        "process_user_time_seconds":   { "type": ["number", "null"] },
+        "process_kernel_time_seconds": { "type": ["number", "null"] },
+        "thread_count":                { "type": ["integer", "null"] },
+        "module_count":                { "type": ["integer", "null"] }
+      }
+    },
+
+    "pidRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pid", "source", "thread_count", "exc_tid"],
+      "properties": {
+        "pid":          { "type": ["integer", "null"] },
+        "source":       { "type": ["string", "null"] },
+        "thread_count": { "type": ["integer", "null"] },
+        "exc_tid":      { "type": ["integer", "null"] }
+      }
+    },
+
+    "pebRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["peb_address", "image_base_address", "being_debugged", "image_path",
+                   "command_line", "window_title", "dll_path", "current_directory",
+                   "standard_input", "standard_output", "standard_error",
+                   "environment_variables"],
+      "properties": {
+        "peb_address":        { "$ref": "#/$defs/hexAddress" },
+        "image_base_address": { "$ref": "#/$defs/hexAddress" },
+        "being_debugged":     { "type": ["boolean", "null"] },
+        "image_path":         { "type": ["string", "null"] },
+        "command_line":       { "type": ["string", "null"] },
+        "window_title":       { "type": ["string", "null"] },
+        "dll_path":           { "type": ["string", "null"] },
+        "current_directory":  { "type": ["string", "null"] },
+        "standard_input":     { "$ref": "#/$defs/hexAddress" },
+        "standard_output":    { "$ref": "#/$defs/hexAddress" },
+        "standard_error":     { "$ref": "#/$defs/hexAddress" },
+        "environment_variables": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "required": ["name", "value"],
+            "properties": {
+              "name":  { "type": "string" },
+              "value": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "moduleDiffRecord": {
+      "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity_type", "change_type", "name", "full_path_before", "full_path_after",
+                   "base_address_before", "base_address_after"],
+      "properties": {
+        "entity_type":         { "const": "module" },
+        "change_type":         { "enum": ["added", "removed", "rebased"] },
+        "name":                { "type": "string", "minLength": 1 },
+        "full_path_before":    { "type": ["string", "null"] },
+        "full_path_after":     { "type": ["string", "null"] },
+        "base_address_before": { "$ref": "#/$defs/hexAddress" },
+        "base_address_after":  { "$ref": "#/$defs/hexAddress" }
+      },
+      "allOf": [
+        { "if": { "properties": { "change_type": { "const": "added" } } },
+          "then": { "properties": {
+            "full_path_before":    { "const": null },
+            "base_address_before": { "const": null },
+            "full_path_after":     { "not": { "const": null } },
+            "base_address_after":  { "not": { "const": null } } } } },
+        { "if": { "properties": { "change_type": { "const": "removed" } } },
+          "then": { "properties": {
+            "full_path_after":     { "const": null },
+            "base_address_after":  { "const": null },
+            "full_path_before":    { "not": { "const": null } },
+            "base_address_before": { "not": { "const": null } } } } },
+        { "if": { "properties": { "change_type": { "const": "rebased" } } },
+          "then": { "properties": {
+            "full_path_before":    { "not": { "const": null } },
+            "full_path_after":     { "not": { "const": null } },
+            "base_address_before": { "not": { "const": null } },
+            "base_address_after":  { "not": { "const": null } } } } }
+      ]
+    },
+
+    "threadDiffRecord": {
+      "description": "Matches dumpex.output.records.ThreadDiffRecord.to_dict() -- one added/removed thread between two dumps, grounded in dumpex.commands.diff.diff_threads' own TID-keyed set logic. backing_module_after/backing_module_context are only ever populated for 'added' (resolved against the TARGET's module list); diff_threads never attempts baseline-side module resolution for a removed thread.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity_type", "change_type", "tid", "start_address_before",
+                   "start_address_after", "backing_module_after", "backing_module_context"],
+      "properties": {
+        "entity_type":            { "const": "thread" },
+        "change_type":            { "enum": ["added", "removed"] },
+        "tid":                    { "type": "integer" },
+        "start_address_before":   { "$ref": "#/$defs/hexAddress" },
+        "start_address_after":    { "$ref": "#/$defs/hexAddress" },
+        "backing_module_after":   { "type": ["string", "null"] },
+        "backing_module_context": { "enum": ["resolved", "unregistered", "unavailable", null] }
+      },
+      "allOf": [
+        { "if": { "properties": { "change_type": { "const": "added" } } },
+          "then": { "properties": { "start_address_before": { "const": null } } } },
+        { "if": { "properties": { "change_type": { "const": "removed" } } },
+          "then": { "properties": {
+            "start_address_after":    { "const": null },
+            "backing_module_after":   { "const": null },
+            "backing_module_context": { "const": null } } } }
+      ]
+    },
+
+    "memoryDiffRecord": {
+      "description": "Matches dumpex.output.records.MemoryDiffRecord.to_dict() -- one added/removed/protection-changed memory region between two dumps, grounded in dumpex.commands.diff.diff_memory's own BaseAddress-keyed set logic. suspicious_before/_after reuse memoryRegionRecord.suspicious's own semantics rather than diff_memory's own 4-tier console categorization.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entity_type", "change_type", "base_address", "size_before", "size_after",
+                   "protect_before", "protect_after", "type_before", "type_after",
+                   "suspicious_before", "suspicious_after"],
+      "properties": {
+        "entity_type":        { "const": "memory_region" },
+        "change_type":        { "enum": ["added", "removed", "protection_changed"] },
+        "base_address":       { "$ref": "#/$defs/hexAddress" },
+        "size_before":        { "type": ["integer", "null"] },
+        "size_after":         { "type": ["integer", "null"] },
+        "protect_before":     { "type": ["string", "null"] },
+        "protect_after":      { "type": ["string", "null"] },
+        "type_before":        { "type": ["string", "null"] },
+        "type_after":         { "type": ["string", "null"] },
+        "suspicious_before":  { "type": ["boolean", "null"] },
+        "suspicious_after":   { "type": ["boolean", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "change_type": { "const": "added" } } },
+          "then": { "properties": {
+            "size_before":       { "const": null },
+            "protect_before":    { "const": null },
+            "type_before":       { "const": null },
+            "suspicious_before": { "const": null } } } },
+        { "if": { "properties": { "change_type": { "const": "removed" } } },
+          "then": { "properties": {
+            "size_after":       { "const": null },
+            "protect_after":    { "const": null },
+            "type_after":       { "const": null },
+            "suspicious_after": { "const": null } } } },
+        { "if": { "properties": { "change_type": { "const": "protection_changed" } } },
+          "then": { "properties": {
+            "protect_before":    { "not": { "const": null } },
+            "protect_after":     { "not": { "const": null } },
+            "suspicious_before": { "not": { "const": null } },
+            "suspicious_after":  { "not": { "const": null } } } } }
+      ]
+    },
+
+    "comparisonRecord": {
+      "description": "Tagged union for result.kind == 'comparison' -- discriminated by entity_type, which is a distinct const on each branch.",
+      "oneOf": [
+        { "$ref": "#/$defs/moduleDiffRecord" },
+        { "$ref": "#/$defs/threadDiffRecord" },
+        { "$ref": "#/$defs/memoryDiffRecord" }
+      ]
+    },
+
+    "result": {
+      "type": "object",
+      "required": ["kind", "execution_status", "coverage", "data"],
+      "properties": {
+        "kind": {
+          "description": "Which canonical record type result.data.records holds. Grows as more commands migrate onto v2 -- not an open string.",
+          "enum": ["memory_regions", "modules", "threads", "sysinfo", "pid", "peb", "comparison"]
+        },
+        "execution_status": {
+          "description": "Did the COMMAND itself run to completion -- independent of whether the EVIDENCE it saw was complete (see coverage below). None of the six v2 recon commands has an internal scan-budget/timeout concept that could produce a genuine partial execution, so 'partial' is reserved for future commands (e.g. hunters, once migrated) that do.",
+          "enum": ["completed", "partial", "failed"]
+        },
+        "coverage": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "description": "Was the evidence available to this command complete? Vocabulary shared with dumpex.hunt._coverage.derive_coverage_status.",
+              "enum": ["complete", "partial", "not_evaluated"]
+            },
+            "reasons": {
+              "description": "Backward-compatible flat human text, rendered from `limitations` -- kept so an existing consumer that only reads `reasons` never breaks.",
+              "type": "array",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "sources": {
+              "description": "Per-source observed state -- keyed by source name (e.g. 'memory_info', 'threads', or a dotted entity-namespaced name such as 'baseline.modules' for a comparison result). Optional: an older producer that doesn't populate this is still a valid document.",
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/sourceObservation" },
+              "default": {}
+            },
+            "limitations": {
+              "description": "Structured, machine-readable coverage gaps -- the source `reasons` is rendered from. `code` is intentionally a plain string, not a closed enum: dumpex.output.coverage.LimitationCode grows as commands migrate, and this schema should not need a version bump every time a new code is added.",
+              "type": "array",
+              "items": { "$ref": "#/$defs/coverageLimitation" },
+              "default": []
+            }
+          }
+        },
+        "summary": { "type": "object" },
+        "data": {
+          "type": "object",
+          "required": ["records"],
+          "properties": {
+            "records": { "type": "array" }
+          }
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "kind": { "const": "memory_regions" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/memoryRegionRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "modules" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/moduleRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "threads" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/threadRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "sysinfo" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/sysInfoRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "pid" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/pidRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "peb" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/pebRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "comparison" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/comparisonRecord" } } } } } } }
+      ]
+    },
+
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "warnings": { "type": "array", "items": { "$ref": "#/$defs/diagnosticEntry" }, "default": [] },
+        "errors":   { "type": "array", "items": { "$ref": "#/$defs/diagnosticEntry" }, "default": [] }
+      }
+    },
+
+    "diagnosticEntry": {
+      "description": "Matches dumpex.output.records.Diagnostic.to_dict(), which always emits all three fields -- `code` is required (it's always a key in the dict), just nullable.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "message", "code"],
+      "properties": {
+        "severity": { "enum": ["warning", "error"] },
+        "message":  { "type": "string", "minLength": 1 },
+        "code":     { "type": ["string", "null"], "minLength": 1 }
+      }
+    },
+
+    "sourceObservation": {
+      "description": "Matches dumpex.output.coverage.SourceObservation.to_dict(), which always emits all three fields -- `required` covers all of them, not just `state`, and the record_count<->state invariant (None for absent/failed, exactly 0 for present_empty, >=1 for present) is frozen structurally below, mirroring the same invariant SourceObservation.__post_init__ enforces in Python.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "record_count", "detail"],
+      "properties": {
+        "state":        { "enum": ["absent", "present_empty", "present", "failed"] },
+        "record_count": { "type": ["integer", "null"] },
+        "detail":       { "type": ["string", "null"], "minLength": 1 }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "enum": ["absent", "failed"] } } },
+          "then": { "properties": { "record_count": { "type": "null" } } } },
+        { "if": { "properties": { "state": { "const": "present_empty" } } },
+          "then": { "properties": { "record_count": { "const": 0 } } } },
+        { "if": { "properties": { "state": { "const": "present" } } },
+          "then": { "properties": { "record_count": { "type": "integer", "minimum": 1 } } } }
+      ]
+    },
+
+    "coverageLimitation": {
+      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does. `allOf` below constrains each KNOWN code's disallowed fields to their default (null/[]), pins `source` where fixed, and mirrors the value-shape rules dumpex.output.coverage._CODE_SPECS/CoverageLimitation.__post_init__ enforce that JSON Schema CAN express (minItems, exact array contents, non-null requirements, one-field-implies-another-field dependencies) -- each `if` matches only that one `code` value, so an unrecognized future code matches none of them and stays fully open; `code` itself remains a plain string, not an enum. This is NOT full parity with the Python model: rules comparing two field VALUES for inequality (source != counterpart_source) or against another object's state entirely outside this fragment (counterpart_source's own record_count, a sibling entry in result.coverage.sources) are Python-only and cannot be expressed here -- see CoverageLimitation.__post_init__ and _validate_source_absent_against_sources for those.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "source", "scope", "affected_count", "unavailable_fields",
+                   "available_fields", "counterpart_source", "related_sources",
+                   "related_tids", "thread_id", "detail"],
+      "properties": {
+        "code":                { "type": "string", "minLength": 1 },
+        "source":              { "type": "string", "minLength": 1 },
+        "scope":               { "type": ["string", "null"], "minLength": 1 },
+        "affected_count":      { "type": ["integer", "null"], "minimum": 1 },
+        "unavailable_fields":  { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "available_fields":    { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "counterpart_source":  { "type": ["string", "null"], "minLength": 1 },
+        "related_sources":     { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "related_tids":        { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "thread_id":           { "type": ["integer", "null"], "minimum": 1 },
+        "detail":              { "type": ["string", "null"], "minLength": 1 }
+      },
+      "allOf": [
+        { "if": { "properties": { "code": { "const": "SOURCE_ABSENT" } } },
+          "then": { "properties": { "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_ABSENT" }, "affected_count": { "not": { "const": null } } } },
+          "then": { "properties": { "counterpart_source": { "not": { "const": null } } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_ABSENT" }, "available_fields": { "minItems": 1 } } },
+          "then": { "properties": { "unavailable_fields": { "minItems": 1 }, "counterpart_source": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_FAILED" } } },
+          "then": { "properties": { "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_KEY_MISMATCH" } } },
+          "then": { "properties": { "available_fields": { "const": [] }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SOURCE_GROUP_ABSENT" } } },
+          "then": { "properties": { "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "minItems": 2 }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "MODULE_CLASSIFICATION_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PEB_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "peb" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_SOURCES_ABSENT" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": ["misc_info", "threads", "exception"] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_THREAD_LIST_FALLBACK" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": "threads" }, "related_sources": { "const": [] }, "related_tids": { "minItems": 1 }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_EXCEPTION_TID_FALLBACK" } } },
+          "then": { "properties": { "source": { "const": "exception" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "type": "integer" }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "PID_NO_USABLE_FALLBACK" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_SYSTEM_INFO_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "sysinfo" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_MISC_INFO_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "misc_info" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_PEB_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "peb" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_THREADS_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "threads" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "SYSINFO_MODULES_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } }
+      ]
+    },
+
+    "artifact": {
+      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Not yet populated by any of the six v2-routed recon commands; the type exists so a future producer (extract/report, once migrated) has a typed shape to build. Matches dumpex.output.records.Artifact.to_dict(), which always emits all six fields -- `required` covers all of them, not just id/kind/path.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "path", "size_bytes", "sha256", "description"],
+      "properties": {
+        "id":          { "type": "string", "minLength": 1 },
+        "kind":        { "type": "string", "minLength": 1 },
+        "path":        { "type": "string", "minLength": 1 },
+        "size_bytes":  { "type": ["integer", "null"], "minimum": 0 },
+        "sha256":      { "type": ["string", "null"], "minLength": 1 },
+        "description": { "type": ["string", "null"] }
+      }
+    }
+  }
+}
