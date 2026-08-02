@@ -35,7 +35,7 @@ def test_check_not_dump_path_refuses_same_path(tmp_path, capsys):
     assert dump.read_bytes() == b"x"   # evidence untouched
 
 
-# ── summarize_bytes / summarize_file ────────────────────────────────────
+# ── summarize_bytes / summarize_file / compute_bytes_summary ────────────
 
 def test_summarize_bytes_and_file_agree(tmp_path):
     data = b"hello world"
@@ -46,6 +46,24 @@ def test_summarize_bytes_and_file_agree(tmp_path):
     f = tmp_path / "x.bin"
     f.write_bytes(data)
     assert safe_io.summarize_file(f) == summary
+
+
+def test_compute_bytes_summary_matches_summarize_bytes():
+    # compute_bytes_summary() is the raw (size, sha256) pair a caller
+    # building a structured record/Artifact needs directly, without
+    # parsing them back out of summarize_bytes()'s own display string --
+    # both must derive from the identical computation.
+    data = b"hello world"
+    size, digest = safe_io.compute_bytes_summary(data)
+    assert size == len(data)
+    assert digest == hashlib.sha256(data).hexdigest()
+    assert safe_io.summarize_bytes(data) == f"{size} bytes  sha256={digest}"
+
+
+def test_compute_bytes_summary_empty_bytes():
+    size, digest = safe_io.compute_bytes_summary(b"")
+    assert size == 0
+    assert digest == hashlib.sha256(b"").hexdigest()
 
 
 # ── write_output_bytes / write_output_text ──────────────────────────────

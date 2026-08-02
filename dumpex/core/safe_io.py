@@ -90,8 +90,18 @@ def check_not_dump_path(out_path, dump_path, label: str):
             sys.exit(1)
 
 
+def compute_bytes_summary(data: bytes) -> "tuple[int, str]":
+    """(size, sha256_hex) -- the two raw values summarize_bytes() formats
+    into one display string. Split out so a caller building a structured
+    record/Artifact (size_bytes/sha256 as separate wire fields) doesn't
+    have to parse summarize_bytes()'s own human-readable string back
+    apart to get them."""
+    return len(data), hashlib.sha256(data).hexdigest()
+
+
 def summarize_bytes(data: bytes) -> str:
-    return f"{len(data)} bytes  sha256={hashlib.sha256(data).hexdigest()}"
+    size, digest = compute_bytes_summary(data)
+    return f"{size} bytes  sha256={digest}"
 
 
 def summarize_file(path) -> str:

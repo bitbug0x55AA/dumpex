@@ -34,7 +34,7 @@ __all__ = [
     "EvidenceInput", "build_meta_v2", "Result", "Envelope",
 ]
 
-SCHEMA_VERSION = "2.1"
+SCHEMA_VERSION = "2.2"
 
 # CLI options whose VALUE is a filesystem path -- same redaction concern
 # as dumpex.ui.structured's _PATH_OPTION_KEYS, kept as its own copy here
@@ -204,9 +204,9 @@ def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | 
     single all-or-nothing except that replaced the entire meta object
     with just {"schema_version", "error"} (as a prior version of this
     function did) would itself be schema-invalid -- silently producing a
-    document that claims "schema_version: 2.1" but cannot pass the very
+    document that claims "schema_version: 2.2" but cannot pass the very
     schema it names. Each fallback below still satisfies every field
-    dumpex-output-v2.1.schema.json's $defs/meta requires, with an "error"
+    dumpex-output-v2.2.schema.json's $defs/meta requires, with an "error"
     key added alongside (additionalProperties is not restricted on these
     objects) so the failure is visible rather than merely papered over.
     """

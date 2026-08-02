@@ -36,7 +36,6 @@ def _forbid_open_dump(monkeypatch):
 
 @pytest.mark.parametrize("mode_args", [
     ["--report", "--report-tid", "1"],
-    ["--extract", "0x1000"],
     ["--strings", "0x1000"],
 ])
 def test_json_on_unsupported_mode_rejected_before_open_dump(monkeypatch, capsys, mode_args):
@@ -53,6 +52,14 @@ def test_json_on_v2_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
     # A v2-supported mode must proceed past the pre-flight check and reach
     # open_dump()'s own (different) failure mode for a nonexistent file.
     code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--json", "out.json"])
+    assert code == 1
+    assert "File not found" in capsys.readouterr().out
+
+
+def test_json_on_extract_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
+    # --extract is v2-supported too (Phase E, PR1) -- must proceed past
+    # the pre-flight check and reach open_dump()'s own failure mode.
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--extract", "0x1000", "--json", "out.json"])
     assert code == 1
     assert "File not found" in capsys.readouterr().out
 
@@ -96,11 +103,46 @@ def test_modules_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.1"
+        assert doc["meta"]["schema_version"] == "2.2"
         assert isinstance(doc["meta"]["evidence"], list)
         assert doc["result"]["kind"] == "modules"
         assert doc["result"]["data"]["records"][0]["name"] == "ntdll.dll"
         assert "hunt" not in doc
+    finally:
+        os.remove(dump_path)
+
+
+def test_extract_json_produces_v2_shaped_document_with_artifact(monkeypatch, tmp_path):
+    # --extract (Phase E, PR1) is the first v2-routed command to populate
+    # result.artifacts/diagnostics for real -- both were plumbed end to
+    # end (CommandResult -> V2Output.set_command_result()) since Phase B
+    # but had no real producer until now.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.filename = dump_path
+        import dumpex.commands.extract as extract_mod
+        from tests.fixtures.fakes import mem_reader
+        monkeypatch.setattr(extract_mod, "read_region",
+                             mem_reader({0x1000: b"MZ" + b"\x90" * 62}))
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        extract_out = str(tmp_path / "extracted.bin")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--extract", "0x1000", "--size", "0x40",
+                              "--output", extract_out, "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == "2.2"
+        assert doc["result"]["kind"] == "extract"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        assert doc["result"]["data"]["records"][0]["mz_header_detected"] is True
+        assert doc["artifacts"][0]["path"] == extract_out
+        assert doc["artifacts"][0]["size_bytes"] == 64
+        assert doc["diagnostics"]["warnings"][0]["code"] == "EXTRACT_MZ_HEADER_DETECTED"
+        assert os.path.exists(extract_out)
     finally:
         os.remove(dump_path)
 
@@ -231,7 +273,7 @@ def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(mon
         assert exc.value.code == cli.EXIT_PARTIAL == 3   # degraded: no thread_info stream
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.1"
+        assert doc["meta"]["schema_version"] == "2.2"
         assert doc["result"]["kind"] == "threads"
         assert doc["result"]["execution_status"] == "completed"
         assert doc["result"]["coverage"]["status"] == "partial"
@@ -264,7 +306,7 @@ def test_peb_missing_json_produces_v2_shaped_document_via_command_result_adapter
         assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.1"
+        assert doc["meta"]["schema_version"] == "2.2"
         assert doc["result"]["kind"] == "peb"
         assert doc["result"]["execution_status"] == "completed"
         assert doc["result"]["coverage"]["status"] == "not_evaluated"
@@ -434,7 +476,7 @@ def test_diff_json_produces_comparison_document_with_two_evidence_entries(monkey
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.1"
+        assert doc["meta"]["schema_version"] == "2.2"
         assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
         assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
         assert doc["result"]["kind"] == "comparison"

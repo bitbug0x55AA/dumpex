@@ -36,10 +36,12 @@ class CommandResult(Generic[T]):
     coverage: CoverageReport
     execution_status: str = EXECUTION_COMPLETED
     summary: dict = field(default_factory=dict)
-    diagnostics: list = field(default_factory=list)   # list[Diagnostic], unused by any
-                                                         # migrated command yet -- plumbing
-                                                         # for a future one that needs it
-    artifacts: list = field(default_factory=list)      # list[Artifact], likewise unused today
+    diagnostics: list = field(default_factory=list)   # list[Diagnostic] -- populated by
+                                                         # --extract (Phase E) for its MZ-
+                                                         # header-detected warning
+    artifacts: list = field(default_factory=list)      # list[Artifact] -- populated by
+                                                         # --extract (Phase E) for its
+                                                         # written-file record
 
     def __post_init__(self):
         try:

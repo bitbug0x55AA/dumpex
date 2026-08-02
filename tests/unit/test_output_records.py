@@ -7,7 +7,7 @@ import pytest
 
 from dumpex.output.records import (
     MemoryRegionRecord, ModuleRecord, ThreadRecord, SysInfoRecord, PidRecord, PebRecord,
-    Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address, Artifact,
+    ExtractRecord, Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address, Artifact,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
     ModuleDiffRecord, MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF_REBASED,
     ThreadDiffRecord, THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED,
@@ -179,6 +179,25 @@ def test_peb_record_environment_variables_defensive_copy():
     d = rec.to_dict()
     env.append({"name": "MUTATED", "value": "x"})
     assert d["environment_variables"] == [{"name": "PATH", "value": "C:\\"}]
+
+
+# ── ExtractRecord ──────────────────────────────────────────────────────
+
+def test_extract_record_to_dict_shape():
+    rec = ExtractRecord(requested_address="0x0000000000001000", requested_size=16,
+                         auto_sized=False, bytes_read=16, mz_header_detected=False)
+    assert rec.to_dict() == {
+        "requested_address": "0x0000000000001000", "requested_size": 16,
+        "auto_sized": False, "bytes_read": 16, "mz_header_detected": False,
+    }
+
+
+def test_extract_record_auto_sized_and_mz_flags_are_plain_bools():
+    rec = ExtractRecord(requested_address="0x0000000000001000", requested_size=16,
+                         auto_sized=True, bytes_read=16, mz_header_detected=True)
+    d = rec.to_dict()
+    assert d["auto_sized"] is True
+    assert d["mz_header_detected"] is True
 
 
 # ── Diagnostic ───────────────────────────────────────────────────────────

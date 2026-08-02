@@ -17,9 +17,9 @@ is free to format any of these ints as hex text for display -- that is a
 presentation choice independent of the record's own field type.
 
 StringRecord (extraction, for a future --strings migration) is
-intentionally not defined yet. Artifact (below) IS defined -- its wire
-shape needed locking in ahead of a future --extract/--report migration --
-but isn't populated by any command yet.
+intentionally not defined yet. Artifact (below) is now populated by
+--extract (Phase E) -- a future --report migration is expected to reuse
+it too, for its own optional extract-to-file side effect.
 """
 import re
 from dataclasses import dataclass, field
@@ -240,6 +240,35 @@ class PebRecord:
             "standard_error":        self.standard_error,
             "environment_variables": (list(self.environment_variables)
                                        if self.environment_variables is not None else None),
+        }
+
+
+# ── Extraction records (Phase E) ────────────────────────────────────────
+
+@dataclass
+class ExtractRecord:
+    """`--extract`'s record -- the READ-side facts only. Write-side facts
+    (the output path/size_bytes/sha256) live on the corresponding entry
+    in result.artifacts instead (see Artifact below) -- not duplicated
+    here, since the two describe different things (what was read from
+    the dump vs. what was written to disk) that happen to usually agree
+    in size but are conceptually distinct facts."""
+    requested_address:   "str | None"   # hex_address(addr)
+    requested_size:       "int | None"  # size actually passed to read_region
+                                          # (post auto-size resolution -- see
+                                          # dumpex.core.memory._resolve_size)
+    auto_sized:             bool         # True when --size wasn't given
+    bytes_read:              int         # len(data) -- equal to requested_size
+                                          # whenever the read didn't come up short
+    mz_header_detected:      bool        # data[:2] == b"MZ"
+
+    def to_dict(self) -> dict:
+        return {
+            "requested_address":  self.requested_address,
+            "requested_size":     self.requested_size,
+            "auto_sized":         self.auto_sized,
+            "bytes_read":         self.bytes_read,
+            "mz_header_detected": self.mz_header_detected,
         }
 
 
@@ -591,14 +620,14 @@ class Artifact:
     """One entry in the top-level `artifacts` array -- an output file the
     tool itself produced (e.g. an extracted memory region), distinct from
     meta.evidence (which describes the INPUT dump(s)). Field naming
-    mirrors meta.evidence's own id/path/size_bytes/sha256 shape. Not yet
-    populated by any of the six v2-routed recon commands -- extract.py/
-    report.py (the eventual producers) are still v1.1 console-only today
-    and only ever concatenate size+hash into a print string via
-    dumpex.core.safe_io.summarize_bytes(), with no structured shape at
-    all -- this type exists so a future migration has something typed to
-    build instead of a bare dict. Constructing one is the ONLY way an
-    entry reaches `artifacts` on the wire -- dumpex.output.collector.
+    mirrors meta.evidence's own id/path/size_bytes/sha256 shape. Populated
+    by --extract (Phase E, via dumpex.commands.extract.build_extract_
+    artifact(), which calls dumpex.core.safe_io.compute_bytes_summary()
+    for the size_bytes/sha256 fields directly rather than parsing them
+    back out of summarize_bytes()'s formatted string) -- a future
+    --report migration is expected to reuse the same helper for its own
+    optional extract-to-file side effect. Constructing one is the ONLY
+    way an entry reaches `artifacts` on the wire -- dumpex.output.collector.
     V2Output.set_command_result() calls .to_dict() unconditionally (no
     duck-typed dict passthrough), so a caller can't smuggle a shape this
     class doesn't validate. Frozen for the same reason as Diagnostic --

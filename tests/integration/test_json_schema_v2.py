@@ -1,16 +1,16 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.1.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.1") for each of the six
+dumpex/schemas/dumpex-output-v2.2.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.2") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
 hand-written fixture JSON, so a shape change in any of them is caught
-here. dumpex-output-v2.0.schema.json (the frozen historical shape, pre-
-comparison) is also exercised directly (see the "schema version
-history" section below) to prove it still validates a genuine 2.0-era
-document and still rejects a "comparison" kind it was never updated to
-know about.
+here. dumpex-output-v2.0.schema.json and dumpex-output-v2.1.schema.json
+(the frozen historical shapes) are also exercised directly (see the
+"schema version history" section below) to prove each still validates a
+genuine document from its own era and still rejects a `result.kind` it
+was never updated to know about.
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -27,7 +27,7 @@ jsonschema = pytest.importorskip("jsonschema")
 
 from tests.fixtures.fakes import (
     Region, Module, ThreadInfo, Thread, Ctx, Peb, SysInfo, MiscInfo,
-    ExceptionStream, FakeStream, FakeMF,
+    ExceptionStream, FakeStream, FakeMF, mem_reader,
 )
 
 from dumpex.output import V2Output
@@ -46,7 +46,7 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.1.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.2.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -60,6 +60,18 @@ def schema_v2_0():
 def validator_v2_0(schema_v2_0):
     jsonschema.Draft202012Validator.check_schema(schema_v2_0)
     return jsonschema.Draft202012Validator(schema_v2_0)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_1():
+    with schema_path("dumpex-output-v2.1.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_1(schema_v2_1):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_1)
+    return jsonschema.Draft202012Validator(schema_v2_1)
 
 
 @pytest.fixture(scope="module")
@@ -276,7 +288,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.1",
+            "schema_version": "2.2",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -718,6 +730,44 @@ def test_comparison_full_envelope_with_all_three_entity_types_validates(validato
     finally:
         os.remove(dump_a)
         os.remove(dump_b)
+
+
+# ── result.kind == "extract" (Phase E, PR1) ───────────────────────────────
+
+def test_extract_full_envelope_with_mz_header_validates(validator, tmp_path):
+    import dumpex.commands.extract as extract_mod
+    from dumpex.commands.extract import collect_extract
+
+    mf = FakeMF()
+    mf.filename = "test.dmp"
+    extract_mod.read_region = mem_reader({0x1000: b"MZ" + b"\x90" * 62})
+    out_path = str(tmp_path / "out.bin")
+    result = collect_extract(mf, 0x1000, 64, out_path, auto_size=False, force=True)
+    doc = _validate(validator, result)
+    assert doc["result"]["kind"] == "extract"
+    assert doc["result"]["coverage"]["status"] == "complete"
+    assert doc["artifacts"][0]["kind"] == "extracted_region"
+    assert doc["diagnostics"]["warnings"][0]["code"] == "EXTRACT_MZ_HEADER_DETECTED"
+
+
+def test_extract_kind_is_rejected_by_the_frozen_v2_1_schema(validator_v2_1):
+    # dumpex-output-v2.1.schema.json predates "extract" entirely -- proves
+    # the frozen historical schema was never silently updated to accept
+    # it (the whole point of keeping it as its own file, same precedent
+    # as v2.0 not accepting "comparison").
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.1"
+    doc["result"]["kind"] = "extract"
+    doc["result"]["data"]["records"] = []
+    assert not validator_v2_1.is_valid(doc)
+
+
+def test_a_genuine_v2_1_era_document_still_validates_against_the_v2_1_schema(validator_v2_1):
+    # The frozen historical schema must keep validating output produced
+    # before schema_version 2.2 existed.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.1"
+    assert validator_v2_1.is_valid(doc)
 
 
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):
