@@ -255,25 +255,25 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         modules_target_available = modules_obs.state in (
             SourceState.PRESENT, SourceState.PRESENT_EMPTY)
         # A plain bare-name completeness check here would produce a
-        # SOURCE_ABSENT limitation byte-identical to collect_module_diff's
-        # own ("target ModuleListStream not present in this dump") when
-        # both fire together under collect_comparison(mode="all") --
-        # scope="thread" + unavailable_fields differentiates the two: this
+        # limitation byte-identical to collect_module_diff's own ("target
+        # ModuleListStream not present in this dump" for ABSENT, or the
+        # same SOURCE_FAILED text for FAILED) when both fire together
+        # under collect_comparison(mode="all") -- scope="thread" +
+        # unavailable_fields differentiates the two for EITHER state: this
         # one says WHICH thread-side fields are unavailable as a result,
-        # not just that the stream is absent. affected_count is
-        # deliberately not set -- SOURCE_ABSENT's own contract only
-        # allows it paired with a counterpart_source whose record_count it
-        # must equal exactly (see coverage.py's
-        # _validate_source_absent_against_sources), and no such
-        # counterpart exists here (this fact is about a SUBSET of
-        # target.thread_info's threads -- the added ones with a known
-        # address -- not "every record in some counterpart source"). A
-        # FAILED target.modules bypasses this customization entirely (see
-        # _derive_required_source_limitation's own FAILED branch, which
-        # ignores SourceRequirement.scope/unavailable_fields) and renders
-        # via SOURCE_FAILED's own distinct wording instead -- acceptable,
-        # since SOURCE_FAILED already can't collide with
-        # collect_module_diff's own SOURCE_ABSENT limitation.
+        # not just that the stream is absent/unreadable.
+        # _derive_required_source_limitation applies this customization to
+        # both its ABSENT and FAILED branches identically, so the two
+        # entities' limitations never collide (and combine_coverage_
+        # reports' dedup, which only collapses byte-identical limitations,
+        # correctly leaves both in place). affected_count is deliberately
+        # not set -- SOURCE_ABSENT's own contract only allows it paired
+        # with a counterpart_source whose record_count it must equal
+        # exactly (see coverage.py's _validate_source_absent_against_
+        # sources), and no such counterpart exists here (this fact is
+        # about a SUBSET of target.thread_info's threads -- the added ones
+        # with a known address -- not "every record in some counterpart
+        # source").
         completeness_checks.append(SourceRequirement(
             "target.modules", scope="thread",
             unavailable_fields=("backing_module_after", "backing_module_context")))

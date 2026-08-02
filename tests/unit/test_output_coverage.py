@@ -1302,6 +1302,33 @@ def test_render_limitation_source_failed_with_detail():
         "ModuleListStream present but could not be read: AttributeError: bad record")
 
 
+def test_render_limitation_source_failed_with_unavailable_fields():
+    # comparison.py's thread diff customizes a FAILED target.modules this
+    # way (scope="thread" + unavailable_fields) -- same wording convention
+    # SOURCE_ABSENT's own unavailable_fields clause already uses.
+    limitation = CoverageLimitation(
+        code=LIMITATION_SOURCE_FAILED, source="modules", scope="thread", detail="boom",
+        unavailable_fields=("backing_module_after", "backing_module_context"))
+    assert render_limitation(limitation) == (
+        "ModuleListStream present but could not be read: boom; "
+        "backing_module_after/backing_module_context unavailable")
+
+
+def test_render_limitation_source_failed_with_unavailable_and_available_fields():
+    limitation = CoverageLimitation(
+        code=LIMITATION_SOURCE_FAILED, source="modules", scope="thread",
+        unavailable_fields=("backing_module_after",), available_fields=("tid",))
+    assert render_limitation(limitation) == (
+        "ModuleListStream present but could not be read; "
+        "backing_module_after unavailable (tid only)")
+
+
+def test_coverage_limitation_source_failed_rejects_available_fields_without_unavailable():
+    with pytest.raises(ValueError, match="requires unavailable_fields"):
+        CoverageLimitation(code=LIMITATION_SOURCE_FAILED, source="modules",
+                            available_fields=("tid",))
+
+
 def test_render_limitation_unknown_source_falls_back_to_raw_name():
     limitation = CoverageLimitation(code=LIMITATION_SOURCE_ABSENT, source="some_future_stream",
                                      scope="dump")

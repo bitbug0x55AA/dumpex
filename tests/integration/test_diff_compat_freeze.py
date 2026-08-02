@@ -478,6 +478,34 @@ NEW_BEHAVIOR = [
         '  baseline.dmp: N/A modules\n  target.dmp: 1 modules\n\n'
         '  Comparison not evaluated.\n',
     ),
+    (
+        "thread_target_modules_failed_shows_reason_above_not_in_any_module",
+        # target.modules is an OPTIONAL enrichment for thread diff (see
+        # collect_thread_diff's own SourceRequirement(scope="thread",
+        # unavailable_fields=(...))) -- a FAILED read there degrades
+        # backing-module resolution rather than aborting the whole thread
+        # diff, so the added thread record still renders with the SAME
+        # "NOT IN ANY MODULE ⚠" text a confirmed-unregistered thread gets
+        # (a deliberate, already-reviewed conflation -- see diff.py's own
+        # docstring; not changed here). What WAS a real bug (fixed by this
+        # scenario) is that the read-failure reason above it never
+        # rendered at all: the limitation's scope was hardcoded to "dump"
+        # instead of the requirement's own "thread", so render_thread_
+        # diff's scope=="thread" filter silently dropped it. It must now
+        # appear, so a reader is never left thinking "confirmed
+        # unregistered" when the real fact is "couldn't check."
+        ["--diff-mode", "threads"],
+        _mf_threads([]),
+        _ExplodingModulesMF(),   # thread_info patched in below, modules raises
+        3,
+        '\n═══ THREAD DIFF ═══\n'
+        '  [~] target ModuleListStream present but could not be read: modules boom; '
+        'backing_module_after/backing_module_context unavailable\n'
+        '  baseline.dmp: 0 threads\n  target.dmp: 1 threads\n\n'
+        '  [+] New threads in target.dmp (1):\n'
+        '      TID=0x2  StartAddr=0x5000  Backed by: NOT IN ANY MODULE ⚠\n\n'
+        '  [-] No removed threads.\n',
+    ),
 ]
 # thread_added_target_modules_absent's target FakeMF needs thread_info set
 # without also getting a `modules` attribute at all (ModuleListStream
@@ -485,6 +513,11 @@ NEW_BEHAVIOR = [
 # None) inline above without ALSO skipping thread_info, so it's patched
 # in here.
 NEW_BEHAVIOR[1][3].thread_info = FakeStream([ThreadInfo(2, 0x5000)], "infos")
+# thread_target_modules_failed_shows_reason_above_not_in_any_module's
+# target _ExplodingModulesMF needs thread_info set too -- constructing it
+# with the keyword wouldn't work since `modules` is a raising @property,
+# not a plain attribute FakeStream can populate via **kwargs.
+NEW_BEHAVIOR[-1][3].thread_info = FakeStream([ThreadInfo(2, 0x5000)], "infos")
 
 
 ALL_SCENARIOS = TRUE_FREEZE + NEW_BEHAVIOR
@@ -560,3 +593,43 @@ def test_diff_mode_all_combines_three_entities_and_validates_against_schema(
     assert module_diffs_rows, "CSV must contain a module_diffs table"
     assert "## comparison / records" not in csv_text, \
         "a comparison result must never write the generic 'records' table"
+
+
+def test_diff_mode_all_shows_shared_target_modules_failure_in_both_sections(
+        monkeypatch, tmp_path, capsys):
+    # target.modules is read independently by BOTH module diff (its own
+    # primary source) and thread diff (an optional enrichment source) --
+    # when it FAILS, each collector derives its own CoverageLimitation
+    # (scope="dump" for module diff, scope="thread"+unavailable_fields for
+    # thread diff). These must stay two distinct facts, each printed under
+    # its OWN section -- not collapsed into one by combine_coverage_
+    # reports' dedup (which only removes byte-identical limitations), and
+    # not cross-leaked into the wrong section (module's own filter
+    # excludes scope=="thread"; thread's own filter requires it).
+    mf_baseline = _mf_modules([Module(0x1000, 0x1000, r"C:\a.dll")])
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_target = _ExplodingModulesMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(2, 0x5000)], "infos")
+
+    exit_code, doc, csv_text, (label_a, label_b) = _run(
+        monkeypatch, tmp_path, ["--diff-mode", "all"], mf_baseline, mf_target)
+    console = capsys.readouterr().out
+
+    assert exit_code == 3
+    assert doc["result"]["coverage"]["status"] == "partial"
+    failed = [l for l in doc["result"]["coverage"]["limitations"] if l["code"] == "SOURCE_FAILED"]
+    assert len(failed) == 2, "module diff's and thread diff's own target.modules " \
+        "failures must both survive as distinct facts, not be deduplicated"
+    assert {l["scope"] for l in failed} == {"dump", "thread"}
+
+    module_section, _, rest = console.partition("═══ THREAD DIFF ═══")
+    thread_section, _, memory_section = rest.partition("═══ MEMORY REGION DIFF ═══")
+    assert "target ModuleListStream present but could not be read: modules boom\n" \
+        in module_section
+    assert "target ModuleListStream present but could not be read: modules boom; " \
+        "backing_module_after/backing_module_context unavailable" in thread_section
+    # The module section's own (undifferentiated) reason must not also
+    # leak into the thread section, and vice versa.
+    assert "backing_module_after/backing_module_context unavailable" not in module_section
+    assert module_section.count("target ModuleListStream present but could not be read") == 1
+    assert thread_section.count("target ModuleListStream present but could not be read") == 1

@@ -422,6 +422,7 @@ def test_source_observation_domain_invalid_shapes_rejected_by_schema(
 
 @pytest.mark.parametrize("code,kwargs", [
     (LimitationCode.SOURCE_ABSENT, dict(source="modules", scope="dump")),
+    (LimitationCode.SOURCE_FAILED, dict(source="modules", scope="dump", detail="boom")),
     (LimitationCode.SOURCE_GROUP_ABSENT,
      dict(source="threads", scope="dump", related_sources=["threads", "thread_info"])),
     (LimitationCode.PID_THREAD_LIST_FALLBACK,
@@ -569,6 +570,32 @@ def test_coverage_limitation_source_absent_available_with_counterpart_rejected_b
                               unavailable_fields=["StartAddress"]).to_dict()
     doc["available_fields"] = ["TID"]
     doc["counterpart_source"] = "other"
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_source_failed_with_unavailable_fields_validates(
+        coverage_limitation_schema):
+    # comparison.py's thread diff customizes a FAILED target.modules with
+    # scope="thread" + unavailable_fields (see dumpex.commands.comparison
+    # collect_thread_diff) -- the schema must accept this shape, not just
+    # the plain no-context SOURCE_FAILED every other producer emits.
+    doc = CoverageLimitation(
+        code=LimitationCode.SOURCE_FAILED, source="modules", scope="thread", detail="boom",
+        unavailable_fields=["backing_module_after", "backing_module_context"]).to_dict()
+    jsonschema.validate(doc, coverage_limitation_schema)
+
+
+def test_coverage_limitation_source_failed_available_without_unavailable_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source="modules").to_dict()
+    doc["available_fields"] = ["tid"]
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_source_failed_nonnull_affected_count_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source="modules").to_dict()
+    doc["affected_count"] = 3
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 

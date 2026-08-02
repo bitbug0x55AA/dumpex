@@ -461,7 +461,32 @@ def _render_source_absent(limitation: "CoverageLimitation") -> str:
 def _render_source_failed(limitation: "CoverageLimitation") -> str:
     name = _display_name(limitation.source)
     detail = f": {limitation.detail}" if limitation.detail else ""
-    return f"{name} present but could not be read{detail}"
+    base = f"{name} present but could not be read{detail}"
+    # unavailable_fields lets a caller (e.g. comparison.py's thread diff,
+    # for which target.modules is an optional enrichment source) say what
+    # a FAILED read impacts beyond "the source itself" -- same wording
+    # convention as _render_source_absent's own unavailable_fields clause,
+    # so a reader sees the identical shape whether the source is missing
+    # or merely unreadable. Existing SOURCE_FAILED text with no
+    # unavailable_fields (every one of today's non-comparison call sites)
+    # is unchanged -- this is purely additive.
+    if limitation.unavailable_fields:
+        avail = (f" ({'/'.join(limitation.available_fields)} only)"
+                  if limitation.available_fields else "")
+        return f"{base}; {'/'.join(limitation.unavailable_fields)} unavailable{avail}"
+    return base
+
+
+def _validate_source_failed_fields(limitation: "CoverageLimitation") -> None:
+    # Mirrors _validate_source_absent_fields' identical rule: available_
+    # fields only means anything alongside unavailable_fields (the
+    # renderer's "(Y only)" clause is appended to the unavailable_fields
+    # sentence, never emitted on its own).
+    if limitation.available_fields and not limitation.unavailable_fields:
+        raise ValueError(
+            "CoverageLimitation(code=SOURCE_FAILED) requires unavailable_fields when "
+            f"available_fields is set, got available_fields={limitation.available_fields!r} "
+            f"with unavailable_fields=()")
 
 
 def _render_source_key_mismatch(limitation: "CoverageLimitation") -> str:
@@ -673,7 +698,9 @@ _CODE_SPECS = {
             "scope", "affected_count", "unavailable_fields", "available_fields",
             "counterpart_source"})),
     LimitationCode.SOURCE_FAILED: _CodeSpec(
-        render=_render_source_failed, allowed_fields=frozenset({"scope", "detail"})),
+        render=_render_source_failed, validate_fields=_validate_source_failed_fields,
+        allowed_fields=frozenset({
+            "scope", "detail", "unavailable_fields", "available_fields"})),
     LimitationCode.SOURCE_KEY_MISMATCH: _CodeSpec(
         render=_render_source_key_mismatch, caller_buildable=True,
         validate_against_sources=_validate_source_key_mismatch_against_sources,
@@ -1189,8 +1216,26 @@ def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequi
         _validate_limitation_against_sources(limitation, sources)
         return limitation
     if obs.state == SourceState.FAILED:
-        return CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source=obs.name,
-                                   scope="dump", detail=obs.detail)
+        # Mirrors the plain-absence branch above: scope defaults to "dump"
+        # only when the caller didn't supply one, and unavailable_fields/
+        # available_fields pass through unchanged -- a source that's an
+        # OPTIONAL enrichment for one caller (e.g. comparison.py's thread
+        # diff customizing target.modules with scope="thread" and its own
+        # unavailable_fields) must produce a limitation just as
+        # distinguishable when that source FAILS to read as when it's
+        # merely ABSENT; hardcoding scope="dump" here regardless of `req`
+        # made a FAILED target.modules indistinguishable from (and
+        # therefore silently dropped alongside) module diff's own,
+        # unrelated FAILED target.modules limitation under combine_
+        # coverage_reports' dedup, and made the thread-only console never
+        # show the read failure at all (see comparison.py's own docstring
+        # on _observe_or_failed for the full story).
+        limitation = CoverageLimitation(
+            code=LimitationCode.SOURCE_FAILED, source=obs.name,
+            scope=req.scope or "dump", unavailable_fields=req.unavailable_fields,
+            available_fields=req.available_fields, detail=obs.detail)
+        _validate_limitation_against_sources(limitation, sources)
+        return limitation
     return None
 
 

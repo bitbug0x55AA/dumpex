@@ -552,6 +552,42 @@ def test_collect_thread_diff_target_modules_failure_degrades_not_aborts():
     assert coverage.status == "partial"
     assert coverage.sources["target.modules"].state == "failed"
     assert [l.code for l in coverage.limitations] == ["SOURCE_FAILED"]
+    # The FAILED limitation must carry the SAME SourceRequirement
+    # customization (scope="thread" + unavailable_fields) an ABSENT
+    # target.modules already gets here -- otherwise a thread-only console
+    # never shows the read failure at all (scope="dump" doesn't match
+    # render_thread_diff's own scope=="thread" filter), and mode="all"
+    # would produce a limitation byte-identical to module diff's own
+    # unrelated target.modules failure, which combine_coverage_reports'
+    # dedup would then incorrectly collapse into one.
+    failed_limitation = coverage.limitations[0]
+    assert failed_limitation.scope == "thread"
+    assert failed_limitation.unavailable_fields == (
+        "backing_module_after", "backing_module_context")
+
+
+def test_collect_comparison_mode_all_keeps_distinct_dump_and_thread_failed_limitations():
+    # mode="all" reads target.modules TWICE for the same underlying
+    # failure -- once as module diff's own primary source (scope="dump"),
+    # once as thread diff's optional enrichment source (scope="thread",
+    # with unavailable_fields). These must NOT collapse into one via
+    # combine_coverage_reports' dedup (which only removes byte-identical
+    # limitations) -- each section needs its own reason line.
+    mf_baseline = FakeMF()
+    mf_baseline.modules = FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules")
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_target = _ExplodingModulesMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, 0x1000)], "infos")
+
+    result = collect_comparison(mf_baseline, mf_target, mode="all")
+    failed = [l for l in result.coverage.limitations if l.code == "SOURCE_FAILED"]
+    assert len(failed) == 2
+    scopes = {l.scope for l in failed}
+    assert scopes == {"dump", "thread"}
+    thread_lim = next(l for l in failed if l.scope == "thread")
+    assert thread_lim.unavailable_fields == ("backing_module_after", "backing_module_context")
+    dump_lim = next(l for l in failed if l.scope == "dump")
+    assert dump_lim.unavailable_fields == ()
 
 
 def test_combine_coverage_reports_rolls_a_failed_entity_into_overall_partial():
