@@ -1564,3 +1564,73 @@ def test_combine_coverage_reports_rejects_conflicting_source_observation():
     r2 = _report(COVERAGE_COMPLETE, "shared", record_count=2)
     with pytest.raises(ValueError, match="conflicting"):
         combine_coverage_reports([r1, r2])
+
+
+def test_combine_coverage_reports_deduplicates_identical_limitations():
+    # Two entities independently reading the SAME physical FAILED source
+    # (e.g. a comparison's module diff and thread diff both attempting
+    # target.modules) derive the exact same CoverageLimitation from it --
+    # SOURCE_FAILED's rendered text never varies by scope (unlike SOURCE_
+    # ABSENT, which a caller CAN differentiate via unavailable_fields/a
+    # custom scope). A byte-identical limitation is one fact, not two, and
+    # must not be reported twice.
+    obs = SourceObservation(name="shared", state=SourceState.FAILED, detail="boom")
+    r1 = build_coverage_report({"shared": obs}, completeness_checks=["shared"])
+    r2 = build_coverage_report({"shared": obs}, completeness_checks=["shared"])
+    combined = combine_coverage_reports([r1, r2])
+    assert len(combined.limitations) == 1
+    assert combined.limitations[0].code == LimitationCode.SOURCE_FAILED
+
+
+def test_combine_coverage_reports_preserves_distinct_limitations_for_shared_source():
+    # The dedup above must never conflate two GENUINELY different facts
+    # about the same source -- e.g. module diff's plain SOURCE_ABSENT vs
+    # thread diff's own differentiated one (custom scope/unavailable_
+    # fields, exactly comparison.py's own target.modules pattern) both
+    # survive, since they are not equal as CoverageLimitation values.
+    absent_obs = SourceObservation(name="shared", state=SourceState.ABSENT)
+    other_obs = SourceObservation(name="other", state=SourceState.PRESENT, record_count=1)
+    r1 = build_coverage_report(
+        {"shared": absent_obs}, completeness_checks=["shared"])
+    r2 = build_coverage_report(
+        {"shared": absent_obs, "other": other_obs},
+        completeness_checks=[SourceRequirement(
+            "shared", scope="thread", unavailable_fields=("x",))])
+    combined = combine_coverage_reports([r1, r2])
+    assert len(combined.limitations) == 2
+    assert {l.scope for l in combined.limitations} == {"dump", "thread"}
+
+
+def test_build_coverage_report_surfaces_failed_source_even_when_another_group_not_evaluated():
+    # A FAILED source outside every all-absent evaluation group must not
+    # silently vanish just because a DIFFERENT group's plain absence
+    # already short-circuits the result to not_evaluated -- sources[name]
+    # still records state=FAILED either way, but limitations/reasons
+    # (and therefore the console/JSON) previously never mentioned the
+    # read failure at all in this combination.
+    baseline_obs = SourceObservation(name="baseline.x", state=SourceState.FAILED, detail="boom")
+    target_obs = SourceObservation(name="target.x", state=SourceState.ABSENT)
+    coverage = build_coverage_report(
+        {"baseline.x": baseline_obs, "target.x": target_obs},
+        evaluation_groups=[EvaluationRequirement(("baseline.x",)),
+                            EvaluationRequirement(("target.x",))],
+        completeness_checks=["baseline.x", "target.x"],
+    )
+    assert coverage.status == COVERAGE_NOT_EVALUATED
+    codes_and_sources = {(l.code, l.source) for l in coverage.limitations}
+    assert codes_and_sources == {
+        (LimitationCode.SOURCE_ABSENT, "target.x"),
+        (LimitationCode.SOURCE_FAILED, "baseline.x"),
+    }
+
+
+def test_build_coverage_report_not_evaluated_never_duplicates_absent_source_as_failed_check():
+    # The FAILED-surfacing fix above must stay scoped to FAILED only -- an
+    # ABSENT completeness_check source is already fully represented by
+    # the group's own SOURCE_ABSENT limitation; re-deriving it a second
+    # time here would just duplicate that same fact.
+    obs = SourceObservation(name="x", state=SourceState.ABSENT)
+    coverage = build_coverage_report(
+        {"x": obs}, evaluation_sources=("x",), completeness_checks=["x"])
+    assert coverage.status == COVERAGE_NOT_EVALUATED
+    assert len(coverage.limitations) == 1

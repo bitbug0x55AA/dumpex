@@ -419,16 +419,19 @@ NEW_BEHAVIOR = [
         "module_target_read_failure",
         # SourceState.FAILED -- reserved since Phase 0, unreachable by any
         # command before this migration (see this file's module docstring).
-        # The healthy baseline side's own count/records must not be
-        # misreported just because the target side raised.
+        # A required side FAILED means the diff was never attempted at all:
+        # its count shows N/A, and the section stops right there --
+        # printing "No new modules."/"No removed modules." here would read
+        # as "compared, found nothing," not "never compared" (this is the
+        # exact bug _entity_not_evaluated()/_count_or_na() in diff.py fix).
         ["--diff-mode", "modules"],
         _mf_modules([Module(0x1000, 0x1000, r"C:\a.dll")]),
         _ExplodingModulesMF(),
         3,
         '\n═══ MODULE DIFF ═══\n'
         '  [~] target ModuleListStream present but could not be read: modules boom\n'
-        '  baseline.dmp: 1 modules\n  target.dmp: 0 modules\n\n'
-        '  [+] No new modules.\n\n  [-] No removed modules.\n',
+        '  baseline.dmp: 1 modules\n  target.dmp: N/A modules\n\n'
+        '  Comparison not evaluated.\n',
     ),
     (
         "thread_baseline_read_failure",
@@ -439,8 +442,8 @@ NEW_BEHAVIOR = [
         '\n═══ THREAD DIFF ═══\n'
         '  [~] baseline ThreadInfoListStream present but could not be read: '
         'thread_info boom\n'
-        '  baseline.dmp: 0 threads\n  target.dmp: 1 threads\n\n'
-        '  [+] No new threads.\n\n  [-] No removed threads.\n',
+        '  baseline.dmp: N/A threads\n  target.dmp: 1 threads\n\n'
+        '  Comparison not evaluated.\n',
     ),
     (
         "memory_target_read_failure",
@@ -451,9 +454,29 @@ NEW_BEHAVIOR = [
         '\n═══ MEMORY REGION DIFF ═══\n'
         '  [~] target MemoryInfoListStream present but could not be read: '
         'memory_info boom\n'
-        '  baseline.dmp: 0 regions\n  target.dmp: 0 regions\n'
-        '  Delta: +0 / -0 regions\n\n  [!] No RWX regions added.\n\n'
-        '  [~] No protection changes.\n',
+        '  baseline.dmp: 0 regions\n  target.dmp: N/A regions\n\n'
+        '  Comparison not evaluated.\n',
+    ),
+    (
+        "module_baseline_absent_target_present",
+        # ABSENT (not just FAILED) is the other required-source-missing
+        # state the same guard covers: baseline.modules is entirely
+        # absent, target genuinely has one real module -- that module was
+        # never actually compared against anything, so it must not be
+        # silently paired with a false "No removed modules." into looking
+        # like a completed, clean comparison. Exit code here is
+        # not_evaluated (4), unlike the FAILED scenarios above (partial,
+        # 3) -- a plain ABSENT required source is exactly what
+        # NOT_EVALUATED already meant before this review round; only the
+        # console's wording was wrong.
+        ["--diff-mode", "modules"],
+        FakeMF(),   # ModuleListStream absent entirely
+        _mf_modules([Module(0x1000, 0x1000, r"C:\a.dll")]),
+        4,
+        '\n═══ MODULE DIFF ═══\n'
+        '  [~] baseline ModuleListStream not present in this dump\n'
+        '  baseline.dmp: N/A modules\n  target.dmp: 1 modules\n\n'
+        '  Comparison not evaluated.\n',
     ),
 ]
 # thread_added_target_modules_absent's target FakeMF needs thread_info set

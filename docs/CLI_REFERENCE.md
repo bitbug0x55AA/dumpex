@@ -79,11 +79,11 @@ refuses any output path that resolves to an input dump path.
 mode: `--hunt` uses the v1.1 contract unchanged; `--list`/`--modules`/
 `--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff` use the v2 contract
 (canonical records, `null` for missing values, normalized hex addresses —
-see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output---list--modules--threads--pid--sysinfo--peb)).
+see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
 `--diff` produces a `kind: "comparison"` result with a two-entry
 `meta.evidence` array (`baseline`/`target`) instead of the single-dump
 `meta` shape the other six use — see
-[Output and Evidence Schema](OUTPUT_SCHEMA.md#comparison-records---diff).
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#comparison-records).
 `--report`/`--extract`/`--strings` don't produce structured output yet —
 `--json`/`--csv` with one of these is rejected immediately, before the
 dump is opened, rather than running the full command first. For the

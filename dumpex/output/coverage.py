@@ -1307,8 +1307,37 @@ def build_coverage_report(
         absent_group_limitations.append(group_limitation)
 
     if absent_group_limitations:
+        # completeness_checks is otherwise skipped entirely once any group
+        # is all-absent (see the docstring above) -- but a FAILED source is
+        # NOT absent, so it can sit outside every all-absent group and its
+        # own fact ("this source was actually attempted and errored, not
+        # merely missing") would otherwise vanish completely: sources[name]
+        # still records state=FAILED, but neither `limitations` nor the
+        # `reasons` derived from it would ever mention it, silently hiding
+        # a real read error behind an unrelated not_evaluated verdict. Only
+        # FAILED is surfaced here, never ABSENT -- an absent completeness-
+        # check source is either already covered by the group logic above,
+        # or (if outside every group) would just repeat "not present",
+        # adding no new fact worth surfacing under not_evaluated.
+        extra_failed_limitations = []
+        seen_failed_sources = set()
+        for check in completeness_checks:
+            if isinstance(check, CoverageLimitation):
+                continue   # a pre-built business fact never applies when nothing was evaluated
+            name = _completeness_check_source_name(check)
+            if name in seen_failed_sources or sources[name].state != SourceState.FAILED:
+                continue
+            req = check if isinstance(check, SourceRequirement) else None
+            # Always a CoverageLimitation, never None, for state=FAILED --
+            # _derive_required_source_limitation's FAILED branch constructs
+            # one unconditionally (unlike its ABSENT branch, which req
+            # doesn't gate here either -- FAILED already ignores req
+            # entirely, see that function's own docstring).
+            extra_failed_limitations.append(
+                _derive_required_source_limitation(sources[name], req, sources))
+            seen_failed_sources.add(name)
         return CoverageReport(status=CoverageStatus.NOT_EVALUATED, sources=sources,
-                               limitations=absent_group_limitations)
+                               limitations=absent_group_limitations + extra_failed_limitations)
 
     limitations = []
     for check in completeness_checks:
@@ -1366,6 +1395,7 @@ def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
 
     sources = {}
     limitations = []
+    seen_limitations = set()
     for r in reports:
         for name, obs in r.sources.items():
             if name in sources and sources[name].to_dict() != obs.to_dict():
@@ -1376,7 +1406,23 @@ def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
                     f"identically, or the merged sources dict cannot represent one coherent "
                     f"fact about it")
             sources[name] = obs
-        limitations.extend(r.limitations)
+        for lim in r.limitations:
+            # Two entities independently reading the SAME physical source
+            # (e.g. a comparison's thread diff also consulting target.
+            # modules to resolve backing modules, the same stream the
+            # module diff itself already reads) can derive the exact same
+            # CoverageLimitation from it -- most visibly for SOURCE_FAILED,
+            # whose rendered text never varies by scope (unlike SOURCE_
+            # ABSENT, which a caller can differentiate via `unavailable_
+            # fields`/a custom `scope`; see comparison.py's own target.
+            # modules SourceRequirement for that case). A byte-identical
+            # limitation is one fact, not two -- deduplicated here (first
+            # occurrence wins, order otherwise preserved) rather than
+            # printed/reported twice for what is genuinely a single read.
+            if lim in seen_limitations:
+                continue
+            seen_limitations.add(lim)
+            limitations.append(lim)
 
     statuses = {r.status for r in reports}
     if statuses == {CoverageStatus.NOT_EVALUATED}:

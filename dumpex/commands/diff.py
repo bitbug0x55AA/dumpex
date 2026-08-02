@@ -19,7 +19,7 @@ from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
 from dumpex.output.command_result import CommandResult
 from dumpex.output.records import MODULE_CONTEXT_RESOLVED
-from dumpex.output.coverage import render_limitation
+from dumpex.output.coverage import render_limitation, SourceState
 from dumpex.commands.comparison import collect_comparison
 
 # MemoryDiffRecord deliberately only carries the coarse suspicious_before/
@@ -65,8 +65,55 @@ def _print_reasons(reasons) -> None:
         print(YELLOW(f"  [~] {reason}"))
 
 
+_UNEVALUATED_STATES = (SourceState.ABSENT, SourceState.FAILED)
+
+
+def _count_or_na(obs) -> str:
+    """record_count is None for both ABSENT and FAILED -- `or 0` would
+    print "0" for a side that was never actually read, indistinguishable
+    from a side genuinely confirmed to have zero items. N/A only when
+    there is truly no count to report; PRESENT_EMPTY still prints 0 (it
+    IS a confirmed zero)."""
+    return "N/A" if obs.record_count is None else str(obs.record_count)
+
+
+def _entity_not_evaluated(coverage, baseline_source: str, target_source: str) -> bool:
+    """True when EITHER required side for this entity is ABSENT or FAILED
+    -- exactly the condition under which collect_module_diff/
+    collect_thread_diff/collect_memory_diff each return records=[] without
+    attempting a diff at all (see their own post-coverage gates in
+    comparison.py). Deliberately checks only the entity's own two required
+    sources (e.g. thread's baseline.thread_info/target.thread_info), never
+    an optional enrichment source like target.modules -- a FAILED/ABSENT
+    target.modules degrades thread backing-module resolution but must
+    never suppress the add/remove section itself, which never depended on
+    it."""
+    baseline_state = coverage.sources[baseline_source].state
+    target_state = coverage.sources[target_source].state
+    return baseline_state in _UNEVALUATED_STATES or target_state in _UNEVALUATED_STATES
+
+
 def _render_module_diff(records, coverage, label_baseline, label_target) -> None:
     module_records = [r for r in records if r.entity_type == "module"]
+    baseline_obs = coverage.sources["baseline.modules"]
+    target_obs = coverage.sources["target.modules"]
+
+    print(f"\n{BOLD('═══ MODULE DIFF ═══')}")
+    _print_reasons(_reasons_for(
+        coverage, lambda l: l.source in ("baseline.modules", "target.modules")
+        and l.scope != "thread"))
+    print(f"  {DIM(label_baseline)}: {_count_or_na(baseline_obs)} modules")
+    print(f"  {DIM(label_target)}: {_count_or_na(target_obs)} modules")
+
+    if _entity_not_evaluated(coverage, "baseline.modules", "target.modules"):
+        # collect_module_diff never attempted a diff at all here (either
+        # side ABSENT/FAILED) -- module_records is unconditionally [], so
+        # printing "No new modules."/"No removed modules." below would
+        # read as "compared, found nothing," not "never compared."
+        print(DIM("\n  Comparison not evaluated."))
+        return
+    print()
+
     # Header counts come from the SOURCE's own record_count, not a
     # recount of `records` (which only holds the diff, not a full
     # inventory) -- see this function's own note on the one narrow,
@@ -74,16 +121,6 @@ def _render_module_diff(records, coverage, label_baseline, label_target) -> None
     # original silently deduplicates by lowercase basename before
     # counting (a pre-existing bug when two named modules share a
     # basename), this uses the true raw stream count instead.
-    baseline_count = coverage.sources["baseline.modules"].record_count or 0
-    target_count = coverage.sources["target.modules"].record_count or 0
-
-    print(f"\n{BOLD('═══ MODULE DIFF ═══')}")
-    _print_reasons(_reasons_for(
-        coverage, lambda l: l.source in ("baseline.modules", "target.modules")
-        and l.scope != "thread"))
-    print(f"  {DIM(label_baseline)}: {baseline_count} modules")
-    print(f"  {DIM(label_target)}: {target_count} modules\n")
-
     added = [r for r in module_records if r.change_type == "added"]
     if added:
         print(GREEN(f"  [+] Added in {label_target} ({len(added)}):"))
@@ -111,15 +148,24 @@ def _render_module_diff(records, coverage, label_baseline, label_target) -> None
 
 def _render_thread_diff(records, coverage, label_baseline, label_target) -> None:
     thread_records = [r for r in records if r.entity_type == "thread"]
-    baseline_count = coverage.sources["baseline.thread_info"].record_count or 0
-    target_count = coverage.sources["target.thread_info"].record_count or 0
+    baseline_obs = coverage.sources["baseline.thread_info"]
+    target_obs = coverage.sources["target.thread_info"]
 
     print(f"\n{BOLD('═══ THREAD DIFF ═══')}")
     _print_reasons(_reasons_for(
         coverage, lambda l: l.source in ("baseline.thread_info", "target.thread_info")
         or (l.source == "target.modules" and l.scope == "thread")))
-    print(f"  {DIM(label_baseline)}: {baseline_count} threads")
-    print(f"  {DIM(label_target)}: {target_count} threads\n")
+    print(f"  {DIM(label_baseline)}: {_count_or_na(baseline_obs)} threads")
+    print(f"  {DIM(label_target)}: {_count_or_na(target_obs)} threads")
+
+    if _entity_not_evaluated(coverage, "baseline.thread_info", "target.thread_info"):
+        # Only the two REQUIRED thread_info sides gate this -- an ABSENT/
+        # FAILED target.modules is an OPTIONAL enrichment source (see
+        # comparison.py's collect_thread_diff) and must never suppress
+        # add/remove rendering, which never depended on it.
+        print(DIM("\n  Comparison not evaluated."))
+        return
+    print()
 
     added = [r for r in thread_records if r.change_type == "added"]
     if added:
@@ -153,8 +199,8 @@ def _render_thread_diff(records, coverage, label_baseline, label_target) -> None
 
 def _render_memory_diff(records, coverage, label_baseline, label_target, verbose=False) -> None:
     memory_records = [r for r in records if r.entity_type == "memory_region"]
-    baseline_count = coverage.sources["baseline.memory_info"].record_count or 0
-    target_count = coverage.sources["target.memory_info"].record_count or 0
+    baseline_obs = coverage.sources["baseline.memory_info"]
+    target_obs = coverage.sources["target.memory_info"]
 
     added = [r for r in memory_records if r.change_type == "added"]
     removed = [r for r in memory_records if r.change_type == "removed"]
@@ -190,8 +236,17 @@ def _render_memory_diff(records, coverage, label_baseline, label_target, verbose
     print(f"\n{BOLD('═══ MEMORY REGION DIFF ═══')}")
     _print_reasons(_reasons_for(
         coverage, lambda l: l.source in ("baseline.memory_info", "target.memory_info")))
-    print(f"  {DIM(label_baseline)}: {baseline_count} regions")
-    print(f"  {DIM(label_target)}: {target_count} regions")
+    print(f"  {DIM(label_baseline)}: {_count_or_na(baseline_obs)} regions")
+    print(f"  {DIM(label_target)}: {_count_or_na(target_obs)} regions")
+
+    if _entity_not_evaluated(coverage, "baseline.memory_info", "target.memory_info"):
+        # Skips the Delta/tier lines entirely -- added/removed/changed are
+        # unconditionally [] here, so "Delta: +0 / -0" and "No RWX regions
+        # added"/"No protection changes" would misleadingly read as a
+        # completed comparison that found nothing, not a comparison that
+        # never ran.
+        print(DIM("\n  Comparison not evaluated."))
+        return
     print(f"  {DIM('Delta')}: +{len(added)} / -{len(removed)} regions\n")
 
     if added_rwx:

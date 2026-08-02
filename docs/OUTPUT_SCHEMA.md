@@ -252,7 +252,7 @@ of the dumpex application version. The policy for changing the schema file:
   release notes. Never silently reuse an existing `schema_version` for an
   incompatible shape change.
 
-## v2 structured output (`--list` / `--modules` / `--threads` / `--pid` / `--sysinfo` / `--peb` / `--diff`)
+## v2 structured output
 
 These seven recon commands are always structured internally — even
 without `--json`/`--csv` — and use a distinct envelope from v1.1's
@@ -300,7 +300,7 @@ array's own shape.
 a verdict:
 
 - **`execution_status`** — did the *command* run to completion
-  (`"completed"` / `"partial"` / `"failed"`)? None of these six commands
+  (`"completed"` / `"partial"` / `"failed"`)? None of these seven commands
   has an internal scan-budget/timeout, so this is `"completed"` in every
   case that doesn't crash.
 - **`coverage.status`** — was the *evidence* it looked at complete
@@ -311,7 +311,7 @@ a verdict:
   `ThreadInfoListStream`; `--pid` reports `"partial"` when it had to fall
   back past `MINIDUMP_MISC_INFO` to a thread-list/exception-stream
   heuristic. `coverage.reasons` explains why.
-- **verdict/confidence** — not applicable to these six commands at all;
+- **verdict/confidence** — not applicable to these seven commands at all;
   that concept stays scoped to `--report`/`--hunt`, which reason about
   evidence, not just list it.
 
@@ -391,7 +391,7 @@ itself produced — e.g. an extracted memory region — distinct from
 `{"id", "kind", "path", "size_bytes", "sha256", "description"}`
 (`dumpex.output.records.Artifact`), field naming mirroring
 `meta.evidence`'s own `id`/`path`/`size_bytes`/`sha256` shape. None of
-these six commands populates it today — it stays `[]` — the type exists
+these seven commands populates it today — it stays `[]` — the type exists
 so a future `--extract`/`--report` migration has a typed shape to build
 instead of a bare dict.
 
@@ -400,7 +400,7 @@ Passing `--json`/`--csv` with one of them is rejected before the dump is
 opened (`parser.error`, exit code `2`), not after a full run completes
 with nothing to write.
 
-### `result.kind == "comparison"` (`--diff`)
+### Comparison records
 
 `schema_version 2.1` adds a `"comparison"` value to `result.kind` and
 three new tagged-union record types for it, grounded in `--diff`'s own
