@@ -1,25 +1,26 @@
 """
-Compatibility-freeze suite for `--extract` (Phase E, PR1). `--strings`
-(PR2) is added to this same file once it migrates too -- both share the
-same read-region/no-baseline-target-duality shape, unlike `--diff`'s own
-two-dump suite (test_diff_compat_freeze.py).
+Compatibility-freeze suite for `--extract` (Phase E, PR1) and `--strings`
+(Phase E, PR2) -- both share the same read-region/no-baseline-target-
+duality shape, unlike `--diff`'s own two-dump suite
+(test_diff_compat_freeze.py).
 
 Every scenario runs the real `cli.main()` end to end against a FakeMF and
 asserts exit code, the full console text, and the JSON document's
 kind/coverage/artifact shape -- same discipline as test_diff_compat_freeze.py.
 Expected console text was captured by actually running the ORIGINAL
-(pre-migration) `cmd_extract` (see the scratchpad capture script
-referenced in Phase E's plan) before extract.py was rewritten, not
-hand-guessed -- there is no pre-existing test suite for --extract to fall
-back on if a guess were wrong (zero tests existed for it before this
-phase).
+(pre-migration) `cmd_extract`/`cmd_strings` (see the scratchpad capture
+scripts referenced in Phase E's plan) before extract.py was rewritten, not
+hand-guessed -- there is no pre-existing test suite for either command to
+fall back on if a guess were wrong (zero tests existed for either before
+this phase).
 
 Every scenario here passes an explicit `--size`, so `_resolve_size()`'s
 own auto-detection-from-region logic (unchanged by this migration, lives
 in dumpex.core.memory) is never exercised by this suite -- the
 `auto_sized=True` cosmetic rendering path (the "(auto from region)" note)
-is covered directly against collect_extract()/render_extract_console() in
-tests/unit/test_extract_cmd.py instead, decoupled from _resolve_size's own
+is covered directly against collect_extract()/collect_strings() and their
+own render_*_console() in tests/unit/test_extract_cmd.py and
+tests/unit/test_strings_cmd.py instead, decoupled from _resolve_size's own
 region-lookup behavior.
 """
 import datetime
@@ -197,5 +198,136 @@ def test_extract_read_failure_exits_1_before_any_structured_output(monkeypatch, 
     assert exc.value.code == 1
     console = capsys.readouterr().out
     assert "[*] Reading 0x10 bytes from 0x9999 ...\n" in console
+    assert "[!] Read failed: bad address" in console
+    assert not os.path.exists(out_json), "a failed read must not leave a partial JSON file"
+
+
+# ── --strings (Phase E, PR2) ───────────────────────────────────────────────
+
+def _run_strings(monkeypatch, tmp_path, addr, size_hex, min_len, grep, encoding, data_map):
+    monkeypatch.setattr(cli, "datetime", _FrozenDateTimeModule)
+    monkeypatch.setattr(collector_mod, "datetime", _FrozenDateTimeModule)
+    dump_path = str(tmp_path / "sample.dmp")
+    with open(dump_path, "wb") as fh:
+        fh.write(b"synthetic dump content")
+    mf = FakeMF()
+    mf.filename = dump_path
+    monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+    monkeypatch.setattr(extract_mod, "read_region", mem_reader(data_map))
+
+    out_json = str(tmp_path / "out.json")
+    out_csv = str(tmp_path / "out.csv")
+    argv = ["dumpex", dump_path, "--strings", addr, "--size", size_hex,
+            "--min-len", str(min_len), "--encoding", encoding]
+    if grep is not None:
+        argv += ["--grep", grep]
+    argv += ["--json", out_json, "--csv", out_csv]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    exit_code = 0
+    try:
+        cli.main()
+    except SystemExit as exc:
+        exit_code = exc.code
+    doc = json.loads(open(out_json, encoding="utf-8").read())
+    csv_text = open(out_csv, encoding="utf-8").read()
+    return exit_code, doc, csv_text
+
+
+# ── TRUE_FREEZE_STRINGS scenarios: console text captured from the original
+# cmd_strings before Phase E, PR2's rewrite (see the scratchpad capture
+# script capture_old_strings_output.py referenced in Phase E's plan) ─────
+# (name, addr, size_hex, min_len, grep, encoding, data, expected_console)
+
+_DASH_LINE = "─" * 70   # matches render_strings_console's own "─" * 70
+
+TRUE_FREEZE_STRINGS = [
+    (
+        "ascii_only_both_encoding",
+        "0x1000", None, 6, None, "both",
+        b"hello world!\x00\x00" + b"another string here" + b"\x00" * 10,
+        "\nOffset         Enc     String\n"
+        f"{_DASH_LINE}\n"
+        "0x1000         ASCII   hello world!\n"
+        "0x100e         ASCII   another string here\n"
+        "\n[+] 2 string(s) shown.\n",
+    ),
+    (
+        "grep_filter_matches_some",
+        "0x3000", None, 6, "recipe", "ascii",
+        b"apple pie recipe" + b"\x00" * 5 + b"banana bread recipe" + b"\x00" * 5 + b"cherry tart",
+        "\nOffset         Enc     String\n"
+        f"{_DASH_LINE}\n"
+        "0x3000         ASCII   apple pie recipe\n"
+        "0x3015         ASCII   banana bread recipe\n"
+        "\n[+] 2 string(s) shown.\n",
+    ),
+    (
+        "no_strings_found",
+        "0x4000", 15, 6, None, "both",
+        b"\x01\x02\x03" * 5,
+        "\nOffset         Enc     String\n"
+        f"{_DASH_LINE}\n"
+        "\n[+] 0 string(s) shown.\n",
+    ),
+    (
+        "min_len_boundary_exact_match",
+        "0x6000", 16, 6, None, "ascii",
+        b"abcdef" + b"\x00" * 10,
+        "\nOffset         Enc     String\n"
+        f"{_DASH_LINE}\n"
+        "0x6000         ASCII   abcdef\n"
+        "\n[+] 1 string(s) shown.\n",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "name,addr,size_hex_override,min_len,grep,encoding,data,expected_body",
+    TRUE_FREEZE_STRINGS, ids=[s[0] for s in TRUE_FREEZE_STRINGS],
+)
+def test_strings_compat_freeze(monkeypatch, tmp_path, capsys, name, addr, size_hex_override,
+                                min_len, grep, encoding, data, expected_body):
+    size = size_hex_override if size_hex_override is not None else len(data)
+    size_hex = hex(size)
+    exit_code, doc, csv_text = _run_strings(
+        monkeypatch, tmp_path, addr, size_hex, min_len, grep, encoding, {int(addr, 16): data})
+    console = capsys.readouterr().out
+    body = _split_console_body(console)
+
+    auto_note = ""
+    expected_header = (f"[*] Extracting strings from {addr} (size={size_hex}{auto_note}, "
+                        f"min={min_len}, enc={encoding})\n")
+
+    assert exit_code == 0, f"{name}: exit code drifted"
+    assert body == expected_header + expected_body, f"{name}: console drifted"
+
+    assert doc["meta"]["schema_version"] == "2.2"
+    assert doc["result"]["kind"] == "strings"
+    assert doc["result"]["coverage"]["status"] == "complete"
+    assert "## strings / summary" in csv_text or "## strings / records" in csv_text
+
+
+def test_strings_read_failure_exits_1_before_any_structured_output(monkeypatch, tmp_path, capsys):
+    dump_path = str(tmp_path / "sample.dmp")
+    with open(dump_path, "wb") as fh:
+        fh.write(b"synthetic dump content")
+    mf = FakeMF()
+    mf.filename = dump_path
+    monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+    def _boom(mf, addr, size):
+        raise RuntimeError("bad address")
+    monkeypatch.setattr(extract_mod, "read_region", _boom)
+
+    out_json = str(tmp_path / "out.json")
+    monkeypatch.setattr(sys, "argv",
+                         ["dumpex", dump_path, "--strings", "0x9999", "--size", "0x10",
+                          "--json", out_json])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 1
+    console = capsys.readouterr().out
+    assert "[*] Extracting strings from 0x9999" in console
     assert "[!] Read failed: bad address" in console
     assert not os.path.exists(out_json), "a failed read must not leave a partial JSON file"

@@ -26,32 +26,31 @@ from dumpex.hunt              import cmd_hunt
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # --hunt keeps StructuredOutput/dumpex-output-v1.1.schema.json unchanged.
-# These eight commands are migrated onto the v2 envelope (see
+# These nine commands are migrated onto the v2 envelope (see
 # dumpex/output/ and dumpex-output-v2.2.schema.json); --diff produces a
 # kind="comparison" result via V2Output.from_evidence() (two dumps), the
-# other seven produce their usual single-dump kinds. --report/--strings
-# don't produce structured output yet at all (their own canonical
-# records are a later Phase E migration) -- requesting --json/--csv with
-# one of them is now rejected up front (see the pre-flight check in
-# main()) instead of running the full command and only saying so
-# afterward.
+# other eight produce their usual single-dump kinds. --report doesn't
+# produce structured output yet at all (its own canonical records are a
+# later Phase E migration) -- requesting --json/--csv with it is now
+# rejected up front (see the pre-flight check in main()) instead of
+# running the full command and only saying so afterward.
 _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo", "peb", "diff",
-                                    "extract"})
-_UNSUPPORTED_STRUCTURED_MODES = frozenset({"report", "strings"})
+                                    "extract", "strings"})
+_UNSUPPORTED_STRUCTURED_MODES = frozenset({"report"})
 
-# Exit codes for the eight v2-routed commands, independent of
+# Exit codes for the nine v2-routed commands, independent of
 # --json/--csv having been requested at all: a SOC script checking `$?`
 # on a bare `dumpex --threads dump.dmp` should be able to detect
 # incomplete coverage without needing to also parse JSON. Every other
 # command's exit-code behavior (0 on completion, an uncaught exception's
 # default nonzero exit on a fatal error) is unchanged by this PR --
 # folding --report/--hunt into this same convention is a later,
-# cross-cutting decision, not made here for just these eight commands.
+# cross-cutting decision, not made here for just these nine commands.
 #
 # EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED and the status->code mapping
 # itself (exit_code_for) live in dumpex.output.coverage, not here --
 # that's the single place a coverage status becomes a process exit code,
-# used by _apply_command_result() below for all eight of these commands.
+# used by _apply_command_result() below for all nine of these commands.
 
 
 def _selected_run_mode(args) -> str:
@@ -156,15 +155,14 @@ def main():
     run_mode = _selected_run_mode(args)
 
     # --json/--csv on a command that doesn't produce structured output yet
-    # (--report/--strings -- see _UNSUPPORTED_STRUCTURED_MODES) is
-    # rejected HERE, before the dump is even opened, rather than running the
-    # full command and only saying so afterward once nothing was collected
-    # to write.
+    # (--report -- see _UNSUPPORTED_STRUCTURED_MODES) is rejected HERE,
+    # before the dump is even opened, rather than running the full command
+    # and only saying so afterward once nothing was collected to write.
     if (args.json or args.csv) and run_mode in _UNSUPPORTED_STRUCTURED_MODES:
         flag = "--json" if args.json else "--csv"
         parser.error(f"{flag} is not supported for --{run_mode} yet -- structured output "
                      f"currently covers --list/--modules/--threads/--pid/--sysinfo/--peb/"
-                     f"--diff/--extract (v2) and --hunt (v1.1). Rerun without {flag}.")
+                     f"--diff/--extract/--strings (v2) and --hunt (v1.1). Rerun without {flag}.")
 
     # --ref-dir is only meaningful for --hunt stomping, but validated
     # unconditionally and up front — a silently-ignored typo'd/missing
@@ -267,7 +265,7 @@ def main():
         mf_target = open_dump(args.diff) if run_mode == "diff" else None
 
         # Structured output collector — populated by commands that support
-        # it. The seven v2-routed recon commands always get a V2Output
+        # it. The eight v2-routed recon commands always get a V2Output
         # (built regardless of --json/--csv, so the exit-code contract
         # below is consistent whether or not structured output was
         # actually written); --hunt keeps constructing StructuredOutput
@@ -314,7 +312,7 @@ def main():
 
 
 def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
-    """Returns the process exit code for the eight v2-routed commands
+    """Returns the process exit code for the nine v2-routed commands
     (EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED — see module docstring), or
     None for every other command (unchanged exit-code behavior: 0 on
     completion, an uncaught exception's default nonzero exit on a fatal
@@ -322,7 +320,7 @@ def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
     exit_code = None
 
     def _apply_command_result(result):
-        """CommandResult-based path -- all eight v2-routed commands
+        """CommandResult-based path -- all nine v2-routed commands
         are migrated onto dumpex.output.coverage/.command_result (see
         those modules). Routed through set_command_result(), which
         forwards every CommandResult field (execution_status, structured
@@ -373,7 +371,8 @@ def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
         addr = parse_hex_or_int(args.strings)
         _req = parse_hex_or_int(args.size) if args.size else None
         size = _resolve_size(mf, addr, _req)
-        cmd_strings(mf, addr, size, args.min_len, args.grep, args.encoding, auto_size=_req is None)
+        exit_code = _apply_command_result(
+            cmd_strings(mf, addr, size, args.min_len, args.grep, args.encoding, auto_size=_req is None))
 
     # ── Write structured output ────────────────────────────────────────────
     if out:

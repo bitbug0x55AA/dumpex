@@ -750,6 +750,49 @@ def test_extract_full_envelope_with_mz_header_validates(validator, tmp_path):
     assert doc["diagnostics"]["warnings"][0]["code"] == "EXTRACT_MZ_HEADER_DETECTED"
 
 
+# ── result.kind == "strings" (Phase E, PR2) ───────────────────────────────
+
+def test_strings_full_envelope_with_grep_validates(validator):
+    import dumpex.commands.extract as extract_mod
+    from dumpex.commands.extract import collect_strings
+
+    mf = FakeMF()
+    mf.filename = "test.dmp"
+    data = b"apple pie recipe" + b"\x00" * 5 + b"cherry tart notes"
+    extract_mod.read_region = mem_reader({0x1000: data})
+    result = collect_strings(mf, 0x1000, len(data), 6, "recipe", "ascii")
+    doc = _validate(validator, result)
+    assert doc["result"]["kind"] == "strings"
+    assert doc["result"]["coverage"]["status"] == "complete"
+    assert doc["result"]["data"]["records"][0]["matched_grep"] is True
+    assert doc["result"]["data"]["records"][1]["matched_grep"] is False
+
+
+def test_strings_empty_result_validates(validator):
+    import dumpex.commands.extract as extract_mod
+    from dumpex.commands.extract import collect_strings
+
+    mf = FakeMF()
+    mf.filename = "test.dmp"
+    extract_mod.read_region = mem_reader({0x4000: b"\x01\x02\x03" * 5})
+    result = collect_strings(mf, 0x4000, 15, 6, None, "both")
+    doc = _validate(validator, result)
+    assert doc["result"]["kind"] == "strings"
+    assert doc["result"]["data"]["records"] == []
+    assert doc["result"]["coverage"]["sources"]["requested_region"]["state"] == "present_empty"
+
+
+def test_strings_kind_is_rejected_by_the_frozen_v2_1_schema(validator_v2_1):
+    # dumpex-output-v2.1.schema.json predates "strings" entirely -- proves
+    # the frozen historical schema was never silently updated to accept
+    # it (same precedent as "extract" and "comparison" above).
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.1"
+    doc["result"]["kind"] = "strings"
+    doc["result"]["data"]["records"] = []
+    assert not validator_v2_1.is_valid(doc)
+
+
 def test_extract_kind_is_rejected_by_the_frozen_v2_1_schema(validator_v2_1):
     # dumpex-output-v2.1.schema.json predates "extract" entirely -- proves
     # the frozen historical schema was never silently updated to accept

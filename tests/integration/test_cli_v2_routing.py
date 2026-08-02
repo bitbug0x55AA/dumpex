@@ -36,7 +36,6 @@ def _forbid_open_dump(monkeypatch):
 
 @pytest.mark.parametrize("mode_args", [
     ["--report", "--report-tid", "1"],
-    ["--strings", "0x1000"],
 ])
 def test_json_on_unsupported_mode_rejected_before_open_dump(monkeypatch, capsys, mode_args):
     _forbid_open_dump(monkeypatch)
@@ -60,6 +59,14 @@ def test_json_on_extract_mode_is_not_rejected_reaches_open_dump(monkeypatch, cap
     # --extract is v2-supported too (Phase E, PR1) -- must proceed past
     # the pre-flight check and reach open_dump()'s own failure mode.
     code = _run(monkeypatch, ["/nonexistent.dmp", "--extract", "0x1000", "--json", "out.json"])
+    assert code == 1
+    assert "File not found" in capsys.readouterr().out
+
+
+def test_json_on_strings_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
+    # --strings is v2-supported too (Phase E, PR2) -- must proceed past
+    # the pre-flight check and reach open_dump()'s own failure mode.
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--strings", "0x1000", "--json", "out.json"])
     assert code == 1
     assert "File not found" in capsys.readouterr().out
 
@@ -143,6 +150,36 @@ def test_extract_json_produces_v2_shaped_document_with_artifact(monkeypatch, tmp
         assert doc["artifacts"][0]["size_bytes"] == 64
         assert doc["diagnostics"]["warnings"][0]["code"] == "EXTRACT_MZ_HEADER_DETECTED"
         assert os.path.exists(extract_out)
+    finally:
+        os.remove(dump_path)
+
+
+def test_strings_json_produces_v2_shaped_document(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.filename = dump_path
+        import dumpex.commands.extract as extract_mod
+        from tests.fixtures.fakes import mem_reader
+        data = b"hello world!\x00\x00" + b"another string here" + b"\x00" * 10
+        monkeypatch.setattr(extract_mod, "read_region", mem_reader({0x1000: data}))
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--strings", "0x1000",
+                              "--size", str(hex(len(data))), "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == "2.2"
+        assert doc["result"]["kind"] == "strings"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        records = doc["result"]["data"]["records"]
+        assert len(records) == 2
+        assert records[0]["text"] == "hello world!"
+        assert records[0]["matched_grep"] is None
+        assert "hunt" not in doc
     finally:
         os.remove(dump_path)
 

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.2.schema.json",
   "title": "dumpex v2 structured output (schema_version 2.2)",
-  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb), --diff, and (Phase E, in progress) --extract/--strings/--report, via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract). v2.2 adds `result.kind == \"extract\"` and its extractRecord type on top of v2.1's unchanged root shape and existing record types -- dumpex-output-v2.1.schema.json remains frozen and installable for validating output produced before this addition; no currently-produced document from any prior command is rejected by v2.2 beyond the schema_version string itself. `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. result.data.records[] items ARE typed per kind (see the allOf/if-then block in $defs/result and the record $defs) -- additionalProperties: false on every record type, so a dropped/renamed/retyped field or a stray field from the wrong kind fails validation, not just 'is an array'.",
+  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb), --diff, --extract, --strings, and (Phase E, in progress) --report, via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract). v2.2 adds `result.kind == \"extract\"`/`\"strings\"` and their extractRecord/stringRecord types on top of v2.1's unchanged root shape and existing record types -- dumpex-output-v2.1.schema.json remains frozen and installable for validating output produced before this addition; no currently-produced document from any prior command is rejected by v2.2 beyond the schema_version string itself. `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. result.data.records[] items ARE typed per kind (see the allOf/if-then block in $defs/result and the record $defs) -- additionalProperties: false on every record type, so a dropped/renamed/retyped field or a stray field from the wrong kind fails validation, not just 'is an array'.",
   "type": "object",
   "required": ["meta", "result"],
   "additionalProperties": true,
@@ -224,6 +224,20 @@
       }
     },
 
+    "stringRecord": {
+      "description": "Matches dumpex.output.records.StringRecord.to_dict() -- one extracted string from a --strings scan. `offset` is a plain byte offset relative to the read region's start, NOT a process address. `matched_grep` is a flag, not a filter: this record is emitted for every extracted string regardless of --grep -- null when no --grep was given at all, true/false per record when it was.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "address", "encoding", "text", "matched_grep"],
+      "properties": {
+        "offset":       { "type": "integer", "minimum": 0 },
+        "address":      { "$ref": "#/$defs/hexAddress" },
+        "encoding":     { "enum": ["ASCII", "UTF16"] },
+        "text":         { "type": "string" },
+        "matched_grep": { "type": ["boolean", "null"] }
+      }
+    },
+
     "moduleDiffRecord": {
       "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic. `name` is always a non-empty string (\"(unnamed)\" for an anonymous module -- see dumpex.commands.comparison._module_display_name), but full_path_before/full_path_after are only forced null on the side that genuinely has no entry -- the PRESENT side's full_path may legitimately be null too (an anonymous module has a real base_address but no name at all), so only base_address is required non-null for added/removed. `full_path_before`/`full_path_after` are otherwise unconstrained by change_type: address identifies a module diff, not path. NOT expressed here (Python-only, see ModuleDiffRecord.__post_init__): for `change_type: \"rebased\"`, base_address_before must differ from base_address_after -- JSON Schema cannot compare two sibling field VALUES for inequality within one object.",
       "type": "object",
@@ -354,7 +368,7 @@
         "kind": {
           "description": "Which canonical record type result.data.records holds. Grows as more commands migrate onto v2 -- not an open string.",
           "enum": ["memory_regions", "modules", "threads", "sysinfo", "pid", "peb", "comparison",
-                    "extract"]
+                    "extract", "strings"]
         },
         "execution_status": {
           "description": "Did the COMMAND itself run to completion -- independent of whether the EVIDENCE it saw was complete (see coverage below). None of the six v2 recon commands has an internal scan-budget/timeout concept that could produce a genuine partial execution, so 'partial' is reserved for future commands (e.g. hunters, once migrated) that do.",
@@ -421,7 +435,10 @@
             "records": { "items": { "$ref": "#/$defs/comparisonRecord" } } } } } } },
         { "if": { "properties": { "kind": { "const": "extract" } } },
           "then": { "properties": { "data": { "properties": {
-            "records": { "items": { "$ref": "#/$defs/extractRecord" } } } } } } }
+            "records": { "items": { "$ref": "#/$defs/extractRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "strings" } } },
+          "then": { "properties": { "data": { "properties": {
+            "records": { "items": { "$ref": "#/$defs/stringRecord" } } } } } } }
       ]
     },
 
@@ -526,7 +543,7 @@
     },
 
     "artifact": {
-      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Not yet populated by any of the six v2-routed recon commands; the type exists so a future producer (extract/report, once migrated) has a typed shape to build. Matches dumpex.output.records.Artifact.to_dict(), which always emits all six fields -- `required` covers all of them, not just id/kind/path.",
+      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Populated by --extract (Phase E, PR1); a future --report migration (PR3) is expected to produce it too, for its own optional extract-to-file side effect, under a different `kind` string. Matches dumpex.output.records.Artifact.to_dict(), which always emits all six fields -- `required` covers all of them, not just id/kind/path.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "kind", "path", "size_bytes", "sha256", "description"],

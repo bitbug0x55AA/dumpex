@@ -2,8 +2,8 @@
 (Phase E, PR1). collect_extract() returns a dumpex.output.command_result.
 CommandResult -- accessed via attributes, never unpacked as a tuple.
 
---strings (cmd_strings) is untouched in this PR -- it stays console-only
-pending PR2 -- so it is not tested here.
+--strings (cmd_strings) is migrated separately in Phase E, PR2 -- see
+tests/unit/test_strings_cmd.py.
 
 Every success-path test writes through the real write_output_bytes(), so
 each uses tmp_path for the output path -- never a bare relative filename,

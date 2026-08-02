@@ -272,15 +272,23 @@ def _get_region_at(addr: int, regions: list):
             return r
     return None
 
-def _extract_strings_from_data(data: bytes, min_len: int = 6) -> list:
-    """\n    Extract ASCII and UTF-16LE strings.\n    Returns list of (offset, enc, string).\n    UTF-16LE covers Windows API names, registry paths, and wide-char C2\n    configs that pure ASCII scans miss entirely.\n    """
+def _extract_strings_from_data(data: bytes, min_len: int = 6, encoding: str = "both") -> list:
+    """\n    Extract ASCII and/or UTF-16LE strings.\n    Returns list of (offset, enc, string).\n    UTF-16LE covers Windows API names, registry paths, and wide-char C2\n    configs that pure ASCII scans miss entirely.\n\n    `encoding` ("ascii" | "unicode" | "both", default "both") selects
+    which pattern(s) run -- report.py's own call site never passes it
+    (always wants both), so the default preserves its exact existing
+    behavior; --strings' own ASCII/UTF16/both modes are the reason this
+    parameter exists at all (extract.py used to duplicate this whole
+    function inline just to add the encoding filter -- see extract.py's
+    own history)."""
     results = []
-    pat_ascii = rb'[ -~]{' + str(min_len).encode() + rb',}'
-    results += [(m.start(), "ASCII", m.group().decode("ascii", errors="replace"))
-                for m in re.finditer(pat_ascii, data)]
-    pat_uni = rb'(?:[ -~]\x00){' + str(min_len).encode() + rb',}'
-    results += [(m.start(), "UTF16", m.group().decode("utf-16-le", errors="replace"))
-                for m in re.finditer(pat_uni, data)]
+    if encoding in ("ascii", "both"):
+        pat_ascii = rb'[ -~]{' + str(min_len).encode() + rb',}'
+        results += [(m.start(), "ASCII", m.group().decode("ascii", errors="replace"))
+                    for m in re.finditer(pat_ascii, data)]
+    if encoding in ("unicode", "both"):
+        pat_uni = rb'(?:[ -~]\x00){' + str(min_len).encode() + rb',}'
+        results += [(m.start(), "UTF16", m.group().decode("utf-16-le", errors="replace"))
+                    for m in re.finditer(pat_uni, data)]
     results.sort(key=lambda x: x[0])
     return results
 

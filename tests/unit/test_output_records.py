@@ -7,7 +7,7 @@ import pytest
 
 from dumpex.output.records import (
     MemoryRegionRecord, ModuleRecord, ThreadRecord, SysInfoRecord, PidRecord, PebRecord,
-    ExtractRecord, Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address, Artifact,
+    ExtractRecord, StringRecord, Diagnostic, SEVERITY_WARNING, SEVERITY_ERROR, hex_address, Artifact,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
     ModuleDiffRecord, MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF_REBASED,
     ThreadDiffRecord, THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED,
@@ -198,6 +198,24 @@ def test_extract_record_auto_sized_and_mz_flags_are_plain_bools():
     d = rec.to_dict()
     assert d["auto_sized"] is True
     assert d["mz_header_detected"] is True
+
+
+# ── StringRecord ─────────────────────────────────────────────────────────
+
+def test_string_record_to_dict_shape():
+    rec = StringRecord(offset=16, address="0x0000000000001010", encoding="ASCII",
+                        text="hello", matched_grep=None)
+    assert rec.to_dict() == {
+        "offset": 16, "address": "0x0000000000001010", "encoding": "ASCII",
+        "text": "hello", "matched_grep": None,
+    }
+
+
+def test_string_record_matched_grep_true_false_are_plain_bools():
+    rec_true = StringRecord(offset=0, address=None, encoding="UTF16", text="x", matched_grep=True)
+    rec_false = StringRecord(offset=0, address=None, encoding="UTF16", text="x", matched_grep=False)
+    assert rec_true.to_dict()["matched_grep"] is True
+    assert rec_false.to_dict()["matched_grep"] is False
 
 
 # ── Diagnostic ───────────────────────────────────────────────────────────

@@ -16,10 +16,11 @@ JSON integer, never a hex string. Missing values are always None, never
 is free to format any of these ints as hex text for display -- that is a
 presentation choice independent of the record's own field type.
 
-StringRecord (extraction, for a future --strings migration) is
-intentionally not defined yet. Artifact (below) is now populated by
---extract (Phase E) -- a future --report migration is expected to reuse
-it too, for its own optional extract-to-file side effect.
+StringRecord is now populated by --strings (Phase E) -- a future --report
+migration is expected to reuse it for its own "notable strings" section.
+Artifact is populated by --extract (Phase E) -- a future --report
+migration is expected to reuse it too, for its own optional
+extract-to-file side effect.
 """
 import re
 from dataclasses import dataclass, field
@@ -269,6 +270,37 @@ class ExtractRecord:
             "auto_sized":         self.auto_sized,
             "bytes_read":         self.bytes_read,
             "mz_header_detected": self.mz_header_detected,
+        }
+
+
+@dataclass
+class StringRecord:
+    """One extracted string -- `--strings`' record, also reused as-is by
+    a future --report migration's own "notable strings" section (see
+    dumpex.commands.report). `offset` is a plain int (a byte offset
+    relative to the read region's start, NOT a process address -- the
+    hex_address()-only-for-real-addresses rule in this module's own
+    docstring doesn't apply to it) while `address` is the absolute VA
+    (the requested read's own base address + offset), a real memory
+    address, so it goes through hex_address() like every other
+    address-typed field. `matched_grep` is a FLAG, not a filter: this
+    record is emitted for every extracted string regardless of --grep,
+    matching the original console's own "show all, highlight matches"
+    behavior -- None when no --grep was given at all (the concept doesn't
+    apply), True/False per record when it was."""
+    offset:        int
+    address:       "str | None"
+    encoding:      str              # "ASCII" | "UTF16"
+    text:          str
+    matched_grep:  "bool | None"
+
+    def to_dict(self) -> dict:
+        return {
+            "offset":       self.offset,
+            "address":      self.address,
+            "encoding":     self.encoding,
+            "text":         self.text,
+            "matched_grep": self.matched_grep,
         }
 
 

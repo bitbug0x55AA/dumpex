@@ -3,9 +3,11 @@ import re
 import sys
 from pathlib import Path
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
-from dumpex.core.memory import read_region
+from dumpex.core.memory import read_region, _extract_strings_from_data
 from dumpex.core.safe_io import write_output_bytes, compute_bytes_summary
-from dumpex.output.records import ExtractRecord, Artifact, Diagnostic, SEVERITY_WARNING, hex_address
+from dumpex.output.records import (
+    ExtractRecord, StringRecord, Artifact, Diagnostic, SEVERITY_WARNING, hex_address,
+)
 from dumpex.output.coverage import SourceObservation, SourceState, build_coverage_report
 from dumpex.output.command_result import CommandResult
 
@@ -89,34 +91,59 @@ def cmd_extract(mf, addr, size, output, auto_size=False, force=False) -> Command
     return result
 
 
-def cmd_strings(mf, addr, size, min_len, grep, encoding, auto_size=False):
-    auto_note = DIM(" (auto from region)") if auto_size else ""
-    print(f"[*] Extracting strings from 0x{addr:x} (size=0x{size:x}{auto_note}, min={min_len}, enc={encoding})")
-    try:
-        data = read_region(mf, addr, size)
-    except Exception as e:
-        print(RED(f"[!] Read failed: {e}")); sys.exit(1)
-
-    results = []
-    if encoding in ("ascii", "both"):
-        pat = rb'[ -~]{' + str(min_len).encode() + rb',}'
-        results += [(m.start(), "ASCII", m.group().decode("ascii", errors="replace"))
-                    for m in re.finditer(pat, data)]
-    if encoding in ("unicode", "both"):
-        pat = rb'(?:[ -~]\x00){' + str(min_len).encode() + rb',}'
-        results += [(m.start(), "UTF16", m.group().decode("utf-16-le", errors="replace"))
-                    for m in re.finditer(pat, data)]
-
-    results.sort(key=lambda x: x[0])
+def collect_strings(mf, addr: int, size: int, min_len: int, grep: "str | None",
+                     encoding: str, auto_size: bool = False) -> CommandResult:
+    """Read-then-scan, packaging each extracted string as a StringRecord
+    regardless of --grep (see StringRecord's own docstring for why
+    `matched_grep` is a flag, not a filter). Same unwrapped-read-failure
+    reasoning as collect_extract -- see cmd_strings's own try/except."""
+    data = read_region(mf, addr, size)
+    raw = _extract_strings_from_data(data, min_len=min_len, encoding=encoding)
     grep_re = re.compile(grep, re.IGNORECASE) if grep else None
+    records = [
+        StringRecord(offset=off, address=hex_address(addr + off), encoding=enc, text=s,
+                     matched_grep=(bool(grep_re.search(s)) if grep_re else None))
+        for off, enc, s in raw
+    ]
 
+    source = SourceObservation(
+        name="requested_region",
+        state=(SourceState.PRESENT if records else SourceState.PRESENT_EMPTY),
+        record_count=len(records))
+    coverage = build_coverage_report(
+        {"requested_region": source},
+        evaluation_sources=("requested_region",),
+        completeness_checks=["requested_region"],
+    )
+    shown = sum(1 for r in records if r.matched_grep is not False)
+    return CommandResult(kind="strings", records=records, coverage=coverage,
+                          summary={"count": len(records), "shown": shown})
+
+
+def render_strings_console(records) -> None:
+    """The `"[*] Extracting strings ..."` preamble is NOT printed here --
+    see render_extract_console's identical note on why it must print
+    before collect_strings() is even attempted."""
     print(f"\n{BOLD('Offset'):<14} {BOLD('Enc'):<7} {BOLD('String')}")
     print("─" * 70)
     shown = 0
-    for offset, enc, s in results:
-        if grep_re and not grep_re.search(s):
+    for r in records:
+        if r.matched_grep is False:
             continue
-        line = f"0x{addr + offset:<12x} {enc:<7} {s}"
-        print(YELLOW(line) if grep_re else line)
+        addr = int(r.address, 16)
+        line = f"0x{addr:<12x} {r.encoding:<7} {r.text}"
+        print(YELLOW(line) if r.matched_grep else line)
         shown += 1
     print(f"\n{GREEN(f'[+] {shown} string(s) shown.')}")
+
+
+def cmd_strings(mf, addr, size, min_len, grep, encoding, auto_size=False) -> CommandResult:
+    auto_note = DIM(" (auto from region)") if auto_size else ""
+    print(f"[*] Extracting strings from 0x{addr:x} (size=0x{size:x}{auto_note}, min={min_len}, enc={encoding})")
+    try:
+        result = collect_strings(mf, addr, size, min_len, grep, encoding, auto_size=auto_size)
+    except Exception as e:
+        print(RED(f"[!] Read failed: {e}"))
+        sys.exit(1)
+    render_strings_console(result.records)
+    return result
