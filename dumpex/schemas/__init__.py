@@ -15,7 +15,8 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
     whether the package is on disk or inside a zipped wheel). Defaults to
     the v1.1 (--hunt) schema for backward compatibility; pass
     "dumpex-output-v2.2.schema.json" for the current v2 (recon commands,
-    comparison, extract) schema, or "dumpex-output-v2.1.schema.json"/
+    comparison, extract, strings, report) schema, or
+    "dumpex-output-v2.1.schema.json"/
     "dumpex-output-v2.0.schema.json" for the frozen historical v2.1/v2.0
     schemas (still valid for validating output produced before
     schema_version 2.2/2.1 respectively)."""

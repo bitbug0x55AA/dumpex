@@ -16,11 +16,11 @@ JSON integer, never a hex string. Missing values are always None, never
 is free to format any of these ints as hex text for display -- that is a
 presentation choice independent of the record's own field type.
 
-StringRecord is now populated by --strings (Phase E) -- a future --report
-migration is expected to reuse it for its own "notable strings" section.
-Artifact is populated by --extract (Phase E) -- a future --report
-migration is expected to reuse it too, for its own optional
-extract-to-file side effect.
+StringRecord is populated by --strings and reused as-is by --report's own
+"notable strings" section (see TriageCardRecord below). Artifact is
+populated by --extract and by --report's own optional extract-to-file
+side effect (under a different `kind` string -- see Artifact's own
+docstring).
 """
 import re
 from dataclasses import dataclass, field
@@ -327,7 +327,7 @@ class ExtractRecord:
 @dataclass
 class StringRecord:
     """One extracted string -- `--strings`' record, also reused as-is by
-    a future --report migration's own "notable strings" section (see
+    `--report`'s own "notable strings" section (see
     dumpex.commands.report). `offset` is a plain int (a byte offset
     relative to the read region's start, NOT a process address -- the
     hex_address()-only-for-real-addresses rule in this module's own
@@ -724,12 +724,15 @@ class Artifact:
     tool itself produced (e.g. an extracted memory region), distinct from
     meta.evidence (which describes the INPUT dump(s)). Field naming
     mirrors meta.evidence's own id/path/size_bytes/sha256 shape. Populated
-    by --extract (Phase E, via dumpex.commands.extract.build_extract_
-    artifact(), which calls dumpex.core.safe_io.compute_bytes_summary()
-    for the size_bytes/sha256 fields directly rather than parsing them
-    back out of summarize_bytes()'s formatted string) -- a future
-    --report migration is expected to reuse the same helper for its own
-    optional extract-to-file side effect. Constructing one is the ONLY
+    by --extract and by --report's own optional extract-to-file side
+    effect (both via dumpex.commands.extract.build_extract_artifact(),
+    which calls dumpex.core.safe_io.compute_bytes_summary() for the
+    size_bytes/sha256 fields directly rather than parsing them back out
+    of summarize_bytes()'s formatted string) -- report.py calls this
+    helper directly rather than going through collect_extract()/
+    cmd_extract(), passing kind="report_extracted_region" so
+    artifacts[].kind still distinguishes the two producers. Constructing
+    one is the ONLY
     way an entry reaches `artifacts` on the wire -- dumpex.output.collector.
     V2Output.set_command_result() calls .to_dict() unconditionally (no
     duck-typed dict passthrough), so a caller can't smuggle a shape this
@@ -764,3 +767,319 @@ class Artifact:
         return {"id": self.id, "kind": self.kind, "path": self.path,
                 "size_bytes": self.size_bytes, "sha256": self.sha256,
                 "description": self.description}
+
+
+# ── Report records (Phase E, PR3) ───────────────────────────────────────
+# One TriageCardRecord per triage card -- see dumpex.commands.report's own
+# module docstring for why this is NOT a --diff-style tagged union of
+# independent thread/region/string entities: a card's thread/region/
+# strings/verdict are one coherent, MECE-scored narrative about one
+# anchor, not independent things a consumer would count/filter
+# separately. --report-string's N hits become N TriageCardRecords in one
+# CommandResult.records list; tid/addr mode always produces exactly one.
+
+TRIAGE_ANCHOR_TID        = "tid"
+TRIAGE_ANCHOR_ADDRESS    = "address"
+TRIAGE_ANCHOR_STRING_HIT = "string_hit"
+_TRIAGE_ANCHOR_SOURCES = (TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT)
+
+# Mirrors dumpex.core.memory.VERDICT_CLEAN/_SUSPICIOUS/_LIKELY_MALICIOUS/
+# _HIGH_CONFIDENCE_MALICIOUS by convention (same four literal strings) --
+# not imported from there, the same way ThreadRecord.module_context's own
+# MODULE_CONTEXT_* vocabulary above is this module's own closed set
+# rather than importing dumpex.hunt._context's. Keeps the dependency
+# direction command/domain model -> output layer, never the reverse.
+_TRIAGE_VERDICTS = ("CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_MALICIOUS")
+
+
+@dataclass
+class ReportThreadInfo:
+    """One thread as seen by `--report` -- either the anchor thread
+    (Section 1) or one of the other threads sharing the anchor's resolved
+    region (Section 3). Deliberately narrower than ThreadRecord (no
+    create_time/exit_time/exit_status/suspend_count/priority/teb/flags):
+    report.py's own console output never surfaces those for either
+    section, so this record does not either -- see ThreadRecord itself
+    for the full `--threads` shape."""
+    tid:               int
+    start_address:     "str | None"
+    backing_module:    "str | None"
+    module_context:    "str | None"   # None only when start_address is itself
+                                        # None -- see ThreadRecord's identical rule
+    kernel_time_100ns: "int | None"
+    user_time_100ns:   "int | None"
+    backing_module_base: "str | None" = None   # only populated for report.py's own Section 1
+    backing_module_end:  "str | None" = None   # anchor-thread print (which shows a module range);
+                                                 # Section 3's "other threads sharing this region"
+                                                 # entries never fetch/print a range, so these stay
+                                                 # None there even when module_context == resolved
+
+    def __post_init__(self):
+        _require_nonneg_int(self.tid, "ReportThreadInfo.tid")
+        _require_optional_hex_address(self.start_address, "ReportThreadInfo.start_address")
+        _require_optional_diff_str(self.backing_module, "ReportThreadInfo.backing_module")
+        if self.module_context is not None and self.module_context not in _MODULE_CONTEXTS:
+            raise ValueError(
+                f"ReportThreadInfo.module_context must be None or one of "
+                f"{_MODULE_CONTEXTS}, got {self.module_context!r}")
+        if self.start_address is None and self.module_context is not None:
+            raise ValueError(
+                "ReportThreadInfo.module_context must be None when start_address is None "
+                "-- module resolution is never attempted with no address to resolve")
+        _require_optional_diff_int(self.kernel_time_100ns, "ReportThreadInfo.kernel_time_100ns")
+        _require_optional_diff_int(self.user_time_100ns, "ReportThreadInfo.user_time_100ns")
+        _require_optional_hex_address(self.backing_module_base, "ReportThreadInfo.backing_module_base")
+        _require_optional_hex_address(self.backing_module_end, "ReportThreadInfo.backing_module_end")
+        if (self.backing_module_base is None) != (self.backing_module_end is None):
+            raise ValueError(
+                "ReportThreadInfo.backing_module_base and backing_module_end must both be "
+                "None or both be set")
+        if self.backing_module_base is not None and self.module_context != MODULE_CONTEXT_RESOLVED:
+            raise ValueError(
+                "ReportThreadInfo.backing_module_base/backing_module_end require "
+                "module_context == 'resolved'")
+
+    def to_dict(self) -> dict:
+        return {
+            "tid":                  self.tid,
+            "start_address":        self.start_address,
+            "backing_module":       self.backing_module,
+            "module_context":       self.module_context,
+            "kernel_time_100ns":    self.kernel_time_100ns,
+            "user_time_100ns":      self.user_time_100ns,
+            "backing_module_base":  self.backing_module_base,
+            "backing_module_end":   self.backing_module_end,
+        }
+
+
+@dataclass
+class ReportRegionInfo:
+    """The memory region resolved at a triage card's target address
+    (report.py's Section 2). `file_offset` is a plain int -- a byte
+    offset inside the .dmp file, not a process address -- so it does NOT
+    go through hex_address() despite the name similarity to this module's
+    other `*_address` fields (see this module's own docstring's hex-vs-int
+    type rule). `is_rwx_private`/`has_injected_pe` are the two MECE
+    dimensions report.py can determine from the region alone, independent
+    of any thread/string evidence -- see TriageCardRecord.findings for
+    where they end up when they fire."""
+    base_address:     str
+    size:             int
+    protect:          str
+    type:             str
+    module_owner:     "str | None"
+    file_offset:      "int | None"
+    is_rwx_private:   bool
+    has_injected_pe:  bool
+    protection_suspicious: bool   # `protect` matches one of the runtime-configured
+                                    # suspicious_protections rules (see
+                                    # dumpex.rules_pkg.loader.get_rules()) -- independent
+                                    # of is_rwx_private, which additionally requires
+                                    # MEM_PRIVATE. Same semantics as MemoryRegionRecord.
+                                    # suspicious above, kept as a separate field (not
+                                    # reused) since ReportRegionInfo's own is_rwx_private
+                                    # is already a distinct, MECE-dimension-specific bool.
+
+    def __post_init__(self):
+        _require_hex_address(self.base_address, "ReportRegionInfo.base_address")
+        _require_nonneg_int(self.size, "ReportRegionInfo.size")
+        if not isinstance(self.protect, str) or not self.protect:
+            raise ValueError("ReportRegionInfo.protect must be a non-empty string")
+        if not isinstance(self.type, str) or not self.type:
+            raise ValueError("ReportRegionInfo.type must be a non-empty string")
+        _require_optional_diff_str(self.module_owner, "ReportRegionInfo.module_owner")
+        _require_optional_diff_int(self.file_offset, "ReportRegionInfo.file_offset")
+        _require_bool(self.is_rwx_private, "ReportRegionInfo.is_rwx_private")
+        _require_bool(self.has_injected_pe, "ReportRegionInfo.has_injected_pe")
+        _require_bool(self.protection_suspicious, "ReportRegionInfo.protection_suspicious")
+        if self.is_rwx_private and not self.protection_suspicious:
+            raise ValueError(
+                "ReportRegionInfo.is_rwx_private requires protection_suspicious -- RWX+PRIVATE "
+                "is itself a suspicious-protection match")
+
+    def to_dict(self) -> dict:
+        return {
+            "base_address":          self.base_address,
+            "size":                  self.size,
+            "protect":               self.protect,
+            "type":                  self.type,
+            "module_owner":          self.module_owner,
+            "file_offset":           self.file_offset,
+            "is_rwx_private":        self.is_rwx_private,
+            "has_injected_pe":       self.has_injected_pe,
+            "protection_suspicious": self.protection_suspicious,
+        }
+
+
+@dataclass
+class TriageCardRecord:
+    """One triage card -- see this section's own header comment for why
+    this is one record per card, not a tagged union of its constituent
+    thread/region/string facts. `anchor_source` says which of --report-tid/
+    --report-addr/--report-string produced THIS card (string-hit mode
+    produces N cards, one per private hit region, each with
+    anchor_source="string_hit" and anchor_address set to that region's
+    base -- report_tid is never forwarded into those, see
+    dumpex.commands.report's own note on why). `notable_strings` reuses
+    StringRecord as-is (matched_grep always None -- --report has no
+    --grep concept). `ioc_strings` is NOT a list of StringRecord: each
+    entry is a StringRecord's own to_dict() shape plus one extra
+    "is_network_pattern" bool report.py's IOC section computes per hit
+    (whether it also matched a network-protocol pattern) -- a fact with
+    no meaning for plain `--strings` output, so it does not become a
+    StringRecord field. `findings`/`finding_details` are today's `dims`
+    dict, split into its ordered keys and their detail text -- `findings`
+    entries are the same closed vocabulary as
+    dumpex.core.memory.INDICATOR_DIMS' own keys (unbacked_thread/
+    rwx_private/injected_pe/ioc_strings), not re-validated against that
+    dict here (see this section's own note on why records.py doesn't
+    import from core.memory). `verdict` is verdict_for(dims)'s output --
+    provably the same MECE rule the console's own colored text renders
+    from (see core.memory._verdict). `artifact_id` correlates to this
+    card's own entry in result.artifacts when --output was given for this
+    card, else None.
+
+    `string_scan`/`string_scan_error` capture Section 4's own scan
+    metadata that neither notable_strings nor ioc_strings (both filtered
+    subsets) can reconstruct: the total extracted-string count by
+    encoding and whether MAX_REGION_READ clamped the scan below the
+    region's actual size -- None (both) when region is None (Section 4
+    never ran), string_scan None with string_scan_error set to the
+    exception text when region is not None but the read/extraction itself
+    raised (report.py's own pre-existing `except Exception: print(...)`
+    around that section, preserved as structured data here instead of a
+    console-only message). `thread_region_correlation_excluded` is True
+    exactly when this card's thread was confirmed unbacked but that fact
+    was excluded from `findings`/verdict because it is not correlated
+    with the independently-resolved region (see
+    dumpex.commands.report._collect_triage_card's own reconciliation
+    note) -- a fact with no other home in this record, since `findings`
+    only lists dimensions that DID fire."""
+    anchor_tid:               "int | None"
+    anchor_address:           "str | None"
+    anchor_source:            str          # TRIAGE_ANCHOR_TID / _ADDRESS / _STRING_HIT
+    thread:                   "ReportThreadInfo | None"
+    region:                   "ReportRegionInfo | None"
+    string_hit:               "dict | None"   # {"offset", "address", "encoding"} -- the exact
+                                                # location _search_string_in_memory found the
+                                                # needle at, for anchor_source == string_hit cards
+                                                # only; None otherwise. Kept separate from
+                                                # notable_strings/ioc_strings (Section 4's own,
+                                                # independently-run string extraction, which is
+                                                # not guaranteed to re-find this exact substring
+                                                # position, e.g. across a min_len boundary).
+    other_threads_in_region:  list         # list[ReportThreadInfo]
+    notable_strings:          list         # list[StringRecord]
+    ioc_strings:              list         # list[dict] -- StringRecord.to_dict() + is_network_pattern
+    string_scan:              "dict | None"   # {"scanned_bytes", "clamped", "total",
+                                                # "ascii_count", "utf16_count"}
+    string_scan_error:        "str | None"
+    thread_region_correlation_excluded: bool
+    findings:                 list         # list[str] -- INDICATOR_DIMS key(s) that fired
+    finding_details:          dict         # {key: human detail string}
+    verdict:                  str          # verdict_for()'s output
+    artifact_id:              "str | None"
+    extract_read_clamped:     "bool | None"   # None when no --output was given for this card
+                                                # (extract never attempted); True/False once it
+                                                # was, whether MAX_REGION_READ clamped the bytes
+                                                # actually written below the region's own size
+
+    def __post_init__(self):
+        if self.anchor_tid is not None:
+            _require_nonneg_int(self.anchor_tid, "TriageCardRecord.anchor_tid")
+        _require_optional_hex_address(self.anchor_address, "TriageCardRecord.anchor_address")
+        if self.anchor_source not in _TRIAGE_ANCHOR_SOURCES:
+            raise ValueError(
+                f"TriageCardRecord.anchor_source must be one of {_TRIAGE_ANCHOR_SOURCES}, "
+                f"got {self.anchor_source!r}")
+        if self.thread is not None and not isinstance(self.thread, ReportThreadInfo):
+            raise TypeError("TriageCardRecord.thread must be None or a ReportThreadInfo")
+        if self.region is not None and not isinstance(self.region, ReportRegionInfo):
+            raise TypeError("TriageCardRecord.region must be None or a ReportRegionInfo")
+        if self.string_hit is not None:
+            if not isinstance(self.string_hit, dict) or set(self.string_hit.keys()) != {
+                    "offset", "address", "encoding"}:
+                raise ValueError(
+                    "TriageCardRecord.string_hit must be None or a dict with exactly "
+                    "'offset'/'address'/'encoding' keys")
+            _require_nonneg_int(self.string_hit["offset"], "TriageCardRecord.string_hit['offset']")
+            _require_hex_address(self.string_hit["address"], "TriageCardRecord.string_hit['address']")
+            if self.string_hit["encoding"] not in _STRING_RECORD_ENCODINGS:
+                raise ValueError(
+                    f"TriageCardRecord.string_hit['encoding'] must be one of "
+                    f"{_STRING_RECORD_ENCODINGS}, got {self.string_hit['encoding']!r}")
+        if self.anchor_source == TRIAGE_ANCHOR_STRING_HIT and self.string_hit is None:
+            raise ValueError(
+                "TriageCardRecord.string_hit is required when anchor_source == 'string_hit'")
+        if not isinstance(self.other_threads_in_region, list) or any(
+                not isinstance(t, ReportThreadInfo) for t in self.other_threads_in_region):
+            raise TypeError(
+                "TriageCardRecord.other_threads_in_region must be a list of ReportThreadInfo")
+        if not isinstance(self.notable_strings, list) or any(
+                not isinstance(s, StringRecord) for s in self.notable_strings):
+            raise TypeError("TriageCardRecord.notable_strings must be a list of StringRecord")
+        if not isinstance(self.ioc_strings, list) or any(
+                not isinstance(s, dict) or not isinstance(s.get("is_network_pattern"), bool)
+                for s in self.ioc_strings):
+            raise TypeError(
+                "TriageCardRecord.ioc_strings must be a list of dicts, each with a bool "
+                "'is_network_pattern' key")
+        if self.string_scan is not None:
+            if not isinstance(self.string_scan, dict):
+                raise TypeError("TriageCardRecord.string_scan must be None or a dict")
+            required = {"scanned_bytes", "clamped", "total", "ascii_count", "utf16_count"}
+            if set(self.string_scan.keys()) != required:
+                raise ValueError(
+                    f"TriageCardRecord.string_scan must have exactly the keys {sorted(required)}, "
+                    f"got {sorted(self.string_scan.keys())}")
+            _require_bool(self.string_scan["clamped"], "TriageCardRecord.string_scan['clamped']")
+            for key in ("scanned_bytes", "total", "ascii_count", "utf16_count"):
+                _require_nonneg_int(self.string_scan[key], f"TriageCardRecord.string_scan[{key!r}]")
+        _require_optional_diff_str(self.string_scan_error, "TriageCardRecord.string_scan_error")
+        if self.string_scan is not None and self.string_scan_error is not None:
+            raise ValueError(
+                "TriageCardRecord.string_scan and string_scan_error are mutually exclusive -- "
+                "a scan either produced counts or failed, never both")
+        _require_bool(self.thread_region_correlation_excluded,
+                      "TriageCardRecord.thread_region_correlation_excluded")
+        if self.extract_read_clamped is not None:
+            _require_bool(self.extract_read_clamped, "TriageCardRecord.extract_read_clamped")
+        if not isinstance(self.findings, list) or any(
+                not isinstance(f, str) or not f for f in self.findings):
+            raise TypeError("TriageCardRecord.findings must be a list of non-empty strings")
+        if len(set(self.findings)) != len(self.findings):
+            raise ValueError("TriageCardRecord.findings must not contain duplicate keys")
+        if not isinstance(self.finding_details, dict) or any(
+                not isinstance(k, str) or not isinstance(v, str)
+                for k, v in self.finding_details.items()):
+            raise TypeError(
+                "TriageCardRecord.finding_details must be a dict of str -> str")
+        if set(self.findings) != set(self.finding_details.keys()):
+            raise ValueError(
+                "TriageCardRecord.findings and finding_details must name the same keys, got "
+                f"findings={self.findings!r} finding_details keys={list(self.finding_details)!r}")
+        if self.verdict not in _TRIAGE_VERDICTS:
+            raise ValueError(
+                f"TriageCardRecord.verdict must be one of {_TRIAGE_VERDICTS}, got {self.verdict!r}")
+        _require_optional_diff_str(self.artifact_id, "TriageCardRecord.artifact_id")
+
+    def to_dict(self) -> dict:
+        return {
+            "anchor_tid":              self.anchor_tid,
+            "anchor_address":          self.anchor_address,
+            "anchor_source":           self.anchor_source,
+            "thread":                  self.thread.to_dict() if self.thread else None,
+            "region":                  self.region.to_dict() if self.region else None,
+            "string_hit":              dict(self.string_hit) if self.string_hit else None,
+            "other_threads_in_region": [t.to_dict() for t in self.other_threads_in_region],
+            "notable_strings":         [s.to_dict() for s in self.notable_strings],
+            "ioc_strings":             [dict(s) for s in self.ioc_strings],
+            "string_scan":             dict(self.string_scan) if self.string_scan else None,
+            "string_scan_error":       self.string_scan_error,
+            "thread_region_correlation_excluded": self.thread_region_correlation_excluded,
+            "findings":                list(self.findings),
+            "finding_details":         dict(self.finding_details),
+            "verdict":                 self.verdict,
+            "artifact_id":             self.artifact_id,
+            "extract_read_clamped":    self.extract_read_clamped,
+        }

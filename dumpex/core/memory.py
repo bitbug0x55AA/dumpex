@@ -332,21 +332,50 @@ INDICATOR_DIMS = {
     "ioc_strings":     "IOC string pattern(s) matched in region",
 }
 
-def _verdict(dims: dict) -> str:
+VERDICT_CLEAN                    = "CLEAN"
+VERDICT_SUSPICIOUS                = "SUSPICIOUS"
+VERDICT_LIKELY_MALICIOUS          = "LIKELY_MALICIOUS"
+VERDICT_HIGH_CONFIDENCE_MALICIOUS = "HIGH_CONFIDENCE_MALICIOUS"
+
+
+def verdict_for(dims: dict) -> str:
+    """The machine-readable tier for a MECE dims dict -- `_verdict()`
+    below derives its colored console string from this, so the wire
+    value (TriageCardRecord.verdict) and the console text are provably
+    the same rule, not two hand-maintained copies that could drift."""
     score = len(dims)
     if score == 0:
-        return GREEN("CLEAN — no suspicious indicators found")
+        return VERDICT_CLEAN
     if score == 1:
-        return YELLOW("SUSPICIOUS — 1 independent indicator")
+        return VERDICT_SUSPICIOUS
     if score == 2:
+        return VERDICT_LIKELY_MALICIOUS
+    return VERDICT_HIGH_CONFIDENCE_MALICIOUS
+
+
+def _verdict(dims: dict) -> str:
+    tier = verdict_for(dims)
+    score = len(dims)
+    if tier == VERDICT_CLEAN:
+        return GREEN("CLEAN — no suspicious indicators found")
+    if tier == VERDICT_SUSPICIOUS:
+        return YELLOW("SUSPICIOUS — 1 independent indicator")
+    if tier == VERDICT_LIKELY_MALICIOUS:
         return YELLOW("LIKELY MALICIOUS — 2 independent indicators")
     return RED(f"HIGH CONFIDENCE MALICIOUS — {score} independent indicators")
 
-def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
+def _search_string_in_memory(mf: MinidumpFile, needle: str) -> tuple:
     """
     Search all committed memory regions for needle (ASCII and UTF-16LE).
-    Returns list of (region, offset, encoding) tuples, one per hit region
-    (deduplicated by region base so we report each region once).
+    Returns (hits, skipped_count): hits is a list of (region, offset,
+    encoding) tuples, one per hit region (deduplicated by region base so
+    we report each region once); skipped_count is how many committed
+    regions raised on read_region() and were silently skipped -- a
+    pre-existing gap (a corrupted/unreadable region during the scan was
+    previously invisible) surfaced here rather than fixed by retrying or
+    failing the whole scan, so a caller (see dumpex.commands.report.
+    collect_report) can report it as a single Diagnostic instead of
+    leaving it unmentioned.
 
     Each region's read is capped at MAX_REGION_READ: this is a
     search-everything operation over every committed region in the dump
@@ -359,6 +388,7 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
     regions  = get_memory_regions(mf)
     hits     = []
     seen     = set()
+    skipped  = 0
     needle_b = needle.encode("ascii", errors="replace")
     needle_w = needle.encode("utf-16-le")
 
@@ -370,6 +400,7 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
         try:
             data = read_region(mf, r.BaseAddress, min(r.RegionSize, MAX_REGION_READ))
         except Exception:
+            skipped += 1
             continue
 
         off_a = data.find(needle_b)
@@ -383,7 +414,7 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> list:
             hits.append((r, off_w, "UTF16"))
             seen.add(r.BaseAddress)
 
-    return hits
+    return hits, skipped
 
 def _extract_ioc_strings(data: bytes, base_addr: int) -> list:
     """

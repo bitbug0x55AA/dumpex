@@ -81,10 +81,12 @@ with `--force`.
 
 `--json`/`--csv` currently route to one of two contracts depending on the
 mode: `--hunt` uses the v1.1 contract unchanged; `--list`/`--modules`/
-`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff`/`--extract`/`--strings` use
-the v2 contract (canonical records, `null` for missing values, normalized
-hex addresses — see
-[Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
+`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff`/`--extract`/`--strings`/
+`--report` use the v2 contract (canonical records, `null` for missing
+values, normalized hex addresses — see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)). All
+nine of these support `--json`/`--csv` — `--hunt` is the only command left
+on the v1.1 contract.
 `--diff` produces a `kind: "comparison"` result with a two-entry
 `meta.evidence` array (`baseline`/`target`) instead of the single-dump
 `meta` shape the other eight use — see
@@ -94,9 +96,10 @@ hex addresses — see
 MZ-header-detected warning) — both are siblings of `result`, not nested
 under it — see
 [Output and Evidence Schema](OUTPUT_SCHEMA.md#extract-and-strings-records).
-`--report` doesn't produce structured output yet — `--json`/`--csv` with it
-is rejected immediately, before the dump is opened, rather than running the
-full command first. For the v2-routed modes, the process exit code also
+`--report` produces a `kind: "report"` result, one `triageCardRecord` per
+triage card (see [Output and Evidence Schema](OUTPUT_SCHEMA.md#report-records)),
+and also populates `artifacts[]` for its own optional `--output` extract.
+For the v2-routed modes, the process exit code also
 reports coverage independent of `--json`/`--csv`: `0` for complete coverage,
 `3` for partial (e.g. `--threads` on a dump missing `ThreadInfoListStream`
 while the base thread list is still present, or `--extract`/`--strings`

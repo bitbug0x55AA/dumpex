@@ -1183,3 +1183,179 @@ def test_memory_diff_record_null_base_address_rejected_by_schema(memory_diff_rec
            "type_before": None, "type_after": "MEM_PRIVATE",
            "suspicious_before": None, "suspicious_after": False}
     assert not memory_diff_record_schema.is_valid(doc)
+
+
+# ── report kind (Phase E, PR3) ─────────────────────────────────────────────
+
+def _minimal_valid_report_summary():
+    return {"mode": "addr", "card_count": 1, "query_string": None, "query_tid": None,
+            "query_addr": "0x1000", "total_hits": None, "hits_private": None,
+            "hits_image": None, "image_hit_modules": [], "skipped_unreadable_regions": 0}
+
+
+def _minimal_valid_triage_card_record():
+    return {
+        "anchor_tid": None, "anchor_address": "0x0000000000001000", "anchor_source": "address",
+        "thread": None, "region": None, "string_hit": None,
+        "other_threads_in_region": [], "notable_strings": [], "ioc_strings": [],
+        "string_scan": None, "string_scan_error": None,
+        "thread_region_correlation_excluded": False,
+        "findings": [], "finding_details": {}, "verdict": "CLEAN",
+        "artifact_id": None, "extract_read_clamped": None,
+    }
+
+
+def _minimal_valid_report_doc():
+    """A genuinely valid kind == "report" envelope -- see
+    _minimal_valid_strings_doc's own docstring for why the generic
+    _minimal_valid_doc(kind="report") (summary={"count": 1}, a
+    moduleRecord-shaped records[0]) is the wrong base for a report-kind
+    negative test: it is already schema-invalid before the test's own
+    mutation even applies."""
+    doc = _minimal_valid_doc(kind="report")
+    doc["result"]["summary"] = _minimal_valid_report_summary()
+    doc["result"]["data"]["records"] = [_minimal_valid_triage_card_record()]
+    return doc
+
+
+def test_minimal_valid_report_doc_passes_schema(validator):
+    assert validator.is_valid(_minimal_valid_report_doc())
+
+
+def test_report_summary_missing_query_tid_is_rejected_by_schema(validator):
+    doc = _minimal_valid_report_doc()
+    del doc["result"]["summary"]["query_tid"]
+    assert not validator.is_valid(doc)
+
+
+def test_report_summary_string_mode_requires_non_null_query_string(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["summary"]["mode"] = "string"
+    doc["result"]["summary"]["total_hits"] = 1
+    doc["result"]["summary"]["hits_private"] = 1
+    doc["result"]["summary"]["hits_image"] = 0
+    # query_string still None -- violates the mode == "string" allOf rule
+    assert not validator.is_valid(doc)
+
+
+def test_report_summary_string_mode_with_all_fields_set_passes(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["summary"] = {
+        "mode": "string", "card_count": 1, "query_string": "needle", "query_tid": None,
+        "query_addr": None, "total_hits": 1, "hits_private": 1, "hits_image": 0,
+        "image_hit_modules": [], "skipped_unreadable_regions": 0,
+    }
+    doc["result"]["data"]["records"] = [{
+        **_minimal_valid_triage_card_record(),
+        "anchor_source": "string_hit",
+        "string_hit": {"offset": 0, "address": "0x0000000000001000", "encoding": "ASCII"},
+    }]
+    assert validator.is_valid(doc)
+
+
+def test_report_summary_tid_mode_with_non_null_query_string_is_rejected(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["summary"]["mode"] = "tid"
+    doc["result"]["summary"]["query_string"] = "should not be set in tid mode"
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_string_hit_anchor_requires_non_null_string_hit(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["anchor_source"] = "string_hit"
+    # string_hit left None -- violates the anchor_source == "string_hit" allOf rule
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_non_string_hit_anchor_rejects_non_null_string_hit(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["string_hit"] = {
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII"}
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_string_scan_and_error_mutually_exclusive(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["string_scan"] = {
+        "scanned_bytes": 100, "clamped": False, "total": 0, "ascii_count": 0, "utf16_count": 0}
+    doc["result"]["data"]["records"][0]["string_scan_error"] = "boom"
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_unknown_extra_field_is_rejected_by_schema(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["totally_unexpected_field"] = "x"
+    assert not validator.is_valid(doc)
+
+
+def test_report_region_info_is_rwx_private_requires_protection_suspicious(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["region"] = {
+        "base_address": "0x0000000000001000", "size": 4096, "protect": "PAGE_READWRITE",
+        "type": "MEM_PRIVATE", "module_owner": None, "file_offset": None,
+        "is_rwx_private": True, "has_injected_pe": False, "protection_suspicious": False,
+    }
+    assert not validator.is_valid(doc)
+
+
+def test_report_region_info_valid_rwx_private_passes(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["region"] = {
+        "base_address": "0x0000000000001000", "size": 4096,
+        "protect": "PAGE_EXECUTE_READWRITE", "type": "MEM_PRIVATE", "module_owner": None,
+        "file_offset": None, "is_rwx_private": True, "has_injected_pe": False,
+        "protection_suspicious": True,
+    }
+    assert validator.is_valid(doc)
+
+
+def test_report_thread_info_resolved_without_range_is_still_valid(validator):
+    # module_context == "resolved" does NOT force backing_module_base/end
+    # to be set -- Section 3's "other threads sharing this region" entries
+    # are resolved but never fetch a module range (only the anchor
+    # thread's own Section 1 print does). Only the REVERSE direction is
+    # constrained: a non-null backing_module_base requires
+    # module_context == "resolved" (see the next test).
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = {
+        "tid": 1, "start_address": "0x0000000000001000", "backing_module": "ntdll.dll",
+        "module_context": "resolved", "kernel_time_100ns": 0, "user_time_100ns": 0,
+        "backing_module_base": None, "backing_module_end": None,
+    }
+    assert validator.is_valid(doc)
+
+
+def test_report_thread_info_unregistered_with_module_range_is_rejected(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = {
+        "tid": 1, "start_address": "0x0000000000001000", "backing_module": None,
+        "module_context": "unregistered", "kernel_time_100ns": 0, "user_time_100ns": 0,
+        "backing_module_base": "0x0000000000001000", "backing_module_end": "0x0000000000002000",
+    }
+    assert not validator.is_valid(doc)
+
+
+def test_report_thread_info_valid_resolved_passes(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["thread"] = {
+        "tid": 1, "start_address": "0x0000000000001000", "backing_module": "ntdll.dll",
+        "module_context": "resolved", "kernel_time_100ns": 0, "user_time_100ns": 0,
+        "backing_module_base": "0x0000000000001000", "backing_module_end": "0x0000000000002000",
+    }
+    assert validator.is_valid(doc)
+
+
+def test_triage_card_ioc_string_missing_is_network_pattern_is_rejected(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["ioc_strings"] = [{
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII",
+        "text": "x", "matched_grep": None}]
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_ioc_string_valid_entry_passes(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["ioc_strings"] = [{
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII",
+        "text": "x", "matched_grep": None, "is_network_pattern": True}]
+    assert validator.is_valid(doc)

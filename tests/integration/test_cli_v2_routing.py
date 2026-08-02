@@ -26,26 +26,10 @@ def _run(monkeypatch, argv):
     return exc.value.code
 
 
-# ── pre-flight rejection: before open_dump(), not after a full run ───────
-
-def _forbid_open_dump(monkeypatch):
-    def _boom(path):
-        raise AssertionError("open_dump must not be called for a rejected mode")
-    monkeypatch.setattr(cli, "open_dump", _boom)
-
-
-@pytest.mark.parametrize("mode_args", [
-    ["--report", "--report-tid", "1"],
-])
-def test_json_on_unsupported_mode_rejected_before_open_dump(monkeypatch, capsys, mode_args):
-    _forbid_open_dump(monkeypatch)
-
-    code = _run(monkeypatch, ["/nonexistent.dmp", *mode_args, "--json", "out.json"])
-
-    assert code == 2
-    err = capsys.readouterr().err
-    assert "is not supported for" in err
-
+# ── pre-flight: every mode reaches open_dump(), none are rejected ────────
+# _UNSUPPORTED_STRUCTURED_MODES is permanently empty as of Phase E, PR3
+# (--report was the last command still on it) -- there is no longer any
+# mode a --json/--csv pre-flight check can reject before open_dump().
 
 def test_json_on_v2_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
     # A v2-supported mode must proceed past the pre-flight check and reach
@@ -67,6 +51,15 @@ def test_json_on_strings_mode_is_not_rejected_reaches_open_dump(monkeypatch, cap
     # --strings is v2-supported too (Phase E, PR2) -- must proceed past
     # the pre-flight check and reach open_dump()'s own failure mode.
     code = _run(monkeypatch, ["/nonexistent.dmp", "--strings", "0x1000", "--json", "out.json"])
+    assert code == 1
+    assert "File not found" in capsys.readouterr().out
+
+
+def test_json_on_report_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
+    # --report is v2-supported too (Phase E, PR3) -- must proceed past
+    # the pre-flight check and reach open_dump()'s own failure mode.
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--report", "--report-tid", "1",
+                              "--json", "out.json"])
     assert code == 1
     assert "File not found" in capsys.readouterr().out
 
@@ -181,6 +174,46 @@ def test_strings_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         assert records[0]["matched_grep"] is None
         assert "hunt" not in doc
         assert doc["result"]["summary"]["requested_address"] == "0x0000000000001000"
+    finally:
+        os.remove(dump_path)
+
+
+def test_report_json_produces_v2_shaped_document_with_triage_card(monkeypatch, tmp_path):
+    # --report (Phase E, PR3) -- the last of the three Phase E commands to
+    # populate result.records for real, one TriageCardRecord per card.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.filename = dump_path
+        mf.modules = FakeStream([], "modules")
+        mf.thread_info = FakeStream([], "infos")
+        mf.memory_info = FakeStream(
+            [Region(0x6000, 0x6000, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+            "infos")
+        import dumpex.commands.report as report_mod
+        import dumpex.core.memory as core_memory_mod
+        from tests.fixtures.fakes import mem_reader
+        reader = mem_reader({0x6000: b"boring data here nothing to see"})
+        monkeypatch.setattr(report_mod, "read_region", reader)
+        monkeypatch.setattr(core_memory_mod, "read_region", reader)
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--report", "--report-addr", "0x6000",
+                              "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == "2.2"
+        assert doc["result"]["kind"] == "report"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        records = doc["result"]["data"]["records"]
+        assert len(records) == 1
+        assert records[0]["verdict"] == "SUSPICIOUS"
+        assert records[0]["findings"] == ["rwx_private"]
+        assert doc["result"]["summary"]["mode"] == "addr"
+        assert "hunt" not in doc
     finally:
         os.remove(dump_path)
 
