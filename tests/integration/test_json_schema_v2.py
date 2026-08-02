@@ -809,6 +809,17 @@ def _minimal_valid_strings_summary():
 
 
 def _minimal_valid_strings_doc():
+    """A genuinely valid kind == "strings" envelope -- unlike the generic
+    _minimal_valid_doc(kind="strings"), which stamps `summary={"count":
+    1}` (correct for every OTHER kind, but missing stringsSummary's other
+    five required fields) and a moduleRecord-shaped `data.records` entry
+    (wrong shape for "strings"). Using the generic helper as the base for
+    a "records" negative test would mean the document was ALREADY invalid
+    before the test even touched the field under test -- the test would
+    keep "passing" (finding some schema violation) even if the specific
+    constraint it claims to check were silently removed. Every strings-
+    kind schema test below must start from THIS helper, then mutate
+    exactly the one thing being tested."""
     doc = _minimal_valid_doc(kind="strings")
     doc["result"]["summary"] = _minimal_valid_strings_summary()
     doc["result"]["data"]["records"] = []
@@ -876,19 +887,41 @@ def test_strings_summary_unknown_extra_field_is_rejected_by_schema(validator):
     assert not validator.is_valid(doc)
 
 
+def test_minimal_valid_string_record_passes_schema(validator):
+    # Baseline for the three negative tests below (P2 remediation, round
+    # 3): proves a fully valid strings envelope -- valid summary AND a
+    # valid stringRecord -- really does validate, so each negative test's
+    # failure is attributable to the ONE field it deliberately breaks, not
+    # to some other already-invalid part of the base document (see
+    # _minimal_valid_strings_doc's own docstring for why the OLD base --
+    # _minimal_valid_doc(kind="strings") -- was already invalid on its
+    # own, via a missing stringsSummary, before these tests even touched
+    # `data.records`).
+    doc = _minimal_valid_strings_doc()
+    doc["result"]["data"]["records"] = [{
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII",
+        "text": "x", "matched_grep": None}]
+    assert validator.is_valid(doc)
+
+
 def test_string_record_null_address_is_rejected_by_schema(validator):
     # P2-1 remediation: unlike most hexAddress-typed fields, stringRecord's
     # `address` is never null on the wire (a string is always found at
     # some real address) -- the schema must reject a null there even
-    # though hexAddress itself otherwise allows it.
-    doc = _minimal_valid_doc(kind="strings")
+    # though hexAddress itself otherwise allows it. Starts from
+    # _minimal_valid_strings_doc() (a genuinely valid envelope, including
+    # a valid stringsSummary), not the old _minimal_valid_doc(kind=
+    # "strings") -- that base was already schema-invalid via a missing
+    # stringsSummary, so this test would have kept "passing" (finding
+    # SOME violation) even if the address-nullability check were removed.
+    doc = _minimal_valid_strings_doc()
     doc["result"]["data"]["records"] = [{
         "offset": 0, "address": None, "encoding": "ASCII", "text": "x", "matched_grep": None}]
     assert not validator.is_valid(doc)
 
 
 def test_string_record_negative_offset_is_rejected_by_schema(validator):
-    doc = _minimal_valid_doc(kind="strings")
+    doc = _minimal_valid_strings_doc()
     doc["result"]["data"]["records"] = [{
         "offset": -1, "address": "0x0000000000001000", "encoding": "ASCII",
         "text": "x", "matched_grep": None}]
@@ -896,7 +929,7 @@ def test_string_record_negative_offset_is_rejected_by_schema(validator):
 
 
 def test_string_record_unknown_encoding_is_rejected_by_schema(validator):
-    doc = _minimal_valid_doc(kind="strings")
+    doc = _minimal_valid_strings_doc()
     doc["result"]["data"]["records"] = [{
         "offset": 0, "address": "0x0000000000001000", "encoding": "BOGUS",
         "text": "x", "matched_grep": None}]
