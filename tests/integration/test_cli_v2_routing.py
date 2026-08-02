@@ -35,7 +35,6 @@ def _forbid_open_dump(monkeypatch):
 
 
 @pytest.mark.parametrize("mode_args", [
-    ["--diff", "/nonexistent2.dmp"],
     ["--report", "--report-tid", "1"],
     ["--extract", "0x1000"],
     ["--strings", "0x1000"],
@@ -50,17 +49,21 @@ def test_json_on_unsupported_mode_rejected_before_open_dump(monkeypatch, capsys,
     assert "is not supported for" in err
 
 
-def test_csv_on_unsupported_mode_rejected_before_open_dump(monkeypatch, capsys):
-    _forbid_open_dump(monkeypatch)
-    code = _run(monkeypatch, ["/nonexistent.dmp", "--diff", "/other.dmp", "--csv", "out.csv"])
-    assert code == 2
-    assert "--csv" in capsys.readouterr().err
-
-
 def test_json_on_v2_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
     # A v2-supported mode must proceed past the pre-flight check and reach
     # open_dump()'s own (different) failure mode for a nonexistent file.
     code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--json", "out.json"])
+    assert code == 1
+    assert "File not found" in capsys.readouterr().out
+
+
+def test_json_on_diff_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
+    # --diff is v2-supported too -- must proceed past the pre-flight check
+    # and reach open_dump()'s failure mode for the (nonexistent) PRIMARY
+    # dump, same as any other v2 mode. main() opens args.dumpfile before
+    # args.diff, so a bad primary path's error surfaces first (deliberate,
+    # not a gap -- see cli.py's own comment at the mf_target= line).
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--diff", "/other.dmp", "--json", "out.json"])
     assert code == 1
     assert "File not found" in capsys.readouterr().out
 
@@ -401,6 +404,128 @@ def test_sysinfo_normal_json_produces_complete_status(monkeypatch, tmp_path):
         assert doc["result"]["coverage"]["reasons"] == []
     finally:
         os.remove(dump_path)
+
+
+def test_diff_json_produces_comparison_document_with_two_evidence_entries(monkeypatch, tmp_path):
+    # diff.py's cmd_diff is migrated onto CommandResult via
+    # V2Output.from_evidence() -- the multi-dump counterpart to every
+    # other test in this file, which all use the single dump_path
+    # constructor. open_dump must be PATH-AWARE here (unlike every other
+    # test's path-ignoring lambda) since --diff opens two distinct dumps.
+    baseline_path = _make_dump_file()
+    target_path = _make_dump_file()
+    try:
+        mf_baseline = FakeMF()
+        mf_baseline.modules = FakeStream(
+            [Module(0x1000, 0x1000, r"C:\a.dll")], "modules")
+        mf_baseline.filename = baseline_path
+        mf_target = FakeMF()
+        mf_target.modules = FakeStream(
+            [Module(0x1000, 0x1000, r"C:\a.dll"), Module(0x2000, 0x1000, r"C:\b.dll")],
+            "modules")
+        mf_target.filename = target_path
+        mfs = {baseline_path: mf_baseline, target_path: mf_target}
+        monkeypatch.setattr(cli, "open_dump", lambda path: mfs[path])
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", baseline_path, "--diff", target_path,
+                              "--diff-mode", "modules", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == "2.1"
+        assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
+        assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
+        assert doc["result"]["kind"] == "comparison"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        added = [r for r in doc["result"]["data"]["records"] if r["change_type"] == "added"]
+        assert len(added) == 1
+        assert added[0]["entity_type"] == "module"
+        assert added[0]["name"] == "b.dll"
+    finally:
+        os.remove(baseline_path)
+        os.remove(target_path)
+
+
+def test_diff_json_partial_when_one_entity_not_evaluated_among_others_complete(
+        monkeypatch, tmp_path):
+    # A single not_evaluated entity (ModuleListStream absent on BOTH sides)
+    # among otherwise-complete entities (threads/memory) must roll the
+    # OVERALL coverage into "partial", not "not_evaluated" outright, and
+    # exit code 3 -- combine_coverage_reports' unanimous-not_evaluated-
+    # required rule (see dumpex.output.coverage) exercised end to end
+    # through the real CLI path (mode="all") for the first time; the
+    # collect_comparison()-level version of this rule is already covered
+    # directly in tests/unit/test_comparison_cmd.py.
+    baseline_path = _make_dump_file()
+    target_path = _make_dump_file()
+    try:
+        mf_baseline = FakeMF()   # ModuleListStream absent
+        mf_baseline.thread_info = FakeStream([], "infos")
+        mf_baseline.memory_info = FakeStream([], "infos")
+        mf_baseline.filename = baseline_path
+        mf_target = FakeMF()   # ModuleListStream absent
+        mf_target.thread_info = FakeStream([], "infos")
+        mf_target.memory_info = FakeStream([], "infos")
+        mf_target.filename = target_path
+        mfs = {baseline_path: mf_baseline, target_path: mf_target}
+        monkeypatch.setattr(cli, "open_dump", lambda path: mfs[path])
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", baseline_path, "--diff", target_path,
+                              "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_PARTIAL == 3
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "comparison"
+        assert doc["result"]["coverage"]["status"] == "partial"
+        assert doc["result"]["data"]["records"] == []
+    finally:
+        os.remove(baseline_path)
+        os.remove(target_path)
+
+
+def test_diff_csv_directory_mode_writes_module_diffs_table(monkeypatch, tmp_path):
+    # csv_export.build_tables()' comparison-specific module_diffs/
+    # thread_diffs/memory_diffs table split (Phase C) is already proven
+    # directly against V2Output in tests/unit/test_output_csv_and_collector.py
+    # -- this proves it survives a real cli.main() --diff --csv DIR\ call,
+    # the one command shape that couldn't be exercised before --diff was
+    # wired onto V2Output.
+    baseline_path = _make_dump_file()
+    target_path = _make_dump_file()
+    try:
+        mf_baseline = FakeMF()
+        mf_baseline.modules = FakeStream([Module(0x1000, 0x1000, r"C:\a.dll")], "modules")
+        mf_baseline.filename = baseline_path
+        mf_target = FakeMF()
+        mf_target.modules = FakeStream(
+            [Module(0x1000, 0x1000, r"C:\a.dll"), Module(0x2000, 0x1000, r"C:\b.dll")],
+            "modules")
+        mf_target.filename = target_path
+        mfs = {baseline_path: mf_baseline, target_path: mf_target}
+        monkeypatch.setattr(cli, "open_dump", lambda path: mfs[path])
+
+        csv_dir = tmp_path / "csvout"
+        csv_dir.mkdir()
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", baseline_path, "--diff", target_path,
+                              "--diff-mode", "modules", "--csv", str(csv_dir) + os.sep])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        names = os.listdir(csv_dir)
+        module_diff_files = [n for n in names if "module_diffs" in n]
+        assert len(module_diff_files) == 1
+        assert not any("records.csv" in n for n in names)
+        contents = (csv_dir / module_diff_files[0]).read_text(encoding="utf-8")
+        assert "b.dll" in contents
+    finally:
+        os.remove(baseline_path)
+        os.remove(target_path)
 
 
 def test_hunt_json_still_produces_v1_1_shaped_document(monkeypatch, tmp_path):

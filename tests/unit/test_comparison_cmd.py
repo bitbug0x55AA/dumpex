@@ -14,6 +14,34 @@ from dumpex.commands.comparison import (
 from dumpex.output.records import (
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
+from dumpex.output.coverage import combine_coverage_reports, COVERAGE_COMPLETE, COVERAGE_PARTIAL
+
+
+class _ExplodingThreadInfoMF(FakeMF):
+    """A minidump stand-in whose `.thread_info` access raises -- reproduces
+    a genuinely malformed sub-structure (as opposed to a stream that's
+    merely absent or empty), which _observe_or_failed() must catch and
+    report as SourceState.FAILED rather than crash the whole comparison
+    or silently misreport the OTHER side's real items as 100%
+    added/removed."""
+    @property
+    def thread_info(self):
+        raise RuntimeError("thread_info stream could not be read")
+
+    @thread_info.setter
+    def thread_info(self, value):
+        pass
+
+
+class _ExplodingMemoryInfoMF(FakeMF):
+    """Same as _ExplodingThreadInfoMF, for `.memory_info`."""
+    @property
+    def memory_info(self):
+        raise RuntimeError("memory_info stream could not be read")
+
+    @memory_info.setter
+    def memory_info(self, value):
+        pass
 
 
 # ── collect_module_diff ───────────────────────────────────────────────────
@@ -459,3 +487,85 @@ def test_collect_comparison_all_mode_target_modules_limitations_are_distinguisha
     # reported, just with an unresolved backing module.
     assert len(result.records) == 1
     assert result.records[0].backing_module_context == "unavailable"
+
+
+# ── SourceState.FAILED (Phase D) ──────────────────────────────────────────
+# comparison.py's _observe_or_failed() isolates one side's stream read: a
+# genuine exception (not just an absent/empty stream) becomes
+# SourceState.FAILED for that side specifically, rather than crashing the
+# whole comparison or silently misreporting the OTHER side's real items.
+
+def test_collect_module_diff_target_read_failure_is_partial_not_crash():
+    mf_baseline = FakeMF()
+    mf_baseline.modules = FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules")
+    mf_target = _ExplodingModulesMF()
+
+    records, coverage = collect_module_diff(mf_baseline, mf_target)
+    assert records == []   # must NOT misreport baseline's real module as "removed"
+    assert coverage.status == "partial"
+    assert coverage.sources["target.modules"].state == "failed"
+    assert coverage.sources["target.modules"].detail == "modules stream should not be touched here"
+    assert [l.code for l in coverage.limitations] == ["SOURCE_FAILED"]
+
+
+def test_collect_thread_diff_baseline_read_failure_is_partial_not_crash():
+    mf_baseline = _ExplodingThreadInfoMF()
+    mf_target = FakeMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, 0x1000)], "infos")
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)
+    assert records == []   # must NOT misreport target's real thread as "added"
+    assert coverage.status == "partial"
+    assert coverage.sources["baseline.thread_info"].state == "failed"
+    assert [l.code for l in coverage.limitations] == ["SOURCE_FAILED"]
+
+
+def test_collect_memory_diff_target_read_failure_is_partial_not_crash():
+    mf_baseline = FakeMF()
+    mf_baseline.memory_info = FakeStream(
+        [Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")], "infos")
+    mf_target = _ExplodingMemoryInfoMF()
+
+    records, coverage = collect_memory_diff(mf_baseline, mf_target)
+    assert records == []   # must NOT misreport baseline's real region as "removed"
+    assert coverage.status == "partial"
+    assert coverage.sources["target.memory_info"].state == "failed"
+    assert [l.code for l in coverage.limitations] == ["SOURCE_FAILED"]
+
+
+def test_collect_thread_diff_target_modules_failure_degrades_not_aborts():
+    # Unlike a FAILED baseline/target.thread_info (which aborts the whole
+    # thread diff, see above), a FAILED target.modules is a strictly
+    # optional enrichment -- thread add/remove detection doesn't need it,
+    # only the backing-module lookup does, so it degrades to "unavailable"
+    # the same way an absent target.modules already does, rather than
+    # discarding the otherwise-valid added-thread record.
+    mf_baseline = FakeMF()
+    mf_baseline.thread_info = FakeStream([], "infos")
+    mf_target = _ExplodingModulesMF()
+    mf_target.thread_info = FakeStream([ThreadInfo(1, 0x1000)], "infos")
+
+    records, coverage = collect_thread_diff(mf_baseline, mf_target)
+    assert len(records) == 1
+    assert records[0].backing_module_context == MODULE_CONTEXT_UNAVAILABLE
+    assert records[0].backing_module_after is None
+    assert coverage.status == "partial"
+    assert coverage.sources["target.modules"].state == "failed"
+    assert [l.code for l in coverage.limitations] == ["SOURCE_FAILED"]
+
+
+def test_combine_coverage_reports_rolls_a_failed_entity_into_overall_partial():
+    mf_a1 = FakeMF()
+    mf_a1.modules = FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules")
+    mf_b1 = _ExplodingModulesMF()
+    _, module_coverage = collect_module_diff(mf_a1, mf_b1)
+    assert module_coverage.status == COVERAGE_PARTIAL
+
+    mf_a2, mf_b2 = FakeMF(), FakeMF()
+    mf_a2.thread_info = FakeStream([], "infos")
+    mf_b2.thread_info = FakeStream([], "infos")
+    _, thread_coverage = collect_thread_diff(mf_a2, mf_b2)
+    assert thread_coverage.status == COVERAGE_COMPLETE
+
+    combined = combine_coverage_reports([module_coverage, thread_coverage])
+    assert combined.status == COVERAGE_PARTIAL

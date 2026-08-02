@@ -29,9 +29,9 @@ dumpex currently has two coexisting JSON contracts, not one:
 | Commands | Contract | Schema file |
 |---|---|---|
 | `--hunt` | v1.1 | [`dumpex-output-v1.1.schema.json`](../dumpex/schemas/dumpex-output-v1.1.schema.json) |
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb` | v2.1 (current) | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff` | v2.1 (current) | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) |
 | — (historical) | v2.0 | [`dumpex-output-v2.0.schema.json`](../dumpex/schemas/dumpex-output-v2.0.schema.json) — frozen, kept only to validate output produced before `schema_version 2.1`; no command emits this anymore |
-| `--diff`, `--report`, `--extract`, `--strings` | none yet | — `--json`/`--csv` are rejected up front (before the dump is opened) for these modes |
+| `--report`, `--extract`, `--strings` | none yet | — `--json`/`--csv` are rejected up front (before the dump is opened) for these modes |
 
 `schema_version` moved from `"2.0"` to `"2.1"` when `result.kind` gained a
 `"comparison"` value (see "v2 structured output" below) — a new value on an
@@ -252,11 +252,14 @@ of the dumpex application version. The policy for changing the schema file:
   release notes. Never silently reuse an existing `schema_version` for an
   incompatible shape change.
 
-## v2 structured output (`--list` / `--modules` / `--threads` / `--pid` / `--sysinfo` / `--peb`)
+## v2 structured output (`--list` / `--modules` / `--threads` / `--pid` / `--sysinfo` / `--peb` / `--diff`)
 
-These six recon commands are always structured internally — even without
-`--json`/`--csv` — and use a distinct envelope from v1.1's `hunt`-shaped
-root:
+These seven recon commands are always structured internally — even
+without `--json`/`--csv` — and use a distinct envelope from v1.1's
+`hunt`-shaped root. `--diff` is the one two-dump exception (`kind:
+"comparison"`, a two-entry `meta.evidence`) — see "`result.kind ==
+"comparison"`" below; everything in this section otherwise applies to it
+too:
 
 ```json
 {
@@ -288,9 +291,10 @@ root:
 ```
 
 `meta.evidence` is an **array**, not a single object (v1.1's shape) — a
-future comparison command (baseline + target dumps) can add a second
-entry without a breaking change to this array's own shape. A single-dump
-recon command always emits exactly one entry, `role: "primary"`.
+single-dump recon command emits exactly one entry, `role: "primary"`;
+`--diff` emits exactly two, `role: "baseline"`/`role: "target"` (see
+"`result.kind == "comparison"`" below), without a breaking change to this
+array's own shape.
 
 `result` deliberately keeps three concepts separate, and none of them is
 a verdict:
@@ -320,9 +324,13 @@ consumer that wants to act on them without string-matching:
   command consulted, keyed by source name (`"memory_info"`, `"threads"`,
   `"misc_info"`, ...). Each value is `{"state", "record_count", "detail"}`
   — `state` is one of `"absent"` / `"present_empty"` / `"present"` /
-  `"failed"` (`"failed"` is reserved for a future command whose source
-  access can genuinely raise and recover; none of these six ever produces
-  it today — a read failure crashes the whole command instead). This is
+  `"failed"`. The six single-dump commands never produce `"failed"` (a
+  read failure crashes the whole command instead) — `--diff` is the one
+  command that does: reading one side's stream can genuinely raise
+  without the other side's dump being at fault, so that side is reported
+  as `"failed"` (with `detail` carrying the underlying error text) and
+  that entity's diff is skipped, rather than the whole comparison
+  crashing or the failed side being silently treated as empty. This is
   exactly `dumpex.output.coverage.SourceObservation`, one per source.
 - **`coverage.limitations`** — an array of structured, machine-readable
   gaps; `coverage.reasons` is rendered from this list, one string per
@@ -365,15 +373,15 @@ the second rule structurally: it raises rather than silently
 stringifying any value that isn't already a plain JSON scalar/list/dict
 by the time it's serialized.
 
-An exit code mirrors `coverage.status` one-for-one for these six commands,
-independent of whether `--json`/`--csv` was even requested: `0` for
-`"complete"`, `3` for `"partial"`, `4` for `"not_evaluated"` (the primary
-stream a command needed was entirely absent from the dump — e.g.
+An exit code mirrors `coverage.status` one-for-one for these seven
+commands, independent of whether `--json`/`--csv` was even requested: `0`
+for `"complete"`, `3` for `"partial"`, `4` for `"not_evaluated"` (the
+primary stream a command needed was entirely absent from the dump — e.g.
 `--modules` when `ModuleListStream` itself isn't present, as opposed to
 being present with zero entries, which is `"complete"`) — a SOC script
 checking `$?` on a bare `dumpex sample.dmp --threads` can distinguish "no
 data at all" from "some data, degraded" without parsing JSON at all. This
-convention is scoped to these six commands only; every other command's
+convention is scoped to these seven commands only; every other command's
 exit-code behavior (`0` on completion, an uncaught exception's default
 nonzero on a fatal error) is unchanged.
 
@@ -387,16 +395,21 @@ these six commands populates it today — it stays `[]` — the type exists
 so a future `--extract`/`--report` migration has a typed shape to build
 instead of a bare dict.
 
-`--diff`/`--report`/`--extract`/`--strings` do not produce structured
-output yet. Passing `--json`/`--csv` with one of them is rejected before
-the dump is opened (`parser.error`, exit code `2`), not after a full run
-completes with nothing to write.
+`--report`/`--extract`/`--strings` do not produce structured output yet.
+Passing `--json`/`--csv` with one of them is rejected before the dump is
+opened (`parser.error`, exit code `2`), not after a full run completes
+with nothing to write.
 
-### `result.kind == "comparison"` (infrastructure only -- not yet wired to any command)
+### `result.kind == "comparison"` (`--diff`)
 
-`schema_version 2.1` adds a `"comparison"` value to `result.kind` and three
-new tagged-union record types for it, grounded in `--diff`'s own (still
-console-only) `diff_modules`/`diff_threads`/`diff_memory` business logic:
+`schema_version 2.1` adds a `"comparison"` value to `result.kind` and
+three new tagged-union record types for it, grounded in `--diff`'s own
+`diff_modules`/`diff_threads`/`diff_memory` console business logic (see
+[`dumpex/commands/comparison.py`](../dumpex/commands/comparison.py) for
+the ported `collect_module_diff`/`collect_thread_diff`/
+`collect_memory_diff`/`collect_comparison()` functions, and
+[`dumpex/commands/diff.py`](../dumpex/commands/diff.py) for the
+`collect_diff`/`render_diff_console`/`cmd_diff` CLI-facing trio):
 `moduleDiffRecord`, `threadDiffRecord`, `memoryDiffRecord` --
 `entity_type` (`"module"` / `"thread"` / `"memory_region"`) is the
 discriminator a mixed `result.data.records` array uses to tell them apart.
@@ -404,21 +417,42 @@ Each carries `change_type` (`"added"`/`"removed"`/`"rebased"` for modules,
 `"added"`/`"removed"` for threads, `"added"`/`"removed"`/
 `"protection_changed"` for memory regions) plus before/after field pairs --
 only the pair a given `change_type` actually produces is non-null (e.g. an
-`"added"` module has no `full_path_before`, since `diff_modules` never had
-a baseline-side module to report one from). See
+`"added"` module has no `full_path_before`, since there is no
+baseline-side module to report one from). `--diff-mode
+modules|threads|memory|all` (default `all`) selects which entity types
+appear in `result.data.records`; only the corresponding sources appear in
+`coverage.sources` too. See
 [`dumpex/output/records.py`](../dumpex/output/records.py)'s
 `ModuleDiffRecord`/`ThreadDiffRecord`/`MemoryDiffRecord` for the exact
-field lists, and `dumpex/commands/comparison.py` for the pure
-`collect_module_diff`/`collect_thread_diff`/`collect_memory_diff`/
-`collect_comparison()` functions that build them.
+field lists.
 
-This is capability only: no CLI flag produces `kind: "comparison"` output
-today, `--diff` still only prints to the console, and `--json`/`--csv` are
-still rejected for it exactly as before. `coverage.sources` for a
-comparison result uses dotted, entity-namespaced source names (e.g.
-`"baseline.modules"`/`"target.modules"`) rather than the bare names the
-six single-dump commands use, so a comparison's baseline and target sides
-never collide as coverage facts about the same-named source.
+`--diff DUMP2`'s `meta.evidence` has exactly two entries --
+`{"id": "baseline", "role": "baseline", ...}` for the primary dump
+argument and `{"id": "target", "role": "target", ...}` for `DUMP2` --
+built via `V2Output.from_evidence()` instead of the single-`dump_path`
+constructor the other six commands use. `coverage.sources` uses dotted,
+entity-namespaced source names (e.g. `"baseline.modules"`/
+`"target.modules"`, `"baseline.thread_info"`/`"target.thread_info"`,
+`"baseline.memory_info"`/`"target.memory_info"`) rather than the bare
+names the six single-dump commands use, so a comparison's baseline and
+target sides never collide as coverage facts about the same-named source.
+`coverage.status` is combined across whichever entities `--diff-mode`
+selected (`dumpex.output.coverage.combine_coverage_reports`): unanimous
+`"not_evaluated"` only if every selected entity is (e.g. `--diff-mode all`
+against two dumps that both lack every one of ModuleListStream/
+ThreadInfoListStream/MemoryInfoListStream); a single weak entity among
+otherwise-complete ones is `"partial"`, not `"not_evaluated"`. This is
+also the one place `coverage.sources`' `"failed"` state appears in
+practice (see above) -- a side's stream raising on read (as opposed to
+merely being absent) marks that side `"failed"` and skips that entity's
+diff, without aborting the other selected entities.
+
+`--csv` splits a comparison result into up to three tables --
+`module_diffs`/`thread_diffs`/`memory_diffs` -- instead of the generic
+`records` table the other six commands write, since a mixed-entity_type
+array can't share one CSV header row; only entities that actually
+produced records get a file (directory mode) or a section (single-file
+mode).
 
 ## Reproducing a run
 

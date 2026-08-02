@@ -1,21 +1,23 @@
-"""Comparison infrastructure (Phase C, PR2) -- pure domain functions only.
+"""Comparison infrastructure (Phase C, PR2/D) -- pure domain functions only.
 
-No CLI wiring, no V2Output call, no --json/--csv handling here. --diff
-(dumpex/commands/diff.py) stays console-only and untouched; this module
-exists so a LATER migration of --diff has a typed, tested comparison
-result to build on, reviewed as its own state machine rather than bundled
-with a CLI change. That future migration would open both dumps
-(open_dump()), build two EvidenceInput entries (id="baseline"/"target"),
-construct a V2Output via V2Output.from_evidence() (see
-dumpex.output.collector), and call collect_comparison() here with the two
-already-open MinidumpFile objects -- exactly the shape cmd_diff() in
-diff.py already uses (mf_a already open, path_b opened internally).
+No CLI wiring, no V2Output call, no --json/--csv handling here --
+dumpex/commands/diff.py owns all of that (collect_diff/render_diff_console/
+cmd_diff), calling collect_comparison() here with two already-open
+MinidumpFile objects.
 
 Each collect_*_diff() function's set logic (added/removed/rebased,
 added/removed, added/removed/protection_changed) is ported directly from
-diff.py's diff_modules/diff_threads/diff_memory -- not reinvented -- so a
-future console-renderer for this data can still cross-check against the
-original, still-shipping console output.
+diff.py's original diff_modules/diff_threads/diff_memory -- not
+reinvented -- so diff.py's console renderer can still cross-check against
+that lineage.
+
+Per-side stream reads are isolated via _observe_or_failed(): a genuinely
+raised exception (not just an absent/empty stream) becomes
+SourceState.FAILED for that side specifically, rather than crashing the
+whole comparison or letting the OTHER side's real data get silently
+misreported as 100% added/removed against an empty stand-in -- see each
+collect_*_diff()'s own FAILED-gate comment for why the diff-building step
+must never run when a side is FAILED.
 
 Source naming is dotted and entity-namespaced (e.g. "baseline.modules"/
 "target.modules") rather than the bare names the six single-dump commands
@@ -50,10 +52,37 @@ from dumpex.output.records import (
 from dumpex.output.coverage import (
     observe_source, build_coverage_report, combine_coverage_reports,
     EvaluationRequirement, SourceRequirement, COVERAGE_NOT_EVALUATED,
+    SourceObservation, SourceState,
 )
 from dumpex.output.command_result import CommandResult
 
 _DIFF_MODES = ("modules", "threads", "memory", "all")
+
+
+def _observe_or_failed(name: str, mf, stream_attr: str, getter) -> "tuple[SourceObservation, list]":
+    """(observation, items) -- isolates one side's stream-presence-check +
+    read into a single try/except. A genuinely raised exception (e.g. an
+    mf.modules property that raises on access, as opposed to a stream
+    that's merely absent or empty) is reported as SourceState.FAILED for
+    THIS side specifically, via the same SourceObservation shape
+    observe_source() already produces for the absent/present_empty/
+    present cases -- never silently treated as "zero items," which would
+    misreport every one of the OTHER side's real items as added/removed
+    instead of correctly refusing to diff at all (see each
+    collect_*_diff()'s own post-coverage FAILED gate, which this return
+    value drives)."""
+    try:
+        present = bool(getattr(mf, stream_attr))
+        items = getter(mf)
+        return observe_source(name, present=present, items=items), items
+    except Exception as e:
+        # str(e) can legitimately be "" for an exception raised with no
+        # message (e.g. bare `raise RuntimeError()`) -- SourceObservation.
+        # detail requires None or a NON-EMPTY string, so fall back to
+        # repr(e) (always non-empty: at minimum the exception's class
+        # name) rather than let a message-less exception crash here too.
+        return SourceObservation(name=name, state=SourceState.FAILED,
+                                  detail=str(e) or repr(e)), []
 
 
 def _module_match_key(m) -> str:
@@ -91,21 +120,33 @@ def collect_module_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     the console version, for a named module), exactly like the console
     version for named modules -- see _module_match_key's own docstring
     for anonymous ones. Returns ([], coverage) without attempting a diff
-    at all when either side's ModuleListStream is entirely absent."""
-    raw_baseline = get_modules(mf_baseline)
-    raw_target = get_modules(mf_target)
+    at all when either side's ModuleListStream is entirely absent OR
+    failed to read (see _observe_or_failed)."""
+    baseline_obs, raw_baseline = _observe_or_failed(
+        "baseline.modules", mf_baseline, "modules", get_modules)
+    target_obs, raw_target = _observe_or_failed(
+        "target.modules", mf_target, "modules", get_modules)
+    sources = {"baseline.modules": baseline_obs, "target.modules": target_obs}
 
-    sources = {
-        "baseline.modules": observe_source(
-            "baseline.modules", present=bool(mf_baseline.modules), items=raw_baseline),
-        "target.modules": observe_source(
-            "target.modules", present=bool(mf_target.modules), items=raw_target),
-    }
-    coverage = build_coverage_report(sources, evaluation_groups=[
-        EvaluationRequirement(("baseline.modules",)),
-        EvaluationRequirement(("target.modules",)),
-    ])
+    coverage = build_coverage_report(
+        sources,
+        evaluation_groups=[EvaluationRequirement(("baseline.modules",)),
+                            EvaluationRequirement(("target.modules",))],
+        # Bare names here so a FAILED side (which the evaluation_groups
+        # gate above does NOT catch -- not_evaluated only fires on
+        # ABSENT, never FAILED) still produces a SOURCE_FAILED limitation
+        # via the reducer's existing FAILED branch, yielding PARTIAL
+        # rather than a false COMPLETE with zero limitations.
+        completeness_checks=["baseline.modules", "target.modules"],
+    )
     if coverage.status == COVERAGE_NOT_EVALUATED:
+        return [], coverage
+    if baseline_obs.state == SourceState.FAILED or target_obs.state == SourceState.FAILED:
+        # Required in addition to the NOT_EVALUATED check above: a FAILED
+        # side is not ABSENT, so it survives that gate, but raw_baseline/
+        # raw_target is [] for it (the _observe_or_failed fallback) --
+        # proceeding to diff against that [] would silently misreport
+        # 100% of the OTHER side's real items as added/removed.
         return [], coverage
 
     mods_baseline = {_module_match_key(m): m for m in raw_baseline}
@@ -166,24 +207,32 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     consulted keeps the two in sync -- an absent target.modules makes
     coverage partial (with its own reason) exactly when a
     backing_module_context could actually come back "unavailable"."""
-    raw_baseline = get_thread_infos(mf_baseline)
-    raw_target = get_thread_infos(mf_target)
+    baseline_obs, raw_baseline = _observe_or_failed(
+        "baseline.thread_info", mf_baseline, "thread_info", get_thread_infos)
+    target_obs, raw_target = _observe_or_failed(
+        "target.thread_info", mf_target, "thread_info", get_thread_infos)
+    sources = {"baseline.thread_info": baseline_obs, "target.thread_info": target_obs}
+    completeness_checks = ["baseline.thread_info", "target.thread_info"]
 
     ta = {ti.ThreadId: ti for ti in raw_baseline}
     tb = {ti.ThreadId: ti for ti in raw_target}
     added = set(tb) - set(ta)
     removed = set(ta) - set(tb)
-    needs_target_modules = any(tb[tid].StartAddress is not None for tid in added)
+    # If either REQUIRED side already failed to read, `added`/`ta`/`tb`
+    # are meaningless (built from the [] fallback for whichever side
+    # failed) -- the whole diff is about to be discarded below (the
+    # thread_info_failed gate after build_coverage_report), so skip even
+    # ATTEMPTING the target.modules read here: doing so anyway would
+    # produce a spurious, misleading SOURCE_ABSENT/SOURCE_FAILED
+    # limitation about modules when the actual, real problem is the
+    # failed thread_info read.
+    thread_info_failed = (baseline_obs.state == SourceState.FAILED
+                           or target_obs.state == SourceState.FAILED)
+    needs_target_modules = (not thread_info_failed
+                             and any(tb[tid].StartAddress is not None for tid in added))
 
-    sources = {
-        "baseline.thread_info": observe_source(
-            "baseline.thread_info", present=bool(mf_baseline.thread_info), items=raw_baseline),
-        "target.thread_info": observe_source(
-            "target.thread_info", present=bool(mf_target.thread_info), items=raw_target),
-    }
     modules_target_available = None
     modules_target = None
-    completeness_checks = None
     if needs_target_modules:
         # mf_target.modules/get_modules(mf_target) are only ever touched
         # here, inside this branch -- when no added thread has a known
@@ -191,10 +240,20 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         # modules_target_available (see the "sa is None" branch further
         # down), so accessing the stream at all would be an unjustified
         # read of data this call never actually needed.
-        modules_target_available = bool(mf_target.modules)
-        modules_target = get_modules(mf_target)
-        sources["target.modules"] = observe_source(
-            "target.modules", present=modules_target_available, items=modules_target)
+        modules_obs, modules_target = _observe_or_failed(
+            "target.modules", mf_target, "modules", get_modules)
+        sources["target.modules"] = modules_obs
+        # A FAILED target.modules degrades the SAME way an absent one
+        # does (module resolution just isn't attempted -- thread add/
+        # remove detection itself never needed this stream) rather than
+        # aborting the whole thread diff the way a FAILED thread_info
+        # side does below -- this stream is a strictly optional
+        # enrichment, not a source the diff computation itself depends on.
+        # PRESENT_EMPTY still counts as "available" (the stream itself
+        # exists; an address just won't resolve, correctly reported as
+        # UNREGISTERED, not UNAVAILABLE) -- only ABSENT/FAILED are not.
+        modules_target_available = modules_obs.state in (
+            SourceState.PRESENT, SourceState.PRESENT_EMPTY)
         # A plain bare-name completeness check here would produce a
         # SOURCE_ABSENT limitation byte-identical to collect_module_diff's
         # own ("target ModuleListStream not present in this dump") when
@@ -208,10 +267,16 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         # _validate_source_absent_against_sources), and no such
         # counterpart exists here (this fact is about a SUBSET of
         # target.thread_info's threads -- the added ones with a known
-        # address -- not "every record in some counterpart source").
-        completeness_checks = [SourceRequirement(
+        # address -- not "every record in some counterpart source"). A
+        # FAILED target.modules bypasses this customization entirely (see
+        # _derive_required_source_limitation's own FAILED branch, which
+        # ignores SourceRequirement.scope/unavailable_fields) and renders
+        # via SOURCE_FAILED's own distinct wording instead -- acceptable,
+        # since SOURCE_FAILED already can't collide with
+        # collect_module_diff's own SOURCE_ABSENT limitation.
+        completeness_checks.append(SourceRequirement(
             "target.modules", scope="thread",
-            unavailable_fields=("backing_module_after", "backing_module_context"))]
+            unavailable_fields=("backing_module_after", "backing_module_context")))
 
     coverage = build_coverage_report(
         sources,
@@ -220,6 +285,10 @@ def collect_thread_diff(mf_baseline, mf_target) -> "tuple[list, object]":
         completeness_checks=completeness_checks,
     )
     if coverage.status == COVERAGE_NOT_EVALUATED:
+        return [], coverage
+    if baseline_obs.state == SourceState.FAILED or target_obs.state == SourceState.FAILED:
+        # Only the two REQUIRED sources abort the whole thread diff --
+        # target.modules failing is handled above (degrade, don't abort).
         return [], coverage
 
     records = []
@@ -265,20 +334,21 @@ def collect_memory_diff(mf_baseline, mf_target) -> "tuple[list, object]":
     SUSPICIOUS_PROTS check rather than diff_memory's own 4-tier console
     categorization (rwx/exec/notable/noise), which stays a future
     console-renderer concern."""
-    raw_baseline = get_memory_regions(mf_baseline)
-    raw_target = get_memory_regions(mf_target)
+    baseline_obs, raw_baseline = _observe_or_failed(
+        "baseline.memory_info", mf_baseline, "memory_info", get_memory_regions)
+    target_obs, raw_target = _observe_or_failed(
+        "target.memory_info", mf_target, "memory_info", get_memory_regions)
+    sources = {"baseline.memory_info": baseline_obs, "target.memory_info": target_obs}
 
-    sources = {
-        "baseline.memory_info": observe_source(
-            "baseline.memory_info", present=bool(mf_baseline.memory_info), items=raw_baseline),
-        "target.memory_info": observe_source(
-            "target.memory_info", present=bool(mf_target.memory_info), items=raw_target),
-    }
-    coverage = build_coverage_report(sources, evaluation_groups=[
-        EvaluationRequirement(("baseline.memory_info",)),
-        EvaluationRequirement(("target.memory_info",)),
-    ])
+    coverage = build_coverage_report(
+        sources,
+        evaluation_groups=[EvaluationRequirement(("baseline.memory_info",)),
+                            EvaluationRequirement(("target.memory_info",))],
+        completeness_checks=["baseline.memory_info", "target.memory_info"],
+    )
     if coverage.status == COVERAGE_NOT_EVALUATED:
+        return [], coverage
+    if baseline_obs.state == SourceState.FAILED or target_obs.state == SourceState.FAILED:
         return [], coverage
 
     ra = {r.BaseAddress: r for r in raw_baseline}

@@ -105,6 +105,18 @@ def test_output_path_same_as_dumpfile_refused(monkeypatch, capsys):
     assert "--output" in out
 
 
+def test_json_path_same_as_diff_target_refused(monkeypatch, capsys):
+    # --diff's SECOND dump is just as much real evidence as the primary
+    # --dumpfile -- check_not_dump_path must guard against overwriting
+    # EITHER one, not just args.dumpfile (see cli.py's dump_paths list).
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--diff", "/other.dmp",
+                              "--json", "/other.dmp"])
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "same path as the input dump" in out
+    assert "--json" in out
+
+
 def test_json_path_different_from_dumpfile_reaches_open_dump(monkeypatch, capsys):
     # A --json path that is NOT the dump file must not be refused --
     # execution proceeds to open_dump()'s own (different) failure mode.

@@ -10,6 +10,7 @@ from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
 from dumpex.rules_pkg.loader import get_rules, configure_rules_source
 from dumpex.ui.structured import StructuredOutput, _ANSI_RE
 from dumpex.output import V2Output
+from dumpex.output.envelope import EvidenceInput
 from dumpex.output.coverage import EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED, exit_code_for
 from dumpex.core.safe_io import check_not_dump_path, AtomicTextTee
 
@@ -25,15 +26,17 @@ from dumpex.hunt              import cmd_hunt
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # --hunt keeps StructuredOutput/dumpex-output-v1.1.schema.json unchanged.
-# These six recon commands are migrated onto the v2 envelope (see
-# dumpex/output/ and dumpex-output-v2.1.schema.json); --diff/--report/
-# --extract/--strings don't produce structured output yet at all (their
-# own canonical records are a later migration) -- requesting --json/--csv
+# These seven commands are migrated onto the v2 envelope (see
+# dumpex/output/ and dumpex-output-v2.1.schema.json); --diff produces a
+# kind="comparison" result via V2Output.from_evidence() (two dumps), the
+# other six produce their usual single-dump kinds. --report/--extract/
+# --strings don't produce structured output yet at all (their own
+# canonical records are a later migration) -- requesting --json/--csv
 # with one of them is now rejected up front (see the pre-flight check in
 # main()) instead of running the full command and only saying so
 # afterward.
-_V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo", "peb"})
-_UNSUPPORTED_STRUCTURED_MODES = frozenset({"diff", "report", "extract", "strings"})
+_V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo", "peb", "diff"})
+_UNSUPPORTED_STRUCTURED_MODES = frozenset({"report", "extract", "strings"})
 
 # Exit codes for the six v2-routed recon commands, independent of
 # --json/--csv having been requested at all: a SOC script checking `$?`
@@ -152,15 +155,15 @@ def main():
     run_mode = _selected_run_mode(args)
 
     # --json/--csv on a command that doesn't produce structured output yet
-    # (--diff/--report/--extract/--strings -- see _UNSUPPORTED_STRUCTURED_MODES)
-    # is rejected HERE, before the dump is even opened, rather than running
-    # the full command and only saying so afterward once nothing was
-    # collected to write.
+    # (--report/--extract/--strings -- see _UNSUPPORTED_STRUCTURED_MODES) is
+    # rejected HERE, before the dump is even opened, rather than running the
+    # full command and only saying so afterward once nothing was collected
+    # to write.
     if (args.json or args.csv) and run_mode in _UNSUPPORTED_STRUCTURED_MODES:
         flag = "--json" if args.json else "--csv"
         parser.error(f"{flag} is not supported for --{run_mode} yet -- structured output "
-                     f"currently covers --list/--modules/--threads/--pid/--sysinfo/--peb "
-                     f"(v2) and --hunt (v1.1). Rerun without {flag}.")
+                     f"currently covers --list/--modules/--threads/--pid/--sysinfo/--peb/"
+                     f"--diff (v2) and --hunt (v1.1). Rerun without {flag}.")
 
     # --ref-dir is only meaningful for --hunt stomping, but validated
     # unconditionally and up front — a silently-ignored typo'd/missing
@@ -183,10 +186,11 @@ def main():
     # of the process (not a one-time upfront slurp), so there is no point in
     # program execution where overwriting the dump path becomes "safe" —
     # this is a hard, unconditional refusal, not something --force can lift.
+    dump_paths = [args.dumpfile] + ([args.diff] if args.diff else [])
     for out_arg, label in ((args.txt, "--txt"), (args.output, "--output"),
                             (args.json, "--json"), (args.csv, "--csv")):
         if out_arg:
-            check_not_dump_path(out_arg, args.dumpfile, label)
+            check_not_dump_path(out_arg, dump_paths, label)
 
     # ── Derive a short label describing the command being run ─────────────
     # Used in auto-generated filenames when the caller passes a directory.
@@ -252,16 +256,27 @@ def main():
 
     exit_code = None
     try:
-        mf   = open_dump(args.dumpfile)
+        mf        = open_dump(args.dumpfile)
+        # Only --diff opens a second dump. If BOTH args.dumpfile and
+        # args.diff are bad, only the primary's parse error surfaces here
+        # (it's opened first) -- consistent with every other command's
+        # single-error-then-exit behavior, not an oversight.
+        mf_target = open_dump(args.diff) if run_mode == "diff" else None
 
         # Structured output collector — populated by commands that support
-        # it. The six v2-routed recon commands always get a V2Output (built
-        # regardless of --json/--csv, so the exit-code contract below is
-        # consistent whether or not structured output was actually
-        # written); --hunt keeps constructing StructuredOutput exactly as
-        # before, only when --json/--csv was actually requested.
+        # it. The seven v2-routed recon commands always get a V2Output
+        # (built regardless of --json/--csv, so the exit-code contract
+        # below is consistent whether or not structured output was
+        # actually written); --hunt keeps constructing StructuredOutput
+        # exactly as before, only when --json/--csv was actually requested.
         need_structured = bool(args.json or args.csv)
-        if run_mode in _V2_STRUCTURED_MODES:
+        if run_mode == "diff":
+            out = V2Output.from_evidence(
+                [EvidenceInput(id="baseline", role="baseline", path=args.dumpfile),
+                 EvidenceInput(id="target", role="target", path=args.diff)],
+                command=cmd_label, options=_build_options(), case_id=args.case_id,
+                analyst=args.analyst, redact_paths=args.redact_paths, started_at=started_at)
+        elif run_mode in _V2_STRUCTURED_MODES:
             out = V2Output(args.dumpfile, mf, command=cmd_label, options=_build_options(),
                             case_id=args.case_id, analyst=args.analyst,
                             redact_paths=args.redact_paths, started_at=started_at)
@@ -279,7 +294,7 @@ def main():
         # --output is checked exactly once, inside cmd_extract/cmd_report
         # right before the write.
 
-        exit_code = _run(args, mf, out, cmd_label)
+        exit_code = _run(args, mf, out, cmd_label, mf_target=mf_target)
     except BaseException:
         if _tee is not None:
             _tee.abandon()
@@ -295,7 +310,7 @@ def main():
         sys.exit(exit_code)
 
 
-def _run(args, mf, out, cmd_label) -> "int | None":
+def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
     """Returns the process exit code for the six v2-routed recon commands
     (EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED — see module docstring), or
     None for every other command (unchanged exit-code behavior: 0 on
@@ -340,7 +355,9 @@ def _run(args, mf, out, cmd_label) -> "int | None":
         data = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
                         ref_dir=args.ref_dir)
         if out and data: out.add("hunt", data)
-    elif args.diff:         cmd_diff(mf, args.diff, args.diff_mode, verbose=args.verbose)
+    elif args.diff:
+        exit_code = _apply_command_result(
+            cmd_diff(mf, mf_target, args.diff_mode, verbose=args.verbose))
 
     elif args.extract:
         addr = parse_hex_or_int(args.extract)
