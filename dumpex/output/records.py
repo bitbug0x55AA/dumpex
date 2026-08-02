@@ -284,23 +284,32 @@ class ExtractRecord:
     here, since the two describe different things (what was read from
     the dump vs. what was written to disk) that happen to usually agree
     in size but are conceptually distinct facts."""
-    requested_address:   "str | None"   # hex_address(addr)
-    requested_size:       "int | None"  # size actually passed to read_region
+    requested_address:      str          # hex_address(addr) -- never null: a
+                                          # successful collect_extract() always
+                                          # knows the address it read from
+    requested_size:          int         # size actually passed to read_region
                                           # (post auto-size resolution -- see
-                                          # dumpex.core.memory._resolve_size)
+                                          # dumpex.core.memory._resolve_size) --
+                                          # never null for the same reason
     auto_sized:             bool         # True when --size wasn't given
     bytes_read:              int         # len(data) -- equal to requested_size
                                           # whenever the read didn't come up short
     mz_header_detected:      bool        # data[:2] == b"MZ"
 
     def __post_init__(self):
-        _require_optional_hex_address(self.requested_address, "ExtractRecord.requested_address")
-        if self.requested_size is not None:
-            _require_nonneg_int(self.requested_size, "ExtractRecord.requested_size")
+        # Both non-null: collect_extract() only ever constructs this record
+        # after a successful read_region() call, which means it always
+        # already knows the exact address/size it asked for -- allowing
+        # None here would let a producer construct (and .to_dict()) a
+        # shape the v2.2 schema's own required/non-nullable extractRecord
+        # fields reject, the same gap StringRecord's own non-null
+        # `address` field closed earlier.
+        _require_hex_address(self.requested_address, "ExtractRecord.requested_address")
+        _require_nonneg_int(self.requested_size, "ExtractRecord.requested_size")
         _require_bool(self.auto_sized, "ExtractRecord.auto_sized")
         _require_nonneg_int(self.bytes_read, "ExtractRecord.bytes_read")
         _require_bool(self.mz_header_detected, "ExtractRecord.mz_header_detected")
-        if self.requested_size is not None and self.bytes_read > self.requested_size:
+        if self.bytes_read > self.requested_size:
             raise ValueError(
                 f"ExtractRecord.bytes_read ({self.bytes_read}) must not exceed "
                 f"requested_size ({self.requested_size}) -- a read can come up short, never long")
@@ -329,11 +338,16 @@ class StringRecord:
     this module, always non-null: a string was found at some real address,
     there is no "address unknown" case for it. `matched_grep` is a FLAG,
     not a filter: this record is emitted for every extracted string
-    regardless of --grep, matching the original console's own "show all,
-    highlight matches" behavior -- None when no --grep was given at all
-    (the concept doesn't apply), True/False per record when it was."""
+    regardless of --grep, so the STRUCTURED records list (JSON/CSV) always
+    shows every extracted string -- None when no --grep was given at all
+    (the concept doesn't apply), True/False per record when it was. The
+    CONSOLE rendering (render_strings_console) is a separate, narrower
+    concern: it actually SKIPS any record with matched_grep is False
+    (only highlighting True matches, never printing non-matches) -- do
+    not conflate the two; a --grep run's console text and its JSON/CSV
+    output deliberately show different amounts of data."""
     offset:        int
-    address:       "str | None"
+    address:       str
     encoding:      str              # "ASCII" | "UTF16"
     text:          str
     matched_grep:  "bool | None"
@@ -676,7 +690,8 @@ SEVERITY_ERROR   = "error"
 
 @dataclass(frozen=True)
 class Diagnostic:
-    """One entry in result.diagnostics.warnings/.errors -- structured,
+    """One entry in the top-level diagnostics.warnings/.errors (a sibling
+    of `result`, not nested under it) -- structured,
     not a bare string, so a consumer can filter/triage without parsing
     free text. Frozen: a plain (mutable) dataclass would let a caller
     construct a valid instance, then mutate a field past __post_init__'s

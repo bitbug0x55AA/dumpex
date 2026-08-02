@@ -89,9 +89,10 @@ hex addresses — see
 `meta.evidence` array (`baseline`/`target`) instead of the single-dump
 `meta` shape the other eight use — see
 [Output and Evidence Schema](OUTPUT_SCHEMA.md#comparison-records).
-`--extract` is the first command to populate `result.artifacts[]` (the
-`--output` file it wrote) and `result.diagnostics.warnings[]` (e.g. an
-MZ-header-detected warning) — see
+`--extract` is the first command to populate the top-level `artifacts[]`
+(the `--output` file it wrote) and `diagnostics.warnings[]` (e.g. an
+MZ-header-detected warning) — both are siblings of `result`, not nested
+under it — see
 [Output and Evidence Schema](OUTPUT_SCHEMA.md#extract-and-strings-records).
 `--report` doesn't produce structured output yet — `--json`/`--csv` with it
 is rejected immediately, before the dump is opened, rather than running the

@@ -108,15 +108,30 @@ def collect_extract(mf, addr: int, size: int, output: "str | None",
         evaluation_sources=("requested_region",),
         completeness_checks=completeness_checks,
     )
+    # No output_path here -- artifacts[0].path is the one authoritative
+    # place the write-side path lives (see build_extract_artifact above).
+    # A second copy in `summary` would need its own --redact-paths
+    # handling to stay in sync with artifacts[].path's own redaction (see
+    # envelope._redact_artifacts) instead of just leaking the full
+    # absolute path unredacted every time --redact-paths is set.
     return CommandResult(kind="extract", records=[record], coverage=coverage,
-                          summary={"count": 1, "output_path": out},
+                          summary={"count": 1},
                           diagnostics=diagnostics, artifacts=[artifact])
 
 
-def render_extract_console(records, artifacts, diagnostics) -> None:
+def render_extract_console(records, artifacts, diagnostics, coverage) -> None:
     """The `"[*] Reading ..."` preamble is NOT printed here -- it must
     print before collect_extract() is even attempted (see cmd_extract),
-    so there is something to say even when the read itself fails."""
+    so there is something to say even when the read itself fails. Takes
+    the whole CoverageReport, not just a bool -- consumes its already-
+    rendered `.reasons` (never re-derives a short-read fact from
+    `records` itself) the same way render_modules_console/
+    render_threads_console do, so a --extract user isn't left staring at
+    a normal-looking "[+] Saved" line with no indication the read that
+    produced it was actually truncated (coverage.status == "partial",
+    exit code 3)."""
+    for reason in coverage.reasons:
+        print(YELLOW(f"  [~] {reason}"))
     for d in diagnostics:
         print(YELLOW(f"[!] {d.message}"))
     artifact = artifacts[0]
@@ -135,7 +150,7 @@ def cmd_extract(mf, addr, size, output, auto_size=False, force=False) -> Command
     except OutputWriteError as e:
         print(RED(f"[!] Write failed: {e}"))
         sys.exit(1)
-    render_extract_console(result.records, result.artifacts, result.diagnostics)
+    render_extract_console(result.records, result.artifacts, result.diagnostics, result.coverage)
     return result
 
 
@@ -179,14 +194,21 @@ def collect_strings(mf, addr: int, size: int, min_len: int, grep: "str | None",
     shown = sum(1 for r in records if r.matched_grep is not False)
     return CommandResult(kind="strings", records=records, coverage=coverage,
                           summary={"count": len(records), "shown": shown,
+                                   "requested_address": hex_address(addr),
                                    "requested_size": size, "bytes_read": len(data),
                                    "auto_sized": auto_size})
 
 
-def render_strings_console(records) -> None:
+def render_strings_console(records, coverage) -> None:
     """The `"[*] Extracting strings ..."` preamble is NOT printed here --
     see render_extract_console's identical note on why it must print
-    before collect_strings() is even attempted."""
+    before collect_strings() is even attempted. Takes the whole
+    CoverageReport for the same reason render_extract_console does --
+    see its own docstring; a genuinely complete read (coverage.reasons ==
+    []) prints nothing extra here, so this is purely additive and never
+    changes existing compat-freeze console text."""
+    for reason in coverage.reasons:
+        print(YELLOW(f"  [~] {reason}"))
     print(f"\n{BOLD('Offset'):<14} {BOLD('Enc'):<7} {BOLD('String')}")
     print("─" * 70)
     shown = 0
@@ -211,5 +233,5 @@ def cmd_strings(mf, addr, size, min_len, grep, encoding, auto_size=False) -> Com
     except re.error as e:
         print(RED(f"[!] Invalid --grep regex: {e}"))
         sys.exit(1)
-    render_strings_console(result.records)
+    render_strings_console(result.records, result.coverage)
     return result

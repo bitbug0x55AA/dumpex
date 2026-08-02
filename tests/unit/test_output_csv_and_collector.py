@@ -97,8 +97,8 @@ def test_write_csv_with_no_records_still_writes_a_summary_table(tmp_path, capsys
 # ── artifacts / diagnostics CSV tables (P1-2 remediation) ────────────────
 # Before this fix, build_tables() only ever consumed `result` -- JSON's
 # top-level artifacts[]/diagnostics were completely invisible in CSV, and
-# a custom result.summary field (e.g. --extract's output_path, --strings'
-# shown) was silently dropped by summary_rows() too.
+# a custom result.summary field (e.g. --strings' shown) was silently
+# dropped by summary_rows() too.
 
 def test_build_tables_omits_artifacts_and_diagnostics_tables_when_none_given():
     result = Result(kind="modules", execution_status="completed", coverage_status="complete",
@@ -235,6 +235,31 @@ def test_json_and_csv_agree_on_artifact_facts(tmp_path):
     assert doc["artifacts"][0]["path"] == csv_rows[0]["path"]
     assert str(doc["artifacts"][0]["size_bytes"]) == csv_rows[0]["size_bytes"]
     assert doc["artifacts"][0]["sha256"] == csv_rows[0]["sha256"]
+
+
+def test_strings_requested_address_reaches_both_json_and_csv_summary(tmp_path):
+    # P2 remediation: --strings' summary.requested_address must be
+    # visible through both output formats, not just JSON.
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="strings", options={})
+
+    import dumpex.commands.extract as extract_mod
+    mf = FakeMF()
+    mf.filename = str(dump_path)
+    extract_mod.read_region = mem_reader({0x1000: b"\x01\x02\x03" * 5})   # no strings found
+    result = extract_mod.collect_strings(mf, 0x1000, 15, 6, None, "both")
+    out.set_command_result(result)
+
+    doc = json.loads(out.to_json())
+    assert doc["result"]["summary"]["requested_address"] == "0x0000000000001000"
+
+    csv_path = tmp_path / "out.csv"
+    out.write_csv(str(csv_path), cmd_label="strings")
+    text = csv_path.read_text(encoding="utf-8")
+    summary_block = text.split("## strings / summary\n", 1)[1].split("\n\n", 1)[0]
+    csv_rows = list(csv.DictReader(io.StringIO(summary_block)))
+    assert csv_rows[0]["requested_address"] == "0x0000000000001000"
 
 
 def test_list_typed_field_becomes_json_cell_not_python_repr(tmp_path):
@@ -439,6 +464,42 @@ def test_set_command_result_then_to_json_redacts_artifact_path_when_requested(tm
     assert doc["artifacts"][0]["sha256"] == "abc123"
     assert doc["meta"]["execution"]["options"]["output"] == "extracted.bin"
     assert str(tmp_path) not in json.dumps(doc)
+
+
+def test_real_collect_extract_redact_paths_leaves_no_absolute_path_in_json(tmp_path):
+    # P1 remediation (round 2): collect_extract()'s own summary used to
+    # carry a second, UNREDACTED copy of the output path
+    # (summary["output_path"]) -- --redact-paths only ever touched
+    # meta.execution.options.output and artifacts[].path, so the full
+    # absolute path (and its parent directory) still leaked through
+    # result.summary in the JSON text. Uses the REAL collect_extract(),
+    # not a hand-built CommandResult, so this exercises the exact
+    # producer the bug was in.
+    import dumpex.commands.extract as extract_mod
+    from tests.fixtures.fakes import mem_reader
+
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out_dir = tmp_path / "case_evidence_dir"
+    out_dir.mkdir()
+    output_path = str(out_dir / "extracted.bin")
+
+    mf = FakeMF()
+    mf.filename = str(dump_path)
+    extract_mod.read_region = mem_reader({0x1000: b"hello world"})
+    result = extract_mod.collect_extract(mf, 0x1000, 11, output_path, force=True)
+
+    out = V2Output(str(dump_path), command="extract",
+                    options={"output": output_path}, redact_paths=True)
+    out.set_command_result(result)
+    doc = json.loads(out.to_json())
+    full_text = json.dumps(doc)
+
+    assert str(out_dir) not in full_text, "parent directory leaked despite --redact-paths"
+    assert output_path not in full_text, "full absolute output path leaked despite --redact-paths"
+    assert doc["artifacts"][0]["path"] == "extracted.bin"
+    assert "output_path" not in doc["result"]["summary"]
+    assert doc["meta"]["execution"]["options"]["output"] == "extracted.bin"
 
 
 def test_set_command_result_then_to_json_keeps_full_artifact_path_by_default(tmp_path):

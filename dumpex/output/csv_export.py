@@ -101,9 +101,10 @@ def summary_rows(result) -> list:
     even when `records` is empty, so this table's file always gets
     written in directory mode.
 
-    Any command-specific field in result.summary (e.g. --extract's
-    output_path, --strings' shown) is merged in alongside the five fixed
-    fields below -- CSV's own summary table would otherwise silently drop
+    Any command-specific field in result.summary (e.g. --strings' shown/
+    requested_size/bytes_read/auto_sized/requested_address) is merged in
+    alongside the five fixed fields below -- CSV's own summary table
+    would otherwise silently drop
     everything result.summary carries beyond the generic count, unlike
     JSON's result.summary, which serializes it verbatim. A fixed field
     name always wins over a same-named result.summary entry (there is

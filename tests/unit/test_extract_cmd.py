@@ -59,7 +59,11 @@ def test_collect_extract_happy_path(monkeypatch, tmp_path):
     assert result.coverage.status == "complete"
     assert result.coverage.sources["requested_region"].state == SourceState.PRESENT
     assert result.coverage.sources["requested_region"].record_count == 1
-    assert result.summary == {"count": 1, "output_path": out_path}
+    # No output_path in summary -- artifacts[0].path (asserted above) is
+    # the one authoritative place the write-side path lives (P1
+    # remediation: a second unredacted copy of the path in `summary`
+    # would leak it even under --redact-paths).
+    assert result.summary == {"count": 1}
     assert (tmp_path / "out.bin").read_bytes() == b"hello world"
 
 
@@ -68,7 +72,7 @@ def test_collect_extract_default_output_filename(monkeypatch, tmp_path):
     mf = _mk_mf(monkeypatch, {0x2000: b"x" * 10})
     result = collect_extract(mf, 0x2000, 10, None, auto_size=False, force=True)
     assert result.artifacts[0].path == "region_0x2000.bin"
-    assert result.summary["output_path"] == "region_0x2000.bin"
+    assert "output_path" not in result.summary
     assert (tmp_path / "region_0x2000.bin").read_bytes() == b"x" * 10
 
 
@@ -219,3 +223,18 @@ def test_cmd_extract_returns_command_result_on_success(monkeypatch, capsys, tmp_
     out = capsys.readouterr().out
     assert "[*] Reading 0xb bytes from 0x1000 ..." in out
     assert "[+] Saved" in out
+    assert "[~]" not in out   # a full read must print no coverage-reason line at all
+
+
+def test_cmd_extract_short_read_prints_partial_notice_and_still_saves(monkeypatch, tmp_path, capsys):
+    # P2 remediation: a short read must be visible on the console, not
+    # just in the JSON exit code -- an analyst running --extract without
+    # --json/--csv would otherwise see a normal-looking "[+] Saved" line
+    # with no indication the read was truncated.
+    mf = _mk_mf(monkeypatch, {0x6000: b"only nine"})
+    out_path = str(tmp_path / "out.bin")
+    result = cmd_extract(mf, 0x6000, 64, out_path, auto_size=False, force=True)
+    assert result.coverage.status == "partial"
+    out = capsys.readouterr().out
+    assert "[~] Requested memory region was only partially read" in out
+    assert "[+] Saved" in out   # the (truncated) output is still saved and reported

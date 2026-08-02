@@ -838,6 +838,24 @@ def test_extract_record_negative_bytes_read_is_rejected_by_schema(validator):
     assert not validator.is_valid(doc)
 
 
+def test_extract_record_null_requested_address_is_rejected_by_schema(validator):
+    # P2 remediation: requested_address is non-nullable on extractRecord --
+    # a successful --extract always knows the exact address it read.
+    doc = _minimal_valid_doc(kind="extract")
+    doc["result"]["data"]["records"] = [{
+        "requested_address": None, "requested_size": 16,
+        "auto_sized": False, "bytes_read": 16, "mz_header_detected": False}]
+    assert not validator.is_valid(doc)
+
+
+def test_extract_record_null_requested_size_is_rejected_by_schema(validator):
+    doc = _minimal_valid_doc(kind="extract")
+    doc["result"]["data"]["records"] = [{
+        "requested_address": "0x0000000000001000", "requested_size": None,
+        "auto_sized": False, "bytes_read": 16, "mz_header_detected": False}]
+    assert not validator.is_valid(doc)
+
+
 def test_strings_kind_is_rejected_by_the_frozen_v2_1_schema(validator_v2_1):
     # dumpex-output-v2.1.schema.json predates "strings" entirely -- proves
     # the frozen historical schema was never silently updated to accept

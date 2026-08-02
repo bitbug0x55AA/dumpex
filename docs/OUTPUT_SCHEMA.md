@@ -45,12 +45,14 @@ installed and importable via
 validating output captured before each respective change; neither is deleted
 or overwritten, following the same precedent v1.0→v1.1 set.
 
-`--extract` is the first command to populate `result.artifacts[]` (the file
-it wrote) and `result.diagnostics.warnings[]` (e.g. an MZ-header-detected
-warning) for real — both were part of the v2 envelope since `schema_version
-2.1` but had no producer until `--extract` migrated. `--strings` reuses the
-same `requested_region`-scoped coverage shape as `--extract` (see
-`extractRecord`/`stringRecord` below) but never writes an artifact of its own.
+`--extract` is the first command to populate the top-level `artifacts[]`
+(the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
+warning) — both are siblings of `result`, not nested under it (see the
+envelope shape above) — for real; both were part of the v2 envelope since
+`schema_version 2.1` but had no producer until `--extract` migrated.
+`--strings` reuses the same `requested_region`-scoped coverage shape as
+`--extract` (see `extractRecord`/`stringRecord` below) but never writes an
+artifact of its own.
 
 This split exists because v1.1's root schema requires a top-level `hunt`
 object (`"required": ["meta", "hunt"]`) — the six recon commands never
@@ -472,8 +474,9 @@ produced records get a file (directory mode) or a section (single-file
 mode). `--extract`/`--strings` additionally get `artifacts`/
 `diagnostic_warnings`/`diagnostic_errors` tables when they have anything
 to put in them (see "Extract and strings records" above) -- kind-
-independent tables any v2 command's `result.artifacts`/`.diagnostics`
-can populate, not specific to comparison's own per-entity split.
+independent tables any v2 command's own top-level `artifacts`/
+`diagnostics` can populate, not specific to comparison's own per-entity
+split.
 
 ### Extract and strings records
 
@@ -496,13 +499,18 @@ vs. what was written to disk) that happen to usually agree in size.
 
 `--strings` returns one `stringRecord` per extracted string —
 `{"offset", "address", "encoding", "text", "matched_grep"}` — regardless
-of `--grep`: `matched_grep` is a flag, not a filter, matching the
-console's own "show all, highlight matches" behavior (`null` when
-`--grep` wasn't given at all; `true`/`false` per record when it was).
-`result.summary` additionally carries `requested_size`/`bytes_read`/
-`auto_sized`/`shown` (a `--strings`-only scan-context field CSV's own
-`summary` table now also exposes automatically, since custom
-`result.summary` fields are merged into that table's single row).
+of `--grep`: `matched_grep` is a flag, not a filter, so `result.data.
+records` (JSON/CSV) always contains every extracted string (`null` when
+`--grep` wasn't given at all; `true`/`false` per record when it was). The
+console rendering is narrower and does NOT match this one-for-one: it
+skips any record with `matched_grep == false` entirely (only ever
+highlighting the `true` matches), so a `--grep` run's console text always
+shows fewer lines than its own JSON/CSV output for the same run.
+`result.summary` additionally carries `requested_address`/
+`requested_size`/`bytes_read`/`auto_sized`/`shown` (`--strings`-only
+scan-context fields CSV's own `summary` table now also exposes
+automatically, since custom `result.summary` fields are merged into that
+table's single row).
 
 Both commands share the same `requested_region`-scoped
 `coverage.sources` shape as every other v2 command — a bad `--extract`/

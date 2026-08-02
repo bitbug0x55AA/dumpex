@@ -258,10 +258,20 @@ def test_extract_record_rejects_malformed_requested_address():
                        auto_sized=False, bytes_read=16, mz_header_detected=False)
 
 
-def test_extract_record_allows_null_requested_address():
-    rec = ExtractRecord(requested_address=None, requested_size=16,
-                         auto_sized=False, bytes_read=16, mz_header_detected=False)
-    assert rec.requested_address is None
+def test_extract_record_rejects_null_requested_address():
+    # P2 remediation: a successful collect_extract() always knows the
+    # exact address it read from -- allowing None here would let a
+    # producer construct a shape the v2.2 schema itself rejects
+    # (extractRecord.requested_address is non-nullable).
+    with pytest.raises(ValueError, match="requested_address"):
+        ExtractRecord(requested_address=None, requested_size=16,
+                       auto_sized=False, bytes_read=16, mz_header_detected=False)
+
+
+def test_extract_record_rejects_null_requested_size():
+    with pytest.raises(ValueError, match="requested_size"):
+        ExtractRecord(requested_address="0x0000000000001000", requested_size=None,
+                       auto_sized=False, bytes_read=16, mz_header_detected=False)
 
 
 def test_string_record_rejects_negative_offset():

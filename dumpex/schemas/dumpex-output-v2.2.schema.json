@@ -211,14 +211,14 @@
     },
 
     "extractRecord": {
-      "description": "Matches dumpex.output.records.ExtractRecord.to_dict() -- the READ-side facts for one --extract invocation. NOT expressed here (Python-only, see ExtractRecord.__post_init__): bytes_read must never exceed requested_size when requested_size is non-null -- JSON Schema cannot compare two sibling field VALUES against each other within one object.",
+      "description": "Matches dumpex.output.records.ExtractRecord.to_dict() -- the READ-side facts for one --extract invocation. `requested_address`/`requested_size` are never null -- a successful --extract always knows the exact address/size it read (unlike most other hexAddress-typed fields in this schema, which stay nullable for genuinely optional cases). NOT expressed here (Python-only, see ExtractRecord.__post_init__): bytes_read must never exceed requested_size -- JSON Schema cannot compare two sibling field VALUES against each other within one object.",
       "type": "object",
       "additionalProperties": false,
       "required": ["requested_address", "requested_size", "auto_sized", "bytes_read",
                    "mz_header_detected"],
       "properties": {
-        "requested_address":   { "$ref": "#/$defs/hexAddress" },
-        "requested_size":      { "type": ["integer", "null"], "minimum": 0 },
+        "requested_address":   { "$ref": "#/$defs/hexAddress", "not": { "const": null } },
+        "requested_size":      { "type": "integer", "minimum": 0 },
         "auto_sized":          { "type": "boolean" },
         "bytes_read":          { "type": "integer", "minimum": 0 },
         "mz_header_detected":  { "type": "boolean" }

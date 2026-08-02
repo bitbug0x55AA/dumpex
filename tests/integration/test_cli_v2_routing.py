@@ -180,16 +180,18 @@ def test_strings_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         assert records[0]["text"] == "hello world!"
         assert records[0]["matched_grep"] is None
         assert "hunt" not in doc
+        assert doc["result"]["summary"]["requested_address"] == "0x0000000000001000"
     finally:
         os.remove(dump_path)
 
 
-def test_extract_short_read_exits_partial_and_json_shows_truncation(monkeypatch, tmp_path):
+def test_extract_short_read_exits_partial_and_json_shows_truncation(monkeypatch, tmp_path, capsys):
     # P1-4 remediation: a short read (read_region() returned fewer bytes
     # than requested) must surface as exit code 3 (EXIT_PARTIAL), not the
     # 0 a full "complete" read gets -- a SOC script checking `$?` on a
     # bare `dumpex --extract ...` (no --json/--csv) must be able to detect
-    # this without parsing JSON at all.
+    # this without parsing JSON at all. P2 remediation: it must ALSO be
+    # visible on the console itself, not just the exit code/JSON.
     dump_path = _make_dump_file()
     try:
         mf = FakeMF()
@@ -207,12 +209,39 @@ def test_extract_short_read_exits_partial_and_json_shows_truncation(monkeypatch,
         with pytest.raises(SystemExit) as exc:
             cli.main()
         assert exc.value.code == 3
+        assert "[~] Requested memory region was only partially read" in capsys.readouterr().out
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
         assert doc["result"]["coverage"]["status"] == "partial"
         codes = {lim["code"] for lim in doc["result"]["coverage"]["limitations"]}
         assert "REGION_READ_TRUNCATED" in codes
         assert doc["result"]["data"]["records"][0]["bytes_read"] == 8
+    finally:
+        os.remove(dump_path)
+
+
+def test_strings_short_read_exits_partial_and_console_shows_truncation(monkeypatch, tmp_path, capsys):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.filename = dump_path
+        import dumpex.commands.extract as extract_mod
+        from tests.fixtures.fakes import mem_reader
+        monkeypatch.setattr(extract_mod, "read_region",
+                             mem_reader({0x1000: b"only a short string here"}))
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--strings", "0x1000", "--size", "0xc8",
+                              "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 3
+        assert "[~] Requested memory region was only partially read" in capsys.readouterr().out
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["coverage"]["status"] == "partial"
     finally:
         os.remove(dump_path)
 

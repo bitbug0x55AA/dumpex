@@ -9,7 +9,7 @@ import pytest
 from tests.fixtures.fakes import FakeMF, mem_reader
 
 import dumpex.commands.extract as extract_mod
-from dumpex.commands.extract import collect_strings, cmd_strings
+from dumpex.commands.extract import collect_strings, cmd_strings, render_strings_console
 from dumpex.core.memory import RegionReadError
 from dumpex.output.coverage import SourceState
 from dumpex.output.records import StringRecord
@@ -40,8 +40,9 @@ def test_collect_strings_happy_path(monkeypatch):
     assert result.coverage.status == "complete"
     assert result.coverage.sources["requested_region"].state == SourceState.PRESENT
     assert result.coverage.sources["requested_region"].record_count == 2
-    assert result.summary == {"count": 2, "shown": 2, "requested_size": len(data),
-                               "bytes_read": len(data), "auto_sized": False}
+    assert result.summary == {"count": 2, "shown": 2, "requested_address": "0x0000000000001000",
+                               "requested_size": len(data), "bytes_read": len(data),
+                               "auto_sized": False}
 
 
 def test_collect_strings_no_strings_found_is_present_empty(monkeypatch):
@@ -52,8 +53,21 @@ def test_collect_strings_no_strings_found_is_present_empty(monkeypatch):
     assert result.coverage.sources["requested_region"].state == SourceState.PRESENT_EMPTY
     assert result.coverage.sources["requested_region"].record_count == 0
     assert result.coverage.status == "complete"
-    assert result.summary == {"count": 0, "shown": 0, "requested_size": 15,
-                               "bytes_read": 15, "auto_sized": False}
+    # P2 remediation: a zero-result scan is exactly the case where
+    # summary.requested_address matters most -- the structured records
+    # list is empty, so requested_address is the ONLY way a consumer can
+    # tell where the (empty) scan even started.
+    assert result.summary == {"count": 0, "shown": 0, "requested_address": "0x0000000000004000",
+                               "requested_size": 15, "bytes_read": 15, "auto_sized": False}
+
+
+def test_collect_strings_requested_address_reflects_auto_sized_flag(monkeypatch):
+    # requested_address is independent of auto_size -- it's always
+    # hex_address(addr) regardless of how the size argument was resolved.
+    mf = _mk_mf(monkeypatch, {0x9000: b"a string long enough"})
+    result = collect_strings(mf, 0x9000, 21, 6, None, "ascii", auto_size=True)
+    assert result.summary["requested_address"] == "0x0000000000009000"
+    assert result.summary["auto_sized"] is True
 
 
 def test_collect_strings_short_read_marks_coverage_partial(monkeypatch):
@@ -90,6 +104,27 @@ def test_collect_strings_matched_grep_true_false_when_grep_given(monkeypatch):
     # matched_grep is a flag, not a filter -- both records are always present.
     assert result.summary["count"] == 2
     assert result.summary["shown"] == 1
+
+
+def test_grep_console_shows_fewer_lines_than_structured_records(monkeypatch, capsys):
+    # Docs remediation: the structured records list (JSON/CSV) and the
+    # console rendering deliberately show DIFFERENT amounts of data for a
+    # --grep run -- records always includes every extracted string
+    # (matched_grep is a flag, never a filter), but the console SKIPS any
+    # record with matched_grep is False, only ever highlighting matches.
+    # This test locks in that contrast directly, rather than trusting a
+    # prose description of it.
+    data = b"apple pie recipe" + b"\x00" * 5 + b"cherry tart notes"
+    mf = _mk_mf(monkeypatch, {0x3000: data})
+    result = collect_strings(mf, 0x3000, len(data), 6, "recipe", "ascii")
+
+    assert len(result.records) == 2   # structured: both the match AND the non-match
+
+    render_strings_console(result.records, result.coverage)
+    console = capsys.readouterr().out
+    assert "apple pie recipe" in console
+    assert "cherry tart notes" not in console   # console: the non-match is skipped entirely
+    assert "[+] 1 string(s) shown." in console
 
 
 def test_collect_strings_matched_grep_none_when_no_grep(monkeypatch):
@@ -173,3 +208,15 @@ def test_cmd_strings_returns_command_result_on_success(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[*] Extracting strings from 0x1000" in out
     assert "string(s) shown" in out
+    assert "[~]" not in out   # a full read must print no coverage-reason line at all
+
+
+def test_cmd_strings_short_read_prints_partial_notice(monkeypatch, capsys):
+    # P2 remediation: same console visibility gap as cmd_extract -- a
+    # short read must not look identical to a complete one just because
+    # at least one string was found in what WAS read.
+    mf = _mk_mf(monkeypatch, {0x6000: b"only a short string here"})
+    result = cmd_strings(mf, 0x6000, 200, 6, None, "ascii")
+    assert result.coverage.status == "partial"
+    out = capsys.readouterr().out
+    assert "[~] Requested memory region was only partially read" in out
