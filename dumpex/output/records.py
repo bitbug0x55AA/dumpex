@@ -245,6 +245,36 @@ class PebRecord:
 
 
 # ── Extraction records (Phase E) ────────────────────────────────────────
+# Validators below mirror v2.2's extractRecord/stringRecord $defs (P2-1
+# remediation) -- before this, neither record had a __post_init__ at all,
+# so Python happily constructed (and .to_dict()'d) shapes the schema
+# itself rejects (negative offsets, a bogus `encoding`, bytes_read >
+# requested_size, bool-typed ints, ...). `_HEX_ADDRESS_RE` and the
+# `_require_optional_*` family a little further below (shared with the
+# comparison records) are referenced here by name -- plain top-level
+# functions looked up at __post_init__ CALL time, not at class-definition
+# time, so their physical position later in this module (kept together
+# with their other comparison-record callers) doesn't matter.
+
+def _require_nonneg_int(value, field_name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{field_name} must be a non-negative plain int (not bool), got {value!r}")
+
+
+def _require_bool(value, field_name: str) -> None:
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a bool, got {value!r}")
+
+
+def _require_hex_address(value, field_name: str) -> None:
+    if not isinstance(value, str) or not _HEX_ADDRESS_RE.match(value):
+        raise ValueError(
+            f"{field_name} must be a normalized hex address string (\"0x\" + 16 lowercase hex "
+            f"digits, see hex_address()), got {value!r}")
+
+
+_STRING_RECORD_ENCODINGS = ("ASCII", "UTF16")
+
 
 @dataclass
 class ExtractRecord:
@@ -262,6 +292,18 @@ class ExtractRecord:
     bytes_read:              int         # len(data) -- equal to requested_size
                                           # whenever the read didn't come up short
     mz_header_detected:      bool        # data[:2] == b"MZ"
+
+    def __post_init__(self):
+        _require_optional_hex_address(self.requested_address, "ExtractRecord.requested_address")
+        if self.requested_size is not None:
+            _require_nonneg_int(self.requested_size, "ExtractRecord.requested_size")
+        _require_bool(self.auto_sized, "ExtractRecord.auto_sized")
+        _require_nonneg_int(self.bytes_read, "ExtractRecord.bytes_read")
+        _require_bool(self.mz_header_detected, "ExtractRecord.mz_header_detected")
+        if self.requested_size is not None and self.bytes_read > self.requested_size:
+            raise ValueError(
+                f"ExtractRecord.bytes_read ({self.bytes_read}) must not exceed "
+                f"requested_size ({self.requested_size}) -- a read can come up short, never long")
 
     def to_dict(self) -> dict:
         return {
@@ -283,16 +325,29 @@ class StringRecord:
     docstring doesn't apply to it) while `address` is the absolute VA
     (the requested read's own base address + offset), a real memory
     address, so it goes through hex_address() like every other
-    address-typed field. `matched_grep` is a FLAG, not a filter: this
-    record is emitted for every extracted string regardless of --grep,
-    matching the original console's own "show all, highlight matches"
-    behavior -- None when no --grep was given at all (the concept doesn't
-    apply), True/False per record when it was."""
+    address-typed field -- and, unlike most other address-typed fields in
+    this module, always non-null: a string was found at some real address,
+    there is no "address unknown" case for it. `matched_grep` is a FLAG,
+    not a filter: this record is emitted for every extracted string
+    regardless of --grep, matching the original console's own "show all,
+    highlight matches" behavior -- None when no --grep was given at all
+    (the concept doesn't apply), True/False per record when it was."""
     offset:        int
     address:       "str | None"
     encoding:      str              # "ASCII" | "UTF16"
     text:          str
     matched_grep:  "bool | None"
+
+    def __post_init__(self):
+        _require_nonneg_int(self.offset, "StringRecord.offset")
+        _require_hex_address(self.address, "StringRecord.address")
+        if self.encoding not in _STRING_RECORD_ENCODINGS:
+            raise ValueError(
+                f"StringRecord.encoding must be one of {_STRING_RECORD_ENCODINGS}, "
+                f"got {self.encoding!r}")
+        if not isinstance(self.text, str):
+            raise ValueError(f"StringRecord.text must be a str, got {self.text!r}")
+        _require_optional_diff_bool(self.matched_grep, "StringRecord.matched_grep")
 
     def to_dict(self) -> dict:
         return {

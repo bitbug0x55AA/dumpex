@@ -13,7 +13,7 @@ from pathlib import Path
 from dumpex.ui.colors import DIM
 from dumpex.core.safe_io import write_text_to_target, write_text_to_directory, summarize_file
 from dumpex.output.envelope import build_meta_v2, Result, Envelope, EvidenceInput, \
-    _normalize_evidence_inputs
+    _normalize_evidence_inputs, _redact_artifacts
 from dumpex.output.serializer import to_json as _serialize_envelope
 from dumpex.output.csv_export import build_tables
 from dumpex.output.records import Diagnostic, SEVERITY_ERROR
@@ -119,6 +119,19 @@ class V2Output:
             else:
                 self._diagnostics_warnings.append(d_dict)
         self._artifacts.extend(a.to_dict() for a in result.artifacts)
+        # Second line of defense behind cli.py's own up-front
+        # --output/--json/--csv/--txt collision check (see
+        # safe_io.check_no_output_collisions): an artifact this run
+        # already wrote (e.g. --extract's own --output file) is now also
+        # a protected path for write_json/write_csv below, so a later
+        # structured-output write to that same path is refused instead of
+        # silently overwriting it -- check_not_dump_path accepts a
+        # (path, description) tuple precisely for this case, so the
+        # printed refusal correctly names the artifact instead of always
+        # claiming it's the input dump.
+        for a in result.artifacts:
+            self._protected_paths.append(
+                (a.path, f"the '{a.kind}' artifact this run already wrote"))
 
     def add_diagnostic(self, severity: str, message: str, code: str = None) -> None:
         d = Diagnostic(severity=severity, message=message, code=code).to_dict()
@@ -151,7 +164,8 @@ class V2Output:
                 analyst=self._analyst, redact_paths=self._redact_paths,
                 started_at=self._started_at, finished_at=finished_at,
             )
-        return Envelope(meta=meta, result=self._result, artifacts=list(self._artifacts),
+        artifacts = _redact_artifacts(self._artifacts) if self._redact_paths else list(self._artifacts)
+        return Envelope(meta=meta, result=self._result, artifacts=artifacts,
                          diagnostics_warnings=list(self._diagnostics_warnings),
                          diagnostics_errors=list(self._diagnostics_errors))
 
@@ -179,7 +193,10 @@ class V2Output:
         in both modes -- a genuinely empty stream must not look like
         --csv silently did nothing.
         """
-        tables = build_tables(self._result) if self._result else {}
+        tables = build_tables(self._result, artifacts=self._artifacts,
+                               diagnostic_warnings=self._diagnostics_warnings,
+                               diagnostic_errors=self._diagnostics_errors) \
+                 if self._result else {}
         p_in = Path(path)
 
         if p_in.suffix.lower() == ".csv":

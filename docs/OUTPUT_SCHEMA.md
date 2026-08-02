@@ -29,18 +29,28 @@ dumpex currently has two coexisting JSON contracts, not one:
 | Commands | Contract | Schema file |
 |---|---|---|
 | `--hunt` | v1.1 | [`dumpex-output-v1.1.schema.json`](../dumpex/schemas/dumpex-output-v1.1.schema.json) |
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff` | v2.1 (current) | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings` | v2.2 (current) | [`dumpex-output-v2.2.schema.json`](../dumpex/schemas/dumpex-output-v2.2.schema.json) |
+| — (historical) | v2.1 | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) — frozen, kept only to validate output produced before `schema_version 2.2`; no command emits this anymore |
 | — (historical) | v2.0 | [`dumpex-output-v2.0.schema.json`](../dumpex/schemas/dumpex-output-v2.0.schema.json) — frozen, kept only to validate output produced before `schema_version 2.1`; no command emits this anymore |
-| `--report`, `--extract`, `--strings` | none yet | — `--json`/`--csv` are rejected up front (before the dump is opened) for these modes |
+| `--report` | none yet | — `--json`/`--csv` are rejected up front (before the dump is opened) for this mode |
 
 `schema_version` moved from `"2.0"` to `"2.1"` when `result.kind` gained a
-`"comparison"` value (see "v2 structured output" below) — a new value on an
+`"comparison"` value, then from `"2.1"` to `"2.2"` when it gained `"extract"`
+and `"strings"` values (see "v2 structured output" below) — a new value on an
 existing closed enum always bumps the version per this document's own
-versioning policy, even though the six recon commands' own output is
-otherwise unaffected. `dumpex-output-v2.0.schema.json` stays installed and
-importable via `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")`
-for validating output captured before this change; it is not deleted or
-overwritten, following the same precedent v1.0→v1.1 set.
+versioning policy, even though an already-migrated command's own output is
+otherwise unaffected. `dumpex-output-v2.0.schema.json`/`v2.1.schema.json` stay
+installed and importable via
+`dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`) for
+validating output captured before each respective change; neither is deleted
+or overwritten, following the same precedent v1.0→v1.1 set.
+
+`--extract` is the first command to populate `result.artifacts[]` (the file
+it wrote) and `result.diagnostics.warnings[]` (e.g. an MZ-header-detected
+warning) for real — both were part of the v2 envelope since `schema_version
+2.1` but had no producer until `--extract` migrated. `--strings` reuses the
+same `requested_region`-scoped coverage shape as `--extract` (see
+`extractRecord`/`stringRecord` below) but never writes an artifact of its own.
 
 This split exists because v1.1's root schema requires a top-level `hunt`
 object (`"required": ["meta", "hunt"]`) — the six recon commands never
@@ -254,7 +264,7 @@ of the dumpex application version. The policy for changing the schema file:
 
 ## v2 structured output
 
-These seven recon commands are always structured internally — even
+These nine commands are always structured internally — even
 without `--json`/`--csv` — and use a distinct envelope from v1.1's
 `hunt`-shaped root. `--diff` is the one two-dump exception (`kind:
 "comparison"`, a two-entry `meta.evidence`) — see "`result.kind ==
@@ -264,7 +274,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.1",
+    "schema_version": "2.2",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -300,7 +310,7 @@ array's own shape.
 a verdict:
 
 - **`execution_status`** — did the *command* run to completion
-  (`"completed"` / `"partial"` / `"failed"`)? None of these seven commands
+  (`"completed"` / `"partial"` / `"failed"`)? None of these nine commands
   has an internal scan-budget/timeout, so this is `"completed"` in every
   case that doesn't crash.
 - **`coverage.status`** — was the *evidence* it looked at complete
@@ -311,7 +321,7 @@ a verdict:
   `ThreadInfoListStream`; `--pid` reports `"partial"` when it had to fall
   back past `MINIDUMP_MISC_INFO` to a thread-list/exception-stream
   heuristic. `coverage.reasons` explains why.
-- **verdict/confidence** — not applicable to these seven commands at all;
+- **verdict/confidence** — not applicable to these nine commands at all;
   that concept stays scoped to `--report`/`--hunt`, which reason about
   evidence, not just list it.
 
@@ -324,7 +334,7 @@ consumer that wants to act on them without string-matching:
   command consulted, keyed by source name (`"memory_info"`, `"threads"`,
   `"misc_info"`, ...). Each value is `{"state", "record_count", "detail"}`
   — `state` is one of `"absent"` / `"present_empty"` / `"present"` /
-  `"failed"`. The six single-dump commands never produce `"failed"` (a
+  `"failed"`. The eight single-dump commands never produce `"failed"` (a
   read failure crashes the whole command instead) — `--diff` is the one
   command that does: reading one side's stream can genuinely raise
   without the other side's dump being at fault, so that side is reported
@@ -346,7 +356,7 @@ consumer that wants to act on them without string-matching:
   code is added.
 
 Both fields are optional (a producer that doesn't populate them is still
-a schema-valid document) and additive to `schema_version: "2.1"` — no
+a schema-valid document) and were additive to `schema_version: "2.1"` — no
 version bump, per the versioning rule above.
 
 `result.data.records` is always an array of one canonical record type per
@@ -373,7 +383,7 @@ the second rule structurally: it raises rather than silently
 stringifying any value that isn't already a plain JSON scalar/list/dict
 by the time it's serialized.
 
-An exit code mirrors `coverage.status` one-for-one for these seven
+An exit code mirrors `coverage.status` one-for-one for these nine
 commands, independent of whether `--json`/`--csv` was even requested: `0`
 for `"complete"`, `3` for `"partial"`, `4` for `"not_evaluated"` (the
 primary stream a command needed was entirely absent from the dump — e.g.
@@ -381,24 +391,31 @@ primary stream a command needed was entirely absent from the dump — e.g.
 being present with zero entries, which is `"complete"`) — a SOC script
 checking `$?` on a bare `dumpex sample.dmp --threads` can distinguish "no
 data at all" from "some data, degraded" without parsing JSON at all. This
-convention is scoped to these seven commands only; every other command's
+convention is scoped to these nine commands only; every other command's
 exit-code behavior (`0` on completion, an uncaught exception's default
-nonzero on a fatal error) is unchanged.
+nonzero on a fatal error) is unchanged. `--extract`/`--strings` also use
+`"partial"` for a short read (`REGION_READ_TRUNCATED` — `read_region()`
+returned fewer bytes than requested, e.g. because the requested range
+extends past what's actually backed in the dump): the requested region
+itself stays `"present"` in `coverage.sources` (there IS real data), but
+the read didn't fully succeed either.
 
 `artifacts` (top-level, a sibling of `result`) is an output file the tool
 itself produced — e.g. an extracted memory region — distinct from
 `meta.evidence`, which describes the *input* dump(s). Each entry is
 `{"id", "kind", "path", "size_bytes", "sha256", "description"}`
 (`dumpex.output.records.Artifact`), field naming mirroring
-`meta.evidence`'s own `id`/`path`/`size_bytes`/`sha256` shape. None of
-these seven commands populates it today — it stays `[]` — the type exists
-so a future `--extract`/`--report` migration has a typed shape to build
-instead of a bare dict.
+`meta.evidence`'s own `id`/`path`/`size_bytes`/`sha256` shape.
+`--extract` is the first command to populate it — one entry per
+`--output` file written (`kind: "extracted_region"`); a future `--report`
+migration is expected to populate it too, under a different `kind`
+string. `--redact-paths` reduces each entry's `path` to its basename the
+same way it does `meta.execution.options`' path-typed fields —
+`size_bytes`/`sha256`/`description` are left untouched.
 
-`--report`/`--extract`/`--strings` do not produce structured output yet.
-Passing `--json`/`--csv` with one of them is rejected before the dump is
-opened (`parser.error`, exit code `2`), not after a full run completes
-with nothing to write.
+`--report` does not produce structured output yet. Passing `--json`/
+`--csv` with it is rejected before the dump is opened (`parser.error`,
+exit code `2`), not after a full run completes with nothing to write.
 
 ### Comparison records
 
@@ -430,11 +447,11 @@ field lists.
 `{"id": "baseline", "role": "baseline", ...}` for the primary dump
 argument and `{"id": "target", "role": "target", ...}` for `DUMP2` --
 built via `V2Output.from_evidence()` instead of the single-`dump_path`
-constructor the other six commands use. `coverage.sources` uses dotted,
+constructor the other eight commands use. `coverage.sources` uses dotted,
 entity-namespaced source names (e.g. `"baseline.modules"`/
 `"target.modules"`, `"baseline.thread_info"`/`"target.thread_info"`,
 `"baseline.memory_info"`/`"target.memory_info"`) rather than the bare
-names the six single-dump commands use, so a comparison's baseline and
+names the eight single-dump commands use, so a comparison's baseline and
 target sides never collide as coverage facts about the same-named source.
 `coverage.status` is combined across whichever entities `--diff-mode`
 selected (`dumpex.output.coverage.combine_coverage_reports`): unanimous
@@ -449,10 +466,52 @@ diff, without aborting the other selected entities.
 
 `--csv` splits a comparison result into up to three tables --
 `module_diffs`/`thread_diffs`/`memory_diffs` -- instead of the generic
-`records` table the other six commands write, since a mixed-entity_type
+`records` table the other eight commands write, since a mixed-entity_type
 array can't share one CSV header row; only entities that actually
 produced records get a file (directory mode) or a section (single-file
-mode).
+mode). `--extract`/`--strings` additionally get `artifacts`/
+`diagnostic_warnings`/`diagnostic_errors` tables when they have anything
+to put in them (see "Extract and strings records" above) -- kind-
+independent tables any v2 command's `result.artifacts`/`.diagnostics`
+can populate, not specific to comparison's own per-entity split.
+
+### Extract and strings records
+
+`schema_version 2.2` adds `"extract"`/`"strings"` values to `result.kind`
+and their own record types, `extractRecord`/`stringRecord` (see
+[`dumpex/commands/extract.py`](../dumpex/commands/extract.py)'s
+`collect_extract`/`collect_strings` and
+[`dumpex/output/records.py`](../dumpex/output/records.py)'s
+`ExtractRecord`/`StringRecord` for the exact field lists).
+
+`--extract` always returns a single-element `records` array —
+`{"requested_address", "requested_size", "auto_sized", "bytes_read",
+"mz_header_detected"}` — the READ-side facts only; the WRITE-side facts
+(the `--output` path, its size, its sha256) live on the matching
+`artifacts[]` entry instead, not duplicated onto the record, since the
+two describe conceptually distinct things (what was read from the dump
+vs. what was written to disk) that happen to usually agree in size.
+`mz_header_detected` also drives a `diagnostics.warnings[]` entry
+(`code: "EXTRACT_MZ_HEADER_DETECTED"`) when set.
+
+`--strings` returns one `stringRecord` per extracted string —
+`{"offset", "address", "encoding", "text", "matched_grep"}` — regardless
+of `--grep`: `matched_grep` is a flag, not a filter, matching the
+console's own "show all, highlight matches" behavior (`null` when
+`--grep` wasn't given at all; `true`/`false` per record when it was).
+`result.summary` additionally carries `requested_size`/`bytes_read`/
+`auto_sized`/`shown` (a `--strings`-only scan-context field CSV's own
+`summary` table now also exposes automatically, since custom
+`result.summary` fields are merged into that table's single row).
+
+Both commands share the same `requested_region`-scoped
+`coverage.sources` shape as every other v2 command — a bad `--extract`/
+`--strings` address or size is a usage error (`sys.exit(1)`, printed
+before any structured output is written), not something either command
+models as a coverage gap; a short read (fewer bytes actually read than
+requested) is the one genuine evidence-completeness gap either command
+can hit, and is what `coverage.status: "partial"` /
+`REGION_READ_TRUNCATED` (see above) exists for.
 
 ## Reproducing a run
 
@@ -467,6 +526,6 @@ Retain the following together:
 
 For reports shared outside the investigation environment, use
 `--redact-paths` but preserve hashes and basenames. Redaction protects local
-directory layout; it does not anonymize evidence content, strings, module
-names, host data, or findings.
+directory layout — including `--extract`'s own `artifacts[].path` — it does
+not anonymize evidence content, strings, module names, host data, or findings.
 

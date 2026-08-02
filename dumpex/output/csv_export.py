@@ -80,20 +80,52 @@ def environment_variables_rows(result) -> list:
     return rows
 
 
+def artifacts_rows(artifacts) -> list:
+    """One row per already-dict-ified Artifact (see
+    dumpex.output.records.Artifact.to_dict()) -- id/kind/path/size_bytes/
+    sha256/description are all flat scalars already, so _flatten_row is
+    only for uniformity with every other table, not because any of these
+    fields is ever list/dict-typed."""
+    return [_flatten_row(a) for a in artifacts]
+
+
+def diagnostics_rows(diagnostics) -> list:
+    """One row per already-dict-ified Diagnostic (severity/message/code)
+    -- shared by both the 'diagnostic_warnings' and 'diagnostic_errors'
+    tables, which differ only in which list the caller passes."""
+    return [_flatten_row(d) for d in diagnostics]
+
+
 def summary_rows(result) -> list:
     """One row summarizing the whole result. Always exactly one row,
     even when `records` is empty, so this table's file always gets
-    written in directory mode."""
-    return [{
+    written in directory mode.
+
+    Any command-specific field in result.summary (e.g. --extract's
+    output_path, --strings' shown) is merged in alongside the five fixed
+    fields below -- CSV's own summary table would otherwise silently drop
+    everything result.summary carries beyond the generic count, unlike
+    JSON's result.summary, which serializes it verbatim. A fixed field
+    name always wins over a same-named result.summary entry (there is
+    none today, but a future command's summary dict must never be able to
+    shadow kind/execution_status/coverage_status/coverage_reasons/count
+    by accident)."""
+    row = {
         "kind":              result.kind,
         "execution_status":  result.execution_status,
         "coverage_status":   result.coverage_status,
         "coverage_reasons":  "; ".join(result.coverage_reasons),
         "count":             len(result.records),
-    }]
+    }
+    fixed_fields = set(row)
+    for key, value in (result.summary or {}).items():
+        if key in fixed_fields:
+            continue
+        row[key] = _flatten_value(value)
+    return [row]
 
 
-def build_tables(result) -> dict:
+def build_tables(result, artifacts=(), diagnostic_warnings=(), diagnostic_errors=()) -> dict:
     """{table_name: [row, ...]}. 'summary' is always present. For every
     kind except "comparison": 'records' is always present too;
     'environment_variables' is added only for a peb result that actually
@@ -103,7 +135,15 @@ def build_tables(result) -> dict:
     simply never written -- see collector.py's write_csv, which already
     skips any table with zero rows in both single-file and directory
     mode), exactly mirroring how 'records' itself is always present but
-    silently unwritten when empty for the other six kinds."""
+    silently unwritten when empty for the other six kinds.
+
+    'artifacts'/'diagnostic_warnings'/'diagnostic_errors' are independent
+    of `kind` -- any command can populate them (see CommandResult) -- so
+    they're added the same way regardless of which branch above ran, and
+    only when the caller actually passed any (mirroring
+    'environment_variables'' own conditional-presence precedent, so a
+    kind that has never populated them doesn't grow new always-empty
+    tables no test or consumer expects)."""
     if result.kind == "comparison":
         module_diffs = diff_rows_for_entity(result, "module")
         thread_diffs = diff_rows_for_entity(result, "thread")
@@ -124,18 +164,26 @@ def build_tables(result) -> dict:
                 f"build_tables(kind='comparison') partitioned {partitioned} of "
                 f"{len(result.records)} records by entity_type -- unrecognized "
                 f"entity_type value(s): {sorted(unknown)!r}")
-        return {
+        tables = {
             "summary":      summary_rows(result),
             "module_diffs": module_diffs,
             "thread_diffs": thread_diffs,
             "memory_diffs": memory_diffs,
         }
-    tables = {
-        "summary": summary_rows(result),
-        "records": records_to_rows(result),
-    }
-    if result.kind == "peb":
-        env_rows = environment_variables_rows(result)
-        if env_rows:
-            tables["environment_variables"] = env_rows
+    else:
+        tables = {
+            "summary": summary_rows(result),
+            "records": records_to_rows(result),
+        }
+        if result.kind == "peb":
+            env_rows = environment_variables_rows(result)
+            if env_rows:
+                tables["environment_variables"] = env_rows
+
+    if artifacts:
+        tables["artifacts"] = artifacts_rows(artifacts)
+    if diagnostic_warnings:
+        tables["diagnostic_warnings"] = diagnostics_rows(diagnostic_warnings)
+    if diagnostic_errors:
+        tables["diagnostic_errors"] = diagnostics_rows(diagnostic_errors)
     return tables

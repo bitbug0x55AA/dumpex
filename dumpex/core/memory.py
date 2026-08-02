@@ -45,6 +45,19 @@ def open_dump(path: str) -> MinidumpFile:
         sys.exit(1)
 
 
+class RegionReadError(RuntimeError):
+    """Raised by a caller wrapping read_region() (see
+    dumpex.commands.extract.collect_extract/collect_strings) to narrow
+    what "the read itself failed" means -- read_region() here never
+    raises this itself (report.py/hunt's own call sites are unaffected
+    and keep seeing whatever exception the reader naturally raises), it
+    exists so a command's own try/except around a wrapped read_region()
+    call can distinguish an actual read failure from an unrelated
+    exception (a write failure, a bad --grep regex, a record/schema
+    construction bug) that happens to occur later in the same try block --
+    see cmd_extract/cmd_strings for why that distinction matters."""
+
+
 def read_region(mf: MinidumpFile, addr: int, size: int) -> bytes:
     reader = mf.get_reader().get_buffered_reader()
     reader.move(addr)

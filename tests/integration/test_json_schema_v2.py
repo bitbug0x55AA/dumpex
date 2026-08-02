@@ -750,6 +750,27 @@ def test_extract_full_envelope_with_mz_header_validates(validator, tmp_path):
     assert doc["diagnostics"]["warnings"][0]["code"] == "EXTRACT_MZ_HEADER_DETECTED"
 
 
+def test_extract_short_read_validates_with_region_read_truncated_limitation(validator, tmp_path):
+    # P1-4 remediation: a short read must still produce a schema-valid
+    # document -- coverage.status becomes "partial" and a
+    # REGION_READ_TRUNCATED limitation appears, rather than silently
+    # reporting a truncated read as "complete".
+    import dumpex.commands.extract as extract_mod
+    from dumpex.commands.extract import collect_extract
+
+    mf = FakeMF()
+    mf.filename = "test.dmp"
+    extract_mod.read_region = mem_reader({0x1000: b"short"})
+    out_path = str(tmp_path / "out.bin")
+    result = collect_extract(mf, 0x1000, 64, out_path, auto_size=False, force=True)
+    doc = _validate(validator, result)
+    assert doc["result"]["coverage"]["status"] == "partial"
+    assert doc["result"]["data"]["records"][0]["requested_size"] == 64
+    assert doc["result"]["data"]["records"][0]["bytes_read"] == 5
+    codes = {lim["code"] for lim in doc["result"]["coverage"]["limitations"]}
+    assert codes == {"REGION_READ_TRUNCATED"}
+
+
 # ── result.kind == "strings" (Phase E, PR2) ───────────────────────────────
 
 def test_strings_full_envelope_with_grep_validates(validator):
@@ -780,6 +801,41 @@ def test_strings_empty_result_validates(validator):
     assert doc["result"]["kind"] == "strings"
     assert doc["result"]["data"]["records"] == []
     assert doc["result"]["coverage"]["sources"]["requested_region"]["state"] == "present_empty"
+
+
+def test_string_record_null_address_is_rejected_by_schema(validator):
+    # P2-1 remediation: unlike most hexAddress-typed fields, stringRecord's
+    # `address` is never null on the wire (a string is always found at
+    # some real address) -- the schema must reject a null there even
+    # though hexAddress itself otherwise allows it.
+    doc = _minimal_valid_doc(kind="strings")
+    doc["result"]["data"]["records"] = [{
+        "offset": 0, "address": None, "encoding": "ASCII", "text": "x", "matched_grep": None}]
+    assert not validator.is_valid(doc)
+
+
+def test_string_record_negative_offset_is_rejected_by_schema(validator):
+    doc = _minimal_valid_doc(kind="strings")
+    doc["result"]["data"]["records"] = [{
+        "offset": -1, "address": "0x0000000000001000", "encoding": "ASCII",
+        "text": "x", "matched_grep": None}]
+    assert not validator.is_valid(doc)
+
+
+def test_string_record_unknown_encoding_is_rejected_by_schema(validator):
+    doc = _minimal_valid_doc(kind="strings")
+    doc["result"]["data"]["records"] = [{
+        "offset": 0, "address": "0x0000000000001000", "encoding": "BOGUS",
+        "text": "x", "matched_grep": None}]
+    assert not validator.is_valid(doc)
+
+
+def test_extract_record_negative_bytes_read_is_rejected_by_schema(validator):
+    doc = _minimal_valid_doc(kind="extract")
+    doc["result"]["data"]["records"] = [{
+        "requested_address": "0x0000000000001000", "requested_size": 16,
+        "auto_sized": False, "bytes_read": -1, "mz_header_detected": False}]
+    assert not validator.is_valid(doc)
 
 
 def test_strings_kind_is_rejected_by_the_frozen_v2_1_schema(validator_v2_1):

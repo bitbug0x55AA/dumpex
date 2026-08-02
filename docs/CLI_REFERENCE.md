@@ -70,27 +70,36 @@ one.
 | `--force` | Allow replacement of an existing output file; never permits replacing an input dump |
 | `--case-id ID` | Record a case or ticket identifier in JSON metadata |
 | `--analyst NAME` | Record the analyst name or handle in JSON metadata |
-| `--redact-paths` | Reduce absolute evidence, rules, YARA, and reference paths to basenames in JSON metadata |
+| `--redact-paths` | Reduce absolute evidence, rules, YARA, reference, and (for `--extract`) output/artifact paths to basenames in JSON metadata |
 
 Output files are not overwritten unless `--force` is present. dumpex also
-refuses any output path that resolves to an input dump path.
+refuses any output path that resolves to an input dump path, and refuses to
+run at all if two of `--output`/`--json`/`--csv`/`--txt` (or `--extract`'s own
+auto-generated default filename) would resolve to the same file — a later
+write silently clobbering an earlier one's output is never allowed, even
+with `--force`.
 
 `--json`/`--csv` currently route to one of two contracts depending on the
 mode: `--hunt` uses the v1.1 contract unchanged; `--list`/`--modules`/
-`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff` use the v2 contract
-(canonical records, `null` for missing values, normalized hex addresses —
-see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
+`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff`/`--extract`/`--strings` use
+the v2 contract (canonical records, `null` for missing values, normalized
+hex addresses — see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
 `--diff` produces a `kind: "comparison"` result with a two-entry
 `meta.evidence` array (`baseline`/`target`) instead of the single-dump
-`meta` shape the other six use — see
+`meta` shape the other eight use — see
 [Output and Evidence Schema](OUTPUT_SCHEMA.md#comparison-records).
-`--report`/`--extract`/`--strings` don't produce structured output yet —
-`--json`/`--csv` with one of these is rejected immediately, before the
-dump is opened, rather than running the full command first. For the
-v2-routed modes, the process exit code also reports coverage independent
-of `--json`/`--csv`: `0` for complete coverage, `3` for partial (e.g.
-`--threads` on a dump missing `ThreadInfoListStream` while the base
-thread list is still present), `4` when the one stream the command
+`--extract` is the first command to populate `result.artifacts[]` (the
+`--output` file it wrote) and `result.diagnostics.warnings[]` (e.g. an
+MZ-header-detected warning) — see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#extract-and-strings-records).
+`--report` doesn't produce structured output yet — `--json`/`--csv` with it
+is rejected immediately, before the dump is opened, rather than running the
+full command first. For the v2-routed modes, the process exit code also
+reports coverage independent of `--json`/`--csv`: `0` for complete coverage,
+`3` for partial (e.g. `--threads` on a dump missing `ThreadInfoListStream`
+while the base thread list is still present, or `--extract`/`--strings`
+reading fewer bytes than requested), `4` when the one stream the command
 needed is entirely absent (e.g. `--modules` when `ModuleListStream`
 itself isn't in the dump at all).
 

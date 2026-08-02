@@ -912,6 +912,44 @@ def test_coverage_limitation_pid_no_usable_fallback_rejects_scope_alone():
                             scope="module")
 
 
+# ── REGION_READ_TRUNCATED (P1-4 remediation): --extract/--strings' own
+# short-read gap -- read_region() returned fewer bytes than requested,
+# the source itself stays PRESENT (there IS data), same caller_buildable/
+# fixed_source/no-allowed_fields shape as PID_NO_USABLE_FALLBACK above. ──
+
+def test_render_limitation_region_read_truncated():
+    limitation = CoverageLimitation(code=LimitationCode.REGION_READ_TRUNCATED,
+                                     source="requested_region")
+    assert render_limitation(limitation) == "Requested memory region was only partially read"
+
+
+def test_coverage_limitation_region_read_truncated_rejects_wrong_source():
+    with pytest.raises(ValueError, match="requested_region"):
+        CoverageLimitation(code=LimitationCode.REGION_READ_TRUNCATED, source="modules")
+
+
+def test_coverage_limitation_region_read_truncated_rejects_scope():
+    # Never auto-derived (the source stays PRESENT, so build_coverage_
+    # report's own derivation path -- the only thing that ever sets
+    # scope -- never reaches this code) -- no legitimate use for it.
+    with pytest.raises(ValueError, match="scope"):
+        CoverageLimitation(code=LimitationCode.REGION_READ_TRUNCATED,
+                            source="requested_region", scope="dump")
+
+
+def test_build_coverage_report_with_region_read_truncated_completeness_check_is_partial():
+    source = SourceObservation(name="requested_region", state=SourceState.PRESENT, record_count=1)
+    limitation = CoverageLimitation(code=LimitationCode.REGION_READ_TRUNCATED,
+                                     source="requested_region")
+    report = build_coverage_report(
+        {"requested_region": source},
+        evaluation_sources=("requested_region",),
+        completeness_checks=["requested_region", limitation])
+    assert report.status == "partial"
+    assert report.sources["requested_region"].state == SourceState.PRESENT
+    assert report.limitations == [limitation]
+
+
 @pytest.mark.parametrize("field_name,kwargs", [
     ("counterpart_source", dict(counterpart_source="threads")),
     ("affected_count", dict(affected_count=1)),

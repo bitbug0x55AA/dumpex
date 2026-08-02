@@ -39,8 +39,11 @@ SCHEMA_VERSION = "2.2"
 # CLI options whose VALUE is a filesystem path -- same redaction concern
 # as dumpex.ui.structured's _PATH_OPTION_KEYS, kept as its own copy here
 # rather than importing that module's private name, so v2 never depends
-# on v1's internals.
-_PATH_OPTION_KEYS = frozenset({"ref_dir", "yara_dir", "rules_file"})
+# on v1's internals. "output" (--extract's own --output path) joined
+# ref_dir/yara_dir/rules_file here -- it was missing entirely, so
+# meta.execution.options.output kept leaking the full absolute path even
+# with --redact-paths set.
+_PATH_OPTION_KEYS = frozenset({"ref_dir", "yara_dir", "rules_file", "output"})
 
 
 def _redact_options(options: dict) -> dict:
@@ -50,6 +53,24 @@ def _redact_options(options: dict) -> dict:
             out[k] = os.path.basename(v.rstrip("/\\"))
         else:
             out[k] = v
+    return out
+
+
+def _redact_artifacts(artifacts: list) -> list:
+    """Non-destructive: returns NEW dicts with `path` reduced to its
+    basename, same redaction rule as _redact_options -- size_bytes/
+    sha256/description are left untouched (only the filesystem location
+    is sensitive, not the file's own facts). The caller's own artifact
+    dicts (used verbatim by CSV export, and by V2Output's already-
+    written-output protection -- see collector.py) are never mutated;
+    this always returns a fresh list of fresh dicts."""
+    out = []
+    for a in artifacts:
+        a2 = dict(a)
+        path = a2.get("path")
+        if isinstance(path, str) and path:
+            a2["path"] = os.path.basename(path.rstrip("/\\"))
+        out.append(a2)
     return out
 
 

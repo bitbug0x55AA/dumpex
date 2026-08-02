@@ -212,10 +212,90 @@ def test_string_record_to_dict_shape():
 
 
 def test_string_record_matched_grep_true_false_are_plain_bools():
-    rec_true = StringRecord(offset=0, address=None, encoding="UTF16", text="x", matched_grep=True)
-    rec_false = StringRecord(offset=0, address=None, encoding="UTF16", text="x", matched_grep=False)
+    rec_true = StringRecord(offset=0, address="0x0000000000001000", encoding="UTF16", text="x",
+                             matched_grep=True)
+    rec_false = StringRecord(offset=0, address="0x0000000000001000", encoding="UTF16", text="x",
+                              matched_grep=False)
     assert rec_true.to_dict()["matched_grep"] is True
     assert rec_false.to_dict()["matched_grep"] is False
+
+
+# ── ExtractRecord/StringRecord __post_init__ validation (P2-1) ──────────
+
+def test_extract_record_rejects_negative_bytes_read():
+    with pytest.raises(ValueError, match="bytes_read"):
+        ExtractRecord(requested_address="0x0000000000001000", requested_size=16,
+                       auto_sized=False, bytes_read=-1, mz_header_detected=False)
+
+
+def test_extract_record_rejects_bool_for_bytes_read():
+    with pytest.raises(ValueError, match="bytes_read"):
+        ExtractRecord(requested_address="0x0000000000001000", requested_size=16,
+                       auto_sized=False, bytes_read=True, mz_header_detected=False)
+
+
+def test_extract_record_rejects_bytes_read_exceeding_requested_size():
+    with pytest.raises(ValueError, match="bytes_read"):
+        ExtractRecord(requested_address="0x0000000000001000", requested_size=16,
+                       auto_sized=False, bytes_read=17, mz_header_detected=False)
+
+
+def test_extract_record_allows_bytes_read_below_requested_size():
+    rec = ExtractRecord(requested_address="0x0000000000001000", requested_size=16,
+                         auto_sized=False, bytes_read=3, mz_header_detected=False)
+    assert rec.bytes_read == 3
+
+
+def test_extract_record_rejects_non_bool_auto_sized():
+    with pytest.raises(ValueError, match="auto_sized"):
+        ExtractRecord(requested_address="0x0000000000001000", requested_size=16,
+                       auto_sized=1, bytes_read=16, mz_header_detected=False)
+
+
+def test_extract_record_rejects_malformed_requested_address():
+    with pytest.raises(ValueError, match="requested_address"):
+        ExtractRecord(requested_address="not-a-hex-address", requested_size=16,
+                       auto_sized=False, bytes_read=16, mz_header_detected=False)
+
+
+def test_extract_record_allows_null_requested_address():
+    rec = ExtractRecord(requested_address=None, requested_size=16,
+                         auto_sized=False, bytes_read=16, mz_header_detected=False)
+    assert rec.requested_address is None
+
+
+def test_string_record_rejects_negative_offset():
+    with pytest.raises(ValueError, match="offset"):
+        StringRecord(offset=-1, address="0x0000000000001000", encoding="ASCII",
+                      text="x", matched_grep=None)
+
+
+def test_string_record_rejects_null_address():
+    with pytest.raises(ValueError, match="address"):
+        StringRecord(offset=0, address=None, encoding="ASCII", text="x", matched_grep=None)
+
+
+def test_string_record_rejects_malformed_address():
+    with pytest.raises(ValueError, match="address"):
+        StringRecord(offset=0, address="0x123", encoding="ASCII", text="x", matched_grep=None)
+
+
+def test_string_record_rejects_unknown_encoding():
+    with pytest.raises(ValueError, match="encoding"):
+        StringRecord(offset=0, address="0x0000000000001000", encoding="BOGUS",
+                      text="x", matched_grep=None)
+
+
+def test_string_record_rejects_non_str_text():
+    with pytest.raises(ValueError, match="text"):
+        StringRecord(offset=0, address="0x0000000000001000", encoding="ASCII",
+                      text=123, matched_grep=None)
+
+
+def test_string_record_rejects_non_bool_matched_grep():
+    with pytest.raises(ValueError, match="matched_grep"):
+        StringRecord(offset=0, address="0x0000000000001000", encoding="ASCII",
+                      text="x", matched_grep="yes")
 
 
 # ── Diagnostic ───────────────────────────────────────────────────────────

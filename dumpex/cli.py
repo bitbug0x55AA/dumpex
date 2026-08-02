@@ -12,7 +12,7 @@ from dumpex.ui.structured import StructuredOutput, _ANSI_RE
 from dumpex.output import V2Output
 from dumpex.output.envelope import EvidenceInput
 from dumpex.output.coverage import EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED, exit_code_for
-from dumpex.core.safe_io import check_not_dump_path, AtomicTextTee
+from dumpex.core.safe_io import check_not_dump_path, check_no_output_collisions, AtomicTextTee
 
 from dumpex.commands.list_cmd import cmd_list
 from dumpex.commands.modules  import cmd_modules
@@ -146,10 +146,11 @@ def main():
     parser.add_argument('--analyst',    metavar='NAME',      default=None,
                         help='Analyst name/handle recorded in --json meta.execution.analyst')
     parser.add_argument('--redact-paths', action='store_true',
-                        help='Omit absolute filesystem paths from --json meta (evidence.path and '
-                             'any --ref-dir/--yara-dir/--rules-file path in meta.execution.options '
-                             'are reduced to their basename) — for sharing JSON output outside the '
-                             'analyst\'s own machine without leaking local directory layout')
+                        help='Omit absolute filesystem paths from --json output (evidence.path, '
+                             'any --ref-dir/--yara-dir/--rules-file/--output path in '
+                             'meta.execution.options, and every artifacts[].path, are all reduced '
+                             'to their basename) — for sharing JSON output outside the analyst\'s '
+                             'own machine without leaking local directory layout')
     args = parser.parse_args()
 
     run_mode = _selected_run_mode(args)
@@ -190,6 +191,28 @@ def main():
                             (args.json, "--json"), (args.csv, "--csv")):
         if out_arg:
             check_not_dump_path(out_arg, dump_paths, label)
+
+    # This run's own output targets must not collide with EACH OTHER
+    # either -- e.g. `--extract 0x1000 --output same.out --json same.out
+    # --force` would otherwise let the later --json write silently
+    # clobber the just-written extract output (see
+    # safe_io.check_no_output_collisions's own docstring). Includes
+    # --extract's own auto-generated default filename when --output isn't
+    # given, so that collision is caught here too, before the dump is
+    # even opened -- not just when both are given explicitly.
+    _extract_default_output = None
+    if args.extract and not args.output:
+        try:
+            _extract_default_output = f"region_0x{parse_hex_or_int(args.extract):x}.bin"
+        except ValueError:
+            pass   # malformed --extract value -- surfaces at its usual place in _run()
+    check_no_output_collisions([
+        (args.output, "--output"),
+        (_extract_default_output, "--extract's default output filename"),
+        (args.json, "--json"),
+        (args.csv, "--csv"),
+        (args.txt, "--txt"),
+    ])
 
     # ── Derive a short label describing the command being run ─────────────
     # Used in auto-generated filenames when the caller passes a directory.

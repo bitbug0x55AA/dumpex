@@ -309,6 +309,16 @@ class LimitationCode(str, Enum):
     # (requires sysinfo + thread list)") differs from --peb's own
     # PEB_UNAVAILABLE text, so it needs a distinctly-named code rather
     # than reusing that one.
+    REGION_READ_TRUNCATED = "REGION_READ_TRUNCATED"
+    # ^ --extract/--strings: read_region() returned fewer bytes than
+    # requested (the requested range extends past what's actually backed
+    # in the dump). source="requested_region" stays PRESENT -- there IS
+    # real data, just less of it than asked for -- so this is NOT an
+    # auto-derived absent/failed limitation; the caller hand-builds it
+    # (caller_buildable) exactly when len(data) < requested size. Fully
+    # fixed sentence: the actual requested/actual byte counts already live
+    # on ExtractRecord/StringRecord's own fields and result.summary, not
+    # duplicated onto this limitation.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -754,6 +764,14 @@ _CODE_SPECS = {
     LimitationCode.SYSINFO_MODULES_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("ModuleListStream not present (module_count unavailable)"),
         fixed_source="modules", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.REGION_READ_TRUNCATED: _CodeSpec(
+        render=_render_fixed_text("Requested memory region was only partially read"),
+        fixed_source="requested_region", caller_buildable=True),
+        # allowed_fields defaults to empty -- fully fixed sentence, no
+        # fields; the actual requested/actual byte counts live on
+        # ExtractRecord/StringRecord and result.summary instead (see
+        # collect_extract/collect_strings), not on the limitation itself,
+        # same pattern as PID_NO_USABLE_FALLBACK above.
 }
 
 # Derived collections -- every other call site (SourceRequirement,

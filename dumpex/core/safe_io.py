@@ -63,13 +63,18 @@ def check_not_dump_path(out_path, dump_path, label: str):
 
     dump_path is either a single path (str/Path -- the original, still
     most common case: one command, one input dump) or an iterable of
-    paths (a comparison command with a baseline AND a target dump, each
-    equally real evidence that must never be overwritten). A bare string
-    is deliberately NOT treated as "an iterable of characters" here --
-    isinstance(dump_path, (str, Path)) is checked explicitly first, since
-    Python strings are iterable and would otherwise silently explode into
-    single-character "paths" that can never collide with anything,
-    defeating the whole check.
+    entries, each either a bare path (str/Path -- treated as "the input
+    dump" for the printed message) or a (path, description) tuple -- used
+    by V2Output to also protect an already-written --extract artifact
+    path from a later --json/--csv write to the same file (see
+    dumpex.output.collector.V2Output._protected_paths), with a message
+    that correctly names what would be overwritten instead of always
+    claiming it's the input dump. A bare string is deliberately NOT
+    treated as "an iterable of characters" here -- isinstance(dump_path,
+    (str, Path)) is checked explicitly first, since Python strings are
+    iterable and would otherwise silently explode into single-character
+    "paths" that can never collide with anything, defeating the whole
+    check.
 
     Callers must invoke this against the LITERAL path about to be written,
     at commit time — never against a directory or pattern that merely
@@ -82,12 +87,58 @@ def check_not_dump_path(out_path, dump_path, label: str):
     out_resolved = resolve_or_none(out_path)
     if out_resolved is None:
         return
-    dump_paths = [dump_path] if isinstance(dump_path, (str, Path)) else list(dump_path)
-    for dp in dump_paths:
+    entries = [dump_path] if isinstance(dump_path, (str, Path)) else list(dump_path)
+    for entry in entries:
+        if isinstance(entry, (str, Path)):
+            dp, desc, extra = entry, "the input dump", "This would destroy the evidence file."
+        else:
+            dp, desc = entry
+            extra = "This would silently overwrite output this run already wrote."
         if out_resolved == resolve_or_none(dp):
-            print(RED(f"[!] Refusing to write {label} to the same path as the input dump: {out_path}"))
-            print(DIM(f"    This would destroy the evidence file. Choose a different output path."))
+            print(RED(f"[!] Refusing to write {label} to the same path as {desc}: {out_path}"))
+            print(DIM(f"    {extra} Choose a different output path."))
             sys.exit(1)
+
+
+def check_no_output_collisions(targets) -> None:
+    """
+    Reject up front -- before the dump is even opened or any output file
+    is touched -- if two or more of this run's own OUTPUT targets
+    (--output/--json/--csv/--txt, plus --extract's own auto-generated
+    default filename when --output isn't given) would resolve to the same
+    file. Without this, e.g. `--extract 0x1000 --output same.out --json
+    same.out --force` lets the later --json write silently clobber the
+    just-written extract output: the JSON's own artifact entry keeps
+    describing a file (path/size/sha256) that no longer contains what it
+    claims to, a metadata/data mismatch a DFIR tool must never produce.
+
+    `targets` is an iterable of (path_or_None, label) pairs. Entries whose
+    path is falsy (flag not given) are skipped. Directory-mode targets
+    (a trailing slash, or an existing directory -- --csv's/--txt's own
+    "write one auto-named file per table/run into this directory" mode)
+    are also skipped: they never write AT the literal directory path
+    itself, so a bare equality check against it would be pointless.
+
+    Never lifted by --force -- same philosophy as check_not_dump_path's
+    own unconditional refusal.
+    """
+    seen = {}
+    for path, label in targets:
+        if not path:
+            continue
+        is_dir_target = str(path).endswith(('/', '\\')) or Path(path).is_dir()
+        if is_dir_target:
+            continue
+        resolved = resolve_or_none(path)
+        if resolved is None:
+            continue
+        if resolved in seen:
+            other_label = seen[resolved]
+            print(RED(f"[!] Refusing to run: {label} and {other_label} would both write to "
+                      f"the same file ({path})."))
+            print(DIM(f"    Choose different output paths -- this is refused even with --force."))
+            sys.exit(1)
+        seen[resolved] = label
 
 
 def compute_bytes_summary(data: bytes) -> "tuple[int, str]":

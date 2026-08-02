@@ -211,27 +211,28 @@
     },
 
     "extractRecord": {
+      "description": "Matches dumpex.output.records.ExtractRecord.to_dict() -- the READ-side facts for one --extract invocation. NOT expressed here (Python-only, see ExtractRecord.__post_init__): bytes_read must never exceed requested_size when requested_size is non-null -- JSON Schema cannot compare two sibling field VALUES against each other within one object.",
       "type": "object",
       "additionalProperties": false,
       "required": ["requested_address", "requested_size", "auto_sized", "bytes_read",
                    "mz_header_detected"],
       "properties": {
         "requested_address":   { "$ref": "#/$defs/hexAddress" },
-        "requested_size":      { "type": ["integer", "null"] },
+        "requested_size":      { "type": ["integer", "null"], "minimum": 0 },
         "auto_sized":          { "type": "boolean" },
-        "bytes_read":          { "type": "integer" },
+        "bytes_read":          { "type": "integer", "minimum": 0 },
         "mz_header_detected":  { "type": "boolean" }
       }
     },
 
     "stringRecord": {
-      "description": "Matches dumpex.output.records.StringRecord.to_dict() -- one extracted string from a --strings scan. `offset` is a plain byte offset relative to the read region's start, NOT a process address. `matched_grep` is a flag, not a filter: this record is emitted for every extracted string regardless of --grep -- null when no --grep was given at all, true/false per record when it was.",
+      "description": "Matches dumpex.output.records.StringRecord.to_dict() -- one extracted string from a --strings scan. `offset` is a plain byte offset relative to the read region's start, NOT a process address. Unlike most other hexAddress-typed fields in this schema, `address` is never null -- a string was found at some real address, there is no \"address unknown\" case for it (see StringRecord.__post_init__). `matched_grep` is a flag, not a filter: this record is emitted for every extracted string regardless of --grep -- null when no --grep was given at all, true/false per record when it was.",
       "type": "object",
       "additionalProperties": false,
       "required": ["offset", "address", "encoding", "text", "matched_grep"],
       "properties": {
         "offset":       { "type": "integer", "minimum": 0 },
-        "address":      { "$ref": "#/$defs/hexAddress" },
+        "address":      { "$ref": "#/$defs/hexAddress", "not": { "const": null } },
         "encoding":     { "enum": ["ASCII", "UTF16"] },
         "text":         { "type": "string" },
         "matched_grep": { "type": ["boolean", "null"] }
@@ -538,7 +539,9 @@
         { "if": { "properties": { "code": { "const": "SYSINFO_THREADS_UNAVAILABLE" } } },
           "then": { "properties": { "source": { "const": "threads" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
         { "if": { "properties": { "code": { "const": "SYSINFO_MODULES_UNAVAILABLE" } } },
-          "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } }
+          "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "REGION_READ_TRUNCATED" } } },
+          "then": { "properties": { "source": { "const": "requested_region" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } }
       ]
     },
 

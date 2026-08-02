@@ -35,6 +35,68 @@ def test_check_not_dump_path_refuses_same_path(tmp_path, capsys):
     assert dump.read_bytes() == b"x"   # evidence untouched
 
 
+def test_check_not_dump_path_accepts_path_description_tuple(tmp_path, capsys):
+    # Used by V2Output to protect an already-written artifact path (not
+    # the input dump) -- the printed message must name the actual thing
+    # being protected, not always claim it's the input dump.
+    artifact_path = tmp_path / "extracted.bin"
+    artifact_path.write_bytes(b"x")
+    with pytest.raises(SystemExit) as exc:
+        safe_io.check_not_dump_path(
+            artifact_path, [(str(artifact_path), "the 'extracted_region' artifact")],
+            "test output")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "same path as the 'extracted_region' artifact" in out
+    assert "same path as the input dump" not in out
+    assert artifact_path.read_bytes() == b"x"   # untouched
+
+
+def test_check_not_dump_path_mixed_bare_string_and_tuple_entries(tmp_path):
+    dump = tmp_path / "evidence.dmp"
+    dump.write_bytes(b"x")
+    out = tmp_path / "out.json"
+    # A bare string entry alongside a tuple entry, neither colliding --
+    # must not raise.
+    safe_io.check_not_dump_path(out, [str(dump), (str(tmp_path / "other.bin"), "other")],
+                                 "test output")
+
+
+# ── check_no_output_collisions ──────────────────────────────────────────
+
+def test_check_no_output_collisions_allows_distinct_paths(tmp_path):
+    safe_io.check_no_output_collisions([
+        (str(tmp_path / "a.json"), "--json"),
+        (str(tmp_path / "b.csv"), "--csv"),
+        (None, "--txt"),
+    ])   # must not raise
+
+
+def test_check_no_output_collisions_refuses_same_path(tmp_path, capsys):
+    same = str(tmp_path / "same.out")
+    with pytest.raises(SystemExit) as exc:
+        safe_io.check_no_output_collisions([(same, "--output"), (same, "--json")])
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "would both write to the same file" in out
+    assert "--output" in out and "--json" in out
+
+
+def test_check_no_output_collisions_skips_directory_mode_targets(tmp_path):
+    # A directory-mode target (existing dir, or trailing slash) writes
+    # auto-named files INTO it -- never at the literal path itself -- so
+    # it must not be compared for equality against another target that
+    # happens to share that literal string.
+    safe_io.check_no_output_collisions([
+        (str(tmp_path), "--csv"),
+        (str(tmp_path), "--txt"),
+    ])   # must not raise: both are directory-mode, skipped entirely
+
+
+def test_check_no_output_collisions_skips_none_entries(tmp_path):
+    safe_io.check_no_output_collisions([(None, "--output"), (None, "--json")])   # must not raise
+
+
 # ── summarize_bytes / summarize_file / compute_bytes_summary ────────────
 
 def test_summarize_bytes_and_file_agree(tmp_path):

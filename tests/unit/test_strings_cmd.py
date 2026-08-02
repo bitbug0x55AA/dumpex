@@ -10,6 +10,7 @@ from tests.fixtures.fakes import FakeMF, mem_reader
 
 import dumpex.commands.extract as extract_mod
 from dumpex.commands.extract import collect_strings, cmd_strings
+from dumpex.core.memory import RegionReadError
 from dumpex.output.coverage import SourceState
 from dumpex.output.records import StringRecord
 
@@ -39,7 +40,8 @@ def test_collect_strings_happy_path(monkeypatch):
     assert result.coverage.status == "complete"
     assert result.coverage.sources["requested_region"].state == SourceState.PRESENT
     assert result.coverage.sources["requested_region"].record_count == 2
-    assert result.summary == {"count": 2, "shown": 2}
+    assert result.summary == {"count": 2, "shown": 2, "requested_size": len(data),
+                               "bytes_read": len(data), "auto_sized": False}
 
 
 def test_collect_strings_no_strings_found_is_present_empty(monkeypatch):
@@ -50,7 +52,31 @@ def test_collect_strings_no_strings_found_is_present_empty(monkeypatch):
     assert result.coverage.sources["requested_region"].state == SourceState.PRESENT_EMPTY
     assert result.coverage.sources["requested_region"].record_count == 0
     assert result.coverage.status == "complete"
-    assert result.summary == {"count": 0, "shown": 0}
+    assert result.summary == {"count": 0, "shown": 0, "requested_size": 15,
+                               "bytes_read": 15, "auto_sized": False}
+
+
+def test_collect_strings_short_read_marks_coverage_partial(monkeypatch):
+    # P1-4 remediation: same short-read gap as collect_extract -- a
+    # truncated read must not be silently reported as complete just
+    # because at least one string happened to be found in what WAS read.
+    mf = _mk_mf(monkeypatch, {0x6000: b"only a short string here"})
+    result = collect_strings(mf, 0x6000, 200, 6, None, "ascii")
+    assert result.summary["requested_size"] == 200
+    assert result.summary["bytes_read"] == 24
+    assert result.coverage.status == "partial"
+    assert result.coverage.sources["requested_region"].state == SourceState.PRESENT
+    codes = {lim.code for lim in result.coverage.limitations}
+    assert "REGION_READ_TRUNCATED" in codes
+
+
+def test_collect_strings_full_read_stays_complete(monkeypatch):
+    data = b"exactly this many bytes"
+    mf = _mk_mf(monkeypatch, {0x7000: data})
+    result = collect_strings(mf, 0x7000, len(data), 6, None, "ascii")
+    assert result.summary["bytes_read"] == len(data)
+    assert result.coverage.status == "complete"
+    assert result.coverage.limitations == []
 
 
 def test_collect_strings_matched_grep_true_false_when_grep_given(monkeypatch):
@@ -93,16 +119,26 @@ def test_collect_strings_encoding_unicode_excludes_ascii(monkeypatch):
     assert all(r.encoding == "UTF16" for r in result.records)
 
 
-def test_collect_strings_read_failure_propagates_unwrapped(monkeypatch):
-    # Same reasoning as collect_extract -- see test_extract_cmd.py's
-    # equivalent test and Phase E's plan for why this stays a hard
-    # failure rather than becoming SourceState.FAILED/coverage.
+def test_collect_strings_read_failure_wrapped_as_region_read_error(monkeypatch):
+    # P2-2 remediation: same RegionReadError wrapping as collect_extract
+    # -- see test_extract_cmd.py's equivalent test and Phase E's plan for
+    # why this stays a hard failure rather than becoming
+    # SourceState.FAILED/coverage.
     def _boom(mf, addr, size):
         raise RuntimeError("bad address")
     monkeypatch.setattr(extract_mod, "read_region", _boom)
     mf = FakeMF()
-    with pytest.raises(RuntimeError, match="bad address"):
+    with pytest.raises(RegionReadError, match="bad address"):
         collect_strings(mf, 0x9999, 16, 6, None, "both")
+
+
+def test_collect_strings_bad_grep_regex_propagates_as_re_error(monkeypatch):
+    # A malformed --grep pattern must propagate as re.error, not get
+    # relabeled as a read failure just because it's raised inside the
+    # same function, after a successful read.
+    mf = _mk_mf(monkeypatch, {0x1000: b"hello world!" + b"\x00" * 10})
+    with pytest.raises(re.error):
+        collect_strings(mf, 0x1000, 22, 6, "(unclosed", "ascii")
 
 
 def test_cmd_strings_read_failure_exits_1(monkeypatch, capsys):
@@ -117,6 +153,16 @@ def test_cmd_strings_read_failure_exits_1(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "[*] Extracting strings from 0x9999" in out
     assert "[!] Read failed: bad address" in out
+
+
+def test_cmd_strings_bad_grep_regex_exits_1_with_invalid_regex_message(monkeypatch, capsys):
+    mf = _mk_mf(monkeypatch, {0x1000: b"hello world!" + b"\x00" * 10})
+    with pytest.raises(SystemExit) as exc:
+        cmd_strings(mf, 0x1000, 22, 6, "(unclosed", "ascii")
+    assert exc.value.code == 1
+    out = capsys.readouterr().out
+    assert "[!] Invalid --grep regex:" in out
+    assert "Read failed" not in out
 
 
 def test_cmd_strings_returns_command_result_on_success(monkeypatch, capsys):

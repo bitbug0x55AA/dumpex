@@ -19,7 +19,7 @@ from dumpex.output.collector import V2Output
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport, COVERAGE_COMPLETE
 from dumpex.output.records import Diagnostic, Artifact, SEVERITY_WARNING, SEVERITY_ERROR
-from tests.fixtures.fakes import Module, FakeStream, FakeMF
+from tests.fixtures.fakes import Module, FakeStream, FakeMF, mem_reader
 from dumpex.commands.comparison import collect_comparison
 
 
@@ -92,6 +92,149 @@ def test_write_csv_with_no_records_still_writes_a_summary_table(tmp_path, capsys
     rows = list(csv.DictReader(io.StringIO(csv_files[0].read_text(encoding="utf-8"))))
     assert rows == [{"kind": "modules", "execution_status": "completed",
                       "coverage_status": "complete", "coverage_reasons": "", "count": "0"}]
+
+
+# ── artifacts / diagnostics CSV tables (P1-2 remediation) ────────────────
+# Before this fix, build_tables() only ever consumed `result` -- JSON's
+# top-level artifacts[]/diagnostics were completely invisible in CSV, and
+# a custom result.summary field (e.g. --extract's output_path, --strings'
+# shown) was silently dropped by summary_rows() too.
+
+def test_build_tables_omits_artifacts_and_diagnostics_tables_when_none_given():
+    result = Result(kind="modules", execution_status="completed", coverage_status="complete",
+                     records=[{"name": "a.dll"}])
+    tables = build_tables(result)
+    assert "artifacts" not in tables
+    assert "diagnostic_warnings" not in tables
+    assert "diagnostic_errors" not in tables
+
+
+def test_build_tables_includes_artifacts_table_when_present():
+    result = Result(kind="extract", execution_status="completed", coverage_status="complete",
+                     records=[{"bytes_read": 16}])
+    artifact = Artifact(id="extract_output", kind="extracted_region", path="out.bin",
+                         size_bytes=16, sha256="abc123", description="Bytes extracted")
+    tables = build_tables(result, artifacts=[artifact.to_dict()])
+    assert tables["artifacts"] == [{
+        "id": "extract_output", "kind": "extracted_region", "path": "out.bin",
+        "size_bytes": 16, "sha256": "abc123", "description": "Bytes extracted",
+    }]
+
+
+def test_build_tables_includes_diagnostic_warnings_table_when_present():
+    result = Result(kind="extract", execution_status="completed", coverage_status="complete",
+                     records=[{"bytes_read": 64}])
+    warning = Diagnostic(severity=SEVERITY_WARNING, message="MZ header detected",
+                          code="EXTRACT_MZ_HEADER_DETECTED")
+    tables = build_tables(result, diagnostic_warnings=[warning.to_dict()])
+    assert tables["diagnostic_warnings"] == [{
+        "severity": "warning", "message": "MZ header detected",
+        "code": "EXTRACT_MZ_HEADER_DETECTED",
+    }]
+    assert "diagnostic_errors" not in tables
+
+
+def test_summary_rows_merges_custom_summary_fields():
+    result = Result(kind="strings", execution_status="completed", coverage_status="complete",
+                     records=[{"text": "a"}, {"text": "b"}], summary={"count": 2, "shown": 1})
+    tables = build_tables(result)
+    assert tables["summary"][0]["shown"] == 1
+    assert tables["summary"][0]["count"] == 2   # fixed field, unaffected by merge
+
+
+def test_summary_rows_fixed_fields_win_over_a_same_named_custom_field():
+    # A future command's result.summary must never be able to shadow a
+    # fixed summary field by accident -- kind/execution_status/
+    # coverage_status/coverage_reasons/count always come from the real
+    # Result attributes, never from summary's own dict.
+    result = Result(kind="modules", execution_status="completed", coverage_status="complete",
+                     records=[{"name": "a.dll"}], summary={"kind": "SPOOFED", "count": 999})
+    tables = build_tables(result)
+    assert tables["summary"][0]["kind"] == "modules"
+    assert tables["summary"][0]["count"] == 1
+
+
+def test_write_csv_single_file_includes_artifact_and_diagnostic_tables(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="extract", options={})
+
+    import dumpex.commands.extract as extract_mod
+    mf = FakeMF()
+    mf.filename = str(dump_path)
+    extract_mod.read_region = mem_reader({0x1000: b"MZ" + b"\x90" * 14})
+    result = extract_mod.collect_extract(mf, 0x1000, 16, str(tmp_path / "extracted.bin"),
+                                          force=True)
+    out.set_command_result(result)
+
+    csv_path = tmp_path / "out.csv"
+    out.write_csv(str(csv_path), cmd_label="extract")
+    text = csv_path.read_text(encoding="utf-8")
+
+    assert "## extract / artifacts" in text
+    assert "## extract / diagnostic_warnings" in text
+    artifacts_block = text.split("## extract / artifacts\n", 1)[1].split("\n\n", 1)[0]
+    rows = list(csv.DictReader(io.StringIO(artifacts_block)))
+    assert rows[0]["path"] == str(tmp_path / "extracted.bin")
+    assert rows[0]["size_bytes"] == "16"
+    import hashlib
+    assert rows[0]["sha256"] == hashlib.sha256(b"MZ" + b"\x90" * 14).hexdigest()
+    warnings_block = text.split("## extract / diagnostic_warnings\n", 1)[1].split("\n\n", 1)[0]
+    warning_rows = list(csv.DictReader(io.StringIO(warnings_block)))
+    assert warning_rows[0]["code"] == "EXTRACT_MZ_HEADER_DETECTED"
+
+
+def test_write_csv_directory_mode_includes_artifact_and_diagnostic_tables(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    out = V2Output(str(dump_path), command="extract", options={})
+
+    import dumpex.commands.extract as extract_mod
+    mf = FakeMF()
+    mf.filename = str(dump_path)
+    extract_mod.read_region = mem_reader({0x1000: b"MZ" + b"\x90" * 14})
+    result = extract_mod.collect_extract(mf, 0x1000, 16, str(tmp_path / "extracted2.bin"),
+                                          force=True)
+    out.set_command_result(result)
+
+    out.write_csv(str(out_dir) + "/", cmd_label="extract")
+
+    csv_files = {f.name: f for f in out_dir.glob("*.csv")}
+    assert any("artifacts" in name for name in csv_files)
+    assert any("diagnostic_warnings" in name for name in csv_files)
+    artifacts_file = next(f for name, f in csv_files.items() if "artifacts" in name)
+    rows = list(csv.DictReader(io.StringIO(artifacts_file.read_text(encoding="utf-8"))))
+    assert rows[0]["path"] == str(tmp_path / "extracted2.bin")
+
+
+def test_json_and_csv_agree_on_artifact_facts(tmp_path):
+    # The same CommandResult must produce the same artifact facts in both
+    # JSON (top-level artifacts[]) and CSV (the 'artifacts' table) --
+    # before this fix, only JSON carried this information at all.
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="extract", options={})
+
+    import dumpex.commands.extract as extract_mod
+    mf = FakeMF()
+    mf.filename = str(dump_path)
+    extract_mod.read_region = mem_reader({0x2000: b"plain data, no MZ header"})
+    result = extract_mod.collect_extract(mf, 0x2000, 24, str(tmp_path / "extracted3.bin"),
+                                          force=True)
+    out.set_command_result(result)
+
+    doc = json.loads(out.to_json())
+    csv_path = tmp_path / "out.csv"
+    out.write_csv(str(csv_path), cmd_label="extract")
+    text = csv_path.read_text(encoding="utf-8")
+    artifacts_block = text.split("## extract / artifacts\n", 1)[1].split("\n\n", 1)[0]
+    csv_rows = list(csv.DictReader(io.StringIO(artifacts_block)))
+
+    assert doc["artifacts"][0]["path"] == csv_rows[0]["path"]
+    assert str(doc["artifacts"][0]["size_bytes"]) == csv_rows[0]["size_bytes"]
+    assert doc["artifacts"][0]["sha256"] == csv_rows[0]["sha256"]
 
 
 def test_list_typed_field_becomes_json_cell_not_python_repr(tmp_path):
@@ -244,6 +387,98 @@ def test_set_command_result_forwards_artifacts(tmp_path):
 
     assert doc["artifacts"] == [{"id": "a1", "kind": "extracted_region", "path": "x.bin",
                                   "size_bytes": None, "sha256": None, "description": None}]
+
+
+def test_set_command_result_protects_artifact_path_from_later_writes(tmp_path, capsys):
+    # P1-1 remediation, second line of defense: an artifact this run
+    # already wrote (e.g. --extract's own --output file) must become a
+    # protected path for a LATER write_json/write_csv call, so a
+    # collision (--json pointed at the same path) is refused instead of
+    # silently overwriting the artifact -- see safe_io.check_not_dump_path's
+    # (path, description) tuple support.
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    artifact_path = tmp_path / "extracted.bin"
+    artifact_path.write_bytes(b"original artifact bytes")
+
+    out = V2Output(str(dump_path), command="extract", options={})
+    result = CommandResult(
+        kind="extract", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE),
+        artifacts=[Artifact(id="extract_output", kind="extracted_region",
+                             path=str(artifact_path))])
+    out.set_command_result(result)
+
+    with pytest.raises(SystemExit) as exc:
+        out.write_json(str(artifact_path), cmd_label="extract")
+    assert exc.value.code == 1
+    err = capsys.readouterr().out
+    assert "extracted_region" in err
+    assert artifact_path.read_bytes() == b"original artifact bytes"   # untouched
+
+
+def test_set_command_result_then_to_json_redacts_artifact_path_when_requested(tmp_path):
+    # P1-3 remediation: artifacts[].path leaked the full absolute path
+    # even under --redact-paths -- only meta.evidence.path and
+    # meta.execution.options were ever redacted.
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="extract",
+                    options={"output": str(tmp_path / "extracted.bin")}, redact_paths=True)
+    result = CommandResult(
+        kind="extract", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE),
+        artifacts=[Artifact(id="extract_output", kind="extracted_region",
+                             path=str(tmp_path / "extracted.bin"), size_bytes=64,
+                             sha256="abc123")])
+    out.set_command_result(result)
+    doc = json.loads(out.to_json())
+
+    assert doc["artifacts"][0]["path"] == "extracted.bin"
+    assert doc["artifacts"][0]["size_bytes"] == 64
+    assert doc["artifacts"][0]["sha256"] == "abc123"
+    assert doc["meta"]["execution"]["options"]["output"] == "extracted.bin"
+    assert str(tmp_path) not in json.dumps(doc)
+
+
+def test_set_command_result_then_to_json_keeps_full_artifact_path_by_default(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="extract",
+                    options={"output": str(tmp_path / "extracted.bin")}, redact_paths=False)
+    result = CommandResult(
+        kind="extract", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE),
+        artifacts=[Artifact(id="extract_output", kind="extracted_region",
+                             path=str(tmp_path / "extracted.bin"))])
+    out.set_command_result(result)
+    doc = json.loads(out.to_json())
+
+    assert doc["artifacts"][0]["path"] == str(tmp_path / "extracted.bin")
+    assert doc["meta"]["execution"]["options"]["output"] == str(tmp_path / "extracted.bin")
+
+
+def test_redact_paths_does_not_affect_csv_artifact_path(tmp_path):
+    # --redact-paths is documented as a --json-only concern -- CSV export
+    # (an analyst-local file, not something shared off-machine the way
+    # --json commonly is) keeps the full path either way, matching
+    # today's un-redacted CSV behavior for every other path-bearing field.
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="extract", options={}, redact_paths=True)
+    artifact_path = str(tmp_path / "extracted.bin")
+    result = CommandResult(
+        kind="extract", records=_fake_records(),
+        coverage=CoverageReport(status=COVERAGE_COMPLETE),
+        artifacts=[Artifact(id="extract_output", kind="extracted_region", path=artifact_path)])
+    out.set_command_result(result)
+
+    csv_path = tmp_path / "out.csv"
+    out.write_csv(str(csv_path), cmd_label="extract")
+    text = csv_path.read_text(encoding="utf-8")
+    artifacts_block = text.split("## extract / artifacts\n", 1)[1].split("\n\n", 1)[0]
+    rows = list(csv.DictReader(io.StringIO(artifacts_block)))
+    assert rows[0]["path"] == artifact_path
 
 
 def test_command_result_rejects_bare_dict_artifact():

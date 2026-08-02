@@ -62,6 +62,46 @@ def test_meta_redact_paths_reduces_path_options_to_basename(tmp_path):
     assert meta["execution"]["options"]["rules_file"] == "rules.yaml"
 
 
+def test_meta_redact_paths_reduces_output_option_to_basename(tmp_path):
+    # P1-3 remediation: --extract's own --output path was missing from
+    # _PATH_OPTION_KEYS entirely, so meta.execution.options.output kept
+    # leaking the full absolute path even with --redact-paths set.
+    meta = _meta(tmp_path, options={"verbose": False, "output": "/case/evidence/extracted.bin"},
+                 redact_paths=True)
+    assert meta["execution"]["options"]["output"] == "extracted.bin"
+
+
+def test_meta_without_redact_paths_output_option_stays_absolute(tmp_path):
+    meta = _meta(tmp_path, options={"verbose": False, "output": "/case/evidence/extracted.bin"},
+                 redact_paths=False)
+    assert meta["execution"]["options"]["output"] == "/case/evidence/extracted.bin"
+
+
+# ── _redact_artifacts ────────────────────────────────────────────────────
+
+def test_redact_artifacts_reduces_path_to_basename_leaves_other_fields():
+    artifacts = [{"id": "extract_output", "kind": "extracted_region",
+                  "path": "/case/evidence/extracted.bin", "size_bytes": 64,
+                  "sha256": "abc123", "description": "Bytes extracted from 0x1000"}]
+    redacted = envelope_mod._redact_artifacts(artifacts)
+    assert redacted[0]["path"] == "extracted.bin"
+    assert redacted[0]["size_bytes"] == 64
+    assert redacted[0]["sha256"] == "abc123"
+    assert redacted[0]["description"] == "Bytes extracted from 0x1000"
+
+
+def test_redact_artifacts_does_not_mutate_the_original_dicts():
+    original = {"id": "a1", "kind": "extracted_region", "path": "/case/out.bin"}
+    artifacts = [original]
+    envelope_mod._redact_artifacts(artifacts)
+    assert original["path"] == "/case/out.bin"   # untouched -- a NEW dict was returned
+
+
+def test_redact_artifacts_tolerates_null_path():
+    redacted = envelope_mod._redact_artifacts([{"id": "a1", "kind": "k", "path": None}])
+    assert redacted[0]["path"] is None
+
+
 def test_meta_evidence_missing_file_reports_error_not_crash(tmp_path):
     meta = _meta(tmp_path, dump_path_abs=str(tmp_path / "does_not_exist.dmp"))
     entry = meta["evidence"][0]

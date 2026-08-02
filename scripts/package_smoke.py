@@ -95,8 +95,9 @@ def main() -> None:
               f"found {sorted(yar_files)}")
     print(f"packaged YARA rule files: {sorted(yar_files)}")
 
-    for schema_filename in ("dumpex-output-v1.1.schema.json", "dumpex-output-v2.0.schema.json",
-                             "dumpex-output-v2.1.schema.json"):
+    _schema_filenames = ("dumpex-output-v1.1.schema.json", "dumpex-output-v2.0.schema.json",
+                         "dumpex-output-v2.1.schema.json", "dumpex-output-v2.2.schema.json")
+    for schema_filename in _schema_filenames:
         schema_path = importlib.resources.files("dumpex.schemas").joinpath(schema_filename)
         if not schema_path.is_file():
             _fail(f"dumpex/schemas/{schema_filename} not found via importlib.resources")
@@ -105,8 +106,7 @@ def main() -> None:
             json.loads(schema_text)
         except json.JSONDecodeError as e:
             _fail(f"packaged {schema_filename} is not valid JSON: {e}")
-    print("packaged schemas: dumpex-output-v1.1.schema.json, dumpex-output-v2.0.schema.json, "
-          "dumpex-output-v2.1.schema.json")
+    print(f"packaged schemas: {', '.join(_schema_filenames)}")
 
     from dumpex.rules_pkg import loader
 
