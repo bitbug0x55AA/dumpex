@@ -239,6 +239,21 @@
       }
     },
 
+    "stringsSummary": {
+      "description": "Matches result.summary for kind == 'strings' (dumpex.commands.extract.collect_strings). Pins the scan-context fields the P2 review's own 'a zero-result scan must still be able to tell where the scan started' finding needs machine-enforced, not just documented/unit-tested -- requested_address is the only way to know the scan origin when `data.records` is empty. additionalProperties: false since these six fields are the whole of collect_strings' own summary dict today; a future field added there must extend this def too, the same way every other v2.2 record type is kept in lockstep with its Python producer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "shown", "requested_address", "requested_size", "bytes_read", "auto_sized"],
+      "properties": {
+        "count":              { "type": "integer", "minimum": 0 },
+        "shown":              { "type": "integer", "minimum": 0 },
+        "requested_address":  { "$ref": "#/$defs/hexAddress", "not": { "const": null } },
+        "requested_size":     { "type": "integer", "minimum": 0 },
+        "bytes_read":         { "type": "integer", "minimum": 0 },
+        "auto_sized":         { "type": "boolean" }
+      }
+    },
+
     "moduleDiffRecord": {
       "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic. `name` is always a non-empty string (\"(unnamed)\" for an anonymous module -- see dumpex.commands.comparison._module_display_name), but full_path_before/full_path_after are only forced null on the side that genuinely has no entry -- the PRESENT side's full_path may legitimately be null too (an anonymous module has a real base_address but no name at all), so only base_address is required non-null for added/removed. `full_path_before`/`full_path_after` are otherwise unconstrained by change_type: address identifies a module diff, not path. NOT expressed here (Python-only, see ModuleDiffRecord.__post_init__): for `change_type: \"rebased\"`, base_address_before must differ from base_address_after -- JSON Schema cannot compare two sibling field VALUES for inequality within one object.",
       "type": "object",
@@ -403,7 +418,10 @@
             }
           }
         },
-        "summary": { "type": "object" },
+        "summary": {
+          "description": "Free-form per-kind extension point by default (open object) -- refined per-kind via the allOf/if-then block below exactly like data.records is, wherever a kind's own summary fields carry machine-relevant facts (e.g. kind == 'strings', whose requested_address is the only way to know a zero-result scan's own origin).",
+          "type": "object"
+        },
         "data": {
           "type": "object",
           "required": ["records"],
@@ -438,8 +456,10 @@
           "then": { "properties": { "data": { "properties": {
             "records": { "items": { "$ref": "#/$defs/extractRecord" } } } } } } },
         { "if": { "properties": { "kind": { "const": "strings" } } },
-          "then": { "properties": { "data": { "properties": {
-            "records": { "items": { "$ref": "#/$defs/stringRecord" } } } } } } }
+          "then": { "properties": {
+            "summary": { "$ref": "#/$defs/stringsSummary" },
+            "data": { "properties": {
+              "records": { "items": { "$ref": "#/$defs/stringRecord" } } } } } } }
       ]
     },
 

@@ -344,8 +344,9 @@ class StringRecord:
     CONSOLE rendering (render_strings_console) is a separate, narrower
     concern: it actually SKIPS any record with matched_grep is False
     (only highlighting True matches, never printing non-matches) -- do
-    not conflate the two; a --grep run's console text and its JSON/CSV
-    output deliberately show different amounts of data."""
+    not conflate the two; a --grep run's console text shows the same
+    count as its own JSON/CSV output only when every extracted string
+    happens to match, and fewer whenever at least one doesn't."""
     offset:        int
     address:       str
     encoding:      str              # "ASCII" | "UTF16"

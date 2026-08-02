@@ -803,6 +803,79 @@ def test_strings_empty_result_validates(validator):
     assert doc["result"]["coverage"]["sources"]["requested_region"]["state"] == "present_empty"
 
 
+def _minimal_valid_strings_summary():
+    return {"count": 0, "shown": 0, "requested_address": "0x0000000000001000",
+            "requested_size": 16, "bytes_read": 16, "auto_sized": False}
+
+
+def _minimal_valid_strings_doc():
+    doc = _minimal_valid_doc(kind="strings")
+    doc["result"]["summary"] = _minimal_valid_strings_summary()
+    doc["result"]["data"]["records"] = []
+    return doc
+
+
+def test_strings_minimal_valid_summary_passes_schema(validator):
+    # Baseline for the negative tests below: proves the "valid" shape
+    # really does validate, so a failure in one of them is attributable
+    # to the specific mutation, not to some other unrelated defect.
+    assert validator.is_valid(_minimal_valid_strings_doc())
+
+
+def test_strings_summary_missing_requested_address_is_rejected_by_schema(validator):
+    # P2 remediation: before stringsSummary existed, result.summary for
+    # kind == "strings" was only `{"type": "object"}` -- deleting
+    # requested_address entirely (or any of the other five required
+    # fields) still validated. This is the exact regression the schema
+    # itself must now catch, not just collect_strings()'s own
+    # implementation and unit tests.
+    doc = _minimal_valid_strings_doc()
+    del doc["result"]["summary"]["requested_address"]
+    assert not validator.is_valid(doc)
+
+
+def test_strings_summary_null_requested_address_is_rejected_by_schema(validator):
+    doc = _minimal_valid_strings_doc()
+    doc["result"]["summary"]["requested_address"] = None
+    assert not validator.is_valid(doc)
+
+
+def test_strings_summary_wrong_type_requested_size_is_rejected_by_schema(validator):
+    doc = _minimal_valid_strings_doc()
+    doc["result"]["summary"]["requested_size"] = "16"
+    assert not validator.is_valid(doc)
+
+
+def test_strings_summary_missing_count_is_rejected_by_schema(validator):
+    doc = _minimal_valid_strings_doc()
+    del doc["result"]["summary"]["count"]
+    assert not validator.is_valid(doc)
+
+
+def test_strings_summary_missing_shown_is_rejected_by_schema(validator):
+    doc = _minimal_valid_strings_doc()
+    del doc["result"]["summary"]["shown"]
+    assert not validator.is_valid(doc)
+
+
+def test_strings_summary_missing_bytes_read_is_rejected_by_schema(validator):
+    doc = _minimal_valid_strings_doc()
+    del doc["result"]["summary"]["bytes_read"]
+    assert not validator.is_valid(doc)
+
+
+def test_strings_summary_missing_auto_sized_is_rejected_by_schema(validator):
+    doc = _minimal_valid_strings_doc()
+    del doc["result"]["summary"]["auto_sized"]
+    assert not validator.is_valid(doc)
+
+
+def test_strings_summary_unknown_extra_field_is_rejected_by_schema(validator):
+    doc = _minimal_valid_strings_doc()
+    doc["result"]["summary"]["totally_unexpected_field"] = "x"
+    assert not validator.is_valid(doc)
+
+
 def test_string_record_null_address_is_rejected_by_schema(validator):
     # P2-1 remediation: unlike most hexAddress-typed fields, stringRecord's
     # `address` is never null on the wire (a string is always found at

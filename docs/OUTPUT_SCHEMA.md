@@ -504,8 +504,10 @@ records` (JSON/CSV) always contains every extracted string (`null` when
 `--grep` wasn't given at all; `true`/`false` per record when it was). The
 console rendering is narrower and does NOT match this one-for-one: it
 skips any record with `matched_grep == false` entirely (only ever
-highlighting the `true` matches), so a `--grep` run's console text always
-shows fewer lines than its own JSON/CSV output for the same run.
+highlighting the `true` matches). Console skips records whose
+`matched_grep` is false, so it may show fewer records than JSON/CSV when
+non-matching strings exist — if every extracted string happens to match
+`--grep`, console and JSON/CSV show the same count for that run.
 `result.summary` additionally carries `requested_address`/
 `requested_size`/`bytes_read`/`auto_sized`/`shown` (`--strings`-only
 scan-context fields CSV's own `summary` table now also exposes
