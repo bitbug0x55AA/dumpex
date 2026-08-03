@@ -1,1 +1,5 @@
 .git_archival.txt export-subst
+
+# Frozen schemas have release hashes tied to their original line endings.
+dumpex/schemas/dumpex-output-v1.1.schema.json text eol=crlf
+dumpex/schemas/dumpex-output-v2.3.schema.json text eol=lf
