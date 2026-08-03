@@ -73,13 +73,16 @@ from dumpex.hunt.injection import aggregate
 from dumpex.hunt.injection import presentation
 
 
-def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
-    """
-    Detect classic process injection via AllocationBase + current RIP/EIP
-    + page type + structural PE validation. Each signal alone can be
-    noise; correlation by allocation and live execution raises confidence.
-    Returns dict of findings for use in --hunt all summary.
-    """
+def _build_injection_report(mf: MinidumpFile):
+    """Run the scan/correlate/aggregate pipeline and return the
+    aggregate.Report -- the ONE place this pipeline is assembled, shared by
+    `_hunt_injection()` (console path, below) and
+    `dumpex.hunt.injection.collect.collect_injection_record()` (the v2.4
+    migration's HunterRecord-producing path). Both consuming the exact
+    same Report is what guarantees they can never compute a different
+    score/status/coverage for the same input -- extracted from
+    `_hunt_injection` itself (see PR2 of the `--hunt` v2.4 migration),
+    behavior unchanged."""
     # RWX/hidden-PE need MemoryInfoListStream; unbacked-thread needs
     # ThreadInfoListStream; hidden-PE and unbacked-thread BOTH additionally
     # need ModuleListStream to tell known from unknown — computed first so
@@ -115,9 +118,23 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     correlation_result = correlation.correlate(
         rwx, validated_pe_hits, thread_contexts, start_threads, regions)
 
-    report = aggregate.build_report(
+    thread_info_entries = mf.thread_info.infos if thread_info_stream else []
+    module_list         = mf.modules.modules if module_list_stream else []
+
+    return aggregate.build_report(
         rwx, hidden_pe_scan, validated_pe_hits, mz_only_hits, start_threads,
         thread_contexts, correlation_result, memory_info_stream, thread_info_stream,
-        module_list_stream, thread_list_stream, threads_total, contexts_parsed)
+        module_list_stream, thread_list_stream, threads_total, contexts_parsed,
+        all_regions=regions, thread_info_entries=thread_info_entries, module_list=module_list)
+
+
+def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
+    """
+    Detect classic process injection via AllocationBase + current RIP/EIP
+    + page type + structural PE validation. Each signal alone can be
+    noise; correlation by allocation and live execution raises confidence.
+    Returns dict of findings for use in --hunt all summary.
+    """
+    report = _build_injection_report(mf)
 
     return presentation.render(mf, report, verbose)

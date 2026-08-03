@@ -356,6 +356,46 @@ class LimitationCode(str, Enum):
     # target-region read, this one is about the SEARCH's own scan of
     # regions that may never become a card at all). caller_buildable;
     # affected_count alone carries the fact.
+    PE_HEADER_READ_FAILED = "PE_HEADER_READ_FAILED"
+    # ^ --hunt injection: dumpex.hunt.injection.memory_scan's hidden-PE scan
+    # (HiddenPeScan.read_failed) -- N region(s) raised/returned nothing
+    # usable while being checked for a hidden PE header. source is fixed to
+    # "hidden_pe_scan" (not any one region -- this is an aggregate count
+    # across the whole scan, the same shape REPORT_STRING_SCAN_INCOMPLETE
+    # already uses for its own memory-wide scan). caller_buildable;
+    # affected_count alone carries the fact, computed directly from
+    # HiddenPeScan.read_failed.
+    PE_HEADER_SHORT_READ = "PE_HEADER_SHORT_READ"
+    # ^ --hunt injection: same scan as PE_HEADER_READ_FAILED, but the read
+    # succeeded and came back with fewer bytes than the header-validation
+    # read requested (HiddenPeScan.short_reads) -- a genuine "not fully
+    # examined" gap, not a confirmed absence of a hidden PE header there.
+    # Distinct code from PE_HEADER_READ_FAILED for the same reason
+    # REPORT_STRING_SCAN_INCOMPLETE/_TRUNCATED are distinct: "failed to
+    # read at all" and "read, but short" are different facts an analyst
+    # needs to tell apart. source fixed to "hidden_pe_scan";
+    # caller_buildable; affected_count alone carries the fact.
+    THREAD_CONTEXT_UNAVAILABLE = "THREAD_CONTEXT_UNAVAILABLE"
+    # ^ --hunt injection (and, once migrated, stomping/pipe): no per-thread
+    # CONTEXT (RIP/EIP) could be read from this dump at all -- live-
+    # execution correlation could not run for any thread. Fully fixed
+    # sentence, source fixed to "thread_context" (a derived source: "at
+    # least one thread's CONTEXT was successfully parsed", not a single
+    # named minidump stream -- mirrors how threads.py already treats
+    # thread_info/threads as sources despite both ultimately reading
+    # ThreadListStream/ThreadInfoListStream). absent_capable: selected as a
+    # SourceRequirement.absent_code when the thread_context source's own
+    # SourceObservation is ABSENT (zero threads had a parsed CONTEXT).
+    THREAD_CONTEXT_PARTIAL = "THREAD_CONTEXT_PARTIAL"
+    # ^ Companion to THREAD_CONTEXT_UNAVAILABLE for the partial case: the
+    # thread_context source IS present (at least one thread's CONTEXT
+    # parsed) but N thread(s) did not get one -- live-execution correlation
+    # ran, but not for every thread, so a negative correlation result for
+    # those specific threads can't be trusted as covering the full scope.
+    # source fixed to "thread_context"; caller_buildable (a present-but-
+    # incomplete source is not the same shape build_coverage_report's
+    # automatic SOURCE_ABSENT/FAILED derivation covers); affected_count
+    # alone carries the fact.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -575,6 +615,38 @@ def _render_report_string_scan_incomplete(limitation: "CoverageLimitation") -> s
 def _render_report_string_scan_truncated(limitation: "CoverageLimitation") -> str:
     return (f"The memory-wide string search only partially read {limitation.affected_count} "
             f"region(s) -- a needle past that point would not be found")
+
+
+def _render_pe_header_read_failed(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} region(s) failed to read while checking for "
+            f"hidden PE headers")
+
+
+def _render_pe_header_short_read(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} region(s) returned fewer bytes than requested "
+            f"while checking for hidden PE headers (short read) -- not fully examined")
+
+
+def _render_thread_context_partial(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} thread(s) had no parsed CONTEXT -- live-execution "
+            f"correlation ran, but not for every thread")
+
+
+def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimitation"], None]:
+    """Factory for the "affected_count must be a positive int" check shared
+    by every purely-count-based caller_buildable code (REPORT_STRING_SCAN_
+    INCOMPLETE/_TRUNCATED already duplicate this inline twice; PE_HEADER_
+    READ_FAILED/_SHORT_READ/THREAD_CONTEXT_PARTIAL would make that four
+    more near-identical copies, past the point a shared factory -- the
+    same pattern _render_fixed_text already uses -- is worth it)."""
+    def _validate(limitation: "CoverageLimitation") -> None:
+        if (not isinstance(limitation.affected_count, int)
+                or isinstance(limitation.affected_count, bool)
+                or limitation.affected_count <= 0):
+            raise ValueError(
+                f"CoverageLimitation(code={code_label}) requires affected_count to be a "
+                f"positive integer, got {limitation.affected_count!r}")
+    return _validate
 
 
 def _render_pid_sources_absent(limitation: "CoverageLimitation") -> str:
@@ -858,6 +930,26 @@ _CODE_SPECS = {
     LimitationCode.REPORT_STRING_SCAN_TRUNCATED: _CodeSpec(
         render=_render_report_string_scan_truncated, fixed_source="string_search",
         caller_buildable=True, validate_fields=_validate_report_string_scan_truncated_fields,
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.PE_HEADER_READ_FAILED: _CodeSpec(
+        render=_render_pe_header_read_failed, fixed_source="hidden_pe_scan",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("PE_HEADER_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.PE_HEADER_SHORT_READ: _CodeSpec(
+        render=_render_pe_header_short_read, fixed_source="hidden_pe_scan",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("PE_HEADER_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.THREAD_CONTEXT_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "No per-thread CONTEXT (RIP/EIP) available -- live-execution correlation "
+            "could not run"),
+        fixed_source="thread_context", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.THREAD_CONTEXT_PARTIAL: _CodeSpec(
+        render=_render_thread_context_partial, fixed_source="thread_context",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("THREAD_CONTEXT_PARTIAL"),
         allowed_fields=frozenset({"affected_count"})),
 }
 

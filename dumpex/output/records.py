@@ -25,6 +25,8 @@ docstring).
 import re
 from dataclasses import dataclass, field
 
+from dumpex.output.coverage import CoverageReport
+
 
 def hex_address(n) -> "str | None":
     """Normalize an address-like int to a fixed-width (16 hex digit,
@@ -1276,4 +1278,521 @@ class TriageCardRecord:
             "artifact_id":             self.artifact_id,
             "extract_read_clamped":    self.extract_read_clamped,
             "extract_read_truncated":  self.extract_read_truncated,
+        }
+
+
+# ── Hunt records (v2.4 migration, PR2a -- injection only) ───────────────
+# One HunterRecord per hunter -- `--hunt all` produces exactly 7, in a
+# fixed order; a single `--hunt <ttp>` produces exactly 1. See
+# docs/hunt_migration_field_matrix.md for the full field-by-field audit
+# this section implements. `hunter`/`status`/`score`/`max_score`/
+# `verdict_level`/`confidence`/`lead_count`/`review_priority` are the 7
+# common judgment fields (8 minus coverage_status, which is NOT a judgment
+# field -- see that doc's legend); `coverage` is a real CoverageReport
+# object (dumpex.output.coverage), never a bare status string alongside
+# it, so there is exactly one place this fact lives; `findings` is the
+# existing dumpex.hunt._finding.Finding.to_dict() shape, unchanged;
+# `details` is one of the 7 *Details types below, discriminated by
+# `hunter`.
+#
+# IMPORTANT SCOPING NOTE: this is PR2a (injection only), NOT a complete
+# PR2. Only InjectionDetails is fully wired to a real collect_*() this pass
+# (dumpex.hunt.injection.collect.collect_injection_record(), see that
+# module) -- the other 6 *Details classes below are SHAPE-ONLY stubs
+# (field names/types straight from the field-matrix doc, not speculative)
+# so HunterRecord's discriminated-union validation is complete and
+# testable now, but nothing yet constructs them from a real hunter run,
+# and their raw fields are NOT guaranteed free of the confirmed
+# non-reproducible str(obj) defect InjectionDetails was built to fix (see
+# each stub class's own docstring). Per the full migration plan, PR2 is
+# only complete once all 7 hunters have this same real typed-conversion +
+# collector treatment -- hollowing/stomping/pipe/cs-beacon/yara/
+# obfuscation are explicit, tracked follow-up work (PR2b onward), not
+# silently folded into "PR2 done".
+
+HUNTERS = ("injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation")
+_HUNT_STATUSES = ("DETECTED", "NOT_DETECTED_IN_SCANNED_SCOPE", "INCONCLUSIVE", "NOT_EVALUATED")
+_HUNT_VERDICT_LEVELS = ("clean", "possible", "likely", "high", "inconclusive", "not_evaluated")
+_HUNT_CONFIDENCES = ("none", "low", "medium", "high")
+_HUNT_REVIEW_PRIORITIES = ("none", "low", "medium", "high")
+
+
+def _require_list_of(value, cls, field_name: str) -> None:
+    if not isinstance(value, list) or any(not isinstance(item, cls) for item in value):
+        raise TypeError(f"{field_name} must be a list of {cls.__name__}")
+
+
+@dataclass
+class HuntRegionRef:
+    """A memory region reference inside a hunter's `details` -- replaces
+    every raw Region object a hunter's aggregate.py builds today, which
+    (per docs/hunt_migration_field_matrix.md's cross-cutting finding #1)
+    reaches JSON via dumpex.ui.structured._json_safe()'s str(obj) fallback
+    and embeds the interpreter's own live heap address, non-reproducible
+    across runs."""
+    base_address:    str
+    allocation_base: "str | None"
+    size:            int
+    type:            str
+    protect:         str
+
+    def __post_init__(self):
+        _require_hex_address(self.base_address, "HuntRegionRef.base_address")
+        _require_optional_hex_address(self.allocation_base, "HuntRegionRef.allocation_base")
+        _require_nonneg_int(self.size, "HuntRegionRef.size")
+        if not isinstance(self.type, str) or not self.type:
+            raise ValueError("HuntRegionRef.type must be a non-empty string")
+        if not isinstance(self.protect, str) or not self.protect:
+            raise ValueError("HuntRegionRef.protect must be a non-empty string")
+
+    def to_dict(self) -> dict:
+        return {
+            "base_address":    self.base_address,
+            "allocation_base": self.allocation_base,
+            "size":            self.size,
+            "type":            self.type,
+            "protect":         self.protect,
+        }
+
+
+@dataclass
+class HuntThreadRef:
+    """A thread reference inside a hunter's `details` -- TID plus optional
+    StartAddress / current instruction pointer, hex-formatted. Same
+    non-reproducibility problem as HuntRegionRef above for the raw
+    ThreadInfo/Thread objects it replaces."""
+    tid:            int
+    start_address:  "str | None" = None
+    ip:             "str | None" = None
+    ip_reg:         "str | None" = None
+
+    def __post_init__(self):
+        _require_nonneg_int(self.tid, "HuntThreadRef.tid")
+        _require_optional_hex_address(self.start_address, "HuntThreadRef.start_address")
+        _require_optional_hex_address(self.ip, "HuntThreadRef.ip")
+        if self.ip_reg is not None and not isinstance(self.ip_reg, str):
+            raise ValueError("HuntThreadRef.ip_reg must be None or a string")
+        if self.ip is not None and self.ip_reg is None:
+            raise ValueError("HuntThreadRef.ip_reg is required when ip is set")
+        if self.ip is None and self.ip_reg is not None:
+            raise ValueError("HuntThreadRef.ip_reg must be None when ip is None")
+
+    def to_dict(self) -> dict:
+        return {"tid": self.tid, "start_address": self.start_address,
+                "ip": self.ip, "ip_reg": self.ip_reg}
+
+
+@dataclass
+class HuntThreadRegionHit:
+    """A thread correlated with a specific region -- e.g. a thread's
+    current RIP/EIP executing inside a flagged allocation, or its
+    StartAddress falling inside one. Raw correlation.py output is a
+    `(thread_ctx_or_info, region)` tuple; a bare `HuntThreadRef` alone
+    would lose WHICH region/allocation the thread was actually correlated
+    with, making it impossible for a consumer to re-verify a "full
+    correlation" claim against `rwx`/`hidden_pe_validated` above."""
+    thread: HuntThreadRef
+    region: HuntRegionRef
+
+    def __post_init__(self):
+        if not isinstance(self.thread, HuntThreadRef):
+            raise TypeError("HuntThreadRegionHit.thread must be a HuntThreadRef")
+        if not isinstance(self.region, HuntRegionRef):
+            raise TypeError("HuntThreadRegionHit.region must be a HuntRegionRef")
+
+    def to_dict(self) -> dict:
+        return {"thread": self.thread.to_dict(), "region": self.region.to_dict()}
+
+
+@dataclass
+class HuntPeHeaderHit:
+    """One MZ-prefixed region examined for a hidden PE header (injection's
+    hidden_pe_validated/hidden_pe_unvalidated) -- the region plus the
+    structural-validation outcome. `entry_point_rva` stays a plain int
+    (an RVA is relative to a not-yet-established image base, not itself a
+    memory address -- see this module's own top-of-file type rule);
+    `image_base` (the PE header's OWN declared base) is a real address,
+    hex-formatted."""
+    region:              HuntRegionRef
+    valid:               bool
+    machine_name:        "str | None" = None
+    is_pe32_plus:        "bool | None" = None
+    number_of_sections:  "int | None" = None
+    entry_point_rva:     "int | None" = None
+    image_base:          "str | None" = None
+    reason:              "str | None" = None   # only set when valid is False
+
+    def __post_init__(self):
+        if not isinstance(self.region, HuntRegionRef):
+            raise TypeError("HuntPeHeaderHit.region must be a HuntRegionRef")
+        _require_bool(self.valid, "HuntPeHeaderHit.valid")
+        _require_optional_hex_address(self.image_base, "HuntPeHeaderHit.image_base")
+        if self.number_of_sections is not None:
+            _require_nonneg_int(self.number_of_sections, "HuntPeHeaderHit.number_of_sections")
+        if self.entry_point_rva is not None:
+            _require_nonneg_int(self.entry_point_rva, "HuntPeHeaderHit.entry_point_rva")
+        pe_fields = ("machine_name", "is_pe32_plus", "number_of_sections",
+                     "entry_point_rva", "image_base")
+        if self.valid:
+            if self.reason is not None:
+                raise ValueError("HuntPeHeaderHit.reason must be None when valid is True")
+            for f_name in pe_fields:
+                if getattr(self, f_name) is None:
+                    raise ValueError(
+                        f"HuntPeHeaderHit.{f_name} must be set when valid is True -- a "
+                        f"structurally-valid PE header always carries these facts")
+            if not isinstance(self.machine_name, str) or not self.machine_name:
+                raise ValueError(
+                    "HuntPeHeaderHit.machine_name must be a non-empty string when valid is True")
+            _require_bool(self.is_pe32_plus, "HuntPeHeaderHit.is_pe32_plus")
+        else:
+            for f_name in pe_fields:
+                if getattr(self, f_name) is not None:
+                    raise ValueError(
+                        f"HuntPeHeaderHit.{f_name} must be None when valid is False")
+            if not isinstance(self.reason, str) or not self.reason:
+                raise ValueError(
+                    "HuntPeHeaderHit.reason must be a non-empty string when valid is False")
+
+    def to_dict(self) -> dict:
+        return {
+            "region":             self.region.to_dict(),
+            "valid":              self.valid,
+            "machine_name":       self.machine_name,
+            "is_pe32_plus":       self.is_pe32_plus,
+            "number_of_sections": self.number_of_sections,
+            "entry_point_rva":    self.entry_point_rva,
+            "image_base":         self.image_base,
+            "reason":             self.reason,
+        }
+
+
+@dataclass
+class InjectionDetails:
+    """`--hunt injection`'s hunter-specific evidence. `pe_read_failed`/
+    `pe_short_reads` deliberately do NOT appear here -- per the field
+    matrix, those are coverage counts, not evidence, and instead inform
+    this hunter's own CoverageReport limitations (PE_HEADER_READ_FAILED/
+    PE_HEADER_SHORT_READ, see dumpex.output.coverage)."""
+    rwx:                              list   # list[HuntRegionRef]
+    hidden_pe_validated:              list   # list[HuntPeHeaderHit], valid=True
+    hidden_pe_unvalidated:            list   # list[HuntPeHeaderHit], valid=False (MZ-prefix only)
+    suspicious_validated_pe_hits:     list   # subset of hidden_pe_validated that's scoreable
+    informational_validated_pe_hits: list   # the other (context-only) subset
+    threads:                          list   # list[HuntThreadRef] -- unbacked StartAddress threads
+    thread_contexts:                  list   # list[HuntThreadRef] -- every parsed thread context
+    rwx_and_pe_alloc_bases:           list   # list[str] -- hex allocation bases
+    rip_hits:                         list   # list[HuntThreadRegionHit] -- RIP inside a flagged region
+    rip_full_correlation:             list   # subset of rip_hits with full (RWX+PE) correlation
+    start_hits:                       list   # list[HuntThreadRegionHit] -- StartAddress-correlated
+
+    def __post_init__(self):
+        _require_list_of(self.rwx, HuntRegionRef, "InjectionDetails.rwx")
+        _require_list_of(self.hidden_pe_validated, HuntPeHeaderHit,
+                          "InjectionDetails.hidden_pe_validated")
+        _require_list_of(self.hidden_pe_unvalidated, HuntPeHeaderHit,
+                          "InjectionDetails.hidden_pe_unvalidated")
+        _require_list_of(self.suspicious_validated_pe_hits, HuntPeHeaderHit,
+                          "InjectionDetails.suspicious_validated_pe_hits")
+        _require_list_of(self.informational_validated_pe_hits, HuntPeHeaderHit,
+                          "InjectionDetails.informational_validated_pe_hits")
+        _require_list_of(self.threads, HuntThreadRef, "InjectionDetails.threads")
+        _require_list_of(self.thread_contexts, HuntThreadRef, "InjectionDetails.thread_contexts")
+        if not isinstance(self.rwx_and_pe_alloc_bases, list) or any(
+                not isinstance(a, str) for a in self.rwx_and_pe_alloc_bases):
+            raise TypeError("InjectionDetails.rwx_and_pe_alloc_bases must be a list of str")
+        for a in self.rwx_and_pe_alloc_bases:
+            _require_hex_address(a, "InjectionDetails.rwx_and_pe_alloc_bases[]")
+        _require_list_of(self.rip_hits, HuntThreadRegionHit, "InjectionDetails.rip_hits")
+        _require_list_of(self.rip_full_correlation, HuntThreadRegionHit,
+                          "InjectionDetails.rip_full_correlation")
+        _require_list_of(self.start_hits, HuntThreadRegionHit, "InjectionDetails.start_hits")
+
+    def to_dict(self) -> dict:
+        return {
+            "rwx":                              [r.to_dict() for r in self.rwx],
+            "hidden_pe_validated":               [h.to_dict() for h in self.hidden_pe_validated],
+            "hidden_pe_unvalidated":             [h.to_dict() for h in self.hidden_pe_unvalidated],
+            "suspicious_validated_pe_hits":       [h.to_dict() for h in self.suspicious_validated_pe_hits],
+            "informational_validated_pe_hits":    [h.to_dict() for h in self.informational_validated_pe_hits],
+            "threads":                            [t.to_dict() for t in self.threads],
+            "thread_contexts":                    [t.to_dict() for t in self.thread_contexts],
+            "rwx_and_pe_alloc_bases":             list(self.rwx_and_pe_alloc_bases),
+            "rip_hits":                            [t.to_dict() for t in self.rip_hits],
+            "rip_full_correlation":                [t.to_dict() for t in self.rip_full_correlation],
+            "start_hits":                          [t.to_dict() for t in self.start_hits],
+        }
+
+
+# The remaining 6 *Details classes below are SHAPE ONLY (field names/types
+# straight from docs/hunt_migration_field_matrix.md's own per-hunter
+# tables, empirically verified there against running code) -- no
+# collect_*() function constructs any of these yet, and their fields are
+# NOT guaranteed free of the raw-object str(obj) non-reproducibility
+# defect InjectionDetails above was built specifically to fix. Real
+# per-hunter collect_*() wiring (the same treatment injection got) is
+# explicit follow-up work.
+
+@dataclass
+class HollowingDetails:
+    """New JSON surface for `--hunt hollowing` (today's v1.1 output has NO
+    detail fields at all -- see the field matrix's hollowing section for
+    why). Mirrors the four checks hollowing.py's console section already
+    computes but never persists: memory type / MZ header / RWX protection
+    at the image base, and the PEB-vs-module-list name compare."""
+    image_base:           str
+    mem_private_at_base:  "bool | None"   # None if the image-base region wasn't found at all
+    mz_header_present:    "bool | None"   # None if the header read itself failed
+    is_rwx_at_base:       "bool | None"   # None if the image-base region wasn't found at all
+    peb_image_path:       "str | None"
+    module_name:          "str | None"    # None if no module was found at image_base
+    name_mismatch:        "bool | None"   # None if module list itself was unavailable
+
+    def __post_init__(self):
+        _require_hex_address(self.image_base, "HollowingDetails.image_base")
+        for f_name in ("mem_private_at_base", "mz_header_present", "is_rwx_at_base", "name_mismatch"):
+            v = getattr(self, f_name)
+            if v is not None:
+                _require_bool(v, f"HollowingDetails.{f_name}")
+        _require_optional_diff_str(self.peb_image_path, "HollowingDetails.peb_image_path")
+        _require_optional_diff_str(self.module_name, "HollowingDetails.module_name")
+
+    def to_dict(self) -> dict:
+        return {
+            "image_base":          self.image_base,
+            "mem_private_at_base": self.mem_private_at_base,
+            "mz_header_present":   self.mz_header_present,
+            "is_rwx_at_base":      self.is_rwx_at_base,
+            "peb_image_path":      self.peb_image_path,
+            "module_name":         self.module_name,
+            "name_mismatch":       self.name_mismatch,
+        }
+
+
+@dataclass
+class StompingDetails:
+    """`--hunt stomping`'s hunter-specific evidence. `verified_changes[*]`
+    is already close to this final shape in today's v1.1 output (a flat
+    dict, not a raw object) -- see the field matrix's stomping section."""
+    protection_leads: list   # list[dict]
+    verified_changes: list   # list[dict]
+
+    def __post_init__(self):
+        for name in ("protection_leads", "verified_changes"):
+            value = getattr(self, name)
+            if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
+                raise TypeError(f"StompingDetails.{name} must be a list of dict")
+
+    def to_dict(self) -> dict:
+        return {
+            "protection_leads": [dict(x) for x in self.protection_leads],
+            "verified_changes": [dict(x) for x in self.verified_changes],
+        }
+
+
+@dataclass
+class PipeDetails:
+    """`--hunt pipe`'s hunter-specific evidence."""
+    handle_pipes:    list   # list[dict]
+    private_pipes:   list   # list[dict]
+    c2_context:      list   # list[dict]
+    framework_pipes: list   # list[dict]
+    unbacked_in_rgn: list   # list[dict]
+
+    def __post_init__(self):
+        for name in ("handle_pipes", "private_pipes", "c2_context", "framework_pipes",
+                      "unbacked_in_rgn"):
+            value = getattr(self, name)
+            if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
+                raise TypeError(f"PipeDetails.{name} must be a list of dict")
+
+    def to_dict(self) -> dict:
+        return {
+            "handle_pipes":    [dict(x) for x in self.handle_pipes],
+            "private_pipes":   [dict(x) for x in self.private_pipes],
+            "c2_context":      [dict(x) for x in self.c2_context],
+            "framework_pipes": [dict(x) for x in self.framework_pipes],
+            "unbacked_in_rgn": [dict(x) for x in self.unbacked_in_rgn],
+        }
+
+
+@dataclass
+class CsBeaconDetails:
+    """`--hunt cs-beacon`'s hunter-specific evidence. `configs[*]`'s
+    `va`/`file_offset`/`region_base` are plain JSON ints in today's v1.1
+    output -- confirmed by the field matrix as a real shape change (not
+    just a container move) once this hunter's collect_*() is wired."""
+    configs:      list   # list[dict]
+    config_count: int
+
+    def __post_init__(self):
+        if not isinstance(self.configs, list) or any(not isinstance(x, dict) for x in self.configs):
+            raise TypeError("CsBeaconDetails.configs must be a list of dict")
+        _require_nonneg_int(self.config_count, "CsBeaconDetails.config_count")
+        if self.config_count != len(self.configs):
+            raise ValueError(
+                f"CsBeaconDetails.config_count ({self.config_count}) must equal "
+                f"len(configs) ({len(self.configs)})")
+
+    def to_dict(self) -> dict:
+        return {"configs": [dict(x) for x in self.configs], "config_count": self.config_count}
+
+
+@dataclass
+class YaraDetails:
+    """`--hunt yara`'s hunter-specific evidence. YARA deliberately stays
+    off the shared Finding model -- see docs/hunt_migration_field_matrix.md's
+    legend for why `matches` must not be reclassified as `finding`."""
+    matches:    list   # list[dict]
+    rules_hit:  list   # list[str]
+
+    def __post_init__(self):
+        if not isinstance(self.matches, list) or any(not isinstance(x, dict) for x in self.matches):
+            raise TypeError("YaraDetails.matches must be a list of dict")
+        if not isinstance(self.rules_hit, list) or any(not isinstance(x, str) for x in self.rules_hit):
+            raise TypeError("YaraDetails.rules_hit must be a list of str")
+
+    def to_dict(self) -> dict:
+        return {"matches": [dict(x) for x in self.matches], "rules_hit": list(self.rules_hit)}
+
+
+@dataclass
+class ObfuscationDetails:
+    """`--hunt obfuscation`'s hunter-specific evidence -- the seven decode
+    layers' own hit lists."""
+    sleep_mask:        list   # list[dict]
+    entropy:           list   # list[dict]
+    base64:            list   # list[dict]
+    xor:               list   # list[dict]
+    compressed:        list   # list[dict]
+    hidden_pe:         list   # list[dict]
+    hidden_shellcode:  list   # list[dict]
+
+    def __post_init__(self):
+        for name in ("sleep_mask", "entropy", "base64", "xor", "compressed", "hidden_pe",
+                      "hidden_shellcode"):
+            value = getattr(self, name)
+            if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
+                raise TypeError(f"ObfuscationDetails.{name} must be a list of dict")
+
+    def to_dict(self) -> dict:
+        return {
+            "sleep_mask":       [dict(x) for x in self.sleep_mask],
+            "entropy":          [dict(x) for x in self.entropy],
+            "base64":           [dict(x) for x in self.base64],
+            "xor":              [dict(x) for x in self.xor],
+            "compressed":       [dict(x) for x in self.compressed],
+            "hidden_pe":        [dict(x) for x in self.hidden_pe],
+            "hidden_shellcode": [dict(x) for x in self.hidden_shellcode],
+        }
+
+
+_HUNTER_DETAILS_TYPES = {
+    "injection":  InjectionDetails,
+    "hollowing":  HollowingDetails,
+    "stomping":   StompingDetails,
+    "pipe":       PipeDetails,
+    "cs-beacon":  CsBeaconDetails,
+    "yara":       YaraDetails,
+    "obfuscation": ObfuscationDetails,
+}
+
+
+@dataclass
+class HunterRecord:
+    """One hunter's complete v2.4 result -- `result.data.records[*]` for
+    `result.kind == "hunt"`. `hunter` discriminates which of the 7
+    `*Details` types `details` must be. `max_score`/`confidence`/
+    `lead_count`/`review_priority` are `None` for every hunter except
+    `hunter == "yara"`, where they must ALL be `None` (yara has none of
+    these today -- see the field matrix) -- never a mix of some set, some
+    not. `coverage` is a real CoverageReport, not a bare status string:
+    this hunter's coverage_status/coverage_reasons/coverage dict from
+    today's v1.1 output are migration SOURCES the reducer that built this
+    CoverageReport consumed, never carried forward as a second field
+    alongside it (see the field matrix's own cross-cutting finding #2)."""
+    hunter:          str
+    status:          str
+    score:           int
+    max_score:       "int | None"
+    verdict_level:   str
+    confidence:      "str | None"
+    lead_count:      "int | None"
+    review_priority: "str | None"
+    coverage:        CoverageReport
+    findings:        list   # list[dict] -- Finding.to_dict() shape, unchanged; [] for yara
+    details:         object  # one of the 7 *Details types, matching `hunter`
+
+    def __post_init__(self):
+        if self.hunter not in HUNTERS:
+            raise ValueError(f"HunterRecord.hunter must be one of {HUNTERS}, got {self.hunter!r}")
+        if self.status not in _HUNT_STATUSES:
+            raise ValueError(
+                f"HunterRecord.status must be one of {_HUNT_STATUSES}, got {self.status!r}")
+        _require_nonneg_int(self.score, "HunterRecord.score")
+        if self.verdict_level not in _HUNT_VERDICT_LEVELS:
+            raise ValueError(
+                f"HunterRecord.verdict_level must be one of {_HUNT_VERDICT_LEVELS}, "
+                f"got {self.verdict_level!r}")
+
+        yara_only_fields = {
+            "max_score": self.max_score, "confidence": self.confidence,
+            "lead_count": self.lead_count, "review_priority": self.review_priority,
+        }
+        if self.hunter == "yara":
+            set_fields = [name for name, v in yara_only_fields.items() if v is not None]
+            if set_fields:
+                raise ValueError(
+                    f"HunterRecord.{set_fields[0]} must be None for hunter='yara' "
+                    f"(max_score/confidence/lead_count/review_priority are all-or-nothing null)")
+        else:
+            unset_fields = [name for name, v in yara_only_fields.items() if v is None]
+            if unset_fields:
+                raise ValueError(
+                    f"HunterRecord.{unset_fields[0]} must not be None for hunter={self.hunter!r} "
+                    f"(only 'yara' allows these fields to be null)")
+            _require_nonneg_int(self.max_score, "HunterRecord.max_score")
+            if self.confidence not in _HUNT_CONFIDENCES:
+                raise ValueError(
+                    f"HunterRecord.confidence must be one of {_HUNT_CONFIDENCES}, "
+                    f"got {self.confidence!r}")
+            _require_nonneg_int(self.lead_count, "HunterRecord.lead_count")
+            if self.review_priority not in _HUNT_REVIEW_PRIORITIES:
+                raise ValueError(
+                    f"HunterRecord.review_priority must be one of {_HUNT_REVIEW_PRIORITIES}, "
+                    f"got {self.review_priority!r}")
+
+        if not isinstance(self.coverage, CoverageReport):
+            raise TypeError("HunterRecord.coverage must be a dumpex.output.coverage.CoverageReport")
+        if not isinstance(self.findings, list) or any(not isinstance(f, dict) for f in self.findings):
+            raise TypeError("HunterRecord.findings must be a list of dict")
+        if self.hunter == "yara" and self.findings:
+            raise ValueError(
+                "HunterRecord.findings must be [] for hunter='yara' -- yara deliberately stays "
+                "off the shared Finding model (see the field matrix's legend)")
+
+        expected_details_type = _HUNTER_DETAILS_TYPES[self.hunter]
+        if not isinstance(self.details, expected_details_type):
+            raise TypeError(
+                f"HunterRecord.details must be a {expected_details_type.__name__} for "
+                f"hunter={self.hunter!r}, got {type(self.details).__name__}")
+
+    def to_dict(self) -> dict:
+        return {
+            "hunter":          self.hunter,
+            "status":          self.status,
+            "score":           self.score,
+            "max_score":       self.max_score,
+            "verdict_level":   self.verdict_level,
+            "confidence":      self.confidence,
+            "lead_count":      self.lead_count,
+            "review_priority": self.review_priority,
+            "coverage": {
+                "status":      self.coverage.status.value,
+                "reasons":     self.coverage.reasons,
+                "sources":     {name: obs.to_dict() for name, obs in self.coverage.sources.items()},
+                "limitations": [lim.to_dict() for lim in self.coverage.limitations],
+            },
+            "findings": list(self.findings),
+            "details":  self.details.to_dict(),
         }

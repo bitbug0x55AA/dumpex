@@ -12,7 +12,7 @@ from dumpex.output.records import (
     ModuleDiffRecord, MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF_REBASED,
     ThreadDiffRecord, THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED,
     MemoryDiffRecord, MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED,
-    ReportIocString,
+    ReportIocString, ReportThreadInfo, ReportRegionInfo,
 )
 
 
@@ -858,3 +858,121 @@ def test_report_ioc_string_rejects_hit_offset_equal_to_context_length():
 def test_report_ioc_string_accepts_hit_offset_at_last_valid_index():
     rec = ReportIocString(**_valid_ioc_kwargs(context_hex="ab" * 4, context_hit_offset=3))
     assert rec.context_hit_offset == 3
+
+
+# ── ReportThreadInfo negative-branch coverage ─────────────────────────────
+
+def _valid_thread_info(**overrides):
+    kwargs = dict(tid=1, start_address=hex_address(0x1000), backing_module=None,
+                  module_context=None, kernel_time_100ns=None, user_time_100ns=None,
+                  backing_module_base=None, backing_module_end=None)
+    kwargs.update(overrides)
+    return ReportThreadInfo(**kwargs)
+
+
+def test_report_thread_info_rejects_invalid_module_context():
+    with pytest.raises(ValueError, match="module_context"):
+        _valid_thread_info(module_context="not-a-real-context")
+
+
+def test_report_thread_info_rejects_module_context_without_start_address():
+    with pytest.raises(ValueError, match="start_address is None"):
+        _valid_thread_info(start_address=None, module_context=MODULE_CONTEXT_RESOLVED)
+
+
+def test_report_thread_info_rejects_mismatched_backing_module_range():
+    with pytest.raises(ValueError, match="both be"):
+        _valid_thread_info(backing_module_base=hex_address(0x2000), backing_module_end=None)
+
+
+def test_report_thread_info_rejects_backing_module_range_without_resolved_context():
+    with pytest.raises(ValueError, match="resolved"):
+        _valid_thread_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                           backing_module_base=hex_address(0x2000),
+                           backing_module_end=hex_address(0x3000))
+
+
+# ── ReportRegionInfo negative-branch coverage ─────────────────────────────
+
+def _valid_region_info(**overrides):
+    kwargs = dict(base_address=hex_address(0x1000), size=0x1000, protect="PAGE_READWRITE",
+                  type="MEM_PRIVATE", module_owner=None, file_offset=None,
+                  is_rwx_private=False, module_context=MODULE_CONTEXT_RESOLVED,
+                  mz_header_detected=None, has_injected_pe=None, protection_suspicious=False)
+    kwargs.update(overrides)
+    return ReportRegionInfo(**kwargs)
+
+
+def test_report_region_info_rejects_empty_protect():
+    with pytest.raises(ValueError, match="protect"):
+        _valid_region_info(protect="")
+
+
+def test_report_region_info_rejects_empty_type():
+    with pytest.raises(ValueError, match="type"):
+        _valid_region_info(type="")
+
+
+def test_report_region_info_rejects_invalid_module_context():
+    with pytest.raises(ValueError, match="module_context"):
+        _valid_region_info(module_context="not-a-real-context")
+
+
+def test_report_region_info_rwx_private_requires_protection_suspicious():
+    with pytest.raises(ValueError, match="protection_suspicious"):
+        _valid_region_info(is_rwx_private=True, protection_suspicious=False)
+
+
+def test_report_region_info_rejects_injected_pe_without_mz_header_detected():
+    with pytest.raises(ValueError, match="mz_header_detected is None"):
+        _valid_region_info(mz_header_detected=None, has_injected_pe=True)
+
+
+def test_report_region_info_rejects_injected_pe_true_when_mz_not_detected():
+    with pytest.raises(ValueError, match="must be False"):
+        _valid_region_info(mz_header_detected=False, has_injected_pe=True)
+
+
+def test_report_region_info_rejects_injected_pe_false_when_unregistered():
+    with pytest.raises(ValueError, match="must be True"):
+        _valid_region_info(module_context=MODULE_CONTEXT_UNREGISTERED,
+                           mz_header_detected=True, has_injected_pe=False)
+
+
+def test_report_region_info_rejects_injected_pe_true_when_resolved():
+    with pytest.raises(ValueError, match="must be False"):
+        _valid_region_info(module_context=MODULE_CONTEXT_RESOLVED,
+                           mz_header_detected=True, has_injected_pe=True)
+
+
+def test_report_region_info_rejects_injected_pe_set_when_unavailable():
+    with pytest.raises(ValueError, match="must be None"):
+        _valid_region_info(module_context=MODULE_CONTEXT_UNAVAILABLE,
+                           mz_header_detected=True, has_injected_pe=True)
+
+
+# ── ReportIocString negative-branch coverage ──────────────────────────────
+
+def test_report_ioc_string_rejects_invalid_encoding():
+    with pytest.raises(ValueError, match="encoding"):
+        ReportIocString(**_valid_ioc_kwargs(encoding="not-a-real-encoding"))
+
+
+def test_report_ioc_string_rejects_non_str_text():
+    with pytest.raises(ValueError, match="text"):
+        ReportIocString(**_valid_ioc_kwargs(text=123))
+
+
+def test_report_ioc_string_rejects_context_fields_when_not_network_pattern():
+    with pytest.raises(ValueError, match="is_network_pattern is False"):
+        ReportIocString(**_valid_ioc_kwargs(is_network_pattern=False))
+
+
+def test_report_ioc_string_rejects_empty_context_hex_when_network_pattern():
+    with pytest.raises(ValueError, match="non-empty hex string"):
+        ReportIocString(**_valid_ioc_kwargs(context_hex=None))
+
+
+def test_report_ioc_string_rejects_non_hex_characters():
+    with pytest.raises(ValueError, match="lowercase hex string"):
+        ReportIocString(**_valid_ioc_kwargs(context_hex="zzzz"))

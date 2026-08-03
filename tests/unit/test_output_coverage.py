@@ -1758,3 +1758,65 @@ def test_coverage_limitation_report_string_scan_truncated_rejects_non_positive_a
     with pytest.raises(ValueError, match="positive int"):
         CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_TRUNCATED,
                             source="string_search", affected_count=0)
+
+
+# ── v2.4 hunt migration (PR2a): PE_HEADER_READ_FAILED/_SHORT_READ, ────────
+# THREAD_CONTEXT_UNAVAILABLE/_PARTIAL
+
+def test_pe_header_read_failed_renders_and_validates():
+    limitation = CoverageLimitation(
+        code=LimitationCode.PE_HEADER_READ_FAILED, source="hidden_pe_scan", affected_count=2)
+    assert render_limitation(limitation) == (
+        "2 region(s) failed to read while checking for hidden PE headers")
+
+
+def test_pe_header_read_failed_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="positive int"):
+        CoverageLimitation(code=LimitationCode.PE_HEADER_READ_FAILED,
+                            source="hidden_pe_scan", affected_count=0)
+
+
+def test_pe_header_short_read_renders_and_validates():
+    limitation = CoverageLimitation(
+        code=LimitationCode.PE_HEADER_SHORT_READ, source="hidden_pe_scan", affected_count=1)
+    assert render_limitation(limitation) == (
+        "1 region(s) returned fewer bytes than requested while checking for hidden PE "
+        "headers (short read) -- not fully examined")
+
+
+def test_pe_header_short_read_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="positive int"):
+        CoverageLimitation(code=LimitationCode.PE_HEADER_SHORT_READ,
+                            source="hidden_pe_scan", affected_count=-1)
+
+
+def test_thread_context_unavailable_renders_fixed_sentence():
+    limitation = CoverageLimitation(
+        code=LimitationCode.THREAD_CONTEXT_UNAVAILABLE, source="thread_context")
+    assert render_limitation(limitation) == (
+        "No per-thread CONTEXT (RIP/EIP) available -- live-execution correlation "
+        "could not run")
+
+
+def test_thread_context_unavailable_selectable_as_source_requirement_absent_code():
+    sources = {"thread_context": observe_source("thread_context", present=False)}
+    report = build_coverage_report(
+        sources, completeness_checks=[SourceRequirement(
+            source="thread_context",
+            absent_code=LimitationCode.THREAD_CONTEXT_UNAVAILABLE)])
+    assert report.status == CoverageStatus.PARTIAL
+    assert report.limitations[0].code == LimitationCode.THREAD_CONTEXT_UNAVAILABLE
+
+
+def test_thread_context_partial_renders_and_validates():
+    limitation = CoverageLimitation(
+        code=LimitationCode.THREAD_CONTEXT_PARTIAL, source="thread_context", affected_count=3)
+    assert render_limitation(limitation) == (
+        "3 thread(s) had no parsed CONTEXT -- live-execution correlation ran, but not "
+        "for every thread")
+
+
+def test_thread_context_partial_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="positive int"):
+        CoverageLimitation(code=LimitationCode.THREAD_CONTEXT_PARTIAL,
+                            source="thread_context", affected_count=0)

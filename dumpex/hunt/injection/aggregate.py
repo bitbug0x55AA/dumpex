@@ -20,6 +20,9 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     verdict_level, lead_count, review_priority)
 from dumpex.hunt.injection.config import PE_VALIDATE_READ_MAX
 from dumpex.hunt.injection.memory_scan import pe_hit_is_context_scoreable
+from dumpex.output.coverage import (
+    observe_source, build_coverage_report, CoverageLimitation, LimitationCode, SourceRequirement,
+)
 
 # score -> verdict_level, owned by this hunter (see dumpex.hunt._finding.verdict_level).
 _VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "likely", 3: "high"}
@@ -53,6 +56,15 @@ class Report:
     start_threads: list = field(default_factory=list)
     correlation: object = None
     coverage: dict = field(default_factory=dict)
+    # v2.4 migration (PR2): a structured dumpex.output.coverage.CoverageReport,
+    # additive alongside `coverage`/`coverage_status`/`coverage_reasons`
+    # above -- NOT yet read by presentation.py or dumpex/hunt/__init__.py,
+    # only by dumpex.hunt.injection.collect.collect_injection_record(). See
+    # that module and docs/hunt_migration_field_matrix.md's cross-cutting
+    # finding #2 for why this must be the ONE place this hunter's coverage
+    # status lives on the v2.4 HunterRecord, not a second fact duplicating
+    # `coverage_status` below.
+    coverage_report: object = None
     score: int = 0
     status: str = None
 
@@ -93,13 +105,22 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
                   start_threads: list, thread_contexts: list,
                   correlation, memory_info_stream: bool, thread_info_stream: bool,
                   module_list_stream: bool, thread_list_stream: bool,
-                  threads_total: int, contexts_parsed: int) -> Report:
+                  threads_total: int, contexts_parsed: int,
+                  *, all_regions: list = None, thread_info_entries: list = None,
+                  module_list: list = None) -> Report:
     """
     Turn already-collected scan/correlation facts into score/status/
     coverage/Finding objects, and the public `findings` dict.
     `validated_pe_hits`/`mz_only_hits` are memory_scan.split_hidden_pe_hits(
     hidden_pe_scan)'s output — computed once by the caller (also needed by
     correlation.py) rather than re-derived here.
+
+    `all_regions`/`thread_info_entries`/`module_list` are the v2.4
+    migration's (PR2) structured CoverageReport's own record-count inputs
+    ONLY -- keyword-only and optional (default None -> record_count stays
+    unset) so this stays additive: the v1.1 `coverage`/`coverage_status`/
+    `coverage_reasons` fields below never read them, only the new
+    `coverage_report` field does.
     """
     coverage = {
         "memory_info_stream": memory_info_stream,
@@ -413,8 +434,92 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
         "review_priority":      review_priority(findings_list, score, status),
     }
 
+    # ── Structured CoverageReport (v2.4 migration, PR2) ───────────────────
+    # Additive: built from the SAME facts as coverage_reasons above, but
+    # through dumpex.output.coverage's structured model rather than a
+    # hand-written string list -- never parsed back out of coverage_reasons
+    # itself (see docs/hunt_migration_field_matrix.md's own migration rule).
+    # "modules"/"thread_context" absence reuse the module_classification/
+    # thread_context codes below via SourceRequirement, so a hunter never
+    # hand-builds a SOURCE_ABSENT-shaped limitation itself; only the two
+    # genuine business facts this reducer cannot infer from source state
+    # alone (a partial hidden-PE scan, a partially-parsed thread-context
+    # set) are hand-built CoverageLimitations.
+    #
+    # "memory_info"/"thread_info" are BOTH in evaluation_sources (so the
+    # hunter is NOT_EVALUATED only when EVERY one of them is absent,
+    # matching this hunter's own `evaluated = memory_info_stream or
+    # thread_info_stream` above) AND in completeness_checks (so a SINGLE
+    # one being absent -- the OTHER still present -- still produces a
+    # PARTIAL-triggering limitation for it, matching `complete`'s own
+    # `memory_info_stream and thread_info_stream and ...` AND-of-all-four
+    # rule above). Omitting them from completeness_checks was a confirmed
+    # regression: a memory_info-only-absent (or thread_info-only-absent)
+    # dump would otherwise report coverage.status="complete" here while
+    # `coverage_status` above (still correctly) says "partial" -- exactly
+    # the two-sources-of-truth bug this migration exists to avoid.
+    coverage_sources = {
+        "memory_info":    observe_source("memory_info", present=coverage["memory_info_stream"],
+                                          items=all_regions),
+        "thread_info":    observe_source("thread_info", present=coverage["thread_info_stream"],
+                                          items=thread_info_entries),
+        "modules":        observe_source("modules", present=coverage["module_list_stream"],
+                                          items=module_list),
+        # Informational only, like `coverage["thread_list_stream"]` in the
+        # v1.1 dict above -- neither this hunter's `complete`/`evaluated`
+        # computation nor its coverage_reasons ever gates on
+        # thread_list_stream by itself (see this function's own `complete`
+        # expression), so no completeness_check is attached to it either;
+        # it exists here purely so a v2.4 consumer can see this source's
+        # real state, matching the informational fact the v1.1 dict
+        # already carried under a different key.
+        "thread_list":    observe_source("thread_list", present=thread_list_stream,
+                                          items=list(range(threads_total))),
+        "thread_context": observe_source("thread_context", present=coverage["thread_context"],
+                                          items=thread_contexts),
+        # Not an optional minidump stream -- the hidden-PE header scan
+        # itself always ran by this point; this source only exists so
+        # PE_HEADER_READ_FAILED/_SHORT_READ have a source key to validate
+        # against (see build_coverage_report's own unknown-source check).
+        "hidden_pe_scan": observe_source("hidden_pe_scan", present=True, items=["scanned"]),
+    }
+    # Order matches the v1.1 `coverage_reasons` list above exactly (memory_
+    # info, thread_info, modules, PE read-failed, PE short-read, THEN
+    # thread_context) -- confirmed regression in an earlier draft: thread_
+    # context's SourceRequirement was listed BEFORE the PE checks, so a
+    # dump hitting both a PE short-read AND a fully-absent thread_context
+    # produced limitations in the opposite order from coverage_reasons
+    # (thread_context first, PE second) for the exact same underlying
+    # facts. A consumer reading `coverage.reasons` (rendered from
+    # `limitations`, see CoverageReport.reasons) must see the same order
+    # as `coverage_reasons` for identical input.
+    coverage_completeness_checks = [
+        "memory_info",
+        "thread_info",
+        SourceRequirement(source="modules",
+                          absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE),
+    ]
+    if hidden_pe_scan.read_failed:
+        coverage_completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.PE_HEADER_READ_FAILED, source="hidden_pe_scan",
+            affected_count=hidden_pe_scan.read_failed))
+    if hidden_pe_scan.short_reads:
+        coverage_completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.PE_HEADER_SHORT_READ, source="hidden_pe_scan",
+            affected_count=hidden_pe_scan.short_reads))
+    coverage_completeness_checks.append(
+        SourceRequirement(source="thread_context",
+                          absent_code=LimitationCode.THREAD_CONTEXT_UNAVAILABLE))
+    if coverage["thread_context"] and coverage["contexts_missing"]:
+        coverage_completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.THREAD_CONTEXT_PARTIAL, source="thread_context",
+            affected_count=coverage["contexts_missing"]))
+    coverage_report = build_coverage_report(
+        coverage_sources, evaluation_sources=("memory_info", "thread_info"),
+        completeness_checks=coverage_completeness_checks)
+
     return Report(findings=findings, findings_list=findings_list, rwx=rwx,
                    validated_pe_hits=validated_pe_hits, mz_only_hits=mz_only_hits,
                    suspicious_pe_hits=suspicious_pe_hits, informational_pe_hits=informational_pe_hits,
                    start_threads=start_threads, correlation=correlation,
-                   coverage=coverage, score=score, status=status)
+                   coverage=coverage, coverage_report=coverage_report, score=score, status=status)
