@@ -115,7 +115,7 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
         "  CLEAN — no suspicious indicators found\n\n\n"
     )
     assert exit_code == 0
-    assert doc["meta"]["schema_version"] == "2.2"
+    assert doc["meta"]["schema_version"] == "2.3"
     assert doc["result"]["kind"] == "report"
     assert doc["result"]["coverage"]["status"] == "complete"
     assert len(doc["result"]["data"]["records"]) == 1
@@ -152,10 +152,14 @@ def test_addr_not_found(monkeypatch, tmp_path, capsys):
 
 
 def test_verdict_suspicious_rwx_private(monkeypatch, tmp_path, capsys):
+    # Padded to the full 0x1000 region size -- a short read is itself now a
+    # coverage-affecting fact (see the P1-3 review fix / tests/unit/
+    # test_report_cmd.py's own coverage matrix tests), and this test's own
+    # purpose is the verdict/console text, not read-truncation semantics.
     exit_code, doc, csv_text = _run(
         monkeypatch, tmp_path, ["--report-addr", "0x6000"],
         regions=[Region(0x6000, 0x6000, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
-        read_map={0x6000: b"boring data here nothing to see"})
+        read_map={0x6000: (b"boring data here nothing to see").ljust(0x1000, b"\x00")})
     body = _split_console_body(capsys.readouterr().out)
     assert "SUSPICIOUS — 1 independent indicator" in body
     assert "RWX + MEM_PRIVATE" in body
@@ -181,10 +185,12 @@ def test_verdict_high_confidence_malicious(monkeypatch, tmp_path, capsys):
 
 
 def test_string_mode_one_private_hit(monkeypatch, tmp_path, capsys):
+    # Padded to the full 0x1000 region size -- see
+    # test_verdict_suspicious_rwx_private's own note on why.
     exit_code, doc, csv_text = _run(
         monkeypatch, tmp_path, ["--report-string", "MYSECRETNEEDLE12"],
         regions=[Region(0xa000, 0xa000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
-        read_map={0xa000: b"header MYSECRETNEEDLE12 trailer" + b"\x00" * 20})
+        read_map={0xa000: (b"header MYSECRETNEEDLE12 trailer" + b"\x00" * 20).ljust(0x1000, b"\x00")})
     body = _split_console_body(capsys.readouterr().out)
     assert "Searching memory for: 'MYSECRETNEEDLE12'" in body
     assert "[+] Found in 1 region(s):" in body
@@ -233,7 +239,9 @@ def test_section3_sharing_threads_and_network_pattern_hexdump(monkeypatch, tmp_p
     # network-pattern IOC hit's ±128-byte hexdump context (an IP address
     # embedded in the IOC string, matching NET_PATTERNS on top of
     # IOC_PATTERNS).
-    ioc_data = (b"cmd.exe /c curl 10.0.0.5:8080/beacon" + b"\x00" * 200)
+    # Padded to the full 0x1000 region size -- see
+    # test_verdict_suspicious_rwx_private's own note on why.
+    ioc_data = (b"cmd.exe /c curl 10.0.0.5:8080/beacon" + b"\x00" * 200).ljust(0x1000, b"\x00")
     exit_code, doc, csv_text = _run(
         monkeypatch, tmp_path, ["--report-tid", "5", "--report-addr", "0x4000"],
         threads=[ThreadInfo(5, 0x4000), ThreadInfo(6, 0x4100)],

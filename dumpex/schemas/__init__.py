@@ -14,12 +14,14 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
     """Path to a packaged schema file, usable as a context manager (works
     whether the package is on disk or inside a zipped wheel). Defaults to
     the v1.1 (--hunt) schema for backward compatibility; pass
-    "dumpex-output-v2.2.schema.json" for the current v2 (recon commands,
+    "dumpex-output-v2.3.schema.json" for the current v2 (recon commands,
     comparison, extract, strings, report) schema, or
-    "dumpex-output-v2.1.schema.json"/
-    "dumpex-output-v2.0.schema.json" for the frozen historical v2.1/v2.0
+    "dumpex-output-v2.2.schema.json"/"dumpex-output-v2.1.schema.json"/
+    "dumpex-output-v2.0.schema.json" for the frozen historical v2.2/v2.1/v2.0
     schemas (still valid for validating output produced before
-    schema_version 2.2/2.1 respectively)."""
+    schema_version 2.3/2.2/2.1 respectively -- v2.2 does NOT accept
+    result.kind == "report": a closed enum's already-shipped copy must
+    never start silently accepting a value it didn't originally define)."""
     return resources.as_file(
         resources.files(__name__).joinpath(filename)
     )

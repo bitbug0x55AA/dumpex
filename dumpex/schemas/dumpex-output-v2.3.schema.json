@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.2.schema.json",
-  "title": "dumpex v2 structured output (schema_version 2.2)",
-  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb), --diff, --extract, --strings, and (Phase E, in progress) --report, via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract). v2.2 adds `result.kind == \"extract\"`/`\"strings\"` and their extractRecord/stringRecord types on top of v2.1's unchanged root shape and existing record types -- dumpex-output-v2.1.schema.json remains frozen and installable for validating output produced before this addition; no currently-produced document from any prior command is rejected by v2.2 beyond the schema_version string itself. `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. result.data.records[] items ARE typed per kind (see the allOf/if-then block in $defs/result and the record $defs) -- additionalProperties: false on every record type, so a dropped/renamed/retyped field or a stray field from the wrong kind fails validation, not just 'is an array'.",
+  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.3.schema.json",
+  "title": "dumpex v2 structured output (schema_version 2.3)",
+  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb), --diff, --extract, --strings, and --report, via --json. --hunt is NOT covered here -- it stays on dumpex-output-v1.1.schema.json (see docs/OUTPUT_SCHEMA.md for which commands use which contract). v2.3 adds `result.kind == \"report\"` and its reportThreadInfo/reportRegionInfo/reportIocString/triageCardRecord types on top of v2.2's unchanged root shape and existing record types -- dumpex-output-v2.2.schema.json remains frozen and installable for validating output produced before this addition (it does NOT include \"report\" in its own result.kind enum: a closed enum's already-shipped copy must never start silently accepting a value it didn't originally define); no currently-produced document from any prior command is rejected by v2.3 beyond the schema_version string itself. `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. result.data.records[] items ARE typed per kind (see the allOf/if-then block in $defs/result and the record $defs) -- additionalProperties: false on every record type, so a dropped/renamed/retyped field or a stray field from the wrong kind fails validation, not just 'is an array'.",
   "type": "object",
   "required": ["meta", "result"],
   "additionalProperties": true,
@@ -17,7 +17,7 @@
       "type": "object",
       "required": ["schema_version", "tool", "execution", "evidence"],
       "properties": {
-        "schema_version": { "const": "2.2" },
+        "schema_version": { "const": "2.3" },
         "tool": {
           "type": "object",
           "required": ["name", "version"],
@@ -226,7 +226,7 @@
     },
 
     "stringRecord": {
-      "description": "Matches dumpex.output.records.StringRecord.to_dict() -- one extracted string from a --strings scan. `offset` is a plain byte offset relative to the read region's start, NOT a process address. Unlike most other hexAddress-typed fields in this schema, `address` is never null -- a string was found at some real address, there is no \"address unknown\" case for it (see StringRecord.__post_init__). `matched_grep` is a flag, not a filter: this record is emitted for every extracted string regardless of --grep -- null when no --grep was given at all, true/false per record when it was.",
+      "description": "Matches dumpex.output.records.StringRecord.to_dict() -- one extracted string from a --strings scan or a --report triage card's own Section 4 (notable_strings). `offset` is a plain byte offset relative to the read region's start, NOT a process address. Unlike most other hexAddress-typed fields in this schema, `address` is never null -- a string was found at some real address, there is no \"address unknown\" case for it (see StringRecord.__post_init__). `matched_grep` is a flag, not a filter: this record is emitted for every extracted string regardless of --grep -- null when no --grep was given at all (always null for --report's own notable_strings, which has no --grep concept), true/false per record when it was.",
       "type": "object",
       "additionalProperties": false,
       "required": ["offset", "address", "encoding", "text", "matched_grep"],
@@ -240,7 +240,7 @@
     },
 
     "stringsSummary": {
-      "description": "Matches result.summary for kind == 'strings' (dumpex.commands.extract.collect_strings). Pins the scan-context fields the P2 review's own 'a zero-result scan must still be able to tell where the scan started' finding needs machine-enforced, not just documented/unit-tested -- requested_address is the only way to know the scan origin when `data.records` is empty. additionalProperties: false since these six fields are the whole of collect_strings' own summary dict today; a future field added there must extend this def too, the same way every other v2.2 record type is kept in lockstep with its Python producer.",
+      "description": "Matches result.summary for kind == 'strings' (dumpex.commands.extract.collect_strings). Pins the scan-context fields the P2 review's own 'a zero-result scan must still be able to tell where the scan started' finding needs machine-enforced, not just documented/unit-tested -- requested_address is the only way to know the scan origin when `data.records` is empty. additionalProperties: false since these six fields are the whole of collect_strings' own summary dict today; a future field added there must extend this def too, the same way every other v2 record type is kept in lockstep with its Python producer.",
       "type": "object",
       "additionalProperties": false,
       "required": ["count", "shown", "requested_address", "requested_size", "bytes_read", "auto_sized"],
@@ -252,6 +252,224 @@
         "bytes_read":         { "type": "integer", "minimum": 0 },
         "auto_sized":         { "type": "boolean" }
       }
+    },
+
+    "reportThreadInfo": {
+      "description": "Matches dumpex.output.records.ReportThreadInfo.to_dict() -- one thread as seen by --report, either the card's own anchor thread (Section 1) or one of the other threads sharing the anchor's resolved region (Section 3). `module_context` is null only when `start_address` is itself null (no address to resolve against). `backing_module_base`/`backing_module_end` are both-or-neither, and only ever non-null when `module_context == 'resolved'` -- Section 3's own 'other threads' entries never populate a range even when resolved (see the class's own docstring).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tid", "start_address", "backing_module", "module_context",
+                   "kernel_time_100ns", "user_time_100ns", "backing_module_base", "backing_module_end"],
+      "properties": {
+        "tid":                  { "type": "integer", "minimum": 0 },
+        "start_address":        { "$ref": "#/$defs/hexAddress" },
+        "backing_module":       { "type": ["string", "null"] },
+        "module_context":       { "enum": ["resolved", "unregistered", "unavailable", null] },
+        "kernel_time_100ns":    { "type": ["integer", "null"] },
+        "user_time_100ns":      { "type": ["integer", "null"] },
+        "backing_module_base":  { "$ref": "#/$defs/hexAddress" },
+        "backing_module_end":   { "$ref": "#/$defs/hexAddress" }
+      },
+      "allOf": [
+        { "if": { "properties": { "start_address": { "const": null } } },
+          "then": { "properties": { "module_context": { "const": null } } } },
+        { "if": { "properties": { "backing_module_base": { "not": { "const": null } } } },
+          "then": { "properties": {
+            "module_context":      { "const": "resolved" },
+            "backing_module_end":  { "not": { "const": null } } } } },
+        { "if": { "properties": { "backing_module_base": { "const": null } } },
+          "then": { "properties": { "backing_module_end": { "const": null } } } }
+      ]
+    },
+
+    "reportRegionInfo": {
+      "description": "Matches dumpex.output.records.ReportRegionInfo.to_dict() -- the memory region resolved at a triage card's target address (Section 2). `file_offset` is a plain byte offset inside the .dmp file, not a process address, so it does NOT use hexAddress. `module_context`/`mz_header_detected`/`has_injected_pe` are a tri-state triple: `module_context` is never null (a resolved region always has SOME module-context answer); `mz_header_detected` is null iff the small header-peek read itself failed; `has_injected_pe` is null whenever the evidence needed to decide is itself missing (see the class's own docstring for the full derivation table, mirrored in the allOf below).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["base_address", "size", "protect", "type", "module_owner", "file_offset",
+                   "is_rwx_private", "module_context", "mz_header_detected", "has_injected_pe",
+                   "protection_suspicious"],
+      "properties": {
+        "base_address":          { "$ref": "#/$defs/hexAddress", "not": { "const": null } },
+        "size":                  { "type": "integer", "minimum": 0 },
+        "protect":               { "type": "string", "minLength": 1 },
+        "type":                  { "type": "string", "minLength": 1 },
+        "module_owner":          { "type": ["string", "null"], "minLength": 1 },
+        "file_offset":           { "type": ["integer", "null"], "minimum": 0 },
+        "is_rwx_private":        { "type": "boolean" },
+        "module_context":        { "enum": ["resolved", "unregistered", "unavailable"] },
+        "mz_header_detected":    { "type": ["boolean", "null"] },
+        "has_injected_pe":       { "type": ["boolean", "null"] },
+        "protection_suspicious": { "type": "boolean" }
+      },
+      "allOf": [
+        { "if": { "properties": { "is_rwx_private": { "const": true } } },
+          "then": { "properties": { "protection_suspicious": { "const": true } } } },
+        { "if": { "properties": { "mz_header_detected": { "const": null } } },
+          "then": { "properties": { "has_injected_pe": { "const": null } } } },
+        { "if": { "properties": { "mz_header_detected": { "const": false } } },
+          "then": { "properties": { "has_injected_pe": { "const": false } } } },
+        { "if": { "properties": {
+            "mz_header_detected": { "const": true }, "module_context": { "const": "unregistered" } } },
+          "then": { "properties": { "has_injected_pe": { "const": true } } } },
+        { "if": { "properties": {
+            "mz_header_detected": { "const": true }, "module_context": { "const": "resolved" } } },
+          "then": { "properties": { "has_injected_pe": { "const": false } } } },
+        { "if": { "properties": {
+            "mz_header_detected": { "const": true }, "module_context": { "const": "unavailable" } } },
+          "then": { "properties": { "has_injected_pe": { "const": null } } } }
+      ]
+    },
+
+    "reportIocString": {
+      "description": "Matches dumpex.output.records.ReportIocString.to_dict() -- one IOC-pattern string hit in a triage card's Section 4. `context_hex`/`context_base_address`/`context_hit_offset` are only ever populated when `is_network_pattern` is true -- a bounded (<=256 byte, i.e. <=512 hex char), collect-time-computed hexdump-context window the renderer decodes instead of re-reading the dump (see dumpex.commands.report.render_report_console's own docstring for why).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offset", "address", "encoding", "text", "is_network_pattern",
+                   "context_hex", "context_base_address", "context_hit_offset"],
+      "properties": {
+        "offset":                { "type": "integer", "minimum": 0 },
+        "address":               { "$ref": "#/$defs/hexAddress", "not": { "const": null } },
+        "encoding":              { "enum": ["ASCII", "UTF16"] },
+        "text":                  { "type": "string" },
+        "is_network_pattern":    { "type": "boolean" },
+        "context_hex":           { "type": ["string", "null"], "pattern": "^([0-9a-f]{2})*$" },
+        "context_base_address":  { "$ref": "#/$defs/hexAddress" },
+        "context_hit_offset":    { "type": ["integer", "null"], "minimum": 0 }
+      },
+      "allOf": [
+        { "if": { "properties": { "is_network_pattern": { "const": false } } },
+          "then": { "properties": {
+            "context_hex":          { "const": null },
+            "context_base_address": { "const": null },
+            "context_hit_offset":   { "const": null } } } },
+        { "if": { "properties": { "is_network_pattern": { "const": true } } },
+          "then": { "properties": {
+            "context_hex":          { "type": "string", "minLength": 1 },
+            "context_base_address": { "not": { "const": null } },
+            "context_hit_offset":   { "type": "integer" } } } }
+      ]
+    },
+
+    "triageCardRecord": {
+      "description": "Matches dumpex.output.records.TriageCardRecord.to_dict() -- one --report triage card. --report-string produces N cards (one per private-memory hit region) in one result.data.records list; --report-tid/--report-addr produce exactly one. `findings` is a closed, deduplicated vocabulary; `verdict` is cross-checked against len(findings) via the allOf below (0/1/2/3+ -> CLEAN/SUSPICIOUS/LIKELY_MALICIOUS/HIGH_CONFIDENCE_MALICIOUS), the same four-tier rule dumpex.core.memory.verdict_for() enforces in Python. NOT expressed here (Python-only, see TriageCardRecord.__post_init__): string_scan['truncated'] must equal bytes_read < requested_bytes, and findings/finding_details must name exactly the same keys -- JSON Schema cannot compare two sibling field VALUES against each other within one object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchor_tid", "anchor_address", "anchor_source", "thread", "region",
+                   "string_hit", "other_threads_in_region", "notable_strings", "ioc_strings",
+                   "string_scan", "string_scan_error", "thread_region_correlation_excluded",
+                   "findings", "finding_details", "verdict", "artifact_id", "extract_read_clamped"],
+      "properties": {
+        "anchor_tid":     { "type": ["integer", "null"], "minimum": 0 },
+        "anchor_address": { "$ref": "#/$defs/hexAddress" },
+        "anchor_source":  { "enum": ["tid", "address", "string_hit"] },
+        "thread":         { "anyOf": [ { "type": "null" }, { "$ref": "#/$defs/reportThreadInfo" } ] },
+        "region":         { "anyOf": [ { "type": "null" }, { "$ref": "#/$defs/reportRegionInfo" } ] },
+        "string_hit": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false,
+              "required": ["offset", "address", "encoding"],
+              "properties": {
+                "offset":   { "type": "integer", "minimum": 0 },
+                "address":  { "$ref": "#/$defs/hexAddress", "not": { "const": null } },
+                "encoding": { "enum": ["ASCII", "UTF16"] }
+              } }
+          ]
+        },
+        "other_threads_in_region": { "type": "array", "items": { "$ref": "#/$defs/reportThreadInfo" } },
+        "notable_strings":         { "type": "array", "items": { "$ref": "#/$defs/stringRecord" } },
+        "ioc_strings":             { "type": "array", "items": { "$ref": "#/$defs/reportIocString" } },
+        "string_scan": {
+          "anyOf": [
+            { "type": "null" },
+            { "type": "object", "additionalProperties": false,
+              "required": ["requested_bytes", "bytes_read", "clamped", "truncated",
+                           "total", "ascii_count", "utf16_count"],
+              "properties": {
+                "requested_bytes": { "type": "integer", "minimum": 0 },
+                "bytes_read":      { "type": "integer", "minimum": 0 },
+                "clamped":         { "type": "boolean" },
+                "truncated":       { "type": "boolean" },
+                "total":           { "type": "integer", "minimum": 0 },
+                "ascii_count":     { "type": "integer", "minimum": 0 },
+                "utf16_count":     { "type": "integer", "minimum": 0 }
+              } }
+          ]
+        },
+        "string_scan_error":                  { "type": ["string", "null"], "minLength": 1 },
+        "thread_region_correlation_excluded":  { "type": "boolean" },
+        "findings": {
+          "type": "array", "uniqueItems": true,
+          "items": { "enum": ["unbacked_thread", "rwx_private", "injected_pe", "ioc_strings"] }
+        },
+        "finding_details": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "verdict":              { "enum": ["CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_MALICIOUS"] },
+        "artifact_id":          { "type": ["string", "null"], "minLength": 1 },
+        "extract_read_clamped": { "type": ["boolean", "null"] }
+      },
+      "allOf": [
+        { "if": { "properties": { "anchor_source": { "const": "string_hit" } } },
+          "then": { "properties": { "string_hit": { "not": { "const": null } } } } },
+        { "if": { "properties": { "anchor_source": { "enum": ["tid", "address"] } } },
+          "then": { "properties": { "string_hit": { "const": null } } } },
+        { "if": { "properties": { "string_scan": { "not": { "const": null } } } },
+          "then": { "properties": { "string_scan_error": { "const": null } } } },
+        { "if": { "properties": { "string_scan_error": { "not": { "const": null } } } },
+          "then": { "properties": { "string_scan": { "const": null } } } },
+        { "if": { "properties": { "findings": { "maxItems": 0 } } },
+          "then": { "properties": { "verdict": { "const": "CLEAN" } } } },
+        { "if": { "properties": { "findings": { "minItems": 1, "maxItems": 1 } } },
+          "then": { "properties": { "verdict": { "const": "SUSPICIOUS" } } } },
+        { "if": { "properties": { "findings": { "minItems": 2, "maxItems": 2 } } },
+          "then": { "properties": { "verdict": { "const": "LIKELY_MALICIOUS" } } } },
+        { "if": { "properties": { "findings": { "minItems": 3 } } },
+          "then": { "properties": { "verdict": { "const": "HIGH_CONFIDENCE_MALICIOUS" } } } }
+      ]
+    },
+
+    "reportSummary": {
+      "description": "Matches result.summary for kind == 'report' (dumpex.commands.report.collect_report). `mode` says which of --report-tid/--report-addr/--report-string (or the tid+addr combination) produced this result -- the allOf below pins which query_* fields are required non-null per mode, the same way stringsSummary pins requested_address for --strings. additionalProperties: false since these ten fields are the whole of collect_report's own summary dict today.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "card_count", "query_string", "query_tid", "query_addr", "total_hits",
+                   "hits_private", "hits_image", "image_hit_modules", "skipped_unreadable_regions"],
+      "properties": {
+        "mode":                       { "enum": ["tid", "addr", "tid_addr", "string"] },
+        "card_count":                 { "type": "integer", "minimum": 0 },
+        "query_string":               { "type": ["string", "null"] },
+        "query_tid":                  { "type": ["string", "null"] },
+        "query_addr":                 { "type": ["string", "null"] },
+        "total_hits":                 { "type": ["integer", "null"], "minimum": 0 },
+        "hits_private":               { "type": ["integer", "null"], "minimum": 0 },
+        "hits_image":                 { "type": ["integer", "null"], "minimum": 0 },
+        "image_hit_modules":          { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "skipped_unreadable_regions": { "type": "integer", "minimum": 0 }
+      },
+      "allOf": [
+        { "if": { "properties": { "mode": { "const": "tid" } } },
+          "then": { "properties": {
+            "query_tid":    { "not": { "const": null } },
+            "query_addr":   { "const": null },
+            "query_string": { "const": null } } } },
+        { "if": { "properties": { "mode": { "const": "addr" } } },
+          "then": { "properties": {
+            "query_addr":   { "not": { "const": null } },
+            "query_tid":    { "const": null },
+            "query_string": { "const": null } } } },
+        { "if": { "properties": { "mode": { "const": "tid_addr" } } },
+          "then": { "properties": {
+            "query_tid":    { "not": { "const": null } },
+            "query_addr":   { "not": { "const": null } },
+            "query_string": { "const": null } } } },
+        { "if": { "properties": { "mode": { "const": "string" } } },
+          "then": { "properties": {
+            "query_string": { "not": { "const": null } },
+            "query_addr":   { "const": null } } } }
+      ]
     },
 
     "moduleDiffRecord": {
@@ -384,10 +602,10 @@
         "kind": {
           "description": "Which canonical record type result.data.records holds. Grows as more commands migrate onto v2 -- not an open string.",
           "enum": ["memory_regions", "modules", "threads", "sysinfo", "pid", "peb", "comparison",
-                    "extract", "strings"]
+                    "extract", "strings", "report"]
         },
         "execution_status": {
-          "description": "Did the COMMAND itself run to completion -- independent of whether the EVIDENCE it saw was complete (see coverage below). None of the six v2 recon commands has an internal scan-budget/timeout concept that could produce a genuine partial execution, so 'partial' is reserved for future commands (e.g. hunters, once migrated) that do.",
+          "description": "Did the COMMAND itself run to completion -- independent of whether the EVIDENCE it saw was complete (see coverage below). 'partial' is used by --report when a self-imposed scan-budget clamp (MAX_REGION_READ) or a per-card --output write failure means the command didn't finish everything it set out to do, even though the evidence it DID look at may be fully covered.",
           "enum": ["completed", "partial", "failed"]
         },
         "coverage": {
@@ -419,7 +637,7 @@
           }
         },
         "summary": {
-          "description": "Free-form per-kind extension point by default (open object) -- refined per-kind via the allOf/if-then block below exactly like data.records is, wherever a kind's own summary fields carry machine-relevant facts (e.g. kind == 'strings', whose requested_address is the only way to know a zero-result scan's own origin).",
+          "description": "Free-form per-kind extension point by default (open object) -- refined per-kind via the allOf/if-then block below exactly like data.records is, wherever a kind's own summary fields carry machine-relevant facts (e.g. kind == 'strings'/'report', whose requested_address/query_* fields are the only way to know a zero-result scan's own origin).",
           "type": "object"
         },
         "data": {
@@ -459,7 +677,12 @@
           "then": { "properties": {
             "summary": { "$ref": "#/$defs/stringsSummary" },
             "data": { "properties": {
-              "records": { "items": { "$ref": "#/$defs/stringRecord" } } } } } } }
+              "records": { "items": { "$ref": "#/$defs/stringRecord" } } } } } } },
+        { "if": { "properties": { "kind": { "const": "report" } } },
+          "then": { "properties": {
+            "summary": { "$ref": "#/$defs/reportSummary" },
+            "data": { "properties": {
+              "records": { "items": { "$ref": "#/$defs/triageCardRecord" } } } } } } }
       ]
     },
 
@@ -561,12 +784,16 @@
         { "if": { "properties": { "code": { "const": "SYSINFO_MODULES_UNAVAILABLE" } } },
           "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
         { "if": { "properties": { "code": { "const": "REGION_READ_TRUNCATED" } } },
-          "then": { "properties": { "source": { "const": "requested_region" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } }
+          "then": { "properties": { "source": { "const": "requested_region" }, "scope": { "const": null }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "REPORT_MODULE_CONTEXT_UNAVAILABLE" } } },
+          "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "REPORT_STRING_SCAN_INCOMPLETE" } } },
+          "then": { "properties": { "scope": { "const": null }, "affected_count": { "type": "integer", "minimum": 1 }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } }
       ]
     },
 
     "artifact": {
-      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Populated by --extract (Phase E, PR1); a future --report migration (PR3) is expected to produce it too, for its own optional extract-to-file side effect, under a different `kind` string. Matches dumpex.output.records.Artifact.to_dict(), which always emits all six fields -- `required` covers all of them, not just id/kind/path.",
+      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Populated by --extract and --report (its own optional extract-to-file side effect, under a different `kind` string -- 'extracted_region' vs 'report_extracted_region'). Matches dumpex.output.records.Artifact.to_dict(), which always emits all six fields -- `required` covers all of them, not just id/kind/path.",
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "kind", "path", "size_bytes", "sha256", "description"],

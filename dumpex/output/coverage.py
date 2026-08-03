@@ -310,15 +310,39 @@ class LimitationCode(str, Enum):
     # PEB_UNAVAILABLE text, so it needs a distinctly-named code rather
     # than reusing that one.
     REGION_READ_TRUNCATED = "REGION_READ_TRUNCATED"
-    # ^ --extract/--strings: read_region() returned fewer bytes than
-    # requested (the requested range extends past what's actually backed
-    # in the dump). source="requested_region" stays PRESENT -- there IS
-    # real data, just less of it than asked for -- so this is NOT an
-    # auto-derived absent/failed limitation; the caller hand-builds it
+    # ^ --extract/--strings/--report: read_region() returned fewer bytes
+    # than requested (the requested range extends past what's actually
+    # backed in the dump). source="requested_region" stays PRESENT --
+    # there IS real data, just less of it than asked for -- so this is NOT
+    # an auto-derived absent/failed limitation; the caller hand-builds it
     # (caller_buildable) exactly when len(data) < requested size. Fully
     # fixed sentence: the actual requested/actual byte counts already live
-    # on ExtractRecord/StringRecord's own fields and result.summary, not
-    # duplicated onto this limitation.
+    # on ExtractRecord/StringRecord's own fields and result.summary (or,
+    # for --report, on the affected TriageCardRecord's own string_scan),
+    # not duplicated onto this limitation. --report attaches this once,
+    # aggregated, if ANY of its (possibly several) triage cards came up
+    # short -- not required to appear as a real entry in `sources` at all
+    # (no validate_against_sources hook reads it back out of there), so a
+    # multi-card run can reuse this one shared source name without the
+    # per-card SourceObservation collisions combine_coverage_reports()
+    # would otherwise reject.
+    REPORT_MODULE_CONTEXT_UNAVAILABLE = "REPORT_MODULE_CONTEXT_UNAVAILABLE"
+    # ^ --report: ModuleListStream absent, so a TRIAGE CARD's own
+    # thread/region-to-module classification (module_context on both
+    # ReportThreadInfo and ReportRegionInfo) can't be attempted -- a
+    # dedicated code rather than reusing MODULE_CLASSIFICATION_UNAVAILABLE,
+    # whose own fixed sentence ("thread backing-module classification
+    # unavailable") is threads.py-specific wording that would misdescribe
+    # an addr-only triage card with no thread evidence involved at all.
+    REPORT_STRING_SCAN_INCOMPLETE = "REPORT_STRING_SCAN_INCOMPLETE"
+    # ^ --report-string: _search_string_in_memory()'s own memory-wide scan
+    # skipped N region(s) it could not read while searching for the
+    # needle (see that function's own skipped-region count) -- a fact
+    # about the SEARCH itself, not about any one triage card's own target
+    # region, so it doesn't fit REGION_READ_TRUNCATED/SOURCE_FAILED's own
+    # per-card shape. caller_buildable, source-less (no SourceObservation
+    # backs it -- affected_count alone carries the fact), fully computed
+    # from _search_string_in_memory()'s own return value.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -343,6 +367,7 @@ _SOURCE_DISPLAY_NAMES = {
     "misc_info":   "MiscInfo stream",
     "exception":   "Exception stream",
     "peb":         "PEB",
+    "target_regions": "Triage card target region(s)",
 }
 
 
@@ -523,6 +548,17 @@ def _render_module_classification_unavailable(limitation: "CoverageLimitation") 
             f"(cannot confirm whether a start address is backed by a known module)")
 
 
+def _render_report_module_context_unavailable(limitation: "CoverageLimitation") -> str:
+    name = _display_name(limitation.source)
+    return (f"{name} not present; triage card module-context classification unavailable "
+            f"(cannot confirm whether a thread/region is backed by a known module)")
+
+
+def _render_report_string_scan_incomplete(limitation: "CoverageLimitation") -> str:
+    return (f"The memory-wide string search skipped {limitation.affected_count} "
+            f"region(s) it could not read")
+
+
 def _render_pid_sources_absent(limitation: "CoverageLimitation") -> str:
     return ("MiscInfo, thread list, and exception stream are all absent from this "
             "dump; PID could not be evaluated")
@@ -650,6 +686,14 @@ def _validate_pid_exception_tid_fallback_fields(limitation: "CoverageLimitation"
             f"a positive integer, got {limitation.thread_id!r}")
 
 
+def _validate_report_string_scan_incomplete_fields(limitation: "CoverageLimitation") -> None:
+    if (not isinstance(limitation.affected_count, int) or isinstance(limitation.affected_count, bool)
+            or limitation.affected_count <= 0):
+        raise ValueError(
+            "CoverageLimitation(code=REPORT_STRING_SCAN_INCOMPLETE) requires affected_count to "
+            f"be a positive integer, got {limitation.affected_count!r}")
+
+
 def _validate_source_key_mismatch_against_sources(limitation: "CoverageLimitation",
                                                     sources: dict) -> None:
     # A SOURCE_KEY_MISMATCH claims two sources are both genuinely present
@@ -771,7 +815,20 @@ _CODE_SPECS = {
         # fields; the actual requested/actual byte counts live on
         # ExtractRecord/StringRecord and result.summary instead (see
         # collect_extract/collect_strings), not on the limitation itself,
-        # same pattern as PID_NO_USABLE_FALLBACK above.
+        # same pattern as PID_NO_USABLE_FALLBACK above. --report reuses
+        # this exact code/source pair for its own aggregate "at least one
+        # triage card's own target region came up short" fact -- see the
+        # enum's own comment for why that's safe despite --report
+        # potentially having several triage cards (this code has no
+        # validate_against_sources hook, so it never needs "requested_region"
+        # to actually be a key in `sources`).
+    LimitationCode.REPORT_MODULE_CONTEXT_UNAVAILABLE: _CodeSpec(
+        render=_render_report_module_context_unavailable, fixed_source="modules",
+        absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.REPORT_STRING_SCAN_INCOMPLETE: _CodeSpec(
+        render=_render_report_string_scan_incomplete, caller_buildable=True,
+        validate_fields=_validate_report_string_scan_incomplete_fields,
+        allowed_fields=frozenset({"affected_count"})),
 }
 
 # Derived collections -- every other call site (SourceRequirement,

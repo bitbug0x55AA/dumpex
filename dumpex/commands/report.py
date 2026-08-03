@@ -14,14 +14,15 @@ from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.pe_utils import _duration_100ns_to_str
 from dumpex.core.safe_io import write_output_bytes
 from dumpex.output.records import (
-    ReportThreadInfo, ReportRegionInfo, TriageCardRecord, StringRecord, Diagnostic,
+    ReportThreadInfo, ReportRegionInfo, ReportIocString, TriageCardRecord, StringRecord, Diagnostic,
     SEVERITY_WARNING, hex_address,
     TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
 from dumpex.output.coverage import (
     LimitationCode, build_coverage_report, combine_coverage_reports,
-    SourceRequirement, observe_source,
+    SourceRequirement, SourceObservation, SourceState, CoverageLimitation, observe_source,
+    EXECUTION_COMPLETED, EXECUTION_PARTIAL,
 )
 from dumpex.output.command_result import CommandResult
 from dumpex.commands.extract import build_extract_artifact
@@ -141,31 +142,52 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
             p          = prot_str(region.Protect)
             mtype      = prot_str(region.Type)
             rmod       = addr_to_module(region.BaseAddress, modules)
+            region_module_context = _module_context_for(rmod, modules_available)
             protection_suspicious = any(s in p for s in suspicious_prots)
             is_private = "MEM_PRIVATE" in mtype
             is_rwx_private = bool(protection_suspicious and is_private)
 
             fo_reg = va_to_file_offset(mf, region.BaseAddress)
-            has_injected_pe = False
             if is_rwx_private:
                 dims['rwx_private'] = (
                     f"Region 0x{region.BaseAddress:x} is "
                     f"PAGE_EXECUTE_READWRITE + MEM_PRIVATE"
                 )
+
+            # mz_header_detected/has_injected_pe are a tri-state pair, not
+            # a single bool -- ModuleListStream being absent must never be
+            # silently conflated with "confirmed not backed by any
+            # module" (region_module_context handles that distinction
+            # already), and a failed header peek must never silently read
+            # as "no MZ header found" either. See ReportRegionInfo's own
+            # docstring for the exact derivation rule; `injected_pe` is
+            # only ever added to `dims` when has_injected_pe is True.
+            mz_header_detected = None
+            has_injected_pe = None
             try:
                 header = read_region(mf, region.BaseAddress, min(64, region.RegionSize))
-                if header[:2] == b'MZ' and not rmod:
+                mz_header_detected = header[:2] == b'MZ'
+            except Exception:
+                mz_header_detected = None
+
+            if mz_header_detected is False:
+                has_injected_pe = False
+            elif mz_header_detected is True:
+                if region_module_context == MODULE_CONTEXT_UNREGISTERED:
                     has_injected_pe = True
                     dims['injected_pe'] = (
                         f"MZ header at 0x{region.BaseAddress:x} in unregistered private memory"
                     )
-            except Exception:
-                pass
+                elif region_module_context == MODULE_CONTEXT_RESOLVED:
+                    has_injected_pe = False
+                else:   # unavailable -- found something suspicious-shaped, can't confirm
+                    has_injected_pe = None
 
             region_record = ReportRegionInfo(
                 base_address=hex_address(region.BaseAddress), size=region.RegionSize,
                 protect=p, type=mtype, module_owner=(rmod.name if rmod else None),
                 file_offset=fo_reg, is_rwx_private=is_rwx_private,
+                module_context=region_module_context, mz_header_detected=mz_header_detected,
                 has_injected_pe=has_injected_pe, protection_suspicious=protection_suspicious)
 
     # ── Reconcile TID evidence against the resolved region ─────────────
@@ -203,7 +225,12 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
                 tid=ti.ThreadId, start_address=hex_address(sa2),
                 backing_module=(mod.name if mod else None), module_context=module_context,
                 kernel_time_100ns=ti.KernelTime, user_time_100ns=ti.UserTime))
-            if not mod and 'unbacked_thread' not in dims:
+            # Same guard as Section 1's own tid_unbacked_detail: a thread
+            # confirmed NOT backed by any module (modules_available AND no
+            # match) is a real signal; ModuleListStream simply being
+            # absent is not -- must not silently produce the same
+            # unbacked_thread finding either way.
+            if not mod and modules_available and 'unbacked_thread' not in dims:
                 dims['unbacked_thread'] = (
                     f"TID 0x{ti.ThreadId:x} in region 0x{region.BaseAddress:x} "
                     f"has no module backing"
@@ -224,10 +251,24 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
 
             for off, enc, s in ioc_hits:
                 abs_addr = region.BaseAddress + off
-                ioc_strings.append({
-                    "offset": off, "address": hex_address(abs_addr), "encoding": enc,
-                    "text": s, "matched_grep": None, "is_network_pattern": off in net_offs,
-                })
+                is_net = off in net_offs
+                # Bounded ±128-byte hexdump context, computed ONCE here
+                # (where the full region `data` is already in scope) so
+                # render_report_console never needs to re-read the dump
+                # to reproduce it -- see ReportIocString's own docstring.
+                context_hex = context_base_address = context_hit_offset = None
+                if is_net:
+                    ctx_start = max(0, off - 128)
+                    ctx_end   = min(len(data), off + 128)
+                    chunk     = data[ctx_start:ctx_end]
+                    context_hex = chunk.hex()
+                    context_base_address = hex_address(region.BaseAddress + ctx_start)
+                    context_hit_offset = off - ctx_start
+                ioc_strings.append(ReportIocString(
+                    offset=off, address=hex_address(abs_addr), encoding=enc, text=s,
+                    is_network_pattern=is_net, context_hex=context_hex,
+                    context_base_address=context_base_address,
+                    context_hit_offset=context_hit_offset))
             if ioc_hits:
                 dims['ioc_strings'] = (
                     f"{len(ioc_hits)} IOC pattern(s) matched "
@@ -243,7 +284,9 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
             n_ascii = sum(1 for _, e, _ in strings if e == 'ASCII')
             n_utf16 = sum(1 for _, e, _ in strings if e == 'UTF16')
             string_scan = {
-                "scanned_bytes": read_size, "clamped": read_size < region.RegionSize,
+                "requested_bytes": read_size, "bytes_read": len(data),
+                "clamped": read_size < region.RegionSize,
+                "truncated": len(data) < read_size,
                 "total": len(strings), "ascii_count": n_ascii, "utf16_count": n_utf16,
             }
         except Exception as e:
@@ -291,11 +334,91 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         sources,
         evaluation_sources=("thread_info", "modules", "memory_info"),
         completeness_checks=[
-            SourceRequirement("modules", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE),
+            SourceRequirement("modules", absent_code=LimitationCode.REPORT_MODULE_CONTEXT_UNAVAILABLE),
             "thread_info", "memory_info",
         ],
     )
     return record, coverage, diagnostics, artifact
+
+
+def _fallback_coverage(mf, modules_available, modules, infos, regions):
+    sources = {
+        "thread_info": observe_source("thread_info", present=bool(mf.thread_info), items=infos),
+        "modules":     observe_source("modules", present=modules_available, items=modules),
+        "memory_info": observe_source("memory_info", present=bool(mf.memory_info), items=regions),
+    }
+    return build_coverage_report(
+        sources, evaluation_sources=("thread_info", "modules", "memory_info"),
+        completeness_checks=[
+            SourceRequirement("modules", absent_code=LimitationCode.REPORT_MODULE_CONTEXT_UNAVAILABLE),
+            "thread_info", "memory_info",
+        ])
+
+
+def _build_aggregate_coverage_report(records, skipped: int):
+    """Whole-run facts no single per-card CoverageReport can express: (a)
+    at least one triage card's own target-region content read failed or
+    came up short, aggregated under one synthetic "requested_region"
+    source (never a real dict key any individual card's own coverage
+    used -- see REGION_READ_TRUNCATED's own enum comment for why reusing
+    that exact code/source pair across many cards is safe here), and (b)
+    _search_string_in_memory()'s own memory-wide scan skipped N regions
+    it could not read while searching for the needle, a fact about the
+    SEARCH itself with no per-card home at all. Returns None when neither
+    applies (the common case), so the caller only combines it in when
+    there is something to combine."""
+    attempted = [r for r in records if r.region is not None]
+    failed_count = sum(1 for r in attempted if r.string_scan_error is not None)
+    truncated_count = sum(1 for r in attempted if r.string_scan and r.string_scan["truncated"])
+
+    sources = {}
+    completeness_checks = []
+
+    if attempted:
+        sources["requested_region"] = SourceObservation(
+            name="requested_region",
+            state=SourceState.FAILED if failed_count else SourceState.PRESENT,
+            record_count=None if failed_count else len(attempted),
+            detail=(f"{failed_count} of {len(attempted)} triage card region read(s) failed"
+                    if failed_count else None))
+        completeness_checks.append("requested_region")
+        if truncated_count:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.REGION_READ_TRUNCATED, source="requested_region"))
+
+    if skipped:
+        sources["string_search"] = SourceObservation(
+            name="string_search", state=SourceState.PRESENT, record_count=1)
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE, source="string_search",
+            affected_count=skipped))
+
+    if not sources:
+        return None
+    return build_coverage_report(sources, evaluation_sources=(), completeness_checks=completeness_checks)
+
+
+def _combine_with_aggregate(coverages: list, records: list, skipped: int):
+    aggregate = _build_aggregate_coverage_report(records, skipped)
+    all_reports = list(coverages) + ([aggregate] if aggregate is not None else [])
+    return combine_coverage_reports(all_reports)
+
+
+def _execution_status_for(records, diagnostics):
+    """MAX_REGION_READ clamping (a self-imposed scan-budget cutoff) and a
+    per-card --output extract write failure are both about whether THIS
+    COMMAND finished its own intended work, not about whether the
+    evidence it looked at was complete -- see OUTPUT_SCHEMA.md's own
+    three-concepts-separate rule. Distinct from coverage.status, which
+    `_build_aggregate_coverage_report` above governs instead (a short/
+    failed read is an evidence gap; a deliberate policy clamp or a write
+    failure is not)."""
+    any_scan_clamped = any(r.string_scan and r.string_scan["clamped"] for r in records)
+    any_extract_clamped = any(r.extract_read_clamped for r in records)
+    any_extract_failed = any(d.code == "REPORT_EXTRACT_FAILED" for d in diagnostics)
+    if any_scan_clamped or any_extract_clamped or any_extract_failed:
+        return EXECUTION_PARTIAL
+    return EXECUTION_COMPLETED
 
 
 def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None" = None,
@@ -309,7 +432,10 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
     also given). tid/addr mode calls it exactly once. Results are
     combined via combine_coverage_reports(), already used in production
     by comparison.py for the identical "N independently-built
-    CoverageReports over the same mf -> one combined report" shape."""
+    CoverageReports over the same mf -> one combined report" shape --
+    _combine_with_aggregate() additionally folds in the whole-run facts
+    _build_aggregate_coverage_report() derives, which no single per-card
+    report can express on its own."""
     suspicious_prots = get_rules()["suspicious_protections"]
 
     modules_available = bool(mf.modules)
@@ -318,19 +444,6 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
     infos   = get_thread_infos(mf)
     tid_map = {ti.ThreadId: ti for ti in infos}
 
-    def fallback_coverage():
-        sources = {
-            "thread_info": observe_source("thread_info", present=bool(mf.thread_info), items=infos),
-            "modules":     observe_source("modules", present=modules_available, items=modules),
-            "memory_info": observe_source("memory_info", present=bool(mf.memory_info), items=regions),
-        }
-        return build_coverage_report(
-            sources, evaluation_sources=("thread_info", "modules", "memory_info"),
-            completeness_checks=[
-                SourceRequirement("modules", absent_code=LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE),
-                "thread_info", "memory_info",
-            ])
-
     # ── String search mode: find regions, then triage each one ───────
     if report_string and not report_addr:
         hits, skipped = _search_string_in_memory(mf, report_string)
@@ -338,11 +451,9 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
             diagnostics = [Diagnostic(SEVERITY_WARNING,
                 "String not found in any committed memory region.",
                 code="REPORT_STRING_NOT_FOUND")]
-            if skipped:
-                diagnostics.append(Diagnostic(SEVERITY_WARNING,
-                    f"{skipped} region(s) could not be read during the string scan and were "
-                    f"skipped.", code="REPORT_STRING_SCAN_REGIONS_SKIPPED"))
-            return CommandResult(kind="report", records=[], coverage=fallback_coverage(),
+            coverage = _combine_with_aggregate(
+                [_fallback_coverage(mf, modules_available, modules, infos, regions)], [], skipped)
+            return CommandResult(kind="report", records=[], coverage=coverage,
                 summary={"mode": "string", "card_count": 0, "query_string": report_string,
                          "query_tid": report_tid, "query_addr": None, "total_hits": 0,
                          "hits_private": 0, "hits_image": 0, "image_hit_modules": [],
@@ -360,10 +471,6 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                 private_hits.append((r, off, enc))
 
         diagnostics = []
-        if skipped:
-            diagnostics.append(Diagnostic(SEVERITY_WARNING,
-                f"{skipped} region(s) could not be read during the string scan and were "
-                f"skipped.", code="REPORT_STRING_SCAN_REGIONS_SKIPPED"))
         if report_tid:
             diagnostics.append(Diagnostic(SEVERITY_WARNING,
                 "--report-tid was also given, but a TID has no established relationship to "
@@ -383,7 +490,9 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                 "All hits are in known system modules -- no actionable regions to triage.",
                 code="REPORT_STRING_HITS_ALL_IMAGE"))
             summary["card_count"] = 0
-            return CommandResult(kind="report", records=[], coverage=fallback_coverage(),
+            coverage = _combine_with_aggregate(
+                [_fallback_coverage(mf, modules_available, modules, infos, regions)], [], skipped)
+            return CommandResult(kind="report", records=[], coverage=coverage,
                                   summary=summary, diagnostics=diagnostics)
 
         records = []
@@ -410,7 +519,8 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
 
         summary["card_count"] = len(records)
         return CommandResult(kind="report", records=records,
-                              coverage=combine_coverage_reports(coverages),
+                              coverage=_combine_with_aggregate(coverages, records, skipped),
+                              execution_status=_execution_status_for(records, diagnostics),
                               summary=summary, diagnostics=diagnostics, artifacts=artifacts)
 
     # ── TID/address mode: exactly one card ────────────────────────────
@@ -435,7 +545,9 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         "hits_private": None, "hits_image": None, "image_hit_modules": [],
         "skipped_unreadable_regions": 0,
     }
-    return CommandResult(kind="report", records=[record], coverage=coverage,
+    return CommandResult(kind="report", records=[record],
+                          coverage=_combine_with_aggregate([coverage], [record], 0),
+                          execution_status=_execution_status_for([record], diagnostics),
                           summary=summary, diagnostics=diagnostics,
                           artifacts=([artifact] if artifact is not None else []))
 
@@ -452,6 +564,14 @@ def _print_card_banner(mf, card, query_tid, query_addr) -> None:
     elif card.anchor_source == TRIAGE_ANCHOR_STRING_HIT and card.anchor_address is not None:
         print(f"  Addr : 0x{int(card.anchor_address, 16):x}")
     print()
+
+
+def _backed_by_text(module_context: str, backing_module: "str | None") -> str:
+    if module_context == MODULE_CONTEXT_RESOLVED:
+        return DIM(os.path.basename(backing_module))
+    if module_context == MODULE_CONTEXT_UNREGISTERED:
+        return RED("NOT IN ANY MODULE ⚠")
+    return YELLOW("module classification unavailable")
 
 
 def _render_card(mf, card, min_len: int) -> None:
@@ -474,7 +594,7 @@ def _render_card(mf, card, min_len: int) -> None:
                 print(f"  {'Module Range':<22} 0x{int(t.backing_module_base, 16):x} — "
                       f"0x{int(t.backing_module_end, 16):x}")
             else:
-                print(f"  {'Backed By':<22} {RED('NOT IN ANY MODULE ⚠')}")
+                print(f"  {'Backed By':<22} {_backed_by_text(t.module_context, None)}")
         print()
 
     # ── 2. Memory region ──────────────────────────────────────────────
@@ -496,15 +616,28 @@ def _render_card(mf, card, min_len: int) -> None:
             print(f"  {'Region Size':<24} 0x{r.size:x}  ({r.size // 1024} KB)")
             print(f"  {'Protection':<22} {RED(r.protect) if r.protection_suspicious else r.protect}")
             print(f"  {'Type':<22} {r.type}")
-            print(f"  {'Module Owner':<22} "
-                  f"{DIM(r.module_owner) if r.module_owner else RED('none — unregistered private memory')}")
+            if r.module_owner:
+                owner_text = DIM(r.module_owner)
+            elif r.module_context == MODULE_CONTEXT_UNAVAILABLE:
+                owner_text = YELLOW('unknown — module classification unavailable')
+            else:
+                owner_text = RED('none — unregistered private memory')
+            print(f"  {'Module Owner':<22} {owner_text}")
 
             if r.is_rwx_private:
                 print(f"\n  {RED('[!] RWX + MEM_PRIVATE — classic shellcode/injection marker')}")
             elif r.protection_suspicious:
                 print(f"\n  {YELLOW('[~] PAGE_EXECUTE_READWRITE (module-backed — notable but less suspicious)')}")
-            if r.has_injected_pe:
+
+            if r.mz_header_detected is None:
+                print(f"  {YELLOW('[~] Could not read region header — injected-PE check skipped')}")
+            elif r.has_injected_pe:
                 print(f"  {RED('[!] MZ header — injected PE in unregistered private memory')}")
+            elif r.mz_header_detected and r.module_context == MODULE_CONTEXT_RESOLVED:
+                print(f"  {DIM('[·] MZ header (known module — expected)')}")
+            elif r.mz_header_detected and r.module_context == MODULE_CONTEXT_UNAVAILABLE:
+                print(f"  {YELLOW('[~] MZ header found, but module classification is unavailable '
+                                  '(ModuleListStream absent) — cannot confirm this is an injected PE')}")
         print()
 
         if card.thread_region_correlation_excluded:
@@ -519,8 +652,7 @@ def _render_card(mf, card, min_len: int) -> None:
         print("─" * 50)
         for t in card.other_threads_in_region:
             sa2 = int(t.start_address, 16)
-            backed = (DIM(os.path.basename(t.backing_module)) if t.module_context == MODULE_CONTEXT_RESOLVED
-                      else RED("NOT IN ANY MODULE ⚠"))
+            backed = _backed_by_text(t.module_context, t.backing_module)
             tag = DIM(" ← report TID") if t.tid == card.anchor_tid else ""
             print(f"  TID=0x{t.tid:<8x}  StartAddr=0x{sa2:x}  {backed}{tag}")
         print()
@@ -531,42 +663,33 @@ def _render_card(mf, card, min_len: int) -> None:
         print("─" * 50)
         if card.string_scan is not None:
             ss = card.string_scan
-            print(DIM(f"  Scanning {ss['scanned_bytes'] // 1024} KB  "
+            print(DIM(f"  Scanning {ss['requested_bytes'] // 1024} KB  "
                       f"(ASCII + UTF-16LE, min_len={min_len})"))
             if ss["clamped"]:
                 print(YELLOW(f"  [~] Region is {card.region.size // 1024} KB — "
                              f"clamped to {MAX_REGION_READ // (1024*1024)} MB for this scan"))
+            if ss["truncated"]:
+                print(YELLOW(f"  [~] Region read came up short: got {ss['bytes_read']} of "
+                             f"{ss['requested_bytes']} requested byte(s) — coverage partial"))
             print()
             if card.ioc_strings:
                 print(f"  {RED(f'[!] {len(card.ioc_strings)} IOC match(es):')}")
                 base = int(card.region.base_address, 16)
-                # Re-reads the exact bytes Section 4 already scanned
-                # (ss['scanned_bytes'], the same read_size collect used)
-                # purely to reproduce _hexdump_context()'s byte-level
-                # display for network-pattern hits -- that raw content is
-                # deliberately never persisted onto the record (it would
-                # bloat JSON with megabytes of memory content), so this is
-                # the one place render legitimately touches `mf` for more
-                # than the dump's filename.
-                context_data = None
-                if any(s["is_network_pattern"] for s in card.ioc_strings):
-                    try:
-                        context_data = read_region(mf, base, ss["scanned_bytes"])
-                    except Exception:
-                        context_data = None
                 for s in card.ioc_strings:
-                    enc, off, text = s["encoding"], s["offset"], s["text"]
-                    abs_addr = int(s["address"], 16)
-                    fo_abs = None if card.region.file_offset is None else card.region.file_offset + off
+                    abs_addr = int(s.address, 16)
+                    fo_abs = None if card.region.file_offset is None else card.region.file_offset + s.offset
                     fo_abs_str = f"0x{fo_abs:x}" if fo_abs is not None else "(not captured)"
-                    enc_col = f"[{enc}]"
-                    print(RED(f"    {CYAN(enc_col):<14} {text}"))
-                    print(RED(f"      VA  = region base 0x{base:016x}  +  offset 0x{off:x}  =  "
+                    enc_col = f"[{s.encoding}]"
+                    print(RED(f"    {CYAN(enc_col):<14} {s.text}"))
+                    print(RED(f"      VA  = region base 0x{base:016x}  +  offset 0x{s.offset:x}  =  "
                               f"0x{abs_addr:016x}"))
                     print(RED(f"      DMP = file offset {fo_abs_str}"))
-                    if s["is_network_pattern"] and context_data is not None:
+                    if s.is_network_pattern and s.context_hex is not None:
                         print(YELLOW("    ↳ Network pattern — ±128 byte context:"))
-                        print(_hexdump_context(context_data, off, base))
+                        context_bytes = bytes.fromhex(s.context_hex)
+                        print(_hexdump_context(context_bytes, s.context_hit_offset,
+                                                int(s.context_base_address, 16),
+                                                before=len(context_bytes), after=len(context_bytes)))
                         print()
             else:
                 print(f"  {DIM('[·] No IOC patterns matched.')}")
@@ -622,7 +745,10 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     Takes `mf` (unlike every other render_*_console in this package) only
     to read `mf.filename` for the per-card banner's "File : ..." line --
     no coverage/business-logic decision here depends on the dump itself,
-    only that one already-known display string."""
+    and the network-pattern hexdump context is read from each
+    ReportIocString's own bounded context_hex, never re-read from `mf`
+    (see _collect_triage_card's own note on why that's computed once at
+    collect time)."""
     for reason in coverage.reasons:
         print(YELLOW(f"  [~] {reason}"))
 

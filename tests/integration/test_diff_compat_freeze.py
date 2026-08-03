@@ -543,7 +543,7 @@ def test_diff_compat_freeze(monkeypatch, tmp_path, capsys, name, diff_args, mf_b
     assert actual_exit == exit_code, f"{name}: exit code drifted"
     assert actual_body == _wrap(label_a, label_b, console_body), f"{name}: console drifted"
 
-    assert doc["meta"]["schema_version"] == "2.2"
+    assert doc["meta"]["schema_version"] == "2.3"
     assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
     assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
     assert doc["result"]["kind"] == "comparison"
@@ -583,7 +583,7 @@ def test_diff_mode_all_combines_three_entities_and_validates_against_schema(
     assert "═══ THREAD DIFF ═══" in console
     assert "═══ MEMORY REGION DIFF ═══" in console
 
-    with schema_path("dumpex-output-v2.2.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.3.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     jsonschema.Draft202012Validator.check_schema(schema)
     jsonschema.Draft202012Validator(schema).validate(doc)

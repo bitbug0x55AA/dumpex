@@ -85,11 +85,11 @@ mode: `--hunt` uses the v1.1 contract unchanged; `--list`/`--modules`/
 `--report` use the v2 contract (canonical records, `null` for missing
 values, normalized hex addresses — see
 [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)). All
-nine of these support `--json`/`--csv` — `--hunt` is the only command left
+ten of these support `--json`/`--csv` — `--hunt` is the only command left
 on the v1.1 contract.
 `--diff` produces a `kind: "comparison"` result with a two-entry
 `meta.evidence` array (`baseline`/`target`) instead of the single-dump
-`meta` shape the other eight use — see
+`meta` shape the other nine use — see
 [Output and Evidence Schema](OUTPUT_SCHEMA.md#comparison-records).
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the `--output` file it wrote) and `diagnostics.warnings[]` (e.g. an

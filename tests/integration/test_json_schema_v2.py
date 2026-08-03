@@ -1,16 +1,17 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.2.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.2") for each of the six
+dumpex/schemas/dumpex-output-v2.3.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.3") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
 hand-written fixture JSON, so a shape change in any of them is caught
-here. dumpex-output-v2.0.schema.json and dumpex-output-v2.1.schema.json
-(the frozen historical shapes) are also exercised directly (see the
-"schema version history" section below) to prove each still validates a
-genuine document from its own era and still rejects a `result.kind` it
-was never updated to know about.
+here. dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
+and dumpex-output-v2.2.schema.json (the frozen historical shapes) are
+also exercised directly (see the "schema version history" section
+below) to prove each still validates a genuine document from its own
+era and still rejects a `result.kind` it was never updated to know
+about.
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -46,8 +47,20 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
+    with schema_path("dumpex-output-v2.3.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_2():
     with schema_path("dumpex-output-v2.2.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_2(schema_v2_2):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_2)
+    return jsonschema.Draft202012Validator(schema_v2_2)
 
 
 @pytest.fixture(scope="module")
@@ -288,7 +301,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.2",
+            "schema_version": "2.3",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -993,6 +1006,30 @@ def test_a_genuine_v2_1_era_document_still_validates_against_the_v2_1_schema(val
     assert validator_v2_1.is_valid(doc)
 
 
+def test_report_kind_is_rejected_by_the_frozen_v2_2_schema(validator_v2_2):
+    # RevFix-P1a: dumpex-output-v2.2.schema.json predates "report" entirely
+    # -- v2.2 was already shipped/used by extract/strings output before
+    # this round's review, so it must stay byte-frozen and never start
+    # silently accepting a result.kind it didn't originally define.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.2"
+    doc["result"]["kind"] = "report"
+    doc["result"]["data"]["records"] = []
+    assert not validator_v2_2.is_valid(doc)
+
+
+def test_a_genuine_v2_2_era_extract_document_still_validates_against_the_v2_2_schema(
+        validator_v2_2):
+    # The frozen historical schema must keep validating real extract/
+    # strings output produced before schema_version 2.3 existed.
+    doc = _minimal_valid_doc(kind="extract")
+    doc["meta"]["schema_version"] = "2.2"
+    doc["result"]["data"]["records"] = [{
+        "requested_address": "0x0000000000001000", "requested_size": 16,
+        "auto_sized": False, "bytes_read": 16, "mz_header_detected": False}]
+    assert validator_v2_2.is_valid(doc)
+
+
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):
     # dumpex-output-v2.0.schema.json predates "comparison" entirely --
     # proves the frozen historical schema was never silently updated to
@@ -1277,7 +1314,8 @@ def test_triage_card_non_string_hit_anchor_rejects_non_null_string_hit(validator
 def test_triage_card_string_scan_and_error_mutually_exclusive(validator):
     doc = _minimal_valid_report_doc()
     doc["result"]["data"]["records"][0]["string_scan"] = {
-        "scanned_bytes": 100, "clamped": False, "total": 0, "ascii_count": 0, "utf16_count": 0}
+        "requested_bytes": 100, "bytes_read": 100, "clamped": False, "truncated": False,
+        "total": 0, "ascii_count": 0, "utf16_count": 0}
     doc["result"]["data"]["records"][0]["string_scan_error"] = "boom"
     assert not validator.is_valid(doc)
 
@@ -1288,24 +1326,49 @@ def test_triage_card_unknown_extra_field_is_rejected_by_schema(validator):
     assert not validator.is_valid(doc)
 
 
-def test_report_region_info_is_rwx_private_requires_protection_suspicious(validator):
-    doc = _minimal_valid_report_doc()
-    doc["result"]["data"]["records"][0]["region"] = {
+def _minimal_valid_report_region(**overrides):
+    base = {
         "base_address": "0x0000000000001000", "size": 4096, "protect": "PAGE_READWRITE",
         "type": "MEM_PRIVATE", "module_owner": None, "file_offset": None,
-        "is_rwx_private": True, "has_injected_pe": False, "protection_suspicious": False,
+        "is_rwx_private": False, "module_context": "unavailable",
+        "mz_header_detected": None, "has_injected_pe": None, "protection_suspicious": False,
     }
+    base.update(overrides)
+    return base
+
+
+def test_report_region_info_is_rwx_private_requires_protection_suspicious(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["region"] = _minimal_valid_report_region(
+        protect="PAGE_READWRITE", is_rwx_private=True, protection_suspicious=False)
     assert not validator.is_valid(doc)
 
 
 def test_report_region_info_valid_rwx_private_passes(validator):
     doc = _minimal_valid_report_doc()
-    doc["result"]["data"]["records"][0]["region"] = {
-        "base_address": "0x0000000000001000", "size": 4096,
-        "protect": "PAGE_EXECUTE_READWRITE", "type": "MEM_PRIVATE", "module_owner": None,
-        "file_offset": None, "is_rwx_private": True, "has_injected_pe": False,
-        "protection_suspicious": True,
-    }
+    doc["result"]["data"]["records"][0]["region"] = _minimal_valid_report_region(
+        protect="PAGE_EXECUTE_READWRITE", is_rwx_private=True, protection_suspicious=True)
+    assert validator.is_valid(doc)
+
+
+def test_report_region_info_mz_header_null_requires_null_has_injected_pe(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["region"] = _minimal_valid_report_region(
+        mz_header_detected=None, has_injected_pe=False)
+    assert not validator.is_valid(doc)
+
+
+def test_report_region_info_mz_header_true_unregistered_requires_injected_pe_true(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["region"] = _minimal_valid_report_region(
+        mz_header_detected=True, module_context="unregistered", has_injected_pe=False)
+    assert not validator.is_valid(doc)
+
+
+def test_report_region_info_mz_header_true_unavailable_context_valid(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["region"] = _minimal_valid_report_region(
+        mz_header_detected=True, module_context="unavailable", has_injected_pe=None)
     assert validator.is_valid(doc)
 
 
@@ -1348,14 +1411,42 @@ def test_report_thread_info_valid_resolved_passes(validator):
 def test_triage_card_ioc_string_missing_is_network_pattern_is_rejected(validator):
     doc = _minimal_valid_report_doc()
     doc["result"]["data"]["records"][0]["ioc_strings"] = [{
-        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII",
-        "text": "x", "matched_grep": None}]
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII", "text": "x",
+        "context_hex": None, "context_base_address": None, "context_hit_offset": None}]
     assert not validator.is_valid(doc)
 
 
-def test_triage_card_ioc_string_valid_entry_passes(validator):
+def test_triage_card_ioc_string_valid_non_network_entry_passes(validator):
     doc = _minimal_valid_report_doc()
     doc["result"]["data"]["records"][0]["ioc_strings"] = [{
-        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII",
-        "text": "x", "matched_grep": None, "is_network_pattern": True}]
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII", "text": "x",
+        "is_network_pattern": False, "context_hex": None, "context_base_address": None,
+        "context_hit_offset": None}]
     assert validator.is_valid(doc)
+
+
+def test_triage_card_ioc_string_network_pattern_requires_context_hex(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["ioc_strings"] = [{
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII", "text": "x",
+        "is_network_pattern": True, "context_hex": None, "context_base_address": None,
+        "context_hit_offset": None}]
+    assert not validator.is_valid(doc)
+
+
+def test_triage_card_ioc_string_valid_network_pattern_entry_passes(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["ioc_strings"] = [{
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII", "text": "x",
+        "is_network_pattern": True, "context_hex": "deadbeef",
+        "context_base_address": "0x0000000000000f80", "context_hit_offset": 4}]
+    assert validator.is_valid(doc)
+
+
+def test_triage_card_ioc_string_non_network_with_context_hex_is_rejected(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0]["ioc_strings"] = [{
+        "offset": 0, "address": "0x0000000000001000", "encoding": "ASCII", "text": "x",
+        "is_network_pattern": False, "context_hex": "deadbeef",
+        "context_base_address": "0x0000000000000f80", "context_hit_offset": 4}]
+    assert not validator.is_valid(doc)

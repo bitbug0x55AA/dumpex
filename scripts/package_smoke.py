@@ -96,7 +96,8 @@ def main() -> None:
     print(f"packaged YARA rule files: {sorted(yar_files)}")
 
     _schema_filenames = ("dumpex-output-v1.1.schema.json", "dumpex-output-v2.0.schema.json",
-                         "dumpex-output-v2.1.schema.json", "dumpex-output-v2.2.schema.json")
+                         "dumpex-output-v2.1.schema.json", "dumpex-output-v2.2.schema.json",
+                         "dumpex-output-v2.3.schema.json")
     for schema_filename in _schema_filenames:
         schema_path = importlib.resources.files("dumpex.schemas").joinpath(schema_filename)
         if not schema_path.is_file():

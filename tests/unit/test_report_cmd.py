@@ -13,10 +13,12 @@ from tests.fixtures.fakes import FakeMF, FakeStream, Module, Region, ThreadInfo,
 
 import dumpex.commands.report as report_mod
 import dumpex.core.memory as core_memory_mod
-from dumpex.commands.report import collect_report, cmd_report
-from dumpex.output.coverage import SourceState, CoverageStatus, combine_coverage_reports
+from dumpex.commands.report import collect_report, cmd_report, render_report_console
+from dumpex.output.coverage import (
+    SourceState, CoverageStatus, combine_coverage_reports, EXECUTION_COMPLETED, EXECUTION_PARTIAL,
+)
 from dumpex.output.records import (
-    TriageCardRecord, ReportThreadInfo, ReportRegionInfo, Diagnostic,
+    TriageCardRecord, ReportThreadInfo, ReportRegionInfo, ReportIocString, Diagnostic,
     TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
     MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
@@ -120,7 +122,8 @@ def test_all_three_region_and_string_dims_combine_to_high_confidence(monkeypatch
     assert set(card.findings) == {"rwx_private", "injected_pe", "ioc_strings"}
     assert card.verdict == VERDICT_HIGH_CONFIDENCE_MALICIOUS
     assert len(card.ioc_strings) == 1
-    assert card.ioc_strings[0]["is_network_pattern"] is False
+    assert card.ioc_strings[0].is_network_pattern is False
+    assert card.ioc_strings[0].context_hex is None
 
 
 def test_unbacked_thread_correlated_with_own_start_address(monkeypatch):
@@ -201,7 +204,10 @@ def test_string_mode_with_report_tid_also_given_is_not_forwarded(monkeypatch):
     assert "REPORT_TID_NOT_CORRELATED_WITH_STRING_HITS" in codes
 
 
-def test_string_mode_skipped_unreadable_region_surfaces_diagnostic(monkeypatch):
+def test_string_mode_skipped_unreadable_region_lowers_coverage(monkeypatch):
+    # P1-3 review fix: a skipped-during-search region must show up in
+    # coverage.status/reasons (a genuine evidence-completeness gap), not
+    # merely as an easy-to-miss diagnostic with no effect on coverage.
     mf = _mk_mf(monkeypatch, modules=[],
                 regions=[
                     Region(0x1000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
@@ -218,8 +224,8 @@ def test_string_mode_skipped_unreadable_region_surfaces_diagnostic(monkeypatch):
     result = collect_report(mf, report_string="MYSECRETNEEDLE12")
     assert len(result.records) == 1
     assert result.summary["skipped_unreadable_regions"] == 1
-    codes = [d.code for d in result.diagnostics]
-    assert "REPORT_STRING_SCAN_REGIONS_SKIPPED" in codes
+    assert result.coverage.status == CoverageStatus.PARTIAL
+    assert any("skipped 1 region" in r for r in result.coverage.reasons)
 
 
 def test_string_mode_multi_hit_extract_disambiguates_filenames(monkeypatch, tmp_path):
@@ -298,6 +304,286 @@ def test_module_context_resolved_carries_module_range(monkeypatch):
     assert card.thread.module_context == MODULE_CONTEXT_RESOLVED
     assert card.thread.backing_module_base == "0x0000000000002000"
     assert card.thread.backing_module_end == "0x0000000000003000"
+
+
+# ── P1-2: injected_pe false positive when modules absent ─────────────────
+
+def test_mz_header_in_unavailable_module_context_is_not_a_false_positive(monkeypatch):
+    # The bug: header[:2] == b'MZ' and not rmod treated "ModuleListStream
+    # absent" (rmod always falsy then too) as "confirmed unregistered."
+    # No modules= given at all -> modules stream itself absent.
+    mf = _mk_mf(monkeypatch,
+                regions=[Region(0x7000, 0x7000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x7000: b"MZ" + b"\x90" * 62})
+    result = collect_report(mf, report_addr="0x7000")
+    card = result.records[0]
+    assert card.region.mz_header_detected is True
+    assert card.region.module_context == MODULE_CONTEXT_UNAVAILABLE
+    assert card.region.has_injected_pe is None
+    assert card.findings == []
+    assert card.verdict == VERDICT_CLEAN
+
+
+def test_mz_header_in_confirmed_unregistered_region_is_injected_pe(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[],   # modules PRESENT (empty) -> confirmed unregistered
+                regions=[Region(0x7100, 0x7100, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x7100: b"MZ" + b"\x90" * 62})
+    result = collect_report(mf, report_addr="0x7100")
+    card = result.records[0]
+    assert card.region.module_context == MODULE_CONTEXT_UNREGISTERED
+    assert card.region.has_injected_pe is True
+    assert card.findings == ["injected_pe"]
+
+
+def test_mz_header_in_resolved_module_is_not_injected_pe(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[Module(0x7200, 0x1000, r"C:\legit.dll")],
+                regions=[Region(0x7200, 0x7200, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_IMAGE")],
+                read_map={0x7200: b"MZ" + b"\x90" * 62})
+    result = collect_report(mf, report_addr="0x7200")
+    card = result.records[0]
+    assert card.region.module_context == MODULE_CONTEXT_RESOLVED
+    assert card.region.has_injected_pe is False
+    assert card.findings == []
+
+
+def test_header_read_failure_yields_null_mz_header_detected(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7300, 0x7300, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+
+    def _reader(mf_, addr, size):
+        raise RuntimeError("region unreadable")
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+
+    result = collect_report(mf, report_addr="0x7300")
+    card = result.records[0]
+    assert card.region.mz_header_detected is None
+    assert card.region.has_injected_pe is None
+    assert card.findings == []
+    # Section 4's own read fails too (same reader) -- see the P1-3 tests
+    # below for the coverage-side consequence of that.
+    assert card.string_scan is None
+    assert card.string_scan_error == "region unreadable"
+
+
+def test_other_thread_unbacked_in_region_requires_modules_available(monkeypatch):
+    # Section 3's own instance of the same bug class: an other-thread in
+    # the resolved region must not be flagged unbacked_thread when
+    # modules are simply unavailable, only when confirmed unregistered.
+    mf = _mk_mf(monkeypatch, threads=[ThreadInfo(1, 0x8050), ThreadInfo(2, 0x8060)],
+                regions=[Region(0x8000, 0x8000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x8000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="1")
+    card = result.records[0]
+    assert card.findings == []
+    assert all(t.module_context == MODULE_CONTEXT_UNAVAILABLE for t in card.other_threads_in_region)
+
+
+# ── P1-3: coverage/execution status matrix ────────────────────────────────
+
+def test_region_read_failure_lowers_coverage_via_aggregate_source_failed(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[], threads=[], regions=[
+        Region(0x9100, 0x9100, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+
+    def _reader(mf_, addr, size):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+
+    result = collect_report(mf, report_addr="0x9100")
+    assert result.records[0].string_scan_error == "boom"
+    assert result.coverage.status == CoverageStatus.PARTIAL
+    assert any("could not be read" in r for r in result.coverage.reasons)
+
+
+def test_short_read_sets_truncated_and_lowers_coverage(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[], threads=[], regions=[
+        Region(0x9200, 0x9200, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+
+    def _reader(mf_, addr, size):
+        return b"short"   # far less than the requested 0x1000
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+
+    result = collect_report(mf, report_addr="0x9200")
+    card = result.records[0]
+    assert card.string_scan["requested_bytes"] == 0x1000
+    assert card.string_scan["bytes_read"] == 5
+    assert card.string_scan["truncated"] is True
+    assert result.coverage.status == CoverageStatus.PARTIAL
+    assert any("partially read" in r for r in result.coverage.reasons)
+
+
+def test_full_read_is_not_truncated_or_clamped(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0xa100, 0xa100, 16, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0xa100: b"x" * 16})
+    result = collect_report(mf, report_addr="0xa100")
+    card = result.records[0]
+    assert card.string_scan["clamped"] is False
+    assert card.string_scan["truncated"] is False
+    assert result.execution_status == EXECUTION_COMPLETED
+
+
+def test_max_region_read_clamp_sets_execution_partial(monkeypatch):
+    monkeypatch.setattr(report_mod, "MAX_REGION_READ", 16)
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0xa200, 0xa200, 4096, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0xa200: b"x" * 4096})
+    result = collect_report(mf, report_addr="0xa200")
+    card = result.records[0]
+    assert card.string_scan["clamped"] is True
+    assert card.string_scan["requested_bytes"] == 16
+    assert result.execution_status == EXECUTION_PARTIAL
+
+
+def test_extract_write_failure_diagnostic_sets_execution_partial(monkeypatch, tmp_path):
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0xa300, 0xa300, 16, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0xa300: b"x" * 16})
+
+    def _raise_write(*a, **kw):
+        raise PermissionError("disk full")
+    monkeypatch.setattr(report_mod, "write_output_bytes", _raise_write)
+
+    bad_path = str(tmp_path / "out.bin")
+    result = collect_report(mf, report_addr="0xa300", extract_to=bad_path)
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_EXTRACT_FAILED" in codes
+    assert result.execution_status == EXECUTION_PARTIAL
+    assert result.records[0].artifact_id is None
+
+
+def test_string_mode_aggregates_truncation_across_cards(monkeypatch):
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[
+                    Region(0xb100, 0xb100, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
+                    Region(0xb200, 0xb200, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
+                ])
+
+    def _reader(mf_, addr, size):
+        if addr == 0xb100:
+            return b"header MULTINEEDLE55 trailer" + b"\x00" * 20   # full read, has the needle
+        return b"x"   # region 2's own Section-4 content read comes up short
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+
+    result = collect_report(mf, report_string="MULTINEEDLE55")
+    assert len(result.records) == 1   # only region 1 contains the needle
+    assert result.coverage.status == CoverageStatus.PARTIAL
+
+
+# ── P2-1: renderer must not re-read the dump ──────────────────────────────
+
+def test_renderer_never_calls_read_region_for_network_pattern_context(monkeypatch, capsys):
+    net_data = (b"MZ" + b"\x90" * 62
+                + b"http://evil.example.com/beacon" + b"\x00" * 20)
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0xc000, 0xc000, 0x1000, "MEM_COMMIT",
+                                 "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
+                read_map={0xc000: net_data})
+    result = collect_report(mf, report_addr="0xc000")
+    card = result.records[0]
+    net_hits = [s for s in card.ioc_strings if s.is_network_pattern]
+    assert len(net_hits) == 1
+    assert net_hits[0].context_hex is not None
+
+    def _boom(mf_, addr, size):
+        raise AssertionError("render must not re-read the dump")
+    monkeypatch.setattr(report_mod, "read_region", _boom)
+    monkeypatch.setattr(core_memory_mod, "read_region", _boom)
+
+    render_report_console(result.records, result.coverage, result.diagnostics,
+                           result.artifacts, result.summary, mf, min_len=6)
+    out = capsys.readouterr().out
+    assert "Network pattern" in out
+
+
+# ── Console rendering branches (P2-1 purification follow-through) ────────
+
+def test_other_thread_confirmed_unregistered_via_section3_sets_finding(monkeypatch):
+    # Positive counterpart to test_other_thread_unbacked_in_region_requires_
+    # modules_available: the ANCHOR thread (TID 1, start 0x8000) is itself
+    # resolved (backed by a tiny module covering only 0x8000-0x800f), so
+    # Section 1 does NOT set unbacked_thread -- the second thread (TID 2,
+    # start 0x8060, inside the same memory region but outside the module's
+    # own range) is the one Section 3's own branch (line 234, not Section
+    # 1's identical-looking one) must catch on its own.
+    mf = _mk_mf(monkeypatch, modules=[Module(0x8000, 0x10, r"C:\tiny.dll")],
+                threads=[ThreadInfo(1, 0x8000), ThreadInfo(2, 0x8060)],
+                regions=[Region(0x8000, 0x8000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x8000: b"\x00" * 64})
+    result = collect_report(mf, report_tid="1")
+    card = result.records[0]
+    assert card.thread.module_context == MODULE_CONTEXT_RESOLVED
+    assert card.findings == ["unbacked_thread"]
+    other = next(t for t in card.other_threads_in_region if t.tid == 2)
+    assert other.module_context == MODULE_CONTEXT_UNREGISTERED
+
+
+def test_string_mode_read_failure_prints_could_not_read_region(monkeypatch, capsys):
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0xd000, 0xd000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+
+    # First read is the memory-wide search itself (must succeed to find the
+    # hit and produce a card); the second is that card's own Section 4
+    # content read (must fail, to exercise the string_scan_error console
+    # branch) -- both request the same size, so a call counter is the only
+    # way to tell them apart.
+    calls = {"n": 0}
+    def _reader(mf_, addr, size):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return b"header MYSECRETNEEDLE12 trailer" + b"\x00" * 20
+        raise RuntimeError("section 4 read failed")
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+
+    result = collect_report(mf, report_string="MYSECRETNEEDLE12")
+    render_report_console(result.records, result.coverage, result.diagnostics,
+                           result.artifacts, result.summary, mf, min_len=6)
+    out = capsys.readouterr().out
+    assert "Could not read region: section 4 read failed" in out
+
+
+def test_string_mode_all_hits_image_prints_skip_notice_and_zero_cards(monkeypatch, capsys):
+    mf = _mk_mf(monkeypatch, modules=[Module(0xb000, 0x1000, r"C:\Windows\System32\kernel32.dll")],
+                regions=[Region(0xb000, 0xb000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_IMAGE")],
+                read_map={0xb000: b"header SHAREDNEEDLE9999 trailer" + b"\x00" * 20})
+    result = collect_report(mf, report_string="SHAREDNEEDLE9999")
+    assert result.summary["card_count"] == 0
+    render_report_console(result.records, result.coverage, result.diagnostics,
+                           result.artifacts, result.summary, mf, min_len=6)
+    out = capsys.readouterr().out
+    assert "hit(s) in known MEM_IMAGE modules (kernel32.dll)" in out
+    assert "All hits are in known system modules" in out
+
+
+def test_string_mode_multi_hit_banner_and_tid_not_carried_notice(monkeypatch, capsys):
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[
+                    Region(0xe000, 0xe000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
+                    Region(0xf000, 0xf000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
+                ],
+                read_map={0xe000: b"header MULTIHITNEEDLE77 trailer" + b"\x00" * 20,
+                          0xf000: b"header MULTIHITNEEDLE77 trailer" + b"\x00" * 20})
+    result = collect_report(mf, report_string="MULTIHITNEEDLE77", report_tid="99")
+    render_report_console(result.records, result.coverage, result.diagnostics,
+                           result.artifacts, result.summary, mf, min_len=6)
+    out = capsys.readouterr().out
+    assert "Triaging hit 1/2" in out and "Triaging hit 2/2" in out
+    assert "--report-tid 0x99 was also given" in out
+
+
+def test_extract_success_prints_artifact_summary(monkeypatch, capsys, tmp_path):
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0xa400, 0xa400, 16, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0xa400: b"x" * 16})
+    out_path = str(tmp_path / "out.bin")
+    result = cmd_report(mf, report_addr="0xa400", extract_to=out_path, force=True)
+    out = capsys.readouterr().out
+    assert "Region extracted" in out
+    assert result.records[0].artifact_id is not None
 
 
 # ── cmd_report thin wrapper ────────────────────────────────────────────────

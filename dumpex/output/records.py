@@ -791,6 +791,12 @@ _TRIAGE_ANCHOR_SOURCES = (TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHO
 # direction command/domain model -> output layer, never the reverse.
 _TRIAGE_VERDICTS = ("CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_MALICIOUS")
 
+# Mirrors dumpex.core.memory.INDICATOR_DIMS' own four keys by convention,
+# for the same reason _TRIAGE_VERDICTS mirrors VERDICT_CLEAN/etc rather
+# than importing them -- a TriageCardRecord.findings entry outside this
+# set is rejected at construction time, not just left undocumented.
+_TRIAGE_FINDING_KEYS = ("unbacked_thread", "rwx_private", "injected_pe", "ioc_strings")
+
 
 @dataclass
 class ReportThreadInfo:
@@ -859,10 +865,36 @@ class ReportRegionInfo:
     offset inside the .dmp file, not a process address -- so it does NOT
     go through hex_address() despite the name similarity to this module's
     other `*_address` fields (see this module's own docstring's hex-vs-int
-    type rule). `is_rwx_private`/`has_injected_pe` are the two MECE
-    dimensions report.py can determine from the region alone, independent
-    of any thread/string evidence -- see TriageCardRecord.findings for
-    where they end up when they fire."""
+    type rule). `is_rwx_private` is a MECE dimension report.py can always
+    determine from the region's own protection bits alone, independent of
+    module evidence.
+
+    `module_context`/`mz_header_detected`/`has_injected_pe` together
+    replace what used to be a single boolean `has_injected_pe` computed as
+    `header[:2] == b'MZ' and not rmod` -- that conflated "confirmed not
+    backed by any module" with "ModuleListStream itself was absent, so we
+    simply could not check," producing a false-positive injected-PE
+    finding whenever modules were unavailable (rmod is unconditionally
+    None/falsy in that case too). `module_context` mirrors ReportThreadInfo's
+    own resolved/unregistered/unavailable vocabulary but is never null here
+    (unlike the thread field): a target region, once resolved at all,
+    always has SOME module-context answer, whereas a thread's own
+    module_context is null only when start_address itself is unknown.
+    `mz_header_detected` is null when the small header-peek read itself
+    failed (a distinct, rare failure from the main Section 4 content
+    read) -- an unconfirmed header must not silently read as "no PE
+    header found" (false negative) any more than a missing module list
+    should silently read as "confirmed unregistered" (false positive).
+    `has_injected_pe` is the MECE-dimension-ready derived fact: True only
+    when an MZ header WAS found AND module_context is confirmed
+    'unregistered'; False when no MZ header was found, or one was found
+    in a module confirmed 'resolved' (known, expected); null whenever the
+    evidence needed to decide either way is itself missing (mz_header_
+    detected is null, or an MZ header was found but module_context is
+    'unavailable' -- found something suspicious-shaped but can't confirm
+    it actually is). TriageCardRecord.findings may only ever contain
+    'injected_pe' when this is True -- never on a null (unconfirmed) or
+    False value."""
     base_address:     str
     size:             int
     protect:          str
@@ -870,7 +902,9 @@ class ReportRegionInfo:
     module_owner:     "str | None"
     file_offset:      "int | None"
     is_rwx_private:   bool
-    has_injected_pe:  bool
+    module_context:        str            # resolved / unregistered / unavailable -- never null
+    mz_header_detected:    "bool | None"  # null iff the header-peek read itself failed
+    has_injected_pe:       "bool | None"  # see class docstring for the tri-state derivation
     protection_suspicious: bool   # `protect` matches one of the runtime-configured
                                     # suspicious_protections rules (see
                                     # dumpex.rules_pkg.loader.get_rules()) -- independent
@@ -890,12 +924,42 @@ class ReportRegionInfo:
         _require_optional_diff_str(self.module_owner, "ReportRegionInfo.module_owner")
         _require_optional_diff_int(self.file_offset, "ReportRegionInfo.file_offset")
         _require_bool(self.is_rwx_private, "ReportRegionInfo.is_rwx_private")
-        _require_bool(self.has_injected_pe, "ReportRegionInfo.has_injected_pe")
+        if self.module_context not in _MODULE_CONTEXTS:
+            raise ValueError(
+                f"ReportRegionInfo.module_context must be one of {_MODULE_CONTEXTS}, "
+                f"got {self.module_context!r}")
+        if self.mz_header_detected is not None:
+            _require_bool(self.mz_header_detected, "ReportRegionInfo.mz_header_detected")
+        if self.has_injected_pe is not None:
+            _require_bool(self.has_injected_pe, "ReportRegionInfo.has_injected_pe")
         _require_bool(self.protection_suspicious, "ReportRegionInfo.protection_suspicious")
         if self.is_rwx_private and not self.protection_suspicious:
             raise ValueError(
                 "ReportRegionInfo.is_rwx_private requires protection_suspicious -- RWX+PRIVATE "
                 "is itself a suspicious-protection match")
+        if self.mz_header_detected is None and self.has_injected_pe is not None:
+            raise ValueError(
+                "ReportRegionInfo.has_injected_pe must be None when mz_header_detected is None "
+                "-- the header read itself failed, so neither can be confirmed")
+        if self.mz_header_detected is False and self.has_injected_pe is not False:
+            raise ValueError(
+                "ReportRegionInfo.has_injected_pe must be False when mz_header_detected is "
+                "False -- no MZ header means no injected-PE finding is possible")
+        if self.mz_header_detected is True:
+            if self.module_context == MODULE_CONTEXT_UNREGISTERED and self.has_injected_pe is not True:
+                raise ValueError(
+                    "ReportRegionInfo.has_injected_pe must be True when an MZ header was found "
+                    "in a confirmed-unregistered region")
+            if self.module_context == MODULE_CONTEXT_RESOLVED and self.has_injected_pe is not False:
+                raise ValueError(
+                    "ReportRegionInfo.has_injected_pe must be False when an MZ header was found "
+                    "in a module confirmed resolved -- a known module's own header is expected, "
+                    "not suspicious")
+            if self.module_context == MODULE_CONTEXT_UNAVAILABLE and self.has_injected_pe is not None:
+                raise ValueError(
+                    "ReportRegionInfo.has_injected_pe must be None when an MZ header was found "
+                    "but module_context is unavailable -- cannot confirm whether it is actually "
+                    "unregistered")
 
     def to_dict(self) -> dict:
         return {
@@ -906,8 +970,80 @@ class ReportRegionInfo:
             "module_owner":          self.module_owner,
             "file_offset":           self.file_offset,
             "is_rwx_private":        self.is_rwx_private,
+            "module_context":        self.module_context,
+            "mz_header_detected":    self.mz_header_detected,
             "has_injected_pe":       self.has_injected_pe,
             "protection_suspicious": self.protection_suspicious,
+        }
+
+
+@dataclass
+class ReportIocString:
+    """One IOC-pattern string hit in a triage card's Section 4 -- replaces
+    the earlier loose dict shape (offset/address/encoding/text/matched_grep/
+    is_network_pattern with no validation at all) with a typed record the
+    same way every other structured fact in this module is typed.
+    `context_hex`/`context_base_address`/`context_hit_offset` are only
+    populated when `is_network_pattern` is True, and are computed ONCE at
+    collect time (report.py already has the full region `data` in scope
+    there) rather than deferred to render time -- the render layer must
+    never re-read the dump to reproduce the ±128-byte hexdump context
+    (see dumpex.commands.report.render_report_console's own docstring for
+    why). `context_hex` is a lowercase hex string of that bounded byte
+    window (never the full region -- at most 256 bytes), safe to embed in
+    JSON; `context_base_address` is that window's own first-byte address;
+    `context_hit_offset` is the hit's own offset WITHIN the window (not
+    the region), i.e. dumpex.core.memory._hexdump_context's own `offset`
+    parameter once fed this window instead of the full region."""
+    offset:              int
+    address:             str
+    encoding:            str
+    text:                str
+    is_network_pattern:  bool
+    context_hex:            "str | None" = None
+    context_base_address:  "str | None" = None
+    context_hit_offset:    "int | None" = None
+
+    def __post_init__(self):
+        _require_nonneg_int(self.offset, "ReportIocString.offset")
+        _require_hex_address(self.address, "ReportIocString.address")
+        if self.encoding not in _STRING_RECORD_ENCODINGS:
+            raise ValueError(
+                f"ReportIocString.encoding must be one of {_STRING_RECORD_ENCODINGS}, "
+                f"got {self.encoding!r}")
+        if not isinstance(self.text, str):
+            raise ValueError(f"ReportIocString.text must be a str, got {self.text!r}")
+        _require_bool(self.is_network_pattern, "ReportIocString.is_network_pattern")
+        if not self.is_network_pattern:
+            if (self.context_hex is not None or self.context_base_address is not None
+                    or self.context_hit_offset is not None):
+                raise ValueError(
+                    "ReportIocString.context_hex/context_base_address/context_hit_offset "
+                    "must all be None when is_network_pattern is False -- the hexdump context "
+                    "is only ever computed for a network-pattern hit")
+        else:
+            if not isinstance(self.context_hex, str) or not self.context_hex:
+                raise ValueError(
+                    "ReportIocString.context_hex must be a non-empty hex string when "
+                    "is_network_pattern is True")
+            if len(self.context_hex) % 2 != 0 or any(
+                    c not in "0123456789abcdef" for c in self.context_hex):
+                raise ValueError(
+                    f"ReportIocString.context_hex must be a lowercase hex string, "
+                    f"got {self.context_hex!r}")
+            _require_hex_address(self.context_base_address, "ReportIocString.context_base_address")
+            _require_nonneg_int(self.context_hit_offset, "ReportIocString.context_hit_offset")
+
+    def to_dict(self) -> dict:
+        return {
+            "offset":               self.offset,
+            "address":              self.address,
+            "encoding":             self.encoding,
+            "text":                 self.text,
+            "is_network_pattern":   self.is_network_pattern,
+            "context_hex":          self.context_hex,
+            "context_base_address": self.context_base_address,
+            "context_hit_offset":   self.context_hit_offset,
         }
 
 
@@ -922,33 +1058,40 @@ class TriageCardRecord:
     base -- report_tid is never forwarded into those, see
     dumpex.commands.report's own note on why). `notable_strings` reuses
     StringRecord as-is (matched_grep always None -- --report has no
-    --grep concept). `ioc_strings` is NOT a list of StringRecord: each
-    entry is a StringRecord's own to_dict() shape plus one extra
-    "is_network_pattern" bool report.py's IOC section computes per hit
-    (whether it also matched a network-protocol pattern) -- a fact with
-    no meaning for plain `--strings` output, so it does not become a
-    StringRecord field. `findings`/`finding_details` are today's `dims`
+    --grep concept). `ioc_strings` is a list of ReportIocString, NOT
+    StringRecord -- see that class's own docstring for why (an extra
+    is_network_pattern bool plus a bounded, collect-time-computed hexdump
+    context that has no meaning for plain `--strings` output).
+    `findings`/`finding_details` are today's `dims`
     dict, split into its ordered keys and their detail text -- `findings`
-    entries are the same closed vocabulary as
+    entries are restricted to _TRIAGE_FINDING_KEYS, the same closed
+    vocabulary as
     dumpex.core.memory.INDICATOR_DIMS' own keys (unbacked_thread/
-    rwx_private/injected_pe/ioc_strings), not re-validated against that
-    dict here (see this section's own note on why records.py doesn't
-    import from core.memory). `verdict` is verdict_for(dims)'s output --
+    rwx_private/injected_pe/ioc_strings), mirrored locally rather than
+    imported (see this section's own note on why records.py doesn't
+    import from core.memory) -- an invented finding key is rejected here,
+    not just left undocumented. `verdict` is verdict_for(dims)'s output --
     provably the same MECE rule the console's own colored text renders
-    from (see core.memory._verdict). `artifact_id` correlates to this
+    from (see core.memory._verdict); __post_init__ cross-checks verdict
+    against len(findings) using the same four-tier rule, mirrored locally
+    for the same reason. `artifact_id` correlates to this
     card's own entry in result.artifacts when --output was given for this
     card, else None.
 
     `string_scan`/`string_scan_error` capture Section 4's own scan
     metadata that neither notable_strings nor ioc_strings (both filtered
-    subsets) can reconstruct: the total extracted-string count by
-    encoding and whether MAX_REGION_READ clamped the scan below the
-    region's actual size -- None (both) when region is None (Section 4
-    never ran), string_scan None with string_scan_error set to the
+    subsets) can reconstruct: `requested_bytes` is how much this card
+    asked read_region() for (post MAX_REGION_READ clamping -- `clamped`
+    says whether that clamp actually reduced the ask below the region's
+    own size); `bytes_read` is the real `len(data)` read_region() handed
+    back (which can independently come up short of `requested_bytes` when
+    the dump itself doesn't back that much of the region -- `truncated`
+    flags exactly that, a genuine evidence-completeness gap distinct from
+    `clamped`'s own self-imposed scan-budget policy). Both None (all
+    string_scan fields, string_scan_error) when region is None (Section 4
+    never ran); string_scan None with string_scan_error set to the
     exception text when region is not None but the read/extraction itself
-    raised (report.py's own pre-existing `except Exception: print(...)`
-    around that section, preserved as structured data here instead of a
-    console-only message). `thread_region_correlation_excluded` is True
+    raised. `thread_region_correlation_excluded` is True
     exactly when this card's thread was confirmed unbacked but that fact
     was excluded from `findings`/verdict because it is not correlated
     with the independently-resolved region (see
@@ -970,12 +1113,12 @@ class TriageCardRecord:
                                                 # position, e.g. across a min_len boundary).
     other_threads_in_region:  list         # list[ReportThreadInfo]
     notable_strings:          list         # list[StringRecord]
-    ioc_strings:              list         # list[dict] -- StringRecord.to_dict() + is_network_pattern
-    string_scan:              "dict | None"   # {"scanned_bytes", "clamped", "total",
-                                                # "ascii_count", "utf16_count"}
+    ioc_strings:              list         # list[ReportIocString]
+    string_scan:              "dict | None"   # {"requested_bytes", "bytes_read", "clamped",
+                                                # "truncated", "total", "ascii_count", "utf16_count"}
     string_scan_error:        "str | None"
     thread_region_correlation_excluded: bool
-    findings:                 list         # list[str] -- INDICATOR_DIMS key(s) that fired
+    findings:                 list         # list[str] -- _TRIAGE_FINDING_KEYS subset that fired
     finding_details:          dict         # {key: human detail string}
     verdict:                  str          # verdict_for()'s output
     artifact_id:              "str | None"
@@ -1011,6 +1154,9 @@ class TriageCardRecord:
         if self.anchor_source == TRIAGE_ANCHOR_STRING_HIT and self.string_hit is None:
             raise ValueError(
                 "TriageCardRecord.string_hit is required when anchor_source == 'string_hit'")
+        if self.anchor_source != TRIAGE_ANCHOR_STRING_HIT and self.string_hit is not None:
+            raise ValueError(
+                "TriageCardRecord.string_hit must be None when anchor_source != 'string_hit'")
         if not isinstance(self.other_threads_in_region, list) or any(
                 not isinstance(t, ReportThreadInfo) for t in self.other_threads_in_region):
             raise TypeError(
@@ -1019,22 +1165,30 @@ class TriageCardRecord:
                 not isinstance(s, StringRecord) for s in self.notable_strings):
             raise TypeError("TriageCardRecord.notable_strings must be a list of StringRecord")
         if not isinstance(self.ioc_strings, list) or any(
-                not isinstance(s, dict) or not isinstance(s.get("is_network_pattern"), bool)
-                for s in self.ioc_strings):
-            raise TypeError(
-                "TriageCardRecord.ioc_strings must be a list of dicts, each with a bool "
-                "'is_network_pattern' key")
+                not isinstance(s, ReportIocString) for s in self.ioc_strings):
+            raise TypeError("TriageCardRecord.ioc_strings must be a list of ReportIocString")
         if self.string_scan is not None:
             if not isinstance(self.string_scan, dict):
                 raise TypeError("TriageCardRecord.string_scan must be None or a dict")
-            required = {"scanned_bytes", "clamped", "total", "ascii_count", "utf16_count"}
+            required = {"requested_bytes", "bytes_read", "clamped", "truncated",
+                        "total", "ascii_count", "utf16_count"}
             if set(self.string_scan.keys()) != required:
                 raise ValueError(
                     f"TriageCardRecord.string_scan must have exactly the keys {sorted(required)}, "
                     f"got {sorted(self.string_scan.keys())}")
-            _require_bool(self.string_scan["clamped"], "TriageCardRecord.string_scan['clamped']")
-            for key in ("scanned_bytes", "total", "ascii_count", "utf16_count"):
+            for key in ("clamped", "truncated"):
+                _require_bool(self.string_scan[key], f"TriageCardRecord.string_scan[{key!r}]")
+            for key in ("requested_bytes", "bytes_read", "total", "ascii_count", "utf16_count"):
                 _require_nonneg_int(self.string_scan[key], f"TriageCardRecord.string_scan[{key!r}]")
+            if self.string_scan["bytes_read"] > self.string_scan["requested_bytes"]:
+                raise ValueError(
+                    "TriageCardRecord.string_scan['bytes_read'] must not exceed "
+                    "['requested_bytes'] -- a read can come up short, never long")
+            if self.string_scan["truncated"] != (
+                    self.string_scan["bytes_read"] < self.string_scan["requested_bytes"]):
+                raise ValueError(
+                    "TriageCardRecord.string_scan['truncated'] must equal "
+                    "bytes_read < requested_bytes")
         _require_optional_diff_str(self.string_scan_error, "TriageCardRecord.string_scan_error")
         if self.string_scan is not None and self.string_scan_error is not None:
             raise ValueError(
@@ -1045,8 +1199,10 @@ class TriageCardRecord:
         if self.extract_read_clamped is not None:
             _require_bool(self.extract_read_clamped, "TriageCardRecord.extract_read_clamped")
         if not isinstance(self.findings, list) or any(
-                not isinstance(f, str) or not f for f in self.findings):
-            raise TypeError("TriageCardRecord.findings must be a list of non-empty strings")
+                f not in _TRIAGE_FINDING_KEYS for f in self.findings):
+            raise ValueError(
+                f"TriageCardRecord.findings entries must all be one of {_TRIAGE_FINDING_KEYS}, "
+                f"got {self.findings!r}")
         if len(set(self.findings)) != len(self.findings):
             raise ValueError("TriageCardRecord.findings must not contain duplicate keys")
         if not isinstance(self.finding_details, dict) or any(
@@ -1061,6 +1217,12 @@ class TriageCardRecord:
         if self.verdict not in _TRIAGE_VERDICTS:
             raise ValueError(
                 f"TriageCardRecord.verdict must be one of {_TRIAGE_VERDICTS}, got {self.verdict!r}")
+        expected_verdict = _TRIAGE_VERDICTS[min(len(self.findings), 3)]
+        if self.verdict != expected_verdict:
+            raise ValueError(
+                f"TriageCardRecord.verdict={self.verdict!r} does not match the four-tier rule "
+                f"for {len(self.findings)} finding(s) (expected {expected_verdict!r}) -- mirrors "
+                f"dumpex.core.memory.verdict_for()'s own len(dims) rule")
         _require_optional_diff_str(self.artifact_id, "TriageCardRecord.artifact_id")
 
     def to_dict(self) -> dict:
@@ -1073,7 +1235,7 @@ class TriageCardRecord:
             "string_hit":              dict(self.string_hit) if self.string_hit else None,
             "other_threads_in_region": [t.to_dict() for t in self.other_threads_in_region],
             "notable_strings":         [s.to_dict() for s in self.notable_strings],
-            "ioc_strings":             [dict(s) for s in self.ioc_strings],
+            "ioc_strings":             [s.to_dict() for s in self.ioc_strings],
             "string_scan":             dict(self.string_scan) if self.string_scan else None,
             "string_scan_error":       self.string_scan_error,
             "thread_region_correlation_excluded": self.thread_region_correlation_excluded,
