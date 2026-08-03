@@ -1,0 +1,124 @@
+
+══════════════════════════════════════════
+  HUNT: Process Injection
+══════════════════════════════════════════
+
+  [✓] RWX memory regions
+      Status : CLEAN — none found
+
+  [✓] Hidden PE headers
+      Status : CLEAN — no structurally-valid unregistered PE headers
+
+  [✓] Unbacked threads (StartAddress)
+      Status : CLEAN — all threads backed by known modules
+
+  [~] No per-thread CONTEXT (RIP/EIP) available in this dump — live-execution correlation could not run; score capped below HIGH.
+
+  [~] MemoryInfoListStream not in this dump — RWX / hidden-PE checks could not run.
+
+  [~] ThreadInfoListStream not in this dump — StartAddress-based unbacked-thread check could not run.
+
+  [ VERDICT ]  NOT EVALUATED — no required stream present in this dump
+
+  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
+
+══════════════════════════════════════════
+  HUNT: Process Hollowing
+══════════════════════════════════════════
+
+  [!] PEB not available — cannot run hollowing check.
+
+  [ VERDICT ]  NOT EVALUATED — PEB stream missing from this dump
+
+
+══════════════════════════════════════════
+  HUNT: Module Stomping
+══════════════════════════════════════════
+
+  [*] Scanning executable MEM_IMAGE regions for IOC strings (lead only)...
+
+  [✓] IOC strings in module code regions
+      Status : CLEAN — no IOC patterns in executable module memory
+
+  stomping.protection_deviation_lead  [LOW]  OBSERVATION
+    Inference   : No module section declared executable-but-not-writable shows a live protection state outside the normal set.
+    Confidence  : low  —  Absence of a protection anomaly is weak evidence of absence — stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.
+    Facts:
+      - 0 module(s) checked
+
+  [ VERDICT ]  NOT EVALUATED — MemoryInfoListStream missing from this dump; ModuleListStream missing from this dump; --ref-dir not supplied — verified content comparison (the only scored signal) was not performed for any module  (0/2, requires --ref-dir; protection-deviation and string-IOC leads above are informational and not counted)
+
+  [·] --ref-dir not supplied — verified content-diff (the only scored signal) was not attempted; reported as INCONCLUSIVE/partial coverage, not a clean result.
+
+
+══════════════════════════════════════════
+  HUNT: Named Pipe C2 / Lateral Movement
+══════════════════════════════════════════
+
+  [✓] Open pipe handles (HandleDataStream)
+      Status : NOT AVAILABLE — dump was not captured with MiniDumpWithHandleData
+
+  [✓] Pipe name strings in non-system memory
+      Status : CLEAN — no pipe-name byte patterns found
+
+  [✓] Known C2 framework pipe naming pattern (string leads)
+      Status : CLEAN — no known framework patterns among string leads
+
+  [ VERDICT ]  NOT EVALUATED — MemoryInfoListStream missing from this dump; HandleDataStream missing from this dump (needs MiniDumpWithHandleData) — the primary, scored pipe-handle check could not run  (0/3 — handle-anchored; string leads shown above are informational only)
+
+
+══════════════════════════════════════════
+  HUNT: Cobalt Strike Beacon Config
+══════════════════════════════════════════
+
+  [~] No memory segments in dump — cannot scan for beacon config.
+
+  [ VERDICT ]  NOT EVALUATED — Memory64ListStream missing from this dump
+
+
+══════════════════════════════════════════
+  HUNT: YARA Memory Scan
+══════════════════════════════════════════
+
+  [~] No .yar / .yara files found in <RULES_DIR>
+
+  [ VERDICT ]  NOT EVALUATED — no .yar/.yara files in <RULES_DIR>
+
+
+══════════════════════════════════════════
+  HUNT: Obfuscation Detection
+══════════════════════════════════════════
+
+  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …
+  [*] Layer 1: Shannon entropy scan …
+  [*] Layers 2-4: Base64 / XOR / GZIP scan …
+  [✓] CS Sleep Mask XOR-encoded beacon memory
+      Status : CLEAN — no sleep mask XOR encoding detected
+
+  [✓] High-entropy private memory
+      Status : CLEAN — no anomalous entropy in private regions
+
+  [✓] Base64 encoded payloads
+      Status : CLEAN — no significant Base64 payloads found
+
+  [✓] XOR single-byte obfuscation
+      Status : CLEAN — no single-byte XOR payloads identified
+
+  [✓] Compressed data (GZIP/ZLIB)
+      Status : CLEAN — no compressed payloads found
+
+  [ VERDICT ]  NOT EVALUATED — MemoryInfoListStream missing from this dump  (0/2 — structural detections only; entropy/Base64/GZIP/shellcode-prefix are observations/leads, never a verdict by themselves)
+
+══════════════════════════════════════════
+  HUNT SUMMARY
+══════════════════════════════════════════
+  Process Injection         NOT EVALUATED  (0/3)
+  Process Hollowing         NOT EVALUATED  (0/2)
+  Module Stomping           NOT EVALUATED  (0/2)
+  Named Pipe C2 / Lat. Move. NOT EVALUATED  (0/3)
+  Cobalt Strike Beacon      NOT EVALUATED  (0/2)
+  YARA Rules                NOT EVALUATED
+  Obfuscation Detection     NOT EVALUATED  (0/2)
+
+  Overall: No TTPs detected in what was scanned, but coverage is incomplete — one or more checks were NOT EVALUATED or INCONCLUSIVE (see per-TTP status above). This is not a clean bill of health.
+

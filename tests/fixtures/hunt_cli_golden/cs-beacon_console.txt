@@ -1,0 +1,25 @@
+
+══════════════════════════════════════════
+  HUNT: Cobalt Strike Beacon Config
+══════════════════════════════════════════
+
+  [*] Scanning 1 segment(s) for beacon signature …
+  [*] Scan complete.
+
+  [!] Beacon config #1  ──────────────────────────────────────────────
+  VA (process)               0x0000000000020100  ← virtual address in target process
+  File offset (.dmp)         0x0000000000002100  ← byte offset inside .dmp file
+  Region base (VA)           0x0000000000020000  ← for cross-referencing with --hunt injection
+  Region size                0x226
+  Region protect             PAGE_EXECUTE_READWRITE
+  XOR key                    0x69 'i'  (CS3 encoding)
+  CS version (estimated)     3.x
+  Context corroboration      YES  — enclosing region 0x20000 is executable, private memory (PAGE_EXECUTE_READWRITE)
+
+  ── C2 / Identity / Transport ──────────────────────────────────────
+  BeaconType                 HTTP
+
+  [ VERDICT ]  COBALT STRIKE — 1 beacon config(s) found in memory  (context-corroborated)
+
+  Use --verbose to dump all config fields.
+

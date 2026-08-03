@@ -1,0 +1,45 @@
+  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
+
+══════════════════════════════════════════
+  HUNT: Obfuscation Detection
+══════════════════════════════════════════
+
+  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …
+  [*] Layer 1: Shannon entropy scan …
+  [*] Layers 2-4: Base64 / XOR / GZIP scan …
+  [✓] CS Sleep Mask XOR-encoded beacon memory
+      Status : CLEAN — no sleep mask XOR encoding detected
+
+  [✓] High-entropy private memory
+      Status : CLEAN — no anomalous entropy in private regions
+
+  [✓] Base64 encoded payloads (observation)
+      Status : OBSERVATION — PE payload(s) found — see obfuscation.structural_payload below (scored)
+      Detail : 1 region(s) with Base64-decodable data
+
+  [✓] XOR single-byte obfuscation
+      Status : CLEAN — no single-byte XOR payloads identified
+
+  [✓] Compressed data (GZIP/ZLIB)
+      Status : CLEAN — no compressed payloads found
+
+  [✓] Structural PE payload inside encoded data
+      Status : DETECTION — executable payload concealed by encoding
+      Detail : 1 PE payload(s) found inside encoded/compressed data
+          Encoding       BASE64
+          Container VA   0x0000000000300000
+          Module status  UNREGISTERED — hidden PE
+          Decoded PE     1184 bytes
+
+  obfuscation.structural_payload  [HIGH]  DETECTION
+    Inference   : Decoded/decompressed content from one or more obfuscation layers structurally validates as a PE image.
+    Confidence  : high  —  Unlike raw entropy/Base64/GZIP presence, this checks WHAT the decoded bytes actually are: full PE structural validation (DOS/COFF/optional header + complete section table). Encoding was only the delivery mechanism here — the payload itself is the evidence.
+    Facts:
+      - type=PE encoding=base64 container_VA=0x300000 module_status=UNREGISTERED decoded_size=1184
+    Limitations:
+      - Structural validation reduces but does not eliminate false positives from adversarially-crafted or coincidental byte sequences in high-entropy data.
+
+  [ VERDICT ]  LIKELY — one structural indicator (sleep-mask decode or PE payload)  (1/2 — structural detections only; entropy/Base64/GZIP/shellcode-prefix are observations/leads, never a verdict by themselves)
+
+  Use --verbose to expand region addresses, decoded content, and IOC strings.
+

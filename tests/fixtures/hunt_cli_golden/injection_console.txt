@@ -1,0 +1,31 @@
+
+══════════════════════════════════════════
+  HUNT: Process Injection
+══════════════════════════════════════════
+
+  [!] RWX memory regions
+      Status : SUSPICIOUS
+      Detail : 1 region(s)
+
+  [!] Hidden PE headers (structurally validated, MZ not in module list)
+      Status : SUSPICIOUS
+      Detail : 1 structurally-validated unregistered PE(s)
+
+  [✓] Unbacked threads (StartAddress)
+      Status : LEAD
+      Detail : 1 thread(s) with no module backing (by StartAddress)
+
+  injection.allocation_correlation  [HIGH]  DETECTION
+    Inference   : 1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE — page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.
+    Confidence  : high  —  This is the strongest evidence this hunter can produce: the process is, at the moment of the dump, actively running code from an allocation with no legitimate module backing and a concealed PE image.
+    Facts:
+      - TID=0x1 RIP=0x7ff700002000 -> VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  [FULL: RWX+validated-PE]
+    Limitations:
+      - RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the dump was captured would not appear here.
+
+  [~] 1 region(s) returned fewer bytes than requested while checking for hidden PE headers — coverage is incomplete.
+
+  [ VERDICT ]  HIGH CONFIDENCE INJECTION  (score 3/3 — current RIP/EIP executing in an allocation where RWX + validated PE overlap)
+
+  Use --verbose to list individual addresses.
+

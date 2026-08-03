@@ -1,0 +1,41 @@
+{
+  "coverage": {
+    "hit_cap_not_reached": true,
+    "matches_completed": true,
+    "rule_files_compiled": true,
+    "scan_budget_ok": true,
+    "segments_read": true,
+    "segments_short_read": true,
+    "segments_size_ok": true
+  },
+  "coverage_status": "complete",
+  "matches": [
+    {
+      "context_unverified": false,
+      "file": "hit.yar",
+      "memory_context": null,
+      "meta": {},
+      "rule": "HitRule",
+      "seg_fo": 20480,
+      "seg_size": 525,
+      "seg_va": 327680,
+      "strings": [
+        {
+          "data": "46494e444d455f4d41524b4552",
+          "fo": 20736,
+          "offset": 256,
+          "va": 327936,
+          "var": "$a"
+        }
+      ],
+      "tags": []
+    }
+  ],
+  "rules_hit": [
+    "HitRule"
+  ],
+  "scan_complete": true,
+  "score": 1,
+  "status": "DETECTED",
+  "verdict_level": "likely"
+}

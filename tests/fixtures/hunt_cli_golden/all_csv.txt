@@ -1,0 +1,15 @@
+## hunt / summary
+ttp,score,max_score,status,verdict,verdict_level,confidence,coverage_complete,coverage_reason,lead_count,review_priority
+injection,0,3,NOT_EVALUATED,NOT_EVALUATED,not_evaluated,none,False,MemoryInfoListStream missing from this dump; ThreadInfoListStream missing from this dump; ModuleListStream missing from this dump; No per-thread CONTEXT (RIP/EIP) available — live-execution correlation could not run,0,none
+hollowing,0,2,NOT_EVALUATED,NOT_EVALUATED,not_evaluated,none,False,PEB stream missing from this dump,0,none
+stomping,0,2,NOT_EVALUATED,NOT_EVALUATED,not_evaluated,none,False,MemoryInfoListStream missing from this dump; ModuleListStream missing from this dump; --ref-dir not supplied — verified content comparison (the only scored signal) was not performed for any module,0,none
+pipe,0,3,NOT_EVALUATED,NOT_EVALUATED,not_evaluated,none,False,"MemoryInfoListStream missing from this dump; HandleDataStream missing from this dump (needs MiniDumpWithHandleData) — the primary, scored pipe-handle check could not run",0,none
+cs-beacon,0,2,NOT_EVALUATED,NOT_EVALUATED,not_evaluated,none,False,Memory64ListStream missing from this dump,0,none
+yara,0,3,NOT_EVALUATED,NOT_EVALUATED,not_evaluated,,False,not evaluated,,
+obfuscation,0,2,NOT_EVALUATED,NOT_EVALUATED,not_evaluated,none,False,MemoryInfoListStream missing from this dump,0,none
+
+## hunt / finding_details
+ttp,check,tag,confidence,inference,rationale,facts,limitations
+injection,injection.rip_correlation_unavailable,observation,low,No per-thread CONTEXT (RIP/EIP) could be read from this dump — live-execution correlation could not run.,"Coverage gap, not a negative result: a suspicious allocation with no RIP correlation available cannot be distinguished from one that was checked and found not currently executing.",thread_list_stream_present=False,"Injection score cannot reach HIGH (3) in this run regardless of other signals, since live-execution confirmation is the only path to that tier."
+stomping,stomping.protection_deviation_lead,observation,low,No module section declared executable-but-not-writable shows a live protection state outside the normal set.,Absence of a protection anomaly is weak evidence of absence — stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.,0 module(s) checked,
+

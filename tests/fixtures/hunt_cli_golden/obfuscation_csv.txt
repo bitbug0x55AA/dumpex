@@ -1,0 +1,13 @@
+## hunt / summary
+ttp,score,max_score,status,verdict,verdict_level,confidence,coverage_complete,coverage_reason,lead_count,review_priority
+obfuscation,1,2,DETECTED,LIKELY,likely,high,True,,0,high
+
+## hunt / findings
+ttp,finding_type,va_process,file_offset,cs_version,xor_key,beacon_type,c2_host,c2_uri,port,useragent,pipename,license_id,sleep_ms,jitter_pct,details
+obfuscation,obfuscation_structural_pe_payload,0x0000000000300000,,,,,,,,,,,,,encoding=base64; decoded_len=1184
+
+## hunt / finding_details
+ttp,check,tag,confidence,inference,rationale,facts,limitations
+obfuscation,obfuscation.base64_observation,observation,low,1 region(s) contain data that decodes cleanly as Base64.,"Base64 is a generic, ubiquitous encoding used constantly by benign software (certificates, config blobs, telemetry, embedded assets) — its mere presence carries no information about intent. Reported as an observation and never drives the obfuscation score by itself; only a decoded PE header or shellcode bootstrap pattern (see obfuscation.structural_payload) does.",VA=0x300000 decoded_type=pe decoded_size=1184,"IOC-style strings inside decoded content are a lead, not proof — see obfuscation.base64_observation facts / stomping-style string caveats."
+obfuscation,obfuscation.structural_payload,detection,high,Decoded/decompressed content from one or more obfuscation layers structurally validates as a PE image.,"Unlike raw entropy/Base64/GZIP presence, this checks WHAT the decoded bytes actually are: full PE structural validation (DOS/COFF/optional header + complete section table). Encoding was only the delivery mechanism here — the payload itself is the evidence.",type=PE encoding=base64 container_VA=0x300000 module_status=UNREGISTERED decoded_size=1184,Structural validation reduces but does not eliminate false positives from adversarially-crafted or coincidental byte sequences in high-entropy data.
+

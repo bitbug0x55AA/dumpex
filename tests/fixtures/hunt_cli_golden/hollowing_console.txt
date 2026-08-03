@@ -1,0 +1,27 @@
+  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
+
+══════════════════════════════════════════
+  HUNT: Process Hollowing
+══════════════════════════════════════════
+
+  PEB ImagePath     : C:\Windows\System32\legit.exe
+  ImageBase VA      : 0x0000000140000000  (process virtual address)
+  ImageBase offset  : (not captured)          (byte offset in .dmp file)
+
+  [!] Memory type at image base
+      Status : SUSPICIOUS — MEM_PRIVATE (not mapped from disk)
+      Detail : VA (process) 0x0000000140000000  File offset (not captured)  MEM_PRIVATE  PAGE_EXECUTE_READWRITE
+
+  [✓] MZ header at image base
+      Status : CLEAN — MZ present
+      Detail : Header bytes: 4d5a909090909090
+
+  [!] Protection at image base
+      Status : SUSPICIOUS — RWX (write needed to hollow)
+      Detail : PAGE_EXECUTE_READWRITE
+
+  [✓] PEB image name vs module list
+      Status : CLEAN — both report 'legit.exe'
+
+  [ VERDICT ]  LIKELY HOLLOWING — MEM_PRIVATE at image base correlated with RWX protection  (1/2 — requires MEM_PRIVATE at image base correlated with a second structural anomaly; single signals above are leads only)
+

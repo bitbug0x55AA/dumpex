@@ -1,0 +1,31 @@
+  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
+
+══════════════════════════════════════════
+  HUNT: Module Stomping
+══════════════════════════════════════════
+
+  [*] Scanning executable MEM_IMAGE regions for IOC strings (lead only)...
+
+  [✓] IOC strings in module code regions
+      Status : CLEAN — no IOC patterns in executable module memory
+
+  stomping.protection_deviation_lead  [LOW]  OBSERVATION
+    Inference   : No module section declared executable-but-not-writable shows a live protection state outside the normal set.
+    Confidence  : low  —  Absence of a protection anomaly is weak evidence of absence — stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.
+    Facts:
+      - 1 module(s) checked
+
+  stomping.verified_content_change  [MEDIUM]  DETECTION
+    Inference   : 1 module section(s) have relocation-normalized, byte-level content differences from an identity-matched (Machine/SizeOfImage/TimeDateStamp) reference file supplied via --ref-dir.
+    Confidence  : medium  —  Verified byte-level difference against an identity-matched, relocation-normalized reference, but no observed thread is currently executing inside the changed range(s).
+    Facts:
+      - module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes changed_ranges=[+0x0(len 0x2000)] disk_sha256=1c3fdaf62acfdf87… mem_sha256=24c09129af01e155…
+    Limitations:
+      - IAT/delay-import ranges and hotpatch trampolines are NOT specifically excluded before diffing — restricting the diff to executable, non-writable sections already excludes the import tables themselves for typical PE layouts, but a legitimate hotpatch NOP-padding/trampoline at a function prologue can still produce a genuine, non-malicious difference inside .text.
+      - PDB GUID/Age (CodeView debug directory) is not checked as part of reference-identity matching — Machine/SizeOfImage/TimeDateStamp matching all three is a strong but not perfect guarantee the reference is the exact same build.
+      - Relocation normalization applies IMAGE_REL_BASED_HIGHLOW/DIR64 fixups only — the types real x86/x64 linkers emit; an exotic or corrupt relocation table would leave some fixups un-normalized.
+
+  [ VERDICT ]  VERIFIED MODULE CODE MODIFICATION — content differs from reference file, but no observed thread executes inside the changed range (uncorroborated; consistent with hotpatch/EDR-hook activity as well as stomping)  (1/2, requires --ref-dir; protection-deviation and string-IOC leads above are informational and not counted)
+
+  Use --verbose to list every verified change in detail.
+

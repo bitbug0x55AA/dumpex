@@ -1,0 +1,12 @@
+## hunt / summary
+ttp,score,max_score,status,verdict,verdict_level,confidence,coverage_complete,coverage_reason,lead_count,review_priority
+cs-beacon,2,2,DETECTED,HIGH,high,high,True,,0,high
+
+## hunt / findings
+ttp,finding_type,va_process,file_offset,cs_version,xor_key,beacon_type,c2_host,c2_uri,port,useragent,pipename,license_id,sleep_ms,jitter_pct,details
+cs-beacon,cs_beacon_config,0x0000000000020100,0x2100,3.x,0x69,0,,,,,,,,,
+
+## hunt / finding_details
+ttp,check,tag,confidence,inference,rationale,facts,limitations
+cs-beacon,cs_beacon.structural_config,detection,high,"Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.","Corroborated by independent memory context: enclosing region 0x20000 is executable, private memory (PAGE_EXECUTE_READWRITE)",VA=0x20100 file_offset=0x2100 xor_key=0x69 cs_version_estimated=3.x field_count=2 | region=0x20000 size=0x226 protect=PAGE_EXECUTE_READWRITE,
+

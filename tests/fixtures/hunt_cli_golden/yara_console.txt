@@ -1,0 +1,17 @@
+
+══════════════════════════════════════════
+  HUNT: YARA Memory Scan
+══════════════════════════════════════════
+
+  [*] Loaded 1 rule file(s) from <RULES_DIR>
+  [*] Scanning 1 segment(s) …
+
+  [*] Scan complete — 1 segment(s) scanned.
+  [!] Rule: HitRule  (hit.yar)
+      Status : SUSPICIOUS
+      Detail : 1 region(s), 1 string hit(s)
+          hit.yar
+          regions: 0x50000
+
+  [ VERDICT ]  MEDIUM — 1 distinct rule(s) matched  (1 rule(s))
+

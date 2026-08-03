@@ -1,0 +1,178 @@
+{
+  "cs-beacon": {
+    "confidence": "none",
+    "configs": [],
+    "coverage_reasons": [
+      "Memory64ListStream missing from this dump"
+    ],
+    "coverage_status": "not_evaluated",
+    "findings": [],
+    "lead_count": 0,
+    "max_score": 2,
+    "review_priority": "none",
+    "score": 0,
+    "status": "NOT_EVALUATED",
+    "verdict_level": "not_evaluated"
+  },
+  "hollowing": {
+    "confidence": "none",
+    "coverage_reasons": [
+      "PEB stream missing from this dump"
+    ],
+    "coverage_status": "not_evaluated",
+    "findings": [],
+    "lead_count": 0,
+    "max_score": 2,
+    "review_priority": "none",
+    "score": 0,
+    "status": "NOT_EVALUATED",
+    "verdict_level": "not_evaluated"
+  },
+  "injection": {
+    "confidence": "none",
+    "coverage": {
+      "contexts_missing": 0,
+      "contexts_parsed": 0,
+      "memory_info_stream": false,
+      "module_list_stream": false,
+      "thread_context": false,
+      "thread_info_stream": false,
+      "thread_list_stream": false,
+      "threads_total": 0
+    },
+    "coverage_reasons": [
+      "MemoryInfoListStream missing from this dump",
+      "ThreadInfoListStream missing from this dump",
+      "ModuleListStream missing from this dump",
+      "No per-thread CONTEXT (RIP/EIP) available — live-execution correlation could not run"
+    ],
+    "coverage_status": "not_evaluated",
+    "findings": [
+      {
+        "check": "injection.rip_correlation_unavailable",
+        "confidence": "low",
+        "facts": [
+          "thread_list_stream_present=False"
+        ],
+        "inference": "No per-thread CONTEXT (RIP/EIP) could be read from this dump — live-execution correlation could not run.",
+        "limitations": [
+          "Injection score cannot reach HIGH (3) in this run regardless of other signals, since live-execution confirmation is the only path to that tier."
+        ],
+        "rationale": "Coverage gap, not a negative result: a suspicious allocation with no RIP correlation available cannot be distinguished from one that was checked and found not currently executing.",
+        "tag": "observation"
+      }
+    ],
+    "hidden_pe_unvalidated": [],
+    "hidden_pe_validated": [],
+    "informational_validated_pe_hits": [],
+    "lead_count": 0,
+    "max_score": 3,
+    "pe_read_failed": 0,
+    "pe_short_reads": 0,
+    "review_priority": "none",
+    "rip_full_correlation": [],
+    "rip_hits": [],
+    "rwx": [],
+    "rwx_and_pe_alloc_bases": [],
+    "score": 0,
+    "start_hits": [],
+    "status": "NOT_EVALUATED",
+    "suspicious_validated_pe_hits": [],
+    "thread_contexts": [],
+    "threads": [],
+    "verdict_level": "not_evaluated"
+  },
+  "obfuscation": {
+    "base64": [],
+    "budget_exhausted": false,
+    "compressed": [],
+    "confidence": "none",
+    "coverage_reasons": [
+      "MemoryInfoListStream missing from this dump"
+    ],
+    "coverage_status": "not_evaluated",
+    "entropy": [],
+    "findings": [],
+    "hidden_pe": [],
+    "hidden_shellcode": [],
+    "lead_count": 0,
+    "max_score": 2,
+    "review_priority": "none",
+    "score": 0,
+    "sleep_mask": [],
+    "status": "NOT_EVALUATED",
+    "verdict_level": "not_evaluated",
+    "xor": []
+  },
+  "pipe": {
+    "budget_exhausted": false,
+    "c2_context": [],
+    "confidence": "none",
+    "coverage_reasons": [
+      "MemoryInfoListStream missing from this dump",
+      "HandleDataStream missing from this dump (needs MiniDumpWithHandleData) — the primary, scored pipe-handle check could not run"
+    ],
+    "coverage_status": "not_evaluated",
+    "findings": [],
+    "framework_pipes": [],
+    "handle_pipes": [],
+    "lead_count": 0,
+    "max_score": 3,
+    "private_pipes": [],
+    "review_priority": "none",
+    "scan_complete": true,
+    "score": 0,
+    "status": "NOT_EVALUATED",
+    "unbacked_in_rgn": [],
+    "verdict_level": "not_evaluated"
+  },
+  "stomping": {
+    "confidence": "none",
+    "coverage_counts": {
+      "headers_parsed": 0,
+      "memory_read_failed": 0,
+      "modules_total": 0,
+      "reference_mismatch": 0,
+      "reference_missing": 0,
+      "reference_read_failed": 0,
+      "relocation_failed": 0,
+      "sections_compared": 0,
+      "sections_total": 0,
+      "short_reads": 0
+    },
+    "coverage_reasons": [
+      "MemoryInfoListStream missing from this dump",
+      "ModuleListStream missing from this dump",
+      "--ref-dir not supplied — verified content comparison (the only scored signal) was not performed for any module"
+    ],
+    "coverage_status": "not_evaluated",
+    "findings": [
+      {
+        "check": "stomping.protection_deviation_lead",
+        "confidence": "low",
+        "facts": [
+          "0 module(s) checked"
+        ],
+        "inference": "No module section declared executable-but-not-writable shows a live protection state outside the normal set.",
+        "limitations": [],
+        "rationale": "Absence of a protection anomaly is weak evidence of absence — stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.",
+        "tag": "observation"
+      }
+    ],
+    "lead_count": 0,
+    "max_score": 2,
+    "protection_leads": [],
+    "review_priority": "none",
+    "score": 0,
+    "status": "NOT_EVALUATED",
+    "verdict_level": "not_evaluated",
+    "verified_changes": []
+  },
+  "yara": {
+    "coverage_status": "not_evaluated",
+    "matches": [],
+    "score": 0,
+    "status": "NOT_EVALUATED",
+    "verdict_level": "not_evaluated"
+  }
+}
