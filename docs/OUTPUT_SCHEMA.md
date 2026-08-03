@@ -29,28 +29,35 @@ dumpex currently has two coexisting JSON contracts, not one:
 | Commands | Contract | Schema file |
 |---|---|---|
 | `--hunt` | v1.1 | [`dumpex-output-v1.1.schema.json`](../dumpex/schemas/dumpex-output-v1.1.schema.json) |
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report` | v2.3 (current) | [`dumpex-output-v2.3.schema.json`](../dumpex/schemas/dumpex-output-v2.3.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report` | v2.4 (current) | [`dumpex-output-v2.4.schema.json`](../dumpex/schemas/dumpex-output-v2.4.schema.json) |
+| — (historical) | v2.3 | [`dumpex-output-v2.3.schema.json`](../dumpex/schemas/dumpex-output-v2.3.schema.json) — frozen, kept only to validate output produced before `schema_version 2.4`; no command emits this anymore |
 | — (historical) | v2.2 | [`dumpex-output-v2.2.schema.json`](../dumpex/schemas/dumpex-output-v2.2.schema.json) — frozen, kept only to validate output produced before `schema_version 2.3`; no command emits this anymore |
 | — (historical) | v2.1 | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) — frozen, kept only to validate output produced before `schema_version 2.2`; no command emits this anymore |
 | — (historical) | v2.0 | [`dumpex-output-v2.0.schema.json`](../dumpex/schemas/dumpex-output-v2.0.schema.json) — frozen, kept only to validate output produced before `schema_version 2.1`; no command emits this anymore |
 
 `schema_version` moved from `"2.0"` to `"2.1"` when `result.kind` gained a
 `"comparison"` value, then from `"2.1"` to `"2.2"` when it gained `"extract"`
-and `"strings"` values, then from `"2.2"` to `"2.3"` when it gained `"report"`
-(see "v2 structured output" below) — a new value on an existing closed enum
-always bumps the version per this document's own versioning policy, even
-though an already-migrated command's own output is otherwise unaffected (the
-`"report"` addition specifically must NOT be folded into `dumpex-output-
-v2.2.schema.json` in place: that file was already shipped/used by `--extract`/
-`--strings` output before `"report"` existed, so it stays byte-frozen —
-`"report"` gets its own new schema_version instead). `dumpex-output-
-v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json` stay installed and
-importable via
+and `"strings"` values, then from `"2.2"` to `"2.3"` when it gained `"report"`,
+then from `"2.3"` to `"2.4"` when it gained `"hunt"` (a `result.kind` value
+that, as of this document, no command actually produces yet -- `--hunt`
+still emits the separate v1.1 contract below until its own CLI wiring
+switches over; see "v2 structured output: hunt" below for the schema
+that switch will start producing) (see "v2 structured output" below) — a
+new value on an existing closed enum always bumps the version per this
+document's own versioning policy, even though an already-migrated
+command's own output is otherwise unaffected (the `"report"`/`"hunt"`
+additions specifically must NOT be folded into `dumpex-output-
+v2.2.schema.json`/`v2.3.schema.json` in place: those files were already
+shipped/used by earlier-migrated commands' output before `"report"`/
+`"hunt"` existed, so they stay byte-frozen — each addition gets its own
+new schema_version instead). `dumpex-output-
+v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`
+stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`) for validating output captured before each respective change; none is
-deleted or overwritten, following the same precedent v1.0→v1.1 set. All ten
-other commands now produce this contract — `--hunt` is the only one left on
-v1.1.
+`v2.2`/`v2.3`) for validating output captured before each respective
+change; none is deleted or overwritten, following the same precedent
+v1.0→v1.1 set. All ten already-migrated commands now produce the v2.4
+contract — `--hunt` is the only one left on v1.1.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -289,7 +296,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.3",
+    "schema_version": "2.4",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -704,6 +711,30 @@ two producers. A `--report-string` run with multiple hit regions
 and `--output` given disambiguates each card's own extract path (e.g.
 `out_0x7ffe1000.bin`, `out_0x7ffe2000.bin`) rather than letting later
 writes silently clobber earlier ones.
+
+### Hunt records (schema-only — not yet produced)
+
+`schema_version 2.4` adds a `"hunt"` value to `result.kind` and its own
+record type, `hunterRecord` (one entry per hunter — `injection`/
+`hollowing`/`stomping`/`pipe`/`cs-beacon`/`yara`/`obfuscation` — not one
+per raw hunter hit; see
+[`dumpex/output/records.py`](../dumpex/output/records.py)'s
+`HunterRecord` and its seven `*Details` types for the exact field lists,
+and [`docs/hunt_migration_field_matrix.md`](hunt_migration_field_matrix.md)
+for the full per-hunter field-by-field migration rationale). `"hunt"`
+gets its own new `schema_version` for the same reason `"report"` did:
+`dumpex-output-v2.3.schema.json` was already shipped/used by `--report`
+output before `"hunt"` existed, so it stays byte-frozen.
+
+As of this document, `--hunt` does not yet emit this contract — it still
+produces the separate v1.1 JSON described earlier in this document. The
+v2.4 schema fully describes the target shape (used today only by tests
+constructing `HunterRecord` instances directly, and by the CSV
+partitioning in
+[`dumpex/output/csv_export.py`](../dumpex/output/csv_export.py)), but the
+CLI's atomic switch onto it — routing `--hunt` through the v2 envelope,
+the coverage-based exit code, and deleting the v1.1 dispatcher path — is
+separate, tracked follow-up work.
 
 ## Reproducing a run
 

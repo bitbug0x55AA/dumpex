@@ -32,7 +32,7 @@ def _meta(tmp_path, **overrides):
 
 def test_meta_evidence_is_a_single_element_array(tmp_path):
     meta = _meta(tmp_path)
-    assert meta["schema_version"] == SCHEMA_VERSION == "2.3"
+    assert meta["schema_version"] == SCHEMA_VERSION == "2.4"
     assert isinstance(meta["evidence"], list)
     assert len(meta["evidence"]) == 1
     entry = meta["evidence"][0]
@@ -330,6 +330,91 @@ def test_build_meta_v2_without_evidence_is_byte_identical_to_before_phase_c(tmp_
     assert entry["file_name"] == "sample.dmp"
     assert entry["size_bytes"] == len(b"fake dump content")
     assert len(entry["sha256"]) == 64
+
+
+# ── meta.rules / meta.yara_rules (PR3: v2.4's hunt-provenance fields) ────
+
+def test_meta_omits_rules_when_get_rules_never_called(tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", lambda: None)
+    meta = _meta(tmp_path)
+    assert "rules" not in meta
+
+
+def test_meta_omits_yara_rules_when_yara_never_invoked(tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", lambda: None)
+    meta = _meta(tmp_path)
+    assert "yara_rules" not in meta
+
+
+def test_meta_includes_rules_provenance_when_present(tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", lambda: {
+        "path": "/case/work/rules.yaml", "sha256": "a" * 64, "explicit": True, "version": 3})
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", lambda: None)
+    meta = _meta(tmp_path)
+    assert meta["rules"] == {"path": "/case/work/rules.yaml", "sha256": "a" * 64,
+                              "explicit": True, "version": 3}
+
+
+def test_meta_redact_paths_reduces_rules_path_to_basename(tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", lambda: {
+        "path": "/case/work/rules.yaml", "sha256": "a" * 64, "explicit": True, "version": 3})
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", lambda: None)
+    meta = _meta(tmp_path, redact_paths=True)
+    assert meta["rules"]["path"] == "rules.yaml"
+
+
+def test_meta_rules_path_none_for_builtin_defaults_stays_none_even_when_redacted(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", lambda: {
+        "path": None, "sha256": None, "explicit": False, "version": 1})
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", lambda: None)
+    meta = _meta(tmp_path, redact_paths=True)
+    assert meta["rules"]["path"] is None
+
+
+def test_meta_includes_yara_rules_provenance_when_present(tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", lambda: None)
+    yara_info = {"rules_dir": "/case/work/rules/yara", "files": [
+        {"name": "cs_indicators.yar", "sha256": "b" * 64, "compiled": True, "error": None}],
+        "aggregate_sha256": "c" * 64, "compiled_ok": 1, "compile_failed": 0}
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", lambda: yara_info)
+    meta = _meta(tmp_path)
+    assert meta["yara_rules"] == yara_info
+
+
+def test_meta_redact_paths_reduces_yara_rules_dir_to_basename(tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", lambda: None)
+    # aggregate_sha256 is never null in the real shape: load_and_compile()
+    # calls hashlib.sha256().hexdigest() unconditionally, even with zero
+    # rule files (see dumpex/hunt/yara_hunt/rules.py) -- a fixed 64-hex
+    # placeholder here, not None, keeps this mock a shape the real code
+    # can actually produce.
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", lambda: {
+        "rules_dir": "/case/work/rules/yara", "files": [], "aggregate_sha256": "e" * 64,
+        "compiled_ok": 0, "compile_failed": 0})
+    meta = _meta(tmp_path, redact_paths=True)
+    assert meta["yara_rules"]["rules_dir"] == "yara"
+
+
+def test_meta_rules_lookup_failure_isolated_as_error_object(tmp_path, monkeypatch):
+    def _boom():
+        raise RuntimeError("simulated rules lookup failure")
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", _boom)
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", lambda: None)
+    meta = _meta(tmp_path)
+    assert meta["rules"] == {"error": "simulated rules lookup failure"}
+    # a failure building rules must not take down the rest of meta
+    assert meta["execution"]["command"] == "modules"
+
+
+def test_meta_yara_rules_lookup_failure_isolated_as_error_object(tmp_path, monkeypatch):
+    monkeypatch.setattr("dumpex.rules_pkg.loader.get_rules_source_info", lambda: None)
+    def _boom():
+        raise RuntimeError("simulated yara lookup failure")
+    monkeypatch.setattr("dumpex.hunt.yara_hunt.get_yara_provenance", _boom)
+    meta = _meta(tmp_path)
+    assert meta["yara_rules"] == {"error": "simulated yara lookup failure"}
+    assert meta["execution"]["command"] == "modules"
 
 
 # ── execution_status / coverage stay independent axes ────────────────────

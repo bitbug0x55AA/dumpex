@@ -34,7 +34,7 @@ __all__ = [
     "EvidenceInput", "build_meta_v2", "Result", "Envelope",
 ]
 
-SCHEMA_VERSION = "2.3"
+SCHEMA_VERSION = "2.4"
 
 # CLI options whose VALUE is a filesystem path -- same redaction concern
 # as dumpex.ui.structured's _PATH_OPTION_KEYS, kept as its own copy here
@@ -93,6 +93,46 @@ def _runtime_meta() -> dict:
         except importlib.metadata.PackageNotFoundError:
             pass
     return info
+
+
+def _rules_meta(redact_paths: bool) -> "dict | None":
+    """v2 counterpart to dumpex.ui.structured.StructuredOutput._rules_meta
+    -- same provenance (which rules.yaml, its sha256, whether it was
+    explicitly supplied via --rules-file), same basename-only redaction
+    under --redact-paths, same "None if get_rules() was never called this
+    run" contract (omitted from meta entirely rather than a misleading
+    empty object)."""
+    try:
+        from dumpex.rules_pkg.loader import get_rules_source_info
+        info = get_rules_source_info()
+        if info is None:
+            return None
+        info = dict(info)
+        if redact_paths and info.get("path"):
+            info["path"] = os.path.basename(info["path"].rstrip("/\\"))
+        return info
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _yara_rules_meta(redact_paths: bool) -> "dict | None":
+    """v2 counterpart to dumpex.ui.structured.StructuredOutput._yara_meta
+    -- same provenance (sorted rule filenames, per-file sha256, aggregate
+    sha256, compile success/fail counts) for the rule files actually used
+    by the most recent --hunt yara/all run, same basename-only redaction
+    under --redact-paths, same "None if YARA scanning was never invoked
+    this run" contract."""
+    try:
+        from dumpex.hunt.yara_hunt import get_yara_provenance
+        info = get_yara_provenance()
+        if info is None:
+            return None
+        info = dict(info)
+        if redact_paths and info.get("rules_dir"):
+            info["rules_dir"] = os.path.basename(info["rules_dir"].rstrip("/\\"))
+        return info
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @dataclass(frozen=True)
@@ -296,6 +336,19 @@ def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | 
         meta["runtime"] = _runtime_meta()
     except Exception:
         pass   # optional field -- omitted entirely on failure, not required by the schema
+
+    # rules/yara_rules are both optional, omitted entirely (not even as an
+    # error placeholder) when the corresponding loader was never invoked
+    # this run -- see each helper's own docstring. This mirrors
+    # dumpex.ui.structured.StructuredOutput._build_meta's identical
+    # if-not-None-then-attach pattern, so v1.1 and v2 report the exact
+    # same provenance for the exact same run.
+    rules = _rules_meta(redact_paths)
+    if rules is not None:
+        meta["rules"] = rules
+    yara_rules = _yara_rules_meta(redact_paths)
+    if yara_rules is not None:
+        meta["yara_rules"] = yara_rules
 
     return meta
 

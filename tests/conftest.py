@@ -24,6 +24,8 @@ from dumpex.core.memory import get_thread_contexts as _real_get_thread_contexts
 import dumpex.hunt.stomping as stomping
 import dumpex.hunt.pipe as pipemod
 import dumpex.hunt.cs_beacon as cs_beacon
+import dumpex.rules_pkg.loader as _rules_loader
+import dumpex.hunt.yara_hunt as _yara_hunt_mod
 
 _THREAD_CONTEXT_MODULES = (stomping, pipemod, cs_beacon)
 
@@ -48,3 +50,27 @@ def _reset_thread_context_monkeypatches():
     yield
     for mod in _THREAD_CONTEXT_MODULES:
         mod.get_thread_contexts = _real_get_thread_contexts
+
+
+@pytest.fixture(autouse=True)
+def _reset_rules_and_yara_provenance():
+    """
+    dumpex.rules_pkg.loader._LAST_SOURCE_INFO and
+    dumpex.hunt.yara_hunt._LAST_YARA_PROVENANCE are both set-only module
+    globals (see get_rules_source_info()/get_yara_provenance()'s own
+    docstrings) -- dumpex.output.envelope.build_meta_v2 now reads both,
+    unconditionally, for EVERY v2 command's meta.rules/meta.yara_rules
+    (PR3). Exactly the same "a stale global leaks into an unrelated later
+    test" hazard _reset_thread_context_monkeypatches above already
+    guards against, just for a different pair of globals: without this,
+    any test that calls get_rules()/_load_yara_rules() (most hunt tests)
+    would leave meta.rules/meta.yara_rules populated in every later,
+    unrelated command's compat-freeze fixture for the rest of the
+    process -- a real failure mode hit while adding this fixture, not a
+    hypothetical one.
+    """
+    _rules_loader._LAST_SOURCE_INFO = None
+    _yara_hunt_mod._LAST_YARA_PROVENANCE = None
+    yield
+    _rules_loader._LAST_SOURCE_INFO = None
+    _yara_hunt_mod._LAST_YARA_PROVENANCE = None
