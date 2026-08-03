@@ -1,5 +1,5 @@
 """Process hollowing / image-base mismatch hunter."""
-import os
+import ntpath
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.rules_pkg.loader import get_rules
@@ -328,4 +328,6 @@ def _hunt_hollowing(mf: MinidumpFile, verbose: bool = False) -> dict:
 
 
 def _basename_lower(path: str) -> str:
-    return os.path.basename(path or "").lower()
+    # Paths embedded in a minidump use Windows separators regardless of
+    # the host running dumpex.  ntpath keeps the comparison portable.
+    return ntpath.basename(path or "").lower()

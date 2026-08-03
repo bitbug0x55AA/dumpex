@@ -1,4 +1,5 @@
 """--report command."""
+import ntpath
 import os
 import re
 from pathlib import Path
@@ -533,7 +534,10 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                 "any specific string hit region -- it is not carried into the per-region "
                 "triage.", code="REPORT_TID_NOT_CORRELATED_WITH_STRING_HITS"))
 
-        image_hit_modules = sorted({os.path.basename(m.name) for _, _, _, m in image_hits})
+        # Module names come from a Windows minidump even when dumpex runs
+        # on Linux/macOS.  Use Windows path semantics so backslash-separated
+        # paths collapse to the same basename on every analysis host.
+        image_hit_modules = sorted({ntpath.basename(m.name) for _, _, _, m in image_hits})
         summary = {
             "mode": "string", "query_string": report_string, "query_tid": report_tid,
             "query_addr": None, "total_hits": len(hits), "hits_private": len(private_hits),
@@ -627,7 +631,7 @@ def _print_card_banner(mf, card, query_tid, query_addr) -> None:
 
 def _backed_by_text(module_context: str, backing_module: "str | None") -> str:
     if module_context == MODULE_CONTEXT_RESOLVED:
-        return DIM(os.path.basename(backing_module))
+        return DIM(ntpath.basename(backing_module))
     if module_context == MODULE_CONTEXT_UNREGISTERED:
         return RED("NOT IN ANY MODULE ⚠")
     return YELLOW("module classification unavailable")
