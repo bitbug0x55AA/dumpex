@@ -1299,6 +1299,52 @@ def test_report_summary_tid_mode_with_non_null_query_string_is_rejected(validato
     assert not validator.is_valid(doc)
 
 
+def test_report_summary_non_string_mode_with_nonzero_search_counters_is_rejected(validator):
+    # RevFix3-P2b: a non-string mode summary must not be able to carry
+    # search-only facts (total_hits/skipped_unreadable_regions/etc) --
+    # these are only ever meaningful for a --report-string run.
+    doc = _minimal_valid_report_doc()
+    doc["result"]["summary"]["total_hits"] = 99
+    doc["result"]["summary"]["skipped_unreadable_regions"] = 9
+    doc["result"]["summary"]["truncated_regions"] = 8
+    doc["result"]["summary"]["clamped_regions"] = 7
+    assert not validator.is_valid(doc)
+
+
+def test_report_summary_non_string_mode_with_nonempty_image_hit_modules_is_rejected(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["summary"]["image_hit_modules"] = ["kernel32.dll"]
+    assert not validator.is_valid(doc)
+
+
+def test_report_summary_string_mode_with_null_total_hits_is_rejected(validator):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["summary"] = {
+        "mode": "string", "card_count": 0, "query_string": "needle", "query_tid": None,
+        "query_addr": None, "total_hits": None, "hits_private": None, "hits_image": None,
+        "image_hit_modules": [], "skipped_unreadable_regions": 0,
+        "truncated_regions": 0, "clamped_regions": 0,
+    }
+    doc["result"]["data"]["records"] = []
+    assert not validator.is_valid(doc)
+
+
+def test_coverage_limitation_report_string_scan_incomplete_wrong_source_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE,
+                              source="string_search", affected_count=1).to_dict()
+    doc["source"] = "wrong_source"
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
+def test_coverage_limitation_report_string_scan_truncated_wrong_source_rejected_by_schema(
+        coverage_limitation_schema):
+    doc = CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_TRUNCATED,
+                              source="string_search", affected_count=1).to_dict()
+    doc["source"] = "wrong_source"
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
+
+
 def test_triage_card_string_hit_anchor_requires_non_null_string_hit(validator):
     doc = _minimal_valid_report_doc()
     doc["result"]["data"]["records"][0]["anchor_source"] = "string_hit"

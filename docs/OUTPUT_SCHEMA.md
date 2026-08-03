@@ -603,17 +603,22 @@ combine into one confidence score).
 are a tri-state triple, not a single boolean: `module_context`
 (`"resolved"`/`"unregistered"`/`"unavailable"`, reusing `threadRecord`'s
 own vocabulary) is never null once a region is resolved at all;
-`mz_header_detected` is `null` only when the region's own content read
-itself failed. `mz_header_detected` is derived from the SAME read
-Section 4 performs for its own string scan, not a second, independent
-small peek read — reusing one read for both closes a gap where a
-header-only read failing on its own while a larger read of the identical
-starting address succeeded right after would otherwise leave
+`mz_header_detected` is `null` when the region's own content read either
+fails outright or returns fewer than 2 bytes — either way there isn't
+enough data to confirm OR rule out an `"MZ"` signature, so it must not
+collapse to `false` the way a bare `data[:2] == b"MZ"` comparison would
+(a 1-byte read's own `b"M"[:2]` is unequal to `b"MZ"`, but that is
+"unknown", not "confirmed absent"). `mz_header_detected` is derived from
+the SAME read Section 4 performs for its own string scan, not a second,
+independent small peek read — reusing one read for both closes a gap
+where a header-only read failing on its own while a larger read of the
+identical starting address succeeded right after would otherwise leave
 `mz_header_detected` stuck at `null` even though the bytes needed were
-available; a failure of that one shared read now means `mz_header_detected`
-is `null` AND `string_scan_error` is set together, both correctly
-reflecting the SAME read failure rather than two independently-tracked
-facts that could disagree. `has_injected_pe` is `null` whenever the
+available; a failure (or short read) of that one shared read now means
+`mz_header_detected` is `null` AND `string_scan.truncated`/
+`string_scan_error` reflect the same gap, both correctly tied to the SAME
+read rather than two independently-tracked facts that could disagree.
+`has_injected_pe` is `null` whenever the
 evidence needed to decide either way is itself missing (an unread header,
 or an MZ header found but `module_context` is `"unavailable"` — found
 something suspicious-shaped but can't confirm it's actually unregistered).

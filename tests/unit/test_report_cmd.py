@@ -366,6 +366,27 @@ def test_header_read_failure_yields_null_mz_header_detected(monkeypatch):
     assert card.string_scan_error == "region unreadable"
 
 
+@pytest.mark.parametrize("returned,expected_mz,expected_injected", [
+    (b"", None, None),         # 0 bytes -- can't tell either way
+    (b"M", None, None),        # 1 byte -- b"M"[:2] != b"MZ", but that's "unknown", not "confirmed absent"
+    (b"MZ", True, True),       # exactly 2 bytes, MZ -- confirmed, and modules=[] -> confirmed unregistered
+    (b"XY", False, False),     # exactly 2 bytes, genuinely not MZ -- confirmed absent
+])
+def test_mz_header_detected_boundary_on_short_reads(monkeypatch, returned, expected_mz, expected_injected):
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x7400, 0x7400, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+
+    def _reader(mf_, addr, size):
+        return returned
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+
+    result = collect_report(mf, report_addr="0x7400")
+    card = result.records[0]
+    assert card.region.mz_header_detected is expected_mz
+    assert card.region.has_injected_pe is expected_injected
+
+
 def test_other_thread_unbacked_in_region_requires_modules_available(monkeypatch):
     # Section 3's own instance of the same bug class: an other-thread in
     # the resolved region must not be flagged unbacked_thread when

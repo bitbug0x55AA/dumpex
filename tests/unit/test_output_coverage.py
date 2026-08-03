@@ -1709,6 +1709,18 @@ def test_build_coverage_report_not_evaluated_never_duplicates_absent_source_as_f
 # read < bytes requested) -- see dumpex.commands.report.StringSearchStats'
 # own docstring for why these must never share one limitation.
 
+def test_coverage_limitation_report_string_scan_incomplete_rejects_wrong_source():
+    with pytest.raises(ValueError, match="string_search"):
+        CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE,
+                            source="wrong_source", affected_count=3)
+
+
+def test_coverage_limitation_report_string_scan_truncated_rejects_wrong_source():
+    with pytest.raises(ValueError, match="string_search"):
+        CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_TRUNCATED,
+                            source="wrong_source", affected_count=3)
+
+
 def test_coverage_limitation_report_string_scan_incomplete_valid_shape_accepted():
     limitation = CoverageLimitation(
         code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE, source="string_search",

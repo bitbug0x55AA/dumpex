@@ -223,7 +223,11 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         has_injected_pe = None
         try:
             data    = read_region(mf, region.BaseAddress, read_size)
-            mz_header_detected = data[:2] == b'MZ'
+            # Fewer than 2 bytes is not enough to rule out "MZ" -- must
+            # stay unconfirmed (None), not silently read as a confirmed
+            # non-match the way a plain data[:2] == b'MZ' comparison would
+            # (b'M'[:2] == b'MZ' is False, not "unknown").
+            mz_header_detected = (data[:2] == b'MZ') if len(data) >= 2 else None
             strings = _extract_strings_from_data(data, min_len=min_len)
 
             ioc_hits = [(off, enc, s) for off, enc, s in strings

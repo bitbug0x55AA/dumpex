@@ -852,12 +852,12 @@ _CODE_SPECS = {
         render=_render_report_module_context_unavailable, fixed_source="modules",
         absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.REPORT_STRING_SCAN_INCOMPLETE: _CodeSpec(
-        render=_render_report_string_scan_incomplete, caller_buildable=True,
-        validate_fields=_validate_report_string_scan_incomplete_fields,
+        render=_render_report_string_scan_incomplete, fixed_source="string_search",
+        caller_buildable=True, validate_fields=_validate_report_string_scan_incomplete_fields,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.REPORT_STRING_SCAN_TRUNCATED: _CodeSpec(
-        render=_render_report_string_scan_truncated, caller_buildable=True,
-        validate_fields=_validate_report_string_scan_truncated_fields,
+        render=_render_report_string_scan_truncated, fixed_source="string_search",
+        caller_buildable=True, validate_fields=_validate_report_string_scan_truncated_fields,
         allowed_fields=frozenset({"affected_count"})),
 }
 
