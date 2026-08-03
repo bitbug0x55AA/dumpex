@@ -603,11 +603,20 @@ combine into one confidence score).
 are a tri-state triple, not a single boolean: `module_context`
 (`"resolved"`/`"unregistered"`/`"unavailable"`, reusing `threadRecord`'s
 own vocabulary) is never null once a region is resolved at all;
-`mz_header_detected` is `null` only when the small header-peek read
-itself failed; `has_injected_pe` is `null` whenever the evidence needed
-to decide either way is itself missing (an unread header, or an MZ
-header found but `module_context` is `"unavailable"` — found something
-suspicious-shaped but can't confirm it's actually unregistered).
+`mz_header_detected` is `null` only when the region's own content read
+itself failed. `mz_header_detected` is derived from the SAME read
+Section 4 performs for its own string scan, not a second, independent
+small peek read — reusing one read for both closes a gap where a
+header-only read failing on its own while a larger read of the identical
+starting address succeeded right after would otherwise leave
+`mz_header_detected` stuck at `null` even though the bytes needed were
+available; a failure of that one shared read now means `mz_header_detected`
+is `null` AND `string_scan_error` is set together, both correctly
+reflecting the SAME read failure rather than two independently-tracked
+facts that could disagree. `has_injected_pe` is `null` whenever the
+evidence needed to decide either way is itself missing (an unread header,
+or an MZ header found but `module_context` is `"unavailable"` — found
+something suspicious-shaped but can't confirm it's actually unregistered).
 `findings` may only ever contain `"injected_pe"` when `has_injected_pe`
 is `true` — never on a `null` (unconfirmed) or `false` value; this closes
 a false-positive the tri-state model replaced, where a missing
@@ -640,11 +649,18 @@ evidence); a card's own target-region content read coming up short or
 failing outright (`REGION_READ_TRUNCATED`/`SOURCE_FAILED`, aggregated
 across however many cards under one synthetic `"requested_region"`
 source rather than one entry per card, since every card reads the same
-underlying dump); and, string-search mode only, regions the memory-wide
-search itself skipped because it could not read them while looking for
-the needle (`REPORT_STRING_SCAN_INCOMPLETE`, source `"string_search"` —
-distinct from a found hit's own region later coming up short, which is
-the `REGION_READ_TRUNCATED` case above). All of the above combine across
+underlying dump — a card's optional `--output` extract coming up short
+folds into this SAME aggregate fact too, via `extract_read_truncated`
+below, since it's the identical underlying gap whether observed via
+Section 4's scan or the extract step); and, string-search mode only, two
+distinct facts about the memory-wide search itself, source
+`"string_search"` for both: regions it could not read AT ALL
+(`REPORT_STRING_SCAN_INCOMPLETE`) and regions it read but only
+PARTIALLY (`REPORT_STRING_SCAN_TRUNCATED`, `bytes_read < requested`) —
+kept as two separate codes rather than one, since "skipped" and
+"partially read" are different facts with different wording, and a
+needle sitting past a partial read is exactly as much a false negative
+as one in a fully-skipped region. All of the above combine across
 however many cards a `--report-string` run produced via
 `dumpex.output.coverage.combine_coverage_reports()`, the same reducer
 `--diff-mode all` uses to merge its own three entities' coverage into
@@ -652,18 +668,28 @@ one.
 
 `execution_status` is `"partial"` (independent of `coverage.status`)
 when `MAX_REGION_READ` clamped a card's own scan below the region's real
-size, or a per-card `--output` extract itself failed to write — a
-self-imposed scan-budget policy or a write failure, neither of which is
-an evidence-completeness gap.
+size, the memory-wide `--report-string` search itself had to clamp any
+region bigger than that same cap, or a per-card `--output` extract
+itself failed to write — a self-imposed scan-budget policy or a write
+failure, neither of which is an evidence-completeness gap. A search-wide
+clamp is deliberately NOT a coverage fact (unlike the two
+`REPORT_STRING_SCAN_*` codes above): asking for less than a region's own
+size is this command's own policy choice, not evidence going missing —
+the two stay separate exactly the way `string_scan.clamped` (policy) and
+`string_scan.truncated` (evidence gap) already do for a single card's own
+scan.
 
 `result.summary` carries call-level context no single card's own fields
 capture: `mode` (`"tid"` / `"addr"` / `"tid_addr"` / `"string"`),
 `card_count`, the raw `query_tid`/`query_addr`/`query_string` CLI strings
 as given (`null` for whichever anchor wasn't used), and — string-search
 mode only — `total_hits`/`hits_private`/`hits_image`/`image_hit_modules`/
-`skipped_unreadable_regions` (the last one also drives the
-`REPORT_STRING_SCAN_INCOMPLETE` coverage limitation above when nonzero,
-rather than being purely informational).
+`skipped_unreadable_regions`/`truncated_regions`/`clamped_regions` (the
+three region counters mirror `dumpex.core.memory.StringSearchStats`
+one-for-one; `skipped_unreadable_regions`/`truncated_regions` also drive
+the two `REPORT_STRING_SCAN_*` coverage limitations above when nonzero,
+`clamped_regions` drives `execution_status` instead, per the split above
+— none of the three is purely informational).
 
 `--report`'s optional `--output` extract (available in every trigger
 mode) populates `artifacts[]` exactly like `--extract` does, under a

@@ -1031,8 +1031,24 @@ class ReportIocString:
                 raise ValueError(
                     f"ReportIocString.context_hex must be a lowercase hex string, "
                     f"got {self.context_hex!r}")
+            # Bounded to <=256 bytes (512 hex chars) -- the whole point of
+            # a "context window" is that it's small and bounded, matching
+            # the +-128-byte window _collect_triage_card actually builds;
+            # an unbounded context_hex would defeat that guarantee for any
+            # caller that bypasses report.py and builds this record
+            # directly (e.g. a future producer, or a hand-built test doc).
+            if len(self.context_hex) > 512:
+                raise ValueError(
+                    "ReportIocString.context_hex must be at most 512 hex chars (256 bytes), "
+                    f"got {len(self.context_hex)} chars")
             _require_hex_address(self.context_base_address, "ReportIocString.context_base_address")
             _require_nonneg_int(self.context_hit_offset, "ReportIocString.context_hit_offset")
+            context_len_bytes = len(self.context_hex) // 2
+            if self.context_hit_offset >= context_len_bytes:
+                raise ValueError(
+                    "ReportIocString.context_hit_offset must fall within context_hex's own "
+                    f"{context_len_bytes}-byte window, got context_hit_offset="
+                    f"{self.context_hit_offset!r}")
 
     def to_dict(self) -> dict:
         return {
@@ -1126,6 +1142,15 @@ class TriageCardRecord:
                                                 # (extract never attempted); True/False once it
                                                 # was, whether MAX_REGION_READ clamped the bytes
                                                 # actually written below the region's own size
+    extract_read_truncated:   "bool | None"   # None when no --output was given for this card;
+                                                # True/False once it was, whether read_region()
+                                                # itself came up short of whatever was requested
+                                                # (post-clamp) -- a genuine evidence gap distinct
+                                                # from extract_read_clamped's own self-imposed
+                                                # policy cap (same clamped-vs-truncated split as
+                                                # string_scan above). True here means the written
+                                                # artifact is itself incomplete, not just smaller
+                                                # than the region by policy.
 
     def __post_init__(self):
         if self.anchor_tid is not None:
@@ -1198,6 +1223,12 @@ class TriageCardRecord:
                       "TriageCardRecord.thread_region_correlation_excluded")
         if self.extract_read_clamped is not None:
             _require_bool(self.extract_read_clamped, "TriageCardRecord.extract_read_clamped")
+        if self.extract_read_truncated is not None:
+            _require_bool(self.extract_read_truncated, "TriageCardRecord.extract_read_truncated")
+        if (self.extract_read_clamped is None) != (self.extract_read_truncated is None):
+            raise ValueError(
+                "TriageCardRecord.extract_read_clamped and extract_read_truncated must both be "
+                "None (no --output attempted for this card) or both be set (once it was)")
         if not isinstance(self.findings, list) or any(
                 f not in _TRIAGE_FINDING_KEYS for f in self.findings):
             raise ValueError(
@@ -1244,4 +1275,5 @@ class TriageCardRecord:
             "verdict":                 self.verdict,
             "artifact_id":             self.artifact_id,
             "extract_read_clamped":    self.extract_read_clamped,
+            "extract_read_truncated":  self.extract_read_truncated,
         }

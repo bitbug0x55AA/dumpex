@@ -586,6 +586,140 @@ def test_extract_success_prints_artifact_summary(monkeypatch, capsys, tmp_path):
     assert result.records[0].artifact_id is not None
 
 
+# ── RevFix2-P1a: string-search clamp/truncation must not silently read as
+#    "exhaustively searched, not found" ────────────────────────────────────
+
+def test_string_search_clamp_produces_false_negative_but_marks_execution_partial(monkeypatch):
+    # The review's own repro: MAX_REGION_READ set low, needle placed past
+    # that cap -- the search genuinely cannot find it, but must not claim
+    # a clean "not found" the same way a truly-absent needle would.
+    monkeypatch.setattr(core_memory_mod, "MAX_REGION_READ", 16)
+    monkeypatch.setattr(report_mod, "MAX_REGION_READ", 16)
+    payload = (b"x" * 100) + b"NEEDLE1234"
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0x1000, 0x1000, 4096, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0x1000: payload.ljust(4096, b"\x00")})
+    result = collect_report(mf, report_string="NEEDLE1234")
+    assert result.records == []
+    assert result.summary["total_hits"] == 0
+    assert result.summary["clamped_regions"] == 1
+    assert result.execution_status == EXECUTION_PARTIAL
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_STRING_NOT_FOUND" in codes
+    msg = next(d.message for d in result.diagnostics if d.code == "REPORT_STRING_NOT_FOUND")
+    assert "scan was incomplete" in msg
+
+
+def test_string_search_short_read_lowers_coverage_and_scopes_not_found_message(monkeypatch):
+    # A real short read (region not fully backed) is a distinct fact from
+    # a policy clamp -- it's an evidence gap, so it must lower
+    # coverage.status, not just execution_status.
+    def _reader(mf_, addr, size):
+        return b"only sixteen by"   # far short of the 4096 requested
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0x2000, 0x2000, 4096, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+    result = collect_report(mf, report_string="NEEDLE1234")
+    assert result.records == []
+    assert result.summary["truncated_regions"] == 1
+    assert result.coverage.status == CoverageStatus.PARTIAL
+    assert any("only partially read" in r for r in result.coverage.reasons)
+    msg = next(d.message for d in result.diagnostics if d.code == "REPORT_STRING_NOT_FOUND")
+    assert "scan was incomplete" in msg
+
+
+def test_string_search_hit_found_despite_other_region_being_clamped(monkeypatch):
+    # The clamp/truncation facts must not swallow a genuine hit found in a
+    # DIFFERENT, fully-read region -- only the affected region's own
+    # coverage/execution signal fires. Region 0x4000 is only 16 bytes --
+    # small enough that the needle fits entirely within the same
+    # MAX_REGION_READ=16 cap applied to region 0x3000, so THAT region's
+    # own read is never actually clamped (requested == its own size).
+    monkeypatch.setattr(core_memory_mod, "MAX_REGION_READ", 16)
+    monkeypatch.setattr(report_mod, "MAX_REGION_READ", 16)
+
+    def _reader(mf_, addr, size):
+        if addr == 0x3000:
+            return (b"x" * 100 + b"NEVERFOUND").ljust(size, b"\x00")[:size]   # clamped away
+        return b"NEEDLE99".ljust(size, b"\x00")[:size]
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[
+                    Region(0x3000, 0x3000, 4096, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
+                    Region(0x4000, 0x4000, 16, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE"),
+                ])
+    result = collect_report(mf, report_string="NEEDLE99")
+    assert len(result.records) == 1
+    assert result.records[0].anchor_address == "0x0000000000004000"
+    assert result.summary["clamped_regions"] == 1
+
+
+# ── RevFix2-P1b: MZ detection reuses Section 4's own content read ────────
+
+def test_mz_header_detected_when_a_small_separate_peek_would_have_failed(monkeypatch):
+    # Before the fix, report.py did an INDEPENDENT small (<=64 byte) read
+    # just to peek at the MZ header, separate from Section 4's own larger
+    # content read -- a reader that only fails for small requests
+    # reproduces exactly the gap the review flagged. After the fix there
+    # is only ONE read per region, so this must now succeed.
+    def _reader(mf_, addr, size):
+        if size <= 64:
+            raise RuntimeError("small peek read fails")
+        return (b"MZ" + b"\x90" * 62).ljust(size, b"\x00")
+    mf = _mk_mf(monkeypatch, modules=[],
+                regions=[Region(0x5000, 0x5000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+    result = collect_report(mf, report_addr="0x5000")
+    card = result.records[0]
+    assert card.region.mz_header_detected is True
+    assert card.string_scan_error is None
+    # modules=[] -> present but empty -> confirmed unregistered, so the
+    # tri-state correctly resolves to True here (not stuck at None the
+    # way the pre-fix independent small-peek read would have left it).
+    assert card.region.has_injected_pe is True
+    assert card.findings == ["injected_pe"]
+
+
+# ── RevFix2-P1c: extract short read must not silently write a partial
+#    artifact ────────────────────────────────────────────────────────────
+
+def test_extract_short_read_marks_truncated_diagnostic_and_partial_coverage(monkeypatch, tmp_path):
+    def _reader(mf_, addr, size):
+        return b"only three"[:3]   # 3 bytes, far short of whatever is requested
+    monkeypatch.setattr(report_mod, "read_region", _reader)
+    monkeypatch.setattr(core_memory_mod, "read_region", _reader)
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0xb000, 0xb000, 32, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
+    out_path = str(tmp_path / "out.bin")
+    result = collect_report(mf, report_addr="0xb000", extract_to=out_path, force=True)
+    card = result.records[0]
+    assert card.extract_read_truncated is True
+    assert card.artifact_id is not None   # still written, just flagged
+    artifact = result.artifacts[0]
+    assert artifact.size_bytes == 3
+    codes = [d.code for d in result.diagnostics]
+    assert "REPORT_EXTRACT_TRUNCATED" in codes
+    assert result.coverage.status == CoverageStatus.PARTIAL
+    # A short read is an evidence gap (coverage), not a policy clamp or a
+    # write failure -- execution_status must stay unaffected by it alone.
+    assert result.execution_status == EXECUTION_COMPLETED
+
+
+def test_extract_full_read_is_not_marked_truncated(monkeypatch, tmp_path):
+    mf = _mk_mf(monkeypatch, modules=[], threads=[],
+                regions=[Region(0xb100, 0xb100, 8, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+                read_map={0xb100: b"x" * 8})
+    out_path = str(tmp_path / "out.bin")
+    result = collect_report(mf, report_addr="0xb100", extract_to=out_path, force=True)
+    card = result.records[0]
+    assert card.extract_read_truncated is False
+    assert card.extract_read_clamped is False
+    assert result.coverage.status == CoverageStatus.COMPLETE
+
+
 # ── cmd_report thin wrapper ────────────────────────────────────────────────
 
 def test_cmd_report_returns_command_result_and_prints(monkeypatch, capsys):

@@ -4,6 +4,7 @@ import ntpath
 import sys
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 try:
     from minidump.minidumpfile import MinidumpFile
@@ -364,44 +365,63 @@ def _verdict(dims: dict) -> str:
         return YELLOW("LIKELY MALICIOUS — 2 independent indicators")
     return RED(f"HIGH CONFIDENCE MALICIOUS — {score} independent indicators")
 
+class StringSearchStats(NamedTuple):
+    """Whole-scan telemetry _search_string_in_memory() can't express through
+    `hits` alone: `skipped` is how many committed regions raised on
+    read_region() and were skipped entirely (couldn't read anything at
+    all); `clamped` is how many regions were bigger than MAX_REGION_READ,
+    so the scan deliberately asked for less than the region's own size --
+    a self-imposed policy choice, not evidence going missing (see
+    dumpex.commands.report.collect_report's own execution_status
+    derivation, which treats this the same as a per-card MAX_REGION_READ
+    clamp); `truncated` is how many regions came back SHORTER than
+    whatever was actually requested (post-clamp) -- read_region() itself
+    couldn't back that much, a genuine evidence-completeness gap
+    independent of `clamped`. A single region can be both `clamped` and
+    `truncated` at once (asked for less than its own size, then even that
+    reduced request came up short); the two counters are orthogonal, not
+    mutually exclusive."""
+    skipped: int
+    clamped: int
+    truncated: int
+
+
 def _search_string_in_memory(mf: MinidumpFile, needle: str) -> tuple:
     """
     Search all committed memory regions for needle (ASCII and UTF-16LE).
-    Returns (hits, skipped_count): hits is a list of (region, offset,
-    encoding) tuples, one per hit region (deduplicated by region base so
-    we report each region once); skipped_count is how many committed
-    regions raised on read_region() and were silently skipped -- a
-    pre-existing gap (a corrupted/unreadable region during the scan was
-    previously invisible) surfaced here rather than fixed by retrying or
-    failing the whole scan, so a caller (see dumpex.commands.report.
-    collect_report) can report it as a single Diagnostic instead of
-    leaving it unmentioned.
-
-    Each region's read is capped at MAX_REGION_READ: this is a
-    search-everything operation over every committed region in the dump
-    (unlike a single --extract/--strings target), so without a per-region
-    cap a dump with one huge region could force a single read the size of
-    that region with no ceiling at all. A match past that cap in any one
-    region would be missed — an accepted tradeoff against turning a
-    string search into an unbounded read.
+    Returns (hits, stats): hits is a list of (region, offset, encoding)
+    tuples, one per hit region (deduplicated by region base so we report
+    each region once); stats is a StringSearchStats -- see its own
+    docstring. A needle that only appears past a `clamped`/`truncated`
+    region's own read boundary is a genuine false negative: the caller
+    must not report "not found" as if the whole dump were exhaustively
+    searched when either counter is nonzero (see collect_report's own
+    scoped wording).
     """
-    regions  = get_memory_regions(mf)
-    hits     = []
-    seen     = set()
-    skipped  = 0
-    needle_b = needle.encode("ascii", errors="replace")
-    needle_w = needle.encode("utf-16-le")
+    regions   = get_memory_regions(mf)
+    hits      = []
+    seen      = set()
+    skipped   = 0
+    clamped   = 0
+    truncated = 0
+    needle_b  = needle.encode("ascii", errors="replace")
+    needle_w  = needle.encode("utf-16-le")
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
             continue
         if r.BaseAddress in seen:
             continue
+        requested = min(r.RegionSize, MAX_REGION_READ)
+        if requested < r.RegionSize:
+            clamped += 1
         try:
-            data = read_region(mf, r.BaseAddress, min(r.RegionSize, MAX_REGION_READ))
+            data = read_region(mf, r.BaseAddress, requested)
         except Exception:
             skipped += 1
             continue
+        if len(data) < requested:
+            truncated += 1
 
         off_a = data.find(needle_b)
         if off_a != -1:
@@ -414,7 +434,7 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> tuple:
             hits.append((r, off_w, "UTF16"))
             seen.add(r.BaseAddress)
 
-    return hits, skipped
+    return hits, StringSearchStats(skipped=skipped, clamped=clamped, truncated=truncated)
 
 def _extract_ioc_strings(data: bytes, base_addr: int) -> list:
     """

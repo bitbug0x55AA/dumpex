@@ -12,6 +12,7 @@ from dumpex.output.records import (
     ModuleDiffRecord, MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF_REBASED,
     ThreadDiffRecord, THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED,
     MemoryDiffRecord, MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED,
+    ReportIocString,
 )
 
 
@@ -811,3 +812,49 @@ def test_memory_diff_record_rejects_empty_string_protect():
                           protect_before=None, protect_after="",
                           type_before=None, type_after="MEM_PRIVATE",
                           suspicious_before=None, suspicious_after=False)
+
+
+# ── ReportIocString context_hex/context_hit_offset bounds (RevFix2-P2) ────
+# The docstring/schema both promise a bounded (<=256 byte) hexdump context
+# window with the hit offset falling inside it -- these were previously
+# unenforced in Python, so a 257-byte context or an out-of-range offset
+# was silently accepted.
+
+def _valid_ioc_kwargs(**overrides):
+    kwargs = dict(offset=0, address=hex_address(0x1000), encoding="ASCII", text="x",
+                   is_network_pattern=True, context_hex="deadbeef",
+                   context_base_address=hex_address(0xf80), context_hit_offset=2)
+    kwargs.update(overrides)
+    return kwargs
+
+
+def test_report_ioc_string_valid_network_pattern_accepted():
+    rec = ReportIocString(**_valid_ioc_kwargs())
+    assert rec.context_hex == "deadbeef"
+
+
+def test_report_ioc_string_rejects_context_hex_over_256_bytes():
+    with pytest.raises(ValueError, match="512 hex chars"):
+        ReportIocString(**_valid_ioc_kwargs(context_hex="ab" * 257, context_hit_offset=0))
+
+
+def test_report_ioc_string_accepts_context_hex_at_exactly_256_bytes():
+    rec = ReportIocString(**_valid_ioc_kwargs(context_hex="ab" * 256, context_hit_offset=255))
+    assert len(rec.context_hex) == 512
+
+
+def test_report_ioc_string_rejects_hit_offset_past_context_window():
+    with pytest.raises(ValueError, match="context_hit_offset"):
+        ReportIocString(**_valid_ioc_kwargs(context_hex="ab" * 10, context_hit_offset=999))
+
+
+def test_report_ioc_string_rejects_hit_offset_equal_to_context_length():
+    # offset must be a valid index INTO the window (strictly less than its
+    # byte length) -- landing exactly at the end means zero bytes remain.
+    with pytest.raises(ValueError, match="context_hit_offset"):
+        ReportIocString(**_valid_ioc_kwargs(context_hex="ab" * 4, context_hit_offset=4))
+
+
+def test_report_ioc_string_accepts_hit_offset_at_last_valid_index():
+    rec = ReportIocString(**_valid_ioc_kwargs(context_hex="ab" * 4, context_hit_offset=3))
+    assert rec.context_hit_offset == 3

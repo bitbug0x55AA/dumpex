@@ -203,12 +203,16 @@ def test_string_mode_one_private_hit(monkeypatch, tmp_path, capsys):
 
 
 def test_string_mode_zero_hits_exits_zero_with_diagnostic(monkeypatch, tmp_path, capsys):
+    # Padded to the full 0x1000 region size -- see
+    # test_verdict_suspicious_rwx_private's own note on why (a short read
+    # is itself now a coverage-affecting fact, and this test's own purpose
+    # is the zero-hit path, not truncation semantics).
     exit_code, doc, csv_text = _run(
         monkeypatch, tmp_path, ["--report-string", "TOTALLYABSENTNEEDLE"],
         regions=[Region(0x9000, 0x9000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
-        read_map={0x9000: b"nothing interesting at all here"})
+        read_map={0x9000: b"nothing interesting at all here".ljust(0x1000, b"\x00")})
     body = _split_console_body(capsys.readouterr().out)
-    assert "String not found in any committed memory region." in body
+    assert "String not found in the memory regions that could be scanned." in body
     assert exit_code == 0
     assert doc["result"]["data"]["records"] == []
     warnings = doc["diagnostics"]["warnings"]

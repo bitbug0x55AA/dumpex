@@ -336,13 +336,26 @@ class LimitationCode(str, Enum):
     # an addr-only triage card with no thread evidence involved at all.
     REPORT_STRING_SCAN_INCOMPLETE = "REPORT_STRING_SCAN_INCOMPLETE"
     # ^ --report-string: _search_string_in_memory()'s own memory-wide scan
-    # skipped N region(s) it could not read while searching for the
-    # needle (see that function's own skipped-region count) -- a fact
+    # skipped N region(s) it could not read at all while searching for the
+    # needle (see that function's own StringSearchStats.skipped) -- a fact
     # about the SEARCH itself, not about any one triage card's own target
     # region, so it doesn't fit REGION_READ_TRUNCATED/SOURCE_FAILED's own
-    # per-card shape. caller_buildable, source-less (no SourceObservation
-    # backs it -- affected_count alone carries the fact), fully computed
-    # from _search_string_in_memory()'s own return value.
+    # per-card shape. caller_buildable; affected_count alone carries the
+    # fact, fully computed from _search_string_in_memory()'s own return
+    # value.
+    REPORT_STRING_SCAN_TRUNCATED = "REPORT_STRING_SCAN_TRUNCATED"
+    # ^ --report-string: N region(s) the memory-wide scan DID manage to
+    # read (unlike REPORT_STRING_SCAN_INCOMPLETE's fully-unreadable case)
+    # but only partially -- read_region() returned fewer bytes than the
+    # scan asked for (StringSearchStats.truncated), so a needle sitting
+    # past that short read is a genuine false negative, not a confirmed
+    # absence. Deliberately a distinct code/wording from
+    # REPORT_STRING_SCAN_INCOMPLETE ("skipped ... could not read" would be
+    # actively wrong here -- bytes WERE read, just not all of them) and
+    # from REGION_READ_TRUNCATED (that one is a single triage card's own
+    # target-region read, this one is about the SEARCH's own scan of
+    # regions that may never become a card at all). caller_buildable;
+    # affected_count alone carries the fact.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -559,6 +572,11 @@ def _render_report_string_scan_incomplete(limitation: "CoverageLimitation") -> s
             f"region(s) it could not read")
 
 
+def _render_report_string_scan_truncated(limitation: "CoverageLimitation") -> str:
+    return (f"The memory-wide string search only partially read {limitation.affected_count} "
+            f"region(s) -- a needle past that point would not be found")
+
+
 def _render_pid_sources_absent(limitation: "CoverageLimitation") -> str:
     return ("MiscInfo, thread list, and exception stream are all absent from this "
             "dump; PID could not be evaluated")
@@ -691,6 +709,14 @@ def _validate_report_string_scan_incomplete_fields(limitation: "CoverageLimitati
             or limitation.affected_count <= 0):
         raise ValueError(
             "CoverageLimitation(code=REPORT_STRING_SCAN_INCOMPLETE) requires affected_count to "
+            f"be a positive integer, got {limitation.affected_count!r}")
+
+
+def _validate_report_string_scan_truncated_fields(limitation: "CoverageLimitation") -> None:
+    if (not isinstance(limitation.affected_count, int) or isinstance(limitation.affected_count, bool)
+            or limitation.affected_count <= 0):
+        raise ValueError(
+            "CoverageLimitation(code=REPORT_STRING_SCAN_TRUNCATED) requires affected_count to "
             f"be a positive integer, got {limitation.affected_count!r}")
 
 
@@ -828,6 +854,10 @@ _CODE_SPECS = {
     LimitationCode.REPORT_STRING_SCAN_INCOMPLETE: _CodeSpec(
         render=_render_report_string_scan_incomplete, caller_buildable=True,
         validate_fields=_validate_report_string_scan_incomplete_fields,
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.REPORT_STRING_SCAN_TRUNCATED: _CodeSpec(
+        render=_render_report_string_scan_truncated, caller_buildable=True,
+        validate_fields=_validate_report_string_scan_truncated_fields,
         allowed_fields=frozenset({"affected_count"})),
 }
 

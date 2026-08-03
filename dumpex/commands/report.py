@@ -8,7 +8,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
     read_region, parse_hex_or_int, INDICATOR_DIMS, MAX_REGION_READ,
     _get_region_at, _extract_strings_from_data,
-    _hexdump_context, _search_string_in_memory, verdict_for,
+    _hexdump_context, _search_string_in_memory, StringSearchStats, verdict_for,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS)
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.pe_utils import _duration_100ns_to_str
@@ -89,6 +89,7 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     region_record = None
     thread_region_correlation_excluded = False
     extract_read_clamped = None
+    extract_read_truncated = None
 
     string_hit_dict = None
     if string_hit_tuple is not None:
@@ -153,42 +154,19 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
                     f"Region 0x{region.BaseAddress:x} is "
                     f"PAGE_EXECUTE_READWRITE + MEM_PRIVATE"
                 )
-
-            # mz_header_detected/has_injected_pe are a tri-state pair, not
-            # a single bool -- ModuleListStream being absent must never be
-            # silently conflated with "confirmed not backed by any
-            # module" (region_module_context handles that distinction
-            # already), and a failed header peek must never silently read
-            # as "no MZ header found" either. See ReportRegionInfo's own
-            # docstring for the exact derivation rule; `injected_pe` is
-            # only ever added to `dims` when has_injected_pe is True.
-            mz_header_detected = None
-            has_injected_pe = None
-            try:
-                header = read_region(mf, region.BaseAddress, min(64, region.RegionSize))
-                mz_header_detected = header[:2] == b'MZ'
-            except Exception:
-                mz_header_detected = None
-
-            if mz_header_detected is False:
-                has_injected_pe = False
-            elif mz_header_detected is True:
-                if region_module_context == MODULE_CONTEXT_UNREGISTERED:
-                    has_injected_pe = True
-                    dims['injected_pe'] = (
-                        f"MZ header at 0x{region.BaseAddress:x} in unregistered private memory"
-                    )
-                elif region_module_context == MODULE_CONTEXT_RESOLVED:
-                    has_injected_pe = False
-                else:   # unavailable -- found something suspicious-shaped, can't confirm
-                    has_injected_pe = None
-
-            region_record = ReportRegionInfo(
-                base_address=hex_address(region.BaseAddress), size=region.RegionSize,
-                protect=p, type=mtype, module_owner=(rmod.name if rmod else None),
-                file_offset=fo_reg, is_rwx_private=is_rwx_private,
-                module_context=region_module_context, mz_header_detected=mz_header_detected,
-                has_injected_pe=has_injected_pe, protection_suspicious=protection_suspicious)
+            # mz_header_detected/has_injected_pe/region_record itself are
+            # deferred to Section 4 below, which derives them from that
+            # SAME content read rather than a second, independent small
+            # peek read -- a header-only read that fails on its own while
+            # Section 4's larger read of the identical starting address
+            # succeeds right after used to leave mz_header_detected stuck
+            # at None even though the bytes needed were right there (see
+            # RevFix2-P1b). One read now serves both facts, and a failure
+            # of that one read means BOTH are appropriately undetermined
+            # together, correctly captured by the SAME aggregate
+            # "region read failed" coverage fact below (see
+            # _build_aggregate_coverage_report) -- no separate limitation
+            # needed for the injected-PE dimension specifically.
 
     # ── Reconcile TID evidence against the resolved region ─────────────
     # Only fold the TID's own "unbacked thread" fact into the combined
@@ -236,11 +214,16 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
                     f"has no module backing"
                 )
 
-    # ── 4. Strings + context-aware IOC display ────────────────────────
+    # ── 4. Strings + context-aware IOC display (also derives the MZ/
+    #      injected-PE tri-state from this same content read -- see
+    #      Section 2's own note on why there is no separate header peek) ──
     if region is not None:
         read_size = min(region.RegionSize, MAX_REGION_READ)
+        mz_header_detected = None
+        has_injected_pe = None
         try:
             data    = read_region(mf, region.BaseAddress, read_size)
+            mz_header_detected = data[:2] == b'MZ'
             strings = _extract_strings_from_data(data, min_len=min_len)
 
             ioc_hits = [(off, enc, s) for off, enc, s in strings
@@ -292,6 +275,26 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         except Exception as e:
             string_scan_error = str(e)
 
+        if mz_header_detected is False:
+            has_injected_pe = False
+        elif mz_header_detected is True:
+            if region_module_context == MODULE_CONTEXT_UNREGISTERED:
+                has_injected_pe = True
+                dims['injected_pe'] = (
+                    f"MZ header at 0x{region.BaseAddress:x} in unregistered private memory"
+                )
+            elif region_module_context == MODULE_CONTEXT_RESOLVED:
+                has_injected_pe = False
+            else:   # unavailable -- found something suspicious-shaped, can't confirm
+                has_injected_pe = None
+
+        region_record = ReportRegionInfo(
+            base_address=hex_address(region.BaseAddress), size=region.RegionSize,
+            protect=p, type=mtype, module_owner=(rmod.name if rmod else None),
+            file_offset=fo_reg, is_rwx_private=is_rwx_private,
+            module_context=region_module_context, mz_header_detected=mz_header_detected,
+            has_injected_pe=has_injected_pe, protection_suspicious=protection_suspicious)
+
     # ── Verdict (MECE) ────────────────────────────────────────────────
     verdict = verdict_for(dims)
     findings = list(dims.keys())
@@ -300,15 +303,29 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     # ── Optional extract ──────────────────────────────────────────────
     if extract_to and region is not None:
         read_size = min(region.RegionSize, MAX_REGION_READ)
-        extract_read_clamped = read_size < region.RegionSize
         try:
             data = read_region(mf, region.BaseAddress, read_size)
+            # Both computed here, together, only on a successful read --
+            # a failed read (except branch below) means neither is
+            # actually known, so both stay None rather than reporting a
+            # clamp/truncation verdict about bytes that were never read.
+            extract_read_clamped = read_size < region.RegionSize
+            extract_read_truncated = len(data) < read_size
             artifact = build_extract_artifact(
                 f"report_extract_0x{region.BaseAddress:x}", "report_extracted_region",
                 extract_to, data,
                 description=f"Bytes extracted from triage card at 0x{region.BaseAddress:x}")
             write_output_bytes(extract_to, data, mf.filename, force, "--output file")
             artifact_id = artifact.id
+            # The artifact is still written even when the read itself came
+            # up short (read_region() returned real, if incomplete, bytes)
+            # -- but that must never be silent: a diagnostic makes the gap
+            # visible in JSON/console, and _execution_status_for below
+            # folds extract_read_truncated into execution_status=partial.
+            if extract_read_truncated:
+                diagnostics.append(Diagnostic(SEVERITY_WARNING,
+                    f"Extract came up short: wrote {len(data)} of {read_size} requested byte(s) "
+                    f"-- the written artifact is incomplete.", code="REPORT_EXTRACT_TRUNCATED"))
         except Exception as e:
             diagnostics.append(Diagnostic(SEVERITY_WARNING, f"Extract failed: {e}",
                                             code="REPORT_EXTRACT_FAILED"))
@@ -323,7 +340,8 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         string_scan=string_scan, string_scan_error=string_scan_error,
         thread_region_correlation_excluded=thread_region_correlation_excluded,
         findings=findings, finding_details=finding_details, verdict=verdict,
-        artifact_id=artifact_id, extract_read_clamped=extract_read_clamped)
+        artifact_id=artifact_id, extract_read_clamped=extract_read_clamped,
+        extract_read_truncated=extract_read_truncated)
 
     sources = {
         "thread_info": observe_source("thread_info", present=bool(mf.thread_info), items=infos),
@@ -355,21 +373,36 @@ def _fallback_coverage(mf, modules_available, modules, infos, regions):
         ])
 
 
-def _build_aggregate_coverage_report(records, skipped: int):
+_NO_SEARCH_STATS = StringSearchStats(skipped=0, clamped=0, truncated=0)
+
+
+def _build_aggregate_coverage_report(records, search_stats: StringSearchStats):
     """Whole-run facts no single per-card CoverageReport can express: (a)
     at least one triage card's own target-region content read failed or
     came up short, aggregated under one synthetic "requested_region"
     source (never a real dict key any individual card's own coverage
     used -- see REGION_READ_TRUNCATED's own enum comment for why reusing
     that exact code/source pair across many cards is safe here), and (b)
-    _search_string_in_memory()'s own memory-wide scan skipped N regions
-    it could not read while searching for the needle, a fact about the
-    SEARCH itself with no per-card home at all. Returns None when neither
-    applies (the common case), so the caller only combines it in when
-    there is something to combine."""
+    _search_string_in_memory()'s own memory-wide scan either skipped
+    regions it could not read at all, or only partially read others --
+    two distinct facts about the SEARCH itself (see StringSearchStats'
+    own docstring), with no per-card home at all. `search_stats.clamped`
+    is deliberately NOT folded in here: a self-imposed MAX_REGION_READ
+    policy cap is an execution_status fact, not an evidence-completeness
+    one (see _execution_status_for). Returns None when nothing applies
+    (the common case), so the caller only combines it in when there is
+    something to combine."""
     attempted = [r for r in records if r.region is not None]
     failed_count = sum(1 for r in attempted if r.string_scan_error is not None)
-    truncated_count = sum(1 for r in attempted if r.string_scan and r.string_scan["truncated"])
+    # A card's own target-region read can come up short via either Section
+    # 4's scan (string_scan["truncated"]) or its optional --output extract
+    # (extract_read_truncated) -- the SAME underlying fact (the dump
+    # doesn't back that much data at this address), so both fold into one
+    # shared "at least one region read came up short" count rather than
+    # two separate limitations for what is really one evidence gap.
+    truncated_count = sum(1 for r in attempted
+                           if (r.string_scan and r.string_scan["truncated"])
+                           or r.extract_read_truncated)
 
     sources = {}
     completeness_checks = []
@@ -386,37 +419,44 @@ def _build_aggregate_coverage_report(records, skipped: int):
             completeness_checks.append(CoverageLimitation(
                 code=LimitationCode.REGION_READ_TRUNCATED, source="requested_region"))
 
-    if skipped:
+    if search_stats.skipped or search_stats.truncated:
         sources["string_search"] = SourceObservation(
             name="string_search", state=SourceState.PRESENT, record_count=1)
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE, source="string_search",
-            affected_count=skipped))
+        if search_stats.skipped:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE, source="string_search",
+                affected_count=search_stats.skipped))
+        if search_stats.truncated:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.REPORT_STRING_SCAN_TRUNCATED, source="string_search",
+                affected_count=search_stats.truncated))
 
     if not sources:
         return None
     return build_coverage_report(sources, evaluation_sources=(), completeness_checks=completeness_checks)
 
 
-def _combine_with_aggregate(coverages: list, records: list, skipped: int):
-    aggregate = _build_aggregate_coverage_report(records, skipped)
+def _combine_with_aggregate(coverages: list, records: list, search_stats: StringSearchStats):
+    aggregate = _build_aggregate_coverage_report(records, search_stats)
     all_reports = list(coverages) + ([aggregate] if aggregate is not None else [])
     return combine_coverage_reports(all_reports)
 
 
-def _execution_status_for(records, diagnostics):
-    """MAX_REGION_READ clamping (a self-imposed scan-budget cutoff) and a
-    per-card --output extract write failure are both about whether THIS
-    COMMAND finished its own intended work, not about whether the
-    evidence it looked at was complete -- see OUTPUT_SCHEMA.md's own
-    three-concepts-separate rule. Distinct from coverage.status, which
-    `_build_aggregate_coverage_report` above governs instead (a short/
-    failed read is an evidence gap; a deliberate policy clamp or a write
-    failure is not)."""
+def _execution_status_for(records, diagnostics, search_stats: StringSearchStats = _NO_SEARCH_STATS):
+    """MAX_REGION_READ clamping (a self-imposed scan-budget cutoff, at
+    either the per-card Section 4 scan level or the whole-run
+    --report-string search level) and a per-card --output extract write
+    failure are all about whether THIS COMMAND finished its own intended
+    work, not about whether the evidence it looked at was complete -- see
+    OUTPUT_SCHEMA.md's own three-concepts-separate rule. Distinct from
+    coverage.status, which `_build_aggregate_coverage_report` above
+    governs instead (a short/failed read is an evidence gap; a deliberate
+    policy clamp or a write failure is not)."""
     any_scan_clamped = any(r.string_scan and r.string_scan["clamped"] for r in records)
     any_extract_clamped = any(r.extract_read_clamped for r in records)
     any_extract_failed = any(d.code == "REPORT_EXTRACT_FAILED" for d in diagnostics)
-    if any_scan_clamped or any_extract_clamped or any_extract_failed:
+    if (any_scan_clamped or any_extract_clamped or any_extract_failed
+            or search_stats.clamped):
         return EXECUTION_PARTIAL
     return EXECUTION_COMPLETED
 
@@ -446,18 +486,30 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
 
     # ── String search mode: find regions, then triage each one ───────
     if report_string and not report_addr:
-        hits, skipped = _search_string_in_memory(mf, report_string)
+        hits, search_stats = _search_string_in_memory(mf, report_string)
         if not hits:
+            incomplete = search_stats.skipped or search_stats.truncated or search_stats.clamped
+            scan_note = ""
+            if incomplete:
+                scan_note = (
+                    f" (scan was incomplete: {search_stats.skipped} region(s) could not be read "
+                    f"at all, {search_stats.truncated} region(s) were only partially read, "
+                    f"{search_stats.clamped} region(s) exceeded the per-region scan cap -- "
+                    f"a needle in one of those would have been missed; see coverage/"
+                    f"execution_status for detail)")
             diagnostics = [Diagnostic(SEVERITY_WARNING,
-                "String not found in any committed memory region.",
+                f"String not found in the memory regions that could be scanned.{scan_note}",
                 code="REPORT_STRING_NOT_FOUND")]
             coverage = _combine_with_aggregate(
-                [_fallback_coverage(mf, modules_available, modules, infos, regions)], [], skipped)
+                [_fallback_coverage(mf, modules_available, modules, infos, regions)], [], search_stats)
             return CommandResult(kind="report", records=[], coverage=coverage,
+                execution_status=_execution_status_for([], diagnostics, search_stats),
                 summary={"mode": "string", "card_count": 0, "query_string": report_string,
                          "query_tid": report_tid, "query_addr": None, "total_hits": 0,
                          "hits_private": 0, "hits_image": 0, "image_hit_modules": [],
-                         "skipped_unreadable_regions": skipped},
+                         "skipped_unreadable_regions": search_stats.skipped,
+                         "truncated_regions": search_stats.truncated,
+                         "clamped_regions": search_stats.clamped},
                 diagnostics=diagnostics)
 
         private_hits = []
@@ -482,7 +534,9 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
             "mode": "string", "query_string": report_string, "query_tid": report_tid,
             "query_addr": None, "total_hits": len(hits), "hits_private": len(private_hits),
             "hits_image": len(image_hits), "image_hit_modules": image_hit_modules,
-            "skipped_unreadable_regions": skipped,
+            "skipped_unreadable_regions": search_stats.skipped,
+            "truncated_regions": search_stats.truncated,
+            "clamped_regions": search_stats.clamped,
         }
 
         if not private_hits:
@@ -491,8 +545,9 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                 code="REPORT_STRING_HITS_ALL_IMAGE"))
             summary["card_count"] = 0
             coverage = _combine_with_aggregate(
-                [_fallback_coverage(mf, modules_available, modules, infos, regions)], [], skipped)
+                [_fallback_coverage(mf, modules_available, modules, infos, regions)], [], search_stats)
             return CommandResult(kind="report", records=[], coverage=coverage,
+                                  execution_status=_execution_status_for([], diagnostics, search_stats),
                                   summary=summary, diagnostics=diagnostics)
 
         records = []
@@ -519,8 +574,8 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
 
         summary["card_count"] = len(records)
         return CommandResult(kind="report", records=records,
-                              coverage=_combine_with_aggregate(coverages, records, skipped),
-                              execution_status=_execution_status_for(records, diagnostics),
+                              coverage=_combine_with_aggregate(coverages, records, search_stats),
+                              execution_status=_execution_status_for(records, diagnostics, search_stats),
                               summary=summary, diagnostics=diagnostics, artifacts=artifacts)
 
     # ── TID/address mode: exactly one card ────────────────────────────
@@ -543,10 +598,10 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         "mode": "_".join(mode_parts), "card_count": 1, "query_string": None,
         "query_tid": report_tid, "query_addr": report_addr, "total_hits": None,
         "hits_private": None, "hits_image": None, "image_hit_modules": [],
-        "skipped_unreadable_regions": 0,
+        "skipped_unreadable_regions": 0, "truncated_regions": 0, "clamped_regions": 0,
     }
     return CommandResult(kind="report", records=[record],
-                          coverage=_combine_with_aggregate([coverage], [record], 0),
+                          coverage=_combine_with_aggregate([coverage], [record], _NO_SEARCH_STATS),
                           execution_status=_execution_status_for([record], diagnostics),
                           summary=summary, diagnostics=diagnostics,
                           artifacts=([artifact] if artifact is not None else []))
@@ -756,7 +811,7 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
         print(f"\n{BOLD('Searching memory for:')} {CYAN(repr(summary['query_string']))}")
         print("─" * 55)
         if summary["card_count"] == 0 and summary["total_hits"] == 0:
-            print(RED(f"  [!] String not found in any committed memory region."))
+            print(RED(f"  [!] String not found in the memory regions that could be scanned."))
             print(DIM("      Try --strings with a broader address range to verify."))
             return
 
@@ -818,6 +873,9 @@ def _print_extract_result(records, artifacts, card) -> None:
         print(YELLOW(f"  [~] Region is {card.region.size // 1024} KB — "
                      f"clamped to {MAX_REGION_READ // (1024*1024)} MB "
                      f"(use --extract with an explicit --size for more)"))
+    if card.extract_read_truncated:
+        print(RED(f"  [!] Read came up short of what was requested -- the written artifact "
+                  f"is INCOMPLETE (see coverage for detail)"))
     summary_text = f"{artifact.size_bytes} bytes  sha256={artifact.sha256}"
     print(GREEN(f"[+] Region extracted → {artifact.path}  ({summary_text})"))
 

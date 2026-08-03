@@ -322,7 +322,7 @@
     },
 
     "reportIocString": {
-      "description": "Matches dumpex.output.records.ReportIocString.to_dict() -- one IOC-pattern string hit in a triage card's Section 4. `context_hex`/`context_base_address`/`context_hit_offset` are only ever populated when `is_network_pattern` is true -- a bounded (<=256 byte, i.e. <=512 hex char), collect-time-computed hexdump-context window the renderer decodes instead of re-reading the dump (see dumpex.commands.report.render_report_console's own docstring for why).",
+      "description": "Matches dumpex.output.records.ReportIocString.to_dict() -- one IOC-pattern string hit in a triage card's Section 4. `context_hex`/`context_base_address`/`context_hit_offset` are only ever populated when `is_network_pattern` is true -- a bounded (<=256 byte, i.e. <=512 hex char, enforced via context_hex's own maxLength) collect-time-computed hexdump-context window the renderer decodes instead of re-reading the dump (see dumpex.commands.report.render_report_console's own docstring for why). context_hit_offset's maximum of 255 is the loosest static bound this schema can express (the real constraint -- must fall strictly within THIS instance's own, possibly shorter, context_hex -- compares two sibling field values and is Python-only, see ReportIocString.__post_init__).",
       "type": "object",
       "additionalProperties": false,
       "required": ["offset", "address", "encoding", "text", "is_network_pattern",
@@ -333,9 +333,10 @@
         "encoding":              { "enum": ["ASCII", "UTF16"] },
         "text":                  { "type": "string" },
         "is_network_pattern":    { "type": "boolean" },
-        "context_hex":           { "type": ["string", "null"], "pattern": "^([0-9a-f]{2})*$" },
+        "context_hex":           { "type": ["string", "null"], "pattern": "^([0-9a-f]{2})*$",
+                                    "maxLength": 512 },
         "context_base_address":  { "$ref": "#/$defs/hexAddress" },
-        "context_hit_offset":    { "type": ["integer", "null"], "minimum": 0 }
+        "context_hit_offset":    { "type": ["integer", "null"], "minimum": 0, "maximum": 255 }
       },
       "allOf": [
         { "if": { "properties": { "is_network_pattern": { "const": false } } },
@@ -358,7 +359,8 @@
       "required": ["anchor_tid", "anchor_address", "anchor_source", "thread", "region",
                    "string_hit", "other_threads_in_region", "notable_strings", "ioc_strings",
                    "string_scan", "string_scan_error", "thread_region_correlation_excluded",
-                   "findings", "finding_details", "verdict", "artifact_id", "extract_read_clamped"],
+                   "findings", "finding_details", "verdict", "artifact_id", "extract_read_clamped",
+                   "extract_read_truncated"],
       "properties": {
         "anchor_tid":     { "type": ["integer", "null"], "minimum": 0 },
         "anchor_address": { "$ref": "#/$defs/hexAddress" },
@@ -408,8 +410,9 @@
           "additionalProperties": { "type": "string" }
         },
         "verdict":              { "enum": ["CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_MALICIOUS"] },
-        "artifact_id":          { "type": ["string", "null"], "minLength": 1 },
-        "extract_read_clamped": { "type": ["boolean", "null"] }
+        "artifact_id":            { "type": ["string", "null"], "minLength": 1 },
+        "extract_read_clamped":   { "type": ["boolean", "null"] },
+        "extract_read_truncated": { "type": ["boolean", "null"] }
       },
       "allOf": [
         { "if": { "properties": { "anchor_source": { "const": "string_hit" } } },
@@ -420,6 +423,10 @@
           "then": { "properties": { "string_scan_error": { "const": null } } } },
         { "if": { "properties": { "string_scan_error": { "not": { "const": null } } } },
           "then": { "properties": { "string_scan": { "const": null } } } },
+        { "if": { "properties": { "extract_read_clamped": { "const": null } } },
+          "then": { "properties": { "extract_read_truncated": { "const": null } } } },
+        { "if": { "properties": { "extract_read_clamped": { "not": { "const": null } } } },
+          "then": { "properties": { "extract_read_truncated": { "not": { "const": null } } } } },
         { "if": { "properties": { "findings": { "maxItems": 0 } } },
           "then": { "properties": { "verdict": { "const": "CLEAN" } } } },
         { "if": { "properties": { "findings": { "minItems": 1, "maxItems": 1 } } },
@@ -432,11 +439,12 @@
     },
 
     "reportSummary": {
-      "description": "Matches result.summary for kind == 'report' (dumpex.commands.report.collect_report). `mode` says which of --report-tid/--report-addr/--report-string (or the tid+addr combination) produced this result -- the allOf below pins which query_* fields are required non-null per mode, the same way stringsSummary pins requested_address for --strings. additionalProperties: false since these ten fields are the whole of collect_report's own summary dict today.",
+      "description": "Matches result.summary for kind == 'report' (dumpex.commands.report.collect_report). `mode` says which of --report-tid/--report-addr/--report-string (or the tid+addr combination) produced this result -- the allOf below pins which query_* fields are required non-null per mode, the same way stringsSummary pins requested_address for --strings. `skipped_unreadable_regions`/`truncated_regions`/`clamped_regions` are StringSearchStats' own three counters (see dumpex.core.memory.StringSearchStats), always 0 outside string-search mode. additionalProperties: false since these twelve fields are the whole of collect_report's own summary dict today.",
       "type": "object",
       "additionalProperties": false,
       "required": ["mode", "card_count", "query_string", "query_tid", "query_addr", "total_hits",
-                   "hits_private", "hits_image", "image_hit_modules", "skipped_unreadable_regions"],
+                   "hits_private", "hits_image", "image_hit_modules", "skipped_unreadable_regions",
+                   "truncated_regions", "clamped_regions"],
       "properties": {
         "mode":                       { "enum": ["tid", "addr", "tid_addr", "string"] },
         "card_count":                 { "type": "integer", "minimum": 0 },
@@ -447,7 +455,9 @@
         "hits_private":               { "type": ["integer", "null"], "minimum": 0 },
         "hits_image":                 { "type": ["integer", "null"], "minimum": 0 },
         "image_hit_modules":          { "type": "array", "items": { "type": "string", "minLength": 1 } },
-        "skipped_unreadable_regions": { "type": "integer", "minimum": 0 }
+        "skipped_unreadable_regions": { "type": "integer", "minimum": 0 },
+        "truncated_regions":          { "type": "integer", "minimum": 0 },
+        "clamped_regions":            { "type": "integer", "minimum": 0 }
       },
       "allOf": [
         { "if": { "properties": { "mode": { "const": "tid" } } },
@@ -788,6 +798,8 @@
         { "if": { "properties": { "code": { "const": "REPORT_MODULE_CONTEXT_UNAVAILABLE" } } },
           "then": { "properties": { "source": { "const": "modules" }, "affected_count": { "const": null }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
         { "if": { "properties": { "code": { "const": "REPORT_STRING_SCAN_INCOMPLETE" } } },
+          "then": { "properties": { "scope": { "const": null }, "affected_count": { "type": "integer", "minimum": 1 }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } },
+        { "if": { "properties": { "code": { "const": "REPORT_STRING_SCAN_TRUNCATED" } } },
           "then": { "properties": { "scope": { "const": null }, "affected_count": { "type": "integer", "minimum": 1 }, "unavailable_fields": { "const": [] }, "available_fields": { "const": [] }, "counterpart_source": { "const": null }, "related_sources": { "const": [] }, "related_tids": { "const": [] }, "thread_id": { "const": null }, "detail": { "const": null } } } }
       ]
     },

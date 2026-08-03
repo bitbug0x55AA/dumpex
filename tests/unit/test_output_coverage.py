@@ -1699,3 +1699,50 @@ def test_build_coverage_report_not_evaluated_never_duplicates_absent_source_as_f
         {"x": obs}, evaluation_sources=("x",), completeness_checks=["x"])
     assert coverage.status == COVERAGE_NOT_EVALUATED
     assert len(coverage.limitations) == 1
+
+
+# ── REPORT_STRING_SCAN_INCOMPLETE / REPORT_STRING_SCAN_TRUNCATED
+#    (RevFix2-P1a) ─────────────────────────────────────────────────────────
+# Distinct codes/wording for two distinct facts about --report-string's
+# own memory-wide scan: INCOMPLETE is regions skipped entirely (couldn't
+# read anything); TRUNCATED is regions read but only partially (bytes
+# read < bytes requested) -- see dumpex.commands.report.StringSearchStats'
+# own docstring for why these must never share one limitation.
+
+def test_coverage_limitation_report_string_scan_incomplete_valid_shape_accepted():
+    limitation = CoverageLimitation(
+        code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE, source="string_search",
+        affected_count=3)
+    assert "skipped 3 region(s) it could not read" in render_limitation(limitation)
+
+
+def test_coverage_limitation_report_string_scan_incomplete_rejects_missing_affected_count():
+    # affected_count=None passes the GENERIC shape check (None is a valid
+    # affected_count in general -- most codes never set it), so this
+    # code's own validate_fields hook is what specifically requires a
+    # real count here (a "some regions were skipped" fact with no count
+    # at all would be meaningless for this code).
+    with pytest.raises(ValueError, match="REPORT_STRING_SCAN_INCOMPLETE.*positive integer"):
+        CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_INCOMPLETE, source="string_search")
+
+
+def test_coverage_limitation_report_string_scan_truncated_valid_shape_accepted():
+    limitation = CoverageLimitation(
+        code=LimitationCode.REPORT_STRING_SCAN_TRUNCATED, source="string_search",
+        affected_count=2)
+    assert "only partially read 2 region(s)" in render_limitation(limitation)
+
+
+def test_coverage_limitation_report_string_scan_truncated_rejects_missing_affected_count():
+    with pytest.raises(ValueError, match="REPORT_STRING_SCAN_TRUNCATED.*positive integer"):
+        CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_TRUNCATED, source="string_search")
+
+
+def test_coverage_limitation_report_string_scan_truncated_rejects_non_positive_affected_count():
+    # Caught by the generic affected_count shape check (shared across
+    # every code), not this code's own validate_fields hook -- still a
+    # ValueError either way, just a different message than the "missing"
+    # case above.
+    with pytest.raises(ValueError, match="positive int"):
+        CoverageLimitation(code=LimitationCode.REPORT_STRING_SCAN_TRUNCATED,
+                            source="string_search", affected_count=0)

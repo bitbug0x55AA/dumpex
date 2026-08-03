@@ -1227,7 +1227,8 @@ def test_memory_diff_record_null_base_address_rejected_by_schema(memory_diff_rec
 def _minimal_valid_report_summary():
     return {"mode": "addr", "card_count": 1, "query_string": None, "query_tid": None,
             "query_addr": "0x1000", "total_hits": None, "hits_private": None,
-            "hits_image": None, "image_hit_modules": [], "skipped_unreadable_regions": 0}
+            "hits_image": None, "image_hit_modules": [], "skipped_unreadable_regions": 0,
+            "truncated_regions": 0, "clamped_regions": 0}
 
 
 def _minimal_valid_triage_card_record():
@@ -1238,7 +1239,7 @@ def _minimal_valid_triage_card_record():
         "string_scan": None, "string_scan_error": None,
         "thread_region_correlation_excluded": False,
         "findings": [], "finding_details": {}, "verdict": "CLEAN",
-        "artifact_id": None, "extract_read_clamped": None,
+        "artifact_id": None, "extract_read_clamped": None, "extract_read_truncated": None,
     }
 
 
@@ -1281,6 +1282,7 @@ def test_report_summary_string_mode_with_all_fields_set_passes(validator):
         "mode": "string", "card_count": 1, "query_string": "needle", "query_tid": None,
         "query_addr": None, "total_hits": 1, "hits_private": 1, "hits_image": 0,
         "image_hit_modules": [], "skipped_unreadable_regions": 0,
+        "truncated_regions": 0, "clamped_regions": 0,
     }
     doc["result"]["data"]["records"] = [{
         **_minimal_valid_triage_card_record(),
