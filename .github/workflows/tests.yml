@@ -39,6 +39,10 @@ jobs:
         run: pytest --cov=dumpex --cov-report=term-missing
 
       - name: Coverage gate — key detection modules
+        # Use the same fail-fast native-command semantics on every runner.
+        # PowerShell can otherwise continue after a failing coverage command
+        # and report the final command's success, producing a false green job.
+        shell: bash
         # Runs even if the overall gate above already failed, so both
         # classes of regression show up in the same CI run instead of
         # needing a second push to discover the per-module one. Targets
