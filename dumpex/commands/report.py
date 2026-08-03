@@ -695,8 +695,10 @@ def _render_card(mf, card, min_len: int) -> None:
             elif r.mz_header_detected and r.module_context == MODULE_CONTEXT_RESOLVED:
                 print(f"  {DIM('[·] MZ header (known module — expected)')}")
             elif r.mz_header_detected and r.module_context == MODULE_CONTEXT_UNAVAILABLE:
-                print(f"  {YELLOW('[~] MZ header found, but module classification is unavailable '
-                                  '(ModuleListStream absent) — cannot confirm this is an injected PE')}")
+                print("  " + YELLOW(
+                    "[~] MZ header found, but module classification is unavailable "
+                    "(ModuleListStream absent) — cannot confirm this is an injected PE"
+                ))
         print()
 
         if card.thread_region_correlation_excluded:
