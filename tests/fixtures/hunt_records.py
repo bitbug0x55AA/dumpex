@@ -5,9 +5,11 @@ content, same "fully synthetic, checked-in fixture" rule
 docs/hunt_migration_field_matrix.md's own revision note establishes for
 tests/fixtures/hunt_cases.py. These build dumpex.output.records.HunterRecord
 instances directly (the same way tests/unit/test_hunt_records.py does) --
-NOT through any hunter's real collect_*() pipeline, since only injection's
-collect_injection_record() exists so far (see that module's own docstring;
-the other six hunters' real collector wiring is tracked follow-up work).
+NOT through any hunter's real collect_*() pipeline (every hunter has one
+as of PR2b; see e.g. dumpex.hunt.injection.collect.collect_injection_record())
+-- deliberately, so PR3's schema/CSV tests stay independent of any given
+hunter's own detection logic and exercise only the record/summary shape
+itself.
 """
 import dataclasses
 
@@ -72,7 +74,9 @@ def injection_detected():
 
 
 def hollowing_not_evaluated():
-    details = HollowingDetails(image_base="0x0000000000000004", mem_private_at_base=None,
+    # image_base=None: the PEB itself is missing in this state -- there is
+    # no image base to report at all (see HollowingDetails' own docstring).
+    details = HollowingDetails(image_base=None, mem_private_at_base=None,
         mz_header_present=None, is_rwx_at_base=None, peb_image_path=None, module_name=None,
         name_mismatch=None)
     return HunterRecord(hunter="hollowing", status="NOT_EVALUATED", score=0, max_score=1,

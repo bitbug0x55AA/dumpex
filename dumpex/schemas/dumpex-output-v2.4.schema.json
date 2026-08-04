@@ -5472,7 +5472,7 @@
       }
     },
     "hollowingDetails": {
-      "description": "Matches dumpex.output.records.HollowingDetails.to_dict() -- `--hunt hollowing`'s hunter-specific evidence: the four checks (memory type / MZ header / RWX protection at the image base, and the PEB-vs-module-list name compare). Unlike the other six hunters, every field here is a scalar -- there is no list-shaped evidence to break out into its own CSV table.",
+      "description": "Matches dumpex.output.records.HollowingDetails.to_dict() -- `--hunt hollowing`'s hunter-specific evidence: the four checks (memory type / MZ header / RWX protection at the image base, and the PEB-vs-module-list name compare). Unlike the other six hunters, every field here is a scalar -- there is no list-shaped evidence to break out into its own CSV table. `image_base` is null exactly when the PEB itself is missing (this hunter's NOT_EVALUATED case) -- there is no image base to report at all, unlike every other hunter's details, which always have SOME evidence even under incomplete coverage.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -5486,10 +5486,7 @@
       ],
       "properties": {
         "image_base": {
-          "$ref": "#/$defs/hexAddress",
-          "not": {
-            "const": null
-          }
+          "$ref": "#/$defs/hexAddress"
         },
         "mem_private_at_base": {
           "type": [

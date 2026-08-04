@@ -1,7 +1,41 @@
 {
   "confidence": "medium",
-  "coverage_reasons": [],
-  "coverage_status": "complete",
+  "coverage": {
+    "limitations": [],
+    "reasons": [],
+    "sources": {
+      "image_base_region": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "modules": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "mz_header_read": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "peb": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      }
+    },
+    "status": "complete"
+  },
+  "details": {
+    "image_base": "0x0000000140000000",
+    "is_rwx_at_base": true,
+    "mem_private_at_base": true,
+    "module_name": "C:\\Windows\\System32\\legit.exe",
+    "mz_header_present": true,
+    "name_mismatch": false,
+    "peb_image_path": "C:\\Windows\\System32\\legit.exe"
+  },
   "findings": [
     {
       "check": "hollowing.mem_private_at_image_base",
@@ -13,7 +47,7 @@
       "limitations": [
         "A manual-mapping loader that isn't hollowing can also produce this signal alone."
       ],
-      "rationale": "A genuine PE image loaded normally is always MEM_IMAGE at its base — MEM_PRIVATE there means nothing was actually mapped from the executable file this process is supposed to be running. Structural on its own, but a manually-mapped, otherwise benign loader (some DRM/anti-cheat/packer stubs) can also produce this without hollowing — correlated with a second anomaly below before it counts toward the score.",
+      "rationale": "A genuine PE image loaded normally is always MEM_IMAGE at its base \u2014 MEM_PRIVATE there means nothing was actually mapped from the executable file this process is supposed to be running. Structural on its own, but a manually-mapped, otherwise benign loader (some DRM/anti-cheat/packer stubs) can also produce this without hollowing \u2014 correlated with a second anomaly below before it counts toward the score.",
       "tag": "lead"
     },
     {
@@ -26,7 +60,7 @@
       "limitations": [
         "Does not by itself distinguish hollowing from JIT/legitimate self-modifying-code use cases at this address."
       ],
-      "rationale": "RWX at the image base is needed to write replacement code during hollowing, but RWX alone is routinely used by JITs, debuggers, and some legitimate packers — a lead, not proof, on its own.",
+      "rationale": "RWX at the image base is needed to write replacement code during hollowing, but RWX alone is routinely used by JITs, debuggers, and some legitimate packers \u2014 a lead, not proof, on its own.",
       "tag": "lead"
     },
     {
@@ -39,10 +73,11 @@
       "limitations": [
         "Structural correlation is strong evidence but not a substitute for live-execution corroboration (no thread-context signal is available for this hunter)."
       ],
-      "rationale": "Any one of these signals alone has a plausible benign explanation (manual mapping, a capture-time read race, a JIT/packer using RWX). MEM_PRIVATE at the image base correlated with a missing/wiped MZ header AND/OR RWX protection at that same address is materially harder to explain away — the combination the module's own checks were designed to catch.",
+      "rationale": "Any one of these signals alone has a plausible benign explanation (manual mapping, a capture-time read race, a JIT/packer using RWX). MEM_PRIVATE at the image base correlated with a missing/wiped MZ header AND/OR RWX protection at that same address is materially harder to explain away \u2014 the combination the module's own checks were designed to catch.",
       "tag": "detection"
     }
   ],
+  "hunter": "hollowing",
   "lead_count": 2,
   "max_score": 2,
   "review_priority": "high",

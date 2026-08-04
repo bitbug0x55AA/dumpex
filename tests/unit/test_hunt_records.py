@@ -271,6 +271,18 @@ def test_hollowing_details_to_dict():
     assert d["mem_private_at_base"] is True
 
 
+def test_hollowing_details_allows_null_image_base_when_peb_missing():
+    # PR2b: the NOT_EVALUATED (PEB-missing) case genuinely has no image
+    # base at all -- HollowingDetails must accept null here, unlike
+    # every other hunter's *Details (which always has SOME evidence to
+    # convert even under incomplete coverage).
+    d = HollowingDetails(
+        image_base=None, mem_private_at_base=None, mz_header_present=None,
+        is_rwx_at_base=None, peb_image_path=None, module_name=None,
+        name_mismatch=None).to_dict()
+    assert d["image_base"] is None
+
+
 def test_stomping_details_rejects_non_dict_entries():
     with pytest.raises(TypeError):
         StompingDetails(protection_leads=["oops"], verified_changes=[])

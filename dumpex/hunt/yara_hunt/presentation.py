@@ -1,16 +1,18 @@
 """Final-result console rendering for the YARA hunter.
 
 Header and in-progress scan announcements ("Loaded N rule file(s)...",
-"Scanning N segment(s)...", "Scan complete...") remain in the entry point
-so they are emitted before/during potentially expensive scanning (mirrors
-the same split in dumpex.hunt.cs_beacon and dumpex.hunt.stomping). This
-module renders only what's left once a Report already exists — findings,
-coverage-gap notes, and the verdict line. This includes the four
-"prerequisite missing" NOT_EVALUATED cases: __init__.py builds their
-Report via aggregate.build_not_evaluated_report() BEFORE calling any of
-the four render_* functions below, so aggregate stays the only place that
-constructs or mutates status/coverage_status/verdict_level, even for
-these early-return paths.
+"Scanning N segment(s)...", "Scan complete...") are printed by
+`_hunt_yara()` in `dumpex/hunt/yara_hunt/__init__.py`, AFTER the fully
+silent `_build_yara_report()` returns (see that function's own
+docstring for how it hands back everything `_hunt_yara()` needs to
+reproduce them without rescanning). This module renders only what's
+left once a Report already exists — findings, coverage-gap notes, and
+the verdict line. This includes the four "prerequisite missing"
+NOT_EVALUATED cases: `_hunt_yara()` picks which of the four render_*
+functions below to call from `report.render_kind`, itself set by
+aggregate.build_not_evaluated_report() -- so aggregate stays the only
+place that constructs or mutates status/coverage_status/verdict_level,
+even for these early-return paths.
 """
 import os
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD

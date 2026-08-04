@@ -305,7 +305,7 @@ def _find_rules_source() -> "_RuleSource | None":
     return _packaged_source()
 
 
-def _load_explicit_rules() -> dict:
+def _load_explicit_rules(announce: bool = True) -> dict:
     """
     Load rules from the user-specified --rules-file, with NO fallback to
     packaged/built-in rules on any failure: a missing file, unreadable
@@ -315,7 +315,11 @@ def _load_explicit_rules() -> dict:
     who asked for a specific ruleset could get a verdict produced by a
     DIFFERENT ruleset without any indication that its request wasn't
     honored — for a DFIR tool, that's a worse failure mode than just
-    stopping.
+    stopping. Every one of these `sys.exit(1)` error paths always prints,
+    regardless of `announce` -- a fatal misconfiguration must never be
+    hidden just because a caller wanted silent rule loading; only the
+    final SUCCESS line is gated (see `announce`'s own docstring on
+    `get_rules()`).
     """
     global _LAST_SOURCE_INFO
     path = _EXPLICIT_RULES_PATH
@@ -372,11 +376,12 @@ def _load_explicit_rules() -> dict:
 
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
     _LAST_SOURCE_INFO = {"path": str(path), "sha256": digest, "explicit": True, "version": version}
-    print(GREEN(f"  [·] Rules loaded from --rules-file {path}  (sha256={digest[:16]}…)"))
+    if announce:
+        print(GREEN(f"  [·] Rules loaded from --rules-file {path}  (sha256={digest[:16]}…)"))
     return rules
 
 
-def _load_rules() -> dict:
+def _load_rules(announce: bool = True) -> dict:
     """
     Load and compile TTP detection rules.
 
@@ -388,14 +393,18 @@ def _load_rules() -> dict:
       2. Built-in defaults (always available)
 
     Errors loading the packaged copy (parse failure, schema mismatch) are
-    printed as warnings and cause automatic fallback to built-in defaults
-    — that path is NOT user-requested, so silent fallback there is the
-    right behavior (it's what keeps the tool runnable standalone).
+    printed as warnings (when `announce`) and cause automatic fallback to
+    built-in defaults — that path is NOT user-requested, so silent
+    fallback there is the right behavior (it's what keeps the tool
+    runnable standalone). `announce=False` suppresses every informational/
+    warning print in this function (see `get_rules()`'s own docstring) --
+    it does NOT affect `_load_explicit_rules()`'s own fatal `sys.exit(1)`
+    error paths, which always print regardless.
     """
     global _LAST_SOURCE_INFO
 
     if _EXPLICIT_RULES_PATH is not None:
-        return _load_explicit_rules()
+        return _load_explicit_rules(announce=announce)
 
     source = _find_rules_source()
 
@@ -407,15 +416,16 @@ def _load_rules() -> dict:
                     import yaml
                     raw = yaml.safe_load(text)
                 except ImportError:
-                    print(DIM(f"  [~] pyyaml not installed — cannot read {source.display}; "
-                              f"install with: pip install pyyaml"))
+                    if announce:
+                        print(DIM(f"  [~] pyyaml not installed — cannot read {source.display}; "
+                                  f"install with: pip install pyyaml"))
                     raw = None
             else:
                 raw = json.loads(text)
 
             if raw is not None:
                 version = raw.get("version", 1)
-                if version != 1:
+                if version != 1 and announce:
                     print(YELLOW(f"  [~] {source.display}: unknown schema version {version}, "
                                  f"proceeding anyway"))
                 _validate_rules_schema(raw)   # raises ValueError -> caught below,
@@ -424,18 +434,20 @@ def _load_rules() -> dict:
                 digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
                 _LAST_SOURCE_INFO = {"path": source.display, "sha256": digest,
                                       "explicit": False, "version": version}
-                print(DIM(f"  [·] Rules loaded from {source.display}  (sha256={digest[:16]}…)"))
+                if announce:
+                    print(DIM(f"  [·] Rules loaded from {source.display}  (sha256={digest[:16]}…)"))
                 return rules
 
         except Exception as e:
-            print(YELLOW(f"  [~] Could not load {source.display}: {e} — using built-in defaults"))
+            if announce:
+                print(YELLOW(f"  [~] Could not load {source.display}: {e} — using built-in defaults"))
 
     _LAST_SOURCE_INFO = {"path": None, "sha256": None, "explicit": False, "version": 1}
     return _compile_rules({k: list(v) if isinstance(v, set) else v
                            for k, v in _DEFAULT_RULES.items()})
 
 
-def get_rules() -> dict:
+def get_rules(announce: bool = True) -> dict:
     """
     Return the compiled rule set, loading it on first call.
 
@@ -444,8 +456,23 @@ def get_rules() -> dict:
     module-level name — `from module import NAME` binds a snapshot at
     import time, so any name reassigned later (e.g. after loading a
     custom rules.yaml) would silently stay stale in the importing module.
-    """
+
+    `announce=False` loads (and caches) the rules exactly as normal but
+    suppresses the "Rules loaded from ..." line (and any non-fatal
+    warning) that would otherwise print on the FIRST real call in a
+    process -- for a caller like `dumpex.hunt.collect_hunt()` that must
+    be usable as a pure data API (see its own docstring), printing
+    anything at all on first use, purely as a side effect of a hunter's
+    builder needing rule data, would be a real stdout-pollution bug for a
+    caller piping JSON from it. Every hunter's own console entry point
+    (`_hunt_*()`/`_print_*_pre_build_console()`) still calls the default,
+    announcing `get_rules()` itself, at the point it wants the
+    "Rules loaded..." line to appear -- this parameter only controls
+    whether THIS particular call is allowed to trigger that print; the
+    cache itself (`_RULES_CACHE`) is unaffected either way, so rules are
+    still loaded from disk only once per process no matter which caller
+    gets there first."""
     global _RULES_CACHE
     if _RULES_CACHE is None:
-        _RULES_CACHE = _load_rules()
+        _RULES_CACHE = _load_rules(announce=announce)
     return _RULES_CACHE

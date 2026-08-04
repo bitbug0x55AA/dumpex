@@ -68,7 +68,9 @@ def test_hunters_table_has_one_row_per_hunter_record():
 def test_hunters_table_flattens_hollowing_scalar_details_in_place():
     tables = build_tables(_hunt_result(all_seven_detected_variety()))
     hollowing_row = next(r for r in tables["hunters"] if r["hunter"] == "hollowing")
-    assert hollowing_row["image_base"] == "0x0000000000000004"
+    # the fixture's hollowing record is NOT_EVALUATED (PEB missing) --
+    # image_base is genuinely null in that state, see HollowingDetails.
+    assert hollowing_row["image_base"] is None
     assert hollowing_row["mem_private_at_base"] is None
 
 

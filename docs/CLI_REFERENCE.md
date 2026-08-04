@@ -79,17 +79,17 @@ auto-generated default filename) would resolve to the same file — a later
 write silently clobbering an earlier one's output is never allowed, even
 with `--force`.
 
-`--json`/`--csv` currently route to one of two contracts depending on the
-mode: `--hunt` uses the v1.1 contract unchanged; `--list`/`--modules`/
-`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff`/`--extract`/`--strings`/
-`--report` use the v2 contract (canonical records, `null` for missing
-values, normalized hex addresses — see
-[Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)). All
-ten of these support `--json`/`--csv` — `--hunt` is the only command left
-on the v1.1 contract.
+`--json`/`--csv` route through a single contract for every mode:
+`--list`/`--modules`/`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff`/
+`--extract`/`--strings`/`--report`/`--hunt` all use the v2 contract
+(canonical records, `null` for missing values, normalized hex addresses —
+see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
+All eleven commands support `--json`/`--csv` on this same v2.4 contract;
+`--hunt` was the last to migrate — its `result.kind` is `"hunt"` and
+`result.data.records` holds one `hunterRecord` per hunter.
 `--diff` produces a `kind: "comparison"` result with a two-entry
 `meta.evidence` array (`baseline`/`target`) instead of the single-dump
-`meta` shape the other nine use — see
+`meta` shape the other ten use — see
 [Output and Evidence Schema](OUTPUT_SCHEMA.md#comparison-records).
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the `--output` file it wrote) and `diagnostics.warnings[]` (e.g. an
@@ -105,7 +105,9 @@ reports coverage independent of `--json`/`--csv`: `0` for complete coverage,
 while the base thread list is still present, or `--extract`/`--strings`
 reading fewer bytes than requested), `4` when the one stream the command
 needed is entirely absent (e.g. `--modules` when `ModuleListStream`
-itself isn't in the dump at all).
+itself isn't in the dump at all). `--hunt` follows the same convention now
+too — `0`/`3`/`4` based on whether every selected hunter, any hunter, or
+none reached a conclusive result — instead of its old unconditional `0`.
 
 See [Output and Evidence Schema](OUTPUT_SCHEMA.md) for formats and metadata.
 

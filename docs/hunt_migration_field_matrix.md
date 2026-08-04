@@ -154,7 +154,7 @@ review_priority, score, status, verdict_level`.
 | coverage_status | coverage | migration SOURCE, not a field to carry forward — see legend |
 | findings | finding | |
 | config_count | judgment-adjacent | derived count, currently duplicated into the console summary suffix (`dumpex/hunt/__init__.py:150-151`) — keep as a `CsBeaconDetails` field, not a top-level `HunterRecord` field |
-| configs | detail | → `CsBeaconDetails.configs`; **confirmed by the frozen test**: `va`/`file_offset` are plain **JSON integers** even after the dispatcher's own sanitization pass, not the fixed-16-hex-string format the v2.4 contract requires — a real shape change, not just a container move. `fields{}`'s int-key→str-key + bytes→hex conversion IS already correct today, but only at the **dispatcher** layer (`dumpex/hunt/__init__.py:59-81`), not inside `_hunt_cs_beacon()` itself — `CsBeaconDetails.__post_init__`/`to_dict()` must absorb that logic so it survives PR4 deleting the dispatcher's hand-rolled version. |
+| configs | detail | → `CsBeaconDetails.configs`; **confirmed by the frozen test**: `va`/`file_offset` are plain **JSON integers** even after the dispatcher's own sanitization pass, not the fixed-16-hex-string format the v2.4 contract requires — a real shape change, not just a container move. `fields{}`'s int-key→str-key + bytes→hex conversion IS already correct today, but only at the **dispatcher** layer (`dumpex/hunt/__init__.py:59-81`), not inside `_hunt_cs_beacon()` itself — `CsBeaconDetails.__post_init__`/`to_dict()` absorbs that same logic independently for the v2.4 `HunterRecord` path. **Update**: the dispatcher's own hand-rolled sanitization was NOT deleted — `cmd_hunt()`'s bare-dict `results` path (used for console rendering and by other, non-v2 callers) still runs it unchanged; only the separate `_record_from_cs_beacon_report()`/`CsBeaconDetails` path that feeds `--hunt`'s v2.4 JSON/CSV output needed its own, independent conversion. |
 | coverage (dict) | coverage | |
 | coverage_reasons | coverage | |
 
@@ -176,7 +176,7 @@ verdict_level}`.
 | matches, rules_hit | detail (NOT finding — see legend) | `matches[*].strings[*].data` is dispatcher-sanitized bytes→hex today (`dumpex/hunt/__init__.py:83-88`) — moves into `YaraDetails.to_dict()`, staying its own typed shape rather than being forced onto the `Finding` model |
 | coverage (dict: rule_files_compiled/segments_read/segments_short_read/segments_size_ok/matches_completed/hit_cap_not_reached/scan_budget_ok) | coverage | maps directly to requested limitation codes: scan read failed/short read/oversized region skipped/scan budget exhausted/hit cap reached/YARA compile failed all present as booleans already |
 | scan_complete | coverage | |
-| — (provenance) | provenance/meta | rule file identity/sha256 currently surfaces only in top-level `meta.yara_rules` (`dumpex/ui/structured.py:227-265`, `dumpex.hunt.yara_hunt.get_yara_provenance()`) — **confirmed not yet ported to v2 `envelope.py:build_meta_v2()`**, required for PR3 |
+| — (provenance) | provenance/meta | rule file identity/sha256 surfaced only in top-level `meta.yara_rules` (`dumpex/ui/structured.py:227-265`, `dumpex.hunt.yara_hunt.get_yara_provenance()`) at the time this doc was frozen — **since ported** to v2 `envelope.py:build_meta_v2()`'s own `_yara_rules_meta()` helper, so `--hunt`'s v2.4 `meta.yara_rules` carries the same provenance |
 
 ## obfuscation
 
@@ -224,14 +224,19 @@ verdict_level, xor`. Frozen scenario:
    `coverage.status` field saying the same thing twice (a two-sources-of-
    truth regression `dumpex/output/coverage.py`'s own module docstring
    explicitly says this migration exists to avoid for every other command).
-3. **`--hunt all` today has no coverage-based process exit code.**
+3. **`--hunt all` had no coverage-based process exit code, as of this
+   doc's frozen baseline.**
    `tests/integration/test_hunt_cli_compat_freeze.py::
    test_hunt_all_all_not_evaluated` runs a real `cli.main()` end to end
-   with every hunter NOT_EVALUATED and confirms `exit_code == 0` —
-   `dumpex/cli.py`'s current `args.hunt` branch never calls
-   `exit_code_for()` the way the other ten migrated commands do. PR4's
-   exit-code change is a real, user-visible behavior change requiring the
-   release-notes callout the user specified.
+   with every hunter NOT_EVALUATED and confirms `exit_code == 0` at that
+   baseline — `dumpex/cli.py`'s `args.hunt` branch never called
+   `exit_code_for()` the way the other ten migrated commands did. **This
+   has since shipped**: `--hunt` is now in `_V2_STRUCTURED_MODES`, its
+   `args.hunt` branch builds a `CommandResult` and runs it through
+   `_apply_command_result()`/`exit_code_for()` like every other v2-routed
+   command, and the exit code is coverage-based (`0`/`3`/`4`) instead of
+   an unconditional `0` — the release-notes callout this finding asked
+   for.
 4. **States frozen**: per-hunter judgment/detail dicts, all synthetic, in
    `tests/integration/test_hunt_compat_freeze.py` (13 scenarios, each
    asserting its FULL key set via `assert set(f) == {...}`, not just a

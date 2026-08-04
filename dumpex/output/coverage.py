@@ -396,6 +396,147 @@ class LimitationCode(str, Enum):
     # incomplete source is not the same shape build_coverage_report's
     # automatic SOURCE_ABSENT/FAILED derivation covers); affected_count
     # alone carries the fact.
+    MODULE_HEADER_READ_FAILED = "MODULE_HEADER_READ_FAILED"
+    # ^ --hunt stomping (and any future hunter parsing a module's own PE
+    # header out of process memory): N module header read(s) raised or
+    # returned nothing usable. source fixed to "module_headers" -- a
+    # synthetic, always-present source (the header-read attempt itself,
+    # not an optional minidump stream) mirroring PE_HEADER_READ_FAILED's
+    # own "hidden_pe_scan" pattern, kept as its own code/source rather
+    # than reusing that one: PE_HEADER_READ_FAILED's source is FIXED to
+    # "hidden_pe_scan" specifically (injection's hidden-PE scan), so a
+    # different source name here needs a different code entirely (see
+    # CoverageLimitation's own fixed_source enforcement). caller_buildable;
+    # affected_count alone carries the fact.
+    MODULE_HEADER_PARSE_FAILED = "MODULE_HEADER_PARSE_FAILED"
+    # ^ Companion to MODULE_HEADER_READ_FAILED: the read succeeded, but the
+    # bytes failed PE structural validation (DOS/COFF/optional header or
+    # section table) -- a loaded, known module whose own header doesn't
+    # parse is itself unusual (the loader required a valid header to map
+    # it), and this module could not be checked for stomping at all.
+    # source fixed to "module_headers"; caller_buildable; affected_count.
+    STOMPING_REFERENCE_NOT_SUPPLIED = "STOMPING_REFERENCE_NOT_SUPPLIED"
+    # ^ --hunt stomping: no --ref-dir supplied at all -- the hunter's ONE
+    # scored signal (verified on-disk-vs-memory content diff) was not
+    # attempted for any module. Fully fixed sentence, source fixed to
+    # "reference_files"; absent_capable (selected as the
+    # SourceRequirement.absent_code when that source's own
+    # SourceObservation is ABSENT -- see dumpex.hunt.stomping.aggregate).
+    STOMPING_REFERENCE_MISSING = "STOMPING_REFERENCE_MISSING"
+    # ^ --ref-dir was supplied, but N eligible section(s) had no
+    # matching-basename reference file under it. source fixed to
+    # "reference_files"; caller_buildable; affected_count.
+    STOMPING_REFERENCE_MISMATCH = "STOMPING_REFERENCE_MISMATCH"
+    # ^ A matching-basename reference file was found for N section(s), but
+    # its own header identity (Machine/SizeOfImage/TimeDateStamp) didn't
+    # match the in-memory module -- comparison was skipped rather than
+    # risk a false positive from diffing against a different build.
+    # source fixed to "reference_files"; caller_buildable; affected_count.
+    STOMPING_REFERENCE_READ_FAILED = "STOMPING_REFERENCE_READ_FAILED"
+    # ^ A matching, identity-confirmed reference file could not be read
+    # for N section(s). source fixed to "reference_files";
+    # caller_buildable; affected_count.
+    STOMPING_SECTION_MEMORY_READ_FAILED = "STOMPING_SECTION_MEMORY_READ_FAILED"
+    # ^ N eligible section(s)' own LIVE memory bytes could not be read
+    # during the verified-content diff (distinct from
+    # MODULE_HEADER_READ_FAILED, which is about the module's HEADER, not
+    # a specific section's body). source fixed to "section_content_diff"
+    # -- a synthetic, always-present source (the diff attempt itself);
+    # caller_buildable; affected_count.
+    STOMPING_SHORT_READ = "STOMPING_SHORT_READ"
+    # ^ A section's live memory read succeeded but returned nothing
+    # comparable against the reference (N section(s) affected) -- not a
+    # confirmed absence of tampering, just an incomplete read. source
+    # fixed to "section_content_diff"; caller_buildable; affected_count.
+    STOMPING_RELOCATION_FAILED = "STOMPING_RELOCATION_FAILED"
+    # ^ N section(s) needed relocation normalization (the reference file
+    # loaded at a different preferred ImageBase than the in-memory module)
+    # that could not be completed -- unsupported machine type or a
+    # malformed relocation table. source fixed to "section_content_diff";
+    # caller_buildable; affected_count.
+    SCAN_REGION_OVERSIZED_SKIPPED = "SCAN_REGION_OVERSIZED_SKIPPED"
+    # ^ Generic (source stays OPEN, unlike the fixed-source codes above):
+    # N region(s) an on-the-fly memory scan skipped for exceeding its own
+    # size cap -- shared by every hunter using dumpex.hunt._coverage.
+    # CoverageTracker's generic skipped_oversize/read_failed/short_reads
+    # counters (pipe's memory-string scan, obfuscation's seven decode-
+    # layer scans) rather than each minting its own near-identical code.
+    # caller_buildable; affected_count.
+    SCAN_REGION_READ_FAILED = "SCAN_REGION_READ_FAILED"
+    # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED: N region(s) a scan
+    # could not read at all (raised/returned nothing usable).
+    # caller_buildable; affected_count.
+    SCAN_REGION_SHORT_READ = "SCAN_REGION_SHORT_READ"
+    # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED: N region(s) a scan read
+    # but got fewer bytes back than declared/requested -- not fully
+    # scanned, not a confirmed absence of whatever was being searched for.
+    # caller_buildable; affected_count.
+    SCAN_BUDGET_EXHAUSTED = "SCAN_BUDGET_EXHAUSTED"
+    # ^ Generic: a dumpex.hunt._budget.ScanBudget backing an on-the-fly
+    # scan (pipe's independent pipe-name/C2-context budgets, obfuscation's
+    # per-layer decode budgets, ...) hit one of its own limits
+    # (ScanBudget.exhausted_reason: "deadline"/"max_attempts"/
+    # "max_bytes_read"/"max_hits"/"max_retained_bytes" -- a closed,
+    # code-enumerated set, not caller-composed prose) before the scan
+    # finished everything in scope. `detail` carries that reason string;
+    # `scope` optionally names WHICH budget, when a hunter has more than
+    # one independent one. caller_buildable.
+    YARA_RULE_COMPILE_FAILED = "YARA_RULE_COMPILE_FAILED"
+    # ^ --hunt yara: N .yar/.yara rule file(s) failed to compile -- scan
+    # coverage is reduced (those rules never ran against anything), not
+    # merely a warning. source fixed to "yara_rules"; caller_buildable;
+    # affected_count alone carries the fact.
+    YARA_MATCH_FAILED = "YARA_MATCH_FAILED"
+    # ^ N compiled_rules.match() call(s) raised a non-timeout exception --
+    # distinct from YARA_MATCH_TIMED_OUT (a different, specific failure
+    # mode an analyst needs to tell apart, same reasoning
+    # PE_HEADER_READ_FAILED/_SHORT_READ split on). source fixed to
+    # "segment_scan"; caller_buildable; affected_count.
+    YARA_MATCH_TIMED_OUT = "YARA_MATCH_TIMED_OUT"
+    # ^ Companion to YARA_MATCH_FAILED: N match() call(s) exceeded the
+    # per-call match timeout. source fixed to "segment_scan";
+    # caller_buildable; affected_count.
+    YARA_HIT_CAP_REACHED = "YARA_HIT_CAP_REACHED"
+    # ^ The scan's own total-hit cap (YaraConfig.max_total_hits) was
+    # reached before every segment/rule pairing was examined -- fully
+    # fixed sentence, no fields, source fixed to "segment_scan"
+    # (mirrors PID_NO_USABLE_FALLBACK's own "fully fixed, no fields"
+    # shape).
+    YARA_SCAN_BUDGET_EXHAUSTED = "YARA_SCAN_BUDGET_EXHAUSTED"
+    # ^ This hunter's own whole-scan time/byte budget was exhausted
+    # before every segment was examined -- unlike CS_BEACON_SCAN_BUDGET_
+    # EXHAUSTED/SCAN_BUDGET_EXHAUSTED, yara_hunt's own ScanOutcome.
+    # budget_exhausted carries no reason string at all (a plain bool),
+    # so this is a fully fixed sentence, no fields, source fixed to
+    # "segment_scan".
+    ENCODING_ALL_REGIONS_FILTERED = "ENCODING_ALL_REGIONS_FILTERED"
+    # ^ --hunt obfuscation: every candidate region was excluded by one of
+    # the seven decode layers' own size/type eligibility filters before
+    # any of them actually read anything -- distinct from
+    # SCAN_REGION_OVERSIZED_SKIPPED (a specific oversized region skipped
+    # mid-scan): this is "nothing was in scope to scan at all", a
+    # stronger, whole-run fact. source fixed to "encoding_scan";
+    # caller_buildable; affected_count (the region count) carries the
+    # fact.
+    YARA_MATCH_CONTEXT_UNVERIFIED = "YARA_MATCH_CONTEXT_UNVERIFIED"
+    # ^ N rule(s) matched but every hit was context_unverified (a
+    # PE_In_Private_Memory-style hit landing in a MemoryContext.OTHER/
+    # UNKNOWN region, so it can be neither confirmed nor ruled out) --
+    # this can't be trusted as a positive OR a negative result, hence
+    # INCONCLUSIVE. source fixed to "yara_context"; caller_buildable;
+    # affected_count alone carries the fact.
+    CS_BEACON_SCAN_BUDGET_EXHAUSTED = "CS_BEACON_SCAN_BUDGET_EXHAUSTED"
+    # ^ --hunt cs-beacon: dumpex.hunt.cs_beacon.scanner's own ad-hoc budget
+    # tracker (NOT dumpex.hunt._budget.ScanBudget -- a distinct, older
+    # mechanism with a genuinely free-form reason string baked in, e.g.
+    # "N candidate(s) examined, M byte(s) scanned ...") hit one of its
+    # limits before every segment/candidate was examined. `detail` is
+    # that free-form string -- the same "the underlying fact truly cannot
+    # be enumerated, so caller-supplied text is unavoidable" precedent
+    # SOURCE_FAILED's own `detail` (an arbitrary exception message) already
+    # sets, NOT the generic caller-composed-prose case that precedent
+    # otherwise warns against. source fixed to "segment_scan";
+    # caller_buildable.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -630,6 +771,102 @@ def _render_pe_header_short_read(limitation: "CoverageLimitation") -> str:
 def _render_thread_context_partial(limitation: "CoverageLimitation") -> str:
     return (f"{limitation.affected_count} thread(s) had no parsed CONTEXT -- live-execution "
             f"correlation ran, but not for every thread")
+
+
+def _render_module_header_read_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} module header read(s) failed"
+
+
+def _render_module_header_parse_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} module header(s) failed PE structural validation"
+
+
+def _render_stomping_reference_missing(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} section(s) had no matching reference file "
+            f"under --ref-dir")
+
+
+def _render_stomping_reference_mismatch(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} section(s) had a reference file whose build "
+            f"identity didn't match")
+
+
+def _render_stomping_reference_read_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} reference file(s) could not be read"
+
+
+def _render_stomping_section_memory_read_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} section(s) could not be read from memory"
+
+
+def _render_stomping_short_read(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} section(s) had nothing comparable to read"
+
+
+def _render_stomping_relocation_failed(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} section(s) needed relocation normalization "
+            f"that could not be completed (unsupported machine type or malformed "
+            f"relocation table)")
+
+
+def _render_scan_region_oversized_skipped(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} oversized region(s) skipped"
+
+
+def _render_scan_region_read_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} region(s) failed to read"
+
+
+def _render_scan_region_short_read(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} region(s) returned fewer bytes than declared "
+            f"(short read) -- not fully scanned")
+
+
+_SCAN_BUDGET_EXHAUSTED_REASONS = frozenset(
+    {"deadline", "max_attempts", "max_bytes_read", "max_hits", "max_retained_bytes"})
+
+
+def _render_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
+    scope = f"{limitation.scope} " if limitation.scope else ""
+    return f"{scope}scan budget exhausted ({limitation.detail})"
+
+
+def _validate_scan_budget_exhausted_fields(limitation: "CoverageLimitation") -> None:
+    if limitation.detail not in _SCAN_BUDGET_EXHAUSTED_REASONS:
+        raise ValueError(
+            f"CoverageLimitation(code=SCAN_BUDGET_EXHAUSTED) requires detail to be one of "
+            f"{sorted(_SCAN_BUDGET_EXHAUSTED_REASONS)!r}, got {limitation.detail!r}")
+
+
+def _render_cs_beacon_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
+    return (f"scan resource budget exhausted ({limitation.detail}) -- stopped before "
+            f"every segment/candidate was examined")
+
+
+def _validate_cs_beacon_scan_budget_exhausted_fields(limitation: "CoverageLimitation") -> None:
+    _require_non_empty_str(limitation.detail, "CoverageLimitation.detail")
+
+
+def _render_yara_rule_compile_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} rule file(s) failed to compile"
+
+
+def _render_yara_match_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} match() call(s) failed"
+
+
+def _render_yara_match_timed_out(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} match() call(s) timed out"
+
+
+def _render_yara_match_context_unverified(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} rule(s) matched but could not be classified "
+            f"(context_unverified)")
+
+
+def _render_encoding_all_regions_filtered(limitation: "CoverageLimitation") -> str:
+    return (f"all {limitation.affected_count} region(s) filtered out by every layer's "
+            f"size/type limits -- nothing was actually scanned")
 
 
 def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimitation"], None]:
@@ -950,6 +1187,104 @@ _CODE_SPECS = {
         render=_render_thread_context_partial, fixed_source="thread_context",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("THREAD_CONTEXT_PARTIAL"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.MODULE_HEADER_READ_FAILED: _CodeSpec(
+        render=_render_module_header_read_failed, fixed_source="module_headers",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("MODULE_HEADER_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.MODULE_HEADER_PARSE_FAILED: _CodeSpec(
+        render=_render_module_header_parse_failed, fixed_source="module_headers",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("MODULE_HEADER_PARSE_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.STOMPING_REFERENCE_NOT_SUPPLIED: _CodeSpec(
+        render=_render_fixed_text(
+            "--ref-dir not supplied -- verified content comparison (the only scored "
+            "signal) was not performed for any module"),
+        fixed_source="reference_files", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.STOMPING_REFERENCE_MISSING: _CodeSpec(
+        render=_render_stomping_reference_missing, fixed_source="reference_files",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("STOMPING_REFERENCE_MISSING"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.STOMPING_REFERENCE_MISMATCH: _CodeSpec(
+        render=_render_stomping_reference_mismatch, fixed_source="reference_files",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("STOMPING_REFERENCE_MISMATCH"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.STOMPING_REFERENCE_READ_FAILED: _CodeSpec(
+        render=_render_stomping_reference_read_failed, fixed_source="reference_files",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("STOMPING_REFERENCE_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.STOMPING_SECTION_MEMORY_READ_FAILED: _CodeSpec(
+        render=_render_stomping_section_memory_read_failed, fixed_source="section_content_diff",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("STOMPING_SECTION_MEMORY_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.STOMPING_SHORT_READ: _CodeSpec(
+        render=_render_stomping_short_read, fixed_source="section_content_diff",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("STOMPING_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.STOMPING_RELOCATION_FAILED: _CodeSpec(
+        render=_render_stomping_relocation_failed, fixed_source="section_content_diff",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("STOMPING_RELOCATION_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED: _CodeSpec(
+        render=_render_scan_region_oversized_skipped, caller_buildable=True,
+        validate_fields=_require_positive_affected_count("SCAN_REGION_OVERSIZED_SKIPPED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.SCAN_REGION_READ_FAILED: _CodeSpec(
+        render=_render_scan_region_read_failed, caller_buildable=True,
+        validate_fields=_require_positive_affected_count("SCAN_REGION_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.SCAN_REGION_SHORT_READ: _CodeSpec(
+        render=_render_scan_region_short_read, caller_buildable=True,
+        validate_fields=_require_positive_affected_count("SCAN_REGION_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.SCAN_BUDGET_EXHAUSTED: _CodeSpec(
+        render=_render_scan_budget_exhausted, caller_buildable=True,
+        validate_fields=_validate_scan_budget_exhausted_fields,
+        allowed_fields=frozenset({"scope", "detail"})),
+    LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
+        render=_render_cs_beacon_scan_budget_exhausted, fixed_source="segment_scan",
+        caller_buildable=True, validate_fields=_validate_cs_beacon_scan_budget_exhausted_fields,
+        allowed_fields=frozenset({"detail"})),
+    LimitationCode.YARA_RULE_COMPILE_FAILED: _CodeSpec(
+        render=_render_yara_rule_compile_failed, fixed_source="yara_rules",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("YARA_RULE_COMPILE_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.YARA_MATCH_FAILED: _CodeSpec(
+        render=_render_yara_match_failed, fixed_source="segment_scan",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("YARA_MATCH_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.YARA_MATCH_TIMED_OUT: _CodeSpec(
+        render=_render_yara_match_timed_out, fixed_source="segment_scan",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("YARA_MATCH_TIMED_OUT"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.YARA_HIT_CAP_REACHED: _CodeSpec(
+        render=_render_fixed_text("scan hit cap reached before every segment/rule pairing "
+                                   "was examined"),
+        fixed_source="segment_scan", caller_buildable=True),
+    LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
+        render=_render_fixed_text("scan resource budget exhausted before every segment "
+                                   "was examined"),
+        fixed_source="segment_scan", caller_buildable=True),
+    LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED: _CodeSpec(
+        render=_render_yara_match_context_unverified, fixed_source="yara_context",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("YARA_MATCH_CONTEXT_UNVERIFIED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.ENCODING_ALL_REGIONS_FILTERED: _CodeSpec(
+        render=_render_encoding_all_regions_filtered, fixed_source="encoding_scan",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("ENCODING_ALL_REGIONS_FILTERED"),
         allowed_fields=frozenset({"affected_count"})),
 }
 

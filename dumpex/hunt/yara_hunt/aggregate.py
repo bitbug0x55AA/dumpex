@@ -11,12 +11,74 @@ that; only structure moved, not the output contract.
 from dataclasses import dataclass, field
 
 from dumpex.hunt._ui import DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE
+from dumpex.output.coverage import build_coverage_report, observe_source, CoverageLimitation, LimitationCode
+
+
+def _yara_coverage_report(outcome, compile_failed: int, unverified_count: int = 0):
+    """Real dumpex.output.coverage.CoverageReport for a yara run that
+    actually scanned (past all four "prerequisite missing" checks) --
+    built at each gap site build_coverage()'s own 7 booleans (and, for
+    the all-unverified-hits case, the context_unverified fact) already
+    derive coverage_status from. `unverified_count` is nonzero only for
+    the "hits exist but none is confidently classified" branch (see
+    build_report()'s own INCONCLUSIVE-with-hits case)."""
+    sources = {
+        "yara_rules":    observe_source("yara_rules", present=True, items=["compiled"]),
+        "segment_scan":  observe_source("segment_scan", present=True, items=["scanned"]),
+        "yara_context":  observe_source("yara_context", present=True, items=["classified"]),
+    }
+    completeness_checks = []
+    if compile_failed:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.YARA_RULE_COMPILE_FAILED, source="yara_rules",
+            affected_count=compile_failed))
+    if outcome.skipped:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="segment_scan",
+            affected_count=outcome.skipped))
+    if outcome.read_failed:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_READ_FAILED, source="segment_scan",
+            affected_count=outcome.read_failed))
+    if outcome.short_reads:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_SHORT_READ, source="segment_scan",
+            affected_count=outcome.short_reads))
+    if outcome.match_failed:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.YARA_MATCH_FAILED, source="segment_scan",
+            affected_count=outcome.match_failed))
+    if outcome.timed_out:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.YARA_MATCH_TIMED_OUT, source="segment_scan",
+            affected_count=outcome.timed_out))
+    if outcome.truncated:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.YARA_HIT_CAP_REACHED, source="segment_scan"))
+    if outcome.budget_exhausted:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED, source="segment_scan"))
+    if unverified_count:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED, source="yara_context",
+            affected_count=unverified_count))
+
+    return build_coverage_report(sources, completeness_checks=completeness_checks)
 
 
 @dataclass
 class Report:
     """Bundles the public `findings` dict with everything presentation.py
-    needs to render console detail."""
+    needs to render console detail.
+
+    `render_kind`/`rules_dir`/`rule_file_count`/`segment_count`/
+    `scan_note`/`modules` exist ONLY so `_hunt_yara()` can print the
+    header/progress lines and pick the right `presentation.render_*`
+    function AFTER `_build_yara_report()` returns, instead of re-running
+    any prerequisite check just to learn which of the five branches
+    fired (see `dumpex/hunt/yara_hunt/__init__.py`'s own docstring) --
+    none of these fields feed score/status/coverage_status/verdict_level,
+    which are decided entirely above, in this same module."""
     findings: dict
     outcome: object = None
     compile_failed: int = 0
@@ -24,9 +86,17 @@ class Report:
     any_gap: bool = False
     verdict_reason: str = ""
     has_hits: bool = False
+    coverage_report: object = None   # dumpex.output.coverage.CoverageReport (v2.4 migration only)
+    render_kind: str = "result"   # "not_installed"|"no_rules_dir"|"no_rule_files"|"no_segments"|"result"
+    rules_dir: str = None
+    rule_file_count: int = 0
+    segment_count: int = 0
+    scan_note: str = ""
+    modules: list = field(default_factory=list)
 
 
-def build_not_evaluated_report(reason: str) -> Report:
+def build_not_evaluated_report(reason: str, render_kind: str, *, rules_dir: str = None,
+                                rule_file_count: int = 0, compile_failed: int = 0) -> Report:
     """
     The ONE place the four "prerequisite missing" early returns (no
     yara-python, no rules directory, no usable rule files, no memory
@@ -35,10 +105,21 @@ def build_not_evaluated_report(reason: str) -> Report:
     diagnostic lines for each case and this report's `verdict_reason`, it
     never constructs or mutates verdict fields itself.
     """
+    from dumpex.output.coverage import build_coverage_report, observe_source, EvaluationRequirement
     findings = {"matches": [], "score": 0, "status": NOT_EVALUATED,
                 "coverage_status": "not_evaluated", "verdict_level": "not_evaluated"}
-    return Report(findings=findings, outcome=None, compile_failed=0,
-                  rule_groups=[], any_gap=False, verdict_reason=reason, has_hits=False)
+    # `reason` distinguishes WHICH prerequisite was missing (no yara-python,
+    # no rules directory, no usable rule files, no memory segments) only in
+    # the OLD free-text verdict_reason -- the new CoverageReport collapses
+    # all four to one synthetic "yara_scan" source's absence, matching this
+    # hunter's own real not_evaluated gate (nothing ran at all either way).
+    coverage_report = build_coverage_report(
+        {"yara_scan": observe_source("yara_scan", present=False)},
+        evaluation_sources=EvaluationRequirement(("yara_scan",)))
+    return Report(findings=findings, outcome=None, compile_failed=compile_failed,
+                  rule_groups=[], any_gap=False, verdict_reason=reason, has_hits=False,
+                  coverage_report=coverage_report, render_kind=render_kind,
+                  rules_dir=rules_dir, rule_file_count=rule_file_count)
 
 
 def build_coverage(outcome, compile_failed: int) -> dict:
@@ -53,7 +134,9 @@ def build_coverage(outcome, compile_failed: int) -> dict:
     }
 
 
-def build_report(outcome, compile_failed: int) -> Report:
+def build_report(outcome, compile_failed: int, *, rules_dir: str = None,
+                  rule_file_count: int = 0, segment_count: int = 0, scan_note: str = "",
+                  modules: list = None) -> Report:
     """
     Turn a completed scan (outcome from scanner.py) into score/status/
     coverage/the public findings dict. Handles both the "nothing found"
@@ -88,7 +171,10 @@ def build_report(outcome, compile_failed: int) -> Report:
             findings["coverage_status"] = "complete"
             findings["verdict_level"]   = "clean"
         return Report(findings=findings, outcome=outcome, compile_failed=compile_failed,
-                      rule_groups=[], any_gap=any_gap, verdict_reason=reason, has_hits=False)
+                      rule_groups=[], any_gap=any_gap, verdict_reason=reason, has_hits=False,
+                      coverage_report=_yara_coverage_report(outcome, compile_failed),
+                      rules_dir=rules_dir, rule_file_count=rule_file_count,
+                      segment_count=segment_count, scan_note=scan_note, modules=modules or [])
 
     # ── Group hits by rule, deduplicated by segment base VA ──────────────
     from collections import defaultdict
@@ -155,5 +241,9 @@ def build_report(outcome, compile_failed: int) -> Report:
                   f"(context_unverified)" if outcome.unverified_rules else
                   "coverage incomplete, see above")
 
+    unverified_count = len(outcome.unverified_rules) if not outcome.triggered_rules else 0
     return Report(findings=findings, outcome=outcome, compile_failed=compile_failed,
-                   rule_groups=rule_groups, any_gap=any_gap, verdict_reason=reason, has_hits=True)
+                   rule_groups=rule_groups, any_gap=any_gap, verdict_reason=reason, has_hits=True,
+                   coverage_report=_yara_coverage_report(outcome, compile_failed, unverified_count),
+                   rules_dir=rules_dir, rule_file_count=rule_file_count,
+                   segment_count=segment_count, scan_note=scan_note, modules=modules or [])

@@ -1,40 +1,59 @@
 {
+  "confidence": null,
   "coverage": {
-    "hit_cap_not_reached": true,
-    "matches_completed": true,
-    "rule_files_compiled": true,
-    "scan_budget_ok": true,
-    "segments_read": true,
-    "segments_short_read": true,
-    "segments_size_ok": true
+    "limitations": [],
+    "reasons": [],
+    "sources": {
+      "segment_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "yara_context": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "yara_rules": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      }
+    },
+    "status": "complete"
   },
-  "coverage_status": "complete",
-  "matches": [
-    {
-      "context_unverified": false,
-      "file": "hit.yar",
-      "memory_context": null,
-      "meta": {},
-      "rule": "HitRule",
-      "seg_fo": 20480,
-      "seg_size": 525,
-      "seg_va": 327680,
-      "strings": [
-        {
-          "data": "46494e444d455f4d41524b4552",
-          "fo": 20736,
-          "offset": 256,
-          "va": 327936,
-          "var": "$a"
-        }
-      ],
-      "tags": []
-    }
-  ],
-  "rules_hit": [
-    "HitRule"
-  ],
-  "scan_complete": true,
+  "details": {
+    "matches": [
+      {
+        "context_unverified": false,
+        "file": "hit.yar",
+        "memory_context": null,
+        "meta": {},
+        "rule": "HitRule",
+        "seg_fo": 20480,
+        "seg_size": 525,
+        "seg_va": "0x0000000000050000",
+        "strings": [
+          {
+            "data": "46494e444d455f4d41524b4552",
+            "fo": 20736,
+            "offset": 256,
+            "va": "0x0000000000050100",
+            "var": "$a"
+          }
+        ],
+        "tags": []
+      }
+    ],
+    "rules_hit": [
+      "HitRule"
+    ]
+  },
+  "findings": [],
+  "hunter": "yara",
+  "lead_count": null,
+  "max_score": null,
+  "review_priority": null,
   "score": 1,
   "status": "DETECTED",
   "verdict_level": "likely"

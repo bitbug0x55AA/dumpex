@@ -1,26 +1,29 @@
 """
-CLI-layer pre-migration compatibility freeze for `--hunt` (v2.4 output
-migration, PR1) -- runs the real `cli.main()` end to end against a
-synthetic `FakeMF`, the same discipline
+CLI-layer compatibility freeze for `--hunt` (v2.4 output migration, PR4 --
+the CLI's atomic switch onto the v2.4 `--hunt` contract) -- runs the real
+`cli.main()` end to end against a synthetic `FakeMF`, the same discipline
 tests/integration/test_report_compat_freeze.py established for the prior
 (`--report`) migration: monkeypatch `cli.open_dump()` to return the fake
 (no real .dmp file is parsed), freeze `datetime.datetime.now()` so
 `meta.execution.started_at/finished_at/duration_seconds` are reproducible,
-and assert exit code + full JSON `hunt` dict + full CSV text + full console
-body for all 7 hunters individually AND for `--hunt all` (all 7 at once,
-NOT_EVALUATED). Every module-attribute override (`read_region`/
+and assert exit code + full JSON `HunterRecord` + full CSV text + full
+console body for all 7 hunters individually AND for `--hunt all` (all 7 at
+once, NOT_EVALUATED). Every module-attribute override (`read_region`/
 `get_thread_contexts`) goes through pytest's `monkeypatch` fixture, never a
 bare module-attribute assignment -- nothing here can leak into a later,
 unrelated test regardless of execution order.
 
 tests/fixtures/hunt_cases.py + tests/integration/test_hunt_compat_freeze.py
-freeze each hunter's OWN `_hunt_*()`/`cmd_hunt()` return value in isolation
-(no CLI, no `meta`). This file freezes what that approach cannot: what
-`dumpex.ui.structured.StructuredOutput` (still v1.1 for `--hunt` today)
-actually writes to `--json`/`--csv`, and the real process exit code --
-confirmed here to be 0 even for an all-NOT_EVALUATED run, since `--hunt`
-does not go through `exit_code_for()` the ten already-migrated commands do
-(see docs/hunt_migration_field_matrix.md's cross-cutting finding #3).
+freeze each hunter's OWN `_hunt_*()`/`cmd_hunt()` v1.1-shaped dict return
+value in isolation (no CLI, no `meta`) -- that contract is UNCHANGED by
+PR4 (see cmd_hunt()'s own docstring: its console output and bare `results`
+dict return value are byte-identical to before; only the CLI's own
+`--json`/`--csv` output and process exit code moved onto the v2.4
+envelope). This file freezes what that approach cannot: what
+`dumpex.output.V2Output` actually writes to `--json`/`--csv` for `--hunt`
+now, and the real process exit code -- now coverage-based via
+`exit_code_for()`, the same convention the ten other v2-routed commands
+already used, rather than always 0 regardless of coverage.
 
 Expected values live in tests/fixtures/hunt_cli_golden/<ttp>_{hunt_dict.json,
 csv.txt,console.txt} -- one synthetic golden snapshot per hunter, generated
@@ -30,16 +33,23 @@ diffable like any other checked-in fixture. These are NOT real-dump output
 (see tests/fixtures/hunt_cases.py's own docstring for why that would be a
 privacy violation) -- every one of them was produced by exactly the FakeMF
 construction each test function below builds, so re-running the generator
-against the same construction reproduces them byte-for-byte.
+against the same construction reproduces them byte-for-byte. `console.txt`
+is unchanged from the pre-PR4 (v1.1) fixtures -- confirmed byte-identical
+when this suite was migrated, since `cmd_hunt()`'s console rendering was
+never touched by this switch, only what wraps its return value for
+`--json`/`--csv`.
 
 Like test_report_compat_freeze.py, this does NOT compare the full JSON
 document as one string -- `meta.evidence.path` embeds `tmp_path` (different
 every test run) and `meta.tool.version` embeds this checkout's git-describe
-string, neither of which a frozen fixture can pin. Only `doc["hunt"][ttp]`
-(the part with no such dynamic content) is compared, in full.
+string, neither of which a frozen fixture can pin. Only
+`doc["result"]["data"]["records"][0]` (the single `HunterRecord` dict for
+a single-TTP run -- the part with no such dynamic content) is compared, in
+full; `test_hunt_all_all_not_evaluated` compares the full 7-element
+`records` list the same way.
 
 `test_hunt_all_all_not_evaluated`, like every other scenario here, freezes
-the FULL JSON `hunt` dict (all 7 hunters at once)/CSV/console body -- it
+the FULL JSON `records` list (all 7 hunters at once)/CSV/console body -- it
 does NOT rely on the default packaged YARA rules directory (which would
 print its own absolute host path, an un-freezable dynamic segment): it
 passes `--yara-dir <tmp_path>/empty_rules` (a synthetic, always-empty
@@ -163,8 +173,10 @@ def _load_golden(ttp):
 
 
 def _assert_frozen(ttp, doc, csv_text, console, *, tmp_path=None, rules_dir_placeholder=None):
-    expected_dict, expected_csv, expected_console = _load_golden(ttp)
-    assert _normalize_object_addresses(doc["hunt"][ttp]) == expected_dict
+    expected_record, expected_csv, expected_console = _load_golden(ttp)
+    records = doc["result"]["data"]["records"]
+    assert len(records) == 1, f"expected exactly 1 record for a single-TTP run, got {len(records)}"
+    assert _normalize_object_addresses(records[0]) == expected_record
     assert csv_text == expected_csv
     body = _split_console_body(console)
     if rules_dir_placeholder is not None:
@@ -200,11 +212,19 @@ def _mf_injection(monkeypatch):
 def test_hunt_injection_detected_full_correlation_cli(monkeypatch, tmp_path):
     exit_code, doc, csv_text, console = _run(
         monkeypatch, tmp_path, ["--hunt", "injection"], _mf_injection(monkeypatch))
-    assert exit_code == 0
-    assert doc["meta"]["schema_version"] == "1.1"
+    # One of this scenario's two memory-info regions is a short read while
+    # checking for hidden PE headers, so status is DETECTED (score 3/3) but
+    # coverage.status is "partial" -- status and coverage.status are
+    # independent dimensions, and this document-level exit code must reflect
+    # coverage, not overall detection outcome: EXIT_PARTIAL (3), not 0.
+    assert exit_code == cli.EXIT_PARTIAL == 3
+    assert doc["meta"]["schema_version"] == "2.4"
     assert doc["meta"]["execution"]["command"] == "hunt_injection"
     assert doc["meta"]["execution"]["started_at"] == "2024-01-01T00:00:00Z"
-    assert list(doc["hunt"].keys()) == ["injection"]
+    assert doc["result"]["kind"] == "hunt"
+    assert doc["result"]["data"]["records"][0]["status"] == "DETECTED"
+    assert doc["result"]["coverage"]["status"] == "partial"
+    assert [r["hunter"] for r in doc["result"]["data"]["records"]] == ["injection"]
     _assert_frozen("injection", doc, csv_text, console)
 
 
@@ -271,7 +291,14 @@ def test_hunt_pipe_detected_cli(monkeypatch, tmp_path):
         {"ThreadId": 0x999, "ip": pipe_va + 5, "ip_reg": "RIP", "is_wow64": False}])
 
     exit_code, doc, csv_text, console = _run(monkeypatch, tmp_path, ["--hunt", "pipe"], mf)
-    assert exit_code == 0
+    # This FakeMF's memory-string scan hits a short read (see the golden
+    # fixture's own coverage.reasons), so status is DETECTED (full
+    # corroboration, score 3/3) but coverage.status is "partial" -- status
+    # and coverage.status are independent dimensions, and this
+    # document-level exit code must reflect coverage: EXIT_PARTIAL (3).
+    assert exit_code == cli.EXIT_PARTIAL == 3
+    assert doc["result"]["data"]["records"][0]["status"] == "DETECTED"
+    assert doc["result"]["coverage"]["status"] == "partial"
     _assert_frozen("pipe", doc, csv_text, console)
 
 
@@ -337,12 +364,16 @@ def test_hunt_obfuscation_detected_cli(monkeypatch, tmp_path):
 
 
 def test_hunt_all_all_not_evaluated(monkeypatch, tmp_path):
-    """A fully empty FakeMF -> all 7 hunters NOT_EVALUATED, exit code still
-    0. `--yara-dir` is pointed at a synthetic EMPTY tmp_path directory
-    instead of the default packaged rules dir -- the packaged dir's own
-    absolute host path would otherwise appear in the printed "Loaded N
-    rule file(s) from <path>" line, making full console/JSON/CSV freezing
-    impossible across machines/CI runners (same reasoning as
+    """A fully empty FakeMF -> all 7 hunters NOT_EVALUATED -> summary.
+    overall_status == "NOT_EVALUATED" -> coverage.status ==
+    "not_evaluated" -> exit_code_for() now returns EXIT_NOT_EVALUATED (4),
+    not 0 -- the coverage-based exit code PR4 brings `--hunt` onto, same
+    as the ten other v2-routed commands already had. `--yara-dir` is
+    pointed at a synthetic EMPTY tmp_path directory instead of the
+    default packaged rules dir -- the packaged dir's own absolute host
+    path would otherwise appear in the printed "Loaded N rule file(s)
+    from <path>" line, making full console/JSON/CSV freezing impossible
+    across machines/CI runners (same reasoning as
     test_hunt_yara_detected_cli's rules_dir_placeholder). An empty
     directory still reaches yara_hunt's "no .yar/.yara files found" branch
     without ever importing yara-python, so this needs no optional
@@ -355,16 +386,20 @@ def test_hunt_all_all_not_evaluated(monkeypatch, tmp_path):
     exit_code, doc, csv_text, console = _run(
         monkeypatch, tmp_path, ["--hunt", "all", "--yara-dir", str(rules_dir)], mf)
 
-    assert exit_code == 0
+    assert exit_code == cli.EXIT_NOT_EVALUATED == 4
     assert doc["meta"]["execution"]["command"] == "hunt_all"
-    assert list(doc["hunt"].keys()) == [
+    assert doc["result"]["kind"] == "hunt"
+    records = doc["result"]["data"]["records"]
+    assert [r["hunter"] for r in records] == [
         "injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation"]
-    assert all(v["status"] == "NOT_EVALUATED" for v in doc["hunt"].values())
+    assert all(r["status"] == "NOT_EVALUATED" for r in records)
+    assert doc["result"]["summary"]["overall_status"] == "NOT_EVALUATED"
+    assert doc["result"]["coverage"]["status"] == "not_evaluated"
 
-    expected_dict = json.loads((_GOLDEN / "all_hunt_dict.json").read_text(encoding="utf-8"))
+    expected_records = json.loads((_GOLDEN / "all_hunt_dict.json").read_text(encoding="utf-8"))
     expected_csv = (_GOLDEN / "all_csv.txt").read_text(encoding="utf-8")
     expected_console = (_GOLDEN / "all_console.txt").read_text(encoding="utf-8")
-    assert _normalize_object_addresses(doc["hunt"]) == expected_dict
+    assert _normalize_object_addresses(records) == expected_records
     assert csv_text == expected_csv
     body = _split_console_body(console).replace(str(rules_dir), "<RULES_DIR>")
     assert body == expected_console

@@ -20,6 +20,60 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
     verdict_level, lead_count, review_priority)
 from dumpex.hunt.encoding.classification import _structural_note
+from dumpex.output.coverage import (
+    build_coverage_report, observe_source, EvaluationRequirement, CoverageLimitation,
+    LimitationCode,
+)
+
+
+def _encoding_coverage_report(mem_info_available: bool, fully_skipped: bool, region_count: int,
+                               total_size_skipped: int, total_read_failed: int,
+                               total_short_reads: int, budget_exhausted: bool,
+                               exhausted_reason: str):
+    """Real dumpex.output.coverage.CoverageReport for an obfuscation run
+    -- built at each gap site this function's own caller already derives
+    coverage_status/coverage_reasons from. `memory_info` is this
+    hunter's ONLY evaluation_sources gate (matching its own `evaluated =
+    mem_info_available` -- no OR/AND combination needed, unlike pipe/
+    stomping's multi-source gates)."""
+    sources = {
+        "memory_info": observe_source("memory_info", present=mem_info_available,
+                                       items=["present"] if mem_info_available else []),
+        "encoding_scan": observe_source("encoding_scan", present=True, items=["scanned"]),
+    }
+    # "memory_info" is NOT a completeness_check here (unlike modules/
+    # thread_info elsewhere): it's this hunter's ONLY evaluation_sources
+    # member, so by the time completeness_checks is even consulted (past
+    # the NOT_EVALUATED short-circuit), it's already guaranteed present
+    # -- listing it again would be a pure no-op, not a bug (contrast
+    # dumpex.hunt.pipe's own _pipe_coverage_report, where memory_info is
+    # a SEPARATE source from the evaluation gate and listing it WOULD be
+    # a real bug -- see that function's own comment).
+    completeness_checks = []
+    if fully_skipped:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.ENCODING_ALL_REGIONS_FILTERED, source="encoding_scan",
+            affected_count=region_count))
+    if total_size_skipped:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="encoding_scan",
+            affected_count=total_size_skipped))
+    if total_read_failed:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_READ_FAILED, source="encoding_scan",
+            affected_count=total_read_failed))
+    if total_short_reads:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_SHORT_READ, source="encoding_scan",
+            affected_count=total_short_reads))
+    if budget_exhausted:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="encoding_scan",
+            detail=exhausted_reason))
+
+    return build_coverage_report(
+        sources, evaluation_sources=EvaluationRequirement(("memory_info",)),
+        completeness_checks=completeness_checks)
 
 # score -> verdict_level, owned by this hunter (see _finding.verdict_level).
 # No "3": this hunter's max score is 2 (confirmed sleep-mask decode and/or
@@ -71,6 +125,7 @@ class EncodingReport:
                                  # must branch on this, not re-derive its own score->tier
                                  # mapping, so a scoring-contract change can't make JSON and
                                  # console verdict text silently disagree.
+    coverage_report: object = None   # dumpex.output.coverage.CoverageReport (v2.4 migration only)
 
 
 def _dedup_by_region(hits: list) -> list:
@@ -482,5 +537,9 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
     for key in ('sleep_mask', 'entropy', 'base64', 'xor', 'compressed',
                 'hidden_pe', 'hidden_shellcode'):
         findings[key] = [h.to_dict() for h in findings[key]]
+
+    report.coverage_report = _encoding_coverage_report(
+        mem_info_available, fully_skipped, len(regions), total_size_skipped,
+        total_read_failed, total_short_reads, budget_exhausted, decode_budget.exhausted_reason)
 
     return report

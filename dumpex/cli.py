@@ -23,32 +23,40 @@ from dumpex.commands.sysinfo  import cmd_sysinfo, cmd_pid
 from dumpex.commands.report   import cmd_report
 from dumpex.commands.diff     import cmd_diff
 from dumpex.hunt              import cmd_hunt
+from dumpex.hunt.summary      import build_hunt_summary
+from dumpex.hunt              import _hunt_coverage_report
+from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
-# --hunt keeps StructuredOutput/dumpex-output-v1.1.schema.json unchanged.
-# All ten other commands are migrated onto the v2 envelope (see
-# dumpex/output/ and dumpex-output-v2.2.schema.json); --diff produces a
-# kind="comparison" result via V2Output.from_evidence() (two dumps), --report
-# produces a kind="report" result (one TriageCardRecord per triage card --
-# see dumpex.commands.report's own module docstring), the other eight
-# produce their usual single-dump kinds.
+# All eleven commands are migrated onto the v2 envelope (see dumpex/output/
+# and dumpex-output-v2.4.schema.json); --diff produces a kind="comparison"
+# result via V2Output.from_evidence() (two dumps), --report produces a
+# kind="report" result (one TriageCardRecord per triage card -- see
+# dumpex.commands.report's own module docstring), --hunt produces a
+# kind="hunt" result (one HunterRecord per selected TTP -- see
+# dumpex.hunt.cmd_hunt()'s own collect_records= docstring), the other
+# eight produce their usual single-dump kinds.
 _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo", "peb", "diff",
-                                    "extract", "strings", "report"})
+                                    "extract", "strings", "report", "hunt"})
 _UNSUPPORTED_STRUCTURED_MODES = frozenset()
 
-# Exit codes for the ten v2-routed commands, independent of
+# Exit codes for all eleven v2-routed commands, independent of
 # --json/--csv having been requested at all: a SOC script checking `$?`
 # on a bare `dumpex --threads dump.dmp` should be able to detect
-# incomplete coverage without needing to also parse JSON. Every other
-# command's exit-code behavior (0 on completion, an uncaught exception's
-# default nonzero exit on a fatal error) is unchanged by this PR --
-# folding --hunt into this same convention is a later, cross-cutting
-# decision, not made here for just these ten commands.
+# incomplete coverage without needing to also parse JSON. `--hunt` uses
+# this same convention too (PR4) -- its exit code is derived from
+# `result.coverage.status`, the document-level rollup dumpex.hunt.
+# _hunt_coverage_report() builds from every selected hunter's own
+# HunterRecord.coverage (see that function's own docstring for why it
+# can't just read summary.overall_status's DETECTED/INCONCLUSIVE/... counts
+# alone). Every command NOT in _V2_STRUCTURED_MODES keeps its
+# exit-code behavior unchanged (0 on completion, an uncaught exception's
+# default nonzero exit on a fatal error).
 #
 # EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED and the status->code mapping
 # itself (exit_code_for) live in dumpex.output.coverage, not here --
 # that's the single place a coverage status becomes a process exit code,
-# used by _apply_command_result() below for all ten of these commands.
+# used by _apply_command_result() below for all eleven of these commands.
 
 
 def _selected_run_mode(args) -> str:
@@ -282,11 +290,10 @@ def main():
         mf_target = open_dump(args.diff) if run_mode == "diff" else None
 
         # Structured output collector — populated by commands that support
-        # it. The eight v2-routed recon commands always get a V2Output
-        # (built regardless of --json/--csv, so the exit-code contract
-        # below is consistent whether or not structured output was
-        # actually written); --hunt keeps constructing StructuredOutput
-        # exactly as before, only when --json/--csv was actually requested.
+        # it. Every v2-routed command (including --hunt as of PR4) always
+        # gets a V2Output (built regardless of --json/--csv, so the
+        # exit-code contract below is consistent whether or not structured
+        # output was actually written).
         need_structured = bool(args.json or args.csv)
         if run_mode == "diff":
             out = V2Output.from_evidence(
@@ -329,7 +336,7 @@ def main():
 
 
 def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
-    """Returns the process exit code for the ten v2-routed commands
+    """Returns the process exit code for all eleven v2-routed commands
     (EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED — see module docstring), or
     None for every other command (unchanged exit-code behavior: 0 on
     completion, an uncaught exception's default nonzero exit on a fatal
@@ -337,7 +344,7 @@ def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
     exit_code = None
 
     def _apply_command_result(result):
-        """CommandResult-based path -- all ten v2-routed commands
+        """CommandResult-based path -- all eleven v2-routed commands
         are migrated onto dumpex.output.coverage/.command_result (see
         those modules). Routed through set_command_result(), which
         forwards every CommandResult field (execution_status, structured
@@ -367,9 +374,19 @@ def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
                        report_string=args.report_string, extract_to=args.output,
                        min_len=args.min_len, force=args.force))
     elif args.hunt:
-        data = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
-                        ref_dir=args.ref_dir)
-        if out and data: out.add("hunt", data)
+        # collect_records=True: cmd_hunt() builds each selected hunter's
+        # Report exactly once and feeds it to BOTH the console renderer
+        # (unchanged) and the v2.4 HunterRecord conversion below, in the
+        # same call -- see cmd_hunt()'s own docstring. Calling cmd_hunt()
+        # for console and dumpex.hunt.collect_hunt() separately for JSON
+        # would scan every selected hunter twice.
+        _, hunt_records = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
+                                    ref_dir=args.ref_dir, collect_records=True)
+        hunt_summary = build_hunt_summary(hunt_records, selected=args.hunt)
+        exit_code = _apply_command_result(
+            CommandResult(kind="hunt", records=hunt_records,
+                          coverage=_hunt_coverage_report(hunt_records, hunt_summary),
+                          summary=hunt_summary))
     elif args.diff:
         exit_code = _apply_command_result(
             cmd_diff(mf, mf_target, args.diff_mode, verbose=args.verbose))

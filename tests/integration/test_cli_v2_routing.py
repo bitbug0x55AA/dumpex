@@ -2,8 +2,10 @@
 Integration tests for cli.py's v2 routing: the pre-flight rejection of
 --json/--csv on not-yet-migrated commands (before the dump is even
 opened), the six recon commands actually writing a v2-shaped document,
---hunt continuing to write the unchanged v1.1-shaped document, and the
-new exit-code contract (0 complete / 3 partial) for the six v2 commands.
+--hunt now also writing a v2.4-shaped document (PR4 -- see
+dumpex.hunt.cmd_hunt()'s own collect_records= docstring), and the
+exit-code contract (0 complete / 3 partial / 4 not_evaluated) for the
+v2-routed commands.
 """
 import json
 import os
@@ -702,7 +704,7 @@ def test_diff_csv_directory_mode_writes_module_diffs_table(monkeypatch, tmp_path
         os.remove(target_path)
 
 
-def test_hunt_json_still_produces_v1_1_shaped_document(monkeypatch, tmp_path):
+def test_hunt_json_now_produces_v2_4_shaped_document(monkeypatch, tmp_path):
     dump_path = _make_dump_file()
     try:
         mf = FakeMF()
@@ -711,12 +713,20 @@ def test_hunt_json_still_produces_v1_1_shaped_document(monkeypatch, tmp_path):
         out_json = str(tmp_path / "out.json")
         monkeypatch.setattr(sys, "argv",
                              ["dumpex", dump_path, "--hunt", "injection", "--json", out_json])
-        cli.main()
+        # A bare FakeMF() has no memory/thread streams at all -> injection
+        # is NOT_EVALUATED -> exit_code_for("not_evaluated") == 4, same
+        # coverage-based exit code the other v2-routed commands already
+        # use (see EXIT_NOT_EVALUATED) -- --hunt no longer always exits 0
+        # regardless of coverage now that it's v2-routed too.
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "1.1"
-        assert "hunt" in doc
-        assert "result" not in doc
+        assert doc["meta"]["schema_version"] == "2.4"
+        assert "hunt" not in doc
+        assert doc["result"]["kind"] == "hunt"
+        assert [r["hunter"] for r in doc["result"]["data"]["records"]] == ["injection"]
     finally:
         os.remove(dump_path)
 

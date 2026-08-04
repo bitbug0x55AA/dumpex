@@ -107,6 +107,10 @@ from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import get_modules, get_memory_regions, get_thread_contexts, read_region
 from dumpex.hunt._ui import _print_hunt_header
 from dumpex.hunt._runtime import HunterRuntime
+from dumpex.output.coverage import (
+    build_coverage_report, observe_source, EvaluationRequirement, SourceRequirement,
+    CoverageLimitation, LimitationCode,
+)
 
 from dumpex.hunt.stomping.config import PE_VALIDATE_READ_MAX
 from dumpex.hunt.stomping.models import StompingScan, VerifiedChangeCandidate
@@ -116,25 +120,96 @@ from dumpex.hunt.stomping import aggregate
 from dumpex.hunt.stomping import presentation
 
 
-def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None) -> dict:
-    """
-    Detect Module Stomping via a verified, relocation-normalized on-disk-
-    vs-memory content diff (primary, scored — requires --ref-dir), a
-    demoted protection-deviation lead, and a demoted string-IOC lead. See
-    package docstring.
-    """
+def _stomping_coverage_report(scan, ref_dir, mem_info_available, module_list_available):
+    """Real dumpex.output.coverage.CoverageReport for a stomping run --
+    built at each gap site aggregate.build_report() already derives
+    coverage_status/coverage_reasons from (never parsed back out of that
+    free text; see docs/hunt_migration_field_matrix.md's own migration
+    rule). `memory_info`/`modules` are each their OWN independent
+    evaluation_groups entry (not one combined group) because stomping's
+    real `evaluated = mem_info_available and module_list_available` is
+    AND-of-presence: EITHER one being absent alone is NOT_EVALUATED,
+    unlike a combined group's OR-of-absence semantics (see comparison.py's
+    own baseline.modules/target.modules precedent for the same pattern).
+    `reference_files`/`module_headers`/`section_content_diff` are
+    synthetic sources (not real minidump streams), mirroring injection's
+    own `hidden_pe_scan` pattern -- see dumpex.output.coverage's newly
+    added STOMPING_*/MODULE_HEADER_* codes."""
+    cc = scan.coverage_counts
+    sources = {
+        "memory_info": observe_source("memory_info", present=mem_info_available,
+                                       items=["present"] if mem_info_available else []),
+        "modules":     observe_source("modules", present=module_list_available,
+                                       items=["present"] if module_list_available else []),
+        "module_headers": observe_source("module_headers", present=True, items=["scanned"]),
+        "reference_files": observe_source("reference_files", present=ref_dir is not None,
+                                           items=["supplied"] if ref_dir is not None else []),
+        "section_content_diff": observe_source("section_content_diff", present=True,
+                                                items=["scanned"]),
+    }
+    completeness_checks = []
+    if scan.read_failed:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.MODULE_HEADER_READ_FAILED, source="module_headers",
+            affected_count=scan.read_failed))
+    if scan.parse_failed:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.MODULE_HEADER_PARSE_FAILED, source="module_headers",
+            affected_count=len(scan.parse_failed)))
+    if ref_dir is None:
+        completeness_checks.append(SourceRequirement(
+            source="reference_files",
+            absent_code=LimitationCode.STOMPING_REFERENCE_NOT_SUPPLIED))
+    else:
+        if cc["reference_missing"]:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.STOMPING_REFERENCE_MISSING, source="reference_files",
+                affected_count=cc["reference_missing"]))
+        if cc["reference_mismatch"]:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.STOMPING_REFERENCE_MISMATCH, source="reference_files",
+                affected_count=cc["reference_mismatch"]))
+        if cc["reference_read_failed"]:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.STOMPING_REFERENCE_READ_FAILED, source="reference_files",
+                affected_count=cc["reference_read_failed"]))
+        if cc["memory_read_failed"]:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.STOMPING_SECTION_MEMORY_READ_FAILED,
+                source="section_content_diff", affected_count=cc["memory_read_failed"]))
+        if cc["short_reads"]:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.STOMPING_SHORT_READ, source="section_content_diff",
+                affected_count=cc["short_reads"]))
+        if cc["relocation_failed"]:
+            completeness_checks.append(CoverageLimitation(
+                code=LimitationCode.STOMPING_RELOCATION_FAILED, source="section_content_diff",
+                affected_count=cc["relocation_failed"]))
+
+    return build_coverage_report(
+        sources,
+        evaluation_groups=[EvaluationRequirement(("memory_info",)),
+                           EvaluationRequirement(("modules",))],
+        completeness_checks=completeness_checks)
+
+
+def _build_stomping_report(mf: MinidumpFile, ref_dir: str = None):
+    """Run the scan/aggregate pipeline and return the aggregate.Report --
+    the ONE place this pipeline is assembled, and runs EXACTLY ONCE per
+    call. Prints nothing at all (see `_hunt_stomping()`/`collect_hunt()`
+    for the two console/typed-record consumers of the same Report --
+    PR4 of the `--hunt` v2.4 migration unified every hunter onto this
+    build-once, multiple-consumers shape)."""
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
     thread_contexts = get_thread_contexts(mf)
     mem_info_available    = bool(mf.memory_info and mf.memory_info.infos)
     module_list_available = bool(mf.modules and mf.modules.modules)
 
-    _r               = get_rules()
+    _r               = get_rules(announce=False)
     STOMPING_WHITELIST  = _r["stomping_whitelist"]
     STOMPING_IOC        = _r["stomping_ioc_patterns"]
     STOMPING_NET_IOC    = _r["stomping_net_ioc_patterns"]
-
-    _print_hunt_header("Module Stomping")
 
     # `read_region` is looked up HERE (this module's own re-exported,
     # still-monkeypatchable global) rather than imported separately inside
@@ -238,11 +313,51 @@ def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None)
                          read_failed=read_failed, coverage_counts=coverage_counts)
 
     # ── Check 2 (demoted lead, NOT scored): string IOC scan ─────────────
-    print(f"  {DIM('[*] Scanning executable MEM_IMAGE regions for IOC strings (lead only)...')}\n")
     ioc_scan = memory_scan.scan_ioc_strings(mf, runtime.read_region, regions, modules,
                                              STOMPING_WHITELIST, STOMPING_IOC, STOMPING_NET_IOC)
 
     report = aggregate.build_report(scan, ioc_scan, thread_contexts, ref_dir,
                                      mem_info_available, module_list_available)
+    report.coverage_report = _stomping_coverage_report(
+        scan, ref_dir, mem_info_available, module_list_available)
+    return report
 
+
+def _hunt_stomping(mf: MinidumpFile, verbose: bool = False, ref_dir: str = None) -> dict:
+    """
+    Detect Module Stomping via a verified, relocation-normalized on-disk-
+    vs-memory content diff (primary, scored — requires --ref-dir), a
+    demoted protection-deviation lead, and a demoted string-IOC lead. See
+    package docstring.
+
+    Both progress announcements below print BEFORE the (now fully
+    silent) `_build_stomping_report()` call rather than interleaved with
+    it -- console output is only ever observed as one fully-captured
+    block (never mid-run) by anything that checks it, including
+    tests/integration/test_hunt_cli_compat_freeze.py's own byte-exact
+    fixtures, so this reordering changes nothing any consumer can see.
+    `get_rules()` is called here too, BEFORE the header print, for the
+    exact same reason dumpex.hunt.hollowing's own console wrapper does
+    -- it prints a one-time "Rules loaded from ..." line the FIRST time
+    it's ever called in a process, and the pre-split function called it
+    before printing the header; the builder calls it again internally
+    (a cheap cache hit after the first real load, see
+    dumpex.rules_pkg.loader.get_rules), so this preserves that print
+    order without the builder itself printing anything.
+    """
+    _print_stomping_pre_build_console()
+    report = _build_stomping_report(mf, ref_dir=ref_dir)
     return presentation.render(report, verbose)
+
+
+def _print_stomping_pre_build_console() -> None:
+    """The header + IOC-scan progress line, extracted so
+    `dumpex.hunt.collect_hunt()`'s console+JSON orchestrator (see that
+    function's own docstring) can print the exact same lines
+    `_hunt_stomping()` does, BEFORE calling `_build_stomping_report()`
+    itself, without duplicating this print sequence (and its
+    `get_rules()` print-ordering fix, see `_hunt_stomping()`'s own
+    docstring) as a second copy."""
+    get_rules()
+    _print_hunt_header("Module Stomping")
+    print(f"  {DIM('[*] Scanning executable MEM_IMAGE regions for IOC strings (lead only)...')}\n")

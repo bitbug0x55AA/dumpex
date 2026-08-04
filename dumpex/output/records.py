@@ -1295,20 +1295,14 @@ class TriageCardRecord:
 # `details` is one of the 7 *Details types below, discriminated by
 # `hunter`.
 #
-# IMPORTANT SCOPING NOTE: this is PR2a (injection only), NOT a complete
-# PR2. Only InjectionDetails is fully wired to a real collect_*() this pass
-# (dumpex.hunt.injection.collect.collect_injection_record(), see that
-# module) -- the other 6 *Details classes below are SHAPE-ONLY stubs
-# (field names/types straight from the field-matrix doc, not speculative)
-# so HunterRecord's discriminated-union validation is complete and
-# testable now, but nothing yet constructs them from a real hunter run,
-# and their raw fields are NOT guaranteed free of the confirmed
-# non-reproducible str(obj) defect InjectionDetails was built to fix (see
-# each stub class's own docstring). Per the full migration plan, PR2 is
-# only complete once all 7 hunters have this same real typed-conversion +
-# collector treatment -- hollowing/stomping/pipe/cs-beacon/yara/
-# obfuscation are explicit, tracked follow-up work (PR2b onward), not
-# silently folded into "PR2 done".
+# All 7 *Details classes below are fully wired to a real collect_*()
+# (dumpex.hunt.injection.collect.collect_injection_record() first, PR2a;
+# the other 6 -- hollowing/stomping/pipe/cs-beacon/yara/obfuscation --
+# followed in PR2b, each fixing the same confirmed non-reproducible
+# str(obj) defect InjectionDetails was built to fix; see each hunter's
+# own collect.py module), and every one of them is reachable from the
+# CLI as of PR4 via `dumpex.hunt.collect_hunt()`/`dumpex.hunt.cmd_hunt(
+# ..., collect_records=True)`.
 
 HUNTERS = ("injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation")
 _HUNT_STATUSES = ("DETECTED", "NOT_DETECTED_IN_SCANNED_SCOPE", "INCONCLUSIVE", "NOT_EVALUATED")
@@ -1539,8 +1533,14 @@ class HollowingDetails:
     detail fields at all -- see the field matrix's hollowing section for
     why). Mirrors the four checks hollowing.py's console section already
     computes but never persists: memory type / MZ header / RWX protection
-    at the image base, and the PEB-vs-module-list name compare."""
-    image_base:           str
+    at the image base, and the PEB-vs-module-list name compare.
+    `image_base` is `None` exactly when the PEB itself is missing (the
+    hunter's own NOT_EVALUATED case, confirmed by
+    dumpex.hunt.hollowing._build_hollowing_report()'s early return) --
+    there is no image base to report at all in that case, unlike every
+    other hunter's `HunterRecord`, which always has SOME evidence to
+    convert even when coverage is incomplete."""
+    image_base:           "str | None"
     mem_private_at_base:  "bool | None"   # None if the image-base region wasn't found at all
     mz_header_present:    "bool | None"   # None if the header read itself failed
     is_rwx_at_base:       "bool | None"   # None if the image-base region wasn't found at all
@@ -1549,7 +1549,7 @@ class HollowingDetails:
     name_mismatch:        "bool | None"   # None if module list itself was unavailable
 
     def __post_init__(self):
-        _require_hex_address(self.image_base, "HollowingDetails.image_base")
+        _require_optional_hex_address(self.image_base, "HollowingDetails.image_base")
         for f_name in ("mem_private_at_base", "mz_header_present", "is_rwx_at_base", "name_mismatch"):
             v = getattr(self, f_name)
             if v is not None:

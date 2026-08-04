@@ -65,11 +65,13 @@ def _thread_region_hit_from_info_pair(pair) -> HuntThreadRegionHit:
     return HuntThreadRegionHit(thread=_thread_ref_from_info(ti), region=_region_ref(region))
 
 
-def collect_injection_record(mf) -> HunterRecord:
-    """Build one `HunterRecord` (`hunter="injection"`) for `mf` -- the v2.4
-    equivalent of `_hunt_injection()`'s v1.1 dict, sharing the exact same
-    underlying `Report`."""
-    report = _build_injection_report(mf)
+def _record_from_injection_report(report) -> HunterRecord:
+    """Pure `aggregate.Report` -> `HunterRecord` conversion -- no
+    scanning, no printing. The ONE place both `collect_injection_record()`
+    (below) and `collect_hunt()` (dumpex/hunt/__init__.py's v2.4
+    orchestrator, PR4) build the typed record from an ALREADY-BUILT
+    Report, so a single `_build_injection_report()` call can feed both
+    the console renderer and this conversion without scanning twice."""
     f = report.findings
     corr = report.correlation
 
@@ -101,3 +103,13 @@ def collect_injection_record(mf) -> HunterRecord:
         findings=f["findings"],
         details=details,
     )
+
+
+def collect_injection_record(mf) -> HunterRecord:
+    """Build one `HunterRecord` (`hunter="injection"`) for `mf` -- the v2.4
+    equivalent of `_hunt_injection()`'s v1.1 dict, sharing the exact same
+    underlying `Report`. Thin compat wrapper: builds a fresh Report and
+    converts it -- `collect_hunt()` calls `_build_injection_report()` and
+    `_record_from_injection_report()` directly instead, so it never scans
+    twice just to also get console output from the same run."""
+    return _record_from_injection_report(_build_injection_report(mf))

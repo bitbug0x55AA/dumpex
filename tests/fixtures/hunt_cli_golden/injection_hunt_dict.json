@@ -1,19 +1,177 @@
 {
   "confidence": "high",
   "coverage": {
-    "contexts_missing": 0,
-    "contexts_parsed": 1,
-    "memory_info_stream": true,
-    "module_list_stream": true,
-    "thread_context": true,
-    "thread_info_stream": true,
-    "thread_list_stream": true,
-    "threads_total": 1
+    "limitations": [
+      {
+        "affected_count": 1,
+        "available_fields": [],
+        "code": "PE_HEADER_SHORT_READ",
+        "counterpart_source": null,
+        "detail": null,
+        "related_sources": [],
+        "related_tids": [],
+        "scope": null,
+        "source": "hidden_pe_scan",
+        "thread_id": null,
+        "unavailable_fields": []
+      }
+    ],
+    "reasons": [
+      "1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short read) -- not fully examined"
+    ],
+    "sources": {
+      "hidden_pe_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "memory_info": {
+        "detail": null,
+        "record_count": 2,
+        "state": "present"
+      },
+      "modules": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "thread_context": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "thread_info": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "thread_list": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      }
+    },
+    "status": "partial"
   },
-  "coverage_reasons": [
-    "1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short read) — not fully examined"
-  ],
-  "coverage_status": "partial",
+  "details": {
+    "hidden_pe_unvalidated": [],
+    "hidden_pe_validated": [
+      {
+        "entry_point_rva": 4096,
+        "image_base": "0x0000000140000000",
+        "is_pe32_plus": true,
+        "machine_name": "AMD64",
+        "number_of_sections": 1,
+        "reason": null,
+        "region": {
+          "allocation_base": "0x00007ff700000000",
+          "base_address": "0x00007ff700002000",
+          "protect": "PAGE_READWRITE",
+          "size": 4096,
+          "type": "MEM_PRIVATE"
+        },
+        "valid": true
+      }
+    ],
+    "informational_validated_pe_hits": [],
+    "rip_full_correlation": [
+      {
+        "region": {
+          "allocation_base": "0x00007ff700000000",
+          "base_address": "0x00007ff700002000",
+          "protect": "PAGE_READWRITE",
+          "size": 4096,
+          "type": "MEM_PRIVATE"
+        },
+        "thread": {
+          "ip": "0x00007ff700002000",
+          "ip_reg": "RIP",
+          "start_address": null,
+          "tid": 1
+        }
+      }
+    ],
+    "rip_hits": [
+      {
+        "region": {
+          "allocation_base": "0x00007ff700000000",
+          "base_address": "0x00007ff700002000",
+          "protect": "PAGE_READWRITE",
+          "size": 4096,
+          "type": "MEM_PRIVATE"
+        },
+        "thread": {
+          "ip": "0x00007ff700002000",
+          "ip_reg": "RIP",
+          "start_address": null,
+          "tid": 1
+        }
+      }
+    ],
+    "rwx": [
+      {
+        "allocation_base": "0x00007ff700000000",
+        "base_address": "0x00007ff700000000",
+        "protect": "PAGE_EXECUTE_READWRITE",
+        "size": 4096,
+        "type": "MEM_PRIVATE"
+      }
+    ],
+    "rwx_and_pe_alloc_bases": [
+      "0x00007ff700000000"
+    ],
+    "start_hits": [
+      {
+        "region": {
+          "allocation_base": "0x00007ff700000000",
+          "base_address": "0x00007ff700002000",
+          "protect": "PAGE_READWRITE",
+          "size": 4096,
+          "type": "MEM_PRIVATE"
+        },
+        "thread": {
+          "ip": null,
+          "ip_reg": null,
+          "start_address": "0x00007ff700002000",
+          "tid": 1
+        }
+      }
+    ],
+    "suspicious_validated_pe_hits": [
+      {
+        "entry_point_rva": 4096,
+        "image_base": "0x0000000140000000",
+        "is_pe32_plus": true,
+        "machine_name": "AMD64",
+        "number_of_sections": 1,
+        "reason": null,
+        "region": {
+          "allocation_base": "0x00007ff700000000",
+          "base_address": "0x00007ff700002000",
+          "protect": "PAGE_READWRITE",
+          "size": 4096,
+          "type": "MEM_PRIVATE"
+        },
+        "valid": true
+      }
+    ],
+    "thread_contexts": [
+      {
+        "ip": "0x00007ff700002000",
+        "ip_reg": "RIP",
+        "start_address": null,
+        "tid": 1
+      }
+    ],
+    "threads": [
+      {
+        "ip": null,
+        "ip_reg": null,
+        "start_address": "0x00007ff700002000",
+        "tid": 1
+      }
+    ]
+  },
   "findings": [
     {
       "check": "injection.rwx_regions",
@@ -25,7 +183,7 @@
       "limitations": [
         "Does not by itself distinguish injection from JIT/legitimate self-modifying-code use cases."
       ],
-      "rationale": "RWX is a directly-observed page protection flag, not a heuristic guess — but RWX alone is routinely used by JITs, debuggers, and some legitimate packers, so it is a lead, not proof, until corroborated by a validated PE header and/or live execution in the same allocation.",
+      "rationale": "RWX is a directly-observed page protection flag, not a heuristic guess \u2014 but RWX alone is routinely used by JITs, debuggers, and some legitimate packers, so it is a lead, not proof, until corroborated by a validated PE header and/or live execution in the same allocation.",
       "tag": "lead"
     },
     {
@@ -38,7 +196,7 @@
       "limitations": [
         "Header validation read is capped at 4096 bytes; a section table extending past that reports as invalid rather than being partially trusted."
       ],
-      "rationale": "Passing full structural PE validation (not just an 'MZ' prefix) rules out coincidental bytes and most decoys, but a valid header outside the module list can also occur from a manually-mapped but otherwise benign in-process library (e.g. some anti-cheat/DRM loaders) — confidence rises to HIGH only when a thread's live RIP/EIP actually executes inside the same allocation.",
+      "rationale": "Passing full structural PE validation (not just an 'MZ' prefix) rules out coincidental bytes and most decoys, but a valid header outside the module list can also occur from a manually-mapped but otherwise benign in-process library (e.g. some anti-cheat/DRM loaders) \u2014 confidence rises to HIGH only when a thread's live RIP/EIP actually executes inside the same allocation.",
       "tag": "lead"
     },
     {
@@ -49,7 +207,7 @@
       ],
       "inference": "1 thread(s) began execution at an address not covered by any known module.",
       "limitations": [],
-      "rationale": "StartAddress records where a thread BEGAN, not where it is executing now — a thread can legitimately start inside unbacked/JIT memory (e.g. a thread pool worker routine passed as a raw function pointer into private memory) and still be benign. Current RIP/EIP (below, when available) is the stronger signal for what a thread is actually doing.",
+      "rationale": "StartAddress records where a thread BEGAN, not where it is executing now \u2014 a thread can legitimately start inside unbacked/JIT memory (e.g. a thread pool worker routine passed as a raw function pointer into private memory) and still be benign. Current RIP/EIP (below, when available) is the stronger signal for what a thread is actually doing.",
       "tag": "lead"
     },
     {
@@ -58,7 +216,7 @@
       "facts": [
         "TID=0x1 RIP=0x7ff700002000 -> VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  [FULL: RWX+validated-PE]"
       ],
-      "inference": "1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE — page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.",
+      "inference": "1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.",
       "limitations": [
         "RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the dump was captured would not appear here."
       ],
@@ -66,129 +224,11 @@
       "tag": "detection"
     }
   ],
-  "hidden_pe_unvalidated": [],
-  "hidden_pe_validated": [
-    {
-      "in_module_list": false,
-      "pe": {
-        "address_of_entry_point": 4096,
-        "data_directories": [],
-        "e_lfanew": 128,
-        "has_mz": true,
-        "has_pe_sig": true,
-        "image_base": 5368709120,
-        "is_pe32_plus": true,
-        "machine": 34404,
-        "machine_name": "AMD64",
-        "number_of_sections": 1,
-        "reason": "",
-        "sections": [
-          {
-            "characteristics": 1610612736,
-            "is_executable": true,
-            "is_readable": true,
-            "is_writable": false,
-            "name": ".text",
-            "pointer_to_raw_data": 1024,
-            "size_of_raw_data": 4096,
-            "virtual_address": 4096,
-            "virtual_size": 4096
-          }
-        ],
-        "size_of_image": 8192,
-        "time_date_stamp": 305419896,
-        "valid": true
-      },
-      "region": "<tests.fixtures.fakes.Region object at 0xNORMALIZED>"
-    }
-  ],
-  "informational_validated_pe_hits": [],
+  "hunter": "injection",
   "lead_count": 3,
   "max_score": 3,
-  "pe_read_failed": 0,
-  "pe_short_reads": 1,
   "review_priority": "high",
-  "rip_full_correlation": [
-    [
-      {
-        "ThreadId": 1,
-        "ip": 140698833657856,
-        "ip_reg": "RIP",
-        "is_wow64": false
-      },
-      "<tests.fixtures.fakes.Region object at 0xNORMALIZED>"
-    ]
-  ],
-  "rip_hits": [
-    [
-      {
-        "ThreadId": 1,
-        "ip": 140698833657856,
-        "ip_reg": "RIP",
-        "is_wow64": false
-      },
-      "<tests.fixtures.fakes.Region object at 0xNORMALIZED>"
-    ]
-  ],
-  "rwx": [
-    "<tests.fixtures.fakes.Region object at 0xNORMALIZED>"
-  ],
-  "rwx_and_pe_alloc_bases": [
-    140698833649664
-  ],
   "score": 3,
-  "start_hits": [
-    [
-      "<tests.fixtures.fakes.ThreadInfo object at 0xNORMALIZED>",
-      "<tests.fixtures.fakes.Region object at 0xNORMALIZED>"
-    ]
-  ],
   "status": "DETECTED",
-  "suspicious_validated_pe_hits": [
-    {
-      "in_module_list": false,
-      "pe": {
-        "address_of_entry_point": 4096,
-        "data_directories": [],
-        "e_lfanew": 128,
-        "has_mz": true,
-        "has_pe_sig": true,
-        "image_base": 5368709120,
-        "is_pe32_plus": true,
-        "machine": 34404,
-        "machine_name": "AMD64",
-        "number_of_sections": 1,
-        "reason": "",
-        "sections": [
-          {
-            "characteristics": 1610612736,
-            "is_executable": true,
-            "is_readable": true,
-            "is_writable": false,
-            "name": ".text",
-            "pointer_to_raw_data": 1024,
-            "size_of_raw_data": 4096,
-            "virtual_address": 4096,
-            "virtual_size": 4096
-          }
-        ],
-        "size_of_image": 8192,
-        "time_date_stamp": 305419896,
-        "valid": true
-      },
-      "region": "<tests.fixtures.fakes.Region object at 0xNORMALIZED>"
-    }
-  ],
-  "thread_contexts": [
-    {
-      "ThreadId": 1,
-      "ip": 140698833657856,
-      "ip_reg": "RIP",
-      "is_wow64": false
-    }
-  ],
-  "threads": [
-    "<tests.fixtures.fakes.ThreadInfo object at 0xNORMALIZED>"
-  ],
   "verdict_level": "high"
 }

@@ -22,14 +22,15 @@ output path may never replace an input dump.
 machine interface: it carries no schema, no version, and no compatibility
 promise. Automation must use `--json`, never scrape `--txt`.
 
-## Two JSON contracts
+## One JSON contract
 
-dumpex currently has two coexisting JSON contracts, not one:
+Every command now shares a single JSON contract. `--hunt` was the last
+holdout on the older v1.1 contract; it has migrated onto v2.4 alongside
+the other ten commands:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--hunt` | v1.1 | [`dumpex-output-v1.1.schema.json`](../dumpex/schemas/dumpex-output-v1.1.schema.json) |
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report` | v2.4 (current) | [`dumpex-output-v2.4.schema.json`](../dumpex/schemas/dumpex-output-v2.4.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.4 (current) | [`dumpex-output-v2.4.schema.json`](../dumpex/schemas/dumpex-output-v2.4.schema.json) |
 | — (historical) | v2.3 | [`dumpex-output-v2.3.schema.json`](../dumpex/schemas/dumpex-output-v2.3.schema.json) — frozen, kept only to validate output produced before `schema_version 2.4`; no command emits this anymore |
 | — (historical) | v2.2 | [`dumpex-output-v2.2.schema.json`](../dumpex/schemas/dumpex-output-v2.2.schema.json) — frozen, kept only to validate output produced before `schema_version 2.3`; no command emits this anymore |
 | — (historical) | v2.1 | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) — frozen, kept only to validate output produced before `schema_version 2.2`; no command emits this anymore |
@@ -39,10 +40,9 @@ dumpex currently has two coexisting JSON contracts, not one:
 `"comparison"` value, then from `"2.1"` to `"2.2"` when it gained `"extract"`
 and `"strings"` values, then from `"2.2"` to `"2.3"` when it gained `"report"`,
 then from `"2.3"` to `"2.4"` when it gained `"hunt"` (a `result.kind` value
-that, as of this document, no command actually produces yet -- `--hunt`
-still emits the separate v1.1 contract below until its own CLI wiring
-switches over; see "v2 structured output: hunt" below for the schema
-that switch will start producing) (see "v2 structured output" below) — a
+now produced by `--hunt`, the last command to switch its CLI wiring onto
+the v2 envelope; see "Hunt records" below for that record shape) (see
+"v2 structured output" below) — a
 new value on an existing closed enum always bumps the version per this
 document's own versioning policy, even though an already-migrated
 command's own output is otherwise unaffected (the `"report"`/`"hunt"`
@@ -56,8 +56,8 @@ stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
 `v2.2`/`v2.3`) for validating output captured before each respective
 change; none is deleted or overwritten, following the same precedent
-v1.0→v1.1 set. All ten already-migrated commands now produce the v2.4
-contract — `--hunt` is the only one left on v1.1.
+v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
+v2.4 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -74,16 +74,20 @@ triage card whose `--output` extract succeeded, `kind: "report_extracted_region"
 excluded from the combined verdict because it isn't correlated with the
 resolved region).
 
-This split exists because v1.1's root schema requires a top-level `hunt`
-object (`"required": ["meta", "hunt"]`) — the six recon commands never
-produced one, so their JSON, despite stamping `schema_version: "1.1"`,
-could never actually validate against the schema it claimed to satisfy.
-v2 is a genuinely separate, self-consistent contract for those six
-commands rather than a patch to v1.1's `hunt`-shaped root. `--hunt` keeps
-using v1.1 unchanged. The rest of this document describes v1.1
-(`--hunt`); see "v2 structured output" below for the recon contract.
+This split used to exist because v1.1's root schema requires a top-level
+`hunt` object (`"required": ["meta", "hunt"]`) — the six original recon
+commands never produced one, so their JSON, despite stamping
+`schema_version: "1.1"`, could never actually validate against the schema
+it claimed to satisfy. v2 was built as a genuinely separate,
+self-consistent contract for those six commands rather than a patch to
+v1.1's `hunt`-shaped root. `--hunt` was the last command still on v1.1;
+it has since migrated onto v2.4 as well (see "Hunt records" below), so no
+command produces the v1.1 contract anymore. The rest of this section
+describes v1.1 for historical/reference purposes only — see "v2
+structured output" below for the current contract every command,
+including `--hunt`, now uses.
 
-## JSON document (v1.1 — `--hunt`)
+## JSON document (v1.1 — historical, no longer produced)
 
 The top-level object contains `meta` followed by one or more command-specific
 result sections:
@@ -188,10 +192,13 @@ verdict.
 path-bearing execution options (`ref_dir`, `yara_dir`, and `rules_file`) to
 basenames.
 
-## Hunt result semantics
+## Hunt result semantics (v1.1 field names — historical)
 
-Each hunter reports its findings and decision fields inside the command result.
-The important decision fields are:
+Each hunter reported its findings and decision fields inside the v1.1
+`hunt` object using the field names below. Under the current v2.4
+contract these same concepts live on `HunterRecord` — see "Hunt records"
+below for the `status`/`coverage.status`/`verdict_level`/`confidence`
+mapping `--hunt` now uses. The important decision fields were:
 
 | Field | Question answered |
 |---|---|
@@ -221,9 +228,11 @@ consumer of `pip install dumpex` reaches it via
 `importlib.resources.files("dumpex.schemas")`, the same way
 `dumpex.rules_pkg` ships the bundled YARA/TTP rule defaults — not by reading
 a path relative to a source checkout. `tests/integration/test_json_schema.py`
-validates real hunter output (all seven hunters, both typical and edge-case
-verdicts) against this file on every test run, including the negative cases
-it must reject.
+still validates each hunter's internal result dict (all seven hunters, both
+typical and edge-case verdicts) against this file on every test run,
+including the negative cases it must reject — this is legacy-compatibility
+coverage for the v1.1 shape itself, independent of the CLI's own
+`--hunt --json` output, which is now v2.4 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -253,8 +262,11 @@ release.
 
 ### Versioning and breaking changes
 
-`meta.schema_version` (currently `"1.1"`) is the contract version, independent
-of the dumpex application version. The policy for changing the schema file:
+`meta.schema_version` (`"1.1"`, back when this was the contract `--hunt`
+produced) is the contract version, independent of the dumpex application
+version. The policy for changing the schema file — retained here for
+historical reference and because the schema file itself still exists for
+the legacy-compatibility coverage described above:
 
 - **A new optional object field** — no version bump. `additionalProperties`
   keeps object shapes open, so an older cached copy of the schema silently
@@ -286,8 +298,8 @@ of the dumpex application version. The policy for changing the schema file:
 
 ## v2 structured output
 
-These ten commands are always structured internally — even
-without `--json`/`--csv` — and use a distinct envelope from v1.1's
+These eleven commands are always structured internally — even
+without `--json`/`--csv` — and use a distinct envelope from v1.1's old
 `hunt`-shaped root. `--diff` is the one two-dump exception (`kind:
 "comparison"`, a two-entry `meta.evidence`) — see "`result.kind ==
 "comparison"`" below; everything in this section otherwise applies to it
@@ -332,31 +344,43 @@ array's own shape.
 a verdict:
 
 - **`execution_status`** — did the *command* run to completion
-  (`"completed"` / `"partial"` / `"failed"`)? Nine of these ten commands
+  (`"completed"` / `"partial"` / `"failed"`)? Ten of these eleven commands
   have no internal scan-budget/timeout, so this is `"completed"` in every
   case that doesn't crash. `--report` is the exception: its own per-region
   string scan is capped at a fixed byte ceiling
   (`MAX_REGION_READ`), and a per-card `--output` extract can itself fail
   to write — either one sets `execution_status: "partial"`, independent of
   `coverage.status` (a self-imposed scan-budget clamp or a write failure is
-  not an evidence-completeness gap, see `coverage.status` below).
+  not an evidence-completeness gap, see `coverage.status` below). `--hunt`
+  is not a second exception here: its `execution_status` is always
+  `"completed"`, even when individual hunters hit their own scan budgets
+  (`scan_complete`/`budget_exhausted` on `PipeDetails`/`YaraDetails`/
+  `ObfuscationDetails`) — that is folded into `coverage.status` below
+  instead, the same way any other per-hunter evidence gap is.
 - **`coverage.status`** — was the *evidence* it looked at complete
   (`"complete"` / `"partial"` / `"not_evaluated"`), reusing the same
-  vocabulary `--hunt`'s `coverage_status` uses
+  vocabulary `--hunt`'s own hunter-level coverage derivation uses
   (`dumpex.hunt._coverage.derive_coverage_status`)? For example,
   `--threads` reports `"partial"` when a dump lacks
   `ThreadInfoListStream`; `--pid` reports `"partial"` when it had to fall
   back past `MINIDUMP_MISC_INFO` to a thread-list/exception-stream
-  heuristic. `coverage.reasons` explains why.
+  heuristic; `--hunt`'s document-level `coverage.status` (built by
+  `dumpex.hunt._hunt_coverage_report()` from `result.summary`) is
+  `"not_evaluated"` when every selected hunter is, `"partial"` when any
+  hunter is INCONCLUSIVE or NOT_EVALUATED, and `"complete"` otherwise —
+  independent of each individual `HunterRecord`'s own, more detailed
+  `coverage`. `coverage.reasons` explains why.
 - **verdict/confidence** — not a top-level `result` concept for any of
-  these ten commands; that stays scoped to `--hunt`, which reasons about
-  evidence at the whole-command level, not just lists it. `--report` is
-  the one exception among the ten with a verdict at all, and it lives
-  per-record (`triageCardRecord.verdict`, one triage card's own MECE
-  score), independent of and orthogonal to that card's `execution_status`/
+  these eleven commands. Two carry it per-record instead: `--report`'s
+  `triageCardRecord.verdict` (one triage card's own MECE score),
+  independent of and orthogonal to that card's `execution_status`/
   `coverage.status` — a card can be `"CLEAN"` with `coverage.status:
   "partial"` (evidence was incomplete but what was seen showed nothing),
-  or vice versa.
+  or vice versa — and `--hunt`'s `hunterRecord.verdict_level`/
+  `confidence`, one judgment per selected hunter; `result.summary`'s own
+  `overall_status`/`highest_verdict_level` roll those per-hunter values up
+  across the whole `--hunt` invocation without introducing a second,
+  competing top-level verdict field.
 
 `coverage.reasons` is a flat, human-readable text array — fine for
 printing, not for programmatic filtering. `coverage.sources` and
@@ -367,19 +391,24 @@ consumer that wants to act on them without string-matching:
   command consulted, keyed by source name (`"memory_info"`, `"threads"`,
   `"misc_info"`, ...). Each value is `{"state", "record_count", "detail"}`
   — `state` is one of `"absent"` / `"present_empty"` / `"present"` /
-  `"failed"`. Eight of the nine single-dump commands never produce
-  `"failed"` (a read failure crashes the whole command instead) — `--diff`
-  is one exception: reading one side's stream can genuinely raise without
-  the other side's dump being at fault, so that side is reported as
-  `"failed"` (with `detail` carrying the underlying error text) and that
-  entity's diff is skipped, rather than the whole comparison crashing or
-  the failed side being silently treated as empty. `--report` is the other
-  exception, for a different reason: a triage card's own target-region
-  content read failing has evidence elsewhere in the same card (thread,
-  other-region, verdict) worth still reporting, so a synthetic
-  `"requested_region"` source aggregates "at least one card's region read
-  failed" as `"failed"` rather than aborting the whole command. This is
-  exactly `dumpex.output.coverage.SourceObservation`, one per source.
+  `"failed"`. Eight of the nine single-dump recon/extract/report commands
+  never produce `"failed"` (a read failure crashes the whole command
+  instead) — `--diff` is one exception: reading one side's stream can
+  genuinely raise without the other side's dump being at fault, so that
+  side is reported as `"failed"` (with `detail` carrying the underlying
+  error text) and that entity's diff is skipped, rather than the whole
+  comparison crashing or the failed side being silently treated as empty.
+  `--report` is the other exception, for a different reason: a triage
+  card's own target-region content read failing has evidence elsewhere in
+  the same card (thread, other-region, verdict) worth still reporting, so
+  a synthetic `"requested_region"` source aggregates "at least one card's
+  region read failed" as `"failed"` rather than aborting the whole
+  command. This is exactly `dumpex.output.coverage.SourceObservation`, one
+  per source. `--hunt` is a different shape entirely: its document-level
+  `coverage` (built by `dumpex.hunt._hunt_coverage_report()`) carries only
+  a `status`, with empty `sources`/`limitations` — per-source coverage
+  detail lives one level down, on each selected hunter's own
+  `HunterRecord.coverage`, not on the whole-command `result.coverage`.
 - **`coverage.limitations`** — an array of structured, machine-readable
   gaps; `coverage.reasons` is rendered from this list, one string per
   entry, in the same order. Each entry always has `code` and `source`;
@@ -400,8 +429,9 @@ version bump, per the versioning rule above.
 `result.data.records` is always an array of one canonical record type per
 `kind` (`memory_regions` → `MemoryRegionRecord`, `modules` →
 `ModuleRecord`, `threads` → `ThreadRecord`, `sysinfo` → `SysInfoRecord`,
-`pid` → `PidRecord`, `peb` → `PebRecord`) — a single-record result
-(`sysinfo`/`pid`/`peb`) is still a one-element array, not a bare object,
+`pid` → `PidRecord`, `peb` → `PebRecord`, `hunt` → `HunterRecord`) — a
+single-record result (`sysinfo`/`pid`/`peb`) is still a one-element array,
+not a bare object,
 so a consumer never needs to special-case array-vs-object by `kind`. Each
 record type is fully typed per `kind` in the JSON Schema itself
 (`additionalProperties: false`, every field's exact type, hex-address
@@ -421,17 +451,23 @@ the second rule structurally: it raises rather than silently
 stringifying any value that isn't already a plain JSON scalar/list/dict
 by the time it's serialized.
 
-An exit code mirrors `coverage.status` one-for-one for these ten
+An exit code mirrors `coverage.status` one-for-one for these eleven
 commands, independent of whether `--json`/`--csv` was even requested: `0`
 for `"complete"`, `3` for `"partial"`, `4` for `"not_evaluated"` (the
 primary stream a command needed was entirely absent from the dump — e.g.
 `--modules` when `ModuleListStream` itself isn't present, as opposed to
 being present with zero entries, which is `"complete"`) — a SOC script
 checking `$?` on a bare `dumpex sample.dmp --threads` can distinguish "no
-data at all" from "some data, degraded" without parsing JSON at all. This
-convention is scoped to these ten commands only; every other command's
-exit-code behavior (`0` on completion, an uncaught exception's default
-nonzero on a fatal error) is unchanged. `--extract`/`--strings`/`--report`
+data at all" from "some data, degraded" without parsing JSON at all.
+`--hunt` follows the same mapping from its own document-level
+`coverage.status` (`4` when every selected hunter is NOT_EVALUATED, `3`
+when any hunter is INCONCLUSIVE or NOT_EVALUATED, `0` otherwise) — the
+same three-way split `dumpex/hunt/__init__.py`'s `_hunt_coverage_report()`
+derives from `result.summary`, replacing the unconditional `0` `--hunt`
+used to exit with under the v1.1 contract. This convention is scoped to
+these eleven commands only; every other command's exit-code behavior (`0`
+on completion, an uncaught exception's default nonzero on a fatal error)
+is unchanged. `--extract`/`--strings`/`--report`
 also use `"partial"` for a short read (`REGION_READ_TRUNCATED` —
 `read_region()` returned fewer bytes than requested, e.g. because the
 requested range extends past what's actually backed in the dump): the
@@ -492,7 +528,7 @@ field lists.
 `{"id": "baseline", "role": "baseline", ...}` for the primary dump
 argument and `{"id": "target", "role": "target", ...}` for `DUMP2` --
 built via `V2Output.from_evidence()` instead of the single-`dump_path`
-constructor the other nine commands use. `coverage.sources` uses dotted,
+constructor the other ten commands use. `coverage.sources` uses dotted,
 entity-namespaced source names (e.g. `"baseline.modules"`/
 `"target.modules"`, `"baseline.thread_info"`/`"target.thread_info"`,
 `"baseline.memory_info"`/`"target.memory_info"`) rather than the bare
@@ -712,7 +748,7 @@ and `--output` given disambiguates each card's own extract path (e.g.
 `out_0x7ffe1000.bin`, `out_0x7ffe2000.bin`) rather than letting later
 writes silently clobber earlier ones.
 
-### Hunt records (schema-only — not yet produced)
+### Hunt records
 
 `schema_version 2.4` adds a `"hunt"` value to `result.kind` and its own
 record type, `hunterRecord` (one entry per hunter — `injection`/
@@ -726,23 +762,24 @@ gets its own new `schema_version` for the same reason `"report"` did:
 `dumpex-output-v2.3.schema.json` was already shipped/used by `--report`
 output before `"hunt"` existed, so it stays byte-frozen.
 
-As of this document, `--hunt` does not yet emit this contract — it still
-produces the separate v1.1 JSON described earlier in this document. The
-v2.4 schema fully describes the target shape (used today only by tests
-constructing `HunterRecord` instances directly, and by the CSV
-partitioning in
-[`dumpex/output/csv_export.py`](../dumpex/output/csv_export.py)), but the
-CLI's atomic switch onto it — routing `--hunt` through the v2 envelope,
-the coverage-based exit code, and deleting the v1.1 dispatcher path — is
-separate, tracked follow-up work.
+`--hunt` now emits this contract: it is routed through the v2 envelope
+like the other ten commands, `result.kind` is `"hunt"`, and the process
+exit code is coverage-based (`0`/`3`/`4`) instead of always `0`. The CLI
+wiring lives in `dumpex/cli.py` (`--hunt` is included in
+`_V2_STRUCTURED_MODES`) and `dumpex/hunt/__init__.py`'s `cmd_hunt()`,
+which takes a `collect_records=True` flag to return `(results, records)`
+for the CLI's v2 path; `cmd_hunt()` still returns its original bare dict
+when `collect_records` is left at its default, so other, non-CLI callers
+of the v1.1-era dict shape are unaffected. Console output (the per-hunter
+detail and the `--hunt all` summary card) is unchanged — only the
+`--json`/`--csv` output and the exit code changed.
 
 ## Reproducing a run
 
 Retain the following together:
 
 1. the JSON result;
-2. the source dump identified by `meta.evidence[0].sha256` (v2) or
-   `meta.evidence.sha256` (v1.1 `--hunt`);
+2. the source dump identified by `meta.evidence[0].sha256`;
 3. any explicit rules or reference modules;
 4. the dumpex version and runtime versions in `meta`; and
 5. the exact options recorded under `meta.execution.options`.

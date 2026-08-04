@@ -17,12 +17,20 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     lead_count, review_priority)
 from dumpex.hunt.cs_beacon.schema import _VERDICT_LEVEL_BY_SCORE
 from dumpex.hunt.cs_beacon.parser import _cs_guess_version
+from dumpex.hunt.cs_beacon.scanner import format_scan_note
 
 
 @dataclass
 class Report:
     """Bundles the public `findings` dict with everything presentation.py
-    needs to render console detail (hit_records, any_corroborated, ...)."""
+    needs to render console detail (hit_records, any_corroborated, ...).
+
+    `scan_note` (the "Scan complete<note>." progress-line suffix, only
+    computable once a scan has actually run) is stored here so
+    `_hunt_cs_beacon()` can print its post-scan progress line from the
+    already-built Report instead of re-running the scan just to learn
+    it -- see `dumpex/hunt/cs_beacon/__init__.py`'s own docstring for why
+    this hunter's progress prints straddle the builder call."""
     findings: dict
     findings_list: list
     hit_records: list = field(default_factory=list)
@@ -30,6 +38,8 @@ class Report:
     status: str = NOT_EVALUATED
     any_corroborated: bool = False
     coverage_reasons: list = field(default_factory=list)
+    coverage_report: object = None   # dumpex.output.coverage.CoverageReport (v2.4 migration only)
+    scan_note: str = ""
 
 
 def build_not_evaluated_report() -> Report:
@@ -88,6 +98,7 @@ def build_report(scan_outcome, hit_records: list, mem_info_available: bool,
                                  "could not be verified")
     findings['coverage_status']  = derive_coverage_status(True, complete)
     findings['coverage_reasons'] = coverage_reasons
+    scan_note = format_scan_note(scan_outcome)
 
     if not scan_outcome.hits:
         status = derive_status(True, False, complete)
@@ -114,7 +125,7 @@ def build_report(scan_outcome, hit_records: list, mem_info_available: bool,
         findings['review_priority'] = review_priority(findings_list, 0, status)
         return Report(findings=findings, findings_list=findings_list, hit_records=[],
                        score=0, status=status, any_corroborated=False,
-                       coverage_reasons=coverage_reasons)
+                       coverage_reasons=coverage_reasons, scan_note=scan_note)
 
     # ── Score: structural validity alone is 1 ("likely" — see package ──────
     # docstring for why); independent memory-context corroboration on AT
@@ -209,4 +220,4 @@ def build_report(scan_outcome, hit_records: list, mem_info_available: bool,
 
     return Report(findings=findings, findings_list=findings_list, hit_records=hit_records,
                    score=score, status=status, any_corroborated=any_corroborated,
-                   coverage_reasons=coverage_reasons)
+                   coverage_reasons=coverage_reasons, scan_note=scan_note)

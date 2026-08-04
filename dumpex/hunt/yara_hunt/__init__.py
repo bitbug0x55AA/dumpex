@@ -121,10 +121,27 @@ def _load_yara_rules(rules_dir: str) -> tuple:
     return bundle.rule_files, bundle.compile_failed
 
 
-def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
-                verbose: bool = False) -> dict:
-    """
-    Scan all captured memory segments against every YARA rule in rules_dir.
+def _build_yara_report(mf: MinidumpFile, rules_dir: str = None):
+    """Run the prerequisite checks / scan / aggregate pipeline and return
+    the aggregate.Report -- the ONE place this pipeline is assembled,
+    shared by `_hunt_yara()` (console path, below) and
+    `collect_yara_record()` (the v2.4 migration's HunterRecord-producing
+    path). Prints nothing at all: unlike every other phase-two/three
+    hunter's own builder (which only has ONE result path once it starts
+    scanning), this one has FIVE -- four "prerequisite missing" early
+    returns plus the main scan path -- so which `presentation.render_*`
+    function fires, and which header/progress lines led up to it, can't
+    be decided until the Report exists. `report.render_kind` records
+    which of the five branches fired, and `report.rules_dir`/
+    `rule_file_count`/`segment_count`/`scan_note`/`modules` carry every
+    value `_hunt_yara()` needs to reproduce the exact same console text
+    as before, AFTER this call returns, without recomputing any of it
+    (see aggregate.Report's own docstring). PR4 of the `--hunt` v2.4
+    migration unified every hunter onto this build-once, multiple-
+    consumers shape.
+
+    Scan all captured memory segments against every YARA rule in
+    rules_dir.
 
     For each match reports:
       - Rule name, file, tags, description, MITRE ATT&CK ID
@@ -134,8 +151,6 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     See package docstring for the rules-directory resolution order and
     the score/coverage model.
     """
-    _print_hunt_header("YARA Memory Scan")
-
     # get_yara_provenance() is a module-level global, only ever SET by
     # _load_yara_rules() — never cleared. Without resetting it here, a
     # run that returns NOT_EVALUATED before ever reaching
@@ -150,8 +165,8 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     try:
         import yara
     except ImportError:
-        report = aggregate.build_not_evaluated_report("yara-python not installed")
-        return presentation.render_yara_not_installed(report)
+        return aggregate.build_not_evaluated_report(
+            "yara-python not installed", render_kind="not_installed")
 
     # ── Resolve rules directory ───────────────────────────────────────
     if rules_dir is None:
@@ -167,8 +182,8 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
             rules_dir = rules.packaged_yara_rules_dir()
 
     if rules_dir is None or not os.path.isdir(rules_dir):
-        report = aggregate.build_not_evaluated_report("no YARA rules directory found")
-        return presentation.render_no_rules_dir(report)
+        return aggregate.build_not_evaluated_report(
+            "no YARA rules directory found", render_kind="no_rules_dir")
 
     # ── Load rule files ───────────────────────────────────────────────
     # Looked up HERE by its bare name (this module's own re-exported,
@@ -178,19 +193,15 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     if not rule_files:
         reason = (f"all {compile_failed} rule file(s) in {rules_dir} failed to compile"
                    if compile_failed else f"no .yar/.yara files in {rules_dir}")
-        report = aggregate.build_not_evaluated_report(reason)
-        return presentation.render_no_rule_files(report, rules_dir, compile_failed)
-
-    print(DIM(f"  [*] Loaded {len(rule_files)} rule file(s) from {rules_dir}"))
-    if compile_failed:
-        print(YELLOW(f"  [~] {compile_failed} rule file(s) failed to compile — "
-                      f"scan coverage is reduced, not just a warning\n"))
+        return aggregate.build_not_evaluated_report(
+            reason, render_kind="no_rule_files", rules_dir=rules_dir, compile_failed=compile_failed)
 
     # ── Collect memory segments ───────────────────────────────────────
     segs = scanner.select_segments(mf)
     if not segs:
-        report = aggregate.build_not_evaluated_report("Memory64ListStream missing from this dump")
-        return presentation.render_no_segments(report)
+        return aggregate.build_not_evaluated_report(
+            "Memory64ListStream missing from this dump", render_kind="no_segments",
+            rules_dir=rules_dir, rule_file_count=len(rule_files), compile_failed=compile_failed)
 
     # Two independent context sources used to judge whether a
     # PE_In_Private_Memory hit is really in private memory or just a
@@ -202,8 +213,6 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
     mem_info_available = bool(mf.memory_info and mf.memory_info.infos)
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
-
-    print(DIM(f"  [*] Scanning {len(segs)} segment(s) …\n"))
 
     # config bundles every yara_hunt.* tunable, read from THIS module's own
     # (re-exported, and therefore still monkeypatchable) globals -- see
@@ -224,7 +233,72 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
                                      config, runtime.monotonic)
 
     scan_note = scanner.format_scan_note(outcome, config)
-    print(DIM(f"  [*] Scan complete — {outcome.scanned} segment(s) scanned{scan_note}."))
+
+    return aggregate.build_report(outcome, compile_failed, rules_dir=rules_dir,
+                                   rule_file_count=len(rule_files), segment_count=len(segs),
+                                   scan_note=scan_note, modules=modules)
+
+
+def _hunt_yara(mf: MinidumpFile, rules_dir: str = None, verbose: bool = False) -> dict:
+    """Scan all captured memory segments against every YARA rule in
+    rules_dir -- see `_build_yara_report()`'s own docstring for the
+    algorithm and rules-directory resolution order.
+
+    All console output (header, in-progress announcements, and the
+    final render_* call) happens here, AFTER the now fully silent
+    `_build_yara_report()` returns, reading whatever it needs from
+    `report.render_kind`/`rules_dir`/`rule_file_count`/`segment_count`/
+    `scan_note`/`modules`/`outcome` rather than recomputing any of it
+    (see aggregate.Report's own docstring). Nothing prints DURING the
+    builder call in either the old or new code -- scanner.py never
+    prints (see this package's own docstring) -- and none of the four
+    early-return branches print anything past the point they returned,
+    so reproducing each branch's prints as one contiguous block right
+    after the builder call, instead of interleaved with the pipeline
+    steps that used to produce them, is byte-identical to any consumer
+    that only ever observes a fully-captured block of console text
+    (including tests/integration/test_hunt_cli_compat_freeze.py's own
+    byte-exact fixtures)."""
+    _print_hunt_header("YARA Memory Scan")
+    report = _build_yara_report(mf, rules_dir=rules_dir)
+    return _render_yara_console(report, verbose)
+
+
+def _render_yara_console(report, verbose: bool = False) -> dict:
+    """Print the console report for an ALREADY-BUILT yara `Report`
+    (picking the right `presentation.render_*` branch from
+    `report.render_kind`, and printing the progress lines that lead up
+    to it) and return the same v1.1-shaped findings dict `_hunt_yara()`
+    always has -- extracted so `dumpex.hunt.collect_hunt()`'s console+
+    JSON orchestrator (see that function's own docstring) can call
+    `_build_yara_report()` once and feed the SAME Report to this
+    function AND `_record_from_yara_report()`, instead of calling
+    `_hunt_yara()` (which would build its own second Report and scan
+    again). Does NOT print the header -- that happens before the
+    builder call (see `_hunt_yara()` above), since it doesn't depend on
+    the Report at all."""
+    if report.render_kind == "not_installed":
+        presentation.render_yara_not_installed(report)
+        return report.findings
+    if report.render_kind == "no_rules_dir":
+        presentation.render_no_rules_dir(report)
+        return report.findings
+    if report.render_kind == "no_rule_files":
+        presentation.render_no_rule_files(report, report.rules_dir, report.compile_failed)
+        return report.findings
+
+    print(DIM(f"  [*] Loaded {report.rule_file_count} rule file(s) from {report.rules_dir}"))
+    if report.compile_failed:
+        print(YELLOW(f"  [~] {report.compile_failed} rule file(s) failed to compile — "
+                      f"scan coverage is reduced, not just a warning\n"))
+
+    if report.render_kind == "no_segments":
+        presentation.render_no_segments(report)
+        return report.findings
+
+    print(DIM(f"  [*] Scanning {report.segment_count} segment(s) …\n"))
+    outcome = report.outcome
+    print(DIM(f"  [*] Scan complete — {outcome.scanned} segment(s) scanned{report.scan_note}."))
     if outcome.suppressed_module_pe:
         print(DIM(f"  [·] {outcome.suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
                   f"MZ/PE header belonged to a known, legitimately loaded module.\n"))
@@ -232,6 +306,5 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None,
         print(DIM(f"  [·] {outcome.suppressed_scoped} scoped rule match(es) suppressed — "
                   f"resolved to a known module or a MEM_IMAGE region.\n"))
 
-    report = aggregate.build_report(outcome, compile_failed)
-
-    return presentation.render_result(report, modules, verbose)
+    presentation.render_result(report, report.modules, verbose)
+    return report.findings

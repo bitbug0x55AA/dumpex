@@ -42,6 +42,7 @@ class Report:
     status: str = None
     coverage_status: str = None
     coverage_reasons: list = field(default_factory=list)
+    coverage_report: object = None   # dumpex.output.coverage.CoverageReport (v2.4 migration only)
     ref_dir: "str|None" = None
 
 

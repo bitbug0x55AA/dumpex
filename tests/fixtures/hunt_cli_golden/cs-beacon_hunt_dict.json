@@ -1,42 +1,57 @@
 {
   "confidence": "high",
-  "config_count": 1,
-  "configs": [
-    {
-      "context_corroborated": true,
-      "cs_version": "3.x",
-      "cs_version_note": "estimated from highest recognized field ID — not a fingerprinted/confirmed build",
-      "fields": {
-        "1": {
-          "name": "BeaconType",
-          "raw": "0000",
-          "type": 1,
-          "value": 0
-        },
-        "7": {
-          "name": "PublicKey",
-          "raw": "3014300d06092a864886f70d01010105000303003000",
-          "type": 3,
-          "value": "3014300d06092a864886f70d010101050003030030"
-        }
-      },
-      "file_offset": 8448,
-      "region_base": 131072,
-      "region_protect": "PAGE_EXECUTE_READWRITE",
-      "region_size": 550,
-      "va": 131328,
-      "xor_key": 105
-    }
-  ],
   "coverage": {
-    "contexts_missing": 0,
-    "contexts_parsed": 0,
-    "mem_info_stream": true,
-    "thread_list_stream": false,
-    "threads_total": 0
+    "limitations": [],
+    "reasons": [],
+    "sources": {
+      "memory_info": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "segment_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "thread_context": {
+        "detail": null,
+        "record_count": null,
+        "state": "absent"
+      }
+    },
+    "status": "complete"
   },
-  "coverage_reasons": [],
-  "coverage_status": "complete",
+  "details": {
+    "config_count": 1,
+    "configs": [
+      {
+        "context_corroborated": true,
+        "cs_version": "3.x",
+        "cs_version_note": "estimated from highest recognized field ID \u2014 not a fingerprinted/confirmed build",
+        "fields": {
+          "1": {
+            "name": "BeaconType",
+            "raw": "0000",
+            "type": 1,
+            "value": 0
+          },
+          "7": {
+            "name": "PublicKey",
+            "raw": "3014300d06092a864886f70d01010105000303003000",
+            "type": 3,
+            "value": "3014300d06092a864886f70d010101050003030030"
+          }
+        },
+        "file_offset": 8448,
+        "region_base": "0x0000000000020000",
+        "region_protect": "PAGE_EXECUTE_READWRITE",
+        "region_size": 550,
+        "va": "0x0000000000020100",
+        "xor_key": 105
+      }
+    ]
+  },
   "findings": [
     {
       "check": "cs_beacon.structural_config",
@@ -51,6 +66,7 @@
       "tag": "detection"
     }
   ],
+  "hunter": "cs-beacon",
   "lead_count": 0,
   "max_score": 2,
   "review_priority": "high",
