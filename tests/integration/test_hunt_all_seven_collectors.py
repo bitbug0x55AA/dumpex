@@ -4,8 +4,10 @@ collect_*_record() functions against ONE shared synthetic MinidumpFile,
 feed the resulting 7 HunterRecords through the real
 dumpex.hunt.summary.build_hunt_summary() reducer, and confirm the whole
 envelope validates against dumpex-output-v2.4.schema.json -- the exact
-shape PR4's future `--hunt all` CLI wiring will produce, built here
-without any CLI/dispatcher code existing yet.
+shape `--hunt all`'s real CLI wiring (`cli.py` -> `dumpex.hunt.
+collect_hunt()`, shipped in PR4) produces, built here independently of
+that CLI/dispatcher code (see tests/integration/
+test_hunt_cli_compat_freeze.py for the CLI-layer equivalent).
 """
 import json
 

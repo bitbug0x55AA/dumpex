@@ -1,13 +1,29 @@
 # `--hunt` v2 migration — PR1 field matrix & frozen fixtures
 
+**Status: migration complete.** `--hunt` shipped onto the v2.4 envelope in
+PR4 — all eleven commands, including `--hunt`, now produce
+`dumpex-output-v2.4.schema.json` (see docs/OUTPUT_SCHEMA.md's "One JSON
+contract" section), and no command produces the v1.1 contract anymore.
+This document is kept as a **historical audit trail**, not a live
+reference: it records the pre-migration (v1.1) field inventory frozen
+before PR2's work started, and is what each PR2/PR2b/PR4 change was
+checked against as it landed. The "Confirmed cross-cutting findings for
+PR2+" section at the bottom has been updated in place, after the fact,
+where a finding's original prediction turned out to need correction (see
+its own "Update" notes) — but the field-by-field inventory above it is
+intentionally left as originally frozen, not rewritten to describe the
+final shape; read dumpex/output/records.py and
+dumpex-output-v2.4.schema.json for that.
+
 Frozen against commit `5c2ef8e87dc17b8eda9f9fe3e2c3af2c6438f7f2` (main), before
 any output-shape change. This is an **inventory document**: it records what
-each hunter emits *today* (v1.1 JSON via `dumpex/ui/structured.py`, plain-dict
-console via `dumpex/hunt/__init__.py`/`presentation.py`), classified by where
-each field is expected to land in the v2.4 `HunterRecord` contract. It is the
-reference PR2+ migration work is checked against — a field that disappears
-without a line in this doc, or a "hunter-specific detail" that gets flattened
-into the JSON shape instead of moving into `details`, is a regression.
+each hunter emitted *at that point* (v1.1 JSON via `dumpex/ui/structured.py`,
+plain-dict console via `dumpex/hunt/__init__.py`/`presentation.py`),
+classified by where each field was expected to land in the v2.4
+`HunterRecord` contract. It was the reference PR2+ migration work was
+checked against — a field that disappeared without a line in this doc, or a
+"hunter-specific detail" that got flattened into the JSON shape instead of
+moving into `details`, would have been a regression.
 
 **Revision note**: an earlier version of this PR captured fixtures by
 running the CLI against the two real dumps in `tests/corpus/evil/samples/`

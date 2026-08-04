@@ -14,9 +14,11 @@ Every raw `Region`/`ThreadInfo`/context-dict object the aggregate's
 addresses -- this is the fix for the confirmed pre-migration defect
 documented in docs/hunt_migration_field_matrix.md's cross-cutting finding
 #1 (raw objects reaching JSON via `_json_safe()`'s `str(obj)` fallback,
-embedding a non-reproducible interpreter heap address). Nothing in this
-module is read by `dumpex/hunt/__init__.py`'s dispatcher yet -- the CLI
-switch is PR4.
+embedding a non-reproducible interpreter heap address). This module is
+read by `dumpex/hunt/__init__.py`'s `collect_hunt()` orchestrator, which
+`cli.py`'s `--hunt` branch now calls for `--json`/`--csv` output -- the
+console dispatcher itself still builds its own bare-dict `results` for
+rendering, unchanged (see `collect_hunt()`'s own docstring).
 """
 from dumpex.core.memory import prot_str
 from dumpex.hunt.injection import _build_injection_report

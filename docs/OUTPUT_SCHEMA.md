@@ -252,13 +252,21 @@ the same `hunterResultBase` (`status`/`score`/`coverage_status`/
 invariants) via `allOf`.
 
 The standalone Windows EXE built by `.github/workflows/build.yml` does not
-read this file at runtime (nothing in the running tool validates its own
-output — only the test suite and external `--json` consumers do), so it is
-not collected into the frozen executable. It is instead uploaded as a
-separate `dumpex-output-v1.1.schema.json` file alongside `dumpex.exe` on
-each GitHub release, so an EXE-only install (no `pip install dumpex`, no
-source checkout) still has a way to get the canonical schema for that
-release.
+read this file (or any schema file) at runtime (nothing in the running
+tool validates its own output — only the test suite and external `--json`
+consumers do), so none of them are collected into the frozen executable.
+They are instead uploaded as separate `dumpex-output-v*.schema.json`
+files alongside `dumpex.exe` in the release ZIP — every version currently
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`), the same set
+`pip install dumpex` already ships (see "Reproducing a run" below for how
+an installed package reaches these via `importlib.resources`) — so an
+EXE-only install (no `pip install dumpex`, no source checkout) still has
+a way to get the schema for whatever output it's holding. Current CLI
+output (from any command, including `--hunt`) always validates against
+`dumpex-output-v2.4.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.3` are
+shipped only to validate output produced by an older dumpex version, not
+anything a current install can produce.
 
 ### Versioning and breaking changes
 

@@ -8,7 +8,7 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, DIM, BOLD
 from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
 from dumpex.rules_pkg.loader import get_rules, configure_rules_source
-from dumpex.ui.structured import StructuredOutput, _ANSI_RE
+from dumpex.ui.structured import _ANSI_RE
 from dumpex.output import V2Output
 from dumpex.output.envelope import EvidenceInput
 from dumpex.output.coverage import EXIT_OK, EXIT_PARTIAL, EXIT_NOT_EVALUATED, exit_code_for
@@ -38,13 +38,12 @@ from dumpex.output.command_result import CommandResult
 # eight produce their usual single-dump kinds.
 _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo", "peb", "diff",
                                     "extract", "strings", "report", "hunt"})
-_UNSUPPORTED_STRUCTURED_MODES = frozenset()
 
 # Exit codes for all eleven v2-routed commands, independent of
 # --json/--csv having been requested at all: a SOC script checking `$?`
 # on a bare `dumpex --threads dump.dmp` should be able to detect
 # incomplete coverage without needing to also parse JSON. `--hunt` uses
-# this same convention too (PR4) -- its exit code is derived from
+# this same convention too -- its exit code is derived from
 # `result.coverage.status`, the document-level rollup dumpex.hunt.
 # _hunt_coverage_report() builds from every selected hunter's own
 # HunterRecord.coverage (see that function's own docstring for why it
@@ -61,10 +60,9 @@ _UNSUPPORTED_STRUCTURED_MODES = frozenset()
 
 def _selected_run_mode(args) -> str:
     """The single mode flag argparse's mutually_exclusive_group(required=True)
-    guarantees is set, as a plain string key into _V2_STRUCTURED_MODES /
-    _UNSUPPORTED_STRUCTURED_MODES -- kept separate from _cmd_label() below,
-    which returns a filename-oriented label (e.g. "hunt_all", "tid_1234"),
-    not a bare mode name."""
+    guarantees is set, as a plain string key into _V2_STRUCTURED_MODES --
+    kept separate from _cmd_label() below, which returns a filename-oriented
+    label (e.g. "hunt_all", "tid_1234"), not a bare mode name."""
     if args.list:      return "list"
     if args.modules:   return "modules"
     if args.threads:   return "threads"
@@ -290,32 +288,27 @@ def main():
         mf_target = open_dump(args.diff) if run_mode == "diff" else None
 
         # Structured output collector — populated by commands that support
-        # it. Every v2-routed command (including --hunt as of PR4) always
-        # gets a V2Output (built regardless of --json/--csv, so the
-        # exit-code contract below is consistent whether or not structured
-        # output was actually written).
-        need_structured = bool(args.json or args.csv)
+        # it. Every v2-routed command (including --hunt) always gets a
+        # V2Output (built regardless of --json/--csv, so the exit-code
+        # contract below is consistent whether or not structured output was
+        # actually written). run_mode is always in _V2_STRUCTURED_MODES
+        # (argparse's mode group guarantees exactly one of the eleven flags
+        # above is set, and all eleven are v2-routed) — diff just needs its
+        # own two-evidence constructor.
         if run_mode == "diff":
             out = V2Output.from_evidence(
                 [EvidenceInput(id="baseline", role="baseline", path=args.dumpfile),
                  EvidenceInput(id="target", role="target", path=args.diff)],
                 command=cmd_label, options=_build_options(), case_id=args.case_id,
                 analyst=args.analyst, redact_paths=args.redact_paths, started_at=started_at)
-        elif run_mode in _V2_STRUCTURED_MODES:
+        else:
             out = V2Output(args.dumpfile, mf, command=cmd_label, options=_build_options(),
                             case_id=args.case_id, analyst=args.analyst,
                             redact_paths=args.redact_paths, started_at=started_at)
-        elif need_structured:
-            out = StructuredOutput(args.dumpfile, mf, command=cmd_label, options=_build_options(),
-                                    case_id=args.case_id, analyst=args.analyst,
-                                    redact_paths=args.redact_paths,
-                                    started_at=started_at)
-        else:
-            out = None
 
         # --json/--csv path resolution (existing-file / dump-path / dir-mode
-        # collision handling) is owned entirely by StructuredOutput.write_json
-        # / write_csv (via commit_output) — not duplicated here. Likewise
+        # collision handling) is owned entirely by V2Output.write_json /
+        # write_csv (via commit_output) — not duplicated here. Likewise
         # --output is checked exactly once, inside cmd_extract/cmd_report
         # right before the write.
 
@@ -406,19 +399,13 @@ def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
             cmd_strings(mf, addr, size, args.min_len, args.grep, args.encoding, auto_size=_req is None))
 
     # ── Write structured output ────────────────────────────────────────────
-    if out:
-        if isinstance(out, V2Output):
-            if args.json:
-                out.write_json(args.json, cmd_label=cmd_label, force=args.force)
-            if args.csv:
-                out.write_csv(args.csv,  cmd_label=cmd_label, force=args.force)
-        elif out._sections:
-            if args.json:
-                out.write_json(args.json, cmd_label=cmd_label, force=args.force)
-            if args.csv:
-                out.write_csv(args.csv,  cmd_label=cmd_label, force=args.force)
-        else:
-            print(DIM("  [~] --json/--csv: this command does not produce structured output."))
+    # `out` is always a V2Output here (see its construction in main() above)
+    # -- every v2-routed command produces structured output, so there's no
+    # "this command doesn't support --json/--csv" case left to handle.
+    if args.json:
+        out.write_json(args.json, cmd_label=cmd_label, force=args.force)
+    if args.csv:
+        out.write_csv(args.csv, cmd_label=cmd_label, force=args.force)
 
     return exit_code
 

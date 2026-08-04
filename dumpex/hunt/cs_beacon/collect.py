@@ -7,16 +7,18 @@ only RESHAPES the resulting `aggregate.Report` into a `HunterRecord` --
 it never recomputes score, status, verdict, or coverage itself.
 
 `configs[*]["fields"]` is int-keyed (by TLV field ID) and its `raw`/
-`value` entries can be raw `bytes` -- today this is sanitized only at
-the CLI dispatcher layer (`dumpex/hunt/__init__.py`'s `_json_safe_cs_
-configs`-equivalent block), never inside the hunter itself. That logic
-is absorbed here so it survives PR4 deleting the dispatcher's hand-
-rolled version (see docs/hunt_migration_field_matrix.md's cs-beacon
-section). `va`/`region_base` (real process addresses) become hex
-strings; `file_offset` (a .dmp BYTE OFFSET, not a memory address) and
-`xor_key` (a one-byte XOR key value, not an address/pointer/handle)
-stay plain JSON integers, per this project's own address-vs-offset
-type rule.
+`value` entries can be raw `bytes` -- this is ALSO sanitized at the CLI
+dispatcher layer (`dumpex/hunt/__init__.py`'s `_json_safe_cs_configs`-
+equivalent block), which was not deleted; it still runs, unchanged, for
+`cmd_hunt()`'s console-rendering `results` dict and any other non-v2
+caller. This module's own, independent conversion is what feeds
+`--hunt`'s v2.4 `--json`/`--csv` output specifically (see
+docs/hunt_migration_field_matrix.md's cs-beacon section and its own
+cross-cutting finding #2 update). `va`/`region_base` (real process
+addresses) become hex strings; `file_offset` (a .dmp BYTE OFFSET, not a
+memory address) and `xor_key` (a one-byte XOR key value, not an
+address/pointer/handle) stay plain JSON integers, per this project's own
+address-vs-offset type rule.
 """
 from dumpex.hunt.cs_beacon import _build_cs_beacon_report
 from dumpex.output.records import HunterRecord, CsBeaconDetails, hex_address

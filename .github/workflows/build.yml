@@ -105,20 +105,35 @@ jobs:
           }
           & .\dist\dumpex.exe --help
 
-      - name: Stage the output-contract schema as a release asset
-        # dumpex.exe never reads this file at runtime (only the test suite
-        # and external --json consumers validate against it), so it isn't
-        # collected into the frozen EXE via --collect-data -- there is
-        # nothing for PyInstaller to bundle it FOR. It's shipped instead as
-        # a plain, separately downloadable file alongside dumpex.exe, so an
+      - name: Stage the output-contract schemas as release assets
+        # dumpex.exe never reads these files at runtime (only the test suite
+        # and external --json consumers validate against them), so they
+        # aren't collected into the frozen EXE via --collect-data -- there is
+        # nothing for PyInstaller to bundle them FOR. They're shipped instead
+        # as plain, separately downloadable files alongside dumpex.exe, so an
         # EXE-only user (no `pip install dumpex`, no source checkout) can
-        # still get the canonical schema for this release without needing
-        # the wheel. Validated as JSON here so a corrupted/empty file never
-        # ships silently.
+        # still get the current schema for this release without needing the
+        # wheel. Every dumpex-output-v*.schema.json is staged (current v2.4,
+        # the contract every command -- including --hunt -- now produces,
+        # plus the frozen historical v1.1/v2.0/v2.1/v2.2/v2.3 files kept for
+        # validating output produced before each respective schema_version
+        # bump -- see docs/OUTPUT_SCHEMA.md), matching what the wheel already
+        # packages (see scripts/package_smoke.py's own schema-presence
+        # check), rather than a hardcoded single-file list that would need
+        # editing every time a new schema version ships. Each file is
+        # validated as JSON here so a corrupted/empty file never ships
+        # silently.
         shell: pwsh
         run: |
-          python -c "import json; json.load(open('dumpex/schemas/dumpex-output-v1.1.schema.json', encoding='utf-8'))"
-          Copy-Item dumpex/schemas/dumpex-output-v1.1.schema.json dist/dumpex-output-v1.1.schema.json
+          $schemas = Get-ChildItem dumpex/schemas -Filter 'dumpex-output-v*.schema.json'
+          if ($schemas.Count -eq 0) {
+            throw "No dumpex-output-v*.schema.json files found under dumpex/schemas"
+          }
+          foreach ($schema in $schemas) {
+            python -c "import json; json.load(open(r'$($schema.FullName)', encoding='utf-8'))"
+            Copy-Item $schema.FullName "dist/$($schema.Name)"
+          }
+          Write-Host "Staged schemas: $($schemas.Name -join ', ')"
 
       - name: Stage license, source, and dependency notices
         shell: pwsh
@@ -147,7 +162,7 @@ jobs:
 
           New-Item -ItemType Directory -Path $bundleDir | Out-Null
           Copy-Item dist/dumpex.exe $bundleDir/dumpex.exe
-          Copy-Item dist/dumpex-output-v1.1.schema.json $bundleDir/dumpex-output-v1.1.schema.json
+          Copy-Item dist/dumpex-output-v*.schema.json $bundleDir/
           Copy-Item dist/LICENSE $bundleDir/LICENSE
           Copy-Item dist/NOTICE $bundleDir/NOTICE
           Copy-Item dist/THIRD_PARTY_NOTICES $bundleDir/THIRD_PARTY_NOTICES
@@ -176,6 +191,54 @@ jobs:
             -Path "$bundleDir/*" `
             -DestinationPath "dist/$bundleName.zip"
 
+      - name: Verify release bundle contents
+        # Guards against exactly the gap this release process shipped once
+        # before: dumpex.exe, LICENSE/NOTICE/etc, and only the *v1.1* schema
+        # made it into the zip while the CLI itself had already moved every
+        # command (including --hunt) onto v2.4 -- an EXE-only user had no way
+        # to get the schema that actually described their own --json output.
+        # Checked against the built zip itself (not just $bundleDir) so a
+        # Compress-Archive mistake (wrong -Path, wrong destination) would
+        # also be caught here, not just a missing Copy-Item.
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
+        run: |
+          $bundleName = "dumpex-v$env:RELEASE_VERSION-windows-x64"
+          $zipPath = "dist/$bundleName.zip"
+          $extractDir = "dist/verify-$bundleName"
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $extractDir
+
+          $required = @(
+            'dumpex.exe',
+            'dumpex-output-v2.4.schema.json',
+            'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'CREDITS',
+            'BUILD-DEPENDENCIES.txt', 'SOURCE.txt'
+          )
+          $missing = $required | Where-Object { -not (Test-Path (Join-Path $extractDir $_)) }
+          if ($missing) {
+            throw "Release bundle is missing required file(s): $($missing -join ', ')"
+          }
+
+          # Every dumpex-output-v*.schema.json staged into dist/ earlier must
+          # have made it into the bundle too -- not just the current v2.4 one.
+          $stagedSchemas = (Get-ChildItem dist -Filter 'dumpex-output-v*.schema.json').Name
+          $bundledSchemas = (Get-ChildItem $extractDir -Filter 'dumpex-output-v*.schema.json').Name
+          $missingSchemas = $stagedSchemas | Where-Object { $_ -notin $bundledSchemas }
+          if ($missingSchemas) {
+            throw "Release bundle is missing schema file(s): $($missingSchemas -join ', ')"
+          }
+
+          # Every schema file inside the zip must still be valid, parseable
+          # JSON (catches a truncated/corrupted Compress-Archive as well as
+          # a corrupted source file).
+          foreach ($schema in $bundledSchemas) {
+            python -c "import json; json.load(open(r'$(Join-Path $extractDir $schema)', encoding='utf-8'))"
+          }
+
+          Write-Host "Bundle contents verified: $($required -join ', '), $($bundledSchemas -join ', ')"
+          Remove-Item -Recurse -Force $extractDir
+
       - name: Generate SHA-256 checksums
         shell: pwsh
         env:
@@ -203,8 +266,11 @@ jobs:
           body: |
             Windows users should download
             `dumpex-v${{ steps.release_version.outputs.version }}-windows-x64.zip`.
-            It contains the executable, MPL-2.0/source notice, output schema,
+            It contains the executable, MPL-2.0/source notice, output schemas,
             and all collected third-party license files.
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ github.event.inputs.version }}/CHANGELOG.md)
+            for user-facing changes in this release, including output-contract migrations.
 
             Exact source: https://github.com/${{ github.repository }}/tree/${{ github.event.inputs.version }}
           files: |

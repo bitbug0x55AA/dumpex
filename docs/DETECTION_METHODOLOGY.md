@@ -51,7 +51,8 @@ Hunters distinguish three things that are easy to conflate:
 
 - `status`: whether the hunter detected evidence, did not detect it in the
   scanned scope, could not reach a conclusion, or was not evaluated;
-- `coverage_status`: whether the dump supplied all evidence required by that
+- `coverage.status` (`result.data.records[].coverage.status` in `--json`
+  output): whether the dump supplied all evidence required by that
   hunter; and
 - `verdict_level` / `confidence`: how strongly the validated evidence supports
   the interpretation.

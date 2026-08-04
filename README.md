@@ -126,13 +126,13 @@ Do not interpret a single field in isolation:
 | Field | Meaning |
 |---|---|
 | `status` | Whether evidence was detected, not detected in scanned scope, inconclusive, or not evaluated |
-| `coverage_status` | Whether the dump supplied the evidence required by that hunter |
+| `coverage.status` (`result.data.records[].coverage.status` in `--json` output) | Whether the dump supplied the evidence required by that hunter |
 | `verdict_level` | Severity supported by validated evidence |
 | `confidence` | Strength of the interpretation given the available evidence |
 
 Two rules matter most:
 
-1. `DETECTED` with `coverage_status: partial` remains a positive finding.
+1. `DETECTED` with `coverage.status: partial` remains a positive finding.
 2. `NOT_DETECTED_IN_SCANNED_SCOPE` does not prove the behavior was absent from
    the process or host.
 
@@ -164,6 +164,7 @@ integration or archiving a result.
 | [CLI Reference](docs/CLI_REFERENCE.md) | Complete modes, options, and examples |
 | [Detection Methodology](docs/DETECTION_METHODOLOGY.md) | Validation logic, limitations, scoring, and ATT&CK mapping |
 | [Output and Evidence Schema](docs/OUTPUT_SCHEMA.md) | JSON metadata, provenance, formats, and reproducibility |
+| [Changelog](CHANGELOG.md) | User-facing changes between releases, including output-contract migrations |
 | [Contributing](CONTRIBUTING.md) | Development setup, tests, CI, and contribution expectations |
 | [CREDITS](CREDITS) | Research attribution, licenses, and nature of use |
 
