@@ -54,7 +54,7 @@ directly.
 """
 import time
 from minidump.minidumpfile import MinidumpFile
-from dumpex.rules_pkg.loader import get_rules
+from dumpex.rules_pkg.loader import get_rules, get_rules_source_info
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, get_thread_contexts, get_handles, read_region)
 from dumpex.hunt._ui import _print_hunt_header
@@ -163,6 +163,24 @@ def _build_pipe_report(mf: MinidumpFile):
     _r                    = get_rules(announce=False)
     KNOWN_FRAMEWORK_PIPES = _r["framework_pipes"]
     C2_PAT                = _r["pipe_c2_context_patterns"]
+    # The loaded ruleset's own CONTENT hash -- the one real, non-fabricated
+    # rule_version this hunter can attach to a
+    # Finding.check == "pipe.handle_framework_match" detection, since that
+    # specific check's evidence IS a framework_pipes entry from this exact
+    # ruleset. Deliberately NOT rules.yaml's own top-level "version:"
+    # field: that is an explicit FORMAT/schema version ("bump when schema
+    # changes", per rules.yaml's own comment), not a content version --
+    # editing a pipe pattern or a MITRE mapping leaves it unchanged, so
+    # using it here would silently report the same rule_version for
+    # materially different detection content (a prior version of this
+    # code did exactly that). "sha256" is None only for the packaged
+    # built-in defaults (no real file was loaded at all) -- rule_version
+    # correctly stays None there too, rather than reporting a version for
+    # a ruleset that was never actually read from disk. get_rules() was
+    # just called above, so get_rules_source_info() is guaranteed
+    # populated here.
+    _rules_source = get_rules_source_info()
+    RULE_VERSION  = _rules_source["sha256"] if _rules_source else None
 
     # `read_region` is looked up HERE (this module's own re-exported,
     # still-monkeypatchable global) rather than imported separately inside
@@ -202,7 +220,7 @@ def _build_pipe_report(mf: MinidumpFile):
                                   regions, KNOWN_FRAMEWORK_PIPES, PIPE_CONTEXT_DISTANCE)
 
     report = aggregate.build_report(mf, hscan, pname_scan, corr, mem_info_available,
-                                     handle_stream_available)
+                                     handle_stream_available, rule_version=RULE_VERSION)
     report.coverage_report = _pipe_coverage_report(
         mem_info_available, handle_stream_available, coverage_counts, c2_budget, pipe_name_budget)
     return report

@@ -29,7 +29,7 @@ from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # All eleven commands are migrated onto the v2 envelope (see dumpex/output/
-# and dumpex-output-v2.4.schema.json); --diff produces a kind="comparison"
+# and dumpex-output-v2.5.schema.json); --diff produces a kind="comparison"
 # result via V2Output.from_evidence() (two dumps), --report produces a
 # kind="report" result (one TriageCardRecord per triage card -- see
 # dumpex.commands.report's own module docstring), --hunt produces a

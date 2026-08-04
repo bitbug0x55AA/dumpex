@@ -176,52 +176,80 @@
     {
       "check": "injection.rwx_regions",
       "confidence": "medium",
+      "evidence_refs": [],
       "facts": [
         "VA=0x7ff700000000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
       ],
+      "id": "finding-437fdd86044e5e1370ff119b69e0bda9",
       "inference": "1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct allocation(s).",
+      "iocs": [],
       "limitations": [
         "Does not by itself distinguish injection from JIT/legitimate self-modifying-code use cases."
       ],
       "rationale": "RWX is a directly-observed page protection flag, not a heuristic guess \u2014 but RWX alone is routinely used by JITs, debuggers, and some legitimate packers, so it is a lead, not proof, until corroborated by a validated PE header and/or live execution in the same allocation.",
-      "tag": "lead"
+      "rule_id": "injection.rwx_regions",
+      "rule_version": null,
+      "severity": "medium",
+      "tag": "lead",
+      "technique_ids": []
     },
     {
       "check": "injection.hidden_pe_validated",
       "confidence": "medium",
+      "evidence_refs": [],
       "facts": [
         "VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  |  PE header VALID: machine=AMD64 pe32plus=True sections=1 entrypoint_rva=0x1000 declared_image_base=0x140000000"
       ],
+      "id": "finding-aae112b40521d5d1a2b5b85a2c5b2b20",
       "inference": "1 region(s) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.",
+      "iocs": [],
       "limitations": [
         "Header validation read is capped at 4096 bytes; a section table extending past that reports as invalid rather than being partially trusted."
       ],
       "rationale": "Passing full structural PE validation (not just an 'MZ' prefix) rules out coincidental bytes and most decoys, but a valid header outside the module list can also occur from a manually-mapped but otherwise benign in-process library (e.g. some anti-cheat/DRM loaders) \u2014 confidence rises to HIGH only when a thread's live RIP/EIP actually executes inside the same allocation.",
-      "tag": "lead"
+      "rule_id": "injection.hidden_pe_validated",
+      "rule_version": null,
+      "severity": "medium",
+      "tag": "lead",
+      "technique_ids": []
     },
     {
       "check": "injection.unbacked_thread_startaddress",
       "confidence": "low",
+      "evidence_refs": [],
       "facts": [
         "TID=0x1 StartAddress=0x7ff700002000"
       ],
+      "id": "finding-5a9d7929555fed553dcfbd655e770436",
       "inference": "1 thread(s) began execution at an address not covered by any known module.",
+      "iocs": [],
       "limitations": [],
       "rationale": "StartAddress records where a thread BEGAN, not where it is executing now \u2014 a thread can legitimately start inside unbacked/JIT memory (e.g. a thread pool worker routine passed as a raw function pointer into private memory) and still be benign. Current RIP/EIP (below, when available) is the stronger signal for what a thread is actually doing.",
-      "tag": "lead"
+      "rule_id": "injection.unbacked_thread_startaddress",
+      "rule_version": null,
+      "severity": "low",
+      "tag": "lead",
+      "technique_ids": []
     },
     {
       "check": "injection.allocation_correlation",
       "confidence": "high",
+      "evidence_refs": [],
       "facts": [
         "TID=0x1 RIP=0x7ff700002000 -> VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  [FULL: RWX+validated-PE]"
       ],
+      "id": "finding-7d5a0612cbfc8286e35b5ad89bc4156f",
       "inference": "1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.",
+      "iocs": [],
       "limitations": [
         "RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the dump was captured would not appear here."
       ],
       "rationale": "This is the strongest evidence this hunter can produce: the process is, at the moment of the dump, actively running code from an allocation with no legitimate module backing and a concealed PE image.",
-      "tag": "detection"
+      "rule_id": "injection.allocation_correlation",
+      "rule_version": null,
+      "severity": "critical",
+      "tag": "detection",
+      "technique_ids": []
     }
   ],
   "hunter": "injection",

@@ -1,19 +1,24 @@
 """
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
-v2 envelopes built around them) against dumpex-output-v2.4.schema.json --
-the PR3 "Schema v2.4" migration step (see docs/hunt_migration_field_matrix.md
-and the migration plan's own PR3 description). Built directly from
+v2 envelopes built around them) against dumpex-output-v2.5.schema.json --
+originally the PR3 "Schema v2.4" hunt migration step (see
+docs/hunt_migration_field_matrix.md and the migration plan's own PR3
+description), carried forward onto v2.5's extended `finding` $def
+(id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version --
+see dumpex/hunt/_finding.py). Built directly from
 tests/fixtures/hunt_records.py's synthetic HunterRecord fixtures, NOT
 through a real hunter collect_*() pipeline -- only injection's
 collect_injection_record() exists so far; the other six hunters' real
 collector wiring is tracked follow-up work (see
 dumpex/output/records.py's own module-level comment above HUNTERS).
 
-Also confirms dumpex-output-v1.1.schema.json and dumpex-output-v2.3.schema.json
-stay byte-identical and functionally frozen (v2.3 still rejects
-result.kind == "hunt", the same way v2.2 already rejects "report" in
-test_json_schema_v2.py) -- a v2.4 addition must never leak backward into an
-already-shipped schema copy.
+Also confirms dumpex-output-v1.1.schema.json, dumpex-output-v2.3.schema.json,
+and dumpex-output-v2.4.schema.json stay byte-identical and functionally
+frozen (v2.3 still rejects result.kind == "hunt", the same way v2.2
+already rejects "report" in test_json_schema_v2.py; v2.4's own `finding`
+$def still rejects the new v2.5 properties via additionalProperties:
+false) -- a v2.5 addition must never leak backward into an already-
+shipped schema copy.
 """
 import hashlib
 import json
@@ -33,8 +38,22 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def schema():
+    with schema_path("dumpex-output-v2.5.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_4():
     with schema_path("dumpex-output-v2.4.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def hunter_record_validator_v2_4(schema_v2_4):
+    wrapper = {"$schema": schema_v2_4["$schema"], "$ref": "#/$defs/hunterRecord",
+               "$defs": schema_v2_4["$defs"]}
+    jsonschema.Draft202012Validator.check_schema(wrapper)
+    return jsonschema.Draft202012Validator(wrapper)
 
 
 @pytest.fixture(scope="module")
@@ -57,10 +76,35 @@ def hunt_summary_validator(schema):
     return jsonschema.Draft202012Validator(wrapper)
 
 
+def test_v2_4_finding_shape_is_rejected_by_the_frozen_v2_4_schema(hunter_record_validator_v2_4):
+    # dumpex-output-v2.4.schema.json's own `finding` $def predates
+    # id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version
+    # entirely -- proves the frozen historical schema was never silently
+    # updated to accept a real, current Finding.to_dict() shape (same
+    # precedent as test_json_schema_v2.py's "kind" freeze tests, applied
+    # to a nested $def instead of the root result.kind).
+    d = injection_detected().to_dict()
+    errors = list(hunter_record_validator_v2_4.iter_errors(d))
+    assert errors
+
+
+def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schema(
+        hunter_record_validator_v2_4):
+    # The frozen historical schema must keep validating a real v2.4-era
+    # finding dict -- i.e. the old shape minus the seven v2.5 additions.
+    d = injection_detected().to_dict()
+    for f in d["findings"]:
+        for key in ("id", "severity", "technique_ids", "evidence_refs", "iocs",
+                    "rule_id", "rule_version"):
+            del f[key]
+    errors = list(hunter_record_validator_v2_4.iter_errors(d))
+    assert errors == []
+
+
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):
     return {
         "meta": {
-            "schema_version": "2.4",
+            "schema_version": "2.5",
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01Z",
                           "duration_seconds": 1.0, "command": command, "options": options or {}},

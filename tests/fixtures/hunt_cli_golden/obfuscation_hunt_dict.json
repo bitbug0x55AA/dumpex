@@ -140,28 +140,42 @@
     {
       "check": "obfuscation.base64_observation",
       "confidence": "low",
+      "evidence_refs": [],
       "facts": [
         "VA=0x300000 decoded_type=pe decoded_size=1184"
       ],
+      "id": "finding-a1e0447339e92f07fc1d489d23421e04",
       "inference": "1 region(s) contain data that decodes cleanly as Base64.",
+      "iocs": [],
       "limitations": [
         "IOC-style strings inside decoded content are a lead, not proof \u2014 see obfuscation.base64_observation facts / stomping-style string caveats."
       ],
       "rationale": "Base64 is a generic, ubiquitous encoding used constantly by benign software (certificates, config blobs, telemetry, embedded assets) \u2014 its mere presence carries no information about intent. Reported as an observation and never drives the obfuscation score by itself; only a decoded PE header or shellcode bootstrap pattern (see obfuscation.structural_payload) does.",
-      "tag": "observation"
+      "rule_id": "obfuscation.base64_observation",
+      "rule_version": null,
+      "severity": "info",
+      "tag": "observation",
+      "technique_ids": []
     },
     {
       "check": "obfuscation.structural_payload",
       "confidence": "high",
+      "evidence_refs": [],
       "facts": [
         "type=PE encoding=base64 container_VA=0x300000 module_status=UNREGISTERED decoded_size=1184"
       ],
+      "id": "finding-e17919d506ed29f5a840bb0df97ae357",
       "inference": "Decoded/decompressed content from one or more obfuscation layers structurally validates as a PE image.",
+      "iocs": [],
       "limitations": [
         "Structural validation reduces but does not eliminate false positives from adversarially-crafted or coincidental byte sequences in high-entropy data."
       ],
       "rationale": "Unlike raw entropy/Base64/GZIP presence, this checks WHAT the decoded bytes actually are: full PE structural validation (DOS/COFF/optional header + complete section table). Encoding was only the delivery mechanism here \u2014 the payload itself is the evidence.",
-      "tag": "detection"
+      "rule_id": "obfuscation.structural_payload",
+      "rule_version": null,
+      "severity": "critical",
+      "tag": "detection",
+      "technique_ids": []
     }
   ],
   "hunter": "obfuscation",

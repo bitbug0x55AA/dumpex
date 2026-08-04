@@ -29,7 +29,7 @@ stomping" result actually checked anything.
 
 ## The four fields that matter
 
-`--json`/`--csv` wrap every hunter's result in dumpex's shared v2.4
+`--json`/`--csv` wrap every hunter's result in dumpex's shared v2.5
 envelope: `result.kind` is `"hunt"`, and each hunter you selected gets
 its own entry in `result.data.records[]` (`hunter` names which TTP —
 `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, or
@@ -123,6 +123,49 @@ unverified) from a `detection` (structurally corroborated; the only tag
 that can drive a nonzero score). A hunter's overall `confidence` field is
 the highest confidence among its own `detection`-tagged findings — it is
 never inflated by a hunter's own `score`/`max_score` arithmetic.
+
+Each finding also carries seven fields for feeding a SIEM/case-management
+pipeline directly, without hand-mapping this shape onto a generic alert
+first:
+
+- `id` — deterministic (a 128-bit hash covering check, rule id, rule
+  version, tag, confidence, technique ids, evidence refs, iocs, and
+  facts, unambiguously encoded so two findings that differ in ANY of
+  those — not just facts — get different ids; 128 bits of SHA-256 is
+  collision-resistant for genuinely different content, not an absolute
+  "never collides" guarantee), so re-running `--hunt` against the same
+  dump reproduces the same id — safe to use as a re-scan dedup key
+  for THAT dump. It is content-only, not evidence-scoped: two dumps that
+  happen to produce byte-identical hashed fields (check, rule id, rule
+  version, tag, confidence, technique ids, evidence refs, iocs, and
+  facts — e.g. the same malware family hitting the same address on two
+  different hosts, with the same rules.yaml in effect) get the SAME id
+  on purpose. If you need a key that's unique across dumps/cases, combine it with
+  `meta.evidence[].sha256` from the same document (e.g.
+  `sha256(evidence_sha256 + finding_id)`) — do not treat `id` alone as
+  globally unique.
+- `severity` — `info` / `low` / `medium` / `high` / `critical`, always
+  derived from `tag` + `confidence` — a producer cannot set it
+  independently, and the schema itself pins the exact mapping (see
+  `dumpex-output-v2.5.schema.json`'s own `finding.allOf`): every
+  `observation` is `info`; every `lead` tops out at `medium`; only a
+  `detection` at `confidence: high` reaches `critical`.
+- `technique_ids` — MITRE ATT&CK technique/sub-technique IDs (e.g.
+  `"T1559.001"`), populated only where a hunter has an actual mapping to
+  attach (today: `pipe`'s own `rules.yaml`-driven framework matches) —
+  empty, not guessed, everywhere else.
+- `evidence_refs` — structured pointers (e.g. a region or thread
+  reference) into that hunter's own `details` object, for cross-
+  referencing this finding against the fuller evidence there.
+- `iocs` — indicator-of-compromise values (an IP, a beacon pipe name)
+  this finding's facts embed, when a hunter has extracted one.
+- `rule_id` / `rule_version` — detection-logic provenance. `rule_id`
+  defaults to `check`; `rule_version` stays `null` unless a real
+  versioned rule source produced this specific finding — for a
+  `rules.yaml`-driven finding (today: `pipe`'s framework matches) this is
+  that ruleset's own *content* sha256 (`meta.rules.sha256`), never
+  `rules.yaml`'s own top-level `version:` field, which is a format/schema
+  version that doesn't change when a pattern or MITRE mapping does.
 
 ## Per-hunter evidence requirements and limits
 
@@ -271,8 +314,8 @@ string in its own place instead.
 
 ### Sanitized `--json` examples
 
-Both examples below are complete, valid v2.4 documents — each validates
-as-is against `dumpex-output-v2.4.schema.json` (see
+Both examples below are complete, valid v2.5 documents — each validates
+as-is against `dumpex-output-v2.5.schema.json` (see
 `tests/integration/test_soc_quickstart_json_examples.py`, which extracts
 these exact fenced blocks and validates them in CI, so this doc can't
 silently drift out of sync with the schema again). A real `--hunt all`
@@ -291,7 +334,7 @@ with `summary.hunter_count: 1` and one matching record. Every command's
 ```json
 {
   "meta": {
-    "schema_version": "2.4",
+    "schema_version": "2.5",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:12:01Z",
@@ -341,13 +384,20 @@ with `summary.hunter_count: 1` and one matching record. Every command's
           "coverage": { "status": "complete", "reasons": [] },
           "findings": [
             {
+              "id": "finding-7a60fc5e1e2838a5ed86a9032de79892",
               "check": "pipe.corroboration",
               "tag": "detection",
+              "severity": "critical",
               "confidence": "high",
               "facts": ["handle=0x88 pipe=\\Device\\NamedPipe\\msagent_1337 rip_hit=true"],
               "inference": "OS-confirmed pipe handle corroborated by both nearby C2-context and live RIP execution.",
               "rationale": "Handle object plus proximate, live execution — the strongest signal this hunter produces.",
-              "limitations": []
+              "limitations": [],
+              "technique_ids": [],
+              "evidence_refs": [],
+              "iocs": [],
+              "rule_id": "pipe.corroboration",
+              "rule_version": null
             }
           ],
           "details": {
@@ -382,7 +432,7 @@ hunter's own `coverage.status`) is what makes this run exit `0` — see
 ```json
 {
   "meta": {
-    "schema_version": "2.4",
+    "schema_version": "2.5",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:14:01Z",

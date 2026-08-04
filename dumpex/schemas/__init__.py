@@ -15,7 +15,7 @@ from importlib import resources
 # version string; schema_path()'s own default stays pinned to v1.1 for
 # backward compatibility with existing callers (see its own docstring) --
 # it is NOT updated in lockstep with this constant.
-CURRENT_SCHEMA = "dumpex-output-v2.4.schema.json"
+CURRENT_SCHEMA = "dumpex-output-v2.5.schema.json"
 
 
 def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
@@ -27,22 +27,25 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
     StructuredOutput -- the legacy v1.1-shaped writer -- against it) --
     this default is deliberately NOT changed to track the current schema;
     use CURRENT_SCHEMA/current_schema_path() for that instead. Pass
-    "dumpex-output-v2.4.schema.json" (or CURRENT_SCHEMA) for the current
+    "dumpex-output-v2.5.schema.json" (or CURRENT_SCHEMA) for the current
     v2 contract every command, including --hunt, now produces, or
-    "dumpex-output-v2.3.schema.json"/"dumpex-output-v2.2.schema.json"/
-    "dumpex-output-v2.1.schema.json"/"dumpex-output-v2.0.schema.json" for
-    the frozen historical v2.3/v2.2/v2.1/v2.0 schemas (still valid for
-    validating output produced before schema_version 2.4/2.3/2.2/2.1
-    respectively -- v2.3 does NOT accept result.kind == "hunt": a closed
-    enum's already-shipped copy must never start silently accepting a
-    value it didn't originally define)."""
+    "dumpex-output-v2.4.schema.json"/"dumpex-output-v2.3.schema.json"/
+    "dumpex-output-v2.2.schema.json"/"dumpex-output-v2.1.schema.json"/
+    "dumpex-output-v2.0.schema.json" for the frozen historical v2.4/v2.3/
+    v2.2/v2.1/v2.0 schemas (still valid for validating output produced
+    before schema_version 2.5/2.4/2.3/2.2/2.1 respectively -- v2.4's own
+    `finding` $def does NOT accept the id/severity/technique_ids/
+    evidence_refs/iocs/rule_id/rule_version properties v2.5 adds, and
+    v2.3 does NOT accept result.kind == "hunt" at all: a closed enum's/
+    object's already-shipped copy must never start silently accepting a
+    value or field it didn't originally define)."""
     return resources.as_file(
         resources.files(__name__).joinpath(filename)
     )
 
 
 def current_schema_path():
-    """Path to CURRENT_SCHEMA (the v2.4 contract every command, including
+    """Path to CURRENT_SCHEMA (the v2.5 contract every command, including
     --hunt, now produces) -- usable as a context manager, same as
     schema_path(). Prefer this over schema_path() with no arguments, whose
     default stays pinned to v1.1 for backward compatibility (see its own

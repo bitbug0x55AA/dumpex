@@ -143,55 +143,85 @@
     {
       "check": "pipe.open_handles",
       "confidence": "medium",
+      "evidence_refs": [],
       "facts": [
         "Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 GrantedAccess=0x12019f  [framework=Cobalt Strike]"
       ],
+      "id": "finding-af8ad550e6ac6d89c86651d87cc5324e",
       "inference": "Process holds 1 open handle(s) to named pipe object(s), per HandleDataStream.",
+      "iocs": [],
       "limitations": [
         "Presence of a pipe handle is not inherently suspicious."
       ],
       "rationale": "HandleDataStream is the OS's own record of what this process actually has open \u2014 far stronger than a bare string match, but having ANY pipe handle open is completely ordinary for most Windows processes (IPC, RPC, print spooler, etc.); only a handle whose name matches a known C2/lateral-movement framework convention, or one corroborated by nearby C2 context / active execution, is treated as a detection.",
-      "tag": "observation"
+      "rule_id": "pipe.open_handles",
+      "rule_version": null,
+      "severity": "info",
+      "tag": "observation",
+      "technique_ids": []
     },
     {
       "check": "pipe.handle_framework_match",
       "confidence": "medium",
+      "evidence_refs": [],
       "facts": [
         "Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 framework=Cobalt Strike technique=SMB Beacon peer-to-peer pipe \u2014 default msagent pipe name mitre=T1090.001"
       ],
+      "id": "finding-9deaac53d8f1c37de8fd2fe88d35b8db",
       "inference": "1 open pipe handle(s) match a known C2/lateral-movement framework naming convention.",
+      "iocs": [],
       "limitations": [
         "Framework pipe-name conventions can be renamed/customized by an operator; absence of a match does not mean absence of C2."
       ],
       "rationale": "An OS-confirmed open handle (not just a string sitting in memory) whose name matches a specific, narrow framework convention (e.g. Cobalt Strike's msagent_/postex_ or PsExec's psexesvc) is meaningfully unlikely to be coincidental \u2014 raised to HIGH only when further corroborated (see pipe.corroboration below).",
-      "tag": "detection"
+      "rule_id": "pipe.handle_framework_match",
+      "rule_version": "f4b1140fc46068211ab4090daf19f62dd7e135507b0730cc294c0ca0ce32b7dd",
+      "severity": "high",
+      "tag": "detection",
+      "technique_ids": [
+        "T1090.001"
+      ]
     },
     {
       "check": "pipe.string_scan_lead",
       "confidence": "low",
+      "evidence_refs": [],
       "facts": [
         "VA=0x1230101 file_offset=(not captured) name='\\\\.\\\\pipe\\\\msagent_1337' region_type=MEM_PRIVATE"
       ],
+      "id": "finding-5004268ea4f881140e7ac5f6d1725d99",
       "inference": "1 occurrence(s) of a '\\pipe\\' name found in non-system-DLL memory via byte-pattern scan.",
+      "iocs": [],
       "limitations": [
         "No corresponding open handle found for this exact name."
       ],
       "rationale": "A string match proves only that these bytes exist somewhere in memory \u2014 not that any handle was ever opened by that name, nor that the name isn't leftover/freed heap data or an unrelated buffer. Reported as a lead for the analyst and to locate regions for C2-context/execution correlation; does NOT contribute to the pipe score on its own.",
-      "tag": "lead"
+      "rule_id": "pipe.string_scan_lead",
+      "rule_version": null,
+      "severity": "low",
+      "tag": "lead",
+      "technique_ids": []
     },
     {
       "check": "pipe.corroboration",
       "confidence": "high",
+      "evidence_refs": [],
       "facts": [
         "Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 pipe_va=0x1230101  c2_va=0x1230116 c2_match='http://' distance=0x15 same_page=True  live_rip=TID:0x999@RIP=0x1230105 distance=0x4 same_page=True"
       ],
+      "id": "finding-1b886abb20f8d6b8ace9f62653810205",
       "inference": "1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution within \u00b14096 bytes of a matching pipe-name string's own address.",
+      "iocs": [],
       "limitations": [
         "Name correlation between a handle's ObjectName and a string scan hit uses exact match on the canonicalized pipe name (prefix stripped, casefolded) \u2014 still not a cryptographic guarantee both refer to the identical kernel object if the process has multiple same-named pipe instances.",
         "Proximity window is \u00b14096 bytes, not a proof of logical association \u2014 an unrelated string or thread could coincidentally fall within that window in a dense region."
       ],
       "rationale": "Combines an OS-confirmed open handle with BOTH independent memory signals (C2 artifacts AND live execution), both within 4096 bytes of that pipe's name string \u2014 the strongest correlation this hunter can produce.",
-      "tag": "detection"
+      "rule_id": "pipe.corroboration",
+      "rule_version": null,
+      "severity": "critical",
+      "tag": "detection",
+      "technique_ids": []
     }
   ],
   "hunter": "pipe",

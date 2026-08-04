@@ -115,7 +115,7 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
         "  CLEAN — no suspicious indicators found\n\n\n"
     )
     assert exit_code == 0
-    assert doc["meta"]["schema_version"] == "2.4"
+    assert doc["meta"]["schema_version"] == "2.5"
     assert doc["result"]["kind"] == "report"
     assert doc["result"]["coverage"]["status"] == "complete"
     assert len(doc["result"]["data"]["records"]) == 1

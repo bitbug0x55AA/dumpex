@@ -14,6 +14,7 @@ itself.
 import dataclasses
 
 from dumpex.hunt.summary import build_hunt_summary
+from dumpex.hunt._finding import Finding, TAG_LEAD, CONFIDENCE_MEDIUM
 from dumpex.output.coverage import CoverageReport, CoverageStatus
 from dumpex.output.records import (
     HunterRecord, InjectionDetails, HollowingDetails, StompingDetails, PipeDetails,
@@ -45,9 +46,11 @@ def invalid_pe_hit(r=None):
 
 
 def a_finding(check="injection.rwx_regions"):
-    return {"check": check, "tag": "lead", "confidence": "medium",
-            "facts": ["VA=0x0000000000000001"], "inference": "x", "rationale": "y",
-            "limitations": []}
+    # Built through the real Finding dataclass (not a hand-typed dict) so
+    # this fixture never drifts from Finding.to_dict()'s own shape -- see
+    # dumpex/hunt/_finding.py for id/severity's auto-derivation.
+    return Finding(check=check, facts=["VA=0x0000000000000001"], inference="x",
+                    confidence=CONFIDENCE_MEDIUM, rationale="y", tag=TAG_LEAD).to_dict()
 
 
 def coverage(status=CoverageStatus.COMPLETE, sources=None, limitations=None):

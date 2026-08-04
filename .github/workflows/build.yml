@@ -113,9 +113,9 @@ jobs:
         # as plain, separately downloadable files alongside dumpex.exe, so an
         # EXE-only user (no `pip install dumpex`, no source checkout) can
         # still get the current schema for this release without needing the
-        # wheel. Every dumpex-output-v*.schema.json is staged (current v2.4,
+        # wheel. Every dumpex-output-v*.schema.json is staged (current v2.5,
         # the contract every command -- including --hunt -- now produces,
-        # plus the frozen historical v1.1/v2.0/v2.1/v2.2/v2.3 files kept for
+        # plus the frozen historical v1.1/v2.0/v2.1/v2.2/v2.3/v2.4 files kept for
         # validating output produced before each respective schema_version
         # bump -- see docs/OUTPUT_SCHEMA.md), matching what the wheel already
         # packages (see scripts/package_smoke.py's own schema-presence
@@ -195,7 +195,7 @@ jobs:
         # Guards against exactly the gap this release process shipped once
         # before: dumpex.exe, LICENSE/NOTICE/etc, and only the *v1.1* schema
         # made it into the zip while the CLI itself had already moved every
-        # command (including --hunt) onto v2.4 -- an EXE-only user had no way
+        # command (including --hunt) onto v2.5 -- an EXE-only user had no way
         # to get the schema that actually described their own --json output.
         # Checked against the built zip itself (not just $bundleDir) so a
         # Compress-Archive mistake (wrong -Path, wrong destination) would
@@ -211,7 +211,7 @@ jobs:
 
           $required = @(
             'dumpex.exe',
-            'dumpex-output-v2.4.schema.json',
+            'dumpex-output-v2.5.schema.json',
             'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'CREDITS',
             'BUILD-DEPENDENCIES.txt', 'SOURCE.txt'
           )
@@ -221,7 +221,7 @@ jobs:
           }
 
           # Every dumpex-output-v*.schema.json staged into dist/ earlier must
-          # have made it into the bundle too -- not just the current v2.4 one.
+          # have made it into the bundle too -- not just the current v2.5 one.
           $stagedSchemas = (Get-ChildItem dist -Filter 'dumpex-output-v*.schema.json').Name
           $bundledSchemas = (Get-ChildItem $extractDir -Filter 'dumpex-output-v*.schema.json').Name
           $missingSchemas = $stagedSchemas | Where-Object { $_ -notin $bundledSchemas }

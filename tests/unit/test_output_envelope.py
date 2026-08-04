@@ -32,7 +32,7 @@ def _meta(tmp_path, **overrides):
 
 def test_meta_evidence_is_a_single_element_array(tmp_path):
     meta = _meta(tmp_path)
-    assert meta["schema_version"] == SCHEMA_VERSION == "2.4"
+    assert meta["schema_version"] == SCHEMA_VERSION == "2.5"
     assert isinstance(meta["evidence"], list)
     assert len(meta["evidence"]) == 1
     entry = meta["evidence"][0]

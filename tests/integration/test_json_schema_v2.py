@@ -1,21 +1,23 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.4.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.4") for each of the six
+dumpex/schemas/dumpex-output-v2.5.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.5") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
 hand-written fixture JSON, so a shape change in any of them is caught
 here. dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
-dumpex-output-v2.2.schema.json, and dumpex-output-v2.3.schema.json (the
-frozen historical shapes) are also exercised directly (see the "schema
-version history" section below) to prove each still validates a genuine
-document from its own era and still rejects a `result.kind` it was never
-updated to know about -- v2.4 is a strict superset of v2.3 (same $defs
-for every kind that already existed; it only adds `result.kind ==
-"hunt"` and meta.rules/meta.yara_rules), so every real document that
-validated against v2.3 continues to validate against v2.4 unchanged,
-just carrying the new version label.
+dumpex-output-v2.2.schema.json, dumpex-output-v2.3.schema.json, and
+dumpex-output-v2.4.schema.json (the frozen historical shapes) are also
+exercised directly (see the "schema version history" section below) to
+prove each still validates a genuine document from its own era and
+still rejects a `result.kind` it was never updated to know about --
+v2.5 is a strict superset of v2.4 for these six recon-command kinds
+(v2.5's only actual change is extending the hunt `finding` $def with
+id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version --
+see test_json_schema_v2_5_hunt.py for that), so every real document
+that validated against v2.4 continues to validate against v2.5
+unchanged, just carrying the new version label.
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -51,8 +53,20 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
+    with schema_path("dumpex-output-v2.5.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_4():
     with schema_path("dumpex-output-v2.4.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_4(schema_v2_4):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_4)
+    return jsonschema.Draft202012Validator(schema_v2_4)
 
 
 @pytest.fixture(scope="module")
@@ -317,7 +331,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.4",
+            "schema_version": "2.5",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -1066,6 +1080,17 @@ def test_a_genuine_v2_3_era_report_document_still_validates_against_the_v2_3_sch
     doc = _minimal_valid_doc(kind="modules")
     doc["meta"]["schema_version"] = "2.3"
     assert validator_v2_3.is_valid(doc)
+
+
+def test_a_genuine_v2_4_era_document_still_validates_against_the_v2_4_schema(validator_v2_4):
+    # v2.5's only actual change is the hunt `finding` $def (see
+    # test_json_schema_v2_5_hunt.py) -- no six-recon-command shape
+    # changed between v2.4 and v2.5, so a v2.4-era document of any of
+    # those kinds must keep validating against the frozen v2.4 schema
+    # unchanged.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.4"
+    assert validator_v2_4.is_valid(doc)
 
 
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):

@@ -25,12 +25,13 @@ promise. Automation must use `--json`, never scrape `--txt`.
 ## One JSON contract
 
 Every command now shares a single JSON contract. `--hunt` was the last
-holdout on the older v1.1 contract; it has migrated onto v2.4 alongside
-the other ten commands:
+holdout on the older v1.1 contract; it has since migrated onto v2, and
+the whole v2 envelope has since moved onto v2.5:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.4 (current) | [`dumpex-output-v2.4.schema.json`](../dumpex/schemas/dumpex-output-v2.4.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.5 (current) | [`dumpex-output-v2.5.schema.json`](../dumpex/schemas/dumpex-output-v2.5.schema.json) |
+| — (historical) | v2.4 | [`dumpex-output-v2.4.schema.json`](../dumpex/schemas/dumpex-output-v2.4.schema.json) — frozen, kept only to validate output produced before `schema_version 2.5`; no command emits this anymore |
 | — (historical) | v2.3 | [`dumpex-output-v2.3.schema.json`](../dumpex/schemas/dumpex-output-v2.3.schema.json) — frozen, kept only to validate output produced before `schema_version 2.4`; no command emits this anymore |
 | — (historical) | v2.2 | [`dumpex-output-v2.2.schema.json`](../dumpex/schemas/dumpex-output-v2.2.schema.json) — frozen, kept only to validate output produced before `schema_version 2.3`; no command emits this anymore |
 | — (historical) | v2.1 | [`dumpex-output-v2.1.schema.json`](../dumpex/schemas/dumpex-output-v2.1.schema.json) — frozen, kept only to validate output produced before `schema_version 2.2`; no command emits this anymore |
@@ -41,23 +42,28 @@ the other ten commands:
 and `"strings"` values, then from `"2.2"` to `"2.3"` when it gained `"report"`,
 then from `"2.3"` to `"2.4"` when it gained `"hunt"` (a `result.kind` value
 now produced by `--hunt`, the last command to switch its CLI wiring onto
-the v2 envelope; see "Hunt records" below for that record shape) (see
-"v2 structured output" below) — a
-new value on an existing closed enum always bumps the version per this
+the v2 envelope; see "Hunt records" below for that record shape), then from
+`"2.4"` to `"2.5"` when `hunterRecord.findings[]`'s own `finding` $def
+gained seven new properties (`id`/`severity`/`technique_ids`/
+`evidence_refs`/`iocs`/`rule_id`/`rule_version` — see "Hunt records" below)
+(see "v2 structured output" below) — a
+new value on an existing closed enum, or a new field on an already-closed
+(`additionalProperties: false`) object, always bumps the version per this
 document's own versioning policy, even though an already-migrated
-command's own output is otherwise unaffected (the `"report"`/`"hunt"`
-additions specifically must NOT be folded into `dumpex-output-
-v2.2.schema.json`/`v2.3.schema.json` in place: those files were already
-shipped/used by earlier-migrated commands' output before `"report"`/
-`"hunt"` existed, so they stay byte-frozen — each addition gets its own
-new schema_version instead). `dumpex-output-
-v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`
+command's own output is otherwise unaffected (the `"report"`/`"hunt"`/
+`finding`-extension additions specifically must NOT be folded into
+`dumpex-output-v2.2.schema.json`/`v2.3.schema.json`/`v2.4.schema.json` in
+place: those files were already shipped/used by earlier-migrated
+commands' output before each addition existed, so they stay byte-frozen —
+each addition gets its own new schema_version instead). `dumpex-output-
+v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`/
+`v2.4.schema.json`
 stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`/`v2.3`) for validating output captured before each respective
+`v2.2`/`v2.3`/`v2.4`) for validating output captured before each respective
 change; none is deleted or overwritten, following the same precedent
 v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
-v2.4 contract.
+v2.5 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -81,7 +87,7 @@ commands never produced one, so their JSON, despite stamping
 it claimed to satisfy. v2 was built as a genuinely separate,
 self-consistent contract for those six commands rather than a patch to
 v1.1's `hunt`-shaped root. `--hunt` was the last command still on v1.1;
-it has since migrated onto v2.4 as well (see "Hunt records" below), so no
+it has since migrated onto v2 as well (see "Hunt records" below), so no
 command produces the v1.1 contract anymore. The rest of this section
 describes v1.1 for historical/reference purposes only — see "v2
 structured output" below for the current contract every command,
@@ -195,7 +201,7 @@ basenames.
 ## Hunt result semantics (v1.1 field names — historical)
 
 Each hunter reported its findings and decision fields inside the v1.1
-`hunt` object using the field names below. Under the current v2.4
+`hunt` object using the field names below. Under the current v2.5
 contract these same concepts live on `HunterRecord` — see "Hunt records"
 below for the `status`/`coverage.status`/`verdict_level`/`confidence`
 mapping `--hunt` now uses. The important decision fields were:
@@ -232,7 +238,7 @@ still validates each hunter's internal result dict (all seven hunters, both
 typical and edge-case verdicts) against this file on every test run,
 including the negative cases it must reject — this is legacy-compatibility
 coverage for the v1.1 shape itself, independent of the CLI's own
-`--hunt --json` output, which is now v2.4 (see "Hunt records" below).
+`--hunt --json` output, which is now v2.5 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -257,14 +263,14 @@ tool validates its own output — only the test suite and external `--json`
 consumers do), so none of them are collected into the frozen executable.
 They are instead uploaded as separate `dumpex-output-v*.schema.json`
 files alongside `dumpex.exe` in the release ZIP — every version currently
-packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`), the same set
-`pip install dumpex` already ships (see "Reproducing a run" below for how
-an installed package reaches these via `importlib.resources`) — so an
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`), the same
+set `pip install dumpex` already ships (see "Reproducing a run" below for
+how an installed package reaches these via `importlib.resources`) — so an
 EXE-only install (no `pip install dumpex`, no source checkout) still has
 a way to get the schema for whatever output it's holding. Current CLI
 output (from any command, including `--hunt`) always validates against
-`dumpex-output-v2.4.schema.json`, the current contract — this section's
-own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.3` are
+`dumpex-output-v2.5.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.4` are
 shipped only to validate output produced by an older dumpex version, not
 anything a current install can produce.
 
@@ -280,6 +286,15 @@ the legacy-compatibility coverage described above:
   keeps object shapes open, so an older cached copy of the schema silently
   ignores a field it doesn't know about; nothing that already validated
   stops validating. Update the schema file and add/extend a schema test.
+- **A new field on an object whose $def already sets
+  `additionalProperties: false`** (e.g. `finding`, or any of the typed
+  record shapes) — **always bump**, even for an optional/nullable field.
+  Unlike the open-object case above, a closed object's already-shipped
+  schema copy rejects ANY key it doesn't list — real output that starts
+  carrying the new field would fail validation against the old schema
+  the moment the field appears, not just when it's missing. This is what
+  `schema_version 2.4` → `2.5` did to `finding` (see "Hunt records"
+  below).
 - **A new value added to an existing enum-typed field** (`status`,
   `coverage_status`, `verdict_level`, `confidence`, `review_priority`,
   `finding.tag`, …) — **always bump**, even though this feels "additive" from
@@ -316,7 +331,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.4",
+    "schema_version": "2.5",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -782,6 +797,35 @@ when `collect_records` is left at its default, so other, non-CLI callers
 of the v1.1-era dict shape are unaffected. Console output (the per-hunter
 detail and the `--hunt all` summary card) is unchanged — only the
 `--json`/`--csv` output and the exit code changed.
+
+`schema_version 2.5` extends `hunterRecord.findings[]`'s own `finding`
+$def (unchanged since it was introduced in `2.4`) with seven fields that
+let one finding stand alone as a normalized SIEM alert, without a
+consumer having to hand-map this shape onto a generic one first — see
+[`dumpex/hunt/_finding.py`](../dumpex/hunt/_finding.py)'s `Finding`
+dataclass for the authoritative field semantics, and "Reading a Finding"
+in [`docs/SOC_QUICKSTART.md`](SOC_QUICKSTART.md) for the analyst-facing
+explanation:
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | string | Deterministic: a 128-bit (32 hex char) SHA-256 prefix of an unambiguous, sort_keys=True JSON encoding of every field that makes one finding materially different from another — `check`/`rule_id`/`rule_version`/`tag`/`confidence`/`technique_ids`(sorted)/`evidence_refs`(sorted)/`iocs`(sorted)/`facts` — never a bare delimiter-joined string (which would let two DIFFERENT fact lists collide onto the same id) and never based on facts alone (which would let a finding re-tagged from a lead to a detection, or reissued after a rules.yaml content update, silently keep the SAME id as the finding it superseded). Stable across repeated `--hunt` runs against the same dump. Content-only, NOT evidence-scoped: two different dumps producing byte-identical hashed fields get the same `id` by design. Safe as a re-scan dedup key for one dump; combine with `meta.evidence[].sha256` for a key unique across dumps/cases. |
+| `severity` | `"info"` \| `"low"` \| `"medium"` \| `"high"` \| `"critical"` | Always derived from `tag` + `confidence` (Python: `init=False` on the `Finding` dataclass, so a caller cannot pass a contradictory value; wire: pinned by the `finding.allOf` block in the schema itself, so any producer must follow it too) — see `severity_for()`. |
+| `technique_ids` | array of string | MITRE ATT&CK technique/sub-technique IDs, format-validated (`^T[0-9]{4}(\.[0-9]{3})?$`) and deduplicated. Empty unless the hunter that built this finding has a real mapping to attach (today: `pipe`'s own `rules.yaml`-driven framework matches) — never invented per check. |
+| `evidence_refs` | array of string | Structured pointers into this hunter's own `details` object, distinct from free-text `facts`. |
+| `iocs` | array of string | Indicator-of-compromise values this finding's facts embed, when a hunter has extracted one. |
+| `rule_id` | string | Defaults to `check` when a hunter doesn't set one explicitly — `check` is already this codebase's own stable detection-logic identifier. |
+| `rule_version` | string or null | `null` unless a real versioned rule source produced this finding. For a `rules.yaml`-driven finding (today: `pipe`'s framework matches) this is that ruleset's own *content* SHA-256 (`dumpex.rules_pkg.loader.get_rules_source_info()["sha256"]`, the same value as `meta.rules.sha256`) — never `rules.yaml`'s own top-level `version:` field, which is a FORMAT/schema version ("bump when schema changes") that stays unchanged when a pattern or MITRE mapping is edited. |
+
+This is the first `schema_version` bump that is NOT a new `result.kind`
+enum value — every prior bump (`2.1`→`"comparison"`, `2.2`→`"extract"`/
+`"strings"`, `2.3`→`"report"`, `2.4`→`"hunt"`) added a root-level kind;
+`2.5` instead adds required properties to an already-`additionalProperties:
+false` nested object (`finding`), which the versioning policy above
+already covers under "narrowing/closed-object changes always bump" — see
+that section's own closed-object bullet. `dumpex-output-v2.4.schema.json`
+stays byte-frozen (its own `finding` $def still rejects these seven
+properties), the same precedent every earlier frozen schema file follows.
 
 ## Reproducing a run
 

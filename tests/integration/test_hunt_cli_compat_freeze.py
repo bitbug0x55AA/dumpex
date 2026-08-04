@@ -218,7 +218,7 @@ def test_hunt_injection_detected_full_correlation_cli(monkeypatch, tmp_path):
     # independent dimensions, and this document-level exit code must reflect
     # coverage, not overall detection outcome: EXIT_PARTIAL (3), not 0.
     assert exit_code == cli.EXIT_PARTIAL == 3
-    assert doc["meta"]["schema_version"] == "2.4"
+    assert doc["meta"]["schema_version"] == "2.5"
     assert doc["meta"]["execution"]["command"] == "hunt_injection"
     assert doc["meta"]["execution"]["started_at"] == "2024-01-01T00:00:00Z"
     assert doc["result"]["kind"] == "hunt"

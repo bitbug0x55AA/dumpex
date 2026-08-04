@@ -74,15 +74,22 @@
       {
         "check": "injection.rip_correlation_unavailable",
         "confidence": "low",
+        "evidence_refs": [],
         "facts": [
           "thread_list_stream_present=False"
         ],
+        "id": "finding-415edf5390abccc385b00714343eccd8",
         "inference": "No per-thread CONTEXT (RIP/EIP) could be read from this dump \u2014 live-execution correlation could not run.",
+        "iocs": [],
         "limitations": [
           "Injection score cannot reach HIGH (3) in this run regardless of other signals, since live-execution confirmation is the only path to that tier."
         ],
         "rationale": "Coverage gap, not a negative result: a suspicious allocation with no RIP correlation available cannot be distinguished from one that was checked and found not currently executing.",
-        "tag": "observation"
+        "rule_id": "injection.rip_correlation_unavailable",
+        "rule_version": null,
+        "severity": "info",
+        "tag": "observation",
+        "technique_ids": []
       }
     ],
     "hunter": "injection",
@@ -213,13 +220,20 @@
       {
         "check": "stomping.protection_deviation_lead",
         "confidence": "low",
+        "evidence_refs": [],
         "facts": [
           "0 module(s) checked"
         ],
+        "id": "finding-c5c269b700a207a66efd343cb8224e8b",
         "inference": "No module section declared executable-but-not-writable shows a live protection state outside the normal set.",
+        "iocs": [],
         "limitations": [],
         "rationale": "Absence of a protection anomaly is weak evidence of absence \u2014 stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.",
-        "tag": "observation"
+        "rule_id": "stomping.protection_deviation_lead",
+        "rule_version": null,
+        "severity": "info",
+        "tag": "observation",
+        "technique_ids": []
       }
     ],
     "hunter": "stomping",

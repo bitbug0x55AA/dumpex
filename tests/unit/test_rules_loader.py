@@ -12,6 +12,7 @@ Every test resets configure_rules_source(None) before and after so the
 module-level cache/explicit-path/source-info globals never leak between
 tests regardless of execution order.
 """
+import hashlib
 import json
 import os
 import re
@@ -98,6 +99,56 @@ def test_validate_schema_rejects_framework_pipe_non_string_field():
             {"framework_pipes": [{"pattern": "x", "mitre": 1234}]})
 
 
+def test_validate_schema_rejects_malformed_mitre_id():
+    # Review finding: a malformed `mitre` string must be rejected HERE,
+    # at load time -- not left to surface only once this specific
+    # entry's pattern happens to match a pipe name in some dump (which
+    # would abort that hunt run deep inside Finding.__post_init__, and
+    # never surface at all for a pattern that's never actually hit).
+    with pytest.raises(ValueError, match=r"framework_pipes\[0\]\.mitre"):
+        loader._validate_rules_schema(
+            {"framework_pipes": [{"pattern": "evil", "mitre": "not-an-attack-id"}]})
+
+
+def test_validate_schema_rejects_malformed_mitre_id_missing_leading_t():
+    with pytest.raises(ValueError, match=r"framework_pipes\[0\]\.mitre"):
+        loader._validate_rules_schema(
+            {"framework_pipes": [{"pattern": "evil", "mitre": "1055"}]})
+
+
+def test_validate_schema_accepts_empty_mitre_as_no_mapping():
+    # "" (or the key simply absent) means "no ATT&CK mapping for this
+    # entry" -- a legitimate value, not a malformed one.
+    loader._validate_rules_schema({"framework_pipes": [{"pattern": "x", "mitre": ""}]})
+    loader._validate_rules_schema({"framework_pipes": [{"pattern": "x"}]})
+
+
+def test_validate_schema_accepts_valid_mitre_sub_technique_id():
+    loader._validate_rules_schema(
+        {"framework_pipes": [{"pattern": "x", "mitre": "T1559.001"}]})
+
+
+@pytest.mark.parametrize("bad_mitre", ["T1055\n", "T1559.001\n"])
+def test_validate_schema_rejects_mitre_id_with_trailing_newline(bad_mitre):
+    # Review finding: Python's `$` matches just before a trailing
+    # newline, not only at the true end of string -- is_valid_technique_id()
+    # (dumpex.core.mitre) uses fullmatch() specifically to close this, and
+    # this loader must actually reject the value that predicate rejects.
+    with pytest.raises(ValueError, match=r"framework_pipes\[0\]\.mitre"):
+        loader._validate_rules_schema(
+            {"framework_pipes": [{"pattern": "evil", "mitre": bad_mitre}]})
+
+
+def test_packaged_rules_yaml_mitre_ids_are_all_valid():
+    # Regression: the shipped rules.yaml/built-in defaults must themselves
+    # pass the same format check a custom --rules-file is held to.
+    loader.configure_rules_source(None)
+    r = loader.get_rules(announce=False)
+    from dumpex.core.mitre import is_valid_technique_id
+    for _pattern, _framework, _technique, mitre in r["framework_pipes"]:
+        assert not mitre or is_valid_technique_id(mitre), f"invalid packaged mitre id: {mitre!r}"
+
+
 # ── --rules-file (explicit source): fail-closed, never falls back ────────
 
 def test_explicit_rules_file_missing_exits_nonzero(tmp_path):
@@ -136,6 +187,19 @@ def test_explicit_rules_file_invalid_schema_exits_nonzero(tmp_path):
         loader.get_rules()
 
 
+def test_explicit_rules_file_invalid_mitre_id_exits_nonzero(tmp_path):
+    # A malformed `mitre` in a user-supplied --rules-file must fail
+    # closed at load time, same as any other schema violation -- not
+    # load successfully and only fail later, deep inside a hunt run, the
+    # first time this entry's pattern happens to match something.
+    content = {"version": 1, "framework_pipes": [
+        {"pattern": "evil", "framework": "X", "mitre": "not-an-attack-id"}]}
+    path = _write(tmp_path, "rules.json", json.dumps(content))
+    loader.configure_rules_source(path)
+    with pytest.raises(SystemExit):
+        loader.get_rules()
+
+
 def test_explicit_rules_file_valid_json_loads_successfully(tmp_path):
     content = {"version": 1, "stomping_whitelist": ["custom.dll"]}
     path = _write(tmp_path, "rules.json", json.dumps(content))
@@ -148,6 +212,41 @@ def test_explicit_rules_file_valid_json_loads_successfully(tmp_path):
     assert info["path"] == path
     assert info["version"] == 1
     assert len(info["sha256"]) == 64
+
+
+def test_explicit_rules_file_crlf_sha256_matches_raw_bytes(tmp_path):
+    # Review finding: text-mode read (Path.read_text()) performs universal-
+    # newline translation, silently turning "\r\n" into "\n" -- hashing the
+    # re-encoded, already-translated text produced a digest that could
+    # never match `certutil -hashfile`/`sha256sum` run against the actual
+    # file, defeating the whole point of this field as verifiable
+    # provenance. The digest MUST be computed over the exact bytes on disk.
+    content = (b'{"version": 1, "stomping_whitelist": ["custom.dll"]}\r\n')
+    path = tmp_path / "rules.json"
+    path.write_bytes(content)
+    real_sha256 = hashlib.sha256(content).hexdigest()
+
+    loader.configure_rules_source(str(path))
+    loader.get_rules()
+    info = loader.get_rules_source_info()
+    assert info["sha256"] == real_sha256
+
+
+def test_packaged_rules_file_crlf_sha256_matches_raw_bytes(tmp_path, monkeypatch):
+    # Same regression as the --rules-file test above, but for the
+    # non-explicit (_find_rules_source()/_RuleSource) path -- both used to
+    # share the identical text-then-reencode bug.
+    content = b"version: 1\r\nstomping_whitelist:\r\n  - custom.dll\r\n"
+    path = tmp_path / "rules.yaml"
+    path.write_bytes(content)
+    real_sha256 = hashlib.sha256(content).hexdigest()
+
+    src = loader._RuleSource(str(path), ".yaml", path.read_bytes)
+    monkeypatch.setattr(loader, "_find_rules_source", lambda: src)
+
+    loader.get_rules(announce=False)
+    info = loader.get_rules_source_info()
+    assert info["sha256"] == real_sha256
 
 
 def test_explicit_rules_file_get_rules_caches_across_calls(tmp_path):

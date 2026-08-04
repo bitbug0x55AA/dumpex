@@ -40,41 +40,62 @@
     {
       "check": "hollowing.mem_private_at_image_base",
       "confidence": "medium",
+      "evidence_refs": [],
       "facts": [
         "VA=0x140000000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
       ],
+      "id": "finding-4f8cd1dec0ec6e5581ec190490785356",
       "inference": "The main module's image base is backed by MEM_PRIVATE memory, not a file-mapped MEM_IMAGE region.",
+      "iocs": [],
       "limitations": [
         "A manual-mapping loader that isn't hollowing can also produce this signal alone."
       ],
       "rationale": "A genuine PE image loaded normally is always MEM_IMAGE at its base \u2014 MEM_PRIVATE there means nothing was actually mapped from the executable file this process is supposed to be running. Structural on its own, but a manually-mapped, otherwise benign loader (some DRM/anti-cheat/packer stubs) can also produce this without hollowing \u2014 correlated with a second anomaly below before it counts toward the score.",
-      "tag": "lead"
+      "rule_id": "hollowing.mem_private_at_image_base",
+      "rule_version": null,
+      "severity": "medium",
+      "tag": "lead",
+      "technique_ids": []
     },
     {
       "check": "hollowing.rwx_at_image_base",
       "confidence": "low",
+      "evidence_refs": [],
       "facts": [
         "VA=0x140000000 protect=PAGE_EXECUTE_READWRITE"
       ],
+      "id": "finding-0e3b733aa0ccb903a862bf9cb88756fb",
       "inference": "The main module's image base carries RWX-family protection.",
+      "iocs": [],
       "limitations": [
         "Does not by itself distinguish hollowing from JIT/legitimate self-modifying-code use cases at this address."
       ],
       "rationale": "RWX at the image base is needed to write replacement code during hollowing, but RWX alone is routinely used by JITs, debuggers, and some legitimate packers \u2014 a lead, not proof, on its own.",
-      "tag": "lead"
+      "rule_id": "hollowing.rwx_at_image_base",
+      "rule_version": null,
+      "severity": "low",
+      "tag": "lead",
+      "technique_ids": []
     },
     {
       "check": "hollowing.structural_correlation",
       "confidence": "medium",
+      "evidence_refs": [],
       "facts": [
         "VA=0x140000000 MEM_PRIVATE at image base + RWX protection"
       ],
+      "id": "finding-9ed89fafcc0ec45db4dcacb718819094",
       "inference": "2 independent structural signal(s) correlate at the same image base: MEM_PRIVATE at image base, RWX protection.",
+      "iocs": [],
       "limitations": [
         "Structural correlation is strong evidence but not a substitute for live-execution corroboration (no thread-context signal is available for this hunter)."
       ],
       "rationale": "Any one of these signals alone has a plausible benign explanation (manual mapping, a capture-time read race, a JIT/packer using RWX). MEM_PRIVATE at the image base correlated with a missing/wiped MZ header AND/OR RWX protection at that same address is materially harder to explain away \u2014 the combination the module's own checks were designed to catch.",
-      "tag": "detection"
+      "rule_id": "hollowing.structural_correlation",
+      "rule_version": null,
+      "severity": "high",
+      "tag": "detection",
+      "technique_ids": []
     }
   ],
   "hunter": "hollowing",

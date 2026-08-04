@@ -5,6 +5,7 @@ import json
 import hashlib
 import importlib.resources
 from pathlib import Path
+from dumpex.core.mitre import is_valid_technique_id
 from dumpex.ui.colors import DIM, YELLOW, RED, GREEN
 
 SUSPICIOUS_PROTS = {"PAGE_EXECUTE_READWRITE", "PAGE_EXECUTE_WRITECOPY"}
@@ -178,6 +179,22 @@ def _validate_rules_schema(raw: dict) -> None:
             for key in ("framework", "technique", "mitre"):
                 if key in entry and not isinstance(entry[key], str):
                     raise ValueError(f"'framework_pipes[{i}].{key}' must be a string")
+            # Validated HERE, at load time -- not left to surface only
+            # when this specific entry's pattern happens to match a pipe
+            # name in some future dump, which would hide a malformed
+            # rules.yaml/--rules-file indefinitely for a rarely-hit
+            # pattern (dumpex.hunt.pipe.aggregate.build_report() would
+            # otherwise raise deep inside a hunt run, aborting it, the
+            # first time this entry ever actually matched something).
+            # Empty string / absent "mitre" is allowed -- it means "no
+            # ATT&CK mapping for this entry", not a malformed one; see
+            # dumpex.core.mitre for the shared shape both this loader and
+            # dumpex.hunt._finding.Finding.technique_ids validate against.
+            mitre = entry.get("mitre")
+            if mitre and not is_valid_technique_id(mitre):
+                raise ValueError(
+                    f"'framework_pipes[{i}].mitre' must be a MITRE ATT&CK "
+                    f"technique/sub-technique id (e.g. \"T1055\", \"T1559.001\"), got {mitre!r}")
             unknown_keys = set(entry.keys()) - set(_FRAMEWORK_PIPE_STR_FIELDS)
             if unknown_keys:
                 raise ValueError(f"'framework_pipes[{i}]' has unknown field(s): "
@@ -222,17 +239,32 @@ class _RuleSource:
     Uniform handle for a candidate rules file, whether it lives at a plain
     filesystem path or inside the installed package via importlib.resources
     (which is not necessarily a real filesystem path — e.g. a zip-safe
-    install — so callers must go through read_text() rather than open()).
-    """
-    __slots__ = ("display", "suffix", "_read_text")
+    install — so callers must go through read_bytes()/read_text() rather
+    than open()).
 
-    def __init__(self, display: str, suffix: str, read_text):
+    Built around read_bytes() as the ONE canonical read, with read_text()
+    a thin decode() on top of it -- not two independent reads. A prior
+    version read text (via Path.read_text()/Traversable.read_text(),
+    which performs universal-newline translation, silently turning a
+    CRLF-terminated rules.yaml's "\\r\\n" into "\\n") and separately
+    re-encoded that ALREADY-TRANSLATED text back to bytes to compute
+    meta.rules.sha256/Finding.rule_version -- producing a hash that could
+    never match `certutil -hashfile`/`sha256sum` run against the actual
+    file on disk, defeating the entire point of that field as verifiable
+    provenance. Hashing MUST run over the exact bytes read from disk.
+    """
+    __slots__ = ("display", "suffix", "_read_bytes")
+
+    def __init__(self, display: str, suffix: str, read_bytes):
         self.display = display
         self.suffix  = suffix
-        self._read_text = read_text
+        self._read_bytes = read_bytes
+
+    def read_bytes(self) -> bytes:
+        return self._read_bytes()
 
     def read_text(self) -> str:
-        return self._read_text()
+        return self.read_bytes().decode("utf-8")
 
 
 def _fs_source(directory: Path) -> "_RuleSource | None":
@@ -240,8 +272,7 @@ def _fs_source(directory: Path) -> "_RuleSource | None":
     for name, suffix in _RULE_FILE_NAMES:
         candidate = directory / name
         if candidate.is_file():
-            return _RuleSource(str(candidate), suffix,
-                                lambda c=candidate: c.read_text(encoding="utf-8"))
+            return _RuleSource(str(candidate), suffix, lambda c=candidate: c.read_bytes())
     return None
 
 
@@ -265,7 +296,7 @@ def _packaged_source() -> "_RuleSource | None":
         try:
             if candidate.is_file():
                 return _RuleSource(f"<dumpex.rules_pkg>/data/{name}", suffix,
-                                    lambda c=candidate: c.read_text(encoding="utf-8"))
+                                    lambda c=candidate: c.read_bytes())
         except Exception:
             continue
     return None
@@ -329,7 +360,8 @@ def _load_explicit_rules(announce: bool = True) -> dict:
         sys.exit(1)
 
     try:
-        text = path.read_text(encoding="utf-8")
+        data = path.read_bytes()
+        text = data.decode("utf-8")
     except Exception as e:
         print(RED(f"[!] --rules-file {path} could not be read: {e}"))
         sys.exit(1)
@@ -374,7 +406,7 @@ def _load_explicit_rules(announce: bool = True) -> dict:
         print(RED(f"[!] --rules-file {path}: failed to compile rules: {e}"))
         sys.exit(1)
 
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(data).hexdigest()
     _LAST_SOURCE_INFO = {"path": str(path), "sha256": digest, "explicit": True, "version": version}
     if announce:
         print(GREEN(f"  [·] Rules loaded from --rules-file {path}  (sha256={digest[:16]}…)"))
@@ -410,7 +442,8 @@ def _load_rules(announce: bool = True) -> dict:
 
     if source is not None:
         try:
-            text = source.read_text()
+            data = source.read_bytes()
+            text = data.decode("utf-8")
             if source.suffix in (".yaml", ".yml"):
                 try:
                     import yaml
@@ -431,7 +464,7 @@ def _load_rules(announce: bool = True) -> dict:
                 _validate_rules_schema(raw)   # raises ValueError -> caught below,
                                                # falls back to built-in defaults
                 rules = _compile_rules(raw)
-                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                digest = hashlib.sha256(data).hexdigest()
                 _LAST_SOURCE_INFO = {"path": source.display, "sha256": digest,
                                       "explicit": False, "version": version}
                 if announce:

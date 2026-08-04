@@ -56,14 +56,21 @@
     {
       "check": "cs_beacon.structural_config",
       "confidence": "high",
+      "evidence_refs": [],
       "facts": [
         "VA=0x20100 file_offset=0x2100 xor_key=0x69 cs_version_estimated=3.x field_count=2",
         "region=0x20000 size=0x226 protect=PAGE_EXECUTE_READWRITE"
       ],
+      "id": "finding-91fab2e45c223b9b48708d1e1e73a78d",
       "inference": "Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.",
+      "iocs": [],
       "limitations": [],
       "rationale": "Corroborated by independent memory context: enclosing region 0x20000 is executable, private memory (PAGE_EXECUTE_READWRITE)",
-      "tag": "detection"
+      "rule_id": "cs_beacon.structural_config",
+      "rule_version": null,
+      "severity": "critical",
+      "tag": "detection",
+      "technique_ids": []
     }
   ],
   "hunter": "cs-beacon",

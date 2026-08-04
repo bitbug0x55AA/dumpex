@@ -40,7 +40,7 @@ class Report:
 
 
 def build_report(mf, handle_scan, pipe_name_scan, correlation, mem_info_available: bool,
-                  handle_stream_available: bool) -> Report:
+                  handle_stream_available: bool, rule_version: "str | None" = None) -> Report:
     findings = {
         "handle_pipes":    handle_scan.handle_classified,
         "private_pipes":   pipe_name_scan.private_pipes,
@@ -84,11 +84,14 @@ def build_report(mf, handle_scan, pipe_name_scan, correlation, mem_info_availabl
     # ── Finding: handle name matches a known framework convention ─────────
     if framework_handle_hits:
         facts = []
+        mitre_ids = []
         for hc in framework_handle_hits:
             h = hc["handle"]
             fw, tech, mitre = hc["framework_match"]
             facts.append(f"Handle=0x{h.Handle:x} ObjectName={h.ObjectName} "
                          f"framework={fw} technique={tech} mitre={mitre}")
+            if mitre and mitre not in mitre_ids:
+                mitre_ids.append(mitre)
         findings_list.append(Finding(
             check="pipe.handle_framework_match",
             facts=facts,
@@ -103,6 +106,14 @@ def build_report(mf, handle_scan, pipe_name_scan, correlation, mem_info_availabl
             limitations=["Framework pipe-name conventions can be renamed/customized by an "
                          "operator; absence of a match does not mean absence of C2."],
             tag=TAG_DETECTION,
+            # Real ATT&CK IDs from rules.yaml's own framework_pipes entries;
+            # rule_version is the loaded ruleset's own CONTENT hash (not
+            # rules.yaml's top-level "version:" FORMAT field -- see
+            # __init__.py's own RULE_VERSION comment for why) -- neither is
+            # invented here (see this hunter's own KNOWN_FRAMEWORK_PIPES in
+            # dumpex/hunt/pipe/__init__.py and rules.yaml's own comments).
+            technique_ids=mitre_ids,
+            rule_version=rule_version,
         ))
 
     # ── Finding: string-scan lead (unscored) ──────────────────────────────

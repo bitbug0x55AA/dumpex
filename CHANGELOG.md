@@ -5,6 +5,36 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## `--hunt` findings now carry a normalized-SIEM-alert shape (schema v2.5)
+
+Every entry in a hunter's `findings[]` array (`--hunt --json`/`--csv`)
+now carries seven additional fields, so one finding can be consumed
+directly as a SIEM alert instead of first being hand-mapped onto one:
+
+- `id` — deterministic, stable across repeated `--hunt` runs against the
+  same dump (a 128-bit hash covering check/rule id/rule version/tag/
+  confidence/technique ids/evidence refs/iocs/facts, unambiguously
+  encoded) — a re-scan dedup key for that dump; combine with
+  `meta.evidence[].sha256` for a key unique across dumps.
+- `severity` — `info`/`low`/`medium`/`high`/`critical`, always derived
+  from `tag`+`confidence` — a producer cannot set it independently, and
+  the schema itself pins the exact mapping.
+- `technique_ids` — MITRE ATT&CK IDs, populated where a hunter has a real
+  mapping (today: `pipe`'s own `rules.yaml`-driven framework matches).
+- `evidence_refs` — structured pointers into that hunter's own `details`.
+- `iocs` — indicator-of-compromise values extracted from this finding.
+- `rule_id` / `rule_version` — detection-logic provenance.
+
+`meta.schema_version` moves from `"2.4"` to `"2.5"` — every producer now
+stamps `"2.5"`. `dumpex-output-v2.4.schema.json` remains shipped and
+installable for validating output produced before this change; it does
+NOT accept these seven new `finding` properties (a closed `finding` $def
+must never silently start accepting fields it didn't originally define).
+See [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md#hunt-records) for the
+full field table and versioning rationale, and
+[docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md#reading-a-finding) for
+the analyst-facing explanation.
+
 ## `--diff` now treats the positional dump as the analysis target
 
 For `dumpex suspect.dmp --diff clean-reference.dmp`, `suspect.dmp` is now
