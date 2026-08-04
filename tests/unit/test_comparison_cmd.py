@@ -425,7 +425,7 @@ def test_collect_comparison_all_mode_combines_every_entity():
 
 
 def test_collect_comparison_all_mode_one_not_evaluated_entity_is_partial_overall():
-    # --diff-mode all cross-entity aggregation: modules entirely absent on
+    # --diff-scope all cross-entity aggregation: modules entirely absent on
     # both sides (not_evaluated for that entity alone) while threads/
     # memory are both fully evaluable must yield PARTIAL overall, not
     # not_evaluated -- one weak entity must not drag the whole comparison

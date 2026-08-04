@@ -28,6 +28,30 @@ def _run(monkeypatch, argv):
     return exc.value.code
 
 
+def test_help_groups_commands_and_modifiers_and_hides_legacy_names(
+        monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["dumpex", "--help"])
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 0
+    help_text = capsys.readouterr().out
+    for heading in ("commands:", "memory and extraction options:",
+                    "string scan options:", "diff options:", "hunt options:",
+                    "report options:", "output and case metadata:"):
+        assert heading in help_text
+    assert "--diff-scope {modules,threads,memory,all}" in help_text
+    assert "--strings-encoding {ascii,unicode,both}" in help_text
+    assert "--diff-mode" not in help_text
+    assert "--encoding " not in help_text
+
+
+def test_legacy_encoding_alias_still_reaches_strings_command(monkeypatch, capsys):
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--strings", "0x1000",
+                              "--encoding", "unicode"])
+    assert code == 1
+    assert "File not found" in capsys.readouterr().out
+
+
 # ── pre-flight: every mode reaches open_dump(), none are rejected ────────
 # _UNSUPPORTED_STRUCTURED_MODES is permanently empty as of Phase E, PR3
 # (--report was the last command still on it) -- there is no longer any

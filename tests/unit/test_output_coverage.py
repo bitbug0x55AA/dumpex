@@ -1551,7 +1551,7 @@ def test_evaluation_groups_single_group_matches_equivalent_evaluation_sources_ca
 
 # ── combine_coverage_reports (Phase C, PR2) ──────────────────────────────
 # Pure cross-entity reduction, e.g. a future comparison command's
-# --diff-mode all combining collect_module_diff/collect_thread_diff/
+# --diff-scope all combining collect_module_diff/collect_thread_diff/
 # collect_memory_diff's three independent CoverageReports into one.
 
 def _report(status, source_name="x", record_count=1):

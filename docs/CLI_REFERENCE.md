@@ -8,14 +8,14 @@ For help interpreting hunt results, use the
 ## Command shape
 
 ```text
-dumpex DUMPFILE MODE [OPTIONS]
-python -m dumpex DUMPFILE MODE [OPTIONS]
+dumpex DUMPFILE COMMAND [OPTIONS]
+python -m dumpex DUMPFILE COMMAND [OPTIONS]
 ```
 
-Exactly one mode is required. Addresses, sizes, and thread IDs accept the
+Exactly one command is required. Addresses, sizes, and thread IDs accept the
 formats documented for their individual options.
 
-## Analysis modes
+## Commands
 
 | Mode | Purpose |
 |---|---|
@@ -31,21 +31,46 @@ formats documented for their individual options.
 | `--report` | Generate a focused triage report |
 | `--hunt TTP` | Run `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `obfuscation`, or `all` |
 
-## Shared and mode-specific options
+## Command-specific options
+
+These sections mirror the groups shown by `dumpex --help`. They are modifiers
+for the named commands, not additional command entry points.
+
+### Memory and extraction options
 
 | Option | Applies to | Description |
 |---|---|---|
 | `-s SIZE`, `--size SIZE` | extraction, strings | Region size in hexadecimal |
-| `-o FILE`, `--output FILE` | extraction | Raw output file |
+| `-o FILE`, `--output FILE` | extraction, report | Write extracted region bytes |
 | `--filter PROT` | list | Filter by protection name, such as `PAGE_EXECUTE_READWRITE` |
+
+### String scan options
+
+| Option | Applies to | Description |
+|---|---|---|
 | `--grep REGEX` | strings | Keep strings matching a regular expression |
 | `--min-len N` | strings | Minimum string length; default `6` |
-| `--encoding ascii\|unicode\|both` | strings | String encoding to scan; default `both` |
-| `--diff-mode modules\|threads\|memory\|all` | diff | Objects to compare; default `all` |
-| `--verbose` | multiple modes | Include routine regions or additional detail |
+| `--strings-encoding ascii\|unicode\|both` | strings | String encoding to scan; default `both` |
+
+### Diff and display options
+
+| Option | Applies to | Description |
+|---|---|---|
+| `--diff-scope modules\|threads\|memory\|all` | diff | Optional evidence-type filter for `--diff`; default `all` |
+| `--verbose` | diff, hunt | Include routine regions or additional detail |
+
+### Hunt options
+
+| Option | Applies to | Description |
+|---|---|---|
 | `--yara-dir DIR` | YARA hunt | Use an explicit directory of `.yar`/`.yara` files instead of packaged rules |
 | `--ref-dir DIR` | stomping hunt | Directory of analyst-supplied reference modules, matched by basename |
 | `--rules-file FILE` | rule-driven hunts | Use an explicit `rules.yaml`, `.yml`, or `.json` file instead of packaged defaults |
+
+### Report options
+
+| Option | Applies to | Description |
+|---|---|---|
 | `--report-tid TID` | report | Anchor a report to a thread ID in hexadecimal or decimal |
 | `--report-addr ADDR` | report | Anchor a report to a memory address |
 | `--report-string STRING` | report | Search memory and report on each matching region |
@@ -162,19 +187,22 @@ dumpex sample.dmp --report --report-string "powershell"
 
 ```bash
 dumpex suspect.dmp --diff clean-reference.dmp
-dumpex suspect.dmp --diff clean-reference.dmp --diff-mode memory
+dumpex suspect.dmp --diff clean-reference.dmp --diff-scope memory
 ```
 
 The positional dump is always the analysis target; the dump passed to
 `--diff` is the baseline/reference. Thus "added", "new", and "changed to"
 records describe the positional dump relative to the reference.
+`--diff-scope` is not a standalone command; it only narrows an existing
+`--diff` comparison. The older `--diff-mode` spelling remains accepted as
+a hidden compatibility alias for existing scripts.
 
 ### Extraction and strings
 
 ```bash
 dumpex sample.dmp --extract 0x7ff600001000 --size 0x1000 --output region.bin
 dumpex sample.dmp --strings 0x7ff600001000 --min-len 8
-dumpex sample.dmp --strings 0x7ff600001000 --encoding unicode --grep "(?i)https?://"
+dumpex sample.dmp --strings 0x7ff600001000 --strings-encoding unicode --grep "(?i)https?://"
 ```
 
 ### Case-ready output

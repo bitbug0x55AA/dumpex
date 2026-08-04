@@ -95,7 +95,9 @@ def main():
 
     parser.add_argument("dumpfile", help="Primary .DMP file")
 
-    mode = parser.add_mutually_exclusive_group(required=True)
+    command_group = parser.add_argument_group(
+        "commands", "Choose exactly one operation for the primary dump.")
+    mode = command_group.add_mutually_exclusive_group(required=True)
     mode.add_argument("--list",         action="store_true", help="List all memory regions")
     mode.add_argument("--modules",      action="store_true", help="List loaded modules")
     mode.add_argument("--threads",      action="store_true", help="List threads with analysis")
@@ -108,53 +110,74 @@ def main():
     mode.add_argument("--report",        action="store_true", help="Generate triage report anchored to a TID, address, or string")
     mode.add_argument("--hunt",          metavar="TTP",       help="TTP detection: injection | hollowing | stomping | pipe | cs-beacon | yara | obfuscation | all")
 
-    # Shared
-    parser.add_argument("-s", "--size",      metavar="SIZE",   help="Region size in hex")
-    parser.add_argument("-o", "--output",    metavar="FILE",   help="Output file for --extract")
-    parser.add_argument("--filter",          metavar="PROT",   help="Filter --list by protection name")
-    parser.add_argument("--grep",            metavar="REGEX",  help="Regex filter for --strings")
-    parser.add_argument("--min-len",         metavar="N", type=int, default=6,
-                        help="Minimum string length (default: 6)")
-    parser.add_argument("--encoding",        choices=["ascii", "unicode", "both"], default="both",
-                        help="String encoding to scan (default: both)")
-    parser.add_argument("--diff-mode",       choices=["modules", "threads", "memory", "all"],
-                        default="all", help="What to diff (default: all)")
+    region_group = parser.add_argument_group("memory and extraction options")
+    region_group.add_argument("--filter", metavar="PROT",
+                              help="Filter --list by protection name")
+    region_group.add_argument("-s", "--size", metavar="SIZE",
+                              help="Region size in hex for --extract or --strings")
+    region_group.add_argument("-o", "--output", metavar="FILE",
+                              help="Extracted bytes for --extract, or region output for --report")
 
-    parser.add_argument('--verbose',    action='store_true', help='Show all regions including routine ones')
-    parser.add_argument('--yara-dir',   metavar='DIR',       default=None,
-                        help='Directory of .yar rule files for --hunt yara '
-                             '(default: packaged rules; no automatic cwd/script-dir scan)')
-    parser.add_argument('--ref-dir',    metavar='DIR',       default=None,
-                        help='Directory of analyst-supplied reference module files '
-                             '(matched by basename) for --hunt stomping\'s optional '
-                             'on-disk-vs-memory section byte diff. Not required — the '
-                             'structural section-protection-mismatch check runs without it.')
-    parser.add_argument('--rules-file', metavar='FILE',      default=None,
-                        help='Explicit rules.yaml/.yml/.json for TTP detection '
-                             '(default: packaged rules; no automatic cwd/script-dir scan)')
-    parser.add_argument('--json',       metavar='FILE',      default=None,
-                        help='Write structured results to FILE as JSON  (e.g. results.json)')
-    parser.add_argument('--csv',        metavar='PATH',      default=None,
-                        help='Write CSV output: FILE.csv → single combined file  |  DIR\\ → one file per table')
-    parser.add_argument('--txt',        metavar='FILE',      default=None,
-                        help='Write plain-text copy of all console output to FILE (ANSI colours stripped)')
-    parser.add_argument('--report-tid',  metavar='TID',  help='Anchor report to this Thread ID (hex or decimal)')
-    parser.add_argument('--report-addr',   metavar='ADDR',   help='Anchor report to this memory address (hex)')
-    parser.add_argument('--report-string', metavar='STRING', help='Search all memory for string, report on each hit region')
-    parser.add_argument('--force',      action='store_true',
-                        help='Allow overwriting an existing output file (--txt/--output/--json/--csv). '
-                             'Never allowed for the input dump file itself.')
-    parser.add_argument('--case-id',    metavar='ID',        default=None,
-                        help='Case/ticket identifier recorded in --json meta.execution.case_id '
-                             '(free-form; not validated or used elsewhere)')
-    parser.add_argument('--analyst',    metavar='NAME',      default=None,
-                        help='Analyst name/handle recorded in --json meta.execution.analyst')
-    parser.add_argument('--redact-paths', action='store_true',
-                        help='Omit absolute filesystem paths from --json output (evidence.path, '
-                             'any --ref-dir/--yara-dir/--rules-file/--output path in '
-                             'meta.execution.options, and every artifacts[].path, are all reduced '
-                             'to their basename) — for sharing JSON output outside the analyst\'s '
-                             'own machine without leaking local directory layout')
+    strings_group = parser.add_argument_group("string scan options")
+    strings_group.add_argument("--grep", metavar="REGEX",
+                               help="Regex filter for --strings")
+    strings_group.add_argument("--min-len", metavar="N", type=int, default=6,
+                               help="Minimum string length for --strings (default: 6)")
+    strings_group.add_argument("--strings-encoding", dest="encoding",
+                               choices=["ascii", "unicode", "both"], default="both",
+                               help="Encoding scanned by --strings (default: both)")
+    # Hidden compatibility spelling; --strings-encoding is deliberately
+    # explicit that this modifies --strings rather than starting a command.
+    parser.add_argument("--encoding", dest="encoding",
+                        choices=["ascii", "unicode", "both"],
+                        help=argparse.SUPPRESS)
+
+    diff_group = parser.add_argument_group("diff options")
+    diff_group.add_argument("--diff-scope", dest="diff_mode",
+                            choices=["modules", "threads", "memory", "all"],
+                            default="all",
+                            help="Evidence type compared by --diff (default: all)")
+    # Backward-compatible spelling for scripts written before the option
+    # was clarified as a scope/filter rather than a standalone command.
+    parser.add_argument("--diff-mode", dest="diff_mode",
+                        choices=["modules", "threads", "memory", "all"],
+                        help=argparse.SUPPRESS)
+
+    display_group = parser.add_argument_group("display options")
+    display_group.add_argument('--verbose', action='store_true',
+                               help='Show additional detail for --diff or --hunt')
+
+    hunt_group = parser.add_argument_group("hunt options")
+    hunt_group.add_argument('--yara-dir', metavar='DIR', default=None,
+                            help='Rule directory for --hunt yara (default: packaged rules)')
+    hunt_group.add_argument('--ref-dir', metavar='DIR', default=None,
+                            help='Reference-module directory for --hunt stomping')
+    hunt_group.add_argument('--rules-file', metavar='FILE', default=None,
+                            help='Explicit rules.yaml/.yml/.json for --hunt')
+
+    report_group = parser.add_argument_group("report options")
+    report_group.add_argument('--report-tid', metavar='TID',
+                              help='Anchor --report to this Thread ID (hex or decimal)')
+    report_group.add_argument('--report-addr', metavar='ADDR',
+                              help='Anchor --report to this memory address (hex)')
+    report_group.add_argument('--report-string', metavar='STRING',
+                              help='Search memory and report each matching region')
+
+    output_group = parser.add_argument_group("output and case metadata")
+    output_group.add_argument('--json', metavar='FILE', default=None,
+                              help='Write structured results as JSON')
+    output_group.add_argument('--csv', metavar='PATH', default=None,
+                              help='Write CSV to a file, or separate tables to a directory')
+    output_group.add_argument('--txt', metavar='FILE', default=None,
+                              help='Write a plain-text copy of console output')
+    output_group.add_argument('--force', action='store_true',
+                              help='Allow overwriting output files (never input dumps)')
+    output_group.add_argument('--case-id', metavar='ID', default=None,
+                              help='Case/ticket identifier recorded in structured output')
+    output_group.add_argument('--analyst', metavar='NAME', default=None,
+                              help='Analyst name recorded in structured output')
+    output_group.add_argument('--redact-paths', action='store_true',
+                              help='Reduce filesystem paths to basenames in structured output')
     args = parser.parse_args()
 
     run_mode = _selected_run_mode(args)

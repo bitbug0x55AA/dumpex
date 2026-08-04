@@ -155,7 +155,7 @@ class _ExplodingMemoryInfoMF(FakeMF):
 
 TRUE_FREEZE = [
     (
-        "module_added_removed_rebased", ["--diff-mode", "modules"],
+        "module_added_removed_rebased", ["--diff-scope", "modules"],
         _mf_modules([Module(0x1000, 0x1000, r"C:\a.dll"), Module(0x2000, 0x1000, r"C:\b.dll")]),
         _mf_modules([Module(0x9000, 0x1000, r"C:\a.dll"), Module(0x3000, 0x1000, r"C:\c.dll")]),
         0,

@@ -97,7 +97,7 @@ dumpex sample.dmp --report --report-addr 0x7ff600001000
 dumpex sample.dmp --extract 0x7ff600001000 --size 0x1000 --output region.bin
 
 # Compare a suspicious capture against a known reference
-dumpex suspect.dmp --diff clean-reference.dmp --diff-mode all
+dumpex suspect.dmp --diff clean-reference.dmp --diff-scope all
 ```
 
 See the [CLI Reference](docs/CLI_REFERENCE.md) for every mode, option, and

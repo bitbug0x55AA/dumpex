@@ -218,7 +218,7 @@ def _run_strings(monkeypatch, tmp_path, addr, size_hex, min_len, grep, encoding,
     out_json = str(tmp_path / "out.json")
     out_csv = str(tmp_path / "out.csv")
     argv = ["dumpex", dump_path, "--strings", addr, "--size", size_hex,
-            "--min-len", str(min_len), "--encoding", encoding]
+            "--min-len", str(min_len), "--strings-encoding", encoding]
     if grep is not None:
         argv += ["--grep", grep]
     argv += ["--json", out_json, "--csv", out_csv]

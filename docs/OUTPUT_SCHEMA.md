@@ -524,7 +524,7 @@ Each carries `change_type` (`"added"`/`"removed"`/`"rebased"` for modules,
 `"protection_changed"` for memory regions) plus before/after field pairs --
 only the pair a given `change_type` actually produces is non-null (e.g. an
 `"added"` module has no `full_path_before`, since there is no
-baseline-side module to report one from). `--diff-mode
+baseline-side module to report one from). `--diff-scope
 modules|threads|memory|all` (default `all`) selects which entity types
 appear in `result.data.records`; only the corresponding sources appear in
 `coverage.sources` too. See
@@ -543,9 +543,9 @@ entity-namespaced source names (e.g. `"baseline.modules"`/
 `"baseline.memory_info"`/`"target.memory_info"`) rather than the bare
 names the nine single-dump commands use, so a comparison's baseline and
 target sides never collide as coverage facts about the same-named source.
-`coverage.status` is combined across whichever entities `--diff-mode`
+`coverage.status` is combined across whichever entities `--diff-scope`
 selected (`dumpex.output.coverage.combine_coverage_reports`): unanimous
-`"not_evaluated"` only if every selected entity is (e.g. `--diff-mode all`
+`"not_evaluated"` only if every selected entity is (e.g. `--diff-scope all`
 against two dumps that both lack every one of ModuleListStream/
 ThreadInfoListStream/MemoryInfoListStream); a single weak entity among
 otherwise-complete ones is `"partial"`, not `"not_evaluated"`. This is
@@ -720,7 +720,7 @@ needle sitting past a partial read is exactly as much a false negative
 as one in a fully-skipped region. All of the above combine across
 however many cards a `--report-string` run produced via
 `dumpex.output.coverage.combine_coverage_reports()`, the same reducer
-`--diff-mode all` uses to merge its own three entities' coverage into
+`--diff-scope all` uses to merge its own three entities' coverage into
 one.
 
 `execution_status` is `"partial"` (independent of `coverage.status`)

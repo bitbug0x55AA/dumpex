@@ -241,8 +241,11 @@ INCONCLUSIVE rather than a confirmed DETECTED.
 ## Evidence handling: hashes, reproducing a run
 
 `--json` output carries `meta.evidence` as an array — one entry per dump
-`--hunt` looked at (`role: "primary"`; `--diff`'s two-dump comparison is
-the only command with more than one entry). Each entry's `sha256` is
+dumpex analyzed. Single-dump commands use `role: "primary"`; `--diff` is
+the only command with two entries. For
+`dumpex suspect.dmp --diff clean-reference.dmp`, `suspect.dmp` has
+`role: "target"` and `clean-reference.dmp` has `role: "baseline"`. Each
+entry's `sha256` is
 computed by streaming the dump file (never loaded fully into memory),
 deterministic over file content only. The same dump file produces the
 same hash regardless of which command or how many times you run it, so

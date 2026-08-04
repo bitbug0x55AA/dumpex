@@ -1933,7 +1933,7 @@ def build_coverage_report(
 
 def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
     """Pure cross-entity reduction -- e.g. a future comparison command's
-    `--diff-mode all`, which runs collect_module_diff/collect_thread_diff/
+    `--diff-scope all`, which runs collect_module_diff/collect_thread_diff/
     collect_memory_diff independently (each producing its own
     build_coverage_report() call over its own namespaced sources, such as
     "baseline.modules"/"target.modules") and needs one overall

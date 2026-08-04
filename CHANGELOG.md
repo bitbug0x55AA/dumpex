@@ -14,6 +14,16 @@ dump relative to the reference. Structured output follows the same rule:
 `meta.evidence[target]` points to the positional dump and
 `meta.evidence[baseline]` points to the `--diff` argument.
 
+The comparison filter is now shown in help as `--diff-scope` to make clear
+that it is an optional modifier, not a second comparison command. The old
+`--diff-mode` spelling remains available as a hidden compatibility alias.
+
+CLI help is now grouped by purpose (commands, memory/extraction, string
+scanning, diff, display, hunt, report, and output/case metadata) instead of
+placing every flag in one undifferentiated list. The string encoding filter
+is now shown as `--strings-encoding`; the older `--encoding` spelling remains
+available as a hidden compatibility alias.
+
 ## `--hunt` output migrated to the v2.4 contract
 
 `--hunt` was the last command still writing the older v1.1 JSON contract.
