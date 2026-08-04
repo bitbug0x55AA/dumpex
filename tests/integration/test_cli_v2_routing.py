@@ -71,7 +71,7 @@ def test_json_on_diff_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys
     # and reach open_dump()'s failure mode for the (nonexistent) PRIMARY
     # dump, same as any other v2 mode. main() opens args.dumpfile before
     # args.diff, so a bad primary path's error surfaces first (deliberate,
-    # not a gap -- see cli.py's own comment at the mf_target= line).
+    # not a gap -- see cli.py's own comment at the mf_reference= line).
     code = _run(monkeypatch, ["/nonexistent.dmp", "--diff", "/other.dmp", "--json", "out.json"])
     assert code == 1
     assert "File not found" in capsys.readouterr().out
@@ -605,7 +605,7 @@ def test_diff_json_produces_comparison_document_with_two_evidence_entries(monkey
 
         out_json = str(tmp_path / "out.json")
         monkeypatch.setattr(sys, "argv",
-                             ["dumpex", baseline_path, "--diff", target_path,
+                             ["dumpex", target_path, "--diff", baseline_path,
                               "--diff-mode", "modules", "--json", out_json])
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
@@ -613,6 +613,8 @@ def test_diff_json_produces_comparison_document_with_two_evidence_entries(monkey
         assert doc["meta"]["schema_version"] == "2.4"
         assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
         assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
+        assert [e["file_name"] for e in doc["meta"]["evidence"]] == [
+            os.path.basename(baseline_path), os.path.basename(target_path)]
         assert doc["result"]["kind"] == "comparison"
         assert doc["result"]["coverage"]["status"] == "complete"
         added = [r for r in doc["result"]["data"]["records"] if r["change_type"] == "added"]
@@ -650,7 +652,7 @@ def test_diff_json_partial_when_one_entity_not_evaluated_among_others_complete(
 
         out_json = str(tmp_path / "out.json")
         monkeypatch.setattr(sys, "argv",
-                             ["dumpex", baseline_path, "--diff", target_path,
+                             ["dumpex", target_path, "--diff", baseline_path,
                               "--json", out_json])
         with pytest.raises(SystemExit) as exc:
             cli.main()
@@ -689,7 +691,7 @@ def test_diff_csv_directory_mode_writes_module_diffs_table(monkeypatch, tmp_path
         csv_dir = tmp_path / "csvout"
         csv_dir.mkdir()
         monkeypatch.setattr(sys, "argv",
-                             ["dumpex", baseline_path, "--diff", target_path,
+                             ["dumpex", target_path, "--diff", baseline_path,
                               "--diff-mode", "modules", "--csv", str(csv_dir) + os.sep])
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 

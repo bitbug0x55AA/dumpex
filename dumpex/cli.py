@@ -104,7 +104,7 @@ def main():
     mode.add_argument("--peb",          action="store_true", help="Show PEB info")
     mode.add_argument("--pid",          action="store_true", help="Show the Process ID recorded in the dump")
     mode.add_argument("--sysinfo",      action="store_true", help="Show OS, host, process and CPU summary")
-    mode.add_argument("--diff",         metavar="DUMP2",     help="Diff against a second .DMP file")
+    mode.add_argument("--diff",         metavar="REFERENCE", help="Compare the primary dump against a reference .DMP file")
     mode.add_argument("--report",        action="store_true", help="Generate triage report anchored to a TID, address, or string")
     mode.add_argument("--hunt",          metavar="TTP",       help="TTP detection: injection | hollowing | stomping | pipe | cs-beacon | yara | obfuscation | all")
 
@@ -285,7 +285,7 @@ def main():
         # args.diff are bad, only the primary's parse error surfaces here
         # (it's opened first) -- consistent with every other command's
         # single-error-then-exit behavior, not an oversight.
-        mf_target = open_dump(args.diff) if run_mode == "diff" else None
+        mf_reference = open_dump(args.diff) if run_mode == "diff" else None
 
         # Structured output collector — populated by commands that support
         # it. Every v2-routed command (including --hunt) always gets a
@@ -297,8 +297,8 @@ def main():
         # own two-evidence constructor.
         if run_mode == "diff":
             out = V2Output.from_evidence(
-                [EvidenceInput(id="baseline", role="baseline", path=args.dumpfile),
-                 EvidenceInput(id="target", role="target", path=args.diff)],
+                [EvidenceInput(id="baseline", role="baseline", path=args.diff),
+                 EvidenceInput(id="target", role="target", path=args.dumpfile)],
                 command=cmd_label, options=_build_options(), case_id=args.case_id,
                 analyst=args.analyst, redact_paths=args.redact_paths, started_at=started_at)
         else:
@@ -312,7 +312,7 @@ def main():
         # --output is checked exactly once, inside cmd_extract/cmd_report
         # right before the write.
 
-        exit_code = _run(args, mf, out, cmd_label, mf_target=mf_target)
+        exit_code = _run(args, mf, out, cmd_label, mf_reference=mf_reference)
     except BaseException:
         if _tee is not None:
             _tee.abandon()
@@ -328,7 +328,7 @@ def main():
         sys.exit(exit_code)
 
 
-def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
+def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
     """Returns the process exit code for all eleven v2-routed commands
     (EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED — see module docstring), or
     None for every other command (unchanged exit-code behavior: 0 on
@@ -382,7 +382,7 @@ def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
                           summary=hunt_summary))
     elif args.diff:
         exit_code = _apply_command_result(
-            cmd_diff(mf, mf_target, args.diff_mode, verbose=args.verbose))
+            cmd_diff(mf, mf_reference, args.diff_mode, verbose=args.verbose))
 
     elif args.extract:
         addr = parse_hex_or_int(args.extract)
@@ -408,4 +408,3 @@ def _run(args, mf, out, cmd_label, *, mf_target=None) -> "int | None":
         out.write_csv(args.csv, cmd_label=cmd_label, force=args.force)
 
     return exit_code
-

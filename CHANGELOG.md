@@ -5,6 +5,15 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## `--diff` now treats the positional dump as the analysis target
+
+For `dumpex suspect.dmp --diff clean-reference.dmp`, `suspect.dmp` is now
+the target and `clean-reference.dmp` is the baseline. Console additions,
+new threads, and protection changes therefore describe the suspicious
+dump relative to the reference. Structured output follows the same rule:
+`meta.evidence[target]` points to the positional dump and
+`meta.evidence[baseline]` points to the `--diff` argument.
+
 ## `--hunt` output migrated to the v2.4 contract
 
 `--hunt` was the last command still writing the older v1.1 JSON contract.

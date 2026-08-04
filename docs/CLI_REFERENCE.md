@@ -27,7 +27,7 @@ formats documented for their individual options.
 | `--peb` | Show Process Environment Block information |
 | `--pid` | Show the process ID recorded in the dump |
 | `--sysinfo` | Show OS, host, process, and CPU summary |
-| `--diff DUMP2` | Compare the primary dump with a second dump |
+| `--diff REFERENCE` | Compare the primary target dump against a reference dump |
 | `--report` | Generate a focused triage report |
 | `--hunt TTP` | Run `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `obfuscation`, or `all` |
 
@@ -161,9 +161,13 @@ dumpex sample.dmp --report --report-string "powershell"
 ### Diff
 
 ```bash
-dumpex before.dmp --diff after.dmp
-dumpex before.dmp --diff after.dmp --diff-mode memory
+dumpex suspect.dmp --diff clean-reference.dmp
+dumpex suspect.dmp --diff clean-reference.dmp --diff-mode memory
 ```
+
+The positional dump is always the analysis target; the dump passed to
+`--diff` is the baseline/reference. Thus "added", "new", and "changed to"
+records describe the positional dump relative to the reference.
 
 ### Extraction and strings
 
@@ -185,4 +189,3 @@ dumpex sample.dmp --hunt all \
 ```
 
 Add `--redact-paths` when the JSON will leave the analyst workstation.
-

@@ -76,8 +76,10 @@ def _run(monkeypatch, tmp_path, argv, mf_baseline, mf_target):
     monkeypatch.setattr(cli, "open_dump", lambda path: mfs[path])
     out_json = str(tmp_path / "out.json")
     out_csv = str(tmp_path / "out.csv")
+    # CLI contract: the positional dump is the target under analysis;
+    # --diff supplies its baseline/reference.
     monkeypatch.setattr(sys, "argv",
-                         ["dumpex", baseline_path, "--diff", target_path, *argv,
+                         ["dumpex", target_path, "--diff", baseline_path, *argv,
                           "--json", out_json, "--csv", out_csv, "--force"])
     exit_code = 0
     try:
@@ -86,12 +88,13 @@ def _run(monkeypatch, tmp_path, argv, mf_baseline, mf_target):
         exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
     csv_text = open(out_csv, encoding="utf-8").read()
-    console = os.path.basename(baseline_path), os.path.basename(target_path)
+    console = os.path.basename(target_path), os.path.basename(baseline_path)
     return exit_code, doc, csv_text, console
 
 
 def _wrap(label_a: str, label_b: str, body: str) -> str:
-    return f"\ndumpex diff: {label_a} vs {label_b}\n" + "─" * 60 + "\n" + body + "\n"
+    return (f"\ndumpex diff: target {label_a} vs baseline {label_b}\n"
+            + "─" * 60 + "\n" + body + "\n")
 
 
 # ── scenario builders (fresh FakeMF pair per invocation) ──────────────────
@@ -546,6 +549,7 @@ def test_diff_compat_freeze(monkeypatch, tmp_path, capsys, name, diff_args, mf_b
     assert doc["meta"]["schema_version"] == "2.4"
     assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
     assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
+    assert [e["file_name"] for e in doc["meta"]["evidence"]] == [label_b, label_a]
     assert doc["result"]["kind"] == "comparison"
     expected_status = {0: "complete", 3: "partial", 4: "not_evaluated"}[exit_code]
     assert doc["result"]["coverage"]["status"] == expected_status, \

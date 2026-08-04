@@ -532,9 +532,10 @@ appear in `result.data.records`; only the corresponding sources appear in
 `ModuleDiffRecord`/`ThreadDiffRecord`/`MemoryDiffRecord` for the exact
 field lists.
 
-`--diff DUMP2`'s `meta.evidence` has exactly two entries --
-`{"id": "baseline", "role": "baseline", ...}` for the primary dump
-argument and `{"id": "target", "role": "target", ...}` for `DUMP2` --
+`--diff REFERENCE`'s `meta.evidence` has exactly two entries --
+`{"id": "baseline", "role": "baseline", ...}` for the `--diff` reference
+dump and `{"id": "target", "role": "target", ...}` for the primary dump
+argument --
 built via `V2Output.from_evidence()` instead of the single-`dump_path`
 constructor the other ten commands use. `coverage.sources` uses dotted,
 entity-namespaced source names (e.g. `"baseline.modules"`/

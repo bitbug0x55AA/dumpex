@@ -37,10 +37,13 @@ EXEC_PROTS = {"PAGE_EXECUTE_READWRITE", "PAGE_EXECUTE_WRITECOPY",
               "PAGE_EXECUTE_READ", "PAGE_EXECUTE"}
 
 
-def collect_diff(mf_baseline, mf_target, mode: str = "all") -> CommandResult:
-    """Thin wrapper over comparison.collect_comparison() -- kept as its
-    own function here purely for naming-convention parity with the other
-    six recon commands' collect_X()/render_X_console()/cmd_X() trio."""
+def collect_diff(mf_target, mf_baseline, mode: str = "all") -> CommandResult:
+    """Collect changes in the primary target relative to the baseline.
+
+    comparison.collect_comparison() uses the domain-level baseline/target
+    ordering, while this CLI-facing wrapper follows command-line ordering:
+    primary target first, ``--diff`` reference second.
+    """
     return collect_comparison(mf_baseline, mf_target, mode)
 
 
@@ -307,7 +310,8 @@ def render_diff_console(records, coverage, label_baseline, label_target, verbose
     collect_thread_diff/collect_memory_diff always register their own
     sources when called, whether or not the diff itself could be
     computed."""
-    print(f"\n{BOLD('dumpex diff')}: {CYAN(label_baseline)} vs {CYAN(label_target)}")
+    print(f"\n{BOLD('dumpex diff')}: target {CYAN(label_target)} vs "
+          f"baseline {CYAN(label_baseline)}")
     print("─" * 60)
 
     if "baseline.modules" in coverage.sources:
@@ -320,8 +324,15 @@ def render_diff_console(records, coverage, label_baseline, label_target, verbose
     print()
 
 
-def cmd_diff(mf_baseline, mf_target, mode: str = "all", verbose: bool = False) -> CommandResult:
-    result = collect_diff(mf_baseline, mf_target, mode)
+def cmd_diff(mf_target, mf_baseline, mode: str = "all", verbose: bool = False) -> CommandResult:
+    """Compare the primary CLI dump (target) against --diff's reference
+    dump (baseline).
+
+    Keeping that direction explicit matters for forensic use: in
+    ``dumpex suspect.dmp --diff clean.dmp``, additions and suspicious
+    changes must describe ``suspect.dmp``, not the clean reference.
+    """
+    result = collect_diff(mf_target, mf_baseline, mode)
     label_baseline = ntpath.basename(mf_baseline.filename)
     label_target = ntpath.basename(mf_target.filename)
     render_diff_console(result.records, result.coverage, label_baseline, label_target,
