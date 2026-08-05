@@ -3,3 +3,9 @@
 # Frozen schemas have release hashes tied to their original line endings.
 dumpex/schemas/dumpex-output-v1.1.schema.json text eol=crlf
 dumpex/schemas/dumpex-output-v2.3.schema.json text eol=lf
+
+# Rule provenance hashes the exact file bytes. Keep packaged rule assets on
+# LF across Windows/Linux checkouts so the same release has one stable
+# ruleset hash (and therefore stable Finding IDs) on every platform.
+dumpex/rules_pkg/data/rules.yaml text eol=lf
+dumpex/rules_pkg/data/yara/*.yar text eol=lf
