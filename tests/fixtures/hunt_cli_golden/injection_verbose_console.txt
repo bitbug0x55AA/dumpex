@@ -1,0 +1,66 @@
+
+══════════════════════════════════════════
+  HUNT: Process Injection
+══════════════════════════════════════════
+
+  [!] RWX memory regions
+      Status : SUSPICIOUS
+      Detail : 1 region(s)
+
+  [!] Hidden PE headers (structurally validated, MZ not in module list)
+      Status : SUSPICIOUS
+      Detail : 1 structurally-validated unregistered PE(s)
+
+  [✓] Unbacked threads (StartAddress)
+      Status : LEAD
+      Detail : 1 thread(s) with no module backing (by StartAddress)
+
+  injection.rwx_regions  [MEDIUM]  LEAD
+    Inference   : 1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct allocation(s).
+    Confidence  : medium  —  RWX is a directly-observed page protection flag, not a heuristic guess — but RWX alone is routinely used by JITs, debuggers, and some legitimate packers, so it is a lead, not proof, until corroborated by a validated PE header and/or live execution in the same allocation.
+    Limitations:
+      - Does not by itself distinguish injection from JIT/legitimate self-modifying-code use cases.
+
+  injection.hidden_pe_validated  [MEDIUM]  LEAD
+    Inference   : 1 region(s) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.
+    Confidence  : medium  —  Passing full structural PE validation (not just an 'MZ' prefix) rules out coincidental bytes and most decoys, but a valid header outside the module list can also occur from a manually-mapped but otherwise benign in-process library (e.g. some anti-cheat/DRM loaders) — confidence rises to HIGH only when a thread's live RIP/EIP actually executes inside the same allocation.
+    Limitations:
+      - Header validation read is capped at 4096 bytes; a section table extending past that reports as invalid rather than being partially trusted.
+
+  injection.unbacked_thread_startaddress  [LOW]  LEAD
+    Inference   : 1 thread(s) began execution at an address not covered by any known module.
+    Confidence  : low  —  StartAddress records where a thread BEGAN, not where it is executing now — a thread can legitimately start inside unbacked/JIT memory (e.g. a thread pool worker routine passed as a raw function pointer into private memory) and still be benign. Current RIP/EIP (below, when available) is the stronger signal for what a thread is actually doing.
+
+  injection.allocation_correlation  [HIGH]  DETECTION
+    Inference   : 1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE — page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.
+    Confidence  : high  —  This is the strongest evidence this hunter can produce: the process is, at the moment of the dump, actively running code from an allocation with no legitimate module backing and a concealed PE image.
+    Facts:
+      - TID=0x1 RIP=0x7ff700002000 -> VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  [FULL: RWX+validated-PE]
+    Limitations:
+      - RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the dump was captured would not appear here.
+
+      RWX memory regions — full detail:
+          VA (process)      0x00007ff700000000  size=0x1000
+          AllocationBase    0x00007ff700000000
+          File offset       (not captured)
+          PAGE_EXECUTE_READWRITE  MEM_PRIVATE
+
+      Hidden PE headers — full detail:
+          VA (process)      0x00007ff700002000
+          AllocationBase    0x00007ff700000000
+          File offset       (not captured)
+          Page type         MEM_PRIVATE  PAGE_READWRITE
+          PE machine        AMD64
+          PE sections       1
+          Entry point RVA   0x1000
+          Declared ImageBase 0x140000000
+
+      Unbacked threads (StartAddress) — full detail:
+          TID=0x1
+          StartAddress (VA) 0x00007ff700002000
+          File offset       (not captured)
+
+  [~] 1 region(s) returned fewer bytes than requested while checking for hidden PE headers — coverage is incomplete.
+
+  [ VERDICT ]  HIGH CONFIDENCE INJECTION  (score 3/3 — current RIP/EIP executing in an allocation where RWX + validated PE overlap)
+

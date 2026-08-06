@@ -1,0 +1,18 @@
+## hunt / summary
+kind,execution_status,coverage_status,coverage_reasons,count,selected,hunter_count,detected_count,inconclusive_count,not_evaluated_count,overall_status,highest_verdict_level,lead_count
+hunt,completed,partial,,1,cs-beacon,1,1,0,0,DETECTED,likely,0
+
+## hunt / hunters
+hunter,status,score,max_score,verdict_level,confidence,lead_count,review_priority,coverage_status,coverage_reasons,finding_count,config_count
+cs-beacon,DETECTED,1,2,likely,medium,0,high,partial,No per-thread CONTEXT (RIP/EIP) available -- live-execution correlation could not run,2,2
+
+## hunt / findings
+hunter,id,check,tag,severity,confidence,facts,inference,rationale,limitations,technique_ids,evidence_refs,iocs,rule_id,rule_version
+cs-beacon,finding-41c2fa76ceaf1bf15e36c61cc37c12ff,cs_beacon.structural_config,detection,high,medium,"[""VA=0x50100 file_offset=0x5100 xor_key=0x69 cs_version_estimated=3.x field_count=2"", ""region=0x50000 size=0x226 protect=PAGE_READWRITE""]","Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.","The config's own structural validity — TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.","[""RIP/EIP-based execution corroboration could not fully run \u2014 ThreadListStream missing from this dump \u2014 a live-execution corroboration for this hit cannot be ruled out.""]",[],[],[],cs_beacon.structural_config,
+cs-beacon,finding-c7382a746d70ed8152d25eb89a98caf3,cs_beacon.structural_config,detection,high,medium,"[""VA=0x60100 file_offset=0x6100 xor_key=0x2e cs_version_estimated=3.x field_count=2"", ""region=0x60000 size=0x226 protect=PAGE_READWRITE""]","Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.","The config's own structural validity — TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.","[""RIP/EIP-based execution corroboration could not fully run \u2014 ThreadListStream missing from this dump \u2014 a live-execution corroboration for this hit cannot be ruled out.""]",[],[],[],cs_beacon.structural_config,
+
+## hunt / beacon_configs
+hunter,va,file_offset,region_base,region_size,region_protect,xor_key,cs_version,cs_version_note,context_corroborated,fields
+cs-beacon,0x0000000000050100,20736,0x0000000000050000,550,PAGE_READWRITE,105,3.x,estimated from highest recognized field ID — not a fingerprinted/confirmed build,False,"{""1"": {""name"": ""BeaconType"", ""type"": 1, ""raw"": ""0000"", ""value"": 0}, ""7"": {""name"": ""PublicKey"", ""type"": 3, ""raw"": ""3014300d06092a864886f70d01010105000303003000"", ""value"": ""3014300d06092a864886f70d010101050003030030""}}"
+cs-beacon,0x0000000000060100,24832,0x0000000000060000,550,PAGE_READWRITE,46,3.x,estimated from highest recognized field ID — not a fingerprinted/confirmed build,False,"{""1"": {""name"": ""BeaconType"", ""type"": 1, ""raw"": ""0000"", ""value"": 0}, ""7"": {""name"": ""PublicKey"", ""type"": 3, ""raw"": ""3014300d06092a864886f70d01010105000303003000"", ""value"": ""3014300d06092a864886f70d010101050003030030""}}"
+

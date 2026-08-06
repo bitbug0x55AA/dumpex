@@ -1,0 +1,147 @@
+{
+  "confidence": "medium",
+  "coverage": {
+    "limitations": [
+      {
+        "affected_count": null,
+        "available_fields": [],
+        "code": "THREAD_CONTEXT_UNAVAILABLE",
+        "counterpart_source": null,
+        "detail": null,
+        "related_sources": [],
+        "related_tids": [],
+        "scope": "dump",
+        "source": "thread_context",
+        "thread_id": null,
+        "unavailable_fields": []
+      }
+    ],
+    "reasons": [
+      "No per-thread CONTEXT (RIP/EIP) available -- live-execution correlation could not run"
+    ],
+    "sources": {
+      "memory_info": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "segment_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "thread_context": {
+        "detail": null,
+        "record_count": null,
+        "state": "absent"
+      }
+    },
+    "status": "partial"
+  },
+  "details": {
+    "config_count": 2,
+    "configs": [
+      {
+        "context_corroborated": false,
+        "cs_version": "3.x",
+        "cs_version_note": "estimated from highest recognized field ID — not a fingerprinted/confirmed build",
+        "fields": {
+          "1": {
+            "name": "BeaconType",
+            "raw": "0000",
+            "type": 1,
+            "value": 0
+          },
+          "7": {
+            "name": "PublicKey",
+            "raw": "3014300d06092a864886f70d01010105000303003000",
+            "type": 3,
+            "value": "3014300d06092a864886f70d010101050003030030"
+          }
+        },
+        "file_offset": 20736,
+        "region_base": "0x0000000000050000",
+        "region_protect": "PAGE_READWRITE",
+        "region_size": 550,
+        "va": "0x0000000000050100",
+        "xor_key": 105
+      },
+      {
+        "context_corroborated": false,
+        "cs_version": "3.x",
+        "cs_version_note": "estimated from highest recognized field ID — not a fingerprinted/confirmed build",
+        "fields": {
+          "1": {
+            "name": "BeaconType",
+            "raw": "0000",
+            "type": 1,
+            "value": 0
+          },
+          "7": {
+            "name": "PublicKey",
+            "raw": "3014300d06092a864886f70d01010105000303003000",
+            "type": 3,
+            "value": "3014300d06092a864886f70d010101050003030030"
+          }
+        },
+        "file_offset": 24832,
+        "region_base": "0x0000000000060000",
+        "region_protect": "PAGE_READWRITE",
+        "region_size": 550,
+        "va": "0x0000000000060100",
+        "xor_key": 46
+      }
+    ]
+  },
+  "findings": [
+    {
+      "check": "cs_beacon.structural_config",
+      "confidence": "medium",
+      "evidence_refs": [],
+      "facts": [
+        "VA=0x50100 file_offset=0x5100 xor_key=0x69 cs_version_estimated=3.x field_count=2",
+        "region=0x50000 size=0x226 protect=PAGE_READWRITE"
+      ],
+      "id": "finding-41c2fa76ceaf1bf15e36c61cc37c12ff",
+      "inference": "Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.",
+      "iocs": [],
+      "limitations": [
+        "RIP/EIP-based execution corroboration could not fully run — ThreadListStream missing from this dump — a live-execution corroboration for this hit cannot be ruled out."
+      ],
+      "rationale": "The config's own structural validity — TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.",
+      "rule_id": "cs_beacon.structural_config",
+      "rule_version": null,
+      "severity": "high",
+      "tag": "detection",
+      "technique_ids": []
+    },
+    {
+      "check": "cs_beacon.structural_config",
+      "confidence": "medium",
+      "evidence_refs": [],
+      "facts": [
+        "VA=0x60100 file_offset=0x6100 xor_key=0x2e cs_version_estimated=3.x field_count=2",
+        "region=0x60000 size=0x226 protect=PAGE_READWRITE"
+      ],
+      "id": "finding-c7382a746d70ed8152d25eb89a98caf3",
+      "inference": "Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.",
+      "iocs": [],
+      "limitations": [
+        "RIP/EIP-based execution corroboration could not fully run — ThreadListStream missing from this dump — a live-execution corroboration for this hit cannot be ruled out."
+      ],
+      "rationale": "The config's own structural validity — TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.",
+      "rule_id": "cs_beacon.structural_config",
+      "rule_version": null,
+      "severity": "high",
+      "tag": "detection",
+      "technique_ids": []
+    }
+  ],
+  "hunter": "cs-beacon",
+  "lead_count": 0,
+  "max_score": 2,
+  "review_priority": "high",
+  "score": 1,
+  "status": "DETECTED",
+  "verdict_level": "likely"
+}
