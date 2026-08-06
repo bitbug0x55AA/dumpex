@@ -223,6 +223,31 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
     assert "(not captured)" not in out
 
 
+def test_verbose_xor_detail_includes_decoding_evidence(capsys, monkeypatch):
+    """The verbose XOR supplement must preserve evidence not carried by
+    the compact status line: dump offset, key, decoded type, and IOC text."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(encoding.presentation, "va_to_file_offset", lambda mf, va: 0x456)
+    region = Region(0x301000, 0x301000, 0x1000,
+                    "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
+    hit = SimpleNamespace(
+        region=region,
+        key=0x5A,
+        cls={"type": "pe", "ioc_strings": ["mimikatz"]},
+    )
+
+    encoding.presentation._print_xor_detail(FakeMF(), [hit])
+    out = capsys.readouterr().out
+
+    assert "XOR single-byte obfuscation" in out
+    assert "VA (process)   0x0000000000301000" in out
+    assert "File offset    0x456" in out
+    assert "XOR key        0x5a" in out
+    assert "Decoded type   PE" in out
+    assert "IOC strings    mimikatz" in out
+
+
 def test_verbose_lists_every_structural_pe_hit_beyond_the_facts_cap(capsys):
     # obfuscation.structural_payload's Finding.facts (built for --json/--csv)
     # cap the hit list at 20 with a "... and N more" sentinel entry --
