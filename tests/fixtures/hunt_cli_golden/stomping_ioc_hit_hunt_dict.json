@@ -80,7 +80,7 @@
       "inference": "No module section declared executable-but-not-writable shows a live protection state outside the normal set.",
       "iocs": [],
       "limitations": [],
-      "rationale": "Absence of a protection anomaly is weak evidence of absence — stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.",
+      "rationale": "Absence of a protection anomaly is weak evidence of absence \u2014 stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.",
       "rule_id": "stomping.protection_deviation_lead",
       "rule_version": null,
       "severity": "info",
@@ -92,15 +92,15 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes changed_ranges=[+0x0(len 0x2000)] disk_sha256=52a0eef5d9945c5a… mem_sha256=14161ad8540739ba…"
+        "module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes changed_ranges=[+0x0(len 0x2000)] disk_sha256=52a0eef5d9945c5a\u2026 mem_sha256=14161ad8540739ba\u2026"
       ],
       "id": "finding-b0ba831a3ee10efa83817285a0cc0fc8",
       "inference": "1 module section(s) have relocation-normalized, byte-level content differences from an identity-matched (Machine/SizeOfImage/TimeDateStamp) reference file supplied via --ref-dir.",
       "iocs": [],
       "limitations": [
-        "IAT/delay-import ranges and hotpatch trampolines are NOT specifically excluded before diffing — restricting the diff to executable, non-writable sections already excludes the import tables themselves for typical PE layouts, but a legitimate hotpatch NOP-padding/trampoline at a function prologue can still produce a genuine, non-malicious difference inside .text.",
-        "PDB GUID/Age (CodeView debug directory) is not checked as part of reference-identity matching — Machine/SizeOfImage/TimeDateStamp matching all three is a strong but not perfect guarantee the reference is the exact same build.",
-        "Relocation normalization applies IMAGE_REL_BASED_HIGHLOW/DIR64 fixups only — the types real x86/x64 linkers emit; an exotic or corrupt relocation table would leave some fixups un-normalized."
+        "IAT/delay-import ranges and hotpatch trampolines are NOT specifically excluded before diffing \u2014 restricting the diff to executable, non-writable sections already excludes the import tables themselves for typical PE layouts, but a legitimate hotpatch NOP-padding/trampoline at a function prologue can still produce a genuine, non-malicious difference inside .text.",
+        "PDB GUID/Age (CodeView debug directory) is not checked as part of reference-identity matching \u2014 Machine/SizeOfImage/TimeDateStamp matching all three is a strong but not perfect guarantee the reference is the exact same build.",
+        "Relocation normalization applies IMAGE_REL_BASED_HIGHLOW/DIR64 fixups only \u2014 the types real x86/x64 linkers emit; an exotic or corrupt relocation table would leave some fixups un-normalized."
       ],
       "rationale": "Verified byte-level difference against an identity-matched, relocation-normalized reference, but no observed thread is currently executing inside the changed range(s).",
       "rule_id": "stomping.verified_content_change",
@@ -122,7 +122,7 @@
       "limitations": [
         "Not corroborated by any structural (section/protection) evidence on its own."
       ],
-      "rationale": "A string match proves only that the bytes exist somewhere in the region — it is trivial to plant, coincidentally match tool/API names, or survive from unrelated benign code. This is reported as an investigative lead only and does NOT contribute to the stomping score; see stomping.verified_content_change for the only signal that scores.",
+      "rationale": "A string match proves only that the bytes exist somewhere in the region \u2014 it is trivial to plant, coincidentally match tool/API names, or survive from unrelated benign code. This is reported as an investigative lead only and does NOT contribute to the stomping score; see stomping.verified_content_change for the only signal that scores.",
       "rule_id": "stomping.ioc_string_lead",
       "rule_version": null,
       "severity": "low",

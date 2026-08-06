@@ -9,3 +9,8 @@ dumpex/schemas/dumpex-output-v2.3.schema.json text eol=lf
 # ruleset hash (and therefore stable Finding IDs) on every platform.
 dumpex/rules_pkg/data/rules.yaml text eol=lf
 dumpex/rules_pkg/data/yara/*.yar text eol=lf
+
+# scripts/update_hunt_cli_goldens.py writes these LF-only, byte-for-byte
+# (see that script's own docstring) -- a Windows checkout auto-converting
+# to CRLF would make --check fail against a clean tree for no real reason.
+tests/fixtures/hunt_cli_golden/** text eol=lf

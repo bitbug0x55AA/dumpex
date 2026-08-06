@@ -44,7 +44,7 @@
       {
         "context_corroborated": false,
         "cs_version": "3.x",
-        "cs_version_note": "estimated from highest recognized field ID — not a fingerprinted/confirmed build",
+        "cs_version_note": "estimated from highest recognized field ID \u2014 not a fingerprinted/confirmed build",
         "fields": {
           "1": {
             "name": "BeaconType",
@@ -69,7 +69,7 @@
       {
         "context_corroborated": false,
         "cs_version": "3.x",
-        "cs_version_note": "estimated from highest recognized field ID — not a fingerprinted/confirmed build",
+        "cs_version_note": "estimated from highest recognized field ID \u2014 not a fingerprinted/confirmed build",
         "fields": {
           "1": {
             "name": "BeaconType",
@@ -106,9 +106,9 @@
       "inference": "Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.",
       "iocs": [],
       "limitations": [
-        "RIP/EIP-based execution corroboration could not fully run — ThreadListStream missing from this dump — a live-execution corroboration for this hit cannot be ruled out."
+        "RIP/EIP-based execution corroboration could not fully run \u2014 ThreadListStream missing from this dump \u2014 a live-execution corroboration for this hit cannot be ruled out."
       ],
-      "rationale": "The config's own structural validity — TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.",
+      "rationale": "The config's own structural validity \u2014 TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up \u2014 is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.",
       "rule_id": "cs_beacon.structural_config",
       "rule_version": null,
       "severity": "high",
@@ -127,9 +127,9 @@
       "inference": "Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.",
       "iocs": [],
       "limitations": [
-        "RIP/EIP-based execution corroboration could not fully run — ThreadListStream missing from this dump — a live-execution corroboration for this hit cannot be ruled out."
+        "RIP/EIP-based execution corroboration could not fully run \u2014 ThreadListStream missing from this dump \u2014 a live-execution corroboration for this hit cannot be ruled out."
       ],
-      "rationale": "The config's own structural validity — TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.",
+      "rationale": "The config's own structural validity \u2014 TLV wire format, known field types, a recognized BeaconType, and an ASN.1-shaped public key all lining up \u2014 is itself hard to produce by chance, but no independent memory-context corroboration (executable private region, or a thread executing within the same allocation) was found for this hit.",
       "rule_id": "cs_beacon.structural_config",
       "rule_version": null,
       "severity": "high",

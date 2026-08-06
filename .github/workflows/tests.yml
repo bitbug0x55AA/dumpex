@@ -35,6 +35,16 @@ jobs:
       - name: Install dumpex with dev + optional extras
         run: pip install -e ".[dev,full]"
 
+      - name: Hunt CLI golden fixtures up to date (scripts/update_hunt_cli_goldens.py --check)
+        # Runs on both OSes in the matrix -- a console-rendering change
+        # made on one platform must produce byte-identical goldens on the
+        # other (no OS-specific line-ending/path drift), and this is the
+        # cheapest place to catch a forgotten `python scripts/
+        # update_hunt_cli_goldens.py` before the parametrized tests in
+        # tests/integration/test_hunt_cli_compat_freeze.py fail one
+        # scenario at a time with less context.
+        run: python scripts/update_hunt_cli_goldens.py --check
+
       - name: Run pytest with coverage (overall gate — see pyproject.toml [tool.coverage.report])
         run: pytest --cov=dumpex --cov-report=term-missing
 
