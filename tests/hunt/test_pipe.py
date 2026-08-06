@@ -228,3 +228,34 @@ def test_missing_handle_stream_and_short_read_both_reported(capsys):
         "the short-read coverage gap must still be visible in the console verdict "
         "even when HandleDataStream is also missing"
     )
+
+
+# ── --verbose must list EVERY open pipe handle, not just the first 20 ─────
+# pipe.open_handles' Finding.facts (built for --json/--csv) cap the list
+# at 20 with a "... and N more" sentinel -- --verbose is supposed to mean
+# "the complete list"; this used to come from presentation.py's own
+# uncapped hand-written expansion before rendering was centralized on
+# Finding.print(). Regression test for that completeness claim silently
+# becoming false again.
+
+def test_verbose_lists_every_handle_beyond_the_facts_cap(capsys):
+    region_base = 0x2200000
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+    handle_list = [Handle(i, "File", rf"\Device\NamedPipe\test_{i}") for i in range(25)]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream(handle_list, "handles")
+    pipemod.read_region = mem_reader({region_base: b""})
+
+    pipemod._hunt_pipe(MF(), verbose=False)
+    normal_out = capsys.readouterr().out
+    assert r"\Device\NamedPipe\test_24" not in normal_out
+
+    pipemod._hunt_pipe(MF(), verbose=True)
+    verbose_out = capsys.readouterr().out
+    for i in range(25):
+        assert rf"\Device\NamedPipe\test_{i}" in verbose_out, \
+            f"handle {i} (beyond the 20-item Finding.facts cap) missing from --verbose output"

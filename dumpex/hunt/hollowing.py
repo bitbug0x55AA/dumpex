@@ -519,6 +519,15 @@ def _render_hollowing_console(mf: MinidumpFile, report: Report, verbose: bool = 
                      YELLOW("NOTABLE — image base not in any module"),
                      "Main executable may have been unmapped")
 
+    # Every Finding this hunter built (the 4 anchor/corroborator checks
+    # above are terse status lines only -- inference/confidence/rationale/
+    # limitations for each, plus the structural_correlation Finding that
+    # drives the score, were --json-only until now). One print() each, in
+    # construction order. See Finding.print()'s own docstring for how
+    # `verbose` gates fact-list expansion.
+    for f in report.findings_list:
+        f.print(verbose=verbose)
+
     score = report.score
     status = report.status
     coverage_reasons = report.coverage_reasons

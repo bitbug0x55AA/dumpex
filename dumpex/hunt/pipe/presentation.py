@@ -10,8 +10,30 @@ already built — never recomputes score/status/coverage itself.
 """
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import _print_check, _status_text, NOT_EVALUATED, INCONCLUSIVE
-from dumpex.hunt._finding import TAG_DETECTION, leads_suffix
+from dumpex.hunt._finding import leads_suffix
 from dumpex.hunt.pipe.config import PIPE_CONTEXT_DISTANCE
+
+# pipe.open_handles' Finding.facts (built in aggregate.py) cap the handle
+# list at 20 with a "... and N more" sentinel entry -- --verbose is
+# supposed to mean "the complete list", so beyond that cap it stopped being
+# one. _print_open_handles_detail restores an uncapped listing (same
+# per-handle fields Finding.facts already has) as a separate supplement,
+# rather than raising the cap on Finding.facts itself and changing
+# --json/--csv content. Rendered with facts_mode="omit"/"notice" below (not
+# "full") so the same handle doesn't print twice under --verbose -- see
+# Finding.print()'s own docstring.
+_SUPPLEMENTED_CHECKS = frozenset({"pipe.open_handles"})
+
+
+def _print_open_handles_detail(handle_classified) -> None:
+    print(DIM("      Open pipe handles — full list:"))
+    for hc in handle_classified:
+        h = hc["handle"]
+        line = f"          Handle=0x{h.Handle:x}  ObjectName={h.ObjectName}  GrantedAccess=0x{h.GrantedAccess:x}"
+        if hc["framework_match"]:
+            line += f"  [framework={hc['framework_match'][0]}]"
+        print(DIM(line))
+    print()
 
 
 def render(report, verbose: bool = False) -> dict:
@@ -41,15 +63,16 @@ def render(report, verbose: bool = False) -> dict:
             _print_check("Open pipe handles (HandleDataStream)",
                          GREEN(f"{len(handle_pipe_hits)} found") if not any(hc["framework_match"] for hc in handle_classified)
                          else RED("SUSPICIOUS — framework-pattern match"),
-                         f"{len(handle_pipe_hits)} pipe handle(s)" if not verbose else
-                         "\n          " + "\n          ".join(f"0x{hc['handle'].Handle:x}  {hc['handle'].ObjectName}"
-                                                                for hc in handle_classified))
+                         f"{len(handle_pipe_hits)} pipe handle(s)")
         else:
             _print_check("Open pipe handles (HandleDataStream)",
                          GREEN("CLEAN — no pipe handles open"))
     else:
         _print_check("Open pipe handles (HandleDataStream)",
                      YELLOW("NOT AVAILABLE — dump was not captured with MiniDumpWithHandleData"))
+
+    if verbose and handle_pipe_hits:
+        _print_open_handles_detail(handle_classified)
 
     # ── String-scan lead ───────────────────────────────────────────────────
     if private_pipes:
@@ -120,10 +143,18 @@ def render(report, verbose: bool = False) -> dict:
                        f"Region=0x{r.BaseAddress:x}")
         print(DIM(detail) + "\n")
 
-    # ── Print corroboration/handle findings ──────────────────────────────
+    # ── Every Finding this hunter built ───────────────────────────────────
+    # One print() each, in construction order -- was previously filtered to
+    # TAG_DETECTION only, which silently dropped pipe.open_handles,
+    # pipe.string_scan_lead, and pipe.start_address_proximity_lead from
+    # console/--txt entirely (--json was the only place their inference/
+    # rationale/limitations were visible). See Finding.print()'s own
+    # docstring for how `verbose` gates fact-list expansion.
     for f in report.findings_list:
-        if f.tag == TAG_DETECTION:
-            f.print()
+        if f.check in _SUPPLEMENTED_CHECKS:
+            f.print(verbose=verbose, facts_mode="omit" if verbose else "notice")
+        else:
+            f.print(verbose=verbose)
 
     # ── Score / Verdict ───────────────────────────────────────────────────
     # `report.verdict_reason` is aggregate.py's — the same coverage_reasons

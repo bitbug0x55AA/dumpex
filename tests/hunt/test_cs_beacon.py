@@ -1,12 +1,17 @@
 """Hunter-level tests for dumpex.hunt.cs_beacon (Cobalt Strike beacon config)."""
 import struct
 
+import pytest
+
 from tests.fixtures.fakes import (Region, Segment, FakeReader, FakeStream, FakeMF,
                                    cs_beacon_config_bytes)
 
 import dumpex.hunt.cs_beacon as cs_beacon
 import dumpex.hunt.cs_beacon.parser as parser
 import dumpex.hunt.cs_beacon.der as cs_der
+import dumpex.hunt.cs_beacon.presentation as presentation
+from dumpex.hunt.cs_beacon.aggregate import Report
+from dumpex.hunt._ui import DETECTED
 from dumpex.ui.structured import StructuredOutput
 
 
@@ -246,6 +251,49 @@ def test_multiple_uncorroborated_hits_stay_at_score_1():
     assert len(f["configs"]) == 2
     assert f["score"] == 1, "two distinct uncorroborated hits must not escalate to 2"
     assert f["verdict_level"] == "likely"
+
+
+def test_console_pairs_each_config_block_with_its_own_finding(capsys):
+    """Console output association test: "Beacon config #1"'s own printed
+    block (VA/file offset/region/... plus its cs_beacon.structural_config
+    Finding narrative) must contain config #1's VA and NOT config #2's --
+    guards against the zip()-based pairing in presentation.py silently
+    matching a config to the wrong Finding (or the right count but wrong
+    order) when aggregate.py's hit_records/findings_list ordering ever
+    drifts apart."""
+    seg1_va, seg1_fo = 0x50000, 0x5000
+    seg2_va, seg2_fo = 0x60000, 0x6000
+    config1 = cs_beacon_config_bytes(0x69)
+    config2 = cs_beacon_config_bytes(0x2e)
+    data1 = _mk_segment_data(config1)
+    data2 = _mk_segment_data(config2)
+    seg1 = Segment(seg1_va, seg1_fo, len(data1))
+    seg2 = Segment(seg2_va, seg2_fo, len(data2))
+    regions = [
+        Region(seg1_va, seg1_va, len(data1), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+        Region(seg2_va, seg2_va, len(data2), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+    ]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg1, seg2], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg1_va: data1, seg2_va: data2})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
+    out = capsys.readouterr().out
+
+    assert "COBALT STRIKE — 2 beacon config(s)" in out
+    block1 = out.split("Beacon config #1", 1)[1].split("Beacon config #2", 1)[0]
+    block2 = out.split("Beacon config #2", 1)[1]
+
+    # Every fact/header line in a config's own block is built relative to
+    # its segment's own VA (the hit is at some offset inside it) -- assert
+    # on that segment VA, present in both hex-padding styles the render
+    # path uses (zero-padded for the header table, un-padded in facts).
+    assert f"0x{seg1_va:016x}" in block1 or f"0x{seg1_va:x}" in block1
+    assert f"0x{seg2_va:016x}" not in block1 and f"0x{seg2_va:x}" not in block1
+    assert f"0x{seg2_va:016x}" in block2 or f"0x{seg2_va:x}" in block2
+    assert f"0x{seg1_va:016x}" not in block2 and f"0x{seg1_va:x}" not in block2
 
 
 # ── a segment read failure must be counted as a coverage gap, not ─────────
@@ -826,3 +874,20 @@ def test_decoded_bytes_budget_marks_partial_on_final_candidate(monkeypatch):
     assert f["status"] == "DETECTED"
     assert f["coverage_status"] == "partial"
     assert any("scan resource budget exhausted" in r for r in f["coverage_reasons"])
+
+
+# ── console rendering: hit_records vs. cs_beacon.structural_config ────────
+# findings must never silently mismatch -- a hunter-side aggregate.py
+# regression that appends the wrong number of Findings must be caught
+# loudly (crash the render), not zip() a Beacon config's own console
+# detail out of existence with no trace anywhere (see
+# dumpex/hunt/cs_beacon/presentation.py's own comment on why this is
+# checked explicitly rather than trusted to plain zip()).
+
+def test_presentation_raises_on_hit_record_finding_count_mismatch():
+    report = Report(
+        findings={}, findings_list=[], hit_records=[object(), object()],
+        status=DETECTED,
+    )
+    with pytest.raises(ValueError, match="cs_beacon report invariant violated"):
+        presentation.render(report, verbose=False)

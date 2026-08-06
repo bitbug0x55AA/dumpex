@@ -13,6 +13,29 @@ from dumpex.hunt._ui import (_print_check, _status_text, DETECTED,
 from dumpex.hunt._finding import leads_suffix
 from dumpex.hunt.stomping.memory_scan import _module_basename
 
+# stomping.ioc_string_lead's Finding.facts (built in aggregate.py) hold, per
+# region, only a deduped/capped list of matched terms -- no per-token
+# absolute VA, no string encoding, no weak/common-API classification, and
+# the region list itself is capped at 15. _print_ioc_token_detail restores
+# exactly that (uncapped over regions, matching the pre-centralization
+# console detail) as a separate --verbose-only supplement, since folding it
+# into Finding.facts would change --json/--csv content and this Finding's
+# id (see Finding.__post_init__'s hash basis). Rendered with
+# facts_mode="omit"/"notice" below (not "full") so the same VA doesn't
+# print twice under --verbose -- see Finding.print()'s own docstring.
+_SUPPLEMENTED_CHECKS = frozenset({"stomping.ioc_string_lead"})
+
+
+def _print_ioc_token_detail(ioc_hits) -> None:
+    print(DIM("      IOC strings in module code regions — additional detail:"))
+    for r, mod, hits, _ in ioc_hits:
+        name = _module_basename(mod) if mod else "(unknown)"
+        print(DIM(f"          {name}  0x{r.BaseAddress:x}"))
+        for off, enc, tok, is_weak in hits[:10]:
+            tag = " (weak/common API)" if is_weak else ""
+            print(DIM(f"            0x{r.BaseAddress+off:x}  [{enc}]  {tok}{tag}"))
+    print()
+
 
 def render(report, verbose: bool = False) -> dict:
     """Render the full result and return the same findings dict for the
@@ -31,23 +54,7 @@ def render(report, verbose: bool = False) -> dict:
         print(f"  {DIM(f'[·] Whitelisted network DLLs skipped (network strings expected): {chr(44).join(unique_wl)}')}")
         print()
 
-    if ioc_scan.ioc_hits:
-        n_strong = sum(sum(1 for h in hits if not h[3]) for _, _, hits, _ in ioc_scan.ioc_hits)
-        n_weak   = sum(sum(1 for h in hits if h[3]) for _, _, hits, _ in ioc_scan.ioc_hits)
-        detail = (f"{n_strong} strong + {n_weak} weak IOC token(s) across "
-                  f"{len(ioc_scan.ioc_hits)} module region(s) — LEAD ONLY, not scored")
-        if ioc_scan.ioc_read_failed:
-            detail += f"  ({ioc_scan.ioc_read_failed} region(s) failed to read, not scanned)"
-        if verbose:
-            for r, mod, hits, _ in ioc_scan.ioc_hits:
-                name = _module_basename(mod) if mod else "(unknown)"
-                detail += f"\n          {name}  0x{r.BaseAddress:x}"
-                for off, enc, tok, is_weak in hits[:10]:
-                    tag = DIM(" (weak/common API)") if is_weak else ""
-                    detail += f"\n            0x{r.BaseAddress+off:x}  [{enc}]  {tok}{tag}"
-        _print_check("IOC strings in module code regions (lead)",
-                     YELLOW("LEAD — not scored, see structural checks above"), detail)
-    else:
+    if not ioc_scan.ioc_hits:
         detail = (f"{ioc_scan.ioc_read_failed} region(s) failed to read and were not scanned"
                   if ioc_scan.ioc_read_failed else "")
         _print_check("IOC strings in module code regions",
@@ -58,7 +65,13 @@ def render(report, verbose: bool = False) -> dict:
 
     # ── Print detection/lead findings ─────────────────────────────────────
     for f in report.findings_list:
-        f.print()
+        if f.check in _SUPPLEMENTED_CHECKS:
+            f.print(verbose=verbose, facts_mode="omit" if verbose else "notice")
+        else:
+            f.print(verbose=verbose)
+
+    if verbose and ioc_scan.ioc_hits:
+        _print_ioc_token_detail(ioc_scan.ioc_hits)
 
     if status == NOT_EVALUATED:
         verdict = _status_text(NOT_EVALUATED, "; ".join(coverage_reasons) or "required streams missing")

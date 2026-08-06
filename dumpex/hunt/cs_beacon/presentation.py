@@ -39,10 +39,30 @@ def render(report, verbose: bool = False):
                          GREEN("CLEAN — no beacon config found in memory")
                          + leads_suffix(report.findings_list))
         print()
+        for f in report.findings_list:
+            f.print(verbose=verbose)
         return
 
+    # aggregate.py appends exactly one "cs_beacon.structural_config" Finding
+    # per hit_record, in the same order it iterates report.hit_records --
+    # zipping positionally here (rather than matching on VA/check name
+    # alone) stays correct even with multiple configs in one dump. Checked
+    # explicitly (rather than trusting plain zip()) because a silent
+    # mismatch here would silently drop a Beacon config's own console
+    # detail -- exactly the failure mode this whole rendering pass exists
+    # to eliminate, and the worst possible one to have fail quietly.
+    structural_config_findings = [f for f in report.findings_list
+                                   if f.check == "cs_beacon.structural_config"]
+    if len(structural_config_findings) != len(report.hit_records):
+        raise ValueError(
+            "cs_beacon report invariant violated: "
+            f"{len(report.hit_records)} hit record(s) but "
+            f"{len(structural_config_findings)} cs_beacon.structural_config finding(s) -- "
+            "aggregate.py must append exactly one per hit_record")
+
     print()
-    for idx, hr in enumerate(report.hit_records, 1):
+    for idx, (hr, finding) in enumerate(
+            zip(report.hit_records, structural_config_findings, strict=True), 1):
         c = hr.candidate
         region = hr.region
         cs_ver = _cs_guess_version(c.fields)
@@ -65,6 +85,12 @@ def render(report, verbose: bool = False):
         else:
             print(f"  {'Context corroboration':<26} {DIM('none')}  — structural validity only")
         print()
+
+        # inference/confidence/rationale/limitations for this exact hit --
+        # previously --json-only; the field-by-field TLV dump below is raw
+        # evidence, not a restatement of this narrative. See Finding.print()
+        # for how `verbose` gates its own fact-list expansion.
+        finding.print(verbose=verbose)
 
         f = c.fields
 

@@ -23,5 +23,26 @@
   [✓] PEB image name vs module list
       Status : CLEAN — both report 'legit.exe'
 
+  hollowing.mem_private_at_image_base  [MEDIUM]  LEAD
+    Inference   : The main module's image base is backed by MEM_PRIVATE memory, not a file-mapped MEM_IMAGE region.
+    Confidence  : medium  —  A genuine PE image loaded normally is always MEM_IMAGE at its base — MEM_PRIVATE there means nothing was actually mapped from the executable file this process is supposed to be running. Structural on its own, but a manually-mapped, otherwise benign loader (some DRM/anti-cheat/packer stubs) can also produce this without hollowing — correlated with a second anomaly below before it counts toward the score.
+    Facts: available — use --verbose to list
+    Limitations:
+      - A manual-mapping loader that isn't hollowing can also produce this signal alone.
+
+  hollowing.rwx_at_image_base  [LOW]  LEAD
+    Inference   : The main module's image base carries RWX-family protection.
+    Confidence  : low  —  RWX at the image base is needed to write replacement code during hollowing, but RWX alone is routinely used by JITs, debuggers, and some legitimate packers — a lead, not proof, on its own.
+    Facts: available — use --verbose to list
+    Limitations:
+      - Does not by itself distinguish hollowing from JIT/legitimate self-modifying-code use cases at this address.
+
+  hollowing.structural_correlation  [MEDIUM]  DETECTION
+    Inference   : 2 independent structural signal(s) correlate at the same image base: MEM_PRIVATE at image base, RWX protection.
+    Confidence  : medium  —  Any one of these signals alone has a plausible benign explanation (manual mapping, a capture-time read race, a JIT/packer using RWX). MEM_PRIVATE at the image base correlated with a missing/wiped MZ header AND/OR RWX protection at that same address is materially harder to explain away — the combination the module's own checks were designed to catch.
+    Facts: available — use --verbose to list
+    Limitations:
+      - Structural correlation is strong evidence but not a substitute for live-execution corroboration (no thread-context signal is available for this hunter).
+
   [ VERDICT ]  LIKELY HOLLOWING — MEM_PRIVATE at image base correlated with RWX protection  (1/2 — requires MEM_PRIVATE at image base correlated with a second structural anomaly; single signals above are leads only)
 

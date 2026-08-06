@@ -399,6 +399,92 @@ def test_ioc_lead_scan_read_failure_is_counted(capsys):
     assert "1 region(s) failed to read" in out
 
 
+def test_ioc_lead_finding_printed_exactly_once(capsys):
+    """Regression test for a console-rendering bug: presentation.py used to
+    hand-render a summary line for stomping.ioc_string_lead AND ALSO print
+    every Finding in report.findings_list unconditionally -- when
+    ioc_scan.ioc_hits fired, that same Finding got printed twice (once as
+    an ad-hoc summary, once again via Finding.print()). Nothing exercised
+    a non-empty ioc_hits case before, so this shipped unnoticed. Fixed by
+    dropping the ad-hoc summary block entirely -- the unified findings_list
+    loop is now the only thing that prints this check."""
+    filler = bytearray((i * 7) % 251 for i in range(0x2000))
+    filler[0x40:0x40 + 8] = b"mimikatz"   # strong (non-weak) IOC token, >= 8 printable chars
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base=0x7ff600000000,
+                                                                    text_bytes=bytes(filler))
+    module_base = 0x7ff600000000
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    regions = [Region(module_base + section["vaddr"], module_base, section["vsize"],
+                       "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+
+    stomping.read_region = mem_reader(
+        {module_base: header, module_base + section["vaddr"]: mem_text})
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(ref_file)
+        f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+
+    ioc_findings = [x for x in f["findings"] if x["check"] == "stomping.ioc_string_lead"]
+    assert len(ioc_findings) == 1
+    assert "mimikatz" in ioc_findings[0]["facts"][0]
+
+    out = capsys.readouterr().out
+    assert out.count("stomping.ioc_string_lead") == 1
+    # The bug: a hand-rendered "(lead)" summary line for this exact check,
+    # printed unconditionally alongside (not instead of) the Finding block
+    # below it -- must not come back.
+    assert "IOC strings in module code regions (lead)" not in out
+
+
+def test_verbose_shows_per_token_va_encoding_and_weak_flag(capsys):
+    """stomping.ioc_string_lead's Finding.facts (built for --json/--csv)
+    hold only a deduped, capped list of matched TERMS per region -- no
+    per-token absolute VA, no string encoding, no weak/common-API
+    classification. That detail used to come from presentation.py's own
+    uncapped hand-written --verbose expansion before rendering was
+    centralized on Finding.print(); regression test for it being silently
+    dropped."""
+    filler = bytearray((i * 7) % 251 for i in range(0x2000))
+    filler[0x40:0x40 + 8] = b"mimikatz"
+    filler[0x80:0x80 + len(b"VirtualAlloc")] = b"VirtualAlloc"   # weak/common-API term
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base=module_base,
+                                                                    text_bytes=bytes(filler))
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    regions = [Region(module_base + section["vaddr"], module_base, section["vsize"],
+                       "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+
+    stomping.read_region = mem_reader(
+        {module_base: header, module_base + section["vaddr"]: mem_text})
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(ref_file)
+        stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+        normal_out = capsys.readouterr().out
+        assert "weak/common API" not in normal_out
+        assert f"0x{module_base + section['vaddr'] + 0x40:x}" not in normal_out
+
+        stomping._hunt_stomping(MF(), verbose=True, ref_dir=d)
+        verbose_out = capsys.readouterr().out
+
+    mimikatz_va = module_base + section["vaddr"] + 0x40
+    valloc_va = module_base + section["vaddr"] + 0x80
+    assert f"0x{mimikatz_va:x}" in verbose_out
+    assert "[ASCII]  mimikatz" in verbose_out
+    assert f"0x{valloc_va:x}" in verbose_out
+    assert "weak/common API" in verbose_out
+
+
 # ── Bonus: genuine-detection paths must still work (no false negatives) ───
 
 def test_verified_change_scores_1_then_2_with_rip():

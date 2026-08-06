@@ -364,13 +364,40 @@ class Finding:
             "rule_version":  self.rule_version,
         }
 
-    def print(self, indent: int = 2):
+    def print(self, indent: int = 2, verbose: bool = False, facts_mode: str = "full"):
         """Console rendering — deliberately unchanged by the v2.5 SIEM-alert
         fields (id/severity/technique_ids/evidence_refs/iocs/rule_id/
         rule_version): those are a --json/--csv concern, not something an
         analyst reading the console transcript needs repeated inline.
-        Every field FROM THE ORIGINAL FIVE-FIELD MODEL is still shown,
-        nothing there is implied."""
+        Every field FROM THE ORIGINAL FIVE-FIELD MODEL is still shown.
+
+        `verbose`/`facts_mode` control only how `facts` is rendered — the
+        data itself (this instance, and what --json/--csv see via
+        to_dict()) never changes.
+
+        facts_mode="full" (default) -- not verbose: facts collapse to a
+        plain "available" notice rather than a count (len(self.facts) is
+        NOT a trustworthy observed-item count: some hunters cap facts at
+        10/15/20 with a synthetic "... and N more" entry that is itself
+        counted, others cap with no such marker at all, a few emit more
+        than one fact per logical observation -- printing it as if it were
+        one would report a wrong number on the one line normal-mode
+        output relies on for a headcount). verbose=True: every stored
+        fact is printed as-is.
+
+        facts_mode="notice"/"omit" exist for callers that render their
+        OWN separate, uncapped raw-evidence block for this exact Finding
+        (several hunters do, for fields facts was never given, e.g. file
+        offset) -- printing `facts` in "full" mode alongside that would
+        duplicate the same VA/handle/token a second time under --verbose.
+        "notice" always shows the "available" notice regardless of
+        `verbose` (use in the caller's non-verbose branch, where it's
+        equivalent to "full" anyway); "omit" prints nothing about facts
+        at all (use in the caller's verbose branch, immediately before it
+        prints its own complete raw-evidence block, so that block is the
+        one and only place each fact appears)."""
+        if facts_mode not in ("full", "notice", "omit"):
+            raise ValueError(f"Finding.print: facts_mode must be 'full'/'notice'/'omit', got {facts_mode!r}")
         pad   = " " * indent
         color = _CONFIDENCE_COLOR.get(self.confidence, DIM)
         tag_str = {"observation": "OBSERVATION", "lead": "LEAD", "detection": "DETECTION"}.get(
@@ -378,10 +405,13 @@ class Finding:
         print(f"{pad}{BOLD(self.check)}  [{color(self.confidence.upper())}]  {DIM(tag_str)}")
         print(f"{pad}  Inference   : {self.inference}")
         print(f"{pad}  Confidence  : {self.confidence}  —  {self.rationale}")
-        if self.facts:
-            print(f"{pad}  Facts:")
-            for f in self.facts:
-                print(f"{pad}    - {f}")
+        if self.facts and facts_mode != "omit":
+            if facts_mode == "full" and verbose:
+                print(f"{pad}  Facts:")
+                for f in self.facts:
+                    print(f"{pad}    - {f}")
+            else:
+                print(f"{pad}  Facts: available — use --verbose to list")
         if self.limitations:
             print(f"{pad}  Limitations:")
             for l in self.limitations:
