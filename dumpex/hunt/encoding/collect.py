@@ -97,4 +97,4 @@ def collect_obfuscation_record(mf) -> HunterRecord:
     `_build_encoding_report()` and `_record_from_encoding_report()`
     directly instead, so it never scans twice just to also get console
     output from the same run."""
-    return _record_from_encoding_report(_build_encoding_report(mf, verbose=False))
+    return _record_from_encoding_report(_build_encoding_report(mf))

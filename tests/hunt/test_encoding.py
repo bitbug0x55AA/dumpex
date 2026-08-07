@@ -157,11 +157,13 @@ def test_decode_layer_short_read_makes_result_inconclusive():
 def test_verbose_shows_file_offset_and_b64_length_not_shown_normally(capsys, monkeypatch):
     # va_to_file_offset() returns None whenever the fake dump has no memory
     # segment table (true of every other fixture in this file) -- asserting
-    # only the *label* "File offset" is present would pass even if the
+    # only the *label* "File_offset" is present would pass even if the
     # value printed is always the vacuous "(not captured)" placeholder.
     # Monkeypatched here to a real, non-None value so the assertion below
     # actually exercises the printed offset text, not just its label.
-    monkeypatch.setattr(encoding.presentation, "va_to_file_offset", lambda mf, va: 0x1234)
+    # Patched on aggregate (not presentation) -- that's where Finding.
+    # verbose_facts is now built, see aggregate.py's own comment on why.
+    monkeypatch.setattr(encoding.aggregate, "va_to_file_offset", lambda mf, va: 0x1234)
 
     region_base = 0x300000
     pe_bytes = build_pe_header(
@@ -178,23 +180,14 @@ def test_verbose_shows_file_offset_and_b64_length_not_shown_normally(capsys, mon
 
     encoding._hunt_encoding(MF(), verbose=False)
     normal_out = capsys.readouterr().out
-    assert "B64 length" not in normal_out
-    assert "File offset" not in normal_out
+    assert "B64_length" not in normal_out
+    assert "File_offset" not in normal_out
     assert "0x1234" not in normal_out
 
     encoding._hunt_encoding(MF(), verbose=True)
     verbose_out = capsys.readouterr().out
-    assert f"B64 length     {len(b64_pe)} chars" in verbose_out
-    assert "File offset    0x1234" in verbose_out
-    # facts_mode="omit" for obfuscation.base64_observation -- its own block
-    # (up to the blank line Finding.print() ends every finding with) must
-    # not ALSO print a "Facts:" list duplicating what the raw supplement
-    # above already shows in full. (This payload also decodes as a valid
-    # PE, so obfuscation.structural_payload's OWN, separate detail block
-    # legitimately repeats the same VA -- that's a second check's evidence,
-    # not a duplicate rendering of this one.)
-    base64_block = verbose_out.split("obfuscation.base64_observation", 1)[1].split("\n\n", 1)[0]
-    assert "Facts:" not in base64_block
+    assert f"B64_length={len(b64_pe)}chars" in verbose_out
+    assert "File_offset=0x1234" in verbose_out
 
 
 def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monkeypatch):
@@ -202,7 +195,7 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
     # very start of the dump file) -- the printed-offset logic must branch
     # on `fo is not None`, not on `fo` being truthy, or a real offset of 0
     # would misprint as "(not captured)".
-    monkeypatch.setattr(encoding.presentation, "va_to_file_offset", lambda mf, va: 0)
+    monkeypatch.setattr(encoding.aggregate, "va_to_file_offset", lambda mf, va: 0)
 
     region_base = 0x300000
     pe_bytes = build_pe_header(
@@ -219,41 +212,52 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
 
     encoding._hunt_encoding(MF(), verbose=True)
     out = capsys.readouterr().out
-    assert "File offset    0x0" in out
+    assert "File_offset=0x0" in out
     assert "(not captured)" not in out
 
 
 def test_verbose_xor_detail_includes_decoding_evidence(capsys, monkeypatch):
-    """The verbose XOR supplement must preserve evidence not carried by
-    the compact status line: dump offset, key, decoded type, and IOC text."""
-    from types import SimpleNamespace
+    """The verbose evidence obfuscation.xor_observation's Finding.
+    verbose_facts carries must preserve evidence not in the compact status
+    line: dump offset, key, decoded type, and IOC text -- built (once, in
+    aggregate.py's _xor_verbose_fact()) from the exact same Hit the
+    compact line and Finding.facts already read, through the real
+    end-to-end scan/aggregate/render path (not a direct call into a
+    presentation-layer helper -- there is no such per-hunter helper left
+    to call; see dumpex/hunt/encoding/presentation.py's own module
+    docstring for why)."""
+    monkeypatch.setattr(encoding.aggregate, "va_to_file_offset", lambda mf, va: 0x456)
 
-    monkeypatch.setattr(encoding.presentation, "va_to_file_offset", lambda mf, va: 0x456)
-    region = Region(0x301000, 0x301000, 0x1000,
-                    "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
-    hit = SimpleNamespace(
-        region=region,
-        key=0x5A,
-        cls={"type": "pe", "ioc_strings": ["mimikatz"]},
-    )
+    key = 0x5A
+    plaintext = b"beacon http://185.220.101.5/submit.php callback data padding here for length"
+    encoded = bytes(b ^ key for b in plaintext)
+    region_base = 0x301000
+    regions = [Region(region_base, region_base, len(encoded), "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
 
-    encoding.presentation._print_xor_detail(FakeMF(), [hit])
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({region_base: encoded})
+
+    encoding._hunt_encoding(MF(), verbose=True)
     out = capsys.readouterr().out
 
     assert "XOR single-byte obfuscation" in out
-    assert "VA (process)   0x0000000000301000" in out
-    assert "File offset    0x456" in out
-    assert "XOR key        0x5a" in out
-    assert "Decoded type   PE" in out
-    assert "IOC strings    mimikatz" in out
+    assert f"VA=0x{region_base:016x}" in out
+    assert "File_offset=0x456" in out
+    assert "XOR_key=0x5a" in out
+    assert "Decoded_type=IOC_TEXT" in out
+    assert "IOC_strings=http://185.220.101.5/submit.php" in out
 
 
 def test_verbose_lists_every_structural_pe_hit_beyond_the_facts_cap(capsys):
     # obfuscation.structural_payload's Finding.facts (built for --json/--csv)
     # cap the hit list at 20 with a "... and N more" sentinel entry --
-    # --verbose is supposed to mean "the complete list". With
-    # facts_mode="omit" the raw supplement (not Finding.facts) is now the
-    # sole --verbose detail source for this check, so it must stay uncapped.
+    # --verbose is supposed to mean "the complete list". Finding.
+    # verbose_facts (not Finding.facts) is the --verbose detail source for
+    # this check, built uncapped -- see aggregate.py's own comment where
+    # obfuscation.structural_payload's Finding is constructed.
     # Each region's PE content must be BYTE-DISTINCT (a different
     # `timestamp`) -- the decode budget dedupes by decoded-content hash
     # (dumpex/hunt/encoding/decoding.py's seen_content()) independently of
@@ -285,12 +289,10 @@ def test_verbose_lists_every_structural_pe_hit_beyond_the_facts_cap(capsys):
     encoding._hunt_encoding(MF(), verbose=True)
     verbose_out = capsys.readouterr().out
     assert "... and" not in verbose_out, \
-        "facts_mode=\"omit\" must fully replace the capped Finding.facts sentinel, not coexist with it"
+        "verbose_facts must fully replace the capped Finding.facts sentinel, not coexist with it"
     for i in range(n):
         va = region_base + i * 0x1000
         assert f"0x{va:016x}" in verbose_out, f"PE hit {i} (VA 0x{va:x}) missing from --verbose output"
-    pe_block = verbose_out.split("obfuscation.structural_payload", 1)[1].split("\n\n", 1)[0]
-    assert "Facts:" not in pe_block
 
 
 def test_verbose_lists_every_shellcode_hit_beyond_the_facts_cap(capsys):
@@ -323,7 +325,7 @@ def test_verbose_lists_every_shellcode_hit_beyond_the_facts_cap(capsys):
     encoding._hunt_encoding(MF(), verbose=True)
     verbose_out = capsys.readouterr().out
     assert "... and" not in verbose_out, \
-        "facts_mode=\"omit\" must fully replace the capped Finding.facts sentinel, not coexist with it"
+        "verbose_facts must fully replace the capped Finding.facts sentinel, not coexist with it"
     for i in range(n):
         va = region_base + i * 0x1000
         assert f"0x{va:016x}" in verbose_out, f"shellcode hit {i} (VA 0x{va:x}) missing from --verbose output"

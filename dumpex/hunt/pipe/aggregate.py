@@ -67,6 +67,14 @@ def build_report(mf, handle_scan, pipe_name_scan, correlation, mem_info_availabl
                    + (f"  [framework={hc['framework_match'][0]}]" if hc["framework_match"] else "")
                    for hc in handle_classified[:20]] + (
                    [f"... and {len(handle_classified)-20} more"] if len(handle_classified) > 20 else []),
+            # Full, uncapped -- facts above is capped at 20 for --json/--csv
+            # (a sentinel entry, not a real "this is everything" claim);
+            # every field it carries per handle is already complete, so the
+            # only delta verbose_facts provides is completeness.
+            verbose_facts=[f"Handle=0x{hc['handle'].Handle:x} ObjectName={hc['handle'].ObjectName} "
+                           f"GrantedAccess=0x{hc['handle'].GrantedAccess:x}"
+                           + (f"  [framework={hc['framework_match'][0]}]" if hc["framework_match"] else "")
+                           for hc in handle_classified],
             inference=f"Process holds {len(handle_pipe_hits)} open handle(s) to named "
                        f"pipe object(s), per HandleDataStream.",
             confidence=CONFIDENCE_MEDIUM,

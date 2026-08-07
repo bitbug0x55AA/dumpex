@@ -206,8 +206,9 @@ def test_cannot_reassign_any_field_after_construction():
 
 def test_list_fields_are_tuples_and_reject_in_place_mutation():
     f = Finding(**_base_kwargs(facts=["a"], limitations=["b"],
-                                technique_ids=["T1055"], evidence_refs=["c"], iocs=["d"]))
-    for attr in ("facts", "limitations", "technique_ids", "evidence_refs", "iocs"):
+                                technique_ids=["T1055"], evidence_refs=["c"], iocs=["d"],
+                                verbose_facts=["e"]))
+    for attr in ("facts", "limitations", "technique_ids", "evidence_refs", "iocs", "verbose_facts"):
         value = getattr(f, attr)
         assert isinstance(value, tuple)
         with pytest.raises(AttributeError):
@@ -220,6 +221,76 @@ def test_mutating_the_callers_original_list_does_not_affect_the_finding():
     facts.append("c")
     facts[0] = "tampered"
     assert f.facts == ("a", "b")
+
+
+# ── verbose_facts (console-only field, not part of the wire contract) ──
+# See tests/hunt/test_finding_print.py for verbose_facts' actual console
+# rendering behavior -- these cover the Finding-construction-level
+# contract only: tuple normalization, defensive copy, dataclasses.replace()
+# round-tripping, string validation, exclusion from to_dict()/id/eq/hash.
+
+def test_verbose_facts_permits_empty_strings_like_facts():
+    # _require_list_of_str (unlike _require_str_list) allows "" -- same
+    # permissive-on-emptiness policy as facts/limitations, see that
+    # validator's own comment.
+    f = Finding(**_base_kwargs(verbose_facts=["", "VA=0x1000 File_offset=0x500"]))
+    assert f.verbose_facts == ("", "VA=0x1000 File_offset=0x500")
+
+
+def test_verbose_facts_rejects_non_string_items():
+    with pytest.raises(ValueError, match="verbose_facts"):
+        Finding(**_base_kwargs(verbose_facts=[1]))
+
+
+def test_verbose_facts_is_a_tuple_and_rejects_in_place_mutation():
+    f = Finding(**_base_kwargs(verbose_facts=["VA=0x1000"]))
+    assert isinstance(f.verbose_facts, tuple)
+    with pytest.raises(AttributeError):
+        f.verbose_facts.append("late")
+
+
+def test_mutating_the_callers_original_verbose_facts_list_does_not_affect_the_finding():
+    verbose_facts = ["VA=0x1000"]
+    f = Finding(**_base_kwargs(verbose_facts=verbose_facts))
+    verbose_facts.append("VA=0x2000")
+    verbose_facts[0] = "tampered"
+    assert f.verbose_facts == ("VA=0x1000",)
+
+
+def test_dataclasses_replace_round_trips_verbose_facts(finding_validator):
+    import dataclasses
+    f = Finding(**_base_kwargs(verbose_facts=["VA=0x1000 File_offset=0x500"]))
+    updated = dataclasses.replace(f, confidence=CONFIDENCE_MEDIUM)
+    assert updated.verbose_facts == ("VA=0x1000 File_offset=0x500",)
+    errors = list(finding_validator.iter_errors(updated.to_dict()))
+    assert errors == [], errors
+
+
+def test_verbose_facts_is_never_part_of_to_dict(finding_validator):
+    f = Finding(**_base_kwargs(verbose_facts=["VA=0x1000 File_offset=0x500"]))
+    d = f.to_dict()
+    assert "verbose_facts" not in d
+    errors = list(finding_validator.iter_errors(d))
+    assert errors == [], errors
+
+
+def test_verbose_facts_does_not_affect_finding_id():
+    f1 = Finding(**_base_kwargs(verbose_facts=[]))
+    f2 = Finding(**_base_kwargs(verbose_facts=["VA=0x1000 File_offset=0x500"]))
+    assert f1.id == f2.id
+
+
+def test_verbose_facts_does_not_affect_equality_or_hash():
+    # Deliberately consistent with verbose_facts' exclusion from `id`'s
+    # hash basis (see Finding's own docstring): two Findings differing
+    # ONLY in verbose_facts are the same finding for every purpose except
+    # console rendering, so __eq__/__hash__ must not treat them as
+    # different either -- field(compare=False) on verbose_facts is what
+    # this test pins down.
+    f1 = Finding(**_base_kwargs(verbose_facts=[]))
+    f2 = Finding(**_base_kwargs(verbose_facts=["VA=0x1000 File_offset=0x500"]))
+    assert f1 == f2
+    assert hash(f1) == hash(f2)
 
 
 def test_dataclasses_replace_round_trips(finding_validator):

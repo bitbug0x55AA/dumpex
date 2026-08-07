@@ -10,7 +10,7 @@ going silent until everything is done.
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.core.memory import prot_str
 from dumpex.hunt._ui import _print_check, _status_text, NOT_EVALUATED, INCONCLUSIVE
-from dumpex.hunt._finding import leads_suffix
+from dumpex.hunt._finding import DetailLevel, leads_suffix
 from dumpex.hunt.cs_beacon.schema import CS_BEACON_TYPES, CS_PROXY_TYPES, CS_INJECT_PERMS
 from dumpex.hunt.cs_beacon.parser import _cs_guess_version, _cs_decode_instructions
 
@@ -24,6 +24,7 @@ def render_not_evaluated():
 def render(report, verbose: bool = False):
     """Render the full result: NOT_EVALUATED / clean / detected, whichever
     `report.status` says happened."""
+    level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
     if report.status == NOT_EVALUATED:
         render_not_evaluated()
         return
@@ -40,7 +41,7 @@ def render(report, verbose: bool = False):
                          + leads_suffix(report.findings_list))
         print()
         for f in report.findings_list:
-            f.print(verbose=verbose)
+            f.print(level=level)
         return
 
     # aggregate.py appends exactly one "cs_beacon.structural_config" Finding
@@ -89,8 +90,8 @@ def render(report, verbose: bool = False):
         # inference/confidence/rationale/limitations for this exact hit --
         # previously --json-only; the field-by-field TLV dump below is raw
         # evidence, not a restatement of this narrative. See Finding.print()
-        # for how `verbose` gates its own fact-list expansion.
-        finding.print(verbose=verbose)
+        # for how `level` gates its own fact-list expansion.
+        finding.print(level=level)
 
         f = c.fields
 

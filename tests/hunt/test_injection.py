@@ -289,11 +289,13 @@ def test_only_informational_pe_with_partial_coverage_is_inconclusive_not_detecte
 def test_verbose_shows_file_offset_for_rwx_not_shown_normally(capsys, monkeypatch):
     # va_to_file_offset() returns None whenever the fake dump has no memory
     # segment table (true of every other fixture in this file) -- asserting
-    # only the *label* "File offset" is present would pass even if the
+    # only the *label* "File_offset" is present would pass even if the
     # value printed is always the vacuous "(not captured)" placeholder.
     # Monkeypatched here to a real, non-None value so the assertion below
     # actually exercises the printed offset text, not just its label.
-    monkeypatch.setattr(injection.presentation, "va_to_file_offset", lambda mf, va: 0x1234)
+    # Patched on aggregate (not presentation) -- that's where Finding.
+    # verbose_facts is now built, see aggregate.py's own comment on why.
+    monkeypatch.setattr(injection.aggregate, "va_to_file_offset", lambda mf, va: 0x1234)
 
     rwx_base = 0x7ffe20000000
     regions = [Region(rwx_base, rwx_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
@@ -305,18 +307,12 @@ def test_verbose_shows_file_offset_for_rwx_not_shown_normally(capsys, monkeypatc
 
     injection._hunt_injection(MF(), verbose=False)
     normal_out = capsys.readouterr().out
-    assert "File offset" not in normal_out
+    assert "File_offset" not in normal_out
     assert "0x1234" not in normal_out
 
     injection._hunt_injection(MF(), verbose=True)
     verbose_out = capsys.readouterr().out
-    assert "File offset       0x1234" in verbose_out
-    # facts_mode="omit" for injection.rwx_regions -- its own block (up to
-    # the blank line Finding.print() ends every finding with) must not ALSO
-    # print a "Facts:" list duplicating the region's VA/AllocationBase/
-    # size/type/protect the raw supplement below already shows in full.
-    rwx_block = verbose_out.split("injection.rwx_regions", 1)[1].split("\n\n", 1)[0]
-    assert "Facts:" not in rwx_block
+    assert "File_offset=0x1234" in verbose_out
 
 
 def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monkeypatch):
@@ -324,7 +320,7 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
     # very start of the dump file) -- the printed-offset logic must branch
     # on `fo is not None`, not on `fo` being truthy, or a real offset of 0
     # would misprint as "(not captured)".
-    monkeypatch.setattr(injection.presentation, "va_to_file_offset", lambda mf, va: 0)
+    monkeypatch.setattr(injection.aggregate, "va_to_file_offset", lambda mf, va: 0)
 
     rwx_base = 0x7ffe20000000
     regions = [Region(rwx_base, rwx_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
@@ -336,16 +332,17 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
 
     injection._hunt_injection(MF(), verbose=True)
     out = capsys.readouterr().out
-    assert "File offset       0x0" in out
+    assert "File_offset=0x0" in out
     assert "(not captured)" not in out
 
 
 def test_verbose_lists_every_rwx_region_beyond_the_facts_cap(capsys):
     # injection.rwx_regions' Finding.facts (built for --json/--csv) cap the
     # region list at 20 with a "... and N more" sentinel entry --
-    # --verbose is supposed to mean "the complete list". With facts_mode
-    #="omit" the raw supplement (not Finding.facts) is now the sole
-    # --verbose detail source for this check, so it must stay uncapped.
+    # --verbose is supposed to mean "the complete list". Finding.
+    # verbose_facts (not Finding.facts) is now the --verbose detail source
+    # for this check, and it's built from the full, uncapped `rwx` list --
+    # see aggregate.py's _rwx_verbose_fact().
     n = 21
     rwx_base = 0x7ffe30000000
     regions = [Region(rwx_base + i * 0x2000, rwx_base + i * 0x2000, 0x1000,
@@ -365,9 +362,8 @@ def test_verbose_lists_every_rwx_region_beyond_the_facts_cap(capsys):
     injection._hunt_injection(MF(), verbose=True)
     verbose_out = capsys.readouterr().out
     assert "... and" not in verbose_out, \
-        "facts_mode=\"omit\" must fully replace the capped Finding.facts sentinel, not coexist with it"
+        "verbose_facts must fully replace the capped Finding.facts sentinel, not coexist with it"
     for i in range(n):
         va = rwx_base + i * 0x2000
         assert f"0x{va:016x}" in verbose_out, \
             f"region {i} (VA 0x{va:x}) missing from --verbose output"
-    assert "Facts:" not in verbose_out.split("injection.rwx_regions", 1)[1].split("\n\n", 1)[0]

@@ -28,11 +28,23 @@ confidence, not on presence. Only structurally corroborated findings
 (matching PE headers, live register state, handle objects, cross-checked
 page/section metadata) reach MEDIUM/HIGH and move a verdict.
 """
+import enum
 import hashlib
 import json
 from dataclasses import dataclass, field
 from dumpex.core.mitre import is_valid_technique_id
 from dumpex.ui.colors import RED, YELLOW, DIM, BOLD
+
+
+class DetailLevel(enum.Enum):
+    """How much of a Finding's evidence to render on console/--txt --
+    replaces the old `verbose: bool` + `facts_mode: "full"/"notice"/
+    "omit"` combination Finding.print() used to take. Two states because
+    there are only two things a caller of print() ever needs: the
+    console's own default view, or the --verbose expansion -- see
+    Finding.print()'s own docstring for exactly what each level shows."""
+    NORMAL  = "normal"
+    VERBOSE = "verbose"
 
 CONFIDENCE_LOW    = "low"
 CONFIDENCE_MEDIUM = "medium"
@@ -160,19 +172,48 @@ class Finding:
     frozen=True raises dataclasses.FrozenInstanceError on any attribute
     assignment after __init__ returns (`__post_init__` itself uses
     object.__setattr__ to set derived fields, the documented way to
-    assign inside a frozen dataclass's own __post_init__). The five
-    list-typed fields are additionally normalized to tuples in
+    assign inside a frozen dataclass's own __post_init__). Every
+    list-typed field (facts/limitations/technique_ids/evidence_refs/
+    iocs/verbose_facts) is additionally normalized to a tuple in
     __post_init__ -- both a defensive copy (mutating the caller's
     original list after construction can no longer affect this instance)
     and, since tuples are themselves immutable, a second, independent
     barrier against exactly the in-place-mutation gap frozen=True alone
-    does not close. `to_dict()` converts them back to `list` for JSON.
+    does not close. `to_dict()` converts the wire-contract ones back to
+    `list` for JSON (verbose_facts is never part of `to_dict()` -- see
+    its own entry below).
 
     See this module's own top-of-file docstring for facts/inference/
-    confidence/rationale/limitations. The seven fields below extend the
-    same judgment with a normalized-SIEM-alert shape (id/severity for
-    triage and dedup, technique_ids/evidence_refs/iocs/rule_id/
-    rule_version for correlation and provenance):
+    confidence/rationale/limitations. The fields below extend the same
+    judgment with a normalized-SIEM-alert shape (id/severity for triage
+    and dedup, technique_ids/evidence_refs/iocs/rule_id/rule_version for
+    correlation and provenance) plus verbose_facts (console-only, not
+    part of the wire contract):
+
+      verbose_facts — OPTIONAL, console/--txt-only enumerable detail this
+                       Finding's own `facts` doesn't carry -- typically
+                       because `facts` is capped (some hunters cap at
+                       10/15/20 entries for --json/--csv) or omits a field
+                       --json/--csv consumers were never meant to need
+                       (e.g. a raw file offset into the .dmp). NOT part of
+                       `to_dict()` (--json/--csv never see it) and NOT
+                       part of the `id` hash basis -- it exists purely so
+                       Finding.print() can be the ONE place that decides
+                       what --verbose shows for THIS finding, instead of
+                       a hunter's own presentation.py separately re-
+                       walking raw scan-result lists (report.rwx,
+                       report.sleep_mask_hits, ...) to reconstruct
+                       equivalent detail from scratch. Deliberately
+                       excluded from the `id` hash basis AND from
+                       `__eq__`/`__hash__` (field(compare=False), see
+                       below): it never carries information `facts`/
+                       `inference` don't already assert at a coarser
+                       grain (an item present in `verbose_facts` but not
+                       summarized by `facts`/`inference` in some form is
+                       a hunter bug, not a legitimate use of this field)
+                       -- see Finding.print()'s own docstring for the
+                       corollary this implies about what belongs in
+                       `facts` vs. `verbose_facts`.
 
       id            — NOT settable by a caller (init=False): always
                        computed in __post_init__ from an unambiguous JSON
@@ -288,6 +329,15 @@ class Finding:
     iocs:           list = field(default_factory=list)   # list[str] (tuple[str] once constructed)
     rule_id:        "str | None" = None   # defaults to `check` in __post_init__ if not given
     rule_version:   "str | None" = None   # None unless a real versioned rule source set it
+    # compare=False: verbose_facts is deliberately excluded from `id`'s
+    # hash basis (see this class's own docstring) precisely because it
+    # never carries information facts/inference don't already assert at a
+    # coarser grain -- two Findings differing ONLY in verbose_facts are
+    # the same finding for every purpose except console rendering, so
+    # __eq__/__hash__ (like `id`) must not treat them as different.
+    verbose_facts:  list = field(default_factory=list, compare=False)
+                                                           # list[str] (tuple[str] once constructed)
+                                                           # -- console/--txt --verbose only, see docstring
     id:             "str | None" = field(init=False, default=None)         # always computed
     severity:       "str | None" = field(init=False, default=None)         # always computed
 
@@ -302,6 +352,7 @@ class Finding:
         _require_nonempty_str(self.rationale, "Finding.rationale")
         _require_list_of_str(self.facts, "Finding.facts")
         _require_list_of_str(self.limitations, "Finding.limitations")
+        _require_list_of_str(self.verbose_facts, "Finding.verbose_facts")
         _require_optional_nonempty_str(self.rule_id, "Finding.rule_id")
         _require_optional_nonempty_str(self.rule_version, "Finding.rule_version")
         rule_id = self.rule_id if self.rule_id is not None else self.check
@@ -324,6 +375,7 @@ class Finding:
         object.__setattr__(self, "technique_ids", tuple(self.technique_ids))
         object.__setattr__(self, "evidence_refs", tuple(self.evidence_refs))
         object.__setattr__(self, "iocs", tuple(self.iocs))
+        object.__setattr__(self, "verbose_facts", tuple(self.verbose_facts))
 
         # Always derived -- see this class's own docstring for why
         # neither of these may be set by a caller.
@@ -364,40 +416,39 @@ class Finding:
             "rule_version":  self.rule_version,
         }
 
-    def print(self, indent: int = 2, verbose: bool = False, facts_mode: str = "full"):
-        """Console rendering — deliberately unchanged by the v2.5 SIEM-alert
-        fields (id/severity/technique_ids/evidence_refs/iocs/rule_id/
+    def print(self, indent: int = 2, level: "DetailLevel" = DetailLevel.NORMAL):
+        """Console rendering — the ONE place that decides what a hunter's
+        presentation.py shows for this Finding; a caller never needs (and
+        must not) go back to raw scan-result lists (report.rwx,
+        report.sleep_mask_hits, ...) to reconstruct equivalent detail --
+        everything console/--txt can show about this Finding already
+        lives on it. Deliberately unchanged by the v2.5 SIEM-alert fields
+        (id/severity/technique_ids/evidence_refs/iocs/rule_id/
         rule_version): those are a --json/--csv concern, not something an
         analyst reading the console transcript needs repeated inline.
-        Every field FROM THE ORIGINAL FIVE-FIELD MODEL is still shown.
 
-        `verbose`/`facts_mode` control only how `facts` is rendered — the
-        data itself (this instance, and what --json/--csv see via
-        to_dict()) never changes.
+        `level` controls only how the evidence section renders — the data
+        itself (this instance, and what --json/--csv see via to_dict())
+        never changes:
 
-        facts_mode="full" (default) -- not verbose: facts collapse to a
-        plain "available" notice rather than a count (len(self.facts) is
-        NOT a trustworthy observed-item count: some hunters cap facts at
-        10/15/20 with a synthetic "... and N more" entry that is itself
-        counted, others cap with no such marker at all, a few emit more
-        than one fact per logical observation -- printing it as if it were
-        one would report a wrong number on the one line normal-mode
-        output relies on for a headcount). verbose=True: every stored
-        fact is printed as-is.
+          DetailLevel.NORMAL (default) — the evidence section collapses
+              to a plain "available" notice, no count (len(facts) is NOT
+              a trustworthy observed-item count for every hunter: some
+              cap facts at 10/15/20 with a synthetic "... and N more"
+              entry that is itself counted; printing that as if it were a
+              real total would report a wrong number on the one line
+              normal-mode output relies on for a headcount).
+          DetailLevel.VERBOSE — every item in the evidence section is
+              printed.
 
-        facts_mode="notice"/"omit" exist for callers that render their
-        OWN separate, uncapped raw-evidence block for this exact Finding
-        (several hunters do, for fields facts was never given, e.g. file
-        offset) -- printing `facts` in "full" mode alongside that would
-        duplicate the same VA/handle/token a second time under --verbose.
-        "notice" always shows the "available" notice regardless of
-        `verbose` (use in the caller's non-verbose branch, where it's
-        equivalent to "full" anyway); "omit" prints nothing about facts
-        at all (use in the caller's verbose branch, immediately before it
-        prints its own complete raw-evidence block, so that block is the
-        one and only place each fact appears)."""
-        if facts_mode not in ("full", "notice", "omit"):
-            raise ValueError(f"Finding.print: facts_mode must be 'full'/'notice'/'omit', got {facts_mode!r}")
+        The evidence section is `verbose_facts` when this Finding has any
+        (the richer, uncapped, console-only detail -- see that field's
+        own docstring), else `facts` (the same list --json/--csv see).
+        Never both: a Finding with `verbose_facts` set is asserting "this
+        supersedes `facts` for a human reader", so printing both would
+        show the same VA/handle/token twice under --verbose."""
+        if not isinstance(level, DetailLevel):
+            raise TypeError(f"Finding.print: level must be a DetailLevel, got {type(level).__name__}")
         pad   = " " * indent
         color = _CONFIDENCE_COLOR.get(self.confidence, DIM)
         tag_str = {"observation": "OBSERVATION", "lead": "LEAD", "detection": "DETECTION"}.get(
@@ -405,11 +456,12 @@ class Finding:
         print(f"{pad}{BOLD(self.check)}  [{color(self.confidence.upper())}]  {DIM(tag_str)}")
         print(f"{pad}  Inference   : {self.inference}")
         print(f"{pad}  Confidence  : {self.confidence}  —  {self.rationale}")
-        if self.facts and facts_mode != "omit":
-            if facts_mode == "full" and verbose:
+        evidence = self.verbose_facts or self.facts
+        if evidence:
+            if level is DetailLevel.VERBOSE:
                 print(f"{pad}  Facts:")
-                for f in self.facts:
-                    print(f"{pad}    - {f}")
+                for item in evidence:
+                    print(f"{pad}    - {item}")
             else:
                 print(f"{pad}  Facts: available — use --verbose to list")
         if self.limitations:

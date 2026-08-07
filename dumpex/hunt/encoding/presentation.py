@@ -3,150 +3,23 @@ Console rendering for dumpex.hunt.encoding. Pure formatting: every
 tag/score/confidence/note decision was already made by
 dumpex/hunt/encoding/aggregate.py (see EncodingReport) -- this module
 only turns that decision into text and prints it. No hunter logic lives
-here.
+here, and no raw hit list (report.sleep_mask_hits, report.entropy_hits,
+...) is read for --verbose detail -- every Finding in report.findings_list
+already carries everything Finding.print() can show for it (see
+aggregate.py's five *_verbose_fact() functions, where that detail --
+including file offset and a few other fields --json/--csv never carried --
+is built once, at Finding-construction time). The raw lists are still read
+here for the short CLEAN/OBSERVATION/LEAD/DETECTION status lines below
+(report.sleep_mask_hits, etc. -- just a truthiness/count check, not a
+source of rendered detail).
 """
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
-from dumpex.core.memory import va_to_file_offset, prot_str, addr_to_module
 from dumpex.hunt._ui import _print_check, _status_text, INCONCLUSIVE, NOT_EVALUATED
-from dumpex.hunt._finding import TAG_OBSERVATION, leads_suffix
+from dumpex.hunt._finding import DetailLevel, TAG_OBSERVATION, leads_suffix
 from dumpex.hunt.encoding.aggregate import EncodingReport
 
-# Every one of these seven checks gets a separate, uncapped --verbose-only
-# raw-evidence block below (matching what presentation.py showed before
-# rendering was centralized on Finding.print()), so they're rendered with
-# facts_mode="omit"/"notice" in render() below rather than "full" --
-# printing both would show the same VA twice under --verbose. See
-# Finding.print()'s own docstring for what those modes mean.
-#
-# obfuscation.structural_payload/shellcode_bootstrap_lead were originally
-# left off this set on the theory that their Finding.facts already carried
-# every field the pre-existing console detail did -- true of the FIELDS,
-# but not the CAP: aggregate.py truncates both at facts[:20] + "... and N
-# more" (see check="obfuscation.structural_payload"/
-# "obfuscation.shellcode_bootstrap_lead" there), while the pre-
-# centralization console printed every hit, always, uncapped, unconditional
-# on --verbose. A dump with >20 hits of either kind silently lost hit #21
-# onward from --verbose the moment rendering moved to facts_mode="full".
-_SUPPLEMENTED_CHECKS = frozenset({
-    "obfuscation.sleep_mask_confirmed", "obfuscation.entropy_observation",
-    "obfuscation.base64_observation", "obfuscation.xor_observation",
-    "obfuscation.compressed_observation", "obfuscation.structural_payload",
-    "obfuscation.shellcode_bootstrap_lead",
-})
 
-
-def _print_sleep_mask_detail(mf, sleep_mask_hits):
-    print(DIM("      CS Sleep Mask XOR-encoded beacon memory — full detail:"))
-    for h in sleep_mask_hits:
-        r = h.region
-        fo = va_to_file_offset(mf, r.BaseAddress)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        ctype = h.cls['type'].upper()
-        color_fn = RED if h.cls['is_pe'] or h.cls['is_shellcode'] else YELLOW
-        print(DIM(f"          VA (process)   0x{r.BaseAddress:016x}"))
-        print(DIM(f"          File offset    {fo_str}"))
-        print(DIM(f"          Region size    0x{r.RegionSize:x}  ({r.RegionSize // 1024} KB)"))
-        print(DIM(f"          XOR key        {h.key.hex()}  (rotation offset {h.key_offset})"))
-        print(f"          Decoded type   {color_fn(ctype)}")
-        if h.cls['ioc_strings']:
-            print(DIM(f"          IOC strings    {', '.join(h.cls['ioc_strings'][:4])}"))
-    print()
-
-
-def _print_entropy_detail(mf, entropy_hits, susp_prots):
-    print(DIM("      High-entropy private memory — full detail:"))
-    for h in entropy_hits:
-        r = h.region
-        p = prot_str(r.Protect)
-        fo = va_to_file_offset(mf, r.BaseAddress)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        rwx = RED(" [RWX]") if any(s in p for s in susp_prots) else ""
-        print(f"          VA (process)   0x{r.BaseAddress:016x}{rwx}")
-        print(DIM(f"          File offset    {fo_str}"))
-        print(DIM(f"          Size           0x{r.RegionSize:x}"))
-        print(DIM(f"          Entropy        {h.entropy:.3f} bits  (threshold: {h.threshold})"))
-        print(DIM(f"          Protection     {p}"))
-    print()
-
-
-def _print_base64_detail(mf, base64_unique):
-    print(DIM("      Base64 encoded payloads — full detail:"))
-    for h in base64_unique:
-        abs_va = h.region.BaseAddress + h.offset
-        fo = va_to_file_offset(mf, abs_va)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        ctype = h.cls['type'].upper()
-        print(DIM(f"          VA (process)   0x{abs_va:016x}"))
-        print(DIM(f"          File offset    {fo_str}"))
-        print(DIM(f"          Decoded type   {ctype}"))
-        print(DIM(f"          Decoded size   {len(h.decoded)} bytes"))
-        print(DIM(f"          B64 length     {len(h.raw)} chars"))
-        if h.cls['ioc_strings']:
-            print(DIM(f"          IOC strings    {', '.join(h.cls['ioc_strings'][:3])}"))
-    print()
-
-
-def _print_xor_detail(mf, xor_unique):
-    print(DIM("      XOR single-byte obfuscation — full detail:"))
-    for h in xor_unique:
-        r = h.region
-        fo = va_to_file_offset(mf, r.BaseAddress)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        ctype = h.cls['type'].upper()
-        print(DIM(f"          VA (process)   0x{r.BaseAddress:016x}"))
-        print(DIM(f"          File offset    {fo_str}"))
-        print(DIM(f"          XOR key        0x{h.key:02x}"))
-        print(DIM(f"          Decoded type   {ctype}"))
-        if h.cls['ioc_strings']:
-            print(DIM(f"          IOC strings    {', '.join(h.cls['ioc_strings'][:3])}"))
-    print()
-
-
-def _print_compressed_detail(mf, compressed_unique):
-    print(DIM("      Compressed data (GZIP/ZLIB) — full detail:"))
-    for h in compressed_unique:
-        abs_va = h.region.BaseAddress + h.offset
-        fo = va_to_file_offset(mf, abs_va)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        print(DIM(f"          VA (process)   0x{abs_va:016x}"))
-        print(DIM(f"          File offset    {fo_str}"))
-        print(DIM(f"          Algorithm      {h.layer.upper()}"))
-        print(DIM(f"          Decoded type   {h.cls['type'].upper()}"))
-        print(DIM(f"          Decoded size   {len(h.decoded)} bytes"))
-        if h.cls['ioc_strings']:
-            print(DIM(f"          IOC strings    {', '.join(h.cls['ioc_strings'][:3])}"))
-    print()
-
-
-def _print_structural_pe_detail(all_pe_hits, modules):
-    print(DIM("      Structural PE payload inside encoded data — full detail:"))
-    for h in all_pe_hits:
-        abs_va = h.region.BaseAddress + h.offset
-        known = addr_to_module(abs_va, modules)
-        print(DIM(f"          Encoding       {h.layer.upper()}"))
-        print(DIM(f"          Container VA   0x{abs_va:016x}"))
-        print(f"          Module status  {DIM('registered') if known else RED('UNREGISTERED — hidden PE')}")
-        line = f"          Decoded PE     {len(h.decoded)} bytes"
-        if not h.complete:
-            line += "  (decompression hit the output cap — not end-to-end verified)"
-        print(DIM(line))
-    print()
-
-
-def _print_shellcode_detail(all_shellcode_hits, context_hits):
-    print(DIM("      Shellcode bootstrap pattern inside encoded data — full detail:"))
-    for h in all_shellcode_hits:
-        abs_va = h.region.BaseAddress + h.offset
-        in_context = h in context_hits
-        print(DIM(f"          Encoding       {h.layer.upper()}"))
-        print(DIM(f"          Container VA   0x{abs_va:016x}"))
-        print(DIM(f"          Decoded size   {len(h.decoded)} bytes (call-$+5 bootstrap prefix)"))
-        if in_context:
-            print(DIM(f"          Container prot {prot_str(h.region.Protect)}  (executable+private — elevated lead)"))
-    print()
-
-
-def _print_sleep_mask(mf, verbose, sleep_mask_hits):
+def _print_sleep_mask(sleep_mask_hits):
     if sleep_mask_hits:
         _print_check(
             "CS Sleep Mask XOR-encoded beacon memory",
@@ -160,7 +33,7 @@ def _print_sleep_mask(mf, verbose, sleep_mask_hits):
         )
 
 
-def _print_entropy(mf, verbose, entropy_hits, susp_prots):
+def _print_entropy(entropy_hits):
     if entropy_hits:
         _print_check("High-entropy private memory (observation)",
                      YELLOW("OBSERVATION — not scored, see rationale"),
@@ -170,7 +43,7 @@ def _print_entropy(mf, verbose, entropy_hits, susp_prots):
                      GREEN("CLEAN — no anomalous entropy in private regions"))
 
 
-def _print_base64(mf, verbose, base64_unique, tag, note):
+def _print_base64(base64_unique, tag, note):
     if base64_unique:
         _print_check("Base64 encoded payloads (observation)",
                      YELLOW("OBSERVATION" if tag == TAG_OBSERVATION else "LEAD") + f" — {note}",
@@ -180,7 +53,7 @@ def _print_base64(mf, verbose, base64_unique, tag, note):
                      GREEN("CLEAN — no significant Base64 payloads found"))
 
 
-def _print_xor(mf, verbose, xor_unique, tag, note):
+def _print_xor(xor_unique, tag, note):
     if xor_unique:
         _print_check("XOR single-byte obfuscation (observation)",
                      YELLOW("OBSERVATION" if tag == TAG_OBSERVATION else "LEAD") + f" — {note}",
@@ -190,7 +63,7 @@ def _print_xor(mf, verbose, xor_unique, tag, note):
                      GREEN("CLEAN — no single-byte XOR payloads identified"))
 
 
-def _print_compressed(mf, verbose, compressed_unique, tag, note):
+def _print_compressed(compressed_unique, tag, note):
     if compressed_unique:
         _print_check("Compressed data (GZIP/ZLIB) (observation)",
                      YELLOW("OBSERVATION" if tag == TAG_OBSERVATION else "LEAD") + f" — {note}",
@@ -200,7 +73,7 @@ def _print_compressed(mf, verbose, compressed_unique, tag, note):
                      GREEN("CLEAN — no compressed payloads found"))
 
 
-def _print_structural_pe(mf, all_pe_hits, modules):
+def _print_structural_pe(all_pe_hits):
     if not all_pe_hits:
         return
     _print_check("Structural PE payload inside encoded data",
@@ -208,7 +81,7 @@ def _print_structural_pe(mf, all_pe_hits, modules):
                  f"{len(all_pe_hits)} PE payload(s) found inside encoded/compressed data")
 
 
-def _print_shellcode(all_shellcode_hits, context_hits):
+def _print_shellcode(all_shellcode_hits):
     if not all_shellcode_hits:
         return
     _print_check("Shellcode bootstrap pattern inside encoded data (lead)",
@@ -216,7 +89,7 @@ def _print_shellcode(all_shellcode_hits, context_hits):
                  f"{len(all_shellcode_hits)} shellcode-bootstrap-pattern match(es) inside encoded/compressed data")
 
 
-def render(mf, verbose: bool, report: EncodingReport, susp_prots, modules):
+def render(report: EncodingReport, verbose: bool = False):
     """Print the whole hunt's console RESULT output, in the same order the
     monolithic _hunt_encoding used to interleave it in. Decides nothing;
     every tag/note/score/status value is read off `report`. The "Layer N
@@ -225,44 +98,23 @@ def render(mf, verbose: bool, report: EncodingReport, susp_prots, modules):
     actually called, so the CLI shows progress DURING a slow scan instead
     of only after every layer has already finished (see that module's own
     comment on why)."""
-    _print_sleep_mask(mf, verbose, report.sleep_mask_hits)
-
-    _print_entropy(mf, verbose, report.entropy_hits, susp_prots)
-
-    _print_base64(mf, verbose, report.base64_hits, report.base64_tag, report.base64_note)
-    _print_xor(mf, verbose, report.xor_hits, report.xor_tag, report.xor_note)
-    _print_compressed(mf, verbose, report.compressed_hits, report.compressed_tag, report.compressed_note)
-
-    _print_structural_pe(mf, report.all_pe_hits, modules)
-    _print_shellcode(report.all_shellcode_hits, report.shellcode_context_hits)
+    _print_sleep_mask(report.sleep_mask_hits)
+    _print_entropy(report.entropy_hits)
+    _print_base64(report.base64_hits, report.base64_tag, report.base64_note)
+    _print_xor(report.xor_hits, report.xor_tag, report.xor_note)
+    _print_compressed(report.compressed_hits, report.compressed_tag, report.compressed_note)
+    _print_structural_pe(report.all_pe_hits)
+    _print_shellcode(report.all_shellcode_hits)
 
     # Every Finding this hunter built, one print() each -- the CLEAN/
     # OBSERVATION/LEAD/DETECTION lines above are a short per-layer status
     # summary only; this is where the narrative (inference/confidence/
     # rationale/limitations) that used to be --json-only becomes visible
-    # on console too. See Finding.print()'s own docstring for how
-    # `verbose` gates fact-list expansion.
+    # on console too. See Finding.print()'s own docstring for how `level`
+    # gates fact-list expansion.
+    level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
     for f in report.findings_list:
-        if f.check in _SUPPLEMENTED_CHECKS:
-            f.print(verbose=verbose, facts_mode="omit" if verbose else "notice")
-        else:
-            f.print(verbose=verbose)
-
-    if verbose:
-        if report.sleep_mask_hits:
-            _print_sleep_mask_detail(mf, report.sleep_mask_hits)
-        if report.entropy_hits:
-            _print_entropy_detail(mf, report.entropy_hits, susp_prots)
-        if report.base64_hits:
-            _print_base64_detail(mf, report.base64_hits)
-        if report.xor_hits:
-            _print_xor_detail(mf, report.xor_hits)
-        if report.compressed_hits:
-            _print_compressed_detail(mf, report.compressed_hits)
-        if report.all_pe_hits:
-            _print_structural_pe_detail(report.all_pe_hits, modules)
-        if report.all_shellcode_hits:
-            _print_shellcode_detail(report.all_shellcode_hits, report.shellcode_context_hits)
+        f.print(level=level)
 
     score = report.score
     if not report.mem_info_available:

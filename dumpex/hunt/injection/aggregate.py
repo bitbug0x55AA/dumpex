@@ -13,7 +13,7 @@ explicit compatibility contract this preserves).
 """
 from dataclasses import dataclass, field
 
-from dumpex.core.memory import prot_str
+from dumpex.core.memory import prot_str, va_to_file_offset
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
@@ -40,6 +40,40 @@ def _pe_facts(pe: dict) -> str:
                 f"entrypoint_rva=0x{pe['address_of_entry_point']:x} "
                 f"declared_image_base=0x{pe['image_base']:x}")
     return f"PE header INVALID ({pe['reason']})"
+
+
+# The three multi-line functions below build Finding.verbose_facts --
+# console/--txt --verbose-only detail (see that field's own docstring) --
+# for RWX/hidden-PE/unbacked-thread. Every field they carry beyond
+# _region_facts()/_pe_facts() above is file offset alone (never given to
+# --json/--csv, so it lives only here, not in `facts`); this is presentation
+# formatting living in aggregate.py, not hunter logic in presentation.py --
+# deliberate, so presentation.py never needs `mf` or these raw hit lists at
+# all (see dumpex/hunt/injection/presentation.py's own module docstring).
+def _rwx_verbose_fact(mf, r) -> str:
+    fo = va_to_file_offset(mf, r.BaseAddress)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    return (f"VA (process)=0x{r.BaseAddress:016x} size=0x{r.RegionSize:x} "
+            f"AllocationBase=0x{r.AllocationBase:016x} File_offset={fo_str} "
+            f"{prot_str(r.Protect)} {prot_str(r.Type)}")
+
+
+def _hidden_pe_verbose_fact(mf, h) -> str:
+    r, pe = h["region"], h["pe"]
+    fo = va_to_file_offset(mf, r.BaseAddress)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    return (f"VA (process)=0x{r.BaseAddress:016x} AllocationBase=0x{r.AllocationBase:016x} "
+            f"File_offset={fo_str} Page_type={prot_str(r.Type)} {prot_str(r.Protect)} "
+            f"PE_machine={pe['machine_name']} PE_sections={pe['number_of_sections']} "
+            f"Entry_point_RVA=0x{pe['address_of_entry_point']:x} "
+            f"Declared_ImageBase=0x{pe['image_base']:x}")
+
+
+def _unbacked_thread_verbose_fact(mf, ti) -> str:
+    sa = ti.StartAddress or 0
+    fo = va_to_file_offset(mf, sa)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    return f"TID=0x{ti.ThreadId:x} StartAddress_VA=0x{sa:016x} File_offset={fo_str}"
 
 
 @dataclass
@@ -101,7 +135,7 @@ def _split_scoreable_pe_hits(validated_pe_hits: list, rwx_and_pe_alloc_bases: se
     return suspicious, informational
 
 
-def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hits: list,
+def build_report(mf, rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hits: list,
                   start_threads: list, thread_contexts: list,
                   correlation, memory_info_stream: bool, thread_info_stream: bool,
                   module_list_stream: bool, thread_list_stream: bool,
@@ -113,7 +147,12 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
     coverage/Finding objects, and the public `findings` dict.
     `validated_pe_hits`/`mz_only_hits` are memory_scan.split_hidden_pe_hits(
     hidden_pe_scan)'s output — computed once by the caller (also needed by
-    correlation.py) rather than re-derived here.
+    correlation.py) rather than re-derived here. `mf` is used ONLY to
+    resolve each RWX/hidden-PE/unbacked-thread hit's file offset for
+    Finding.verbose_facts (--verbose console/--txt detail, never --json/
+    --csv) -- see _rwx_verbose_fact()/_hidden_pe_verbose_fact()/
+    _unbacked_thread_verbose_fact()'s own comment for why that formatting
+    lives here now instead of in presentation.py.
 
     `all_regions`/`thread_info_entries`/`module_list` are the v2.4
     migration's (PR2) structured CoverageReport's own record-count inputs
@@ -200,6 +239,7 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
             check="injection.rwx_regions",
             facts=[_region_facts(r) for r in rwx[:20]] + (
                 [f"... and {len(rwx)-20} more"] if len(rwx) > 20 else []),
+            verbose_facts=[_rwx_verbose_fact(mf, r) for r in rwx],
             inference=f"{len(rwx)} memory region(s) carry PAGE_EXECUTE_READWRITE/"
                        f"WRITECOPY protection, spanning {len(allocs)} distinct allocation(s).",
             confidence=CONFIDENCE_MEDIUM,
@@ -222,6 +262,7 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
         findings_list.append(Finding(
             check="injection.hidden_pe_validated",
             facts=facts,
+            verbose_facts=[_hidden_pe_verbose_fact(mf, h) for h in suspicious_pe_hits],
             inference=f"{len(suspicious_pe_hits)} region(s) contain a structurally-valid "
                        f"PE header (DOS+COFF+optional header+full section table all "
                        f"parsed successfully) at an address absent from the module list, "
@@ -297,6 +338,7 @@ def build_report(rwx: list, hidden_pe_scan, validated_pe_hits: list, mz_only_hit
             facts=[f"TID=0x{ti.ThreadId:x} StartAddress=0x{(ti.StartAddress or 0):x}"
                    for ti in start_threads[:20]] + (
                    [f"... and {len(start_threads)-20} more"] if len(start_threads) > 20 else []),
+            verbose_facts=[_unbacked_thread_verbose_fact(mf, ti) for ti in start_threads],
             inference=f"{len(start_threads)} thread(s) began execution at an address not "
                        f"covered by any known module.",
             confidence=CONFIDENCE_LOW,

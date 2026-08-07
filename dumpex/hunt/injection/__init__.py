@@ -122,7 +122,7 @@ def _build_injection_report(mf: MinidumpFile):
     module_list         = mf.modules.modules if module_list_stream else []
 
     return aggregate.build_report(
-        rwx, hidden_pe_scan, validated_pe_hits, mz_only_hits, start_threads,
+        mf, rwx, hidden_pe_scan, validated_pe_hits, mz_only_hits, start_threads,
         thread_contexts, correlation_result, memory_info_stream, thread_info_stream,
         module_list_stream, thread_list_stream, threads_total, contexts_parsed,
         all_regions=regions, thread_info_entries=thread_info_entries, module_list=module_list)
@@ -137,4 +137,4 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     """
     report = _build_injection_report(mf)
 
-    return presentation.render(mf, report, verbose)
+    return presentation.render(report, verbose)

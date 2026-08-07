@@ -18,6 +18,24 @@ from dumpex.hunt.stomping.memory_scan import _module_basename
 from dumpex.hunt.stomping.config import MAX_DIFF_RANGES
 from dumpex.hunt.stomping import correlation
 
+
+def _ioc_verbose_facts(ioc_hits) -> list:
+    """Finding.verbose_facts for stomping.ioc_string_lead -- console/--txt
+    --verbose-only, uncapped, per-TOKEN detail (absolute VA, encoding,
+    weak/common-API classification) `facts` above never carries: `facts`
+    dedupes to one entry per REGION with a capped, deduped term list (built
+    for --json/--csv). This is presentation formatting living in
+    aggregate.py, not hunter logic in presentation.py -- see
+    dumpex/hunt/stomping/presentation.py's own module docstring."""
+    out = []
+    for r, mod, hits, _ in ioc_hits:
+        name = _module_basename(mod) if mod else "(unknown)"
+        for off, enc, tok, is_weak in hits:
+            weak = " (weak/common API)" if is_weak else ""
+            out.append(f"module={name} region=0x{r.BaseAddress:x} VA=0x{r.BaseAddress+off:x} "
+                       f"encoding={enc} token={tok}{weak}")
+    return out
+
 # score -> verdict_level, owned by this hunter (see dumpex.hunt._finding.verdict_level).
 # No "3": this hunter's max score is 2 (verified change, optionally
 # corroborated by live RIP/EIP — there's no third independent signal).
@@ -268,6 +286,7 @@ def build_report(scan, ioc_scan, thread_contexts: list, ref_dir: "str|None",
         findings_list.append(Finding(
             check="stomping.ioc_string_lead",
             facts=facts,
+            verbose_facts=_ioc_verbose_facts(ioc_scan.ioc_hits),
             inference=f"{n_strong} strong + {n_weak} weak IOC-keyword token(s) found across "
                        f"{len(ioc_scan.ioc_hits)} executable module region(s).",
             confidence=CONFIDENCE_LOW,

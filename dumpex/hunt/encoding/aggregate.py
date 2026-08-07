@@ -14,7 +14,7 @@ decided.
 """
 from dataclasses import dataclass, field
 
-from dumpex.core.memory import addr_to_module, prot_str
+from dumpex.core.memory import addr_to_module, prot_str, va_to_file_offset
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
@@ -24,6 +24,70 @@ from dumpex.output.coverage import (
     build_coverage_report, observe_source, EvaluationRequirement, CoverageLimitation,
     LimitationCode,
 )
+
+
+# The four *_verbose_fact() functions below build Finding.verbose_facts --
+# console/--txt --verbose-only detail (see that field's own docstring) for
+# sleep_mask/entropy/base64/xor/compressed. Every field they carry beyond
+# the corresponding Finding.facts entry above (built inline in build_report
+# below) is file offset -- plus, for sleep_mask/base64, a couple of fields
+# --json/--csv were never given (region size, raw Base64 length) -- so this
+# is presentation formatting living in aggregate.py, not hunter logic in
+# presentation.py: presentation.py never needs `mf` or these raw hit lists
+# for detail purposes (see dumpex/hunt/encoding/presentation.py's own
+# module docstring).
+def _sleep_mask_verbose_fact(mf, h) -> str:
+    r = h.region
+    fo = va_to_file_offset(mf, r.BaseAddress)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    fact = (f"VA=0x{r.BaseAddress:016x} File_offset={fo_str} Region_size=0x{r.RegionSize:x} "
+            f"XOR_key={h.key.hex()} rotation_offset={h.key_offset} Decoded_type={h.cls['type'].upper()}")
+    if h.cls['ioc_strings']:
+        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:4])}"
+    return fact
+
+
+def _entropy_verbose_fact(mf, h, susp_prots) -> str:
+    r = h.region
+    p = prot_str(r.Protect)
+    fo = va_to_file_offset(mf, r.BaseAddress)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    rwx = " [RWX]" if any(s in p for s in susp_prots) else ""
+    return (f"VA=0x{r.BaseAddress:016x}{rwx} File_offset={fo_str} Size=0x{r.RegionSize:x} "
+            f"Entropy={h.entropy:.3f}bits threshold={h.threshold} Protection={p}")
+
+
+def _base64_verbose_fact(mf, h) -> str:
+    abs_va = h.region.BaseAddress + h.offset
+    fo = va_to_file_offset(mf, abs_va)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    fact = (f"VA=0x{abs_va:016x} File_offset={fo_str} Decoded_type={h.cls['type'].upper()} "
+            f"Decoded_size={len(h.decoded)}bytes B64_length={len(h.raw)}chars")
+    if h.cls['ioc_strings']:
+        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:3])}"
+    return fact
+
+
+def _xor_verbose_fact(mf, h) -> str:
+    r = h.region
+    fo = va_to_file_offset(mf, r.BaseAddress)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    fact = (f"VA=0x{r.BaseAddress:016x} File_offset={fo_str} XOR_key=0x{h.key:02x} "
+            f"Decoded_type={h.cls['type'].upper()}")
+    if h.cls['ioc_strings']:
+        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:3])}"
+    return fact
+
+
+def _compressed_verbose_fact(mf, h) -> str:
+    abs_va = h.region.BaseAddress + h.offset
+    fo = va_to_file_offset(mf, abs_va)
+    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
+    fact = (f"VA=0x{abs_va:016x} File_offset={fo_str} Algorithm={h.layer.upper()} "
+            f"Decoded_type={h.cls['type'].upper()} Decoded_size={len(h.decoded)}bytes")
+    if h.cls['ioc_strings']:
+        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:3])}"
+    return fact
 
 
 def _encoding_coverage_report(mem_info_available: bool, fully_skipped: bool, region_count: int,
@@ -161,7 +225,7 @@ def _classify_section(hits: list, ioc_only_note="IOC-style string(s) found — t
     return has_pe, has_shellcode, ioc_only, tag, note
 
 
-def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
+def build_report(mf, sleep_mask_result, entropy_result, decode_result,
                   modules, regions, susp_prots, mem_info_available, decode_budget) -> EncodingReport:
     """
     Turn the three scan layers' raw results into the final findings dict
@@ -205,6 +269,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
             facts=[f"VA=0x{h.region.BaseAddress:x} key={h.key.hex()} "
                    f"rotation_offset={h.key_offset} decoded_type={h.cls['type']}"
                    for h in sleep_mask_hits[:10]],
+            verbose_facts=[_sleep_mask_verbose_fact(mf, h) for h in sleep_mask_hits],
             inference=f"{len(sleep_mask_hits)} region(s) decode cleanly under a recovered "
                        f"repeating-key XOR AND contain the literal 'sha256\\x00' marker "
                        f"that Cobalt Strike's sleep-mask-encoded beacon memory always "
@@ -227,6 +292,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
             check="obfuscation.entropy_observation",
             facts=[f"VA=0x{h.region.BaseAddress:x} entropy={h.entropy:.3f} threshold={h.threshold} "
                    f"protect={prot_str(h.region.Protect)}" for h in entropy_hits[:15]],
+            verbose_facts=[_entropy_verbose_fact(mf, h, susp_prots) for h in entropy_hits],
             inference=f"{len(entropy_hits)} MEM_PRIVATE region(s) exceed the Shannon-entropy "
                        f"threshold typical of encrypted/compressed/packed content.",
             confidence=CONFIDENCE_LOW,
@@ -272,6 +338,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
             check="obfuscation.base64_observation",
             facts=[f"VA=0x{h.region.BaseAddress+h.offset:x} decoded_type={h.cls['type']} "
                    f"decoded_size={len(h.decoded)}" for h in base64_unique[:15]],
+            verbose_facts=[_base64_verbose_fact(mf, h) for h in base64_unique],
             inference=f"{len(base64_unique)} region(s) contain data that decodes cleanly as "
                        f"Base64.",
             confidence=CONFIDENCE_LOW,
@@ -296,6 +363,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
             check="obfuscation.xor_observation",
             facts=[f"VA=0x{h.region.BaseAddress:x} key=0x{h.key:02x} decoded_type={h.cls['type']}"
                    for h in xor_unique[:15]],
+            verbose_facts=[_xor_verbose_fact(mf, h) for h in xor_unique],
             inference=f"{len(xor_unique)} region(s) decode plausibly under a brute-forced "
                        f"single-byte XOR key (already filtered to require IOC content or a "
                        f"structural PE/shellcode match before being surfaced at all).",
@@ -319,6 +387,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
             check="obfuscation.compressed_observation",
             facts=[f"VA=0x{h.region.BaseAddress+h.offset:x} algo={h.layer} decoded_type={h.cls['type']} "
                    f"decoded_size={len(h.decoded)}" for h in compressed_unique[:15]],
+            verbose_facts=[_compressed_verbose_fact(mf, h) for h in compressed_unique],
             inference=f"{len(compressed_unique)} region(s) contain data that decompresses cleanly "
                        f"as GZIP/ZLIB.",
             confidence=CONFIDENCE_LOW,
@@ -368,6 +437,11 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
         findings_list.append(Finding(
             check="obfuscation.structural_payload",
             facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
+            # Full, uncapped -- facts above is capped for --json/--csv (a
+            # sentinel entry, not a real "this is everything" claim); every
+            # field it carries per hit is already complete, so the only
+            # delta verbose_facts provides is completeness, not new fields.
+            verbose_facts=facts,
             inference="Decoded/decompressed content from one or more obfuscation layers "
                        "structurally validates as a PE image.",
             confidence=CONFIDENCE_MEDIUM if all_incomplete else CONFIDENCE_HIGH,
@@ -437,6 +511,7 @@ def build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
         findings_list.append(Finding(
             check="obfuscation.shellcode_bootstrap_lead",
             facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
+            verbose_facts=facts,   # full, uncapped -- see structural_payload's own comment above
             inference=f"{len(all_shellcode_hits)} decoded payload(s) begin with a "
                        f"call-$+5-style shellcode bootstrap prefix (6 bytes)"
                        + (f", {len(context_hits)} of them inside an executable+private region"

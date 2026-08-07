@@ -480,7 +480,7 @@ def test_verbose_shows_per_token_va_encoding_and_weak_flag(capsys):
     mimikatz_va = module_base + section["vaddr"] + 0x40
     valloc_va = module_base + section["vaddr"] + 0x80
     assert f"0x{mimikatz_va:x}" in verbose_out
-    assert "[ASCII]  mimikatz" in verbose_out
+    assert "encoding=ASCII token=mimikatz" in verbose_out
     assert f"0x{valloc_va:x}" in verbose_out
     assert "weak/common API" in verbose_out
 

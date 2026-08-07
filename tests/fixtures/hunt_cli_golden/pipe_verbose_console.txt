@@ -8,9 +8,6 @@
       Status : SUSPICIOUS — framework-pattern match
       Detail : 1 pipe handle(s)
 
-      Open pipe handles — full list:
-          Handle=0x88  ObjectName=\Device\NamedPipe\msagent_1337  GrantedAccess=0x12019f  [framework=Cobalt Strike]
-
   [✓] Pipe name strings in non-system memory (lead only)
       Status : LEAD — not scored, see handle checks above
       Detail : 1 occurrence(s)
@@ -39,6 +36,8 @@
   pipe.open_handles  [MEDIUM]  OBSERVATION
     Inference   : Process holds 1 open handle(s) to named pipe object(s), per HandleDataStream.
     Confidence  : medium  —  HandleDataStream is the OS's own record of what this process actually has open — far stronger than a bare string match, but having ANY pipe handle open is completely ordinary for most Windows processes (IPC, RPC, print spooler, etc.); only a handle whose name matches a known C2/lateral-movement framework convention, or one corroborated by nearby C2 context / active execution, is treated as a detection.
+    Facts:
+      - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 GrantedAccess=0x12019f  [framework=Cobalt Strike]
     Limitations:
       - Presence of a pipe handle is not inherently suspicious.
 

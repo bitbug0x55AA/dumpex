@@ -117,7 +117,7 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
     if _wanted("yara"):
         records.append(_record_from_yara_report(_build_yara_report(mf, rules_dir=yara_dir)))
     if _wanted("obfuscation"):
-        records.append(_record_from_encoding_report(_build_encoding_report(mf, verbose=False)))
+        records.append(_record_from_encoding_report(_build_encoding_report(mf)))
 
     summary = build_hunt_summary(records, selected=selected)
     return CommandResult(kind="hunt", records=records,
@@ -179,7 +179,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
 
     if run_injection:
         report = _build_injection_report(mf)
-        results["injection"] = _render_injection_console(mf, report, verbose)
+        results["injection"] = _render_injection_console(report, verbose)
         records.append(_record_from_injection_report(report))
     if run_hollowing:
         _print_hollowing_pre_build_console()
@@ -213,8 +213,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         records.append(_record_from_yara_report(report))
     if run_obfuscation:
         _print_encoding_pre_build_console()
-        report = _build_encoding_report(mf, verbose=False)
-        results["obfuscation"] = _render_encoding_console(mf, report, verbose)
+        report = _build_encoding_report(mf)
+        results["obfuscation"] = _render_encoding_console(report, verbose)
         records.append(_record_from_encoding_report(report))
 
     # The single cross-hunter reducer JSON (dumpex.hunt.cmd_hunt(...,

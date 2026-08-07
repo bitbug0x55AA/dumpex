@@ -25,12 +25,10 @@
   stomping.ioc_string_lead  [LOW]  LEAD
     Inference   : 1 strong + 0 weak IOC-keyword token(s) found across 1 executable module region(s).
     Confidence  : low  —  A string match proves only that the bytes exist somewhere in the region — it is trivial to plant, coincidentally match tool/API names, or survive from unrelated benign code. This is reported as an investigative lead only and does NOT contribute to the stomping score; see stomping.verified_content_change for the only signal that scores.
+    Facts:
+      - module=legit.dll region=0x7ff600001000 VA=0x7ff600001040 encoding=ASCII token=mimikatz
     Limitations:
       - Not corroborated by any structural (section/protection) evidence on its own.
-
-      IOC strings in module code regions — additional detail:
-          legit.dll  0x7ff600001000
-            0x7ff600001040  [ASCII]  mimikatz
 
   [ VERDICT ]  VERIFIED MODULE CODE MODIFICATION — content differs from reference file, but no observed thread executes inside the changed range (uncorroborated; consistent with hotpatch/EDR-hook activity as well as stomping)  (1/2, requires --ref-dir; protection-deviation and string-IOC leads above are informational and not counted)
 

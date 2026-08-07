@@ -1,69 +1,23 @@
 """All console rendering for the process injection hunter. Reads only
 from the aggregate.Report the caller already built — never recomputes
-score/status/coverage itself.
+score/status/coverage itself, and never reads a raw hit list (report.rwx,
+report.suspicious_pe_hits, report.start_threads) for --verbose detail --
+every Finding in report.findings_list already carries everything
+Finding.print() can show for it (see dumpex/hunt/injection/aggregate.py's
+_rwx_verbose_fact()/_hidden_pe_verbose_fact()/_unbacked_thread_verbose_
+fact(), where that detail -- including file offset, which facts never
+carried -- is built once, at Finding-construction time). The three raw
+lists are still read here for the short CLEAN/SUSPICIOUS status lines
+below (report.rwx, etc. — just a truthiness/count check, not a source of
+rendered detail).
 """
-from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
-from dumpex.core.memory import prot_str, va_to_file_offset
 from dumpex.hunt._ui import _print_hunt_header, _print_check, _status_text, \
     NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED
-from dumpex.hunt._finding import leads_suffix
-
-# injection.rwx_regions/hidden_pe_validated/unbacked_thread_startaddress each
-# get a separate, uncapped --verbose-only raw-evidence block below (matching
-# what presentation.py showed before rendering was centralized on
-# Finding.print()) instead of Finding.facts' own capped list, which is why
-# they're rendered with facts_mode="omit"/"notice" in render() below rather
-# than "full" -- printing both would show the same VA twice under
-# --verbose. See Finding.print()'s own docstring for what those modes mean.
-_SUPPLEMENTED_CHECKS = frozenset({
-    "injection.rwx_regions", "injection.hidden_pe_validated",
-    "injection.unbacked_thread_startaddress",
-})
+from dumpex.hunt._finding import DetailLevel, leads_suffix
 
 
-def _print_rwx_detail(mf: MinidumpFile, rwx) -> None:
-    print(DIM("      RWX memory regions — full detail:"))
-    for r in rwx:
-        fo = va_to_file_offset(mf, r.BaseAddress)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        print(DIM(f"          VA (process)      0x{r.BaseAddress:016x}  size=0x{r.RegionSize:x}"))
-        print(DIM(f"          AllocationBase    0x{r.AllocationBase:016x}"))
-        print(DIM(f"          File offset       {fo_str}"))
-        print(DIM(f"          {prot_str(r.Protect)}  {prot_str(r.Type)}"))
-    print()
-
-
-def _print_hidden_pe_detail(mf: MinidumpFile, suspicious_pe_hits) -> None:
-    print(DIM("      Hidden PE headers — full detail:"))
-    for h in suspicious_pe_hits:
-        r, pe = h["region"], h["pe"]
-        fo = va_to_file_offset(mf, r.BaseAddress)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        print(DIM(f"          VA (process)      0x{r.BaseAddress:016x}"))
-        print(DIM(f"          AllocationBase    0x{r.AllocationBase:016x}"))
-        print(DIM(f"          File offset       {fo_str}"))
-        print(DIM(f"          Page type         {prot_str(r.Type)}  {prot_str(r.Protect)}"))
-        print(DIM(f"          PE machine        {pe['machine_name']}"))
-        print(DIM(f"          PE sections       {pe['number_of_sections']}"))
-        print(DIM(f"          Entry point RVA   0x{pe['address_of_entry_point']:x}"))
-        print(DIM(f"          Declared ImageBase 0x{pe['image_base']:x}"))
-    print()
-
-
-def _print_unbacked_threads_detail(mf: MinidumpFile, start_threads) -> None:
-    print(DIM("      Unbacked threads (StartAddress) — full detail:"))
-    for ti in start_threads:
-        sa = ti.StartAddress or 0
-        fo = va_to_file_offset(mf, sa)
-        fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-        print(DIM(f"          TID=0x{ti.ThreadId:x}"))
-        print(DIM(f"          StartAddress (VA) 0x{sa:016x}"))
-        print(DIM(f"          File offset       {fo_str}"))
-    print()
-
-
-def render(mf: MinidumpFile, report, verbose: bool = False) -> dict:
+def render(report, verbose: bool = False) -> dict:
     """Render the full result and return the same findings dict for the
     caller to hand back."""
     findings = report.findings
@@ -117,20 +71,10 @@ def render(mf: MinidumpFile, report, verbose: bool = False) -> dict:
     # print() each, in construction order, so the narrative (inference/
     # confidence/rationale/limitations) that used to be --json-only is
     # visible on console too. See Finding.print()'s own docstring for how
-    # `verbose` controls fact-list expansion.
+    # `level` controls fact-list expansion.
+    level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
     for f in report.findings_list:
-        if f.check in _SUPPLEMENTED_CHECKS:
-            f.print(verbose=verbose, facts_mode="omit" if verbose else "notice")
-        else:
-            f.print(verbose=verbose)
-
-    if verbose:
-        if rwx:
-            _print_rwx_detail(mf, rwx)
-        if suspicious_pe_hits:
-            _print_hidden_pe_detail(mf, suspicious_pe_hits)
-        if start_threads:
-            _print_unbacked_threads_detail(mf, start_threads)
+        f.print(level=level)
 
     if not coverage["thread_context"]:
         print(YELLOW("  [~] No per-thread CONTEXT (RIP/EIP) available in this dump — "

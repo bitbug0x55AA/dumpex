@@ -103,7 +103,7 @@ from dumpex.hunt.encoding.aggregate import build_report
 from dumpex.hunt.encoding import presentation
 
 
-def _build_encoding_report(mf: MinidumpFile, verbose: bool = False):
+def _build_encoding_report(mf: MinidumpFile):
     """Run the five detection layers and aggregate them into an
     EncodingReport -- the ONE place this pipeline is assembled, shared
     by `_hunt_encoding()` (console path, below) and
@@ -111,7 +111,12 @@ def _build_encoding_report(mf: MinidumpFile, verbose: bool = False):
     producing path). Prints nothing at all (see `_hunt_encoding()`/
     `collect_hunt()` for the two console/typed-record consumers of the
     same Report -- PR4 of the `--hunt` v2.4 migration unified every
-    hunter onto this build-once, multiple-consumers shape).
+    hunter onto this build-once, multiple-consumers shape). Takes no
+    `verbose` parameter: --verbose only ever gates what presentation.py
+    prints from an already-built Report's `Finding.verbose_facts` (see
+    Finding.print()'s own docstring) -- it was never a scan-time or
+    aggregation-time decision, so threading it through this function and
+    into `build_report()` was dead plumbing.
     """
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
@@ -156,7 +161,7 @@ def _build_encoding_report(mf: MinidumpFile, verbose: bool = False):
     entropy_result = _scan_entropy(regions, modules, mf, susp_prots, read_region, config)
     decode_result = scan_decode_layers(regions, modules, mf, read_region, config, decode_budget)
 
-    report = build_report(mf, verbose, sleep_mask_result, entropy_result, decode_result,
+    report = build_report(mf, sleep_mask_result, entropy_result, decode_result,
                            modules, regions, susp_prots, mem_info_available, decode_budget)
     return report
 
@@ -197,8 +202,8 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     own docstring explains).
     """
     _print_encoding_pre_build_console()
-    report = _build_encoding_report(mf, verbose=verbose)
-    return _render_encoding_console(mf, report, verbose)
+    report = _build_encoding_report(mf)
+    return _render_encoding_console(report, verbose)
 
 
 def _print_encoding_pre_build_console() -> None:
@@ -216,16 +221,10 @@ def _print_encoding_pre_build_console() -> None:
     print(DIM("  [*] Layers 2-4: Base64 / XOR / GZIP scan …"))
 
 
-def _render_encoding_console(mf: MinidumpFile, report, verbose: bool = False) -> dict:
+def _render_encoding_console(report, verbose: bool = False) -> dict:
     """Render the console report for an ALREADY-BUILT encoding
     `EncodingReport`, returning the same v1.1-shaped findings dict
     `_hunt_encoding()` always has -- extracted for the same reason as
-    `_print_encoding_pre_build_console()` above. `modules`/`susp_prots`
-    are cheap, pure re-derivations (not a re-scan) needed only by
-    presentation.render()'s own signature -- kept out of EncodingReport
-    itself rather than growing it two fields whose only consumer is this
-    one console call."""
-    modules = get_modules(mf)
-    susp_prots = get_rules()["suspicious_protections"]
-    presentation.render(mf, verbose, report, susp_prots, modules)
+    `_print_encoding_pre_build_console()` above."""
+    presentation.render(report, verbose)
     return report.findings

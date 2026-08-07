@@ -9,7 +9,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
 from dumpex.hunt._ui import (_print_hunt_header, _print_check, _status_text,
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE)
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
-from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
+from dumpex.hunt._finding import (Finding, DetailLevel, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_LEAD, TAG_DETECTION, overall_confidence, verdict_level,
     lead_count, review_priority, leads_suffix)
 from dumpex.output.coverage import (
@@ -524,9 +524,10 @@ def _render_hollowing_console(mf: MinidumpFile, report: Report, verbose: bool = 
     # limitations for each, plus the structural_correlation Finding that
     # drives the score, were --json-only until now). One print() each, in
     # construction order. See Finding.print()'s own docstring for how
-    # `verbose` gates fact-list expansion.
+    # `level` gates fact-list expansion.
+    level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
     for f in report.findings_list:
-        f.print(verbose=verbose)
+        f.print(level=level)
 
     score = report.score
     status = report.status
