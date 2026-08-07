@@ -3,47 +3,53 @@
   HUNT: Process Injection
 ══════════════════════════════════════════
 
-  [!] RWX memory regions
-      Status : SUSPICIOUS
-      Detail : 1 region(s)
+  VERDICT     HIGH CONFIDENCE INJECTION
+  Confidence  high
+  Score       3/3
+  Coverage    PARTIAL
+  Review      high
 
-  [!] Hidden PE headers (structurally validated, MZ not in module list)
-      Status : SUSPICIOUS
-      Detail : 1 structurally-validated unregistered PE(s)
+  KEY SIGNALS
 
-  [✓] Unbacked threads (StartAddress)
-      Status : LEAD
-      Detail : 1 thread(s) with no module backing (by StartAddress)
+  [!] DETECTION  Live execution in a correlated allocation
+      1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a
+      validated hidden PE — page type, structural PE validation, and live RIP/EIP all converge on
+      the same AllocationBase.
 
-  injection.rwx_regions  [MEDIUM]  LEAD
-    Inference   : 1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct allocation(s).
-    Confidence  : medium  —  RWX is a directly-observed page protection flag, not a heuristic guess — but RWX alone is routinely used by JITs, debuggers, and some legitimate packers, so it is a lead, not proof, until corroborated by a validated PE header and/or live execution in the same allocation.
-    Facts: available — use --verbose to list
-    Limitations:
-      - Does not by itself distinguish injection from JIT/legitimate self-modifying-code use cases.
+  [~] LEAD       RWX memory
+      1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct
+      allocation(s).
 
-  injection.hidden_pe_validated  [MEDIUM]  LEAD
-    Inference   : 1 region(s) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.
-    Confidence  : medium  —  Passing full structural PE validation (not just an 'MZ' prefix) rules out coincidental bytes and most decoys, but a valid header outside the module list can also occur from a manually-mapped but otherwise benign in-process library (e.g. some anti-cheat/DRM loaders) — confidence rises to HIGH only when a thread's live RIP/EIP actually executes inside the same allocation.
-    Facts: available — use --verbose to list
-    Limitations:
-      - Header validation read is capped at 4096 bytes; a section table extending past that reports as invalid rather than being partially trusted.
+  [~] LEAD       Hidden PE header
+      1 region(s) contain a structurally-valid PE header (DOS+COFF+optional header+full section
+      table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE
+      memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live
+      thread execution.
 
-  injection.unbacked_thread_startaddress  [LOW]  LEAD
-    Inference   : 1 thread(s) began execution at an address not covered by any known module.
-    Confidence  : low  —  StartAddress records where a thread BEGAN, not where it is executing now — a thread can legitimately start inside unbacked/JIT memory (e.g. a thread pool worker routine passed as a raw function pointer into private memory) and still be benign. Current RIP/EIP (below, when available) is the stronger signal for what a thread is actually doing.
-    Facts: available — use --verbose to list
+  [~] LEAD       Unbacked thread start
+      1 thread(s) began execution at an address not covered by any known module.
 
-  injection.allocation_correlation  [HIGH]  DETECTION
-    Inference   : 1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE — page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.
-    Confidence  : high  —  This is the strongest evidence this hunter can produce: the process is, at the moment of the dump, actively running code from an allocation with no legitimate module backing and a concealed PE image.
-    Facts: available — use --verbose to list
-    Limitations:
-      - RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the dump was captured would not appear here.
+  WHY THIS VERDICT
 
-  [~] 1 region(s) returned fewer bytes than requested while checking for hidden PE headers — coverage is incomplete.
+  Inference
+    1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a
+    validated hidden PE — page type, structural PE validation, and live RIP/EIP all converge on the
+    same AllocationBase.
 
-  [ VERDICT ]  HIGH CONFIDENCE INJECTION  (score 3/3 — current RIP/EIP executing in an allocation where RWX + validated PE overlap)
+  Confidence: HIGH
+    This is the strongest evidence this hunter can produce: the process is, at the moment of the
+    dump, actively running code from an allocation with no legitimate module backing and a concealed
+    PE image.
 
-  Use --verbose to list individual addresses.
+  Caveat
+    RIP is a single-point-in-time snapshot; a thread that executed there moments before or after the
+    dump was captured would not appear here.
+
+  COVERAGE
+
+  [~] PARTIAL
+      1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short
+      read) — not fully examined
+
+  Use --verbose for complete per-region evidence and file offsets.
 

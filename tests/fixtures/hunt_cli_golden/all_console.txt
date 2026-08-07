@@ -3,29 +3,21 @@
   HUNT: Process Injection
 ══════════════════════════════════════════
 
-  [✓] RWX memory regions
-      Status : CLEAN — none found
+  VERDICT     NOT EVALUATED — no required stream present in this dump
+  Confidence  none
+  Score       0/3
+  Coverage    NOT EVALUATED
+  Review      none
 
-  [✓] Hidden PE headers
-      Status : CLEAN — no structurally-valid unregistered PE headers
+  COVERAGE
 
-  [✓] Unbacked threads (StartAddress)
-      Status : CLEAN — all threads backed by known modules
-
-  injection.rip_correlation_unavailable  [LOW]  OBSERVATION
-    Inference   : No per-thread CONTEXT (RIP/EIP) could be read from this dump — live-execution correlation could not run.
-    Confidence  : low  —  Coverage gap, not a negative result: a suspicious allocation with no RIP correlation available cannot be distinguished from one that was checked and found not currently executing.
-    Facts: available — use --verbose to list
-    Limitations:
-      - Injection score cannot reach HIGH (3) in this run regardless of other signals, since live-execution confirmation is the only path to that tier.
-
-  [~] No per-thread CONTEXT (RIP/EIP) available in this dump — live-execution correlation could not run; score capped below HIGH.
-
-  [~] MemoryInfoListStream not in this dump — RWX / hidden-PE checks could not run.
-
-  [~] ThreadInfoListStream not in this dump — StartAddress-based unbacked-thread check could not run.
-
-  [ VERDICT ]  NOT EVALUATED — no required stream present in this dump
+  [-] NOT EVALUATED
+      MemoryInfoListStream missing from this dump
+      ThreadInfoListStream missing from this dump
+      ModuleListStream missing from this dump
+      No per-thread CONTEXT (RIP/EIP) available — live-execution correlation could not run
+      Impact: Injection score cannot reach HIGH (3) in this run regardless of other signals, since
+      live-execution confirmation is the only path to that tier.
 
   [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
 
@@ -48,8 +40,11 @@
       Status : CLEAN — no IOC patterns in executable module memory
 
   stomping.protection_deviation_lead  [LOW]  OBSERVATION
-    Inference   : No module section declared executable-but-not-writable shows a live protection state outside the normal set.
-    Confidence  : low  —  Absence of a protection anomaly is weak evidence of absence — stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.
+    Inference   : No module section declared executable-but-not-writable shows a live protection
+                  state outside the normal set.
+    Confidence  : low — Absence of a protection anomaly is weak evidence of absence — stomping via
+                  careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not
+                  show up here at all.
     Facts: available — use --verbose to list
 
   [ VERDICT ]  NOT EVALUATED — MemoryInfoListStream missing from this dump; ModuleListStream missing from this dump; --ref-dir not supplied — verified content comparison (the only scored signal) was not performed for any module  (0/2, requires --ref-dir; protection-deviation and string-IOC leads above are informational and not counted)
@@ -61,7 +56,7 @@
   HUNT: Named Pipe C2 / Lateral Movement
 ══════════════════════════════════════════
 
-  [✓] Open pipe handles (HandleDataStream)
+  [-] Open pipe handles (HandleDataStream)
       Status : NOT AVAILABLE — dump was not captured with MiniDumpWithHandleData
 
   [✓] Pipe name strings in non-system memory
@@ -118,13 +113,37 @@
 ══════════════════════════════════════════
   HUNT SUMMARY
 ══════════════════════════════════════════
-  Process Injection         NOT EVALUATED  (0/3)
-  Process Hollowing         NOT EVALUATED  (0/2)
-  Module Stomping           NOT EVALUATED  (0/2)
-  Named Pipe C2 / Lat. Move. NOT EVALUATED  (0/3)
-  Cobalt Strike Beacon      NOT EVALUATED  (0/2)
-  YARA Rules                NOT EVALUATED
-  Obfuscation Detection     NOT EVALUATED  (0/2)
+  OVERALL   NOT EVALUATED
+  Highest   NOT EVALUATED
+  Coverage  NOT EVALUATED
+  Results   7 not evaluated
 
-  Overall: No TTPs detected in what was scanned, but coverage is incomplete — one or more checks were NOT EVALUATED or INCONCLUSIVE (see per-TTP status above). This is not a clean bill of health.
+  NEEDS ATTENTION
+
+  [-] Process Injection
+      Not evaluated: Neither MemoryInfoListStream nor ThreadInfoListStream present in this dump
+
+  [-] Process Hollowing
+      Not evaluated: PEB could not be parsed (missing sysinfo or thread list in dump)
+
+  [-] Module Stomping
+      Not evaluated: MemoryInfoListStream not present in this dump
+
+  [-] Named Pipe C2 / Lat. Move.
+      Not evaluated: Neither MemoryInfoListStream nor handle_data present in this dump
+
+  [-] Cobalt Strike Beacon
+      Not evaluated: memory64_list not present in this dump
+
+  [-] YARA Rules
+      Not evaluated: yara_scan not present in this dump
+
+  [-] Obfuscation Detection
+      Not evaluated: MemoryInfoListStream not present in this dump
+
+  NEXT INVESTIGATION
+
+  1. Fill in coverage before trusting a clean result: Neither MemoryInfoListStream nor
+     ThreadInfoListStream present in this dump; PEB could not be parsed (missing sysinfo or thread
+     list in dump); MemoryInfoListStream not present in this dump (+4 more).
 

@@ -2,9 +2,9 @@
 import os
 import sys
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
+from dumpex.ui.colors import RED
 from dumpex.core.memory import va_to_file_offset, prot_str
-from dumpex.hunt._ui import _print_hunt_header, _status_text, NOT_EVALUATED, INCONCLUSIVE
+from dumpex.hunt._ui import _print_hunt_header, NOT_EVALUATED
 
 from dumpex.hunt.injection  import _build_injection_report
 from dumpex.hunt.injection.presentation import render as _render_injection_console
@@ -29,6 +29,7 @@ from dumpex.hunt.yara_hunt.collect import _record_from_yara_report
 from dumpex.hunt.encoding.collect  import _record_from_encoding_report
 
 from dumpex.hunt.summary import build_hunt_summary
+from dumpex.hunt import summary_presentation
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport
 from dumpex.output.records import HUNTERS
@@ -269,85 +270,18 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         results["obfuscation"] = {"score": 0, "status": NOT_EVALUATED}
 
     if ttp == "all":
-        print(BOLD("══════════════════════════════════════════"))
-        print(BOLD("  HUNT SUMMARY"))
-        print(BOLD("══════════════════════════════════════════"))
-        labels = {
-            "injection": ("Process Injection",          results["injection"]["score"],  3),
-            "hollowing": ("Process Hollowing",          results["hollowing"]["score"],
-                          results["hollowing"].get("max_score", 2)),
-            "stomping":  ("Module Stomping",            results["stomping"]["score"],   2),
-            "pipe":      ("Named Pipe C2 / Lat. Move.", results["pipe"]["score"],       3),
-            "cs-beacon": ("Cobalt Strike Beacon",       results["cs-beacon"]["score"],
-                          results["cs-beacon"].get("max_score", 2)),
-            "yara":      ("YARA Rules",                 results["yara"]["score"],       3),
-            "obfuscation":  ("Obfuscation Detection",       results["obfuscation"]["score"],   2),
-        }
-        _LEVEL_COLOR = {"high": RED, "likely": RED, "possible": YELLOW, "clean": GREEN}
-        for key, (name, score, max_score) in labels.items():
-            hunt_result   = results.get(key, {})
-            status        = hunt_result.get("status")
-            verdict_level = hunt_result.get("verdict_level")   # phase-two hunters only
-            if status == NOT_EVALUATED:
-                verdict = _status_text(NOT_EVALUATED)
-            elif status == INCONCLUSIVE:
-                verdict = _status_text(INCONCLUSIVE)
-            elif key == "yara" and score > 0:
-                rules_hit = results["yara"].get("rules_hit", [])
-                verdict = RED(f"RULES MATCHED: {', '.join(rules_hit[:4])}{'…' if len(rules_hit) > 4 else ''}")
-            elif score == 0:
-                verdict = GREEN("CLEAN")
-            elif verdict_level is not None:
-                # The hunter's OWN verdict_level, printed as-is — see
-                # structured.py for why this must not be re-derived here
-                # (score/max_score arithmetic previously disagreed with
-                # what the same hunter's console output said elsewhere,
-                # e.g. stomping 1/2 showing LIKELY on one and POSSIBLE on
-                # the other for the identical finding).
-                color = _LEVEL_COLOR.get(verdict_level, YELLOW)
-                verdict = color(verdict_level.upper())
-            elif score >= max_score - 1:
-                verdict = RED("HIGH CONFIDENCE")
-            else:
-                verdict = YELLOW("POSSIBLE")
-            if hunt_result.get("coverage_status") == "partial" and status not in (NOT_EVALUATED, INCONCLUSIVE):
-                verdict += YELLOW("  [partial coverage]")
-            suffix = (f"  ({score}/{max_score})" if key != "yara" else "")
-            if key == "cs-beacon" and hunt_result.get("config_count"):
-                suffix += f"  [{hunt_result['config_count']} config(s)]"
-            # Surfaced regardless of status/score — a CLEAN or INCONCLUSIVE
-            # line must not read as "nothing here" when unscored leads
-            # (pipe names, C2 strings, shellcode patterns, ...) were
-            # actually found for this TTP; see dumpex.hunt._finding
-            # .lead_count/.review_priority (only set for hunters on the
-            # shared Finding model — legacy yara_hunt has neither, so
-            # this is silently a no-op for it via .get()).
-            lead_n = hunt_result.get("lead_count") or 0
-            if lead_n:
-                prio = hunt_result.get("review_priority")
-                suffix += YELLOW(f"  [{lead_n} lead(s)"
-                                  + (f", review: {prio}" if prio and prio != "none" else "")
-                                  + "]")
-            print(f"  {name:<25} {verdict}{suffix}")
-        print()
-        # Derived from the SAME build_hunt_summary() reduction the JSON/CSV
-        # side uses (see this function's own `summary` computation above)
-        # -- not a second, independently-computed any_hit/any_not_evaluated/
-        # any_inconclusive reduction over `results`, which could silently
-        # disagree with summary.overall_status if either reduction's rule
-        # changed without the other. overall_status is one of DETECTED/
-        # INCONCLUSIVE/NOT_EVALUATED/NOT_DETECTED_IN_SCANNED_SCOPE (see
-        # build_hunt_summary()'s own docstring).
-        overall_status = summary["overall_status"]
-        if overall_status == "DETECTED":
-            print(YELLOW("  Overall: One or more TTPs detected. Run --report for deep-dive."))
-        elif overall_status in (INCONCLUSIVE, NOT_EVALUATED):
-            print(YELLOW("  Overall: No TTPs detected in what was scanned, but coverage is "
-                          "incomplete — one or more checks were NOT EVALUATED or INCONCLUSIVE "
-                          "(see per-TTP status above). This is not a clean bill of health."))
-        else:
-            print(GREEN("  Overall: No TTP indicators found in this dump."))
-        print()
+        # The single cross-hunter renderer (Step 1.5, console presentation
+        # patch) -- reads ONLY `records`/`summary`/the document-level
+        # coverage status, never `results` (this function's own legacy
+        # per-hunter console dicts, still used above for the function's
+        # return value and cs-beacon/yara byte-sanitization only). See
+        # dumpex.hunt.summary_presentation's own module docstring for the
+        # REVIEW FIRST/NEEDS ATTENTION/OTHER HUNTERS/NEXT INVESTIGATION
+        # section breakdown this replaces the old flat per-hunter list
+        # with, and tests/integration/test_hunt_all_summary_source.py for
+        # the proof that a poisoned `results` value cannot leak into it.
+        doc_coverage = _hunt_coverage_report(records, summary)
+        summary_presentation.render_hunt_summary(records, summary, doc_coverage.status.value)
 
     if collect_records:
         return results, records

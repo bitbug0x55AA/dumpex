@@ -4,6 +4,8 @@ from tests.fixtures.fakes import (Region, Module, ThreadInfo, Ctx, Thread, FakeS
                                    mem_reader)
 
 import dumpex.hunt.injection as injection
+import dumpex.hunt.injection.presentation as injection_presentation
+import dumpex.hunt.injection.legacy as injection_legacy
 
 
 # ── embedded PE inside a loaded module's own range -> NOT hidden PE ───────
@@ -370,3 +372,231 @@ def test_verbose_lists_every_rwx_region_beyond_the_facts_cap(capsys):
         va = rwx_base + i * 0x2000
         assert f"0x{va:016x}" in verbose_out, \
             f"region {i} (VA 0x{va:x}) missing from --verbose output"
+
+
+# ── console presentation patch (Step 1.5): verdict-first shape ────────────
+
+def _full_correlation_mf():
+    alloc_base = 0x7ff700000000
+    pe_bytes = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                  "rawptr": 0x400, "rawsize": 0x1000,
+                                  "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                                size_of_image=0x2000, trailing_padding=0x300)
+    regions = [
+        Region(alloc_base, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE"),
+        Region(alloc_base + 0x2000, alloc_base, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE"),
+    ]
+    mods = [Module(0x7ffe00000000, 0x10000, r"C:\Windows\System32\ntdll.dll")]
+    thread_infos = [ThreadInfo(0x1, alloc_base + 0x2000)]
+    thread_list = [Thread(0x1, Ctx(alloc_base + 0x2000))]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream(thread_infos, "infos")
+        threads        = FakeStream(thread_list, "threads")
+    injection.read_region = mem_reader({alloc_base + 0x2000: pe_bytes})
+    return MF()
+
+
+def test_verdict_precedes_first_finding_in_console(capsys):
+    # verbose mode shows the machine check id alongside the human title
+    # (dim, in parens -- see render_finding_lines' title= handling); use
+    # it here so the assertion doesn't depend on any particular title text.
+    injection._hunt_injection(_full_correlation_mf(), verbose=True)
+    out = capsys.readouterr().out
+    verdict_idx = out.index("VERDICT")
+    first_check_idx = min(out.index(check) for check in
+                           ("injection.rwx_regions", "injection.allocation_correlation")
+                           if check in out)
+    assert verdict_idx < first_check_idx
+
+
+def test_detection_key_signal_precedes_lead_key_signal(capsys):
+    injection._hunt_injection(_full_correlation_mf(), verbose=False)
+    out = capsys.readouterr().out
+    detection_title_idx = out.index("Live execution in a correlated allocation")
+    lead_title_idx = out.index("RWX memory")
+    assert detection_title_idx < lead_title_idx
+
+
+def test_coverage_reason_appears_exactly_once_normal_and_verbose(capsys):
+    dummy_regions = [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(dummy_regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+        threads        = None
+    injection.read_region = mem_reader({})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    normal_out = capsys.readouterr().out
+    reason = next(r for r in f["coverage_reasons"] if "live-execution correlation could not run" in r)
+    assert normal_out.count(reason) == 1
+
+    f2 = injection._hunt_injection(MF(), verbose=True)
+    verbose_out = capsys.readouterr().out
+    assert verbose_out.count(reason) == 1
+
+
+def test_finding_limitations_never_duplicate_coverage_reasons(capsys):
+    dummy_regions = [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(dummy_regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+        threads        = None
+    injection.read_region = mem_reader({})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    capsys.readouterr()
+    coverage_reasons = set(f["coverage_reasons"])
+    finding_limitations = {l for finding in f["findings"] for l in finding["limitations"]}
+    assert not (coverage_reasons & finding_limitations), (
+        "a Finding limitation must never be the same text as a coverage_reasons entry -- "
+        "the two are meant to stay structurally disjoint sources, not merely deduplicated by luck")
+
+
+def _collapse_ws(text: str) -> str:
+    """Join wrapped console lines back into one run of text so a
+    substring assertion doesn't depend on exactly where wrap_text
+    happened to insert a line break."""
+    return " ".join(text.split())
+
+
+def _no_thread_context_mf():
+    """memory_info/thread_info/modules all present, but no ThreadListStream
+    at all -- score stays 0 and the ONLY Finding this hunter builds is the
+    coverage-only injection.rip_correlation_unavailable observation (no
+    RWX, no hidden PE, no unbacked thread -- see
+    test_key_signals_omitted_entirely_when_only_coverage_only_findings_exist)."""
+    dummy_regions = [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(dummy_regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+        threads        = None
+    injection.read_region = mem_reader({})
+    return MF()
+
+
+def _mixed_coverage_only_and_real_signal_mf():
+    """A coverage-only finding (injection.rip_correlation_unavailable, via
+    threads=None) co-existing with two REAL KEY SIGNALS findings (an RWX
+    region, an unbacked thread via ThreadInfoListStream) -- the scenario
+    that actually exercises the exclusion rule, as opposed to
+    _no_thread_context_mf's degenerate "only the coverage-only finding
+    exists" case."""
+    rwx_base = 0x7ffe40000000
+    unbacked_start = 0x7ffe50000000
+    regions = [Region(rwx_base, rwx_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+    thread_infos = [ThreadInfo(0x2, unbacked_start)]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream(thread_infos, "infos")
+        threads        = None   # no ThreadListStream -> no contexts -> coverage-only finding fires
+    injection.read_region = mem_reader({})
+    return MF()
+
+
+def test_key_signals_omitted_entirely_when_only_coverage_only_findings_exist(capsys):
+    f = injection._hunt_injection(_no_thread_context_mf(), verbose=False)
+    out = capsys.readouterr().out
+    checks = {x["check"] for x in f["findings"]}
+    assert checks == {"injection.rip_correlation_unavailable"}, (
+        "sanity check on the scenario itself: the ONLY finding must be the coverage-only one")
+    assert "KEY SIGNALS" not in out
+    assert "WHY THIS VERDICT" not in out
+    assert "COVERAGE" in out
+
+
+def test_coverage_only_check_never_appears_in_key_signals_or_why_this_verdict(capsys):
+    for verbose in (False, True):
+        f = injection._hunt_injection(_mixed_coverage_only_and_real_signal_mf(), verbose=verbose)
+        out = capsys.readouterr().out
+        checks = {x["check"] for x in f["findings"]}
+        # sanity: this scenario really does mix a coverage-only finding
+        # with real KEY SIGNALS-worthy findings.
+        assert "injection.rip_correlation_unavailable" in checks
+        assert checks & {"injection.rwx_regions", "injection.unbacked_thread_startaddress"}
+
+        assert "KEY SIGNALS" in out
+        key_signals_body = out.split("KEY SIGNALS", 1)[1]
+        for stop_marker in ("WHY THIS VERDICT", "COVERAGE"):
+            if stop_marker in key_signals_body:
+                key_signals_body = key_signals_body.split(stop_marker, 1)[0]
+                break
+        # structural check: the coverage-only check's OWN identity (both
+        # its human title and, under --verbose, its machine check id) is
+        # absent from the KEY SIGNALS section -- not a comparison of two
+        # arbitrary text blobs.
+        assert "RIP/EIP correlation unavailable" not in key_signals_body
+        assert "injection.rip_correlation_unavailable" not in key_signals_body
+
+        if "WHY THIS VERDICT" in out:
+            why_body = out.split("WHY THIS VERDICT", 1)[1].split("COVERAGE", 1)[0]
+            assert "RIP/EIP correlation unavailable" not in why_body
+            assert "injection.rip_correlation_unavailable" not in why_body
+
+
+def test_coverage_only_finding_still_present_in_json_findings_and_legacy_dict(capsys):
+    # Presentation-only exclusion: --json/--csv (via f["findings"]) must
+    # still carry this Finding in full, untouched by KEY SIGNALS filtering.
+    f = injection._hunt_injection(_mixed_coverage_only_and_real_signal_mf(), verbose=False)
+    capsys.readouterr()
+    checks = {x["check"] for x in f["findings"]}
+    assert "injection.rip_correlation_unavailable" in checks
+
+
+def test_coverage_only_finding_limitation_surfaces_once_under_coverage_as_impact(capsys):
+    f = injection._hunt_injection(_no_thread_context_mf(), verbose=False)
+    out = capsys.readouterr().out
+    rip_finding = next(x for x in f["findings"] if x["check"] == "injection.rip_correlation_unavailable")
+    limitation_text = rip_finding["limitations"][0]
+    coverage_body = out.split("COVERAGE", 1)[1]
+    assert _collapse_ws(limitation_text) in _collapse_ws(coverage_body)
+    assert f"Impact: {_collapse_ws(limitation_text)}" in _collapse_ws(coverage_body)
+    # exactly once -- collapse first so a mid-sentence wrap can't make the
+    # same caveat look like two different occurrences.
+    assert _collapse_ws(coverage_body).count(_collapse_ws(limitation_text)) == 1
+
+
+def test_legacy_findings_dict_called_on_normal_return_path(monkeypatch):
+    calls = []
+    real = injection_legacy.legacy_findings_dict
+
+    def spy(findings):
+        result = real(findings)
+        calls.append(result)
+        return result
+    monkeypatch.setattr(injection_presentation, "legacy_findings_dict", spy)
+
+    f = injection._hunt_injection(_full_correlation_mf(), verbose=False)
+    assert len(calls) == 1
+    assert f is calls[0]
+    assert isinstance(f["rwx"][0], dict)   # never an Evidence dataclass leaking through
+
+
+def test_legacy_findings_dict_called_on_not_evaluated_path(monkeypatch):
+    calls = []
+    real = injection_legacy.legacy_findings_dict
+
+    def spy(findings):
+        result = real(findings)
+        calls.append(result)
+        return result
+    monkeypatch.setattr(injection_presentation, "legacy_findings_dict", spy)
+
+    f = injection._hunt_injection(FakeMF(), verbose=False)
+    assert f["status"] == "NOT_EVALUATED"
+    assert len(calls) == 1
+    assert f is calls[0]

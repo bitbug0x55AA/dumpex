@@ -10,18 +10,33 @@
       Status : CLEAN — no IOC patterns in executable module memory
 
   stomping.protection_deviation_lead  [LOW]  OBSERVATION
-    Inference   : No module section declared executable-but-not-writable shows a live protection state outside the normal set.
-    Confidence  : low  —  Absence of a protection anomaly is weak evidence of absence — stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.
+    Inference   : No module section declared executable-but-not-writable shows a live protection
+                  state outside the normal set.
+    Confidence  : low — Absence of a protection anomaly is weak evidence of absence — stomping via
+                  careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not
+                  show up here at all.
     Facts: available — use --verbose to list
 
   stomping.verified_content_change  [MEDIUM]  DETECTION
-    Inference   : 1 module section(s) have relocation-normalized, byte-level content differences from an identity-matched (Machine/SizeOfImage/TimeDateStamp) reference file supplied via --ref-dir.
-    Confidence  : medium  —  Verified byte-level difference against an identity-matched, relocation-normalized reference, but no observed thread is currently executing inside the changed range(s).
+    Inference   : 1 module section(s) have relocation-normalized, byte-level content differences
+                  from an identity-matched (Machine/SizeOfImage/TimeDateStamp) reference file
+                  supplied via --ref-dir.
+    Confidence  : medium — Verified byte-level difference against an identity-matched,
+                  relocation-normalized reference, but no observed thread is currently executing
+                  inside the changed range(s).
     Facts: available — use --verbose to list
     Limitations:
-      - IAT/delay-import ranges and hotpatch trampolines are NOT specifically excluded before diffing — restricting the diff to executable, non-writable sections already excludes the import tables themselves for typical PE layouts, but a legitimate hotpatch NOP-padding/trampoline at a function prologue can still produce a genuine, non-malicious difference inside .text.
-      - PDB GUID/Age (CodeView debug directory) is not checked as part of reference-identity matching — Machine/SizeOfImage/TimeDateStamp matching all three is a strong but not perfect guarantee the reference is the exact same build.
-      - Relocation normalization applies IMAGE_REL_BASED_HIGHLOW/DIR64 fixups only — the types real x86/x64 linkers emit; an exotic or corrupt relocation table would leave some fixups un-normalized.
+      - IAT/delay-import ranges and hotpatch trampolines are NOT specifically excluded before
+        diffing — restricting the diff to executable, non-writable sections already excludes the
+        import tables themselves for typical PE layouts, but a legitimate hotpatch
+        NOP-padding/trampoline at a function prologue can still produce a genuine, non-malicious
+        difference inside .text.
+      - PDB GUID/Age (CodeView debug directory) is not checked as part of reference-identity
+        matching — Machine/SizeOfImage/TimeDateStamp matching all three is a strong but not perfect
+        guarantee the reference is the exact same build.
+      - Relocation normalization applies IMAGE_REL_BASED_HIGHLOW/DIR64 fixups only — the types real
+        x86/x64 linkers emit; an exotic or corrupt relocation table would leave some fixups
+        un-normalized.
 
   [ VERDICT ]  VERIFIED MODULE CODE MODIFICATION — content differs from reference file, but no observed thread executes inside the changed range (uncorroborated; consistent with hotpatch/EDR-hook activity as well as stomping)  (1/2, requires --ref-dir; protection-deviation and string-IOC leads above are informational and not counted)
 

@@ -8,7 +8,7 @@
       Status : SUSPICIOUS — framework-pattern match
       Detail : 1 pipe handle(s)
 
-  [✓] Pipe name strings in non-system memory (lead only)
+  [~] Pipe name strings in non-system memory (lead only)
       Status : LEAD — not scored, see handle checks above
       Detail : 1 occurrence(s)
 
@@ -35,36 +35,63 @@
 
   pipe.open_handles  [MEDIUM]  OBSERVATION
     Inference   : Process holds 1 open handle(s) to named pipe object(s), per HandleDataStream.
-    Confidence  : medium  —  HandleDataStream is the OS's own record of what this process actually has open — far stronger than a bare string match, but having ANY pipe handle open is completely ordinary for most Windows processes (IPC, RPC, print spooler, etc.); only a handle whose name matches a known C2/lateral-movement framework convention, or one corroborated by nearby C2 context / active execution, is treated as a detection.
+    Confidence  : medium — HandleDataStream is the OS's own record of what this process actually has
+                  open — far stronger than a bare string match, but having ANY pipe handle open is
+                  completely ordinary for most Windows processes (IPC, RPC, print spooler, etc.);
+                  only a handle whose name matches a known C2/lateral-movement framework convention,
+                  or one corroborated by nearby C2 context / active execution, is treated as a
+                  detection.
     Facts:
-      - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 GrantedAccess=0x12019f  [framework=Cobalt Strike]
+      - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 GrantedAccess=0x12019f
+        [framework=Cobalt Strike]
     Limitations:
       - Presence of a pipe handle is not inherently suspicious.
 
   pipe.handle_framework_match  [MEDIUM]  DETECTION
-    Inference   : 1 open pipe handle(s) match a known C2/lateral-movement framework naming convention.
-    Confidence  : medium  —  An OS-confirmed open handle (not just a string sitting in memory) whose name matches a specific, narrow framework convention (e.g. Cobalt Strike's msagent_/postex_ or PsExec's psexesvc) is meaningfully unlikely to be coincidental — raised to HIGH only when further corroborated (see pipe.corroboration below).
+    Inference   : 1 open pipe handle(s) match a known C2/lateral-movement framework naming
+                  convention.
+    Confidence  : medium — An OS-confirmed open handle (not just a string sitting in memory) whose
+                  name matches a specific, narrow framework convention (e.g. Cobalt Strike's
+                  msagent_/postex_ or PsExec's psexesvc) is meaningfully unlikely to be coincidental
+                  — raised to HIGH only when further corroborated (see pipe.corroboration below).
     Facts:
-      - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 framework=Cobalt Strike technique=SMB Beacon peer-to-peer pipe — default msagent pipe name mitre=T1090.001
+      - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 framework=Cobalt Strike technique=SMB
+        Beacon peer-to-peer pipe — default msagent pipe name mitre=T1090.001
     Limitations:
-      - Framework pipe-name conventions can be renamed/customized by an operator; absence of a match does not mean absence of C2.
+      - Framework pipe-name conventions can be renamed/customized by an operator; absence of a match
+        does not mean absence of C2.
 
   pipe.string_scan_lead  [LOW]  LEAD
-    Inference   : 1 occurrence(s) of a '\pipe\' name found in non-system-DLL memory via byte-pattern scan.
-    Confidence  : low  —  A string match proves only that these bytes exist somewhere in memory — not that any handle was ever opened by that name, nor that the name isn't leftover/freed heap data or an unrelated buffer. Reported as a lead for the analyst and to locate regions for C2-context/execution correlation; does NOT contribute to the pipe score on its own.
+    Inference   : 1 occurrence(s) of a '\pipe\' name found in non-system-DLL memory via byte-pattern
+                  scan.
+    Confidence  : low — A string match proves only that these bytes exist somewhere in memory — not
+                  that any handle was ever opened by that name, nor that the name isn't
+                  leftover/freed heap data or an unrelated buffer. Reported as a lead for the
+                  analyst and to locate regions for C2-context/execution correlation; does NOT
+                  contribute to the pipe score on its own.
     Facts:
-      - VA=0x1230101 file_offset=(not captured) name='\\.\\pipe\\msagent_1337' region_type=MEM_PRIVATE
+      - VA=0x1230101 file_offset=(not captured) name='\\.\\pipe\\msagent_1337'
+        region_type=MEM_PRIVATE
     Limitations:
       - No corresponding open handle found for this exact name.
 
   pipe.corroboration  [HIGH]  DETECTION
-    Inference   : 1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution within ±4096 bytes of a matching pipe-name string's own address.
-    Confidence  : high  —  Combines an OS-confirmed open handle with BOTH independent memory signals (C2 artifacts AND live execution), both within 4096 bytes of that pipe's name string — the strongest correlation this hunter can produce.
+    Inference   : 1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP
+                  execution within ±4096 bytes of a matching pipe-name string's own address.
+    Confidence  : high — Combines an OS-confirmed open handle with BOTH independent memory signals
+                  (C2 artifacts AND live execution), both within 4096 bytes of that pipe's name
+                  string — the strongest correlation this hunter can produce.
     Facts:
-      - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 pipe_va=0x1230101  c2_va=0x1230116 c2_match='http://' distance=0x15 same_page=True  live_rip=TID:0x999@RIP=0x1230105 distance=0x4 same_page=True
+      - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 pipe_va=0x1230101 c2_va=0x1230116
+        c2_match='http://' distance=0x15 same_page=True live_rip=TID:0x999@RIP=0x1230105
+        distance=0x4 same_page=True
     Limitations:
-      - Name correlation between a handle's ObjectName and a string scan hit uses exact match on the canonicalized pipe name (prefix stripped, casefolded) — still not a cryptographic guarantee both refer to the identical kernel object if the process has multiple same-named pipe instances.
-      - Proximity window is ±4096 bytes, not a proof of logical association — an unrelated string or thread could coincidentally fall within that window in a dense region.
+      - Name correlation between a handle's ObjectName and a string scan hit uses exact match on the
+        canonicalized pipe name (prefix stripped, casefolded) — still not a cryptographic guarantee
+        both refer to the identical kernel object if the process has multiple same-named pipe
+        instances.
+      - Proximity window is ±4096 bytes, not a proof of logical association — an unrelated string or
+        thread could coincidentally fall within that window in a dense region.
 
   [ VERDICT ]  HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT  (3/3 — handle-anchored; string leads shown above are informational only)
 

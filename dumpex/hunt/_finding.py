@@ -34,6 +34,7 @@ import json
 from dataclasses import dataclass, field
 from dumpex.core.mitre import is_valid_technique_id
 from dumpex.ui.colors import RED, YELLOW, DIM, BOLD
+from dumpex.hunt._console import resolve_width, wrap_text
 
 
 class DetailLevel(enum.Enum):
@@ -416,7 +417,8 @@ class Finding:
             "rule_version":  self.rule_version,
         }
 
-    def print(self, indent: int = 2, level: "DetailLevel" = DetailLevel.NORMAL):
+    def print(self, indent: int = 2, level: "DetailLevel" = DetailLevel.NORMAL,
+              width: "int | None" = None, title: "str | None" = None):
         """Console rendering — the ONE place that decides what a hunter's
         presentation.py shows for this Finding; a caller never needs (and
         must not) go back to raw scan-result lists (report.rwx,
@@ -446,29 +448,86 @@ class Finding:
         own docstring), else `facts` (the same list --json/--csv see).
         Never both: a Finding with `verbose_facts` set is asserting "this
         supersedes `facts` for a human reader", so printing both would
-        show the same VA/handle/token twice under --verbose."""
-        if not isinstance(level, DetailLevel):
-            raise TypeError(f"Finding.print: level must be a DetailLevel, got {type(level).__name__}")
-        pad   = " " * indent
-        color = _CONFIDENCE_COLOR.get(self.confidence, DIM)
-        tag_str = {"observation": "OBSERVATION", "lead": "LEAD", "detection": "DETECTION"}.get(
-            self.tag, self.tag.upper())
-        print(f"{pad}{BOLD(self.check)}  [{color(self.confidence.upper())}]  {DIM(tag_str)}")
-        print(f"{pad}  Inference   : {self.inference}")
-        print(f"{pad}  Confidence  : {self.confidence}  —  {self.rationale}")
-        evidence = self.verbose_facts or self.facts
-        if evidence:
-            if level is DetailLevel.VERBOSE:
-                print(f"{pad}  Facts:")
-                for item in evidence:
-                    print(f"{pad}    - {item}")
-            else:
-                print(f"{pad}  Facts: available — use --verbose to list")
-        if self.limitations:
-            print(f"{pad}  Limitations:")
-            for l in self.limitations:
-                print(f"{pad}    - {l}")
-        print()
+        show the same VA/handle/token twice under --verbose.
+
+        `width`/`title` are optional and both default to today's exact
+        behavior when omitted: `width=None` auto-resolves via
+        dumpex.hunt._console.resolve_width() (a fixed, deterministic 100
+        columns under pytest/non-TTY output — see that function's own
+        docstring); `title=None` keeps the classic `{check}  [{CONF}]
+        {TAG}` header every existing caller already produces. A caller
+        that DOES pass `title` (currently only injection's own
+        presentation.py) gets a human-readable heading with `check` kept
+        alongside it, dim, so the machine check id never becomes
+        untraceable. Long inference/confidence-rationale/limitation/fact
+        lines wrap at `width` with a hanging indent aligned under their
+        own label column -- this is the one behavior change every
+        existing caller of Finding.print() gets for free, since long
+        strings that used to run unbounded off the right edge of the
+        terminal are exactly what this is for."""
+        for line in render_finding_lines(self, level=level, indent=indent,
+                                          width=width, title=title):
+            print(line)
+
+
+def _wrap_labeled(prefix: str, text: str, width: int) -> list:
+    """`prefix` (e.g. "  Inference   : ") is prepended to the first
+    wrapped line; every continuation line is indented to align under
+    wherever the text after `prefix` started, via `wrap_text`'s own
+    `hang_indent`. Returns at least one line (the bare prefix) even for
+    empty `text`, so a caller can always join the result onto the
+    previous line's prefix unconditionally."""
+    hang = len(prefix)
+    wrapped = wrap_text(text, width, hang_indent=hang)
+    if not wrapped:
+        return [prefix.rstrip()]
+    first, rest = wrapped[0], wrapped[1:]
+    return [prefix + first, *rest]
+
+
+def render_finding_lines(finding: "Finding", *, level: "DetailLevel",
+                          indent: int = 2, width: "int | None" = None,
+                          title: "str | None" = None) -> list:
+    """Pure function: `finding` -> the exact list of lines
+    `Finding.print()` prints (one list element per line, no trailing
+    newline characters) -- the ONE place that layout is decided, so
+    Finding.print() itself is just `for line in render_finding_lines(...):
+    print(line)`. See `Finding.print()`'s own docstring for the
+    level/width/title contract this implements."""
+    if not isinstance(level, DetailLevel):
+        raise TypeError(f"Finding.print: level must be a DetailLevel, got {type(level).__name__}")
+    w = resolve_width(width)
+    pad = " " * indent
+    color = _CONFIDENCE_COLOR.get(finding.confidence, DIM)
+    tag_str = {"observation": "OBSERVATION", "lead": "LEAD", "detection": "DETECTION"}.get(
+        finding.tag, finding.tag.upper())
+
+    lines = []
+    if title:
+        lines.append(f"{pad}{BOLD(title)}  [{color(finding.confidence.upper())}]  "
+                      f"{DIM(tag_str)}  {DIM('(' + finding.check + ')')}")
+    else:
+        lines.append(f"{pad}{BOLD(finding.check)}  [{color(finding.confidence.upper())}]  "
+                      f"{DIM(tag_str)}")
+
+    lines.extend(_wrap_labeled(f"{pad}  Inference   : ", finding.inference, w))
+    lines.extend(_wrap_labeled(f"{pad}  Confidence  : ",
+                                f"{finding.confidence}  —  {finding.rationale}", w))
+
+    evidence = finding.verbose_facts or finding.facts
+    if evidence:
+        if level is DetailLevel.VERBOSE:
+            lines.append(f"{pad}  Facts:")
+            for item in evidence:
+                lines.extend(_wrap_labeled(f"{pad}    - ", item, w))
+        else:
+            lines.append(f"{pad}  Facts: available — use --verbose to list")
+    if finding.limitations:
+        lines.append(f"{pad}  Limitations:")
+        for l in finding.limitations:
+            lines.extend(_wrap_labeled(f"{pad}    - ", l, w))
+    lines.append("")
+    return lines
 
 
 def confidence_at_least(confidence: str, minimum: str) -> bool:

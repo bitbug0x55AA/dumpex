@@ -166,3 +166,64 @@ def test_level_rejects_non_detail_level_values():
 def test_level_accepts_both_detail_level_members():
     for level in (DetailLevel.NORMAL, DetailLevel.VERBOSE):
         _captured_print(_finding(), level=level)   # must not raise
+
+
+# ── width= / title= (console presentation patch) ───────────────────────────
+
+def test_width_wraps_long_inference_with_hanging_indent():
+    # width=80 is dumpex.hunt._console.MIN_WIDTH -- the narrowest a caller
+    # can actually request (see resolve_width()'s own clamp), so this also
+    # doubles as a clamp-floor smoke test.
+    long_inference = " ".join(f"word{i}" for i in range(40))
+    out = _captured_print(_finding(inference=long_inference), width=80)
+    lines = [l for l in out.splitlines() if l.strip()]
+    assert any("Inference   :" in l for l in lines)
+    assert len(lines) > 4   # the inference alone must have wrapped onto multiple lines
+    # every printed line stays within the requested width (a single
+    # unsplittable token would be the only allowed exception, not present here)
+    for l in lines:
+        assert len(l) <= 80
+
+
+def test_width_continuation_lines_align_under_label_column():
+    long_inference = " ".join(f"word{i}" for i in range(40))
+    out = _captured_print(_finding(inference=long_inference), width=80)
+    lines = out.splitlines()
+    idx = next(i for i, l in enumerate(lines) if "Inference   :" in l)
+    label_col = lines[idx].index(":") + 2
+    # the very next line (if the inference wrapped) is a continuation --
+    # it must be indented to the same column the label's own text started
+    if idx + 1 < len(lines) and lines[idx + 1].strip() and "Confidence" not in lines[idx + 1]:
+        assert lines[idx + 1][:label_col].strip() == ""
+        assert len(lines[idx + 1]) - len(lines[idx + 1].lstrip()) == label_col
+
+
+def test_short_text_unaffected_by_width_param():
+    out_default = _captured_print(_finding())
+    out_explicit_100 = _captured_print(_finding(), width=100)
+    assert out_default == out_explicit_100
+
+
+def test_title_replaces_header_but_check_id_stays_visible():
+    f = _finding(check="injection.allocation_correlation")
+    out_no_title = _captured_print(f)
+    out_with_title = _captured_print(f, title="Live execution in a correlated allocation")
+    assert "injection.allocation_correlation" in out_no_title
+    assert "Live execution in a correlated allocation" not in out_no_title
+    assert "Live execution in a correlated allocation" in out_with_title
+    assert "injection.allocation_correlation" in out_with_title   # machine id still traceable
+
+
+def test_no_title_keeps_classic_header_format_unchanged():
+    f = _finding(check="test.example", confidence=CONFIDENCE_LOW, tag=TAG_OBSERVATION)
+    out = _captured_print(f)
+    first_line = out.splitlines()[0]
+    assert first_line.strip().startswith("test.example")
+
+
+def test_render_finding_lines_is_pure_and_matches_print_output():
+    from dumpex.hunt._finding import render_finding_lines
+    f = _finding()
+    lines = render_finding_lines(f, level=DetailLevel.NORMAL, width=100)
+    expected = "\n".join(lines) + "\n"
+    assert _captured_print(f, width=100) == expected
