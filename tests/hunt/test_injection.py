@@ -293,9 +293,12 @@ def test_verbose_shows_file_offset_for_rwx_not_shown_normally(capsys, monkeypatc
     # value printed is always the vacuous "(not captured)" placeholder.
     # Monkeypatched here to a real, non-None value so the assertion below
     # actually exercises the printed offset text, not just its label.
-    # Patched on aggregate (not presentation) -- that's where Finding.
-    # verbose_facts is now built, see aggregate.py's own comment on why.
-    monkeypatch.setattr(injection.aggregate, "va_to_file_offset", lambda mf, va: 0x1234)
+    # Patched on dumpex.hunt._location (the ONE shared resolver import
+    # point resolve_location() calls into) rather than on aggregate --
+    # aggregate.py no longer imports va_to_file_offset at all; resolution
+    # now happens in memory_scan.py's rwx_locations(), the scan layer,
+    # before aggregate.py ever sees it (see that function's own comment).
+    monkeypatch.setattr("dumpex.hunt._location.va_to_file_offset", lambda mf, va: 0x1234)
 
     rwx_base = 0x7ffe20000000
     regions = [Region(rwx_base, rwx_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
@@ -320,7 +323,7 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
     # very start of the dump file) -- the printed-offset logic must branch
     # on `fo is not None`, not on `fo` being truthy, or a real offset of 0
     # would misprint as "(not captured)".
-    monkeypatch.setattr(injection.aggregate, "va_to_file_offset", lambda mf, va: 0)
+    monkeypatch.setattr("dumpex.hunt._location.va_to_file_offset", lambda mf, va: 0)
 
     rwx_base = 0x7ffe20000000
     regions = [Region(rwx_base, rwx_base, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]

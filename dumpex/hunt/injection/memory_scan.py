@@ -4,6 +4,7 @@ never scores, never prints.
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import get_modules, get_memory_regions, addr_to_module, prot_str
 from dumpex.core.pe_utils import parse_pe_header
+from dumpex.hunt._location import resolve_location
 from dumpex.hunt.injection.config import PE_VALIDATE_READ_MAX
 from dumpex.hunt.injection.models import HiddenPeScan
 
@@ -137,6 +138,31 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
         # same range check is used uniformly rather than re-deriving it.
         hits.append({"region": r, "in_module_list": owner is not None, "pe": pe})
     return HiddenPeScan(hits=hits, read_failed=read_failed, short_reads=short_reads)
+
+
+def rwx_locations(mf: MinidumpFile, rwx: list) -> dict:
+    """Resolve each RWX region's own Location (file offset included) ONCE,
+    here in the scan layer -- the ONE place this hunter still needs `mf`
+    for address resolution. Keyed by BaseAddress (unique per region within
+    a single MemoryInfoListStream scan). aggregate.py consumes the result
+    without ever needing `mf` or calling va_to_file_offset() itself (see
+    that module's own comment on why the console-only detail this feeds
+    still lives in aggregate.py, not presentation.py)."""
+    return {r.BaseAddress: resolve_location(mf, r.BaseAddress, r.BaseAddress,
+                                             region_size=r.RegionSize)
+            for r in rwx}
+
+
+def hidden_pe_locations(mf: MinidumpFile, hits: list) -> dict:
+    """Same as rwx_locations, for a HiddenPeScan's hit dicts -- keyed by
+    each hit's own region BaseAddress. Built from the FULL hit list
+    (before validated/mz_only split) so a single dict covers every
+    downstream subset (validated_pe_hits, mz_only_hits, and aggregate.py's
+    own suspicious_pe_hits/informational_pe_hits split of those)."""
+    return {h["region"].BaseAddress: resolve_location(
+                mf, h["region"].BaseAddress, h["region"].BaseAddress,
+                region_size=h["region"].RegionSize)
+            for h in hits}
 
 
 def split_hidden_pe_hits(scan: HiddenPeScan) -> "tuple[list, list]":

@@ -1,6 +1,18 @@
 """Unbacked-thread (StartAddress) scan. Only collects facts."""
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import get_modules, get_thread_infos, addr_to_module
+from dumpex.hunt._location import resolve_location
+
+
+def unbacked_thread_locations(mf: MinidumpFile, threads: list) -> dict:
+    """Resolve each unbacked thread's StartAddress Location (file offset
+    included) ONCE, here in the scan layer -- the ONE place this hunter's
+    thread scan still needs `mf`. Keyed by ThreadId (unique per dump).
+    StartAddress has no containing "region" the way an RWX/hidden-PE hit
+    does, so region_base == va (region_offset trivially 0) -- see
+    Location's own docstring on why that's still a valid Location."""
+    return {ti.ThreadId: resolve_location(mf, ti.StartAddress or 0, ti.StartAddress or 0)
+            for ti in threads}
 
 
 def _hunt_unbacked_threads(mf: MinidumpFile, module_list_available: bool = True) -> list:

@@ -102,10 +102,13 @@ def _build_injection_report(mf: MinidumpFile):
     runtime = HunterRuntime(read_region=read_region)
 
     rwx = memory_scan._hunt_rwx(mf)
+    rwx_locations = memory_scan.rwx_locations(mf, rwx)
     hidden_pe_scan = memory_scan._hunt_hidden_pe(
         mf, runtime.read_region, module_list_available=module_list_stream)
+    hidden_pe_locations = memory_scan.hidden_pe_locations(mf, hidden_pe_scan.hits)
     validated_pe_hits, mz_only_hits = memory_scan.split_hidden_pe_hits(hidden_pe_scan)
     start_threads = thread_scan._hunt_unbacked_threads(mf, module_list_available=module_list_stream)
+    unbacked_thread_locations = thread_scan.unbacked_thread_locations(mf, start_threads)
     thread_contexts = get_thread_contexts(mf)   # [{ThreadId, ip, ip_reg, is_wow64}, ...]
 
     # Explicit counts so a PARTIAL context gap is visible even when it
@@ -122,9 +125,11 @@ def _build_injection_report(mf: MinidumpFile):
     module_list         = mf.modules.modules if module_list_stream else []
 
     return aggregate.build_report(
-        mf, rwx, hidden_pe_scan, validated_pe_hits, mz_only_hits, start_threads,
+        rwx, hidden_pe_scan, validated_pe_hits, mz_only_hits, start_threads,
         thread_contexts, correlation_result, memory_info_stream, thread_info_stream,
         module_list_stream, thread_list_stream, threads_total, contexts_parsed,
+        rwx_locations=rwx_locations, hidden_pe_locations=hidden_pe_locations,
+        unbacked_thread_locations=unbacked_thread_locations,
         all_regions=regions, thread_info_entries=thread_info_entries, module_list=module_list)
 
 
