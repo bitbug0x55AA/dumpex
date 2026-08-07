@@ -12,9 +12,10 @@ import pytest
 from tests.fixtures.fakes import Region, Segment, FakeStream, FakeMF, FakeReader, cs_beacon_config_bytes
 
 import dumpex.hunt.cs_beacon as cs_beacon
-from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record
+from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record, _config_dict, _field_dict
 from dumpex.hunt.cs_beacon.parser import _cs_decode_and_parse_tlv
 from dumpex.output.records import HunterRecord, CsBeaconDetails
+from dumpex.output.csv_export import beacon_configs_rows
 
 
 def _mk_segment_data(config: bytes, pad_before: int = 0) -> bytes:
@@ -27,7 +28,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.6.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -130,13 +131,18 @@ def test_structural_config_uncorroborated_scores_1(hunter_record_validator):
     assert cfg["va"] == f"0x{seg_va:016x}"
     assert cfg["context_corroborated"] is False
     assert isinstance(cfg["fields"], dict)
-    assert all(isinstance(k, str) for k in cfg["fields"])
+    # schema_version 2.7: fields is keyed by NAME, not the numeric TLV
+    # field ID string -- cs_beacon_config_bytes() is documented to embed
+    # exactly BeaconType (0x0001) and PublicKey (0x0007).
+    assert set(cfg["fields"]) == {"BeaconType", "PublicKey"}
+    assert not any(k.lstrip("-").isdigit() for k in cfg["fields"]), (
+        "no field key may be a bare numeric string -- that was the pre-2.7 shape")
     for field in cfg["fields"].values():
-        # v2 public output (schema_version 2.6+) drops `raw` entirely --
-        # PublicKey/Malleable C2/inject-transform fields could otherwise
-        # carry very long hex strings here. Only name/type/value remain.
-        assert set(field.keys()) == {"name", "type", "value"}
-        assert isinstance(field["name"], str)
+        # v2 public output (schema_version 2.7+) carries only type/value --
+        # `name` is redundant now that the dict KEY is the name, and `raw`
+        # was already dropped in 2.6 (PublicKey/Malleable C2/inject-
+        # transform fields could otherwise carry very long hex strings here).
+        assert set(field.keys()) == {"type", "value"}
         assert isinstance(field["type"], int)
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
@@ -174,3 +180,156 @@ def test_executable_private_region_corroborates_scores_2(hunter_record_validator
     assert rec.coverage.status.value == "complete"
     assert rec.details.configs[0]["context_corroborated"] is True
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+# ── schema_version 2.7 shape: reviewer-requested expanded coverage ────────
+# (more than "two known fields happen to pass")
+
+def test_v2_7_schema_id_title_and_version_const_all_say_2_7():
+    """Not just 'a document happens to validate' -- the schema FILE ITSELF
+    must actually claim to be 2.7 in every place that matters, or a
+    producer stamping schema_version 2.7 would validate against a schema
+    whose own meta.schema_version.const still says 2.6 and fail."""
+    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    assert schema["$id"].endswith("dumpex-output-v2.7.schema.json")
+    assert "2.7" in schema["title"]
+    assert schema["$defs"]["meta"]["properties"]["schema_version"]["const"] == "2.7"
+
+
+def _fields_validator():
+    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/csBeaconDetails", "$defs": schema["$defs"]}
+    return jsonschema.Draft202012Validator(wrapper)
+
+
+def test_name_keyed_shape_validates_against_v2_7():
+    details = {
+        "configs": [{"fields": {"BeaconType": {"type": 1, "value": 0},
+                                 "field_0x004a": {"type": 3, "value": "ff"}}}],
+        "config_count": 1,
+    }
+    assert list(_fields_validator().iter_errors(details)) == []
+
+
+def test_old_numeric_keyed_name_carrying_shape_is_rejected_by_v2_7():
+    # The pre-2.7 (schema_version 2.6) shape -- proves the new
+    # propertyNames/additionalProperties constraint actually bites, not
+    # just that the new shape happens to pass.
+    details = {
+        "configs": [{"fields": {"1": {"name": "BeaconType", "type": 1, "value": 0}}}],
+        "config_count": 1,
+    }
+    assert list(_fields_validator().iter_errors(details)) != []
+
+
+def test_unknown_field_id_produces_field_0xnnnn_key_and_validates(hunter_record_validator):
+    seg_va, seg_fo = 0xa0000, 0xa000
+    # Start from the same valid (BeaconType + validated PublicKey +
+    # terminator) config _cs_sanity_check() actually accepts -- a
+    # synthetic blob with only an unknown field never passes that check
+    # at all, so it would never reach `fields` as a scored hit -- and
+    # splice an unrecognized field ID (0x004a, one past MaxRetry_Duration,
+    # the highest entry in CS_FIELD_NAMES) in before the terminator.
+    import struct
+    base = cs_beacon_config_bytes(0x69)
+    decoded = bytes(b ^ 0x69 for b in base)
+    terminator = struct.pack('>H', 0)
+    assert decoded.endswith(terminator)
+    body = decoded[:-len(terminator)]
+    unknown_field = struct.pack('>HHH', 0x004a, 1, 2) + struct.pack('>H', 7)
+    plaintext = body + unknown_field + terminator
+    config = bytes(b ^ 0x69 for b in plaintext)
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    rec = collect_cs_beacon_record(MF())
+    assert len(rec.details.configs) == 1
+    fields = rec.details.configs[0]["fields"]
+    assert "field_0x004a" in fields
+    assert fields["field_0x004a"] == {"type": 1, "value": 7}
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_config_dict_raises_on_field_name_collision():
+    # CS_FIELD_NAMES has no real collision today (verified separately),
+    # so this forces one synthetically: two different field IDs whose
+    # parser-resolved `name` happens to be identical.
+    cfg = {
+        "va": 0x1000, "file_offset": 0, "region_base": None, "region_size": None,
+        "region_protect": None, "xor_key": 0x69, "cs_version": "3.x",
+        "cs_version_note": "", "context_corroborated": False,
+        "fields": {
+            0x0001: {"name": "SameName", "type": 1, "value": 0},
+            0x0002: {"name": "SameName", "type": 1, "value": 1},
+        },
+    }
+    with pytest.raises(ValueError, match="collision"):
+        _config_dict(cfg)
+
+
+def test_field_dict_never_includes_name():
+    field_dict = _field_dict({"name": "BeaconType", "type": 1, "value": 0, "raw": b"\x00\x00"})
+    assert set(field_dict) == {"type", "value"}
+
+
+def test_csv_beacon_configs_fields_cell_contains_only_new_structure():
+    seg_va, seg_fo = 0xb0000, 0xb000
+    config = cs_beacon_config_bytes(0x69)
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    rec = collect_cs_beacon_record(MF())
+
+    class _FakeResult:
+        records = [rec.to_dict()]
+
+    rows = beacon_configs_rows(_FakeResult())
+    assert len(rows) == 1
+    fields = json.loads(rows[0]["fields"])
+    assert set(fields) == {"BeaconType", "PublicKey"}
+    for v in fields.values():
+        assert set(v) == {"type", "value"}
+
+
+def test_no_is_text_or_similar_leaks_into_legacy_dict_or_hunter_record():
+    # is_text (the printable/binary decision -- see parser.py's
+    # _cs_decode_type3_value) is computed on demand from `raw` at
+    # console-render time and never stored on the parser's own field
+    # dict, so it can never reach either the legacy _hunt_cs_beacon()
+    # Python return value or the HunterRecord/v2 JSON.
+    seg_va, seg_fo = 0xc0000, 0xc000
+    config = cs_beacon_config_bytes(0x69)
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    legacy = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    for cfg in legacy["configs"]:
+        for field in cfg["fields"].values():
+            assert "is_text" not in field
+            assert set(field) == {"name", "type", "raw", "value"}
+
+    rec = collect_cs_beacon_record(MF())
+    for cfg in rec.details.configs:
+        for field in cfg["fields"].values():
+            assert "is_text" not in field
+            assert set(field) == {"type", "value"}

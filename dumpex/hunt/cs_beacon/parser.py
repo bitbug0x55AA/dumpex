@@ -18,6 +18,33 @@ def _cs_xor_bytes(data: bytes, key: int) -> bytes:
     return bytes(b ^ kb for b in data)
 
 
+def _cs_decode_type3_value(raw: bytes) -> "tuple":
+    """Decode one type-3 (bytes) TLV field's raw payload into
+    `(value, is_text)` -- the ONE place this decision is made, so
+    `_cs_decode_and_parse_tlv()` (building the field's own `value`) and
+    `presentation.py` (deciding how to render it under `--verbose`) can
+    never disagree about whether a given field's payload is genuine
+    printable text or an opaque binary blob.
+
+    `is_text` True only when `raw`, after stripping trailing NUL padding,
+    decodes as UTF-8 and every character is printable (or one of
+    tab/CR/LF, which count as printable text here -- a Malleable C2
+    header block or SpawnTo path can legitimately contain those). In that
+    case `value` IS the decoded text. Otherwise `value` is the
+    NUL-stripped bytes' own hex string -- note this is NOT the same
+    string as `raw.hex()` (trailing NUL bytes are stripped first), so a
+    caller that wants the field's FULL raw bytes as hex (e.g. a console
+    display showing "the actual bytes on disk/in memory") must hex-encode
+    `raw` itself, not reuse this `value`."""
+    stripped = raw.rstrip(b'\x00')
+    try:
+        candidate = stripped.decode('utf-8')
+        is_text = all(c.isprintable() or c in '\t\r\n' for c in candidate)
+        return (candidate if is_text else stripped.hex()), is_text
+    except UnicodeDecodeError:
+        return stripped.hex(), False
+
+
 def _cs_decode_and_parse_tlv(data: bytes, offset: int, key: int, max_len: int) -> dict:
     """
     XOR-decode and TLV-parse a CS beacon config candidate in-place,
@@ -106,18 +133,13 @@ def _cs_decode_and_parse_tlv(data: bytes, offset: int, key: int, max_len: int) -
             elif ftype == 2 and flen == 4:
                 value = struct.unpack('>I', raw)[0]
             elif ftype == 3:
-                stripped = raw.rstrip(b'\x00')
                 # Attempt clean UTF-8 decode; if the result contains non-printable
                 # characters (common for inject payloads, transforms, stubs, etc.)
-                # display as hex instead of mangled replacement characters.
-                try:
-                    candidate = stripped.decode('utf-8')
-                    is_printable = all(
-                        c.isprintable() or c in '\t\r\n' for c in candidate
-                    )
-                    value = candidate if is_printable else stripped.hex()
-                except UnicodeDecodeError:
-                    value = stripped.hex()
+                # display as hex instead of mangled replacement characters. See
+                # _cs_decode_type3_value's own docstring for why this is a shared
+                # function rather than inlined here -- presentation.py's console
+                # rendering needs the identical decision.
+                value, _is_text = _cs_decode_type3_value(raw)
         except Exception:
             value = raw
 

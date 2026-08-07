@@ -35,8 +35,9 @@
   BeaconType                 HTTP
 
   ── Full Config Field Table ────────────────────────────────────────
-    0x0001  BeaconType  0
-    0x0007  PublicKey   '3014300d06092a864886f70d010101050003030030'  [3014300d06092a864886f70d01010105000303003000]
+    Field       Type    Value
+    BeaconType  uint16  0
+    PublicKey   bytes   3014300d06092a864886f70d01010105000303003000
 
   [!] Beacon config #2  ──────────────────────────────────────────────
   VA (process)               0x0000000000060100  ← virtual address in target process
@@ -67,8 +68,9 @@
   BeaconType                 HTTP
 
   ── Full Config Field Table ────────────────────────────────────────
-    0x0001  BeaconType  0
-    0x0007  PublicKey   '3014300d06092a864886f70d010101050003030030'  [3014300d06092a864886f70d01010105000303003000]
+    Field       Type    Value
+    BeaconType  uint16  0
+    PublicKey   bytes   3014300d06092a864886f70d01010105000303003000
 
   [ VERDICT ]  COBALT STRIKE — 2 beacon config(s) found in memory  (structural validity only — no independent memory-context corroboration)
 

@@ -30,13 +30,11 @@
         "cs_version": "3.x",
         "cs_version_note": "estimated from highest recognized field ID \u2014 not a fingerprinted/confirmed build",
         "fields": {
-          "1": {
-            "name": "BeaconType",
+          "BeaconType": {
             "type": 1,
             "value": 0
           },
-          "7": {
-            "name": "PublicKey",
+          "PublicKey": {
             "type": 3,
             "value": "3014300d06092a864886f70d010101050003030030"
           }

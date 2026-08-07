@@ -5,6 +5,84 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## `--hunt cs-beacon` structured fields keyed by name (schema v2.7)
+
+`--hunt cs-beacon`/`--hunt all --json`/`--csv` output re-keys each parsed
+Cobalt Strike beacon config's `details.configs[*].fields` by field NAME
+(e.g. `"BeaconType"`) instead of the raw TLV field ID string (`"1"`), and
+drops the now-redundant `name` property from each field's own value — a
+consumer no longer needs to already know that field ID 1 means
+BeaconType before it can look anything up:
+
+```jsonc
+// before (schema v2.6)
+"fields": { "1": { "name": "BeaconType", "type": 1, "value": 0 } }
+// after (schema v2.7)
+"fields": { "BeaconType": { "type": 1, "value": 0 } }
+```
+
+An unrecognized field ID still renders as `"field_0xNNNN"`, unchanged.
+
+This is a public-output-only change:
+
+- **Internal parsing, detection, and scoring are unchanged** (console
+  DISPLAY changed in two spots — see "Console-only" below). CS Beacon
+  config identification, the sanity check, DER public-key validation,
+  Malleable C2 instruction decoding, scoring, and status/verdict/
+  confidence/findings are all unaffected — the internal parser
+  ([`dumpex/hunt/cs_beacon/parser.py`](dumpex/hunt/cs_beacon/parser.py))
+  still keys its own field dict by integer field ID
+  (`fields[0x0007]["raw"]`); only the value reshaped into the public v2
+  record
+  ([`dumpex/hunt/cs_beacon/collect.py`](dumpex/hunt/cs_beacon/collect.py)'s
+  `_config_dict()`/`_field_dict()`) changed.
+- **A name collision fails loudly, not silently.** If a future edit to
+  `CS_FIELD_NAMES` ever mapped two different field IDs to the same name,
+  `_config_dict()` raises `ValueError` at collect time instead of letting
+  the second field silently overwrite the first in the output.
+- **`meta.schema_version` moves from `"2.6"` to `"2.7"`** — every
+  producer now stamps `"2.7"`. `dumpex-output-v2.6.schema.json` remains
+  shipped and installable for validating output produced before this
+  change. Unlike the prior (`raw`-removal) bump, this one IS visible as a
+  schema `$defs` diff: `configs[*].fields` now structurally rejects the
+  old numeric-key/`name`-carrying shape, not just the new shape's own
+  documentation.
+
+**Console-only, no schema impact** (two spots share the same new
+`_field_display_value()` rendering rule — see
+[`dumpex/hunt/cs_beacon/presentation.py`](dumpex/hunt/cs_beacon/presentation.py)):
+
+1. `--hunt cs-beacon --verbose`'s "Full Config Field Table" no longer
+   shows the hex field-ID column (redundant once the table is
+   name-keyed) and no longer prints a near-duplicate raw-hex preview
+   alongside `value` for binary fields (e.g. PublicKey used to show
+   almost the same hex string twice, in two different formats).
+2. The "Process Injection" inline section (`ProcInject_Transform_x86`/
+   `ProcInject_Transform_x64`, and any other type-3 field in that group)
+   now uses the SAME rendering rule, replacing its own, slightly
+   different prior logic — this is a real, visible change to that
+   section specifically, not merely a side effect of the field-table
+   cleanup:
+   - a printable value now prints as `repr(value)` (quoted, escape
+     sequences visible) instead of the bare decoded string — deliberate:
+     tab/CR/LF count as "printable" for a type-3 field, and an
+     unescaped embedded newline previously broke the one-field-per-line
+     layout;
+   - a binary value now always shows a truncated hex encoding of the
+     field's FULL raw bytes (64 hex chars, `...` if longer) instead of
+     the previous `raw.hex()[:60]` fallback (only reached when the
+     decoded/stripped text was empty, no truncation marker, 60 not 64
+     chars) — trailing NUL bytes, previously stripped from what small
+     amount was shown, are now included in that hex (truncation-permitting).
+
+Both spots show `value`/`raw` exactly once, never a value alongside a
+separate raw-hex preview that says the same thing. Console output was
+never part of any `schema_version` contract, so none of this needed a
+version bump.
+
+See [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md#hunt-records) for the
+full versioning rationale.
+
 ## `--hunt cs-beacon` structured fields drop raw hex bytes (schema v2.6)
 
 `--hunt cs-beacon`/`--hunt all --json`/`--csv` output no longer includes a

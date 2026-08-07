@@ -1,16 +1,23 @@
 """
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
-v2 envelopes built around them) against dumpex-output-v2.6.schema.json (the
-current schema -- structurally identical to v2.5 for every shape this file
-exercises; v2.6's only actual change is removing `raw` from
-csBeaconDetails.configs[*].fields[*], and those fields stay schema-open
-(`type: object`) in both versions, so nothing here needed to change beyond
-which schema file is loaded) -- originally the PR3 "Schema v2.4" hunt
-migration step (see
-docs/hunt_migration_field_matrix.md and the migration plan's own PR3
-description), carried forward onto v2.5's extended `finding` $def
-(id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version --
-see dumpex/hunt/_finding.py). Built directly from
+v2 envelopes built around them) against dumpex-output-v2.7.schema.json
+(the current schema) -- originally the PR3 "Schema v2.4" hunt migration
+step (see docs/hunt_migration_field_matrix.md and the migration plan's own
+PR3 description), carried forward onto v2.5's extended `finding` $def
+(id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version -- see
+dumpex/hunt/_finding.py), v2.6's `csBeaconDetails.configs[*].fields[*]`
+`raw`-removal, and v2.7's re-keying of that same `fields` by field NAME
+(see dumpex/hunt/cs_beacon/collect.py's `_config_dict()`). Every schema
+bump since v2.5 has been structurally IDENTICAL for every shape THIS file
+exercises: `cs_beacon_detected()` (tests/fixtures/hunt_records.py) builds
+its `CsBeaconDetails.configs` entry as a bare `{"cs_version": 4,
+"c2_host": "example.test"}` dict with no `fields` key at all, so it never
+touches v2.7's new `csBeaconDetails.configs[*].fields` constraint (a
+`properties` entry only applies when that property is actually present) --
+that constraint is instead exercised directly, with a real
+numeric-ID-keyed/name-carrying negative case, in
+tests/hunt/test_cs_beacon_collect.py. Nothing here needed to change beyond
+which schema file is loaded. Built directly from
 tests/fixtures/hunt_records.py's synthetic HunterRecord fixtures, NOT
 through a real hunter collect_*() pipeline -- only injection's
 collect_injection_record() exists so far; the other six hunters' real
@@ -43,7 +50,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.6.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -109,7 +116,7 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):
     return {
         "meta": {
-            "schema_version": "2.6",
+            "schema_version": "2.7",
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01Z",
                           "duration_seconds": 1.0, "command": command, "options": options or {}},

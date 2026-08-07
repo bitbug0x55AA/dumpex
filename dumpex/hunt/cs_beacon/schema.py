@@ -78,6 +78,12 @@ CS_FIELD_NAMES = {
     0x0049: 'MaxRetry_Duration',
 }
 
+# Console-display names for parser.py's TLV `type` values (1/2/3) -- the
+# public JSON/CSV `fields[*].type` stays the plain integer (schema_version
+# 2.7 deliberately does not change that), this is purely for the
+# `--verbose` Full Config Field Table's own "Type" column.
+CS_FIELD_TYPE_NAMES = {1: "uint16", 2: "uint32", 3: "bytes"}
+
 # From 1768.py LookupConfigValue
 CS_BEACON_TYPES = {
     0:  'HTTP',

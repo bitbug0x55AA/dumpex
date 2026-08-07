@@ -11,14 +11,40 @@ from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.core.memory import prot_str
 from dumpex.hunt._ui import _print_check, _status_text, NOT_EVALUATED, INCONCLUSIVE
 from dumpex.hunt._finding import DetailLevel, leads_suffix
-from dumpex.hunt.cs_beacon.schema import CS_BEACON_TYPES, CS_PROXY_TYPES, CS_INJECT_PERMS
-from dumpex.hunt.cs_beacon.parser import _cs_guess_version, _cs_decode_instructions
+from dumpex.hunt.cs_beacon.schema import (
+    CS_BEACON_TYPES, CS_PROXY_TYPES, CS_INJECT_PERMS, CS_FIELD_TYPE_NAMES,
+)
+from dumpex.hunt.cs_beacon.parser import (
+    _cs_guess_version, _cs_decode_instructions, _cs_decode_type3_value,
+)
 
 
 def render_not_evaluated():
     print(YELLOW("  [~] No memory segments in dump — cannot scan for beacon config.\n"))
     print(f"  {BOLD('[ VERDICT ]')}  "
           f"{_status_text(NOT_EVALUATED, 'Memory64ListStream missing from this dump')}\n")
+
+
+def _field_display_value(rec: dict) -> str:
+    """Render one TLV field's `value` for console display -- the ONE
+    place both the 'Process Injection' inline section and the
+    `--verbose` Full Config Field Table decide how to show a type-3
+    (bytes) field, so neither can drift onto a different binary/text
+    rule or show `value` alongside a separate `raw` preview that says
+    the same thing twice. Printable text -> `repr(value)` (repr, not the
+    bare string, since tab/CR/LF count as printable here -- see
+    `_cs_decode_type3_value`'s own docstring -- and an embedded newline
+    would otherwise break the one-field-per-line layout). Binary -> a
+    truncated hex encoding of the field's FULL raw bytes, not `value`
+    itself (a NUL-stripped hex string for a binary field -- see that same
+    docstring for why the two differ)."""
+    if rec['type'] != 3:
+        return str(rec['value'])
+    _, is_text = _cs_decode_type3_value(rec['raw'])
+    if is_text:
+        return repr(rec['value'])
+    hexs = rec['raw'].hex()
+    return f"{hexs[:64]}{'...' if len(hexs) > 64 else ''}"
 
 
 def render(report, verbose: bool = False):
@@ -171,10 +197,8 @@ def render(report, verbose: bool = False):
                 rec = inj[fid]
                 if fid in (0x002b, 0x002c):
                     val = CS_INJECT_PERMS.get(rec['value'], str(rec['value']))
-                elif rec['type'] == 3:
-                    val = (rec['value'] or '').strip('\x00') or rec['raw'].hex()[:60]
                 else:
-                    val = str(rec['value'])
+                    val = _field_display_value(rec)
                 print(f"  {rec['name']:<26} {val}")
 
         # ── Malleable C2 / GET / POST transforms ───────────────────────
@@ -212,21 +236,24 @@ def render(report, verbose: bool = False):
                 if val: print(f"  {rec['name']:<26} {val}")
 
         # ── Full field table (--verbose only) ──────────────────────────
+        # No field-ID column -- once `fields` is name-keyed (schema_version
+        # 2.7, see collect.py), the numeric ID is redundant for a console
+        # reader; `fid` is still the internal sort key (stable output
+        # order), just never printed. Each field prints exactly once: a
+        # printable type-3 field shows its decoded text, a binary one
+        # shows a truncated hex encoding of its FULL raw bytes -- never
+        # both `value` and a separate `raw` preview that say the same
+        # thing (see _field_display_value's own docstring).
         if verbose:
             print(f"\n  {BOLD('── Full Config Field Table ────────────────────────────────────────')}")
-            w = max((len(v['name']) for v in f.values()), default=20)
+            name_w = max((len(v['name']) for v in f.values()), default=20)
+            type_w = max((len(CS_FIELD_TYPE_NAMES.get(v['type'], str(v['type'])))
+                          for v in f.values()), default=6)
+            print(f"    {'Field':<{name_w}}  {'Type':<{type_w}}  Value")
             for fid in sorted(f.keys()):
                 rec = f[fid]
-                if rec['type'] == 3:
-                    txt  = (rec['value'] or '').strip('\x00') if isinstance(rec['value'], str) else ''
-                    hexs = rec['raw'].hex()
-                    if txt:
-                        display = f"{repr(txt)}  [{hexs[:48]}{'...' if len(hexs) > 48 else ''}]"
-                    else:
-                        display = f"[{hexs[:64]}{'...' if len(hexs) > 64 else ''}]"
-                else:
-                    display = str(rec['value'])
-                print(f"    0x{fid:04x}  {rec['name']:<{w}}  {display}")
+                type_name = CS_FIELD_TYPE_NAMES.get(rec['type'], str(rec['type']))
+                print(f"    {rec['name']:<{name_w}}  {type_name:<{type_w}}  {_field_display_value(rec)}")
 
         print()
 

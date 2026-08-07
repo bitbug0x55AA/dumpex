@@ -296,6 +296,142 @@ def test_console_pairs_each_config_block_with_its_own_finding(capsys):
     assert f"0x{seg1_va:016x}" not in block2 and f"0x{seg1_va:x}" not in block2
 
 
+# ── --verbose Full Config Field Table: no hex-ID column, no value/raw ─────
+# duplication for binary fields (console field-table patch, no schema impact)
+
+def test_full_field_table_has_no_hex_id_column_and_has_type_column(capsys):
+    seg_va, seg_fo = 0x90000, 0x9000
+    config = cs_beacon_config_bytes(0x69)
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
+    out = capsys.readouterr().out
+
+    table = out.split("Full Config Field Table", 1)[1]
+    assert "Field" in table and "Type" in table and "Value" in table
+    assert "0x0001" not in table and "0x0007" not in table
+    assert "uint16" in table   # BeaconType's type, spelled out
+    assert "bytes" in table    # PublicKey's type, spelled out
+    # PublicKey (binary/non-printable) must show exactly one hex rendering,
+    # not a decoded-text repr AND a separate bracketed raw preview.
+    pubkey_line = next(l for l in table.splitlines() if "PublicKey" in l)
+    assert pubkey_line.count("30") >= 1   # some hex is present
+    assert "[" not in pubkey_line and "]" not in pubkey_line, (
+        "no separate bracketed raw-hex preview alongside value")
+
+
+def _config_with_extra_field(fid: int, ftype: int, value: bytes, xor_key: int = 0x69) -> bytes:
+    """Splice one extra TLV field into an otherwise-valid (BeaconType +
+    validated PublicKey + terminator) config -- a synthetic blob missing
+    PublicKey never passes `_cs_sanity_check()`, so it would never reach
+    `fields` as a scored hit at all."""
+    base = cs_beacon_config_bytes(xor_key)
+    decoded = bytes(b ^ xor_key for b in base)
+    terminator = struct.pack('>H', 0)
+    assert decoded.endswith(terminator)
+    body = decoded[:-len(terminator)]
+    extra = struct.pack('>HHH', fid, ftype, len(value)) + value
+    plaintext = body + extra + terminator
+    return bytes(b ^ xor_key for b in plaintext)
+
+
+# ── Process Injection inline section shares _field_display_value() with ──
+# the Full Config Field Table (same console patch) -- these pin its actual
+# rendering, not just "it didn't crash", for the two ProcInject_Transform_x86/
+# x64-style type-3 fields that section prints.
+
+def test_process_injection_printable_transform_shows_repr_text(capsys):
+    seg_va, seg_fo = 0xd0000, 0xd000
+    printable = b"C:\\Windows\\System32\\svchost.exe"
+    config = _config_with_extra_field(0x002e, 3, printable)   # ProcInject_Transform_x86
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    out = capsys.readouterr().out
+
+    section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
+    transform_line = next(l for l in section.splitlines() if "ProcInject_Transform_x86" in l)
+    text_repr = repr(printable.decode("ascii"))
+    assert text_repr in transform_line
+    # repr() is the ONLY rendering -- not repr() alongside a separate,
+    # un-repr'd copy of the same text (which would look like the quoted
+    # text appearing, then the same content again unquoted).
+    assert transform_line.count(text_repr) == 1
+    assert transform_line.replace(text_repr, "", 1).count("svchost.exe") == 0
+
+
+def test_process_injection_binary_transform_shows_full_raw_hex_once_with_trailing_nul(capsys):
+    seg_va, seg_fo = 0xe0000, 0xe000
+    # Non-printable payload with trailing NUL padding -- the old
+    # `(value or '').strip('\x00') or raw.hex()[:60]` logic would have
+    # stripped the NUL bytes out of whatever little it showed; the new
+    # shared renderer must show them (as part of the full raw hex).
+    binary = bytes([0x01, 0x02, 0x03, 0xff, 0xfe]) + b"\x00\x00\x00"
+    config = _config_with_extra_field(0x002f, 3, binary)   # ProcInject_Transform_x64
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    out = capsys.readouterr().out
+
+    section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
+    transform_line = next(l for l in section.splitlines() if "ProcInject_Transform_x64" in l)
+    full_hex = binary.hex()   # includes the trailing NUL bytes, unstripped
+    assert full_hex in transform_line
+    assert transform_line.count(full_hex) == 1   # shown exactly once, no duplicate raw preview
+
+
+def test_process_injection_long_binary_transform_truncates_at_64_hex_chars_with_ellipsis(capsys):
+    # The short (5-byte, 10-hex-char) payload in the test above never
+    # exercises truncation at all -- it only proves the shown hex is
+    # untruncated/unstripped, not where truncation actually kicks in or
+    # that it's marked with "...". Use a payload whose hex is well over
+    # 64 chars (40 bytes -> 80 hex chars) so both are pinned precisely.
+    seg_va, seg_fo = 0xf0000, 0xf000
+    binary = bytes(range(1, 41))   # 40 bytes, includes non-printable control
+                                    # chars (0x01-0x08 etc.) -- guaranteed binary
+    assert len(binary.hex()) == 80 > 64
+    config = _config_with_extra_field(0x002f, 3, binary)   # ProcInject_Transform_x64
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    out = capsys.readouterr().out
+
+    section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
+    transform_line = next(l for l in section.splitlines() if "ProcInject_Transform_x64" in l)
+    full_hex = binary.hex()
+    expected = full_hex[:64] + "..."
+    assert transform_line.rstrip().endswith(expected)
+    assert full_hex not in transform_line   # the untruncated 80-char hex must not appear
+
+
 # ── a segment read failure must be counted as a coverage gap, not ─────────
 # silently dropped: a "clean" result achieved only because a segment could
 # never actually be read must not read as a genuine NOT_DETECTED_IN_SCANNED_SCOPE.
@@ -439,6 +575,69 @@ def test_decode_and_parse_tlv_illegal_field_type_is_incomplete():
     parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
     assert parsed["complete"] is False
     assert "illegal field type" in parsed["reason"]
+
+
+# ── _cs_decode_type3_value: the shared printable/binary decode helper ─────
+# (schema v2.7 / console field-table patch) -- the ONE place
+# _cs_decode_and_parse_tlv() (building `value`) and presentation.py
+# (deciding how to render a field under --verbose) both get this decision
+# from, so they can never disagree.
+
+def test_decode_type3_value_printable_ascii_is_text():
+    value, is_text = parser._cs_decode_type3_value(b"example.com")
+    assert is_text is True
+    assert value == "example.com"
+
+
+def test_decode_type3_value_multiline_printable_is_text():
+    # tab/CR/LF count as printable here -- a Malleable C2 header block or
+    # SpawnTo path can legitimately contain them.
+    raw = b"line one\nline two\r\ttabbed"
+    value, is_text = parser._cs_decode_type3_value(raw)
+    assert is_text is True
+    assert value == raw.decode("utf-8")
+
+
+def test_decode_type3_value_binary_is_not_text():
+    raw = bytes([0x30, 0x14, 0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86])   # DER-ish, non-printable
+    value, is_text = parser._cs_decode_type3_value(raw)
+    assert is_text is False
+    assert value == raw.hex()
+
+
+def test_decode_type3_value_binary_with_trailing_nul_strips_nul_from_value_only():
+    raw = bytes([0x30, 0x14, 0x30, 0x0d]) + b"\x00\x00\x00"
+    value, is_text = parser._cs_decode_type3_value(raw)
+    assert is_text is False
+    # `value` is hex of the NUL-STRIPPED bytes -- shorter than raw.hex().
+    assert value == raw.rstrip(b"\x00").hex()
+    assert value != raw.hex()
+    assert len(value) < len(raw.hex())
+
+
+def test_decode_type3_value_undecodable_utf8_is_not_text():
+    raw = bytes([0xff, 0xfe, 0x00, 0x01])   # invalid UTF-8
+    value, is_text = parser._cs_decode_type3_value(raw)
+    assert is_text is False
+    assert value == raw.rstrip(b"\x00").hex()
+
+
+def test_decode_type3_value_matches_what_the_tlv_parser_actually_stores():
+    # The parser's own `value` (built via this same helper) must be
+    # byte-for-byte what _cs_decode_type3_value() alone would produce --
+    # proves _cs_decode_and_parse_tlv() didn't drift onto a second,
+    # separately-maintained copy of this decision.
+    raw_printable = b"HTTP/1.1"
+    raw_binary = bytes([0x30, 0x81, 0x9f, 0x30, 0x0d])
+    for raw in (raw_printable, raw_binary):
+        # plaintext must start with CS_BEACON_SIGNATURE (the 6-byte header
+        # of a field_id=1/type=1/length=2 record) or the parser rejects
+        # the whole buffer before ever reaching field 0x0007.
+        plaintext = _tlv(0x0001, 1, struct.pack('>H', 0)) + _tlv(0x0007, 3, raw)
+        encoded = bytes(b ^ 0x69 for b in plaintext)
+        parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+        expected_value, _ = parser._cs_decode_type3_value(raw)
+        assert parsed["fields"][0x0007]["value"] == expected_value
 
 
 def test_decode_and_parse_tlv_terminator_at_exact_buffer_end_is_complete():

@@ -1,0 +1,6778 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.7.schema.json",
+  "title": "dumpex v2 structured output (schema_version 2.7)",
+  "description": "Validates the v2 envelope written by the six recon commands (--list/--modules/--threads/--pid/--sysinfo/--peb), --diff, --extract, --strings, --report, and --hunt, via --json. v2.7 re-keys `csBeaconDetails.configs[*].fields` by field NAME (e.g. `\"BeaconType\"`) instead of the raw TLV field ID string (`\"1\"`) -- a consumer no longer needs to already know that field ID 1 means BeaconType before it can look anything up -- and drops the now-redundant `name` property from each field's own value object (`type`/`value` only; the key IS the name). Unlike v2.6's `raw`-removal, this change IS visible as a `$defs` structural edit: `csBeaconDetails.configs[*].fields` now constrains property NAMES (`field_0x[0-9a-f]{4}` for an unrecognized field ID, or a letter-led identifier for a known one -- see dumpex/hunt/cs_beacon/schema.py's CS_FIELD_NAMES) and each field's own value shape (`additionalProperties: false`, `type`+`value` required, `type` restricted to 1/2/3) — a document still shaped like v2.6 (numeric-string keys, a `name` property) now fails validation, which is the point: schema_version 2.7 is meant to be mechanically distinguishable from 2.6, not just documented as different. `configs[*]` itself stays otherwise schema-open (`type: object`) -- no other config property gained a constraint. `dumpex/hunt/cs_beacon/collect.py`'s `_config_dict()` additionally raises `ValueError` at collect time on a field-name collision (two different field IDs resolving to the same name) rather than letting one silently overwrite the other -- not itself expressible in JSON Schema, enforced in Python before this shape is ever serialized. Console output (`--hunt cs-beacon --verbose`'s field table) also dropped its hex-ID column and stopped showing a separate near-duplicate raw-hex preview alongside `value` for binary fields in the same change, but that is presentation-only and carries no schema impact. dumpex-output-v2.6.schema.json remains frozen and installable for validating output produced before this change. v2.6 removes the `raw` field from `csBeaconDetails.configs[*].fields[*]` -- `--hunt cs-beacon`'s structured output (JSON and the nested CSV `fields` cell) no longer duplicates each parsed TLV field's raw hex bytes alongside `value`; PublicKey, Malleable C2, and inject-transform fields could carry very long hex strings there, degrading JSON/CSV/tool display for no benefit once `value` already carries the field's decoded/hex-rendered content. This was a field REMOVAL from an already-shipped shape (`csBeaconDetails.configs[*]` items were schema-open `type: object` in v2.5/v2.6, so that schema file itself needed no structural edit, but the wire shape a consumer actually received changed incompatibly), so it got its own new schema_version per this project's versioning policy rather than silently reusing 2.5. The internal CS Beacon parser (dumpex/hunt/cs_beacon/parser.py), DER public-key validation, and Malleable C2 instruction decoding are unaffected by either change -- they keep consuming `raw` bytes internally; only the value reshaped into the public v2 record (dumpex/hunt/cs_beacon/collect.py) changed. No other shape changed in either version: `result.kind`, every other record type, and the `finding` $def (extended in 2.5) are otherwise unchanged. `result.kind` is scoped to what has actually been migrated onto v2 so far; it grows as more commands migrate, it is not left open-ended. result.data.records[] items ARE typed per kind (see the allOf/if-then block in $defs/result and the record $defs) -- additionalProperties: false on every record type, so a dropped/renamed/retyped field or a stray field from the wrong kind fails validation, not just 'is an array'. dumpex-output-v1.1.schema.json remains the contract for any --hunt output NOT produced through the v2 envelope (unchanged until the CLI's atomic switch onto v2 -- see docs/hunt_migration_field_matrix.md).",
+  "type": "object",
+  "required": [
+    "meta",
+    "result"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "meta": {
+      "$ref": "#/$defs/meta"
+    },
+    "result": {
+      "$ref": "#/$defs/result"
+    },
+    "artifacts": {
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "diagnostics": {
+      "$ref": "#/$defs/diagnostics"
+    }
+  },
+  "$defs": {
+    "meta": {
+      "type": "object",
+      "required": [
+        "schema_version",
+        "tool",
+        "execution",
+        "evidence"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "2.7"
+        },
+        "tool": {
+          "type": "object",
+          "required": [
+            "name",
+            "version"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "execution": {
+          "type": "object",
+          "required": [
+            "started_at",
+            "finished_at",
+            "duration_seconds",
+            "command",
+            "options"
+          ],
+          "properties": {
+            "started_at": {
+              "type": "string"
+            },
+            "finished_at": {
+              "type": "string"
+            },
+            "duration_seconds": {
+              "type": "number"
+            },
+            "command": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "options": {
+              "type": "object"
+            },
+            "case_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "analyst": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "evidence": {
+          "description": "One entry per evidence source. A single-dump recon command emits exactly one entry (role: 'primary'); a comparison command emits one per side (e.g. 'baseline'/'target').",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "role"
+            ],
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "file_name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sha256": {
+                "type": "string"
+              },
+              "error": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "python_version": {
+              "type": "string"
+            },
+            "minidump_version": {
+              "type": "string"
+            },
+            "yara_version": {
+              "type": "string"
+            },
+            "pyyaml_version": {
+              "type": "string"
+            }
+          }
+        },
+        "rules": {
+          "description": "rules.yaml provenance for this run -- matches dumpex.rules_pkg.loader.get_rules_source_info()'s return shape. Omitted entirely (not present as a key at all) when get_rules() was never called this run (e.g. --hunt injection alone never reads rules.yaml) -- see dumpex.output.envelope._rules_meta. `path`/`sha256` are only null for the built-in defaults (no file was loaded at all); `path` is basename-only under --redact-paths, matching every other path-bearing meta field's own redaction rule. `version` has no lower bound -- rules_pkg.loader only type-checks a rules.yaml-declared `version:` field, never its sign (see loader.py's own _validate_top_level), so this schema does not invent a constraint the Python side doesn't enforce. `path == null` is EXACTLY the built-in-defaults shape (dumpex.rules_pkg.loader's own hardcoded fallback dict, verified against _load_rules()'s only path==None assignment) -- sha256/explicit/version are pinned to null/false/1 on that branch, not merely nullable.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256",
+                "explicit",
+                "version"
+              ],
+              "properties": {
+                "path": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "minLength": 1
+                },
+                "sha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "explicit": {
+                  "type": "boolean"
+                },
+                "version": {
+                  "type": "integer"
+                }
+              },
+              "allOf": [
+                {
+                  "if": {
+                    "properties": {
+                      "path": {
+                        "const": null
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "sha256": {
+                        "const": null
+                      },
+                      "explicit": {
+                        "const": false
+                      },
+                      "version": {
+                        "const": 1
+                      }
+                    }
+                  }
+                },
+                {
+                  "if": {
+                    "properties": {
+                      "path": {
+                        "not": {
+                          "const": null
+                        }
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "sha256": {
+                        "not": {
+                          "const": null
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        },
+        "yara_rules": {
+          "description": "YARA rule-file provenance for this run -- matches dumpex.hunt.yara_hunt.get_yara_provenance()'s return shape. Omitted entirely when YARA scanning was never invoked this run (e.g. --hunt injection alone never loads any .yar/.yara file) -- see dumpex.output.envelope._yara_rules_meta. `rules_dir` is basename-only under --redact-paths. `aggregate_sha256` is never null in this branch -- load_and_compile() always calls hashlib.sha256().hexdigest() unconditionally (even over zero rule files), which never returns null; only the error-only branch below omits it entirely.",
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "rules_dir",
+                "files",
+                "aggregate_sha256",
+                "compiled_ok",
+                "compile_failed"
+              ],
+              "properties": {
+                "rules_dir": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "files": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "name",
+                      "sha256",
+                      "compiled",
+                      "error"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "sha256": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "pattern": "^[0-9a-f]{64}$"
+                      },
+                      "compiled": {
+                        "type": "boolean"
+                      },
+                      "error": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "minLength": 1
+                      }
+                    },
+                    "allOf": [
+                      {
+                        "if": {
+                          "properties": {
+                            "compiled": {
+                              "const": true
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "error": {
+                              "const": null
+                            }
+                          }
+                        }
+                      },
+                      {
+                        "if": {
+                          "properties": {
+                            "compiled": {
+                              "const": false
+                            }
+                          }
+                        },
+                        "then": {
+                          "properties": {
+                            "error": {
+                              "type": "string"
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "aggregate_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "compiled_ok": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "compile_failed": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "error"
+              ],
+              "properties": {
+                "error": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "hexAddress": {
+      "description": "A memory address/pointer/handle, normalized to a fixed-width (16 hex digit), lowercase, 0x-prefixed string -- or null when there is nothing to report an address for (see dumpex/output/records.py's hex_address()). Never a bare int (uint64 precision isn't safe across all JSON consumers) and never a variable-width string.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^0x[0-9a-f]{16}$"
+    },
+    "memoryRegionRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_address",
+        "size",
+        "state",
+        "protect",
+        "type",
+        "suspicious"
+      ],
+      "properties": {
+        "base_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "protect": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "suspicious": {
+          "type": "boolean"
+        }
+      }
+    },
+    "moduleRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "full_path",
+        "base_address",
+        "end_address",
+        "size",
+        "compiled_utc",
+        "file_version",
+        "checksum",
+        "anomaly_flags"
+      ],
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "full_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "end_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "compiled_utc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "file_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checksum": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "anomaly_flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "threadRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tid",
+        "start_address",
+        "backing_module",
+        "module_context",
+        "flags",
+        "create_time",
+        "exit_time",
+        "exit_status",
+        "kernel_time_100ns",
+        "user_time_100ns",
+        "suspend_count",
+        "priority",
+        "teb"
+      ],
+      "properties": {
+        "tid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "start_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "backing_module": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "module_context": {
+          "description": "resolved: backed by a known module. unregistered: ModuleListStream was available and this address is confirmed NOT backed by any known module (a real DFIR signal). unavailable: ModuleListStream itself is missing -- can't tell either way, must not be confused with 'unregistered'. null: start_address is itself unknown (module context is moot).",
+          "enum": [
+            "resolved",
+            "unregistered",
+            "unavailable",
+            null
+          ]
+        },
+        "flags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "create_time": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exit_time": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exit_status": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kernel_time_100ns": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "user_time_100ns": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "suspend_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "priority": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "teb": {
+          "$ref": "#/$defs/hexAddress"
+        }
+      }
+    },
+    "sysInfoRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dump_file",
+        "hostname",
+        "username",
+        "os",
+        "os_version",
+        "architecture",
+        "product_type",
+        "pid",
+        "process_start_utc",
+        "image_path",
+        "command_line",
+        "current_directory",
+        "processors",
+        "cpu_vendor",
+        "cpu_current_mhz",
+        "cpu_max_mhz",
+        "process_user_time_seconds",
+        "process_kernel_time_seconds",
+        "thread_count",
+        "module_count"
+      ],
+      "properties": {
+        "dump_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "hostname": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "os": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "os_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "architecture": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "product_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "process_start_utc": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "image_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command_line": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current_directory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "processors": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cpu_vendor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cpu_current_mhz": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "cpu_max_mhz": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "process_user_time_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "process_kernel_time_seconds": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "thread_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "module_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "pidRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pid",
+        "source",
+        "thread_count",
+        "exc_tid"
+      ],
+      "properties": {
+        "pid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "exc_tid": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "pebRecord": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "peb_address",
+        "image_base_address",
+        "being_debugged",
+        "image_path",
+        "command_line",
+        "window_title",
+        "dll_path",
+        "current_directory",
+        "standard_input",
+        "standard_output",
+        "standard_error",
+        "environment_variables"
+      ],
+      "properties": {
+        "peb_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "image_base_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "being_debugged": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "image_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "command_line": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "window_title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dll_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "current_directory": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "standard_input": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "standard_output": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "standard_error": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "environment_variables": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "value"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "extractRecord": {
+      "description": "Matches dumpex.output.records.ExtractRecord.to_dict() -- the READ-side facts for one --extract invocation. `requested_address`/`requested_size` are never null -- a successful --extract always knows the exact address/size it read (unlike most other hexAddress-typed fields in this schema, which stay nullable for genuinely optional cases). NOT expressed here (Python-only, see ExtractRecord.__post_init__): bytes_read must never exceed requested_size -- JSON Schema cannot compare two sibling field VALUES against each other within one object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requested_address",
+        "requested_size",
+        "auto_sized",
+        "bytes_read",
+        "mz_header_detected"
+      ],
+      "properties": {
+        "requested_address": {
+          "$ref": "#/$defs/hexAddress",
+          "not": {
+            "const": null
+          }
+        },
+        "requested_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "auto_sized": {
+          "type": "boolean"
+        },
+        "bytes_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mz_header_detected": {
+          "type": "boolean"
+        }
+      }
+    },
+    "stringRecord": {
+      "description": "Matches dumpex.output.records.StringRecord.to_dict() -- one extracted string from a --strings scan or a --report triage card's own Section 4 (notable_strings). `offset` is a plain byte offset relative to the read region's start, NOT a process address. Unlike most other hexAddress-typed fields in this schema, `address` is never null -- a string was found at some real address, there is no \"address unknown\" case for it (see StringRecord.__post_init__). `matched_grep` is a flag, not a filter: this record is emitted for every extracted string regardless of --grep -- null when no --grep was given at all (always null for --report's own notable_strings, which has no --grep concept), true/false per record when it was.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offset",
+        "address",
+        "encoding",
+        "text",
+        "matched_grep"
+      ],
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "address": {
+          "$ref": "#/$defs/hexAddress",
+          "not": {
+            "const": null
+          }
+        },
+        "encoding": {
+          "enum": [
+            "ASCII",
+            "UTF16"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "matched_grep": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "stringsSummary": {
+      "description": "Matches result.summary for kind == 'strings' (dumpex.commands.extract.collect_strings). Pins the scan-context fields the P2 review's own 'a zero-result scan must still be able to tell where the scan started' finding needs machine-enforced, not just documented/unit-tested -- requested_address is the only way to know the scan origin when `data.records` is empty. additionalProperties: false since these six fields are the whole of collect_strings' own summary dict today; a future field added there must extend this def too, the same way every other v2 record type is kept in lockstep with its Python producer.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "count",
+        "shown",
+        "requested_address",
+        "requested_size",
+        "bytes_read",
+        "auto_sized"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "shown": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "requested_address": {
+          "$ref": "#/$defs/hexAddress",
+          "not": {
+            "const": null
+          }
+        },
+        "requested_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytes_read": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "auto_sized": {
+          "type": "boolean"
+        }
+      }
+    },
+    "reportThreadInfo": {
+      "description": "Matches dumpex.output.records.ReportThreadInfo.to_dict() -- one thread as seen by --report, either the card's own anchor thread (Section 1) or one of the other threads sharing the anchor's resolved region (Section 3). `module_context` is null only when `start_address` is itself null (no address to resolve against). `backing_module_base`/`backing_module_end` are both-or-neither, and only ever non-null when `module_context == 'resolved'` -- Section 3's own 'other threads' entries never populate a range even when resolved (see the class's own docstring).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tid",
+        "start_address",
+        "backing_module",
+        "module_context",
+        "kernel_time_100ns",
+        "user_time_100ns",
+        "backing_module_base",
+        "backing_module_end"
+      ],
+      "properties": {
+        "tid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "start_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "backing_module": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "module_context": {
+          "enum": [
+            "resolved",
+            "unregistered",
+            "unavailable",
+            null
+          ]
+        },
+        "kernel_time_100ns": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "user_time_100ns": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "backing_module_base": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "backing_module_end": {
+          "$ref": "#/$defs/hexAddress"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "start_address": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "module_context": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backing_module_base": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "module_context": {
+                "const": "resolved"
+              },
+              "backing_module_end": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backing_module_base": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "backing_module_end": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reportRegionInfo": {
+      "description": "Matches dumpex.output.records.ReportRegionInfo.to_dict() -- the memory region resolved at a triage card's target address (Section 2). `file_offset` is a plain byte offset inside the .dmp file, not a process address, so it does NOT use hexAddress. `module_context`/`mz_header_detected`/`has_injected_pe` are a tri-state triple: `module_context` is never null (a resolved region always has SOME module-context answer); `mz_header_detected` is null iff the small header-peek read itself failed; `has_injected_pe` is null whenever the evidence needed to decide is itself missing (see the class's own docstring for the full derivation table, mirrored in the allOf below).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_address",
+        "size",
+        "protect",
+        "type",
+        "module_owner",
+        "file_offset",
+        "is_rwx_private",
+        "module_context",
+        "mz_header_detected",
+        "has_injected_pe",
+        "protection_suspicious"
+      ],
+      "properties": {
+        "base_address": {
+          "$ref": "#/$defs/hexAddress",
+          "not": {
+            "const": null
+          }
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "protect": {
+          "type": "string",
+          "minLength": 1
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "module_owner": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "file_offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "is_rwx_private": {
+          "type": "boolean"
+        },
+        "module_context": {
+          "enum": [
+            "resolved",
+            "unregistered",
+            "unavailable"
+          ]
+        },
+        "mz_header_detected": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "has_injected_pe": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "protection_suspicious": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "is_rwx_private": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "protection_suspicious": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mz_header_detected": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "has_injected_pe": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mz_header_detected": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "has_injected_pe": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mz_header_detected": {
+                "const": true
+              },
+              "module_context": {
+                "const": "unregistered"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "has_injected_pe": {
+                "const": true
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mz_header_detected": {
+                "const": true
+              },
+              "module_context": {
+                "const": "resolved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "has_injected_pe": {
+                "const": false
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mz_header_detected": {
+                "const": true
+              },
+              "module_context": {
+                "const": "unavailable"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "has_injected_pe": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reportIocString": {
+      "description": "Matches dumpex.output.records.ReportIocString.to_dict() -- one IOC-pattern string hit in a triage card's Section 4. `context_hex`/`context_base_address`/`context_hit_offset` are only ever populated when `is_network_pattern` is true -- a bounded (<=256 byte, i.e. <=512 hex char, enforced via context_hex's own maxLength) collect-time-computed hexdump-context window the renderer decodes instead of re-reading the dump (see dumpex.commands.report.render_report_console's own docstring for why). context_hit_offset's maximum of 255 is the loosest static bound this schema can express (the real constraint -- must fall strictly within THIS instance's own, possibly shorter, context_hex -- compares two sibling field values and is Python-only, see ReportIocString.__post_init__).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "offset",
+        "address",
+        "encoding",
+        "text",
+        "is_network_pattern",
+        "context_hex",
+        "context_base_address",
+        "context_hit_offset"
+      ],
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "address": {
+          "$ref": "#/$defs/hexAddress",
+          "not": {
+            "const": null
+          }
+        },
+        "encoding": {
+          "enum": [
+            "ASCII",
+            "UTF16"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "is_network_pattern": {
+          "type": "boolean"
+        },
+        "context_hex": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^([0-9a-f]{2})*$",
+          "maxLength": 512
+        },
+        "context_base_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "context_hit_offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "is_network_pattern": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "context_hex": {
+                "const": null
+              },
+              "context_base_address": {
+                "const": null
+              },
+              "context_hit_offset": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "is_network_pattern": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "context_hex": {
+                "type": "string",
+                "minLength": 1
+              },
+              "context_base_address": {
+                "not": {
+                  "const": null
+                }
+              },
+              "context_hit_offset": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "triageCardRecord": {
+      "description": "Matches dumpex.output.records.TriageCardRecord.to_dict() -- one --report triage card. --report-string produces N cards (one per private-memory hit region) in one result.data.records list; --report-tid/--report-addr produce exactly one. `findings` is a closed, deduplicated vocabulary; `verdict` is cross-checked against len(findings) via the allOf below (0/1/2/3+ -> CLEAN/SUSPICIOUS/LIKELY_MALICIOUS/HIGH_CONFIDENCE_MALICIOUS), the same four-tier rule dumpex.core.memory.verdict_for() enforces in Python. NOT expressed here (Python-only, see TriageCardRecord.__post_init__): string_scan['truncated'] must equal bytes_read < requested_bytes, and findings/finding_details must name exactly the same keys -- JSON Schema cannot compare two sibling field VALUES against each other within one object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "anchor_tid",
+        "anchor_address",
+        "anchor_source",
+        "thread",
+        "region",
+        "string_hit",
+        "other_threads_in_region",
+        "notable_strings",
+        "ioc_strings",
+        "string_scan",
+        "string_scan_error",
+        "thread_region_correlation_excluded",
+        "findings",
+        "finding_details",
+        "verdict",
+        "artifact_id",
+        "extract_read_clamped",
+        "extract_read_truncated"
+      ],
+      "properties": {
+        "anchor_tid": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "anchor_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "anchor_source": {
+          "enum": [
+            "tid",
+            "address",
+            "string_hit"
+          ]
+        },
+        "thread": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/reportThreadInfo"
+            }
+          ]
+        },
+        "region": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/reportRegionInfo"
+            }
+          ]
+        },
+        "string_hit": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "offset",
+                "address",
+                "encoding"
+              ],
+              "properties": {
+                "offset": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "address": {
+                  "$ref": "#/$defs/hexAddress",
+                  "not": {
+                    "const": null
+                  }
+                },
+                "encoding": {
+                  "enum": [
+                    "ASCII",
+                    "UTF16"
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "other_threads_in_region": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reportThreadInfo"
+          }
+        },
+        "notable_strings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/stringRecord"
+          }
+        },
+        "ioc_strings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reportIocString"
+          }
+        },
+        "string_scan": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "requested_bytes",
+                "bytes_read",
+                "clamped",
+                "truncated",
+                "total",
+                "ascii_count",
+                "utf16_count"
+              ],
+              "properties": {
+                "requested_bytes": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "bytes_read": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "clamped": {
+                  "type": "boolean"
+                },
+                "truncated": {
+                  "type": "boolean"
+                },
+                "total": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "ascii_count": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "utf16_count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          ]
+        },
+        "string_scan_error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "thread_region_correlation_excluded": {
+          "type": "boolean"
+        },
+        "findings": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "unbacked_thread",
+              "rwx_private",
+              "injected_pe",
+              "ioc_strings"
+            ]
+          }
+        },
+        "finding_details": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "verdict": {
+          "enum": [
+            "CLEAN",
+            "SUSPICIOUS",
+            "LIKELY_MALICIOUS",
+            "HIGH_CONFIDENCE_MALICIOUS"
+          ]
+        },
+        "artifact_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "extract_read_clamped": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "extract_read_truncated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "anchor_source": {
+                "const": "string_hit"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "string_hit": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "anchor_source": {
+                "enum": [
+                  "tid",
+                  "address"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "string_hit": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "string_scan": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "string_scan_error": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "string_scan_error": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "string_scan": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "extract_read_clamped": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "extract_read_truncated": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "extract_read_clamped": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "extract_read_truncated": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "findings": {
+                "maxItems": 0
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "verdict": {
+                "const": "CLEAN"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "findings": {
+                "minItems": 1,
+                "maxItems": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "verdict": {
+                "const": "SUSPICIOUS"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "findings": {
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "verdict": {
+                "const": "LIKELY_MALICIOUS"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "findings": {
+                "minItems": 3
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "verdict": {
+                "const": "HIGH_CONFIDENCE_MALICIOUS"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "reportSummary": {
+      "description": "Matches result.summary for kind == 'report' (dumpex.commands.report.collect_report). `mode` says which of --report-tid/--report-addr/--report-string (or the tid+addr combination) produced this result -- the allOf below pins which query_* fields are required non-null per mode, the same way stringsSummary pins requested_address for --strings. `skipped_unreadable_regions`/`truncated_regions`/`clamped_regions` are StringSearchStats' own three counters (see dumpex.core.memory.StringSearchStats), always 0 outside string-search mode. additionalProperties: false since these twelve fields are the whole of collect_report's own summary dict today.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mode",
+        "card_count",
+        "query_string",
+        "query_tid",
+        "query_addr",
+        "total_hits",
+        "hits_private",
+        "hits_image",
+        "image_hit_modules",
+        "skipped_unreadable_regions",
+        "truncated_regions",
+        "clamped_regions"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "tid",
+            "addr",
+            "tid_addr",
+            "string"
+          ]
+        },
+        "card_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "query_string": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query_tid": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "query_addr": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_hits": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "hits_private": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "hits_image": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "image_hit_modules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "skipped_unreadable_regions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "truncated_regions": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "clamped_regions": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "tid"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "query_tid": {
+                "not": {
+                  "const": null
+                }
+              },
+              "query_addr": {
+                "const": null
+              },
+              "query_string": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "addr"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "query_addr": {
+                "not": {
+                  "const": null
+                }
+              },
+              "query_tid": {
+                "const": null
+              },
+              "query_string": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "tid_addr"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "query_tid": {
+                "not": {
+                  "const": null
+                }
+              },
+              "query_addr": {
+                "not": {
+                  "const": null
+                }
+              },
+              "query_string": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "query_string": {
+                "not": {
+                  "const": null
+                }
+              },
+              "query_addr": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "string"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "total_hits": {
+                "type": "integer"
+              },
+              "hits_private": {
+                "type": "integer"
+              },
+              "hits_image": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "not": {
+                  "const": "string"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "total_hits": {
+                "const": null
+              },
+              "hits_private": {
+                "const": null
+              },
+              "hits_image": {
+                "const": null
+              },
+              "image_hit_modules": {
+                "const": []
+              },
+              "skipped_unreadable_regions": {
+                "const": 0
+              },
+              "truncated_regions": {
+                "const": 0
+              },
+              "clamped_regions": {
+                "const": 0
+              }
+            }
+          }
+        }
+      ]
+    },
+    "moduleDiffRecord": {
+      "description": "Matches dumpex.output.records.ModuleDiffRecord.to_dict() -- one added/removed/rebased module between two dumps, grounded in dumpex.commands.diff.diff_modules' own set logic. `name` is always a non-empty string (\"(unnamed)\" for an anonymous module -- see dumpex.commands.comparison._module_display_name), but full_path_before/full_path_after are only forced null on the side that genuinely has no entry -- the PRESENT side's full_path may legitimately be null too (an anonymous module has a real base_address but no name at all), so only base_address is required non-null for added/removed. `full_path_before`/`full_path_after` are otherwise unconstrained by change_type: address identifies a module diff, not path. NOT expressed here (Python-only, see ModuleDiffRecord.__post_init__): for `change_type: \"rebased\"`, base_address_before must differ from base_address_after -- JSON Schema cannot compare two sibling field VALUES for inequality within one object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_type",
+        "change_type",
+        "name",
+        "full_path_before",
+        "full_path_after",
+        "base_address_before",
+        "base_address_after"
+      ],
+      "properties": {
+        "entity_type": {
+          "const": "module"
+        },
+        "change_type": {
+          "enum": [
+            "added",
+            "removed",
+            "rebased"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "full_path_before": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "full_path_after": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "base_address_before": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "base_address_after": {
+          "$ref": "#/$defs/hexAddress"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "added"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "full_path_before": {
+                "const": null
+              },
+              "base_address_before": {
+                "const": null
+              },
+              "base_address_after": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "removed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "full_path_after": {
+                "const": null
+              },
+              "base_address_after": {
+                "const": null
+              },
+              "base_address_before": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "rebased"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "base_address_before": {
+                "not": {
+                  "const": null
+                }
+              },
+              "base_address_after": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "threadDiffRecord": {
+      "description": "Matches dumpex.output.records.ThreadDiffRecord.to_dict() -- one added/removed thread between two dumps, grounded in dumpex.commands.diff.diff_threads' own TID-keyed set logic. backing_module_after/backing_module_context are only ever populated for 'added' (resolved against the TARGET's module list); diff_threads never attempts baseline-side module resolution for a removed thread. For 'added': backing_module_after/backing_module_context are both null exactly when start_address_after itself is null (module resolution is never attempted without a known address); otherwise backing_module_context is always one of resolved/unregistered/unavailable, and backing_module_after is non-null iff backing_module_context is 'resolved'.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_type",
+        "change_type",
+        "tid",
+        "start_address_before",
+        "start_address_after",
+        "backing_module_after",
+        "backing_module_context"
+      ],
+      "properties": {
+        "entity_type": {
+          "const": "thread"
+        },
+        "change_type": {
+          "enum": [
+            "added",
+            "removed"
+          ]
+        },
+        "tid": {
+          "type": "integer"
+        },
+        "start_address_before": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "start_address_after": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "backing_module_after": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "backing_module_context": {
+          "enum": [
+            "resolved",
+            "unregistered",
+            "unavailable",
+            null
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "added"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address_before": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "removed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "start_address_after": {
+                "const": null
+              },
+              "backing_module_after": {
+                "const": null
+              },
+              "backing_module_context": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "added"
+              },
+              "start_address_after": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "backing_module_after": {
+                "const": null
+              },
+              "backing_module_context": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "added"
+              },
+              "start_address_after": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "backing_module_context": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backing_module_context": {
+                "const": "resolved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "backing_module_after": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "backing_module_context": {
+                "enum": [
+                  "unregistered",
+                  "unavailable"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "backing_module_after": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    "memoryDiffRecord": {
+      "description": "Matches dumpex.output.records.MemoryDiffRecord.to_dict() -- one added/removed/protection-changed memory region between two dumps, grounded in dumpex.commands.diff.diff_memory's own BaseAddress-keyed set logic. suspicious_before/_after reuse memoryRegionRecord.suspicious's own semantics rather than diff_memory's own 4-tier console categorization. NOT expressed here (Python-only, see MemoryDiffRecord.__post_init__): for `change_type: \"protection_changed\"`, protect_before must differ from protect_after -- JSON Schema cannot compare two sibling field VALUES for inequality within one object.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "entity_type",
+        "change_type",
+        "base_address",
+        "size_before",
+        "size_after",
+        "protect_before",
+        "protect_after",
+        "type_before",
+        "type_after",
+        "suspicious_before",
+        "suspicious_after"
+      ],
+      "properties": {
+        "entity_type": {
+          "const": "memory_region"
+        },
+        "change_type": {
+          "enum": [
+            "added",
+            "removed",
+            "protection_changed"
+          ]
+        },
+        "base_address": {
+          "$ref": "#/$defs/hexAddress",
+          "not": {
+            "const": null
+          }
+        },
+        "size_before": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "size_after": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "protect_before": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "protect_after": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "type_before": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "type_after": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "suspicious_before": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "suspicious_after": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "added"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "size_before": {
+                "const": null
+              },
+              "protect_before": {
+                "const": null
+              },
+              "type_before": {
+                "const": null
+              },
+              "suspicious_before": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "removed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "size_after": {
+                "const": null
+              },
+              "protect_after": {
+                "const": null
+              },
+              "type_after": {
+                "const": null
+              },
+              "suspicious_after": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "change_type": {
+                "const": "protection_changed"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "protect_before": {
+                "not": {
+                  "const": null
+                }
+              },
+              "protect_after": {
+                "not": {
+                  "const": null
+                }
+              },
+              "suspicious_before": {
+                "not": {
+                  "const": null
+                }
+              },
+              "suspicious_after": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "comparisonRecord": {
+      "description": "Tagged union for result.kind == 'comparison' -- discriminated by entity_type, which is a distinct const on each branch.",
+      "oneOf": [
+        {
+          "$ref": "#/$defs/moduleDiffRecord"
+        },
+        {
+          "$ref": "#/$defs/threadDiffRecord"
+        },
+        {
+          "$ref": "#/$defs/memoryDiffRecord"
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "kind",
+        "execution_status",
+        "coverage",
+        "data"
+      ],
+      "properties": {
+        "kind": {
+          "description": "Which canonical record type result.data.records holds. Grows as more commands migrate onto v2 -- not an open string.",
+          "enum": [
+            "memory_regions",
+            "modules",
+            "threads",
+            "sysinfo",
+            "pid",
+            "peb",
+            "comparison",
+            "extract",
+            "strings",
+            "report",
+            "hunt"
+          ]
+        },
+        "execution_status": {
+          "description": "Did the COMMAND itself run to completion -- independent of whether the EVIDENCE it saw was complete (see coverage below). 'partial' is used by --report when a self-imposed scan-budget clamp (MAX_REGION_READ) or a per-card --output write failure means the command didn't finish everything it set out to do, even though the evidence it DID look at may be fully covered.",
+          "enum": [
+            "completed",
+            "partial",
+            "failed"
+          ]
+        },
+        "coverage": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "description": "Was the evidence available to this command complete? Vocabulary shared with dumpex.hunt._coverage.derive_coverage_status.",
+              "enum": [
+                "complete",
+                "partial",
+                "not_evaluated"
+              ]
+            },
+            "reasons": {
+              "description": "Backward-compatible flat human text, rendered from `limitations` -- kept so an existing consumer that only reads `reasons` never breaks.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "sources": {
+              "description": "Per-source observed state -- keyed by source name (e.g. 'memory_info', 'threads', or a dotted entity-namespaced name such as 'baseline.modules' for a comparison result). Optional: an older producer that doesn't populate this is still a valid document.",
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/sourceObservation"
+              },
+              "default": {}
+            },
+            "limitations": {
+              "description": "Structured, machine-readable coverage gaps -- the source `reasons` is rendered from. `code` is intentionally a plain string, not a closed enum: dumpex.output.coverage.LimitationCode grows as commands migrate, and this schema should not need a version bump every time a new code is added.",
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/coverageLimitation"
+              },
+              "default": []
+            }
+          }
+        },
+        "summary": {
+          "description": "Free-form per-kind extension point by default (open object) -- refined per-kind via the allOf/if-then block below exactly like data.records is, wherever a kind's own summary fields carry machine-relevant facts (e.g. kind == 'strings'/'report', whose requested_address/query_* fields are the only way to know a zero-result scan's own origin).",
+          "type": "object"
+        },
+        "data": {
+          "type": "object",
+          "required": [
+            "records"
+          ],
+          "properties": {
+            "records": {
+              "type": "array"
+            }
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "memory_regions"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/memoryRegionRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "modules"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/moduleRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "threads"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/threadRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "sysinfo"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/sysInfoRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "pid"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/pidRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "peb"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/pebRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "comparison"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/comparisonRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "extract"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/extractRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "strings"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "summary": {
+                "$ref": "#/$defs/stringsSummary"
+              },
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/stringRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "report"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "summary": {
+                "$ref": "#/$defs/reportSummary"
+              },
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/triageCardRecord"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "hunt"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "summary": {
+                "$ref": "#/$defs/huntSummary"
+              },
+              "data": {
+                "properties": {
+                  "records": {
+                    "items": {
+                      "$ref": "#/$defs/hunterRecord"
+                    }
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "overall_status": {
+                          "const": "NOT_EVALUATED"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "coverage": {
+                      "properties": {
+                        "status": {
+                          "const": "not_evaluated"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "coverage": {
+                      "properties": {
+                        "status": {
+                          "const": "not_evaluated"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "overall_status": {
+                          "const": "NOT_EVALUATED"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "all"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 7,
+                          "maxItems": 7,
+                          "prefixItems": [
+                            {
+                              "properties": {
+                                "hunter": {
+                                  "const": "injection"
+                                }
+                              }
+                            },
+                            {
+                              "properties": {
+                                "hunter": {
+                                  "const": "hollowing"
+                                }
+                              }
+                            },
+                            {
+                              "properties": {
+                                "hunter": {
+                                  "const": "stomping"
+                                }
+                              }
+                            },
+                            {
+                              "properties": {
+                                "hunter": {
+                                  "const": "pipe"
+                                }
+                              }
+                            },
+                            {
+                              "properties": {
+                                "hunter": {
+                                  "const": "cs-beacon"
+                                }
+                              }
+                            },
+                            {
+                              "properties": {
+                                "hunter": {
+                                  "const": "yara"
+                                }
+                              }
+                            },
+                            {
+                              "properties": {
+                                "hunter": {
+                                  "const": "obfuscation"
+                                }
+                              }
+                            }
+                          ],
+                          "items": false
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "injection"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 1,
+                          "maxItems": 1,
+                          "items": {
+                            "properties": {
+                              "hunter": {
+                                "const": "injection"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "hollowing"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 1,
+                          "maxItems": 1,
+                          "items": {
+                            "properties": {
+                              "hunter": {
+                                "const": "hollowing"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "stomping"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 1,
+                          "maxItems": 1,
+                          "items": {
+                            "properties": {
+                              "hunter": {
+                                "const": "stomping"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "pipe"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 1,
+                          "maxItems": 1,
+                          "items": {
+                            "properties": {
+                              "hunter": {
+                                "const": "pipe"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "cs-beacon"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 1,
+                          "maxItems": 1,
+                          "items": {
+                            "properties": {
+                              "hunter": {
+                                "const": "cs-beacon"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "yara"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 1,
+                          "maxItems": 1,
+                          "items": {
+                            "properties": {
+                              "hunter": {
+                                "const": "yara"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "selected": {
+                          "const": "obfuscation"
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "minItems": 1,
+                          "maxItems": 1,
+                          "items": {
+                            "properties": {
+                              "hunter": {
+                                "const": "obfuscation"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 0
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 0,
+                          "maxContains": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 1
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 1,
+                          "maxContains": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 2,
+                          "maxContains": 2
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 3
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 3,
+                          "maxContains": 3
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 4
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 4,
+                          "maxContains": 4
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 5
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 5,
+                          "maxContains": 5
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 6
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 6,
+                          "maxContains": 6
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "detected_count": {
+                          "const": 7
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "DETECTED"
+                              }
+                            }
+                          },
+                          "minContains": 7,
+                          "maxContains": 7
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 0
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 0,
+                          "maxContains": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 1
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 1,
+                          "maxContains": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 2,
+                          "maxContains": 2
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 3
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 3,
+                          "maxContains": 3
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 4
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 4,
+                          "maxContains": 4
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 5
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 5,
+                          "maxContains": 5
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 6
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 6,
+                          "maxContains": 6
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "inconclusive_count": {
+                          "const": 7
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "INCONCLUSIVE"
+                              }
+                            }
+                          },
+                          "minContains": 7,
+                          "maxContains": 7
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 0
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 0,
+                          "maxContains": 0
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 1
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 1,
+                          "maxContains": 1
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 2
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 2,
+                          "maxContains": 2
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 3
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 3,
+                          "maxContains": 3
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 4
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 4,
+                          "maxContains": 4
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 5
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 5,
+                          "maxContains": 5
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 6
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 6,
+                          "maxContains": 6
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "summary": {
+                      "properties": {
+                        "not_evaluated_count": {
+                          "const": 7
+                        }
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "data": {
+                      "properties": {
+                        "records": {
+                          "contains": {
+                            "properties": {
+                              "status": {
+                                "const": "NOT_EVALUATED"
+                              }
+                            }
+                          },
+                          "minContains": 7,
+                          "maxContains": 7
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "required": [
+              "summary"
+            ]
+          }
+        }
+      ]
+    },
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "warnings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnosticEntry"
+          },
+          "default": []
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/diagnosticEntry"
+          },
+          "default": []
+        }
+      }
+    },
+    "diagnosticEntry": {
+      "description": "Matches dumpex.output.records.Diagnostic.to_dict(), which always emits all three fields -- `code` is required (it's always a key in the dict), just nullable.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "severity",
+        "message",
+        "code"
+      ],
+      "properties": {
+        "severity": {
+          "enum": [
+            "warning",
+            "error"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      }
+    },
+    "sourceObservation": {
+      "description": "Matches dumpex.output.coverage.SourceObservation.to_dict(), which always emits all three fields -- `required` covers all of them, not just `state`, and the record_count<->state invariant (None for absent/failed, exactly 0 for present_empty, >=1 for present) is frozen structurally below, mirroring the same invariant SourceObservation.__post_init__ enforces in Python.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "record_count",
+        "detail"
+      ],
+      "properties": {
+        "state": {
+          "enum": [
+            "absent",
+            "present_empty",
+            "present",
+            "failed"
+          ]
+        },
+        "record_count": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "enum": [
+                  "absent",
+                  "failed"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "record_count": {
+                "type": "null"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "present_empty"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "record_count": {
+                "const": 0
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "state": {
+                "const": "present"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "record_count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    },
+    "coverageLimitation": {
+      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does. `allOf` below constrains each KNOWN code's disallowed fields to their default (null/[]), pins `source` where fixed, and mirrors the value-shape rules dumpex.output.coverage._CODE_SPECS/CoverageLimitation.__post_init__ enforce that JSON Schema CAN express (minItems, exact array contents, non-null requirements, one-field-implies-another-field dependencies) -- each `if` matches only that one `code` value, so an unrecognized future code matches none of them and stays fully open; `code` itself remains a plain string, not an enum. This is NOT full parity with the Python model: rules comparing two field VALUES for inequality (source != counterpart_source) or against another object's state entirely outside this fragment (counterpart_source's own record_count, a sibling entry in result.coverage.sources) are Python-only and cannot be expressed here -- see CoverageLimitation.__post_init__ and _validate_source_absent_against_sources for those.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "source",
+        "scope",
+        "affected_count",
+        "unavailable_fields",
+        "available_fields",
+        "counterpart_source",
+        "related_sources",
+        "related_tids",
+        "thread_id",
+        "detail"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "affected_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "unavailable_fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "available_fields": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "counterpart_source": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "related_sources": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "related_tids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "thread_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SOURCE_ABSENT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SOURCE_ABSENT"
+              },
+              "affected_count": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "counterpart_source": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SOURCE_ABSENT"
+              },
+              "available_fields": {
+                "minItems": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unavailable_fields": {
+                "minItems": 1
+              },
+              "counterpart_source": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SOURCE_FAILED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "affected_count": {
+                "const": null
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SOURCE_FAILED"
+              },
+              "available_fields": {
+                "minItems": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unavailable_fields": {
+                "minItems": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SOURCE_KEY_MISMATCH"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "available_fields": {
+                "const": []
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SOURCE_GROUP_ABSENT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "minItems": 2
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "MODULE_CLASSIFICATION_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "modules"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "PEB_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "peb"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "PID_SOURCES_ABSENT"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "misc_info"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": [
+                  "misc_info",
+                  "threads",
+                  "exception"
+                ]
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "PID_THREAD_LIST_FALLBACK"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "misc_info"
+              },
+              "scope": {
+                "const": null
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": "threads"
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "minItems": 1
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "PID_EXCEPTION_TID_FALLBACK"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "exception"
+              },
+              "scope": {
+                "const": null
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "type": "integer"
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "PID_NO_USABLE_FALLBACK"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "misc_info"
+              },
+              "scope": {
+                "const": null
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SYSINFO_SYSTEM_INFO_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "sysinfo"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SYSINFO_MISC_INFO_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "misc_info"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SYSINFO_PEB_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "peb"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SYSINFO_THREADS_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "threads"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SYSINFO_MODULES_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "modules"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "REGION_READ_TRUNCATED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "requested_region"
+              },
+              "scope": {
+                "const": null
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "REPORT_MODULE_CONTEXT_UNAVAILABLE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "modules"
+              },
+              "affected_count": {
+                "const": null
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "REPORT_STRING_SCAN_INCOMPLETE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "string_search"
+              },
+              "scope": {
+                "const": null
+              },
+              "affected_count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "REPORT_STRING_SCAN_TRUNCATED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "source": {
+                "const": "string_search"
+              },
+              "scope": {
+                "const": null
+              },
+              "affected_count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "unavailable_fields": {
+                "const": []
+              },
+              "available_fields": {
+                "const": []
+              },
+              "counterpart_source": {
+                "const": null
+              },
+              "related_sources": {
+                "const": []
+              },
+              "related_tids": {
+                "const": []
+              },
+              "thread_id": {
+                "const": null
+              },
+              "detail": {
+                "const": null
+              }
+            }
+          }
+        }
+      ]
+    },
+    "artifact": {
+      "description": "An output file the tool itself produced (e.g. an extracted memory region) -- distinct from meta.evidence, which describes the INPUT dump(s). Populated by --extract and --report (its own optional extract-to-file side effect, under a different `kind` string -- 'extracted_region' vs 'report_extracted_region'). Matches dumpex.output.records.Artifact.to_dict(), which always emits all six fields -- `required` covers all of them, not just id/kind/path.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "path",
+        "size_bytes",
+        "sha256",
+        "description"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "size_bytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "finding": {
+      "description": "Matches dumpex.hunt._finding.Finding.to_dict() -- one hunter-agnostic judgment (facts/inference/confidence/rationale/limitations, tagged observation/lead/detection) inside a hunterRecord's `findings` array, extended (v2.5) with a normalized-SIEM-alert shape: `id` (deterministic -- 128-bit SHA-256 prefix of an unambiguous JSON encoding of check/rule_id/confidence/facts, so it never changes across a re-scan of the SAME evidence; content-only, so it is NOT a globally unique cross-dump identifier -- combine it with meta.evidence[].sha256 for that), `severity` (always derived from tag+confidence -- see the allOf block below, which pins the exact mapping so an external producer must follow it too, not just this codebase's own Finding.__post_init__), `technique_ids` (real MITRE ATT&CK technique/sub-technique IDs only, e.g. \"T1055\"/\"T1559.001\" -- empty unless the hunter has an actual mapping -- never invented per check), `evidence_refs` (structured pointers into the hunter's own `details`, distinct from free-text `facts`), `iocs` (indicator-of-compromise values), and `rule_id`/`rule_version` (detection-logic provenance -- `rule_id` defaults to `check`; `rule_version` stays null unless a real versioned rule source produced this finding, e.g. rules.yaml-derived findings carry that ruleset's own CONTENT sha256, never rules.yaml's top-level `version:` FORMAT field, which does not change when rule content does). yara is the one hunter that never populates this -- its own matches/rules_hit stay in YaraDetails instead (see hunterRecord's own allOf: findings must be [] for hunter == 'yara').",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "check",
+        "tag",
+        "severity",
+        "confidence",
+        "facts",
+        "inference",
+        "rationale",
+        "limitations",
+        "technique_ids",
+        "evidence_refs",
+        "iocs",
+        "rule_id",
+        "rule_version"
+      ],
+      "properties": {
+        "id": {
+          "description": "Matches dumpex.hunt._finding.Finding's own \"finding-\" + 32 lowercase hex chars (128-bit SHA-256 prefix) shape exactly -- pattern PLUS an exact minLength/maxLength, same reasoning as technique_ids' own two-branch shape above (a bare '^...$' pattern alone would accept a trailing-newline-appended value one character too long).",
+          "type": "string",
+          "pattern": "^finding-[0-9a-f]{32}$",
+          "minLength": 40,
+          "maxLength": 40
+        },
+        "check": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tag": {
+          "enum": [
+            "observation",
+            "lead",
+            "detection"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ]
+        },
+        "facts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "inference": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rationale": {
+          "type": "string",
+          "minLength": 1
+        },
+        "limitations": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "technique_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "description": "MITRE ATT&CK technique (\"T1055\") or sub-technique (\"T1559.001\") id. Expressed as two fixed-length oneOf branches, each pattern PLUS an exact minLength/maxLength, rather than a single '^...$'-anchored pattern -- a review found that '$' (in both Python re, which the `jsonschema` library's own pattern check uses via re.search(), AND in ECMA 262, the dialect the JSON Schema spec itself designates) matches just before a trailing newline, not only at the true end of string, so a bare pattern alone would incorrectly accept \"T1055\\n\"/\"T1559.001\\n\". The length bound closes that gap portably, without relying on a non-standard anchor like Python's \\Z.",
+            "oneOf": [
+              {
+                "pattern": "^T[0-9]{4}$",
+                "minLength": 5,
+                "maxLength": 5
+              },
+              {
+                "pattern": "^T[0-9]{4}\\.[0-9]{3}$",
+                "minLength": 9,
+                "maxLength": 9
+              }
+            ]
+          }
+        },
+        "evidence_refs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "iocs": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "rule_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rule_version": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "description": "severity is a pure function of (tag, confidence) -- see dumpex.hunt._finding.severity_for()'s own 9-entry mapping table. Pinned here as an allOf/if-then so a producer OTHER than this codebase's own Finding dataclass cannot emit a document where severity contradicts tag+confidence -- the same enforcement Finding.__post_init__ applies in Python (severity is init=False there), now also enforced on the wire.",
+          "if": {
+            "properties": {
+              "tag": {
+                "const": "observation"
+              }
+            },
+            "required": [
+              "tag"
+            ]
+          },
+          "then": {
+            "properties": {
+              "severity": {
+                "const": "info"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tag": {
+                "const": "lead"
+              },
+              "confidence": {
+                "const": "low"
+              }
+            },
+            "required": [
+              "tag",
+              "confidence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "severity": {
+                "const": "low"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tag": {
+                "const": "lead"
+              },
+              "confidence": {
+                "enum": [
+                  "medium",
+                  "high"
+                ]
+              }
+            },
+            "required": [
+              "tag",
+              "confidence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "severity": {
+                "const": "medium"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tag": {
+                "const": "detection"
+              },
+              "confidence": {
+                "const": "low"
+              }
+            },
+            "required": [
+              "tag",
+              "confidence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "severity": {
+                "const": "medium"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tag": {
+                "const": "detection"
+              },
+              "confidence": {
+                "const": "medium"
+              }
+            },
+            "required": [
+              "tag",
+              "confidence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "severity": {
+                "const": "high"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "tag": {
+                "const": "detection"
+              },
+              "confidence": {
+                "const": "high"
+              }
+            },
+            "required": [
+              "tag",
+              "confidence"
+            ]
+          },
+          "then": {
+            "properties": {
+              "severity": {
+                "const": "critical"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "huntRegionRef": {
+      "description": "Matches dumpex.output.records.HuntRegionRef.to_dict() -- a memory region reference inside a hunter's `details`, replacing the raw Region object v1.1 exposed via `_json_safe()`'s non-reproducible str(obj) fallback (see docs/hunt_migration_field_matrix.md's cross-cutting finding #1). `base_address` is never null -- a region reference always names a real address.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base_address",
+        "allocation_base",
+        "size",
+        "type",
+        "protect"
+      ],
+      "properties": {
+        "base_address": {
+          "$ref": "#/$defs/hexAddress",
+          "not": {
+            "const": null
+          }
+        },
+        "allocation_base": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "protect": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "huntThreadRef": {
+      "description": "Matches dumpex.output.records.HuntThreadRef.to_dict() -- a TID plus optional StartAddress/current-instruction-pointer, hex-formatted. `ip`/`ip_reg` are both-or-neither: a thread reference either carries no live register snapshot (both null) or a real one (both set) -- there is no case where the register name is known but its value isn't, or vice versa.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tid",
+        "start_address",
+        "ip",
+        "ip_reg"
+      ],
+      "properties": {
+        "tid": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "start_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "ip": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "ip_reg": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ip": {
+                "const": null
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ip_reg": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "ip": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "ip_reg": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "huntThreadRegionHit": {
+      "description": "Matches dumpex.output.records.HuntThreadRegionHit.to_dict() -- a thread correlated with a specific region, e.g. a thread's current RIP/EIP executing inside a flagged allocation, or its StartAddress falling inside one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "thread",
+        "region"
+      ],
+      "properties": {
+        "thread": {
+          "$ref": "#/$defs/huntThreadRef"
+        },
+        "region": {
+          "$ref": "#/$defs/huntRegionRef"
+        }
+      }
+    },
+    "huntPeHeaderHit": {
+      "description": "Matches dumpex.output.records.HuntPeHeaderHit.to_dict() -- one MZ-prefixed region examined for a hidden PE header, plus the structural-validation outcome. `entry_point_rva` stays a plain int (an RVA is relative to a not-yet-established image base, not itself a memory address); `image_base` (the PE header's OWN declared base) is a real address, hex-formatted. `reason` is set only when `valid` is false; every PE-fact field is set only when `valid` is true.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "region",
+        "valid",
+        "machine_name",
+        "is_pe32_plus",
+        "number_of_sections",
+        "entry_point_rva",
+        "image_base",
+        "reason"
+      ],
+      "properties": {
+        "region": {
+          "$ref": "#/$defs/huntRegionRef"
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "machine_name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "is_pe32_plus": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "number_of_sections": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "entry_point_rva": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "image_base": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "valid": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "machine_name": {
+                "type": "string"
+              },
+              "is_pe32_plus": {
+                "type": "boolean"
+              },
+              "number_of_sections": {
+                "type": "integer"
+              },
+              "entry_point_rva": {
+                "type": "integer"
+              },
+              "image_base": {
+                "not": {
+                  "const": null
+                }
+              },
+              "reason": {
+                "const": null
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "valid": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "machine_name": {
+                "const": null
+              },
+              "is_pe32_plus": {
+                "const": null
+              },
+              "number_of_sections": {
+                "const": null
+              },
+              "entry_point_rva": {
+                "const": null
+              },
+              "image_base": {
+                "const": null
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "injectionDetails": {
+      "description": "Matches dumpex.output.records.InjectionDetails.to_dict() -- `--hunt injection`'s hunter-specific evidence. `pe_read_failed`/`pe_short_reads` deliberately do NOT appear here -- those are coverage counts, not evidence (see PE_HEADER_READ_FAILED/PE_HEADER_SHORT_READ limitations under this hunter's own coverage instead).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rwx",
+        "hidden_pe_validated",
+        "hidden_pe_unvalidated",
+        "suspicious_validated_pe_hits",
+        "informational_validated_pe_hits",
+        "threads",
+        "thread_contexts",
+        "rwx_and_pe_alloc_bases",
+        "rip_hits",
+        "rip_full_correlation",
+        "start_hits"
+      ],
+      "properties": {
+        "rwx": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/huntRegionRef"
+          }
+        },
+        "hidden_pe_validated": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/huntPeHeaderHit"
+              },
+              {
+                "properties": {
+                  "valid": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "hidden_pe_unvalidated": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/huntPeHeaderHit"
+              },
+              {
+                "properties": {
+                  "valid": {
+                    "const": false
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "suspicious_validated_pe_hits": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/huntPeHeaderHit"
+              },
+              {
+                "properties": {
+                  "valid": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "informational_validated_pe_hits": {
+          "type": "array",
+          "items": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/huntPeHeaderHit"
+              },
+              {
+                "properties": {
+                  "valid": {
+                    "const": true
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "threads": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/huntThreadRef"
+          }
+        },
+        "thread_contexts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/huntThreadRef"
+          }
+        },
+        "rwx_and_pe_alloc_bases": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/hexAddress",
+            "not": {
+              "const": null
+            }
+          }
+        },
+        "rip_hits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/huntThreadRegionHit"
+          }
+        },
+        "rip_full_correlation": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/huntThreadRegionHit"
+          }
+        },
+        "start_hits": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/huntThreadRegionHit"
+          }
+        }
+      }
+    },
+    "hollowingDetails": {
+      "description": "Matches dumpex.output.records.HollowingDetails.to_dict() -- `--hunt hollowing`'s hunter-specific evidence: the four checks (memory type / MZ header / RWX protection at the image base, and the PEB-vs-module-list name compare). Unlike the other six hunters, every field here is a scalar -- there is no list-shaped evidence to break out into its own CSV table. `image_base` is null exactly when the PEB itself is missing (this hunter's NOT_EVALUATED case) -- there is no image base to report at all, unlike every other hunter's details, which always have SOME evidence even under incomplete coverage.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "image_base",
+        "mem_private_at_base",
+        "mz_header_present",
+        "is_rwx_at_base",
+        "peb_image_path",
+        "module_name",
+        "name_mismatch"
+      ],
+      "properties": {
+        "image_base": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "mem_private_at_base": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "mz_header_present": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "is_rwx_at_base": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "peb_image_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "module_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name_mismatch": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "stompingDetails": {
+      "description": "Matches dumpex.output.records.StompingDetails.to_dict() -- `--hunt stomping`'s hunter-specific evidence. `protection_leads`/`verified_changes` entries are plain objects, not yet a dedicated typed shape (tracked follow-up -- see docs/hunt_migration_field_matrix.md's stomping section) -- open objects here reflect that Python-side reality rather than inventing a contract the collector doesn't enforce yet.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "protection_leads",
+        "verified_changes"
+      ],
+      "properties": {
+        "protection_leads": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "verified_changes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "pipeDetails": {
+      "description": "Matches dumpex.output.records.PipeDetails.to_dict() -- `--hunt pipe`'s hunter-specific evidence. Entries are plain objects, not yet a dedicated typed shape (tracked follow-up) -- same rationale as stompingDetails above.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "handle_pipes",
+        "private_pipes",
+        "c2_context",
+        "framework_pipes",
+        "unbacked_in_rgn"
+      ],
+      "properties": {
+        "handle_pipes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "private_pipes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "c2_context": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "framework_pipes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "unbacked_in_rgn": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "csBeaconDetails": {
+      "description": "Matches dumpex.output.records.CsBeaconDetails.to_dict() -- `--hunt cs-beacon`'s hunter-specific evidence. NOT expressed here (Python-only, see CsBeaconDetails.__post_init__): config_count must equal len(configs). As of schema_version 2.7, each `configs[*]` item's `fields` is keyed by field NAME (e.g. `\"BeaconType\"`, or `\"field_0xNNNN\"` for an unrecognized field ID) instead of the raw TLV field ID string, and each field's own value carries only `type`/`value` -- the `name` property (redundant once the key IS the name) was dropped (see dumpex/hunt/cs_beacon/collect.py's `_config_dict()`/`_field_dict()`). Unlike the `raw`-removal in 2.6, THIS constraint IS expressed structurally below (`fields`' own `propertyNames`/`additionalProperties`), not just documented -- a `configs[*]` item whose `fields` still uses numeric-string keys or still carries a `name` property fails validation. `configs[*]` items otherwise stay schema-open (`type: object`) here -- every property besides `fields` is unconstrained.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "configs",
+        "config_count"
+      ],
+      "properties": {
+        "configs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "fields": {
+                "type": "object",
+                "description": "Keyed by field NAME (schema_version 2.7) -- a purely-numeric-string key (the pre-2.7 shape) is rejected by propertyNames below.",
+                "propertyNames": {
+                  "pattern": "^(field_0x[0-9a-f]{4}|[A-Za-z][A-Za-z0-9_]*)$"
+                },
+                "additionalProperties": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "value"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "integer",
+                      "enum": [1, 2, 3]
+                    },
+                    "value": {}
+                  }
+                }
+              }
+            }
+          }
+        },
+        "config_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "yaraDetails": {
+      "description": "Matches dumpex.output.records.YaraDetails.to_dict() -- `--hunt yara`'s hunter-specific evidence. Deliberately off the shared `finding` model -- a YARA rule hit is a structural pattern match, not a check/facts/inference/confidence/rationale judgment.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "matches",
+        "rules_hit"
+      ],
+      "properties": {
+        "matches": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "rules_hit": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "obfuscationDetails": {
+      "description": "Matches dumpex.output.records.ObfuscationDetails.to_dict() -- `--hunt obfuscation`'s hunter-specific evidence: the seven decode layers' own hit lists.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sleep_mask",
+        "entropy",
+        "base64",
+        "xor",
+        "compressed",
+        "hidden_pe",
+        "hidden_shellcode"
+      ],
+      "properties": {
+        "sleep_mask": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "entropy": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "base64": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "xor": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "compressed": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "hidden_pe": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
+        "hidden_shellcode": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "hunterRecord": {
+      "description": "Matches dumpex.output.records.HunterRecord.to_dict() -- one hunter's complete result, one entry in `result.data.records` for `result.kind == \"hunt\"`. `hunter` discriminates which of the 7 *Details types `details` must be (see the allOf below). `max_score`/`confidence`/`lead_count`/`review_priority` are null for every hunter except `hunter == \"yara\"`, where they must ALL be null -- never a mix of some set, some not (yara has none of these today, see docs/hunt_migration_field_matrix.md's yara section). `coverage` is this ONE hunter's own CoverageReport, not the top-level `result.coverage` (which combines all selected hunters' reports -- see combine_coverage_reports()).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "hunter",
+        "status",
+        "score",
+        "max_score",
+        "verdict_level",
+        "confidence",
+        "lead_count",
+        "review_priority",
+        "coverage",
+        "findings",
+        "details"
+      ],
+      "properties": {
+        "hunter": {
+          "enum": [
+            "injection",
+            "hollowing",
+            "stomping",
+            "pipe",
+            "cs-beacon",
+            "yara",
+            "obfuscation"
+          ]
+        },
+        "status": {
+          "enum": [
+            "DETECTED",
+            "NOT_DETECTED_IN_SCANNED_SCOPE",
+            "INCONCLUSIVE",
+            "NOT_EVALUATED"
+          ]
+        },
+        "score": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_score": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "verdict_level": {
+          "enum": [
+            "clean",
+            "possible",
+            "likely",
+            "high",
+            "inconclusive",
+            "not_evaluated"
+          ]
+        },
+        "confidence": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            null
+          ]
+        },
+        "lead_count": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "review_priority": {
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            null
+          ]
+        },
+        "coverage": {
+          "type": "object",
+          "required": [
+            "status"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "status": {
+              "enum": [
+                "complete",
+                "partial",
+                "not_evaluated"
+              ]
+            },
+            "reasons": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "default": []
+            },
+            "sources": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/sourceObservation"
+              },
+              "default": {}
+            },
+            "limitations": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/coverageLimitation"
+              },
+              "default": []
+            }
+          }
+        },
+        "findings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/finding"
+          }
+        },
+        "details": {
+          "type": "object"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "const": "yara"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_score": {
+                "const": null
+              },
+              "confidence": {
+                "const": null
+              },
+              "lead_count": {
+                "const": null
+              },
+              "review_priority": {
+                "const": null
+              },
+              "findings": {
+                "const": []
+              },
+              "details": {
+                "$ref": "#/$defs/yaraDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "const": "injection"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_score": {
+                "type": "integer"
+              },
+              "confidence": {
+                "not": {
+                  "const": null
+                }
+              },
+              "details": {
+                "$ref": "#/$defs/injectionDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "const": "hollowing"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_score": {
+                "type": "integer"
+              },
+              "confidence": {
+                "not": {
+                  "const": null
+                }
+              },
+              "details": {
+                "$ref": "#/$defs/hollowingDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "const": "stomping"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_score": {
+                "type": "integer"
+              },
+              "confidence": {
+                "not": {
+                  "const": null
+                }
+              },
+              "details": {
+                "$ref": "#/$defs/stompingDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "const": "pipe"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_score": {
+                "type": "integer"
+              },
+              "confidence": {
+                "not": {
+                  "const": null
+                }
+              },
+              "details": {
+                "$ref": "#/$defs/pipeDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "const": "cs-beacon"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_score": {
+                "type": "integer"
+              },
+              "confidence": {
+                "not": {
+                  "const": null
+                }
+              },
+              "details": {
+                "$ref": "#/$defs/csBeaconDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "const": "obfuscation"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "max_score": {
+                "type": "integer"
+              },
+              "confidence": {
+                "not": {
+                  "const": null
+                }
+              },
+              "details": {
+                "$ref": "#/$defs/obfuscationDetails"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "hunter": {
+                "not": {
+                  "const": "yara"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "lead_count": {
+                "type": "integer"
+              },
+              "review_priority": {
+                "not": {
+                  "const": null
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "DETECTED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "minimum": 1
+              },
+              "verdict_level": {
+                "enum": [
+                  "possible",
+                  "likely",
+                  "high"
+                ]
+              },
+              "coverage": {
+                "properties": {
+                  "status": {
+                    "enum": [
+                      "complete",
+                      "partial"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "NOT_DETECTED_IN_SCANNED_SCOPE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "const": 0
+              },
+              "verdict_level": {
+                "const": "clean"
+              },
+              "coverage": {
+                "properties": {
+                  "status": {
+                    "const": "complete"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "INCONCLUSIVE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "const": 0
+              },
+              "verdict_level": {
+                "const": "inconclusive"
+              },
+              "coverage": {
+                "properties": {
+                  "status": {
+                    "const": "partial"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "NOT_EVALUATED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "score": {
+                "const": 0
+              },
+              "verdict_level": {
+                "const": "not_evaluated"
+              },
+              "coverage": {
+                "properties": {
+                  "status": {
+                    "const": "not_evaluated"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "coverage": {
+                "properties": {
+                  "status": {
+                    "const": "not_evaluated"
+                  }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "NOT_EVALUATED"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "huntSummary": {
+      "description": "Matches result.summary for kind == 'hunt' -- the cross-hunter roll-up a single shared reducer computes (never re-derived independently by JSON/CSV/console -- see docs/hunt_migration_field_matrix.md's own summary-rules section). `selected` is the `--hunt` argument (\"all\" or one hunter name). `highest_verdict_level` is picked only from DETECTED hunters when any exist; otherwise it reflects the strongest non-detected signal (clean/inconclusive/not_evaluated).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "selected",
+        "hunter_count",
+        "detected_count",
+        "inconclusive_count",
+        "not_evaluated_count",
+        "overall_status",
+        "highest_verdict_level",
+        "lead_count"
+      ],
+      "properties": {
+        "selected": {
+          "enum": [
+            "all",
+            "injection",
+            "hollowing",
+            "stomping",
+            "pipe",
+            "cs-beacon",
+            "yara",
+            "obfuscation"
+          ]
+        },
+        "hunter_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "detected_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inconclusive_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_evaluated_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "overall_status": {
+          "enum": [
+            "DETECTED",
+            "NOT_DETECTED_IN_SCANNED_SCOPE",
+            "INCONCLUSIVE",
+            "NOT_EVALUATED"
+          ]
+        },
+        "highest_verdict_level": {
+          "enum": [
+            "clean",
+            "possible",
+            "likely",
+            "high",
+            "inconclusive",
+            "not_evaluated"
+          ]
+        },
+        "lead_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "detected_count": {
+                "minimum": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "overall_status": {
+                "const": "DETECTED"
+              },
+              "highest_verdict_level": {
+                "enum": [
+                  "possible",
+                  "likely",
+                  "high"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "overall_status": {
+                "const": "NOT_EVALUATED"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "highest_verdict_level": {
+                "const": "not_evaluated"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "overall_status": {
+                "const": "NOT_DETECTED_IN_SCANNED_SCOPE"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "highest_verdict_level": {
+                "const": "clean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "const": "all"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "hunter_count": {
+                "const": 7
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "not": {
+                  "const": "all"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "hunter_count": {
+                "const": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "detected_count": {
+                "const": 0
+              },
+              "inconclusive_count": {
+                "minimum": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "overall_status": {
+                "const": "INCONCLUSIVE"
+              },
+              "highest_verdict_level": {
+                "const": "inconclusive"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "const": "all"
+              },
+              "detected_count": {
+                "const": 0
+              },
+              "not_evaluated_count": {
+                "minimum": 1,
+                "maximum": 6
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "overall_status": {
+                "const": "INCONCLUSIVE"
+              },
+              "highest_verdict_level": {
+                "const": "inconclusive"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "const": "all"
+              },
+              "not_evaluated_count": {
+                "const": 7
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "overall_status": {
+                "const": "NOT_EVALUATED"
+              },
+              "highest_verdict_level": {
+                "const": "not_evaluated"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "not": {
+                  "const": "all"
+                }
+              },
+              "not_evaluated_count": {
+                "const": 1
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "overall_status": {
+                "const": "NOT_EVALUATED"
+              },
+              "highest_verdict_level": {
+                "const": "not_evaluated"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "detected_count": {
+                "const": 0
+              },
+              "inconclusive_count": {
+                "const": 0
+              },
+              "not_evaluated_count": {
+                "const": 0
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "overall_status": {
+                "const": "NOT_DETECTED_IN_SCANNED_SCOPE"
+              },
+              "highest_verdict_level": {
+                "const": "clean"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "const": "all"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "detected_count": {
+                "maximum": 7
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "not": {
+                  "const": "all"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "detected_count": {
+                "maximum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "const": "all"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "inconclusive_count": {
+                "maximum": 7
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "not": {
+                  "const": "all"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "inconclusive_count": {
+                "maximum": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "const": "all"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "not_evaluated_count": {
+                "maximum": 7
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "selected": {
+                "not": {
+                  "const": "all"
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "not_evaluated_count": {
+                "maximum": 1
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

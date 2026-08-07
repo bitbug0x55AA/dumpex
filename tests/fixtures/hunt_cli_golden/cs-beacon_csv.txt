@@ -12,5 +12,5 @@ cs-beacon,finding-91fab2e45c223b9b48708d1e1e73a78d,cs_beacon.structural_config,d
 
 ## hunt / beacon_configs
 hunter,va,file_offset,region_base,region_size,region_protect,xor_key,cs_version,cs_version_note,context_corroborated,fields
-cs-beacon,0x0000000000020100,8448,0x0000000000020000,550,PAGE_EXECUTE_READWRITE,105,3.x,estimated from highest recognized field ID — not a fingerprinted/confirmed build,True,"{""1"": {""name"": ""BeaconType"", ""type"": 1, ""value"": 0}, ""7"": {""name"": ""PublicKey"", ""type"": 3, ""value"": ""3014300d06092a864886f70d010101050003030030""}}"
+cs-beacon,0x0000000000020100,8448,0x0000000000020000,550,PAGE_EXECUTE_READWRITE,105,3.x,estimated from highest recognized field ID — not a fingerprinted/confirmed build,True,"{""BeaconType"": {""type"": 1, ""value"": 0}, ""PublicKey"": {""type"": 3, ""value"": ""3014300d06092a864886f70d010101050003030030""}}"
 
