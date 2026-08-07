@@ -22,7 +22,7 @@ encoded/obfuscated payloads.
 - **Extraction** — recover raw bytes or ASCII/Unicode strings from a region.
 - **Rule-driven detection** — use packaged defaults or explicit analyst
   overrides without editing Python.
-- **Case-ready output** — export JSON, CSV, and plain-text results with
+- **Case-ready output** — export JSON and plain-text results with
   evidence and rule provenance.
 
 ## Investigative role

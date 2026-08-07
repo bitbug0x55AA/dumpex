@@ -1,7 +1,7 @@
 """
 Cross-hunter `result.summary` reducer for `result.kind == "hunt"`.
 
-The single function JSON, CSV, and console rendering must all call for
+The single function JSON and console rendering must both call for
 the same set of `HunterRecord`s -- see docs/hunt_migration_field_matrix.md's
 own "summary rules" section and the v2.4 migration plan's requirement
 that this reducer never be re-derived independently by more than one
@@ -19,9 +19,9 @@ formatting in that same card (name/verdict color/score suffix) still
 reads each hunter's own v1.1-shaped dict, since that's presentation, not
 a cross-hunter reduction, but the one cross-hunter judgment (DETECTED/
 INCONCLUSIVE/NOT_EVALUATED/NOT_DETECTED_IN_SCANNED_SCOPE) now has exactly
-one implementation, this one, for JSON, CSV, AND console alike -- see
+one implementation, this one, for JSON and console alike -- see
 `cmd_hunt()`'s own docstring for the exact split. Exercised directly by
-tests/unit/test_hunt_summary.py plus indirectly by every schema/CSV test
+tests/unit/test_hunt_summary.py plus indirectly by every schema test
 that calls it via tests/fixtures/hunt_records.hunt_summary_for(), and by
 tests/integration/test_hunt_cli_compat_freeze.py's byte-exact console
 fixtures (which pin that this reduction produces the same console text
@@ -50,8 +50,7 @@ def build_hunt_summary(records: "list[HunterRecord]", selected: str) -> dict:
     Raises `ValueError`/`TypeError` on any shape violation -- the same
     "fail loudly on a shape the caller got wrong" precedent every other
     cross-record reducer in this codebase follows (see e.g.
-    dumpex.output.csv_export.build_tables' comparison/hunt partition
-    checks, or dumpex.output.coverage.combine_coverage_reports).
+    dumpex.output.coverage.combine_coverage_reports).
 
     Status-to-overall-status reduction (see the migration plan's own
     "整体 Summary 规则" section):

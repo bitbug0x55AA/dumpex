@@ -40,7 +40,7 @@ _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo"
                                     "extract", "strings", "report", "hunt"})
 
 # Exit codes for all eleven v2-routed commands, independent of
-# --json/--csv having been requested at all: a SOC script checking `$?`
+# --json having been requested at all: a SOC script checking `$?`
 # on a bare `dumpex --threads dump.dmp` should be able to detect
 # incomplete coverage without needing to also parse JSON. `--hunt` uses
 # this same convention too -- its exit code is derived from
@@ -166,8 +166,6 @@ def main():
     output_group = parser.add_argument_group("output and case metadata")
     output_group.add_argument('--json', metavar='FILE', default=None,
                               help='Write structured results as JSON')
-    output_group.add_argument('--csv', metavar='PATH', default=None,
-                              help='Write CSV to a file, or separate tables to a directory')
     output_group.add_argument('--txt', metavar='FILE', default=None,
                               help='Write a plain-text copy of console output')
     output_group.add_argument('--force', action='store_true',
@@ -205,7 +203,7 @@ def main():
     # this is a hard, unconditional refusal, not something --force can lift.
     dump_paths = [args.dumpfile] + ([args.diff] if args.diff else [])
     for out_arg, label in ((args.txt, "--txt"), (args.output, "--output"),
-                            (args.json, "--json"), (args.csv, "--csv")):
+                            (args.json, "--json")):
         if out_arg:
             check_not_dump_path(out_arg, dump_paths, label)
 
@@ -227,7 +225,6 @@ def main():
         (args.output, "--output"),
         (_extract_default_output, "--extract's default output filename"),
         (args.json, "--json"),
-        (args.csv, "--csv"),
         (args.txt, "--txt"),
     ])
 
@@ -312,7 +309,7 @@ def main():
 
         # Structured output collector — populated by commands that support
         # it. Every v2-routed command (including --hunt) always gets a
-        # V2Output (built regardless of --json/--csv, so the exit-code
+        # V2Output (built regardless of --json, so the exit-code
         # contract below is consistent whether or not structured output was
         # actually written). run_mode is always in _V2_STRUCTURED_MODES
         # (argparse's mode group guarantees exactly one of the eleven flags
@@ -329,9 +326,8 @@ def main():
                             case_id=args.case_id, analyst=args.analyst,
                             redact_paths=args.redact_paths, started_at=started_at)
 
-        # --json/--csv path resolution (existing-file / dump-path / dir-mode
-        # collision handling) is owned entirely by V2Output.write_json /
-        # write_csv (via commit_output) — not duplicated here. Likewise
+        # --json path resolution and collision handling are owned entirely
+        # by V2Output.write_json (via commit_output) — not duplicated here. Likewise
         # --output is checked exactly once, inside cmd_extract/cmd_report
         # right before the write.
 
@@ -424,10 +420,8 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
     # ── Write structured output ────────────────────────────────────────────
     # `out` is always a V2Output here (see its construction in main() above)
     # -- every v2-routed command produces structured output, so there's no
-    # "this command doesn't support --json/--csv" case left to handle.
+    # "this command doesn't support --json" case left to handle.
     if args.json:
         out.write_json(args.json, cmd_label=cmd_label, force=args.force)
-    if args.csv:
-        out.write_csv(args.csv, cmd_label=cmd_label, force=args.force)
 
     return exit_code

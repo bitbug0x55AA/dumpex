@@ -6,7 +6,7 @@ SourceState.FAILED is explicitly N/A for all six of these commands, see
 dumpex.output.coverage's SourceState docstring: none of their mf.<stream>
 accesses are wrapped in a try/except, so a read failure propagates as a
 fatal exception rather than becoming a SOURCE_FAILED observation), this
-asserts all four output surfaces at once, through one real cli.main()
+asserts all three output surfaces at once, through one real cli.main()
 invocation per scenario:
 
   - process exit code
@@ -19,7 +19,6 @@ invocation per scenario:
     non-reproducible leaf VALUES (wall-clock timestamps, the per-test tmp
     directory, the installed dumpex/library version strings) are
     substituted with a placeholder -- never an entire section skipped.
-  - the full --csv file content, byte for byte
 
 Genuinely dynamic values are made reproducible, not skipped, wherever
 that's actually possible:
@@ -31,18 +30,11 @@ that's actually possible:
     make meta.evidence[0].file_name/size_bytes/sha256 fully deterministic
     too -- only meta.evidence[0].path (which embeds pytest's per-test
     unique tmp directory) is placeholdered.
-  - the CSV file's write-confirmation console line ("... row(s) ...
-    bytes  sha256=...") is asserted EXACTLY, computed via hashlib from
-    the very `csv` string frozen below -- CSV content embeds no path or
-    timestamp, so it's fully reproducible, unlike the JSON write line
-    (whose file embeds meta.evidence[0].path, i.e. the per-test tmp
-    directory), which is placeholdered.
-
 Every expected value below was captured by actually running the code
 (not hand-guessed) and cross-checked against the existing per-command
 unit/integration tests before being frozen here -- this suite's job is to
-catch any FUTURE unintended drift in any of these four surfaces, not to
-re-derive correctness from scratch. A change to any of these four blocks
+catch any FUTURE unintended drift in any of these three surfaces, not to
+re-derive correctness from scratch. A change to any of these three blocks
 for an existing scenario is a compatibility break and must be a deliberate,
 reviewed decision, not an incidental side effect of an unrelated edit.
 """
@@ -119,23 +111,8 @@ def _normalize_console(text: str, tmp_dir: str) -> str:
     text = text.replace(tmp_dir, "<TMP_DIR>")
     # Only the JSON line's size/hash is inherently irreproducible: the
     # JSON file's bytes embed meta.evidence[0].path, which differs
-    # whenever the tmp dir differs. The CSV line is NOT normalized here --
-    # CSV content embeds no path or timestamp, so it's fully
-    # deterministic and asserted exactly by the caller instead.
+    # whenever the tmp dir differs.
     return _JSON_LINE_SIZE_HASH_RE.sub(r"\1<SIZE> bytes  sha256=<HASH>\2", text)
-
-
-def _csv_write_line(result: dict, csv_text: str, tmp_dir_placeholder: str) -> str:
-    # "summary" is always exactly 1 row; "records" contributes
-    # len(records) rows (entirely omitted, not zero rows, when empty) --
-    # matches collector.py's own total_rows accounting exactly. None of
-    # this suite's scenarios hit the third possible table
-    # ("environment_variables", peb-only, only when non-empty).
-    total_rows = 1 + len(result["data"]["records"])
-    csv_bytes = csv_text.encode("utf-8")
-    return (f"  [\u00b7] CSV  written \u2192 {tmp_dir_placeholder}{os.sep}out.csv  "
-            f"({total_rows} row(s) across all tables, {len(csv_bytes)} bytes  "
-            f"sha256={hashlib.sha256(csv_bytes).hexdigest()})\n")
 
 
 def _run(monkeypatch, tmp_path, argv, mf):
@@ -146,9 +123,8 @@ def _run(monkeypatch, tmp_path, argv, mf):
         fh.write(DUMP_BYTES)
     monkeypatch.setattr(cli, "open_dump", lambda path: mf)
     out_json = str(tmp_path / "out.json")
-    out_csv = str(tmp_path / "out.csv")
     monkeypatch.setattr(sys, "argv",
-                         ["dumpex", dump_path, *argv, "--json", out_json, "--csv", out_csv,
+                         ["dumpex", dump_path, *argv, "--json", out_json,
                           "--force"])
     exit_code = 0
     try:
@@ -156,8 +132,7 @@ def _run(monkeypatch, tmp_path, argv, mf):
     except SystemExit as exc:
         exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
-    csv_text = open(out_csv, encoding="utf-8").read()
-    return exit_code, doc, csv_text, os.path.abspath(dump_path)
+    return exit_code, doc, os.path.abspath(dump_path)
 
 
 # ── scenario builders (fresh FakeMF per invocation) ───────────────────────
@@ -868,7 +843,7 @@ SCENARIOS = [
 
 # ── frozen coverage.sources/coverage.limitations, keyed by scenario name ──
 # Kept separate from SCENARIOS above (rather than folded into each
-# scenario's `result` literal) so the console/CSV/exit-code table added
+# scenario's `result` literal) so the console/exit-code table added
 # first stays untouched -- these two structured fields were added later,
 # once coverage.py grew to_dict() methods and collector.py started
 # forwarding them onto the wire (see dumpex.output.envelope.Result).
@@ -1031,12 +1006,12 @@ def _expected_meta(argv0: str) -> dict:
 
 
 @pytest.mark.parametrize(
-    "name,argv,mf_builder,exit_code,console,result,csv",
+    "name,argv,mf_builder,exit_code,console,result,_csv",
     SCENARIOS, ids=[s[0] for s in SCENARIOS],
 )
 def test_compat_freeze(monkeypatch, tmp_path, capsys, name, argv, mf_builder, exit_code,
-                        console, result, csv):
-    actual_exit, doc, csv_text, dump_path_abs = _run(monkeypatch, tmp_path, argv, mf_builder())
+                        console, result, _csv):
+    actual_exit, doc, dump_path_abs = _run(monkeypatch, tmp_path, argv, mf_builder())
     actual_console = _normalize_console(capsys.readouterr().out, str(tmp_path))
     _normalize_doc(doc, dump_path_abs)
 
@@ -1047,11 +1022,10 @@ def test_compat_freeze(monkeypatch, tmp_path, capsys, name, argv, mf_builder, ex
     expected_doc = {"meta": _expected_meta(argv[0]), "result": result,
                      "artifacts": [], "diagnostics": {"warnings": [], "errors": []}}
     expected_console = console + "  [·] JSON written → <TMP_DIR>" + os.sep \
-        + "out.json  (<SIZE> bytes  sha256=<HASH>)\n" + _csv_write_line(result, csv, "<TMP_DIR>")
+        + "out.json  (<SIZE> bytes  sha256=<HASH>)\n"
 
     assert actual_exit == exit_code, f"{name}: exit code drifted"
     assert doc == expected_doc, f"{name}: JSON document drifted"
-    assert csv_text == csv, f"{name}: CSV drifted"
     assert actual_console == expected_console, f"{name}: console drifted"
 
 
@@ -1062,8 +1036,7 @@ def test_compat_freeze_corrupted_dump_exits_1_writes_no_structured_output(
     cli.open_dump -- the real dumpex.core.memory.open_dump() runs against
     our fixed (deliberately non-minidump) DUMP_BYTES, hits
     MinidumpFile.parse()'s real exception path, and must exit 1 before
-    ever reaching a V2Output construction, writing neither --json nor
-    --csv at all (a half-written structured-output file for a run that
+    ever reaching a V2Output construction, writing no --json output (a half-written structured-output file for a run that
     never produced a result would be worse than none). The exact
     exception class/message is the `minidump` library's own -- asserted
     by structural markers (prefix/suffix), not the full interpolated
@@ -1075,9 +1048,8 @@ def test_compat_freeze_corrupted_dump_exits_1_writes_no_structured_output(
     with open(dump_path, "wb") as fh:
         fh.write(DUMP_BYTES)   # not a real minidump -- MinidumpFile.parse() must reject it
     out_json = str(tmp_path / "out.json")
-    out_csv = str(tmp_path / "out.csv")
     monkeypatch.setattr(sys, "argv",
-                         ["dumpex", dump_path, "--list", "--json", out_json, "--csv", out_csv])
+                         ["dumpex", dump_path, "--list", "--json", out_json])
 
     exit_code = 0
     try:
@@ -1087,7 +1059,6 @@ def test_compat_freeze_corrupted_dump_exits_1_writes_no_structured_output(
 
     assert exit_code == 1
     assert not os.path.exists(out_json), "a failed parse must not leave a partial JSON file"
-    assert not os.path.exists(out_csv), "a failed parse must not leave a partial CSV file"
 
     console = capsys.readouterr().out
     assert f"[!] Could not parse {dump_path} as a minidump file:" in console

@@ -90,7 +90,6 @@ one.
 | Option | Description |
 |---|---|
 | `--json FILE` | Write structured JSON results |
-| `--csv PATH` | Write one combined `.csv` file, or one file per table when `PATH` is a directory |
 | `--txt FILE` | Write an ANSI-free copy of console output |
 | `--force` | Allow replacement of an existing output file; never permits replacing an input dump |
 | `--case-id ID` | Record a case or ticket identifier in JSON metadata |
@@ -99,17 +98,17 @@ one.
 
 Output files are not overwritten unless `--force` is present. dumpex also
 refuses any output path that resolves to an input dump path, and refuses to
-run at all if two of `--output`/`--json`/`--csv`/`--txt` (or `--extract`'s own
+run at all if two of `--output`/`--json`/`--txt` (or `--extract`'s own
 auto-generated default filename) would resolve to the same file — a later
 write silently clobbering an earlier one's output is never allowed, even
 with `--force`.
 
-`--json`/`--csv` route through a single contract for every mode:
+`--json` routes through a single contract for every mode:
 `--list`/`--modules`/`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff`/
 `--extract`/`--strings`/`--report`/`--hunt` all use the v2 contract
 (canonical records, `null` for missing values, normalized hex addresses —
 see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
-All eleven commands support `--json`/`--csv` on this same v2.4 contract;
+All eleven commands support `--json` on this same v2.7 contract;
 `--hunt` was the last to migrate — its `result.kind` is `"hunt"` and
 `result.data.records` holds one `hunterRecord` per hunter.
 `--diff` produces a `kind: "comparison"` result with a two-entry
@@ -125,7 +124,7 @@ under it — see
 triage card (see [Output and Evidence Schema](OUTPUT_SCHEMA.md#report-records)),
 and also populates `artifacts[]` for its own optional `--output` extract.
 For the v2-routed modes, the process exit code also
-reports coverage independent of `--json`/`--csv`: `0` for complete coverage,
+reports coverage independent of `--json`: `0` for complete coverage,
 `3` for partial (e.g. `--threads` on a dump missing `ThreadInfoListStream`
 while the base thread list is still present, or `--extract`/`--strings`
 reading fewer bytes than requested), `4` when the one stream the command
@@ -210,7 +209,6 @@ dumpex sample.dmp --strings 0x7ff600001000 --strings-encoding unicode --grep "(?
 ```bash
 dumpex sample.dmp --hunt all \
   --json result.json \
-  --csv tables/ \
   --txt transcript.txt \
   --case-id CASE-1234 \
   --analyst analyst01

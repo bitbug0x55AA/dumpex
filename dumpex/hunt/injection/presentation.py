@@ -24,7 +24,7 @@ excluded from both sections here, with only its NON-duplicate
 `limitations` (e.g. "score capped below HIGH") surfaced once, under
 COVERAGE, as an Impact line. This is presentation-only: the Finding is
 still fully present in `report.findings_list`/`findings["findings"]`
-(--json/--csv/`legacy_findings_dict()`'s return value is untouched), only
+(--json/`legacy_findings_dict()`'s return value is untouched), only
 excluded from these two console groupings.
 
 Reads only from the aggregate.Report the caller already built -- never
@@ -91,7 +91,7 @@ def _sorted_for_display(findings_list: list) -> list:
     """detection -> lead -> observation, stable within a tag (original
     construction order preserved via the enumerate index as the
     tie-break) -- a presentation-only reordering. Never mutates or
-    reorders `findings_list` itself, and never changes what --json/--csv
+    reorders `findings_list` itself, and never changes what --json
     (which read `report.findings["findings"]`, built in construction
     order, unaffected by this function) sees. Coverage-only checks (see
     _COVERAGE_ONLY_CHECKS) are dropped here -- the ONE place both KEY

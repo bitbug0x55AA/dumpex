@@ -31,7 +31,7 @@ from dumpex.output.coverage import (
 # sleep_mask/entropy/base64/xor/compressed. Every field they carry beyond
 # the corresponding Finding.facts entry above (built inline in build_report
 # below) is file offset -- plus, for sleep_mask/base64, a couple of fields
-# --json/--csv were never given (region size, raw Base64 length) -- so this
+# --json were never given (region size, raw Base64 length) -- so this
 # is presentation formatting living in aggregate.py, not hunter logic in
 # presentation.py: presentation.py never needs `mf` or these raw hit lists
 # for detail purposes (see dumpex/hunt/encoding/presentation.py's own
@@ -437,7 +437,7 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
         findings_list.append(Finding(
             check="obfuscation.structural_payload",
             facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
-            # Full, uncapped -- facts above is capped for --json/--csv (a
+            # Full, uncapped -- facts above is capped for --json (a
             # sentinel entry, not a real "this is everything" claim); every
             # field it carries per hit is already complete, so the only
             # delta verbose_facts provides is completeness, not new fields.

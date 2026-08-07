@@ -151,7 +151,7 @@ def test_decode_layer_short_read_makes_result_inconclusive():
 # (file offset for every layer, raw Base64 length) -- these used to come
 # from presentation.py's own hand-written verbose expansion; centralizing
 # rendering on Finding.print() dropped them because Finding.facts (built
-# for --json/--csv) never had them in the first place. Regression test for
+# for --json) never had them in the first place. Regression test for
 # that loss being silently reintroduced.
 
 def test_verbose_shows_file_offset_and_b64_length_not_shown_normally(capsys, monkeypatch):
@@ -252,7 +252,7 @@ def test_verbose_xor_detail_includes_decoding_evidence(capsys, monkeypatch):
 
 
 def test_verbose_lists_every_structural_pe_hit_beyond_the_facts_cap(capsys):
-    # obfuscation.structural_payload's Finding.facts (built for --json/--csv)
+    # obfuscation.structural_payload's Finding.facts (built for --json)
     # cap the hit list at 20 with a "... and N more" sentinel entry --
     # --verbose is supposed to mean "the complete list". Finding.
     # verbose_facts (not Finding.facts) is the --verbose detail source for

@@ -1,4 +1,4 @@
-"""Evidence-file identity helpers for structured output metadata (--json/--csv)."""
+"""Evidence-file identity helpers for structured output metadata (--json)."""
 import hashlib
 
 # 4 MiB — large enough to keep syscall overhead low, small enough that a

@@ -107,7 +107,7 @@ def test_collect_strings_matched_grep_true_false_when_grep_given(monkeypatch):
 
 
 def test_grep_console_shows_fewer_lines_than_structured_records(monkeypatch, capsys):
-    # Docs remediation: the structured records list (JSON/CSV) and the
+    # Docs remediation: the structured records list (JSON) and the
     # console rendering deliberately show DIFFERENT amounts of data for a
     # --grep run -- records always includes every extracted string
     # (matched_grep is a flag, never a filter), but the console SKIPS any

@@ -15,7 +15,6 @@ import dumpex.hunt.cs_beacon as cs_beacon
 from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record, _config_dict, _field_dict
 from dumpex.hunt.cs_beacon.parser import _cs_decode_and_parse_tlv
 from dumpex.output.records import HunterRecord, CsBeaconDetails
-from dumpex.output.csv_export import beacon_configs_rows
 
 
 def _mk_segment_data(config: bytes, pad_before: int = 0) -> bytes:
@@ -146,7 +145,7 @@ def test_structural_config_uncorroborated_scores_1(hunter_record_validator):
         assert isinstance(field["type"], int)
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
-    # The internal parser result (never exposed to v2 JSON/CSV) must still
+    # The internal parser result (never exposed to v2 JSON) must still
     # carry `raw` as bytes -- DER public-key validation
     # (fields[0x0007]["raw"]) and Malleable C2 instruction decoding both
     # depend on it. This guards against ever deleting `raw` from the
@@ -278,31 +277,6 @@ def test_config_dict_raises_on_field_name_collision():
 def test_field_dict_never_includes_name():
     field_dict = _field_dict({"name": "BeaconType", "type": 1, "value": 0, "raw": b"\x00\x00"})
     assert set(field_dict) == {"type", "value"}
-
-
-def test_csv_beacon_configs_fields_cell_contains_only_new_structure():
-    seg_va, seg_fo = 0xb0000, 0xb000
-    config = cs_beacon_config_bytes(0x69)
-    data = _mk_segment_data(config)
-    seg = Segment(seg_va, seg_fo, len(data))
-    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
-
-    class MF(FakeMF):
-        memory_segments_64 = FakeStream([seg], "memory_segments")
-        memory_info          = FakeStream(regions, "infos")
-        _reader                = FakeReader({seg_va: data})
-
-    rec = collect_cs_beacon_record(MF())
-
-    class _FakeResult:
-        records = [rec.to_dict()]
-
-    rows = beacon_configs_rows(_FakeResult())
-    assert len(rows) == 1
-    fields = json.loads(rows[0]["fields"])
-    assert set(fields) == {"BeaconType", "PublicKey"}
-    for v in fields.values():
-        assert set(v) == {"type", "value"}
 
 
 def test_no_is_text_or_similar_leaks_into_legacy_dict_or_hunter_record():

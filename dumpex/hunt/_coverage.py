@@ -8,7 +8,7 @@ answer the same two questions at the end of a scan:
      did it get through everything it was supposed to look at?
      ("not_evaluated" / "partial" / "complete")
   2. status — the top-level DETECTED / NOT_DETECTED_IN_SCANNED_SCOPE /
-     INCONCLUSIVE / NOT_EVALUATED a console/JSON/CSV consumer reads.
+     INCONCLUSIVE / NOT_EVALUATED a console/JSON consumer reads.
 
 Before this module existed, each hunter hand-rolled the same two
 if/elif chains separately (stomping.py, pipe.py, encoding.py each wrote

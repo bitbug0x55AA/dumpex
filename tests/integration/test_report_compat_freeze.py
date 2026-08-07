@@ -72,9 +72,7 @@ def _run(monkeypatch, tmp_path, argv_extra, *, modules=None, threads=None, regio
         monkeypatch.setattr(core_memory_mod, "read_region", reader)
 
     out_json = str(tmp_path / "out.json")
-    out_csv = str(tmp_path / "out.csv")
-    argv = ["dumpex", dump_path, "--report", *argv_extra, "--json", out_json,
-            "--csv", out_csv, "--force"]
+    argv = ["dumpex", dump_path, "--report", *argv_extra, "--json", out_json, "--force"]
     monkeypatch.setattr(sys, "argv", argv)
 
     exit_code = 0
@@ -83,8 +81,7 @@ def _run(monkeypatch, tmp_path, argv_extra, *, modules=None, threads=None, regio
     except SystemExit as exc:
         exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
-    csv_text = open(out_csv, encoding="utf-8").read()
-    return exit_code, doc, csv_text
+    return exit_code, doc
 
 
 def _split_console_body(console_text: str) -> str:
@@ -94,7 +91,7 @@ def _split_console_body(console_text: str) -> str:
 
 
 def test_tid_not_found(monkeypatch, tmp_path, capsys):
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-tid", "5"],
         threads=[ThreadInfo(1, 0x1000)])
     body = _split_console_body(capsys.readouterr().out)
@@ -124,11 +121,10 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
     assert rec["thread"] is None
     warnings = doc["diagnostics"]["warnings"]
     assert any(w["code"] == "REPORT_TID_NOT_FOUND" for w in warnings)
-    assert "## report / summary" in csv_text or "## report / records" in csv_text
 
 
 def test_addr_not_found(monkeypatch, tmp_path, capsys):
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-addr", "0x9999000"])
     body = _split_console_body(capsys.readouterr().out)
     assert body == (
@@ -156,7 +152,7 @@ def test_verdict_suspicious_rwx_private(monkeypatch, tmp_path, capsys):
     # coverage-affecting fact (see the P1-3 review fix / tests/unit/
     # test_report_cmd.py's own coverage matrix tests), and this test's own
     # purpose is the verdict/console text, not read-truncation semantics.
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-addr", "0x6000"],
         regions=[Region(0x6000, 0x6000, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
         read_map={0x6000: (b"boring data here nothing to see").ljust(0x1000, b"\x00")})
@@ -173,7 +169,7 @@ def test_verdict_suspicious_rwx_private(monkeypatch, tmp_path, capsys):
 def test_verdict_high_confidence_malicious(monkeypatch, tmp_path, capsys):
     ioc_data = (b"MZ" + b"\x90" * 62
                 + b"cmd.exe /c powershell -enc ZZZZZZZZZZZZZZZZZZ" + b"\x00" * 20)
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-addr", "0x8000"],
         regions=[Region(0x8000, 0x8000, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
         read_map={0x8000: ioc_data})
@@ -187,7 +183,7 @@ def test_verdict_high_confidence_malicious(monkeypatch, tmp_path, capsys):
 def test_string_mode_one_private_hit(monkeypatch, tmp_path, capsys):
     # Padded to the full 0x1000 region size -- see
     # test_verdict_suspicious_rwx_private's own note on why.
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-string", "MYSECRETNEEDLE12"],
         regions=[Region(0xa000, 0xa000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
         read_map={0xa000: (b"header MYSECRETNEEDLE12 trailer" + b"\x00" * 20).ljust(0x1000, b"\x00")})
@@ -207,7 +203,7 @@ def test_string_mode_zero_hits_exits_zero_with_diagnostic(monkeypatch, tmp_path,
     # test_verdict_suspicious_rwx_private's own note on why (a short read
     # is itself now a coverage-affecting fact, and this test's own purpose
     # is the zero-hit path, not truncation semantics).
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-string", "TOTALLYABSENTNEEDLE"],
         regions=[Region(0x9000, 0x9000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
         read_map={0x9000: b"nothing interesting at all here".ljust(0x1000, b"\x00")})
@@ -220,7 +216,7 @@ def test_string_mode_zero_hits_exits_zero_with_diagnostic(monkeypatch, tmp_path,
 
 
 def test_tid_resolved_to_module_shows_module_range(monkeypatch, tmp_path, capsys):
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-tid", "9"],
         modules=[Module(0x2000, 0x1000, r"C:\Windows\System32\ntdll.dll")],
         threads=[ThreadInfo(9, 0x2000)])
@@ -246,7 +242,7 @@ def test_section3_sharing_threads_and_network_pattern_hexdump(monkeypatch, tmp_p
     # Padded to the full 0x1000 region size -- see
     # test_verdict_suspicious_rwx_private's own note on why.
     ioc_data = (b"cmd.exe /c curl 10.0.0.5:8080/beacon" + b"\x00" * 200).ljust(0x1000, b"\x00")
-    exit_code, doc, csv_text = _run(
+    exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-tid", "5", "--report-addr", "0x4000"],
         threads=[ThreadInfo(5, 0x4000), ThreadInfo(6, 0x4100)],
         regions=[Region(0x4000, 0x4000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
@@ -264,7 +260,7 @@ def test_section3_sharing_threads_and_network_pattern_hexdump(monkeypatch, tmp_p
 
 def test_report_requires_at_least_one_anchor(monkeypatch, tmp_path, capsys):
     # sys.exit(1) fires before any structured output is ever written --
-    # unlike every other scenario in this suite, out_json/out_csv never
+    # unlike every other scenario in this suite, out_json never
     # get created, so this can't go through the shared _run() helper
     # (which assumes both files exist once cli.main() returns/raises).
     configure_rules_source(None)

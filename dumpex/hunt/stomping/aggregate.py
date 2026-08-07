@@ -24,7 +24,7 @@ def _ioc_verbose_facts(ioc_hits) -> list:
     --verbose-only, uncapped, per-TOKEN detail (absolute VA, encoding,
     weak/common-API classification) `facts` above never carries: `facts`
     dedupes to one entry per REGION with a capped, deduped term list (built
-    for --json/--csv). This is presentation formatting living in
+    for --json). This is presentation formatting living in
     aggregate.py, not hunter logic in presentation.py -- see
     dumpex/hunt/stomping/presentation.py's own module docstring."""
     out = []

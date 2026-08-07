@@ -7,7 +7,7 @@ here, and no raw hit list (report.sleep_mask_hits, report.entropy_hits,
 ...) is read for --verbose detail -- every Finding in report.findings_list
 already carries everything Finding.print() can show for it (see
 aggregate.py's five *_verbose_fact() functions, where that detail --
-including file offset and a few other fields --json/--csv never carried --
+including file offset and a few other fields --json never carried --
 is built once, at Finding-construction time). The raw lists are still read
 here for the short CLEAN/OBSERVATION/LEAD/DETECTION status lines below
 (report.sleep_mask_hits, etc. -- just a truthiness/count check, not a
