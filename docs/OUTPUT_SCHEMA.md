@@ -26,11 +26,12 @@ promise. Automation must use `--json`, never scrape `--txt`.
 
 Every command now shares a single JSON contract. `--hunt` was the last
 holdout on the older v1.1 contract; it has since migrated onto v2, and
-the whole v2 envelope has since moved onto v2.5:
+the whole v2 envelope has since moved onto v2.6:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.5 (current) | [`dumpex-output-v2.5.schema.json`](../dumpex/schemas/dumpex-output-v2.5.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.6 (current) | [`dumpex-output-v2.6.schema.json`](../dumpex/schemas/dumpex-output-v2.6.schema.json) |
+| — (historical) | v2.5 | [`dumpex-output-v2.5.schema.json`](../dumpex/schemas/dumpex-output-v2.5.schema.json) — frozen, kept only to validate output produced before `schema_version 2.6`; no command emits this anymore |
 | — (historical) | v2.4 | [`dumpex-output-v2.4.schema.json`](../dumpex/schemas/dumpex-output-v2.4.schema.json) — frozen, kept only to validate output produced before `schema_version 2.5`; no command emits this anymore |
 | — (historical) | v2.3 | [`dumpex-output-v2.3.schema.json`](../dumpex/schemas/dumpex-output-v2.3.schema.json) — frozen, kept only to validate output produced before `schema_version 2.4`; no command emits this anymore |
 | — (historical) | v2.2 | [`dumpex-output-v2.2.schema.json`](../dumpex/schemas/dumpex-output-v2.2.schema.json) — frozen, kept only to validate output produced before `schema_version 2.3`; no command emits this anymore |
@@ -45,25 +46,37 @@ now produced by `--hunt`, the last command to switch its CLI wiring onto
 the v2 envelope; see "Hunt records" below for that record shape), then from
 `"2.4"` to `"2.5"` when `hunterRecord.findings[]`'s own `finding` $def
 gained seven new properties (`id`/`severity`/`technique_ids`/
-`evidence_refs`/`iocs`/`rule_id`/`rule_version` — see "Hunt records" below)
+`evidence_refs`/`iocs`/`rule_id`/`rule_version` — see "Hunt records" below),
+then from `"2.5"` to `"2.6"` when `--hunt cs-beacon`'s
+`csBeaconDetails.configs[*].fields[*]` lost its `raw` field (see "Hunt
+records" below — `configs[*]` items stay schema-open, `type: object`, in
+both v2.5 and v2.6, so this particular change isn't visible as a schema
+`$defs` diff the way the earlier ones are; it is still a real, breaking
+change to the WIRE shape a consumer actually receives, which is what the
+versioning policy below cares about, not merely whether the schema file's
+own JSON text changed)
 (see "v2 structured output" below) — a
-new value on an existing closed enum, or a new field on an already-closed
-(`additionalProperties: false`) object, always bumps the version per this
+new value on an existing closed enum, a new field on an already-closed
+(`additionalProperties: false`) object, or the removal of a field a
+command has ever actually emitted (whether or not the schema itself
+enforced that field's presence), always bumps the version per this
 document's own versioning policy, even though an already-migrated
 command's own output is otherwise unaffected (the `"report"`/`"hunt"`/
-`finding`-extension additions specifically must NOT be folded into
-`dumpex-output-v2.2.schema.json`/`v2.3.schema.json`/`v2.4.schema.json` in
+`finding`-extension/cs-beacon-`raw`-removal changes specifically must NOT
+be folded into `dumpex-output-v2.2.schema.json`/`v2.3.schema.json`/
+`v2.4.schema.json`/`v2.5.schema.json` in
 place: those files were already shipped/used by earlier-migrated
-commands' output before each addition existed, so they stay byte-frozen —
-each addition gets its own new schema_version instead). `dumpex-output-
+commands' output before each change existed, so they stay byte-frozen —
+each change gets its own new schema_version instead). `dumpex-output-
 v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`/
-`v2.4.schema.json`
+`v2.4.schema.json`/`v2.5.schema.json`
 stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`/`v2.3`/`v2.4`) for validating output captured before each respective
+`v2.2`/`v2.3`/`v2.4`/`v2.5`) for validating output captured before each
+respective
 change; none is deleted or overwritten, following the same precedent
 v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
-v2.5 contract.
+v2.6 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -201,7 +214,7 @@ basenames.
 ## Hunt result semantics (v1.1 field names — historical)
 
 Each hunter reported its findings and decision fields inside the v1.1
-`hunt` object using the field names below. Under the current v2.5
+`hunt` object using the field names below. Under the current v2.6
 contract these same concepts live on `HunterRecord` — see "Hunt records"
 below for the `status`/`coverage.status`/`verdict_level`/`confidence`
 mapping `--hunt` now uses. The important decision fields were:
@@ -238,7 +251,7 @@ still validates each hunter's internal result dict (all seven hunters, both
 typical and edge-case verdicts) against this file on every test run,
 including the negative cases it must reject — this is legacy-compatibility
 coverage for the v1.1 shape itself, independent of the CLI's own
-`--hunt --json` output, which is now v2.5 (see "Hunt records" below).
+`--hunt --json` output, which is now v2.6 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -263,14 +276,14 @@ tool validates its own output — only the test suite and external `--json`
 consumers do), so none of them are collected into the frozen executable.
 They are instead uploaded as separate `dumpex-output-v*.schema.json`
 files alongside `dumpex.exe` in the release ZIP — every version currently
-packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`), the same
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`), the same
 set `pip install dumpex` already ships (see "Reproducing a run" below for
 how an installed package reaches these via `importlib.resources`) — so an
 EXE-only install (no `pip install dumpex`, no source checkout) still has
 a way to get the schema for whatever output it's holding. Current CLI
 output (from any command, including `--hunt`) always validates against
-`dumpex-output-v2.5.schema.json`, the current contract — this section's
-own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.4` are
+`dumpex-output-v2.6.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.5` are
 shipped only to validate output produced by an older dumpex version, not
 anything a current install can produce.
 
@@ -331,7 +344,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.5",
+    "schema_version": "2.6",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -826,6 +839,35 @@ already covers under "narrowing/closed-object changes always bump" — see
 that section's own closed-object bullet. `dumpex-output-v2.4.schema.json`
 stays byte-frozen (its own `finding` $def still rejects these seven
 properties), the same precedent every earlier frozen schema file follows.
+
+`schema_version 2.6` removes the `raw` field from `--hunt cs-beacon`'s
+`csBeaconDetails.configs[*].fields[*]` — each parsed TLV field in a
+recovered Cobalt Strike config now carries only `name`, `type`, and
+`value`. PublicKey, Malleable C2, and inject-transform fields could embed
+very long raw-hex strings under the old `raw` field, degrading JSON, CSV,
+and any downstream tool's display for no benefit once `value` already
+carries that same field's decoded (or hex-rendered, for non-printable
+`bytes` fields) content. This is a field REMOVAL, not an addition —
+`configs[*]` items are schema-open (`type: object`) in both `v2.5` and
+`v2.6`, so the schema file's own `$defs` did not need a structural edit,
+but the actual wire shape every `--hunt cs-beacon`/`--hunt all` JSON/CSV
+run produces changed incompatibly, which is what the versioning policy
+above's "removal of a field a command has ever actually emitted" clause
+covers. Nothing else about `csBeaconDetails` or any other hunter's
+`details` shape changed. The change is confined to
+[`dumpex/hunt/cs_beacon/collect.py`](../dumpex/hunt/cs_beacon/collect.py)'s
+`_field_dict()` (the function that reshapes one parsed TLV field into its
+public v2 dict) — CS Beacon config identification, the sanity check, DER
+public-key validation, Malleable C2 instruction decoding, scoring,
+status/verdict/confidence, findings, and both normal and verbose console
+output are all unaffected: the parser
+([`dumpex/hunt/cs_beacon/parser.py`](../dumpex/hunt/cs_beacon/parser.py))
+still returns `raw` as `bytes` on its own internal field dicts, and both
+DER validation (`fields[0x0007]["raw"]`) and instruction decoding still
+consume it directly, before `_field_dict()` ever reshapes anything for
+JSON/CSV. `dumpex-output-v2.5.schema.json` stays byte-frozen and remains
+shipped/installable for validating output produced before this change,
+the same precedent every earlier frozen schema file follows.
 
 ## Reproducing a run
 

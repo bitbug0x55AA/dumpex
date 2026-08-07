@@ -195,7 +195,7 @@ jobs:
         # Guards against exactly the gap this release process shipped once
         # before: dumpex.exe, LICENSE/NOTICE/etc, and only the *v1.1* schema
         # made it into the zip while the CLI itself had already moved every
-        # command (including --hunt) onto v2.5 -- an EXE-only user had no way
+        # command (including --hunt) onto v2.6 -- an EXE-only user had no way
         # to get the schema that actually described their own --json output.
         # Checked against the built zip itself (not just $bundleDir) so a
         # Compress-Archive mistake (wrong -Path, wrong destination) would
@@ -211,7 +211,7 @@ jobs:
 
           $required = @(
             'dumpex.exe',
-            'dumpex-output-v2.5.schema.json',
+            'dumpex-output-v2.6.schema.json',
             'LICENSE', 'NOTICE', 'THIRD_PARTY_NOTICES', 'CREDITS',
             'BUILD-DEPENDENCIES.txt', 'SOURCE.txt'
           )
@@ -221,7 +221,7 @@ jobs:
           }
 
           # Every dumpex-output-v*.schema.json staged into dist/ earlier must
-          # have made it into the bundle too -- not just the current v2.5 one.
+          # have made it into the bundle too -- not just the current v2.6 one.
           $stagedSchemas = (Get-ChildItem dist -Filter 'dumpex-output-v*.schema.json').Name
           $bundledSchemas = (Get-ChildItem $extractDir -Filter 'dumpex-output-v*.schema.json').Name
           $missingSchemas = $stagedSchemas | Where-Object { $_ -notin $bundledSchemas }

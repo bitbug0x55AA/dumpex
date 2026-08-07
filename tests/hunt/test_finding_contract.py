@@ -4,7 +4,7 @@ tests/hunt/test_finding_invariants.py (which covers a cross-hunter
 DETECTED/tag=detection invariant). Covers two review-round regressions:
 
   1. Any Finding that successfully CONSTRUCTS must also validate against
-     the v2.5 schema's own `$defs/finding` -- the schema and
+     the current schema's own `$defs/finding` (unchanged since v2.5) -- the schema and
      Finding.__post_init__ must never drift apart (a review found several
      gaps: inference/rationale left unvalidated, technique_ids format/
      uniqueness unchecked, rule_version accepting a non-str).
@@ -31,7 +31,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def finding_validator():
-    with schema_path("dumpex-output-v2.5.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.6.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/finding", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -108,7 +108,7 @@ def test_schema_rejects_technique_id_with_trailing_newline(finding_validator, ba
     # own __post_init__ already rejects it), so this hand-builds the dict
     # directly to prove the SCHEMA closes the same gap independently, for
     # any producer that isn't this codebase's own Finding dataclass. The
-    # v2.5 schema's own `technique_ids` items use two fixed-length oneOf
+    # `finding` $def's own `technique_ids` items (unchanged since v2.5) use two fixed-length oneOf
     # branches (pattern + exact minLength/maxLength) specifically because
     # a bare "^...$"-anchored pattern alone has the same Python re
     # trailing-newline gap `jsonschema`'s pattern check inherits.
@@ -229,12 +229,15 @@ def test_mutating_the_callers_original_list_does_not_affect_the_finding():
 # contract only: tuple normalization, defensive copy, dataclasses.replace()
 # round-tripping, string validation, exclusion from to_dict()/id/eq/hash.
 
-def test_verbose_facts_permits_empty_strings_like_facts():
-    # _require_list_of_str (unlike _require_str_list) allows "" -- same
-    # permissive-on-emptiness policy as facts/limitations, see that
-    # validator's own comment.
-    f = Finding(**_base_kwargs(verbose_facts=["", "VA=0x1000 File_offset=0x500"]))
-    assert f.verbose_facts == ("", "VA=0x1000 File_offset=0x500")
+def test_verbose_facts_rejects_empty_strings():
+    # Unlike facts/limitations (permissive on "" for v2.5 wire-contract
+    # compatibility reasons -- see _require_list_of_str's own comment),
+    # verbose_facts is console-only and was never part of the schema, so
+    # there is no compatibility reason to accept an empty bullet line.
+    # Uses _require_str_list (same non-empty validator as technique_ids/
+    # evidence_refs/iocs), not the permissive _require_list_of_str.
+    with pytest.raises(ValueError, match="verbose_facts"):
+        Finding(**_base_kwargs(verbose_facts=["", "VA=0x1000 File_offset=0x500"]))
 
 
 def test_verbose_facts_rejects_non_string_items():

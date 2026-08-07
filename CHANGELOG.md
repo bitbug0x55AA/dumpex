@@ -5,6 +5,35 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## `--hunt cs-beacon` structured fields drop raw hex bytes (schema v2.6)
+
+`--hunt cs-beacon`/`--hunt all --json`/`--csv` output no longer includes a
+`raw` field on `details.configs[*].fields[*]` for each parsed Cobalt
+Strike beacon config TLV field. PublicKey, Malleable C2, and
+inject-transform fields could carry very long hex strings there,
+degrading JSON, CSV, and any downstream tool's display for no benefit —
+`value` already carries the same field's decoded (or hex-rendered, for
+non-printable `bytes` fields) content. Each field entry now carries only
+`name`, `type`, and `value`.
+
+This is a public-output-only change:
+
+- **Internal parsing and console behavior are unchanged.** CS Beacon
+  config identification, the sanity check, DER public-key validation,
+  Malleable C2 instruction decoding, scoring, status/verdict/confidence,
+  findings, and both normal and verbose console output are all
+  unaffected — the internal parser
+  ([`dumpex/hunt/cs_beacon/parser.py`](dumpex/hunt/cs_beacon/parser.py))
+  still returns `raw` as `bytes` on its own internal field dicts, and DER
+  validation / instruction decoding still consume it directly.
+- **`meta.schema_version` moves from `"2.5"` to `"2.6"`** — every producer
+  now stamps `"2.6"`. `dumpex-output-v2.5.schema.json` remains shipped and
+  installable for validating output produced before this change; it still
+  describes `configs[*].fields[*]` as carrying `raw`.
+
+See [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md#hunt-records) for the
+full versioning rationale.
+
 ## `--hunt` findings now carry a normalized-SIEM-alert shape (schema v2.5)
 
 Every entry in a hunter's `findings[]` array (`--hunt --json`/`--csv`)

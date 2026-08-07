@@ -1,23 +1,27 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.5.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.5") for each of the six
+dumpex/schemas/dumpex-output-v2.6.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.6") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
 hand-written fixture JSON, so a shape change in any of them is caught
 here. dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
-dumpex-output-v2.2.schema.json, dumpex-output-v2.3.schema.json, and
-dumpex-output-v2.4.schema.json (the frozen historical shapes) are also
-exercised directly (see the "schema version history" section below) to
-prove each still validates a genuine document from its own era and
-still rejects a `result.kind` it was never updated to know about --
-v2.5 is a strict superset of v2.4 for these six recon-command kinds
-(v2.5's only actual change is extending the hunt `finding` $def with
-id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version --
-see test_json_schema_v2_5_hunt.py for that), so every real document
-that validated against v2.4 continues to validate against v2.5
-unchanged, just carrying the new version label.
+dumpex-output-v2.2.schema.json, dumpex-output-v2.3.schema.json,
+dumpex-output-v2.4.schema.json, and dumpex-output-v2.5.schema.json (the
+frozen historical shapes) are also exercised directly (see the "schema
+version history" section below) to prove each still validates a genuine
+document from its own era and still rejects a `result.kind` it was never
+updated to know about -- v2.6 is a strict superset of v2.5 for these six
+recon-command kinds (v2.6's only actual change is removing `raw` from
+`--hunt cs-beacon`'s csBeaconDetails.configs[*].fields[*] -- see
+tests/hunt/test_cs_beacon_collect.py for that; none of it is visible to
+this file's own six recon-command kinds), so every real document that
+validated against v2.5 continues to validate against v2.6 unchanged, just
+carrying the new version label. v2.5 itself was a strict superset of v2.4
+for these six kinds too (v2.5's only actual change was extending the hunt
+`finding` $def with id/severity/technique_ids/evidence_refs/iocs/rule_id/
+rule_version -- see test_json_schema_v2_5_hunt.py for that).
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -53,8 +57,20 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
+    with schema_path("dumpex-output-v2.6.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_5():
     with schema_path("dumpex-output-v2.5.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_5(schema_v2_5):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_5)
+    return jsonschema.Draft202012Validator(schema_v2_5)
 
 
 @pytest.fixture(scope="module")
@@ -331,7 +347,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.5",
+            "schema_version": "2.6",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -1091,6 +1107,18 @@ def test_a_genuine_v2_4_era_document_still_validates_against_the_v2_4_schema(val
     doc = _minimal_valid_doc(kind="modules")
     doc["meta"]["schema_version"] = "2.4"
     assert validator_v2_4.is_valid(doc)
+
+
+def test_a_genuine_v2_5_era_document_still_validates_against_the_v2_5_schema(validator_v2_5):
+    # v2.6's only actual change is removing `raw` from `--hunt cs-beacon`'s
+    # csBeaconDetails.configs[*].fields[*] (see
+    # tests/hunt/test_cs_beacon_collect.py) -- no six-recon-command shape
+    # changed between v2.5 and v2.6, so a v2.5-era document of any of
+    # those kinds must keep validating against the frozen v2.5 schema
+    # unchanged.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.5"
+    assert validator_v2_5.is_valid(doc)
 
 
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):

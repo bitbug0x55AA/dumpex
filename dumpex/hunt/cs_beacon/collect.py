@@ -6,31 +6,40 @@ call the exact same `_build_cs_beacon_report()` pipeline, so this module
 only RESHAPES the resulting `aggregate.Report` into a `HunterRecord` --
 it never recomputes score, status, verdict, or coverage itself.
 
-`configs[*]["fields"]` is int-keyed (by TLV field ID) and its `raw`/
-`value` entries can be raw `bytes` -- this is ALSO sanitized at the CLI
+`configs[*]["fields"]` is int-keyed (by TLV field ID) and its `value`
+entries can be raw `bytes` -- this is ALSO sanitized at the CLI
 dispatcher layer (`dumpex/hunt/__init__.py`'s `_json_safe_cs_configs`-
 equivalent block), which was not deleted; it still runs, unchanged, for
 `cmd_hunt()`'s console-rendering `results` dict and any other non-v2
 caller. This module's own, independent conversion is what feeds
-`--hunt`'s v2.4 `--json`/`--csv` output specifically (see
+`--hunt`'s v2 `--json`/`--csv` output specifically (see
 docs/hunt_migration_field_matrix.md's cs-beacon section and its own
 cross-cutting finding #2 update). `va`/`region_base` (real process
 addresses) become hex strings; `file_offset` (a .dmp BYTE OFFSET, not a
 memory address) and `xor_key` (a one-byte XOR key value, not an
 address/pointer/handle) stay plain JSON integers, per this project's own
 address-vs-offset type rule.
+
+As of schema_version 2.6, `_field_dict()` deliberately drops the parser's
+own `rec["raw"]` bytes from the public dict it returns -- PublicKey,
+Malleable C2, and inject-transform fields could carry very long raw hex
+strings there, degrading JSON/CSV/tool display for no benefit once
+`value` already carries the field's decoded/hex-rendered content. The
+parser (`dumpex/hunt/cs_beacon/parser.py`) still returns `raw` on its own
+internal field dicts -- DER public-key validation
+(`fields[0x0007]["raw"]`) and Malleable C2 instruction decoding both
+still need it -- this function just never copies it into the shape that
+reaches `CsBeaconDetails`/`--json`/`--csv`.
 """
 from dumpex.hunt.cs_beacon import _build_cs_beacon_report
 from dumpex.output.records import HunterRecord, CsBeaconDetails, hex_address
 
 
 def _field_dict(rec: dict) -> dict:
-    raw = rec.get("raw", b"")
     value = rec.get("value")
     return {
         "name": rec.get("name", ""),
         "type": rec.get("type", ""),
-        "raw": raw.hex() if isinstance(raw, bytes) else str(raw),
         "value": value.hex() if isinstance(value, bytes) else value,
     }
 

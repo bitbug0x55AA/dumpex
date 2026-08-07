@@ -22,7 +22,7 @@ import re
 # No ^/$ anchors -- paired with fullmatch() below, not match()/search().
 # `$` in Python's re matches "at the end of the string, or just before a
 # trailing newline" (a review found this let "T1055\n"/"T1559.001\n"
-# through both this validator and the v2.5 schema's own `pattern`, which
+# through both this validator and the v2.6 schema's own `pattern`, which
 # the `jsonschema` library also checks via Python `re.search()`).
 # fullmatch() requires the ENTIRE string to be consumed by the pattern,
 # with no such newline exception, so a trailing "\n" is correctly

@@ -13,6 +13,7 @@ from tests.fixtures.fakes import Region, Segment, FakeStream, FakeMF, FakeReader
 
 import dumpex.hunt.cs_beacon as cs_beacon
 from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record
+from dumpex.hunt.cs_beacon.parser import _cs_decode_and_parse_tlv
 from dumpex.output.records import HunterRecord, CsBeaconDetails
 
 
@@ -26,7 +27,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.5.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.6.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -131,8 +132,25 @@ def test_structural_config_uncorroborated_scores_1(hunter_record_validator):
     assert isinstance(cfg["fields"], dict)
     assert all(isinstance(k, str) for k in cfg["fields"])
     for field in cfg["fields"].values():
-        assert isinstance(field["raw"], str)   # hex-encoded, never raw bytes
+        # v2 public output (schema_version 2.6+) drops `raw` entirely --
+        # PublicKey/Malleable C2/inject-transform fields could otherwise
+        # carry very long hex strings here. Only name/type/value remain.
+        assert set(field.keys()) == {"name", "type", "value"}
+        assert isinstance(field["name"], str)
+        assert isinstance(field["type"], int)
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+    # The internal parser result (never exposed to v2 JSON/CSV) must still
+    # carry `raw` as bytes -- DER public-key validation
+    # (fields[0x0007]["raw"]) and Malleable C2 instruction decoding both
+    # depend on it. This guards against ever deleting `raw` from the
+    # parser itself while trimming it from the public output shape.
+    parsed = _cs_decode_and_parse_tlv(data, 0, 0x69, len(data))
+    assert parsed["complete"] is True
+    assert parsed["fields"]
+    for fid, field in parsed["fields"].items():
+        assert isinstance(field["raw"], bytes)
+    assert isinstance(parsed["fields"][0x0007]["raw"], bytes)
 
 
 def test_executable_private_region_corroborates_scores_2(hunter_record_validator):
