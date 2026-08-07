@@ -352,7 +352,7 @@ class Finding:
         _require_nonempty_str(self.rationale, "Finding.rationale")
         _require_list_of_str(self.facts, "Finding.facts")
         _require_list_of_str(self.limitations, "Finding.limitations")
-        _require_list_of_str(self.verbose_facts, "Finding.verbose_facts")
+        _require_str_list(self.verbose_facts, "Finding.verbose_facts")
         _require_optional_nonempty_str(self.rule_id, "Finding.rule_id")
         _require_optional_nonempty_str(self.rule_version, "Finding.rule_version")
         rule_id = self.rule_id if self.rule_id is not None else self.check
