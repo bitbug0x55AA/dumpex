@@ -15,11 +15,8 @@ python -m dumpex sample.dmp --hunt all --json result.json --case-id CASE-1234 --
 `--hunt all` runs every TTP hunter and prints a summary table plus a
 per-TTP deep dive. `--json` captures the same result as structured data —
 carry that file forward into the case record; it's what the rest of this
-guide is about reading correctly. Add `--csv output/` alongside `--json`
-if you want per-table CSVs for a SIEM/spreadsheet import; both draw from
-the same underlying result, so they will never disagree with each other
-or with the console output on `status`/`verdict_level` for the same
-finding. Add `--redact-paths` before sharing the JSON outside your own
+guide is about reading correctly. Add `--redact-paths` before sharing
+the JSON outside your own
 machine — see [Evidence handling](#evidence-handling-hashes-reproducing-a-run) below.
 
 Module Stomping's score-producing check needs a reference DLL/EXE
@@ -29,7 +26,7 @@ stomping" result actually checked anything.
 
 ## The four fields that matter
 
-`--json`/`--csv` wrap every hunter's result in dumpex's shared v2.7
+`--json` wraps every hunter's result in dumpex's shared v2.7
 envelope: `result.kind` is `"hunt"`, and each hunter you selected gets
 its own entry in `result.data.records[]` (`hunter` names which TTP —
 `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, or
@@ -87,12 +84,12 @@ detect incomplete coverage without parsing JSON at all:
 | `3` | `partial` | At least one selected hunter had a coverage gap (a stream was unreadable, `--ref-dir` was missing, a scan budget was hit, ...) — re-run to close the gap before treating this as a full sweep |
 | `4` | `not_evaluated` | No selected hunter could evaluate at all (e.g. every required stream is missing from the dump) |
 
-This is independent of whether `--json`/`--csv` were even passed — a bare
+This is independent of whether `--json` was even passed — a bare
 `dumpex sample.dmp --hunt all` still exits `0`/`3`/`4` accordingly. It is
 also independent of whether anything was actually *detected*: a fully
 clean, fully covered run still exits `0`; a `DETECTED` result with a
 coverage gap elsewhere in the same `--hunt all` run exits `3`, not `0` —
-exit code tracks *coverage*, not *verdict*. Always read the JSON/CSV
+exit code tracks *coverage*, not *verdict*. Always read the JSON
 `status`/`verdict_level` fields for the actual disposition; use the exit
 code only to gate "was this a complete look."
 
@@ -105,7 +102,7 @@ confirmed; write what the specific finding's `facts`/`inference`/
 ## Reading a Finding
 
 Where a hunter reports structured findings (each entry's own `findings`
-array in `result.data.records[]` in JSON, the `findings` table in CSV),
+array in `result.data.records[]` in JSON),
 each entry has five fields — read all five before acting on any one of
 them:
 
@@ -305,7 +302,7 @@ Pass `--redact-paths` before sharing a `--json` result outside your own
 machine — it reduces each `meta.evidence[].path` and any `--ref-dir`/
 `--yara-dir`/`--rules-file` path down to their basename, so the JSON
 doesn't leak local usernames or directory layout. It never changes
-console, `--txt`, or `--csv` output.
+console or `--txt` output.
 
 A failure computing any one piece of metadata (e.g. the dump became
 unreadable between opening it and writing `--json`) never aborts the

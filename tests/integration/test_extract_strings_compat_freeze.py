@@ -68,11 +68,10 @@ def _run(monkeypatch, tmp_path, extract_addr, size_hex, output_arg, data_map, fo
     monkeypatch.setattr(extract_mod, "read_region", mem_reader(data_map))
 
     out_json = str(tmp_path / "out.json")
-    out_csv = str(tmp_path / "out.csv")
     argv = ["dumpex", dump_path, "--extract", extract_addr, "--size", size_hex]
     if output_arg is not None:
         argv += ["--output", output_arg]
-    argv += ["--json", out_json, "--csv", out_csv]
+    argv += ["--json", out_json]
     if force:
         argv += ["--force"]
     monkeypatch.setattr(sys, "argv", argv)
@@ -83,9 +82,8 @@ def _run(monkeypatch, tmp_path, extract_addr, size_hex, output_arg, data_map, fo
     except SystemExit as exc:
         exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
-    csv_text = open(out_csv, encoding="utf-8").read()
     console = os.path.basename(dump_path)
-    return exit_code, doc, csv_text, console
+    return exit_code, doc, console
 
 
 def _split_console_body(console_text: str) -> str:
@@ -124,7 +122,7 @@ TRUE_FREEZE = [
 def test_extract_compat_freeze(monkeypatch, tmp_path, capsys, name, extract_addr, size_hex,
                                 output_rel, data, exit_code, console_prefix):
     output_path = str(tmp_path / output_rel)
-    actual_exit, doc, csv_text, dump_label = _run(
+    actual_exit, doc, dump_label = _run(
         monkeypatch, tmp_path, extract_addr, size_hex, output_path, {int(extract_addr, 16): data})
     console = capsys.readouterr().out
     body = _split_console_body(console)
@@ -150,15 +148,13 @@ def test_extract_compat_freeze(monkeypatch, tmp_path, capsys, name, extract_addr
 
     assert (tmp_path / output_rel).read_bytes() == written
 
-    assert "## extract / summary" in csv_text or "## extract / records" in csv_text
-
 
 def test_extract_default_output_filename_writes_into_cwd(monkeypatch, tmp_path, capsys):
     # No --output given -- cmd_extract falls back to f"region_0x{addr:x}.bin"
     # in the current working directory, exactly as before this migration.
     monkeypatch.chdir(tmp_path)
     data = b"default name test" + b"\x00" * 50
-    exit_code, doc, csv_text, _ = _run(
+    exit_code, doc, _ = _run(
         monkeypatch, tmp_path, "0x4000", "0x14", None, {0x4000: data})
     console = capsys.readouterr().out
     body = _split_console_body(console)
@@ -216,12 +212,11 @@ def _run_strings(monkeypatch, tmp_path, addr, size_hex, min_len, grep, encoding,
     monkeypatch.setattr(extract_mod, "read_region", mem_reader(data_map))
 
     out_json = str(tmp_path / "out.json")
-    out_csv = str(tmp_path / "out.csv")
     argv = ["dumpex", dump_path, "--strings", addr, "--size", size_hex,
             "--min-len", str(min_len), "--strings-encoding", encoding]
     if grep is not None:
         argv += ["--grep", grep]
-    argv += ["--json", out_json, "--csv", out_csv]
+    argv += ["--json", out_json]
     monkeypatch.setattr(sys, "argv", argv)
 
     exit_code = 0
@@ -230,8 +225,7 @@ def _run_strings(monkeypatch, tmp_path, addr, size_hex, min_len, grep, encoding,
     except SystemExit as exc:
         exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
-    csv_text = open(out_csv, encoding="utf-8").read()
-    return exit_code, doc, csv_text
+    return exit_code, doc
 
 
 # ── TRUE_FREEZE_STRINGS scenarios: console text captured from the original
@@ -290,7 +284,7 @@ def test_strings_compat_freeze(monkeypatch, tmp_path, capsys, name, addr, size_h
                                 min_len, grep, encoding, data, expected_body):
     size = size_hex_override if size_hex_override is not None else len(data)
     size_hex = hex(size)
-    exit_code, doc, csv_text = _run_strings(
+    exit_code, doc = _run_strings(
         monkeypatch, tmp_path, addr, size_hex, min_len, grep, encoding, {int(addr, 16): data})
     console = capsys.readouterr().out
     body = _split_console_body(console)
@@ -305,7 +299,6 @@ def test_strings_compat_freeze(monkeypatch, tmp_path, capsys, name, addr, size_h
     assert doc["meta"]["schema_version"] == "2.7"
     assert doc["result"]["kind"] == "strings"
     assert doc["result"]["coverage"]["status"] == "complete"
-    assert "## strings / summary" in csv_text or "## strings / records" in csv_text
 
 
 def test_strings_read_failure_exits_1_before_any_structured_output(monkeypatch, tmp_path, capsys):

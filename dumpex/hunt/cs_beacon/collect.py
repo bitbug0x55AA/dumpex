@@ -12,7 +12,7 @@ dispatcher layer (`dumpex/hunt/__init__.py`'s `_json_safe_cs_configs`-
 equivalent block), which was not deleted; it still runs, unchanged, for
 `cmd_hunt()`'s console-rendering `results` dict and any other non-v2
 caller. This module's own, independent conversion is what feeds
-`--hunt`'s v2 `--json`/`--csv` output specifically (see
+`--hunt`'s v2 `--json` output specifically (see
 docs/hunt_migration_field_matrix.md's cs-beacon section and its own
 cross-cutting finding #2 update). `va`/`region_base` (real process
 addresses) become hex strings; `file_offset` (a .dmp BYTE OFFSET, not a
@@ -23,13 +23,13 @@ address-vs-offset type rule.
 As of schema_version 2.6, `_field_dict()` deliberately drops the parser's
 own `rec["raw"]` bytes from the public dict it returns -- PublicKey,
 Malleable C2, and inject-transform fields could carry very long raw hex
-strings there, degrading JSON/CSV/tool display for no benefit once
+strings there, degrading JSON/tool display for no benefit once
 `value` already carries the field's decoded/hex-rendered content. The
 parser (`dumpex/hunt/cs_beacon/parser.py`) still returns `raw` on its own
 internal field dicts -- DER public-key validation
 (`fields[0x0007]["raw"]`) and Malleable C2 instruction decoding both
 still need it -- this function just never copies it into the shape that
-reaches `CsBeaconDetails`/`--json`/`--csv`.
+reaches `CsBeaconDetails`/`--json`.
 
 As of schema_version 2.7, `_config_dict()` additionally keys the public
 `fields` dict by field NAME (e.g. `"BeaconType"`) instead of the raw TLV

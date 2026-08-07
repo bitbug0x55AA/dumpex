@@ -340,14 +340,14 @@ class StringRecord:
     this module, always non-null: a string was found at some real address,
     there is no "address unknown" case for it. `matched_grep` is a FLAG,
     not a filter: this record is emitted for every extracted string
-    regardless of --grep, so the STRUCTURED records list (JSON/CSV) always
+    regardless of --grep, so the STRUCTURED records list (JSON) always
     shows every extracted string -- None when no --grep was given at all
     (the concept doesn't apply), True/False per record when it was. The
     CONSOLE rendering (render_strings_console) is a separate, narrower
     concern: it actually SKIPS any record with matched_grep is False
     (only highlighting True matches, never printing non-matches) -- do
     not conflate the two; a --grep run's console text shows the same
-    count as its own JSON/CSV output only when every extracted string
+    count as its own JSON output only when every extracted string
     happens to match, and fewer whenever at least one doesn't."""
     offset:        int
     address:       str

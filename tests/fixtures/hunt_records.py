@@ -1,13 +1,13 @@
 """
 Synthetic HunterRecord fixtures for the v2.4 hunt migration's PR3 tests
-(schema validation, CSV partitioning) -- no real dump, no real memory
+(schema validation, structured-output checks) -- no real dump, no real memory
 content, same "fully synthetic, checked-in fixture" rule
 docs/hunt_migration_field_matrix.md's own revision note establishes for
 tests/fixtures/hunt_cases.py. These build dumpex.output.records.HunterRecord
 instances directly (the same way tests/unit/test_hunt_records.py does) --
 NOT through any hunter's real collect_*() pipeline (every hunter has one
 as of PR2b; see e.g. dumpex.hunt.injection.collect.collect_injection_record())
--- deliberately, so PR3's schema/CSV tests stay independent of any given
+-- deliberately, so PR3's schema tests stay independent of any given
 hunter's own detection logic and exercise only the record/summary shape
 itself.
 """
@@ -166,7 +166,7 @@ def obfuscation_detected():
 
 def all_seven_detected_variety():
     """One record per hunter, mixing DETECTED/INCONCLUSIVE/NOT_EVALUATED/
-    clean states -- used for --hunt all-style schema/CSV round-trips."""
+    clean states -- used for --hunt all-style schema round-trips."""
     return [
         injection_detected(),
         hollowing_not_evaluated(),
@@ -204,7 +204,7 @@ def all_seven_not_evaluated():
 
 def hunt_summary_for(records, selected="all"):
     """Thin delegator to the real production reducer
-    (dumpex.hunt.summary.build_hunt_summary) -- every schema/CSV test
+    (dumpex.hunt.summary.build_hunt_summary) -- every schema test
     that calls this is therefore an end-to-end test of that reducer
     too, not a second, independently-maintained copy of its logic."""
     return build_hunt_summary(records, selected=selected)

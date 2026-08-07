@@ -1,6 +1,6 @@
 # Output and Evidence Schema
 
-dumpex can write JSON, CSV, and plain-text output in addition to the console
+dumpex can write JSON and plain-text output in addition to the console
 display. JSON is the canonical case-record format because it contains analysis
 data together with evidence identity, execution context, dependency versions,
 and rule provenance.
@@ -10,8 +10,6 @@ and rule provenance.
 | Format | Option | Intended use |
 |---|---|---|
 | JSON | `--json FILE` | Automation, case records, reproducibility |
-| CSV | `--csv FILE.csv` | One combined flat export |
-| CSV directory | `--csv DIR` | One file per result table |
 | Plain text | `--txt FILE` | Human-readable transcript with ANSI colours removed |
 
 All enabled formats are derived from the same in-memory analysis result.
@@ -343,7 +341,7 @@ the legacy-compatibility coverage described above:
 ## v2 structured output
 
 These eleven commands are always structured internally — even
-without `--json`/`--csv` — and use a distinct envelope from v1.1's old
+without `--json` — and use a distinct envelope from v1.1's old
 `hunt`-shaped root. `--diff` is the one two-dump exception (`kind:
 "comparison"`, a two-entry `meta.evidence`) — see "`result.kind ==
 "comparison"`" below; everything in this section otherwise applies to it
@@ -496,7 +494,7 @@ stringifying any value that isn't already a plain JSON scalar/list/dict
 by the time it's serialized.
 
 An exit code mirrors `coverage.status` one-for-one for these eleven
-commands, independent of whether `--json`/`--csv` was even requested: `0`
+commands, independent of whether `--json` was even requested: `0`
 for `"complete"`, `3` for `"partial"`, `4` for `"not_evaluated"` (the
 primary stream a command needed was entirely absent from the dump — e.g.
 `--modules` when `ModuleListStream` itself isn't present, as opposed to
@@ -590,18 +588,6 @@ practice (see above) -- a side's stream raising on read (as opposed to
 merely being absent) marks that side `"failed"` and skips that entity's
 diff, without aborting the other selected entities.
 
-`--csv` splits a comparison result into up to three tables --
-`module_diffs`/`thread_diffs`/`memory_diffs` -- instead of the generic
-`records` table the other nine commands write, since a mixed-entity_type
-array can't share one CSV header row; only entities that actually
-produced records get a file (directory mode) or a section (single-file
-mode). `--extract`/`--strings`/`--report` additionally get `artifacts`/
-`diagnostic_warnings`/`diagnostic_errors` tables when they have anything
-to put in them (see "Extract and strings records"/"Report records" below)
--- kind-independent tables any v2 command's own top-level `artifacts`/
-`diagnostics` can populate, not specific to comparison's own per-entity
-split.
-
 ### Extract and strings records
 
 `schema_version 2.2` adds `"extract"`/`"strings"` values to `result.kind`
@@ -624,19 +610,17 @@ vs. what was written to disk) that happen to usually agree in size.
 `--strings` returns one `stringRecord` per extracted string —
 `{"offset", "address", "encoding", "text", "matched_grep"}` — regardless
 of `--grep`: `matched_grep` is a flag, not a filter, so `result.data.
-records` (JSON/CSV) always contains every extracted string (`null` when
+records` (JSON) always contains every extracted string (`null` when
 `--grep` wasn't given at all; `true`/`false` per record when it was). The
 console rendering is narrower and does NOT match this one-for-one: it
 skips any record with `matched_grep == false` entirely (only ever
 highlighting the `true` matches). Console skips records whose
-`matched_grep` is false, so it may show fewer records than JSON/CSV when
+`matched_grep` is false, so it may show fewer records than JSON when
 non-matching strings exist — if every extracted string happens to match
-`--grep`, console and JSON/CSV show the same count for that run.
+`--grep`, console and JSON show the same count for that run.
 `result.summary` additionally carries `requested_address`/
 `requested_size`/`bytes_read`/`auto_sized`/`shown` (`--strings`-only
-scan-context fields CSV's own `summary` table now also exposes
-automatically, since custom `result.summary` fields are merged into that
-table's single row).
+scan-context fields exposed directly in JSON's `result.summary`).
 
 Both commands share the same `requested_region`-scoped
 `coverage.sources` shape as every other v2 command — a bad `--extract`/
@@ -817,7 +801,7 @@ for the CLI's v2 path; `cmd_hunt()` still returns its original bare dict
 when `collect_records` is left at its default, so other, non-CLI callers
 of the v1.1-era dict shape are unaffected. Console output (the per-hunter
 detail and the `--hunt all` summary card) is unchanged — only the
-`--json`/`--csv` output and the exit code changed.
+`--json` output and the exit code changed.
 
 `schema_version 2.5` extends `hunterRecord.findings[]`'s own `finding`
 $def (unchanged since it was introduced in `2.4`) with seven fields that
@@ -852,13 +836,13 @@ properties), the same precedent every earlier frozen schema file follows.
 `csBeaconDetails.configs[*].fields[*]` — each parsed TLV field in a
 recovered Cobalt Strike config now carries only `name`, `type`, and
 `value`. PublicKey, Malleable C2, and inject-transform fields could embed
-very long raw-hex strings under the old `raw` field, degrading JSON, CSV,
+very long raw-hex strings under the old `raw` field, degrading JSON
 and any downstream tool's display for no benefit once `value` already
 carries that same field's decoded (or hex-rendered, for non-printable
 `bytes` fields) content. This is a field REMOVAL, not an addition —
 `configs[*]` items are schema-open (`type: object`) in both `v2.5` and
 `v2.6`, so the schema file's own `$defs` did not need a structural edit,
-but the actual wire shape every `--hunt cs-beacon`/`--hunt all` JSON/CSV
+but the actual wire shape every `--hunt cs-beacon`/`--hunt all` JSON
 run produces changed incompatibly, which is what the versioning policy
 above's "removal of a field a command has ever actually emitted" clause
 covers. Nothing else about `csBeaconDetails` or any other hunter's
@@ -873,7 +857,7 @@ output are all unaffected: the parser
 still returns `raw` as `bytes` on its own internal field dicts, and both
 DER validation (`fields[0x0007]["raw"]`) and instruction decoding still
 consume it directly, before `_field_dict()` ever reshapes anything for
-JSON/CSV. `dumpex-output-v2.5.schema.json` stays byte-frozen and remains
+JSON. `dumpex-output-v2.5.schema.json` stays byte-frozen and remains
 shipped/installable for validating output produced before this change,
 the same precedent every earlier frozen schema file follows.
 
@@ -931,4 +915,3 @@ For reports shared outside the investigation environment, use
 directory layout — including `--extract`'s/`--report`'s own `artifacts[].path`
 — it does not anonymize evidence content, strings, module names, host data,
 or findings.
-

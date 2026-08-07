@@ -1,6 +1,6 @@
 """
 Integration tests for cli.py's v2 routing: the pre-flight rejection of
---json/--csv on not-yet-migrated commands (before the dump is even
+--json on not-yet-migrated commands (before the dump is even
 opened), the six recon commands actually writing a v2-shaped document,
 --hunt now also writing a v2.4-shaped document (PR4 -- see
 dumpex.hunt.cmd_hunt()'s own collect_records= docstring), and the
@@ -55,7 +55,7 @@ def test_legacy_encoding_alias_still_reaches_strings_command(monkeypatch, capsys
 # ── pre-flight: every mode reaches open_dump(), none are rejected ────────
 # _UNSUPPORTED_STRUCTURED_MODES is permanently empty as of Phase E, PR3
 # (--report was the last command still on it) -- there is no longer any
-# mode a --json/--csv pre-flight check can reject before open_dump().
+# mode a --json pre-flight check can reject before open_dump().
 
 def test_json_on_v2_mode_is_not_rejected_reaches_open_dump(monkeypatch, capsys):
     # A v2-supported mode must proceed past the pre-flight check and reach
@@ -248,7 +248,7 @@ def test_extract_short_read_exits_partial_and_json_shows_truncation(monkeypatch,
     # P1-4 remediation: a short read (read_region() returned fewer bytes
     # than requested) must surface as exit code 3 (EXIT_PARTIAL), not the
     # 0 a full "complete" read gets -- a SOC script checking `$?` on a
-    # bare `dumpex --extract ...` (no --json/--csv) must be able to detect
+    # bare `dumpex --extract ...` (no --json) must be able to detect
     # this without parsing JSON at all. P2 remediation: it must ALSO be
     # visible on the console itself, not just the exit code/JSON.
     dump_path = _make_dump_file()
@@ -686,45 +686,6 @@ def test_diff_json_partial_when_one_entity_not_evaluated_among_others_complete(
         assert doc["result"]["kind"] == "comparison"
         assert doc["result"]["coverage"]["status"] == "partial"
         assert doc["result"]["data"]["records"] == []
-    finally:
-        os.remove(baseline_path)
-        os.remove(target_path)
-
-
-def test_diff_csv_directory_mode_writes_module_diffs_table(monkeypatch, tmp_path):
-    # csv_export.build_tables()' comparison-specific module_diffs/
-    # thread_diffs/memory_diffs table split (Phase C) is already proven
-    # directly against V2Output in tests/unit/test_output_csv_and_collector.py
-    # -- this proves it survives a real cli.main() --diff --csv DIR\ call,
-    # the one command shape that couldn't be exercised before --diff was
-    # wired onto V2Output.
-    baseline_path = _make_dump_file()
-    target_path = _make_dump_file()
-    try:
-        mf_baseline = FakeMF()
-        mf_baseline.modules = FakeStream([Module(0x1000, 0x1000, r"C:\a.dll")], "modules")
-        mf_baseline.filename = baseline_path
-        mf_target = FakeMF()
-        mf_target.modules = FakeStream(
-            [Module(0x1000, 0x1000, r"C:\a.dll"), Module(0x2000, 0x1000, r"C:\b.dll")],
-            "modules")
-        mf_target.filename = target_path
-        mfs = {baseline_path: mf_baseline, target_path: mf_target}
-        monkeypatch.setattr(cli, "open_dump", lambda path: mfs[path])
-
-        csv_dir = tmp_path / "csvout"
-        csv_dir.mkdir()
-        monkeypatch.setattr(sys, "argv",
-                             ["dumpex", target_path, "--diff", baseline_path,
-                              "--diff-mode", "modules", "--csv", str(csv_dir) + os.sep])
-        cli.main()   # no SystemExit -- coverage is complete, exit code 0
-
-        names = os.listdir(csv_dir)
-        module_diff_files = [n for n in names if "module_diffs" in n]
-        assert len(module_diff_files) == 1
-        assert not any("records.csv" in n for n in names)
-        contents = (csv_dir / module_diff_files[0]).read_text(encoding="utf-8")
-        assert "b.dll" in contents
     finally:
         os.remove(baseline_path)
         os.remove(target_path)

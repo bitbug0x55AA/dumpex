@@ -342,7 +342,7 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
 
 
 def test_verbose_lists_every_rwx_region_beyond_the_facts_cap(capsys):
-    # injection.rwx_regions' Finding.facts (built for --json/--csv) cap the
+    # injection.rwx_regions' Finding.facts (built for --json) cap the
     # region list at 20 with a "... and N more" sentinel entry --
     # --verbose is supposed to mean "the complete list". Finding.
     # verbose_facts (not Finding.facts) is now the --verbose detail source
@@ -549,7 +549,7 @@ def test_coverage_only_check_never_appears_in_key_signals_or_why_this_verdict(ca
 
 
 def test_coverage_only_finding_still_present_in_json_findings_and_legacy_dict(capsys):
-    # Presentation-only exclusion: --json/--csv (via f["findings"]) must
+    # Presentation-only exclusion: --json (via f["findings"]) must
     # still carry this Finding in full, untouched by KEY SIGNALS filtering.
     f = injection._hunt_injection(_mixed_coverage_only_and_real_signal_mf(), verbose=False)
     capsys.readouterr()

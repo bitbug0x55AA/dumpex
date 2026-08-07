@@ -5,6 +5,14 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## CSV output removed
+
+The `--csv` option has been removed. Structured results are now exported
+only through `--json`; human-readable output remains available in the
+console and through `--txt`. This also removes the CSV conversion layer,
+whose nested values were JSON-encoded inside cells and whose single-file
+mode concatenated multiple table shapes into one non-standard CSV file.
+
 ## `--hunt cs-beacon` structured fields keyed by name (schema v2.7)
 
 `--hunt cs-beacon`/`--hunt all --json`/`--csv` output re-keys each parsed

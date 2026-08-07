@@ -12,7 +12,6 @@ import dumpex.hunt.cs_beacon.der as cs_der
 import dumpex.hunt.cs_beacon.presentation as presentation
 from dumpex.hunt.cs_beacon.aggregate import Report
 from dumpex.hunt._ui import DETECTED
-from dumpex.ui.structured import StructuredOutput
 
 
 def _mk_segment_data(config_bytes: bytes, pad_before: int = 0x100, pad_after: int = 0x100) -> bytes:
@@ -507,32 +506,6 @@ def test_short_read_segment_with_hit_in_readable_portion_still_detects():
     assert f["status"] == "DETECTED"
     assert f["coverage_status"] == "partial"
     assert any("short read" in r for r in f["coverage_reasons"])
-
-
-# ── the ACTUAL hunter output (not a mock) round-trips through structured.py ─
-# with the identical verdict_level it reports itself -- console and JSON/CSV
-# must never disagree on the same result.
-
-def test_real_hunter_output_verdict_level_matches_structured_output():
-    seg_va, seg_fo = 0x90000, 0x9000
-    config = cs_beacon_config_bytes(0x69)
-    data = _mk_segment_data(config)
-    seg = Segment(seg_va, seg_fo, len(data))
-    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT",
-                       "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
-
-    class MF(FakeMF):
-        memory_segments_64 = FakeStream([seg], "memory_segments")
-        memory_info          = FakeStream(regions, "infos")
-        _reader                = FakeReader({seg_va: data})
-
-    result = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
-    assert result["verdict_level"] == "high"
-
-    out = StructuredOutput("/tmp/fake.dmp", mf=None)
-    row = out._section_to_tables("hunt", {"cs-beacon": result})["summary"][0]
-    assert row["verdict_level"] == result["verdict_level"]
-    assert row["verdict"] == result["verdict_level"].upper()
 
 
 # ── _cs_decode_and_parse_tlv: structural TLV validation ────────────────────

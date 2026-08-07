@@ -16,7 +16,7 @@ site.
 
 `expected_exit_code` (default 0) is asserted for EVERY scenario, not just
 ones with `extra_checks` -- exit code isn't captured in any golden fixture
-(JSON/CSV/console text say nothing about the process's own exit code), so
+(JSON/console text say nothing about the process's own exit code), so
 without this a CLI regression that silently changed e.g. hollowing's exit
 code from 0 to 3 would pass both `--check` and the parametrized pytest
 with zero diff anywhere.

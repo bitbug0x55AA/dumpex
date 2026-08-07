@@ -229,7 +229,7 @@ def test_cmd_extract_returns_command_result_on_success(monkeypatch, capsys, tmp_
 def test_cmd_extract_short_read_prints_partial_notice_and_still_saves(monkeypatch, tmp_path, capsys):
     # P2 remediation: a short read must be visible on the console, not
     # just in the JSON exit code -- an analyst running --extract without
-    # --json/--csv would otherwise see a normal-looking "[+] Saved" line
+    # --json would otherwise see a normal-looking "[+] Saved" line
     # with no indication the read was truncated.
     mf = _mk_mf(monkeypatch, {0x6000: b"only nine"})
     out_path = str(tmp_path / "out.bin")

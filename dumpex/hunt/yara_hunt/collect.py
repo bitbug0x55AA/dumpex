@@ -13,7 +13,7 @@ ALSO sanitized at the CLI dispatcher layer (`dumpex/hunt/__init__.py`'s
 bytes->hex block) -- that hand-rolled version was not deleted; it still
 runs, unchanged, for `cmd_hunt()`'s console-rendering `results` dict and
 any other non-v2 caller. This module's own, independent conversion is
-what feeds `--hunt`'s v2.4 `--json`/`--csv` output specifically (see
+what feeds `--hunt`'s v2.4 `--json` output specifically (see
 docs/hunt_migration_field_matrix.md's cross-cutting finding #2 update).
 `seg_va`/`va` (real process addresses) become hex strings; `seg_fo`/
 `fo` (.dmp byte offsets, not addresses) stay plain JSON integers.

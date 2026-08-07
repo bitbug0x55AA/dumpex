@@ -15,7 +15,7 @@ dumpex/hunt/injection/models.py) is converted here into a typed
 `HuntRegionRef`/`HuntThreadRef`/`HuntPeHeaderHit` with hex-formatted
 addresses. This module is read by `dumpex/hunt/__init__.py`'s
 `collect_hunt()` orchestrator, which `cli.py`'s `--hunt` branch now calls
-for `--json`/`--csv` output -- the console dispatcher itself still builds
+for `--json` output -- the console dispatcher itself still builds
 its own bare-dict `results` for rendering, unchanged (see
 `collect_hunt()`'s own docstring).
 """

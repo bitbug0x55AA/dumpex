@@ -442,7 +442,7 @@ def test_ioc_lead_finding_printed_exactly_once(capsys):
 
 
 def test_verbose_shows_per_token_va_encoding_and_weak_flag(capsys):
-    """stomping.ioc_string_lead's Finding.facts (built for --json/--csv)
+    """stomping.ioc_string_lead's Finding.facts (built for --json)
     hold only a deduped, capped list of matched TERMS per region -- no
     per-token absolute VA, no string encoding, no weak/common-API
     classification. That detail used to come from presentation.py's own

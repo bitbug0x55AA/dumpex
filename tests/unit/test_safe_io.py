@@ -1,6 +1,6 @@
 """
 Unit tests for dumpex.core.safe_io — the output-file safety primitives
-every --json/--csv/--txt/--extract writer funnels through: no-clobber by
+every --json/--txt/--extract writer funnels through: no-clobber by
 default, atomic commit (never a half-written or empty placeholder left
 behind), and an unconditional refusal to write onto the input dump path.
 
@@ -67,7 +67,7 @@ def test_check_not_dump_path_mixed_bare_string_and_tuple_entries(tmp_path):
 def test_check_no_output_collisions_allows_distinct_paths(tmp_path):
     safe_io.check_no_output_collisions([
         (str(tmp_path / "a.json"), "--json"),
-        (str(tmp_path / "b.csv"), "--csv"),
+        (str(tmp_path / "b.txt"), "--txt"),
         (None, "--txt"),
     ])   # must not raise
 
@@ -88,7 +88,7 @@ def test_check_no_output_collisions_skips_directory_mode_targets(tmp_path):
     # it must not be compared for equality against another target that
     # happens to share that literal string.
     safe_io.check_no_output_collisions([
-        (str(tmp_path), "--csv"),
+        (str(tmp_path), "--json"),
         (str(tmp_path), "--txt"),
     ])   # must not raise: both are directory-mode, skipped entirely
 
@@ -259,7 +259,7 @@ def test_commit_output_file_target(tmp_path):
     assert out.read_bytes() == b"content"
 
 
-# ── write_text_to_target / write_text_to_directory ──────────────────────
+# ── write_text_to_target ────────────────────────────────────────────────
 
 def test_write_text_to_target_full_pipeline(tmp_path):
     dump = tmp_path / "e.dmp"
@@ -268,16 +268,6 @@ def test_write_text_to_target_full_pipeline(tmp_path):
     final = safe_io.write_text_to_target(str(out), '{"x":1}', ".json", "modules", str(dump), False)
     assert final == out
     assert out.read_text() == '{"x":1}'
-
-
-def test_write_text_to_directory_uses_stem(tmp_path):
-    dump = tmp_path / "e.dmp"
-    dump.write_bytes(b"d")
-    d = tmp_path / "outdir"
-    final = safe_io.write_text_to_directory(d, "a,b\n1,2\n", "dumpex_hunt_summary", ".csv",
-                                             str(dump), False)
-    assert final.name == "dumpex_hunt_summary.csv"
-    assert final.read_text() == "a,b\n1,2\n"
 
 
 # ── AtomicTextTee ─────────────────────────────────────────────────────────

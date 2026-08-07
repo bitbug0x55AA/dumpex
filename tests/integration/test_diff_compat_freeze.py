@@ -7,7 +7,6 @@ dumps opened via a PATH-AWARE `open_dump` fake -- unlike every other
 integration test's path-ignoring lambda, since --diff opens two distinct
 files) and asserts exit code, the full console text, and the JSON
 document's kind/coverage/evidence shape. A representative subset also
-asserts the full CSV table content and (for the mode="all" combined run)
 schema validity against dumpex-output-v2.7.schema.json.
 
 Two buckets, per Phase D's plan:
@@ -75,21 +74,19 @@ def _run(monkeypatch, tmp_path, argv, mf_baseline, mf_target):
     mfs = {baseline_path: mf_baseline, target_path: mf_target}
     monkeypatch.setattr(cli, "open_dump", lambda path: mfs[path])
     out_json = str(tmp_path / "out.json")
-    out_csv = str(tmp_path / "out.csv")
     # CLI contract: the positional dump is the target under analysis;
     # --diff supplies its baseline/reference.
     monkeypatch.setattr(sys, "argv",
                          ["dumpex", target_path, "--diff", baseline_path, *argv,
-                          "--json", out_json, "--csv", out_csv, "--force"])
+                          "--json", out_json, "--force"])
     exit_code = 0
     try:
         cli.main()
     except SystemExit as exc:
         exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
-    csv_text = open(out_csv, encoding="utf-8").read()
     console = os.path.basename(target_path), os.path.basename(baseline_path)
-    return exit_code, doc, csv_text, console
+    return exit_code, doc, console
 
 
 def _wrap(label_a: str, label_b: str, body: str) -> str:
@@ -532,11 +529,11 @@ ALL_SCENARIOS = TRUE_FREEZE + NEW_BEHAVIOR
 )
 def test_diff_compat_freeze(monkeypatch, tmp_path, capsys, name, diff_args, mf_baseline,
                              mf_target, exit_code, console_body):
-    actual_exit, doc, csv_text, (label_a, label_b) = _run(
+    actual_exit, doc, (label_a, label_b) = _run(
         monkeypatch, tmp_path, diff_args, mf_baseline, mf_target)
     actual_console = capsys.readouterr().out
-    # Only the two write-confirmation lines (JSON/CSV) are stripped --
-    # they embed the per-test tmp directory and, for JSON, a content hash;
+    # Only the JSON write-confirmation line is stripped --
+    # they embed the per-test tmp directory and, a content hash;
     # everything else is asserted verbatim, same discipline as
     # test_compat_freeze.py's own suite.
     write_lines_start = actual_console.find("  [\u00b7] JSON written")
@@ -575,7 +572,7 @@ def test_diff_mode_all_combines_three_entities_and_validates_against_schema(
         [Region(0x2000, 0x1000, 0x1000, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")],
         "infos")
 
-    exit_code, doc, csv_text, (label_a, label_b) = _run(
+    exit_code, doc, (label_a, label_b) = _run(
         monkeypatch, tmp_path, [], mf_baseline, mf_target)
     console = capsys.readouterr().out
 
@@ -592,11 +589,6 @@ def test_diff_mode_all_combines_three_entities_and_validates_against_schema(
     jsonschema.Draft202012Validator.check_schema(schema)
     jsonschema.Draft202012Validator(schema).validate(doc)
 
-    module_diffs_rows = [line for line in csv_text.splitlines()
-                          if "## comparison / module_diffs" in line]
-    assert module_diffs_rows, "CSV must contain a module_diffs table"
-    assert "## comparison / records" not in csv_text, \
-        "a comparison result must never write the generic 'records' table"
 
 
 def test_diff_mode_all_shows_shared_target_modules_failure_in_both_sections(
@@ -615,7 +607,7 @@ def test_diff_mode_all_shows_shared_target_modules_failure_in_both_sections(
     mf_target = _ExplodingModulesMF()
     mf_target.thread_info = FakeStream([ThreadInfo(2, 0x5000)], "infos")
 
-    exit_code, doc, csv_text, (label_a, label_b) = _run(
+    exit_code, doc, (label_a, label_b) = _run(
         monkeypatch, tmp_path, ["--diff-mode", "all"], mf_baseline, mf_target)
     console = capsys.readouterr().out
 

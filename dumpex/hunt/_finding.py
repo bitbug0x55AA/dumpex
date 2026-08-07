@@ -194,10 +194,10 @@ class Finding:
       verbose_facts — OPTIONAL, console/--txt-only enumerable detail this
                        Finding's own `facts` doesn't carry -- typically
                        because `facts` is capped (some hunters cap at
-                       10/15/20 entries for --json/--csv) or omits a field
-                       --json/--csv consumers were never meant to need
+                       10/15/20 entries for --json) or omits a field
+                       --json consumers were never meant to need
                        (e.g. a raw file offset into the .dmp). NOT part of
-                       `to_dict()` (--json/--csv never see it) and NOT
+                       `to_dict()` (--json never see it) and NOT
                        part of the `id` hash basis -- it exists purely so
                        Finding.print() can be the ONE place that decides
                        what --verbose shows for THIS finding, instead of
@@ -426,11 +426,11 @@ class Finding:
         everything console/--txt can show about this Finding already
         lives on it. Deliberately unchanged by the v2.5 SIEM-alert fields
         (id/severity/technique_ids/evidence_refs/iocs/rule_id/
-        rule_version): those are a --json/--csv concern, not something an
+        rule_version): those are a --json concern, not something an
         analyst reading the console transcript needs repeated inline.
 
         `level` controls only how the evidence section renders — the data
-        itself (this instance, and what --json/--csv see via to_dict())
+        itself (this instance, and what --json see via to_dict())
         never changes:
 
           DetailLevel.NORMAL (default) — the evidence section collapses
@@ -445,7 +445,7 @@ class Finding:
 
         The evidence section is `verbose_facts` when this Finding has any
         (the richer, uncapped, console-only detail -- see that field's
-        own docstring), else `facts` (the same list --json/--csv see).
+        own docstring), else `facts` (the same list --json see).
         Never both: a Finding with `verbose_facts` set is asserting "this
         supersedes `facts` for a human reader", so printing both would
         show the same VA/handle/token twice under --verbose.
@@ -541,10 +541,10 @@ CONFIDENCE_NONE = "none"
 def overall_confidence(findings: list, score: int) -> str:
     """
     Reduce a hunter's list of Finding objects (plus its own score) to a
-    single top-level confidence for CSV/JSON summary consumers —
+    single top-level confidence for JSON summary consumers —
     "none"/"low"/"medium"/"high" — WITHOUT inflating it from the score
     alone (a prior pattern, `score >= max_score - 1`, silently turned a
-    single medium-confidence structural lead into a "HIGH CONFIDENCE" CSV
+    single medium-confidence structural lead into a "HIGH CONFIDENCE" structured-output
     row for several hunters).
 
     score == 0            -> "none": nothing scored, regardless of what
@@ -595,7 +595,7 @@ def verdict_level(score: int, level_by_score: dict, status: str = None) -> str:
     per point (stomping's max is 2, injection's is 3; a stomping "2" and
     an injection "2" do not mean the same thing), so a single formula
     like `score >= max_score - 1` cannot represent both correctly at
-    once — it previously produced console/CSV verdict text that
+    once — it previously produced console/structured-output verdict text that
     disagreed with each other for the same finding.
 
     Each hunter owns its own table and is the single source of truth for
@@ -644,7 +644,7 @@ def lead_count(findings: list) -> int:
 def review_priority(findings: list, score: int, status: str = None) -> str:
     """
     Reduce a hunter's findings_list (+ score/status) to a single
-    "none"/"low"/"medium"/"high" triage label for CSV/JSON/console summary
+    "none"/"low"/"medium"/"high" triage label for JSON/console summary
     consumers — independent of the verdict TEXT (which already encodes
     score/status), so a score==0 hunter that nonetheless surfaced real
     leads doesn't silently read as "nothing to do here" in a summary table.

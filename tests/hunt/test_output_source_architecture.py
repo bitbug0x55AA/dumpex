@@ -4,7 +4,7 @@ These tests describe the target boundary for the ongoing migration:
 
 * aggregate returns a frozen, deeply immutable domain Report;
 * a Report stores Findings once, rather than keeping parallel console and
-  JSON/CSV representations that can drift;
+  JSON representations that can drift;
 * aggregate consumes collected evidence, not the dump object or a console
   projection flag; and
 * presentation consumes only the Report plus its projection choice.

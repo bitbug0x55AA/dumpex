@@ -2,7 +2,7 @@
 
 Kept entirely separate from dumpex/ui/structured.py (the v1.1 contract,
 which --hunt still uses unchanged) so migrating a command onto v2 never
-risks the existing hunt JSON/CSV shape. See docs/OUTPUT_SCHEMA.md for the
+risks the existing hunt JSON shape. See docs/OUTPUT_SCHEMA.md for the
 envelope layout and dumpex/schemas/dumpex-output-v2.2.schema.json for the
 formal schema.
 
@@ -23,10 +23,6 @@ Layout:
   serializer.py to_json(): a STRICT encoder that raises on any type it
                 doesn't explicitly know, unlike structured.py's permissive
                 str(obj) fallback.
-  csv_export.py records -> CSV tables (summary always; records always;
-                environment_variables for peb results that have any).
-                List/dict-typed fields are JSON-encoded into their cell,
-                never left to csv.DictWriter's default Python repr().
   collector.py  V2Output -- the per-run collector commands feed records
                 into, analogous to StructuredOutput but v2-shaped.
 """

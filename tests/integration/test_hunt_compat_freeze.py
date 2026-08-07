@@ -36,7 +36,7 @@ What this deliberately does NOT pin, and why:
     `_hunt_*()` return value, and embed `datetime.now()` plus real
     filesystem paths — inherently non-reproducible across runs/machines.
     Every scenario below calls a hunter function (or `hunt.cmd_hunt()`)
-    directly instead. The CLI-layer envelope (JSON/CSV/exit code) IS
+    directly instead. The CLI-layer envelope (JSON/exit code) IS
     frozen separately, in tests/integration/test_hunt_cli_compat_freeze.py.
   - `dumpex.ui.structured._json_safe`'s `str(obj)` fallback for raw
     Region/ThreadInfo/Handle objects (e.g. `pipe`'s `handle_pipes`/

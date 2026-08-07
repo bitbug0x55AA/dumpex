@@ -1,8 +1,8 @@
 """
 Unit tests for dumpex.cli.main()'s argument parsing and pre-open_dump
 validation — the mutually-exclusive mode group, --ref-dir existence
-check, and the output-path-vs-dump-path safety refusal (--json/--csv/
---txt/--output). All of these paths run and can be fully exercised
+check, and the output-path-vs-dump-path safety refusal
+(--json/--txt/--output). All of these paths run and can be fully exercised
 BEFORE main() ever calls open_dump()/MinidumpFile.parse(), so no real
 or synthetic .dmp file is needed — a nonexistent path is enough to prove
 which check fired first.
@@ -11,7 +11,6 @@ This module previously had 0% coverage despite being the very first
 thing every invocation goes through, including the safety checks that
 protect the evidence file from being overwritten.
 """
-import os
 import sys
 import tempfile
 
@@ -79,14 +78,11 @@ def test_json_path_same_as_dumpfile_refused(monkeypatch, capsys):
     assert "--json" in out
 
 
-def test_csv_path_same_as_dumpfile_refused(monkeypatch, capsys):
+def test_csv_option_is_rejected(monkeypatch, capsys):
     code = _run(monkeypatch, ["/nonexistent.dmp", "--modules",
-                              "--csv", "/nonexistent.dmp"])
-    assert code == 1
-    out = capsys.readouterr().out
-    assert "same path as the input dump" in out
-    assert "--csv" in out
-
+                              "--csv", "out.csv"])
+    assert code == 2
+    assert "unrecognized arguments: --csv out.csv" in capsys.readouterr().err
 
 def test_txt_path_same_as_dumpfile_refused(monkeypatch, capsys):
     code = _run(monkeypatch, ["/nonexistent.dmp", "--modules",
@@ -130,7 +126,7 @@ def test_json_path_different_from_dumpfile_reaches_open_dump(monkeypatch, capsys
 
 
 # ── output-target-vs-output-target collision (check_no_output_collisions,
-# before open_dump) -- P1-1 remediation: --output/--json/--csv/--txt must
+# before open_dump) -- P1-1 remediation: --output/--json/--txt must
 # not be allowed to collide with EACH OTHER, not just with the dump ──────
 
 def test_output_and_json_same_path_refused(monkeypatch, tmp_path, capsys):
@@ -158,16 +154,6 @@ def test_output_and_json_same_path_refused_even_with_force(monkeypatch, tmp_path
     assert not (tmp_path / "same.out").exists(), "no output file may be created after refusal"
 
 
-def test_output_and_csv_same_path_refused(monkeypatch, tmp_path, capsys):
-    same = str(tmp_path / "same.out")
-    code = _run(monkeypatch, [str(tmp_path / "sample.dmp"), "--extract", "0x1000",
-                              "--output", same, "--csv", same])
-    assert code == 1
-    out = capsys.readouterr().out
-    assert "would both write to the same file" in out
-    assert "--csv" in out
-
-
 def test_output_and_txt_same_path_refused(monkeypatch, tmp_path, capsys):
     same = str(tmp_path / "same.out")
     code = _run(monkeypatch, [str(tmp_path / "sample.dmp"), "--extract", "0x1000",
@@ -181,7 +167,7 @@ def test_output_and_txt_same_path_refused(monkeypatch, tmp_path, capsys):
 def test_extract_default_output_path_collides_with_json_refused(monkeypatch, tmp_path, capsys):
     # No --output given -- --extract's own auto-generated default filename
     # (region_0x1000.bin, relative to cwd) must still be checked against
-    # --json/--csv/--txt, not just an explicit --output.
+    # --json/--txt, not just an explicit --output.
     monkeypatch.chdir(tmp_path)
     code = _run(monkeypatch, [str(tmp_path / "sample.dmp"), "--extract", "0x1000",
                               "--json", "region_0x1000.bin"])
@@ -190,27 +176,3 @@ def test_extract_default_output_path_collides_with_json_refused(monkeypatch, tmp
     assert "would both write to the same file" in out
     assert "--extract's default output filename" in out
     assert not (tmp_path / "region_0x1000.bin").exists()
-
-
-def test_json_and_csv_different_paths_not_refused_reaches_open_dump(monkeypatch, tmp_path, capsys):
-    # Distinct output targets must not be refused -- execution proceeds to
-    # open_dump()'s own (different) failure mode.
-    code = _run(monkeypatch, ["/nonexistent.dmp", "--modules",
-                              "--json", str(tmp_path / "a.json"),
-                              "--csv", str(tmp_path / "b.csv")])
-    assert code == 1
-    out = capsys.readouterr().out
-    assert "would both write to the same file" not in out
-    assert "File not found" in out
-
-
-def test_csv_directory_mode_target_not_falsely_flagged_against_output(monkeypatch, tmp_path, capsys):
-    # A directory-mode --csv target (trailing slash) writes auto-named
-    # files INTO the directory, never at the literal directory path
-    # itself -- it must not be compared for equality against --output.
-    csv_dir = str(tmp_path) + os.sep
-    code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--csv", csv_dir])
-    assert code == 1
-    out = capsys.readouterr().out
-    assert "would both write to the same file" not in out
-    assert "File not found" in out

@@ -29,9 +29,9 @@ Usage:
 
 Every scenario in tests/fixtures/hunt_cli_scenarios.py's `SCENARIOS` is
 regenerated normal AND --verbose (writing/checking <name>_hunt_dict.json,
-<name>_csv.txt, <name>_console.txt, <name>_verbose_console.txt), plus the
-"all" NOT_EVALUATED scenario (all_hunt_dict.json/all_csv.txt/
-all_console.txt, no --verbose variant -- test_hunt_all_all_not_evaluated
+<name>_console.txt, <name>_verbose_console.txt), plus the "all"
+NOT_EVALUATED scenario (all_hunt_dict.json/all_console.txt, no --verbose
+variant -- test_hunt_all_all_not_evaluated
 doesn't have one either, see its own docstring). yara-needing scenarios
 are skipped with a warning (not an error) if yara-python isn't installed,
 matching pytest.importorskip's behavior in the test suite itself.
@@ -60,7 +60,7 @@ CI job would show a spurious diff on the other OS in the test matrix):
     passing `--check` here would not guarantee a passing pytest run.
 
 Every scenario's `tmp_path` is a `tempfile.TemporaryDirectory()` --
-cleaned up (dump file, --ref-dir/--yara-dir contents, --json/--csv output)
+cleaned up (dump file, --ref-dir/--yara-dir contents, --json output)
 before this script moves on to the next scenario, not left behind the way
 a bare `tempfile.mkdtemp()` would be for every one of the ~19 normal/
 --verbose runs a full regen does.
@@ -117,10 +117,7 @@ def _generate_scenario(name: str, results: dict) -> None:
             return
 
     json_path = GOLDEN / f"{scenario.name}_hunt_dict.json"
-    csv_path = GOLDEN / f"{scenario.name}_csv.txt"
-
     record_for_diff = None
-    csv_for_diff = None
     for verbose in (False, True):
         mp = pytest.MonkeyPatch()
         try:
@@ -130,7 +127,7 @@ def _generate_scenario(name: str, results: dict) -> None:
                 argv = ["--hunt", scenario.ttp, *built.extra_argv]
                 if verbose:
                     argv.append("--verbose")
-                exit_code, doc, csv_text, console = run_cli(mp, tmp_path, argv, built.mf)
+                exit_code, doc, console = run_cli(mp, tmp_path, argv, built.mf)
 
                 assert exit_code == scenario.expected_exit_code, (
                     f"{name} ({'verbose' if verbose else 'normal'}): expected exit code "
@@ -147,7 +144,7 @@ def _generate_scenario(name: str, results: dict) -> None:
             mp.undo()
 
         if verbose:
-            # --verbose must never change the JSON record or CSV text --
+            # --verbose must never change the JSON record --
             # enforced here (not just asserted in the test suite) so a
             # divergence is caught at generation time, not discovered as a
             # pytest failure after the goldens were already (wrongly)
@@ -155,13 +152,10 @@ def _generate_scenario(name: str, results: dict) -> None:
             assert record == record_for_diff, (
                 f"{name}: --verbose changed the JSON record -- Finding.print()'s "
                 f"verbose/facts_mode parameters must never affect to_dict()")
-            assert csv_text == csv_for_diff, (
-                f"{name}: --verbose changed the CSV text")
         else:
-            record_for_diff, csv_for_diff = record, csv_text
+            record_for_diff = record
             _write_text(results, json_path,
                         json.dumps(record, indent=2, sort_keys=True) + "\n")
-            _write_text(results, csv_path, csv_text)
 
         console_variant = "verbose_console" if verbose else "console"
         _write_text(results, GOLDEN / f"{scenario.name}_{console_variant}.txt", body)
@@ -178,7 +172,7 @@ def _generate_all_not_evaluated(results: dict) -> None:
             mf = FakeMF()
             rules_dir = tmp_path / "empty_rules"
             rules_dir.mkdir()
-            exit_code, doc, csv_text, console = run_cli(
+            exit_code, doc, console = run_cli(
                 mp, tmp_path, ["--hunt", "all", "--yara-dir", str(rules_dir)], mf)
 
             assert exit_code == 4, f"all: expected EXIT_NOT_EVALUATED (4), got {exit_code}"
@@ -189,7 +183,6 @@ def _generate_all_not_evaluated(results: dict) -> None:
 
     _write_text(results, GOLDEN / "all_hunt_dict.json",
                 json.dumps(records, indent=2, sort_keys=True) + "\n")
-    _write_text(results, GOLDEN / "all_csv.txt", csv_text)
     _write_text(results, GOLDEN / "all_console.txt", body)
     print("  [ok]   all")
 

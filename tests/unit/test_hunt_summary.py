@@ -1,6 +1,6 @@
 """
 Unit tests for dumpex.hunt.summary.build_hunt_summary() -- the single
-cross-hunter result.summary reducer JSON/CSV/console must all share (see
+cross-hunter result.summary reducer JSON/console must all share (see
 that module's own docstring). Built directly from
 tests/fixtures/hunt_records.py's synthetic HunterRecord fixtures.
 """

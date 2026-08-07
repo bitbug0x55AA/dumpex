@@ -4,18 +4,14 @@ dumpex.ui.structured.StructuredOutput is, so cli.py's existing
 meta-building call sites barely change -- but produces a v2 envelope via
 dumpex.output.envelope/.serializer instead of v1.1's flat section dict.
 """
-import io
 import os
-import csv
 import datetime
-from pathlib import Path
 
 from dumpex.ui.colors import DIM
-from dumpex.core.safe_io import write_text_to_target, write_text_to_directory, summarize_file
+from dumpex.core.safe_io import write_text_to_target, summarize_file
 from dumpex.output.envelope import build_meta_v2, Result, Envelope, EvidenceInput, \
     _normalize_evidence_inputs, _redact_artifacts
 from dumpex.output.serializer import to_json as _serialize_envelope
-from dumpex.output.csv_export import build_tables
 from dumpex.output.records import Diagnostic, SEVERITY_ERROR
 
 
@@ -28,8 +24,8 @@ class V2Output:
             # Both None -> nothing to build meta from. Both given ->
             # genuinely ambiguous (which one wins?) and, worse, silently
             # dropping dump_path here would ALSO silently drop it from
-            # self._protected_paths below -- disabling write_json/
-            # write_csv's overwrite guard for a path the caller clearly
+            # self._protected_paths below -- disabling write_json's
+            # overwrite guard for a path the caller clearly
             # considered real input. Exactly one is required, always.
             raise TypeError(
                 "V2Output requires exactly one of dump_path (single-dump commands) or "
@@ -46,8 +42,8 @@ class V2Output:
             # changes between construction and to_json()/write_json().
             evidence = _normalize_evidence_inputs(evidence)
             # No single canonical dump path exists for a multi-evidence
-            # (e.g. comparison) instance -- see write_json/write_csv
-            # below for the one place this matters today.
+            # (e.g. comparison) instance -- see write_json below for the
+            # one place this matters today.
             self._dump_path_abs  = None
             self._dump_file_name = None
             self._evidence        = evidence
@@ -89,7 +85,7 @@ class V2Output:
         consumes every dumpex.output.command_result.CommandResult field
         (execution_status, structured coverage, diagnostics, artifacts),
         converting each nested value's own to_dict() before storing it, so
-        every consumer downstream of this call (serializer, CSV export)
+            every consumer downstream of this call (notably the serializer)
         only ever sees plain JSON-safe data. `result` is duck-typed (not
         type-hinted as CommandResult) to avoid this module importing
         command_result.py, which itself imports this module's sibling
@@ -120,10 +116,10 @@ class V2Output:
                 self._diagnostics_warnings.append(d_dict)
         self._artifacts.extend(a.to_dict() for a in result.artifacts)
         # Second line of defense behind cli.py's own up-front
-        # --output/--json/--csv/--txt collision check (see
+        # --output/--json/--txt collision check (see
         # safe_io.check_no_output_collisions): an artifact this run
         # already wrote (e.g. --extract's own --output file) is now also
-        # a protected path for write_json/write_csv below, so a later
+        # a protected path for write_json below, so a later
         # structured-output write to that same path is refused instead of
         # silently overwriting it -- check_not_dump_path accepts a
         # (path, description) tuple precisely for this case, so the
@@ -183,57 +179,3 @@ class V2Output:
         p = write_text_to_target(path, self.to_json(), ".json", cmd_label,
                                   self._protected_paths, force, "--json output")
         print(DIM(f"  [·] JSON written → {p}  ({summarize_file(p)})"))
-
-    def write_csv(self, path: str, cmd_label: str = "", force: bool = False) -> None:
-        """
-        Writes every table build_tables() produces for the current result
-        ('summary' always; 'records' always; 'environment_variables' only
-        for a peb result that has any). 'summary' always has exactly one
-        row, so a result with zero data records still writes real content
-        in both modes -- a genuinely empty stream must not look like
-        --csv silently did nothing.
-        """
-        tables = build_tables(self._result, artifacts=self._artifacts,
-                               diagnostic_warnings=self._diagnostics_warnings,
-                               diagnostic_errors=self._diagnostics_errors) \
-                 if self._result else {}
-        p_in = Path(path)
-
-        if p_in.suffix.lower() == ".csv":
-            buf = io.StringIO()
-            total_rows = 0
-            for table_name, rows in tables.items():
-                if not rows:
-                    continue
-                buf.write(f"## {self._result.kind} / {table_name}\n")
-                writer = csv.DictWriter(
-                    buf, fieldnames=rows[0].keys(), extrasaction="ignore",
-                    lineterminator="\n")
-                writer.writeheader()
-                writer.writerows(rows)
-                buf.write("\n")
-                total_rows += len(rows)
-            p = write_text_to_target(path, buf.getvalue(), ".csv", cmd_label,
-                                      self._protected_paths, force, "--csv output",
-                                      newline="")
-            print(DIM(f"  [·] CSV  written → {p}  "
-                      f"({total_rows} row(s) across all tables, {summarize_file(p)})"))
-            return
-
-        kind  = self._result.kind if self._result else "result"
-        label = f"{cmd_label}_" if cmd_label else ""
-        for table_name, rows in tables.items():
-            if not rows:
-                continue
-            stem = f"dumpex_{label}{kind}_{table_name}"
-            buf  = io.StringIO()
-            writer = csv.DictWriter(
-                buf, fieldnames=rows[0].keys(), extrasaction="ignore",
-                lineterminator="\n")
-            writer.writeheader()
-            writer.writerows(rows)
-            fname = write_text_to_directory(p_in, buf.getvalue(), stem, ".csv",
-                                             self._protected_paths, force,
-                                             f"CSV table output ({stem}.csv)",
-                                             newline="")
-            print(DIM(f"  [·] CSV  written → {fname}  ({len(rows)} row(s), {summarize_file(fname)})"))

@@ -66,7 +66,7 @@ def check_not_dump_path(out_path, dump_path, label: str):
     entries, each either a bare path (str/Path -- treated as "the input
     dump" for the printed message) or a (path, description) tuple -- used
     by V2Output to also protect an already-written --extract artifact
-    path from a later --json/--csv write to the same file (see
+    path from a later --json write to the same file (see
     dumpex.output.collector.V2Output._protected_paths), with a message
     that correctly names what would be overwritten instead of always
     claiming it's the input dump. A bare string is deliberately NOT
@@ -104,7 +104,7 @@ def check_no_output_collisions(targets) -> None:
     """
     Reject up front -- before the dump is even opened or any output file
     is touched -- if two or more of this run's own OUTPUT targets
-    (--output/--json/--csv/--txt, plus --extract's own auto-generated
+    (--output/--json/--txt, plus --extract's own auto-generated
     default filename when --output isn't given) would resolve to the same
     file. Without this, e.g. `--extract 0x1000 --output same.out --json
     same.out --force` lets the later --json write silently clobber the
@@ -114,8 +114,8 @@ def check_no_output_collisions(targets) -> None:
 
     `targets` is an iterable of (path_or_None, label) pairs. Entries whose
     path is falsy (flag not given) are skipped. Directory-mode targets
-    (a trailing slash, or an existing directory -- --csv's/--txt's own
-    "write one auto-named file per table/run into this directory" mode)
+    (a trailing slash, or an existing directory -- --txt's
+    "write one auto-named file per run into this directory" mode)
     are also skipped: they never write AT the literal directory path
     itself, so a bare equality check against it would be pointless.
 
@@ -200,7 +200,7 @@ def _commit_no_clobber(temp_path, final_path: Path, force: bool, label: str) -> 
 def write_output_bytes(final_path, data: bytes, dump_path, force: bool, label: str) -> str:
     """
     Write `data` as a new output file at an EXACT, caller-chosen path
-    (--extract, --output, --json/--csv single-file targets). Not for a
+    (--extract, --output, and --json targets). Not for a
     directory target — see commit_to_directory for the auto-named case.
 
     check_not_dump_path runs against the literal final_path, unconditionally
@@ -239,7 +239,7 @@ def commit_to_directory(temp_path, directory, stem: str, suffix: str,
     Commit an already-written temp_path into `directory` as
     `{stem}{suffix}`, retrying with `{stem}_001{suffix}`, `_002`, ... on
     collision instead of refusing outright: the stem here is always
-    machine-generated (a timestamp, a CSV table name) rather than
+    machine-generated (normally a timestamp) rather than
     something the user chose to protect, so a collision means "pick a
     fresher name," not "you're about to lose something."
 
@@ -281,12 +281,11 @@ def commit_output(temp_path, requested_path, suffix: str, cmd_label: str,
                    dump_path, force: bool, label: str = "") -> Path:
     """
     Single entry point for turning a completed temp file into a real
-    --json/--csv/--txt output, whether `requested_path` names a directory
+    --json/--txt output, whether `requested_path` names a directory
     (auto-generated `dumpex_<utc-ts>_<cmd_label>{suffix}` filename, via
     commit_to_directory) or an exact file (write_output_bytes's
-    _commit_no_clobber). Every --json/--csv/--txt writer must go through
-    this (or commit_to_directory directly, for CSV's per-table directory
-    case where the stem isn't a timestamp) rather than hand-rolling its
+    _commit_no_clobber). Every --json/--txt writer must go through this
+    rather than hand-rolling its
     own exists()/mkdir()/timestamp logic.
     """
     p = Path(requested_path)
@@ -319,15 +318,13 @@ def write_text_to_target(requested_path, text: str, suffix: str, cmd_label: str,
                           encoding: str = "utf-8",
                           newline: "str | None" = None) -> Path:
     """
-    Full pipeline for a --json/--csv/--txt single-generated-name output:
+    Full pipeline for a --json/--txt output:
     write `text` to a scratch temp file (in whatever directory the final
     output will end up in), then commit_output() it onto requested_path.
     Nothing is ever created at/near the final path until the content is
     complete and ready to commit in one atomic step.
 
-    `newline` is forwarded to the text stream. CSV callers pass "" so
-    their explicitly selected line terminator reaches disk unchanged on
-    every platform.
+    `newline` is forwarded to the text stream.
     """
     p = Path(requested_path)
     is_dir_target = str(requested_path).endswith(('/', '\\')) or p.is_dir()
@@ -347,31 +344,6 @@ def write_text_to_target(requested_path, text: str, suffix: str, cmd_label: str,
             pass
         raise
     return commit_output(tmp_path, requested_path, suffix, cmd_label, dump_path, force, label)
-
-
-def write_text_to_directory(directory, text: str, stem: str, suffix: str,
-                             dump_path, force: bool, label: str = "",
-                             encoding: str = "utf-8",
-                             newline: "str | None" = None) -> Path:
-    """Like write_text_to_target, but for CSV's per-table directory case
-    where the stem is a table name, not a timestamp — see commit_to_directory.
-    `newline` has the same pass-through semantics as write_text_to_target."""
-    d = Path(directory)
-    fh, tmp_path = _mkstemp_text(d, encoding, newline)
-    try:
-        fh.write(text)
-        fh.close()
-    except BaseException:
-        try:
-            fh.close()
-        except Exception:
-            pass
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
-        raise
-    return commit_to_directory(tmp_path, d, stem, suffix, dump_path, force, label)
 
 
 class AtomicTextTee:

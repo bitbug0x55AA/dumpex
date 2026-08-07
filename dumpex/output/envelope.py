@@ -61,8 +61,8 @@ def _redact_artifacts(artifacts: list) -> list:
     basename, same redaction rule as _redact_options -- size_bytes/
     sha256/description are left untouched (only the filesystem location
     is sensitive, not the file's own facts). The caller's own artifact
-    dicts (used verbatim by CSV export, and by V2Output's already-
-    written-output protection -- see collector.py) are never mutated;
+    dicts (also used by V2Output's already-written-output protection --
+    see collector.py) are never mutated;
     this always returns a fresh list of fresh dicts."""
     out = []
     for a in artifacts:

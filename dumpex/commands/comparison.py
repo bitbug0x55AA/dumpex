@@ -1,6 +1,6 @@
 """Comparison infrastructure (Phase C, PR2/D) -- pure domain functions only.
 
-No CLI wiring, no V2Output call, no --json/--csv handling here --
+No CLI wiring, no V2Output call, no --json handling here --
 dumpex/commands/diff.py owns all of that (collect_diff/render_diff_console/
 cmd_diff), calling collect_comparison() here with two already-open
 MinidumpFile objects.

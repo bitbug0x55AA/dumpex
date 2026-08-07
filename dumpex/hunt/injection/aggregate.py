@@ -52,7 +52,7 @@ def _pe_facts(pe) -> str:
 # console/--txt --verbose-only detail (see that field's own docstring) --
 # for RWX/hidden-PE/unbacked-thread. Every field they carry beyond
 # _region_facts()/_pe_facts() above is file offset alone (never given to
-# --json/--csv, so it lives only here, not in `facts`); this is presentation
+# --json, so it lives only here, not in `facts`); this is presentation
 # formatting living in aggregate.py, not hunter logic in presentation.py --
 # deliberate, so presentation.py never needs a Location or these Evidence
 # objects at all (see dumpex/hunt/injection/presentation.py's own module

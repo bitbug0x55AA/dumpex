@@ -231,7 +231,7 @@ def test_missing_handle_stream_and_short_read_both_reported(capsys):
 
 
 # ── --verbose must list EVERY open pipe handle, not just the first 20 ─────
-# pipe.open_handles' Finding.facts (built for --json/--csv) cap the list
+# pipe.open_handles' Finding.facts (built for --json) cap the list
 # at 20 with a "... and N more" sentinel -- --verbose is supposed to mean
 # "the complete list"; this used to come from presentation.py's own
 # uncapped hand-written expansion before rendering was centralized on

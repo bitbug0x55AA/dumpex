@@ -85,8 +85,7 @@ def run_cli(monkeypatch, tmp_path, argv_extra, mf):
     monkeypatch.setattr(cli, "open_dump", lambda path: mf)
 
     out_json = str(tmp_path / "out.json")
-    out_csv = str(tmp_path / "out.csv")
-    argv = ["dumpex", dump_path, *argv_extra, "--json", out_json, "--csv", out_csv, "--force"]
+    argv = ["dumpex", dump_path, *argv_extra, "--json", out_json, "--force"]
     monkeypatch.setattr(sys, "argv", argv)
 
     buf = io.StringIO()
@@ -97,13 +96,12 @@ def run_cli(monkeypatch, tmp_path, argv_extra, mf):
         except SystemExit as exc:
             exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
-    csv_text = open(out_csv, encoding="utf-8").read()
-    return exit_code, doc, csv_text, buf.getvalue()
+    return exit_code, doc, buf.getvalue()
 
 
 def split_console_body(console_text: str) -> str:
-    """Console output ends with a "[.] JSON written ..."/"CSV written ..."
-    confirmation block whose byte offsets/paths are run-specific -- golden
+    """Console output ends with a JSON write confirmation line whose byte
+    offset/path is run-specific -- golden
     fixtures freeze everything BEFORE that point only."""
     write_start = console_text.find("  [·] JSON written")
     assert write_start != -1, "missing JSON write confirmation line"

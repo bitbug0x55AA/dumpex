@@ -13,7 +13,7 @@ builds and cli.py hands to dumpex.output.collector.V2Output.
 set_command_result(), which consumes every field here (including
 execution_status/diagnostics/artifacts -- see that method's docstring
 for why a narrower adapter used to silently drop them) before it becomes
-wire-format JSON/CSV.
+wire-format JSON.
 
 Imports EXECUTION_COMPLETED from dumpex.output.coverage, not
 dumpex.output.envelope, on purpose: this is a command/domain-layer type,
