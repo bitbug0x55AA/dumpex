@@ -6,7 +6,32 @@ from dumpex.core.memory import get_modules, get_memory_regions, addr_to_module, 
 from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt._location import resolve_location
 from dumpex.hunt.injection.config import PE_VALIDATE_READ_MAX
-from dumpex.hunt.injection.models import HiddenPeScan
+from dumpex.hunt.injection.models import (
+    HiddenPeScan, RegionRef, PeHeaderInfo, RwxRegionEvidence, HiddenPeEvidence,
+)
+
+
+def region_ref(r) -> RegionRef:
+    """Convert a raw minidump Region into an immutable RegionRef -- the
+    ONE place this hunter reads a region's raw Type/Protect enum values
+    and formats them via prot_str(), so every Evidence type that carries
+    "a region" (RWX/hidden-PE/RIP-hit/StartAddress-hit) does so with the
+    SAME already-formatted strings, never a second prot_str() call at a
+    different layer. Used by this module and by
+    dumpex.hunt.injection.correlation (the only other place a raw Region
+    is ever converted)."""
+    return RegionRef(base_address=r.BaseAddress, allocation_base=r.AllocationBase,
+                      size=r.RegionSize, type=prot_str(r.Type), protect=prot_str(r.Protect))
+
+
+def _pe_header_info(pe: dict) -> PeHeaderInfo:
+    """Project dumpex.core.pe_utils.parse_pe_header()'s dict down to the
+    lean, immutable PeHeaderInfo this hunter actually consumes -- see that
+    type's own docstring for which fields (and why only those)."""
+    return PeHeaderInfo(
+        valid=pe['valid'], machine_name=pe['machine_name'], is_pe32_plus=pe['is_pe32_plus'],
+        number_of_sections=pe['number_of_sections'], address_of_entry_point=pe['address_of_entry_point'],
+        image_base=pe['image_base'], reason=pe['reason'])
 
 
 def _is_suspicious_rwx(protect: str, mtype: str) -> bool:
@@ -28,14 +53,19 @@ def _is_suspicious_rwx(protect: str, mtype: str) -> bool:
     return False
 
 
-def _hunt_rwx(mf: MinidumpFile) -> list:
-    """Return list of RWX regions."""
+def _hunt_rwx(mf: MinidumpFile) -> tuple:
+    """Return tuple of RwxRegionEvidence -- each built here, at the scan
+    boundary, WITH its file offset already resolved (see
+    dumpex.hunt._location.resolve_location) -- so aggregate.py never
+    needs `mf` or a separate region-BaseAddress -> Location lookup table."""
     regions = get_memory_regions(mf)
     hits = []
     for r in regions:
         if _is_suspicious_rwx(prot_str(r.Protect), prot_str(r.Type)):
-            hits.append(r)
-    return hits
+            hits.append(RwxRegionEvidence(
+                region=region_ref(r),
+                location=resolve_location(mf, r.BaseAddress, r.BaseAddress, region_size=r.RegionSize)))
+    return tuple(hits)
 
 
 def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool = True) -> HiddenPeScan:
@@ -66,13 +96,14 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
     monkeypatched and separately re-imported here — see
     dumpex/hunt/_runtime.py.
 
-    Each hit dict: {"region", "in_module_list", "pe"} where "pe" is the
-    full dumpex.core.pe_utils.parse_pe_header() result — callers decide
-    what "valid" means for their purposes rather than this function
-    silently only returning validated hits.
+    Each hit is a HiddenPeEvidence(region, pe, in_module_list, location) --
+    callers decide what "valid" means for their purposes (see
+    split_hidden_pe_hits) rather than this function silently only
+    returning validated hits. File offset is resolved here too, at scan
+    time, same reasoning as `_hunt_rwx`.
     """
     if not module_list_available:
-        return HiddenPeScan(hits=[], read_failed=0, short_reads=0)
+        return HiddenPeScan(hits=(), read_failed=0, short_reads=0)
     modules = get_modules(mf)
     hits = []
     read_failed = 0
@@ -136,36 +167,13 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
         # regions; a non-image region can still fall inside a module's
         # declared [baseaddress, endaddress) span in principle, so the
         # same range check is used uniformly rather than re-deriving it.
-        hits.append({"region": r, "in_module_list": owner is not None, "pe": pe})
-    return HiddenPeScan(hits=hits, read_failed=read_failed, short_reads=short_reads)
+        hits.append(HiddenPeEvidence(
+            region=region_ref(r), pe=_pe_header_info(pe), in_module_list=owner is not None,
+            location=resolve_location(mf, r.BaseAddress, r.BaseAddress, region_size=r.RegionSize)))
+    return HiddenPeScan(hits=tuple(hits), read_failed=read_failed, short_reads=short_reads)
 
 
-def rwx_locations(mf: MinidumpFile, rwx: list) -> dict:
-    """Resolve each RWX region's own Location (file offset included) ONCE,
-    here in the scan layer -- the ONE place this hunter still needs `mf`
-    for address resolution. Keyed by BaseAddress (unique per region within
-    a single MemoryInfoListStream scan). aggregate.py consumes the result
-    without ever needing `mf` or calling va_to_file_offset() itself (see
-    that module's own comment on why the console-only detail this feeds
-    still lives in aggregate.py, not presentation.py)."""
-    return {r.BaseAddress: resolve_location(mf, r.BaseAddress, r.BaseAddress,
-                                             region_size=r.RegionSize)
-            for r in rwx}
-
-
-def hidden_pe_locations(mf: MinidumpFile, hits: list) -> dict:
-    """Same as rwx_locations, for a HiddenPeScan's hit dicts -- keyed by
-    each hit's own region BaseAddress. Built from the FULL hit list
-    (before validated/mz_only split) so a single dict covers every
-    downstream subset (validated_pe_hits, mz_only_hits, and aggregate.py's
-    own suspicious_pe_hits/informational_pe_hits split of those)."""
-    return {h["region"].BaseAddress: resolve_location(
-                mf, h["region"].BaseAddress, h["region"].BaseAddress,
-                region_size=h["region"].RegionSize)
-            for h in hits}
-
-
-def split_hidden_pe_hits(scan: HiddenPeScan) -> "tuple[list, list]":
+def split_hidden_pe_hits(scan: HiddenPeScan) -> "tuple[tuple, tuple]":
     """
     Split a HiddenPeScan's hits into (validated, mz_only). Only
     STRUCTURALLY VALID hidden PEs count toward correlation/score; an
@@ -175,8 +183,8 @@ def split_hidden_pe_hits(scan: HiddenPeScan) -> "tuple[list, list]":
     Computed once here so correlation.py and aggregate.py agree on the
     same split instead of each re-deriving it.
     """
-    validated = [h for h in scan.hits if not h["in_module_list"] and h["pe"]["valid"]]
-    mz_only   = [h for h in scan.hits if not h["in_module_list"] and not h["pe"]["valid"]]
+    validated = tuple(h for h in scan.hits if not h.in_module_list and h.pe.valid)
+    mz_only   = tuple(h for h in scan.hits if not h.in_module_list and not h.pe.valid)
     return validated, mz_only
 
 
@@ -192,17 +200,17 @@ def _has_executable_protection(protect: str) -> bool:
     return "EXECUTE" in protect
 
 
-def pe_hit_is_context_scoreable(hit: dict) -> bool:
+def pe_hit_is_context_scoreable(hit) -> bool:
     """
-    Classify one validated hidden-PE hit's OWN memory context (before any
-    correlation) as scoreable-by-default or context-only/informational.
-    This is a FACT derivation from page type + protection — like the rest
-    of this module, it never scores anything itself; aggregate.py is
-    still the ONE place score gets computed. A context-only classification
-    here can still be PROMOTED to scoreable by aggregate.py if
-    correlation.py finds the same AllocationBase carrying an RWX region
-    or live thread execution (RIP/EIP or StartAddress) — see aggregate.py's
-    `_split_scoreable_pe_hits`.
+    Classify one validated hidden-PE hit's (a HiddenPeEvidence) OWN memory
+    context (before any correlation) as scoreable-by-default or
+    context-only/informational. This is a FACT derivation from page type +
+    protection — like the rest of this module, it never scores anything
+    itself; aggregate.py is still the ONE place score gets computed. A
+    context-only classification here can still be PROMOTED to scoreable by
+    aggregate.py if correlation.py finds the same AllocationBase carrying
+    an RWX region or live thread execution (RIP/EIP or StartAddress) — see
+    aggregate.py's `_split_scoreable_pe_hits`.
 
     Scoreable on its own:
       - MEM_PRIVATE — no legitimate loader maps an unregistered PE image
@@ -221,7 +229,7 @@ def pe_hit_is_context_scoreable(hit: dict) -> bool:
     enough in ordinary file-mapping/DLL-preview scenarios that it must
     not by itself drive a verdict.
     """
-    r = hit["region"]
-    if prot_str(r.Type) == "MEM_PRIVATE":
+    r = hit.region
+    if r.type == "MEM_PRIVATE":
         return True
-    return _has_executable_protection(prot_str(r.Protect))
+    return _has_executable_protection(r.protect)

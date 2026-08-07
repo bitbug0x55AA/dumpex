@@ -50,7 +50,22 @@ run the scans, correlate, aggregate, render, return the findings dict.
 The stable contract is `_hunt_injection` itself (imported by
 dumpex/hunt/__init__.py): same signature, same fields, same score/status/
 coverage/JSON shape as before this package split — this refactor only
-changes internal structure. `read_region` is re-exported here and
+changes internal structure. Internally, aggregate.py now builds
+`findings["rwx"]`/`hidden_pe_validated`/`hidden_pe_unvalidated`/
+`threads`/`rip_hits`/`rip_full_correlation`/`start_hits` from frozen
+dumpex.hunt.injection.models Evidence dataclasses (the injection Evidence
+migration) rather than raw minidump Region/ThreadInfo objects or
+hand-rolled dicts -- but presentation.render() never hands one of those
+dataclasses back to a caller: dumpex.hunt.injection.legacy.
+legacy_findings_dict() projects every one of them into a plain, JSON-safe
+dict (stable field names -- base_address/allocation_base/size/type/
+protect for a region, etc. -- see that module's own docstring) before
+`_hunt_injection()`/`cmd_hunt()`'s bare `results["injection"]` return.
+Those field names are NOT the raw minidump attribute names
+(BaseAddress/AllocationBase/...) a caller reading this dict pre-migration
+would have used -- that specific element-attribute-name promise is what
+changed; the dict-of-dicts SHAPE and every top-level key did not.
+`read_region` is re-exported here and
 remains monkeypatchable (`injection.read_region = fake` before calling
 `_hunt_injection()` still changes its behavior — see
 dumpex/hunt/_runtime.py) because it is threaded explicitly into
@@ -102,13 +117,10 @@ def _build_injection_report(mf: MinidumpFile):
     runtime = HunterRuntime(read_region=read_region)
 
     rwx = memory_scan._hunt_rwx(mf)
-    rwx_locations = memory_scan.rwx_locations(mf, rwx)
     hidden_pe_scan = memory_scan._hunt_hidden_pe(
         mf, runtime.read_region, module_list_available=module_list_stream)
-    hidden_pe_locations = memory_scan.hidden_pe_locations(mf, hidden_pe_scan.hits)
     validated_pe_hits, mz_only_hits = memory_scan.split_hidden_pe_hits(hidden_pe_scan)
     start_threads = thread_scan._hunt_unbacked_threads(mf, module_list_available=module_list_stream)
-    unbacked_thread_locations = thread_scan.unbacked_thread_locations(mf, start_threads)
     thread_contexts = get_thread_contexts(mf)   # [{ThreadId, ip, ip_reg, is_wow64}, ...]
 
     # Explicit counts so a PARTIAL context gap is visible even when it
@@ -128,8 +140,6 @@ def _build_injection_report(mf: MinidumpFile):
         rwx, hidden_pe_scan, validated_pe_hits, mz_only_hits, start_threads,
         thread_contexts, correlation_result, memory_info_stream, thread_info_stream,
         module_list_stream, thread_list_stream, threads_total, contexts_parsed,
-        rwx_locations=rwx_locations, hidden_pe_locations=hidden_pe_locations,
-        unbacked_thread_locations=unbacked_thread_locations,
         all_regions=regions, thread_info_entries=thread_info_entries, module_list=module_list)
 
 

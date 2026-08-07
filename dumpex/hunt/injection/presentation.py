@@ -10,15 +10,24 @@ carried -- is built once, at Finding-construction time). The three raw
 lists are still read here for the short CLEAN/SUSPICIOUS status lines
 below (report.rwx, etc. — just a truthiness/count check, not a source of
 rendered detail).
+
+Decides nothing about the LEGACY findings-dict SHAPE it hands back to the
+caller either -- that projection (Evidence dataclasses -> plain, JSON-safe
+dicts) is dumpex.hunt.injection.legacy.legacy_findings_dict()'s own single
+job, called once, right before returning, so this module stays purely
+"print, then hand back the dict a caller gets" and never re-decides what
+that dict's shape is.
 """
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import _print_hunt_header, _print_check, _status_text, \
     NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED
 from dumpex.hunt._finding import DetailLevel, leads_suffix
+from dumpex.hunt.injection.legacy import legacy_findings_dict
 
 
 def render(report, verbose: bool = False) -> dict:
-    """Render the full result and return the same findings dict for the
+    """Render the full result and return the LEGACY (Evidence-free, see
+    dumpex.hunt.injection.legacy's own docstring) findings dict for the
     caller to hand back."""
     findings = report.findings
     rwx = report.rwx
@@ -99,7 +108,7 @@ def render(report, verbose: bool = False) -> dict:
     # address space.
     if status == NOT_EVALUATED:
         print(f"  {BOLD('[ VERDICT ]')}  {_status_text(status, 'no required stream present in this dump')}\n")
-        return findings
+        return legacy_findings_dict(findings)
 
     verdict = (RED("HIGH CONFIDENCE INJECTION") if score >= 3 else
                YELLOW("LIKELY INJECTION") if score == 2 else
@@ -115,4 +124,4 @@ def render(report, verbose: bool = False) -> dict:
     if not verbose and (rwx or validated_pe_hits or start_threads):
         print(DIM("  Use --verbose to list individual addresses.\n"))
 
-    return findings
+    return legacy_findings_dict(findings)

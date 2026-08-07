@@ -39,19 +39,27 @@ What this deliberately does NOT pin, and why:
     directly instead. The CLI-layer envelope (JSON/CSV/exit code) IS
     frozen separately, in tests/integration/test_hunt_cli_compat_freeze.py.
   - `dumpex.ui.structured._json_safe`'s `str(obj)` fallback for raw
-    Region/ThreadInfo/Handle objects (e.g. `injection`'s `rwx`/`threads`/
-    `rip_hits` fields, `pipe`'s `handle_pipes`/`private_pipes`/
-    `c2_context`/`unbacked_in_rgn`) embeds the *Python interpreter's own
-    runtime heap address* of the object (`<...Region object at
-    0x0000020AC1D769D0>`) — different every single run, even with
-    identical input. Assertions on these fields check count/type/stable
-    sub-fields, never the raw object's identity or its `_json_safe()`
-    string form (except `test_injection_detected_...`, which pins the
-    SHAPE of that specific defect via regex so PR2 replacing it with a
-    real typed/hex conversion is a visible, intentional diff here).
+    Region/ThreadInfo/Handle objects (e.g. `pipe`'s `handle_pipes`/
+    `private_pipes`/`c2_context`/`unbacked_in_rgn`) embeds the *Python
+    interpreter's own runtime heap address* of the object (`<...Region
+    object at 0x0000020AC1D769D0>`) — different every single run, even
+    with identical input. Assertions on these fields check count/type/
+    stable sub-fields, never the raw object's identity or its
+    `_json_safe()` string form. `injection`'s `rwx`/`hidden_pe_validated`/
+    `hidden_pe_unvalidated`/`threads`/`rip_hits`/`rip_full_correlation`/
+    `start_hits` fields no longer have this defect at all: internally,
+    aggregate.py now builds these from frozen Evidence dataclasses (see
+    dumpex/hunt/injection/models.py), but presentation.render() never
+    returns those dataclasses (or their repr) to a caller -- dumpex.hunt.
+    injection.legacy.legacy_findings_dict() projects every one of them
+    into a plain, JSON-safe dict (stable keys: base_address/
+    allocation_base/size/type/protect for a region, plus region/
+    in_module_list/pe for a hidden-PE hit, etc. -- see that module's own
+    docstring) before `_hunt_injection()`/`cmd_hunt()` ever hand the
+    result back. `test_injection_detected_...` below asserts the actual
+    dict shape directly, not `_json_safe()`'s fallback behavior.
 """
 import json
-import re
 
 import pytest
 
@@ -115,13 +123,22 @@ def test_injection_detected_full_correlation(monkeypatch):
     assert f["review_priority"] == "high"
     assert "HUNT: Process Injection" in console
     assert len(f["rwx"]) == 1
-    # Known pre-migration defect (see module docstring): raw Region objects
-    # reach JSON via _json_safe's str(obj) fallback, embedding a live
-    # interpreter heap address that changes every run. Assert the SHAPE,
-    # not the address -- PR2 replacing this with a typed hex-address
-    # conversion should make this specific assertion fail and get deleted.
-    safe = _json_safe(f["rwx"])
-    assert re.fullmatch(r"<[\w.]+\.Region object at 0x[0-9A-Fa-f]+>", safe[0])
+    # Post-migration (see module docstring): findings["rwx"] no longer
+    # holds a raw minidump Region (the old defect this assertion used to
+    # pin the shape of) NOR an internal Evidence dataclass/its repr --
+    # dumpex.hunt.injection.legacy.legacy_findings_dict() projects it into
+    # a plain, JSON-safe dict before presentation.render() ever returns
+    # it, so this checks the dict's actual keys directly rather than
+    # relying on _json_safe()'s str(obj) fallback at all.
+    assert f["rwx"][0] == {
+        "base_address": 0x7ff700000000, "allocation_base": 0x7ff700000000,
+        "size": 0x1000, "type": "MEM_PRIVATE", "protect": "PAGE_EXECUTE_READWRITE",
+    }
+    for key in ("rwx", "hidden_pe_validated", "hidden_pe_unvalidated",
+                "suspicious_validated_pe_hits", "informational_validated_pe_hits",
+                "threads", "rip_hits", "rip_full_correlation", "start_hits"):
+        for item in f[key]:
+            assert isinstance(item, dict), f"{key} still holds a non-dict item: {item!r}"
     json.dumps(_json_safe(f))  # must not raise
 
 

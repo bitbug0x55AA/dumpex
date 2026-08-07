@@ -120,9 +120,10 @@ def get_thread_contexts(mf: MinidumpFile) -> list:
     return out
 
 
-def group_regions_by_allocation(regions: list) -> dict:
+def group_regions_by_allocation(regions: list, key=lambda r: r.AllocationBase) -> dict:
     """
-    Group MemoryInfo regions by AllocationBase — the address a single
+    Group MemoryInfo regions (or any region-like object `key` can read an
+    allocation base from) by AllocationBase — the address a single
     VirtualAlloc/VirtualAllocEx call originally reserved. A single
     allocation is routinely split into multiple MemoryInfo entries with
     different BaseAddress/Protect/State (e.g. a header page, a RW-then-
@@ -132,12 +133,18 @@ def group_regions_by_allocation(regions: list) -> dict:
     BaseAddress within the SAME allocation are still one suspicious
     allocation, not two unrelated ones.
 
+    `key` defaults to raw minidump Region objects' own `.AllocationBase`
+    attribute; pass e.g. `key=lambda ref: ref.allocation_base` to group an
+    already-converted immutable region-ref/Evidence type instead (see
+    dumpex.hunt.injection.correlation's own callers) without needing a
+    second, hand-rolled grouping loop.
+
     Returns {AllocationBase: [region, ...]}, insertion order preserved
     within each group.
     """
     groups: dict = {}
     for r in regions:
-        groups.setdefault(r.AllocationBase, []).append(r)
+        groups.setdefault(key(r), []).append(r)
     return groups
 
 

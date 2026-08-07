@@ -9,13 +9,17 @@ These tests describe the target boundary for the ongoing migration:
   projection flag; and
 * presentation consumes only the Report plus its projection choice.
 
-Known gaps are marked ``xfail`` so this test-only commit does not make the
-existing CI permanently red while the larger refactor is in progress.  Most
-use strict mode: as soon as an implementation change satisfies one contract,
-pytest reports XPASS as a failure until that case's marker is removed.  A few
-boundaries currently have different status in the commit baseline and the
-independent implementation worktree, so they temporarily use non-strict marks.
-To use the file as a red/green implementation checklist, run it with
+Known gaps are marked ``xfail`` (strict) so this test-only commit does not
+make the existing CI permanently red while the larger refactor is in
+progress -- as soon as an implementation change satisfies one contract,
+pytest reports XPASS as a failure until that case's marker is removed. Once
+a boundary is actually satisfied, its marker is deleted in the SAME commit
+that satisfies it (not left around as a permanently-skipped assertion) --
+Finding.print()'s `level` contract and injection's aggregate/renderer
+boundaries were the first three to convert; obfuscation's renderer boundary
+converted incidentally when its unused `mf`/`susp_prots`/`modules`
+parameters were dropped. To use the file as a red/green implementation
+checklist, run it with
 ``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
 """
 import dataclasses
@@ -42,11 +46,6 @@ from dumpex.hunt.yara_hunt import presentation as yara_presentation
 _PENDING = pytest.mark.xfail(
     strict=True,
     reason="output-source architecture migration not implemented yet",
-)
-
-_INDEPENDENT_IMPLEMENTATION = pytest.mark.xfail(
-    strict=False,
-    reason="contract status differs between the test baseline and implementation worktree",
 )
 
 
@@ -124,7 +123,6 @@ def test_report_does_not_retain_mutable_collection_state(report_type):
     )
 
 
-@_INDEPENDENT_IMPLEMENTATION
 def test_finding_detail_level_replaces_string_projection_modes():
     """Finding projection is a typed two-level policy, not string switches."""
     detail_level = getattr(_finding, "DetailLevel", None)
@@ -137,11 +135,7 @@ def test_finding_detail_level_replaces_string_projection_modes():
 
 
 AGGREGATORS_WITH_PENDING_BOUNDARY_FIXES = [
-    pytest.param(
-        injection_aggregate.build_report,
-        id="injection",
-        marks=_INDEPENDENT_IMPLEMENTATION,
-    ),
+    pytest.param(injection_aggregate.build_report, id="injection"),
     pytest.param(pipe_aggregate.build_report, id="pipe", marks=_PENDING),
     pytest.param(encoding_aggregate.build_report, id="obfuscation", marks=_PENDING),
 ]
@@ -159,20 +153,12 @@ def test_aggregate_accepts_evidence_not_dump_or_projection_state(build_report):
 
 
 RENDERERS = [
-    pytest.param(
-        injection_presentation.render,
-        id="injection",
-        marks=_INDEPENDENT_IMPLEMENTATION,
-    ),
+    pytest.param(injection_presentation.render, id="injection"),
     pytest.param(hollowing._render_hollowing_console, id="hollowing", marks=_PENDING),
     pytest.param(stomping_presentation.render, id="stomping"),
     pytest.param(pipe_presentation.render, id="pipe"),
     pytest.param(cs_beacon_presentation.render, id="cs-beacon"),
-    pytest.param(
-        encoding_presentation.render,
-        id="obfuscation",
-        marks=_INDEPENDENT_IMPLEMENTATION,
-    ),
+    pytest.param(encoding_presentation.render, id="obfuscation"),
     pytest.param(yara_presentation.render_result, id="yara", marks=_PENDING),
 ]
 

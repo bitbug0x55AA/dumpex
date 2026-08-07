@@ -8,19 +8,17 @@ module's own docstring), so this module only RESHAPES the resulting
 status, verdict, or coverage itself. That is what guarantees the console
 path and this v2.4 path can never silently disagree about the same input.
 
-Every raw `Region`/`ThreadInfo`/context-dict object the aggregate's
-`findings`/`Report` fields hold is converted here into a typed
+Every Evidence object the aggregate's `findings`/`Report` fields hold
+(RegionRef/PeHeaderInfo/RwxRegionEvidence/HiddenPeEvidence/
+UnbackedThreadEvidence/RipHitEvidence/StartHitEvidence -- see
+dumpex/hunt/injection/models.py) is converted here into a typed
 `HuntRegionRef`/`HuntThreadRef`/`HuntPeHeaderHit` with hex-formatted
-addresses -- this is the fix for the confirmed pre-migration defect
-documented in docs/hunt_migration_field_matrix.md's cross-cutting finding
-#1 (raw objects reaching JSON via `_json_safe()`'s `str(obj)` fallback,
-embedding a non-reproducible interpreter heap address). This module is
-read by `dumpex/hunt/__init__.py`'s `collect_hunt()` orchestrator, which
-`cli.py`'s `--hunt` branch now calls for `--json`/`--csv` output -- the
-console dispatcher itself still builds its own bare-dict `results` for
-rendering, unchanged (see `collect_hunt()`'s own docstring).
+addresses. This module is read by `dumpex/hunt/__init__.py`'s
+`collect_hunt()` orchestrator, which `cli.py`'s `--hunt` branch now calls
+for `--json`/`--csv` output -- the console dispatcher itself still builds
+its own bare-dict `results` for rendering, unchanged (see
+`collect_hunt()`'s own docstring).
 """
-from dumpex.core.memory import prot_str
 from dumpex.hunt.injection import _build_injection_report
 from dumpex.output.records import (
     HunterRecord, InjectionDetails, HuntRegionRef, HuntThreadRef, HuntThreadRegionHit,
@@ -28,43 +26,50 @@ from dumpex.output.records import (
 )
 
 
-def _region_ref(region) -> HuntRegionRef:
+def _region_ref(region_ref) -> HuntRegionRef:
+    """`region_ref` is a dumpex.hunt.injection.models.RegionRef --
+    type/protect are already prot_str()-formatted strings, resolved once
+    at scan time."""
     return HuntRegionRef(
-        base_address=hex_address(region.BaseAddress),
-        allocation_base=hex_address(getattr(region, "AllocationBase", None)),
-        size=region.RegionSize,
-        type=prot_str(region.Type),
-        protect=prot_str(region.Protect),
+        base_address=hex_address(region_ref.base_address),
+        allocation_base=hex_address(region_ref.allocation_base),
+        size=region_ref.size,
+        type=region_ref.type,
+        protect=region_ref.protect,
     )
 
 
-def _pe_hit_ref(hit: dict) -> HuntPeHeaderHit:
-    region = _region_ref(hit["region"])
-    pe = hit["pe"]
-    if pe["valid"]:
+def _pe_hit_ref(hit) -> HuntPeHeaderHit:
+    """`hit` is a dumpex.hunt.injection.models.HiddenPeEvidence."""
+    region = _region_ref(hit.region)
+    pe = hit.pe
+    if pe.valid:
         return HuntPeHeaderHit(
-            region=region, valid=True, machine_name=pe["machine_name"],
-            is_pe32_plus=pe["is_pe32_plus"], number_of_sections=pe["number_of_sections"],
-            entry_point_rva=pe["address_of_entry_point"], image_base=hex_address(pe["image_base"]))
-    return HuntPeHeaderHit(region=region, valid=False, reason=pe["reason"])
+            region=region, valid=True, machine_name=pe.machine_name,
+            is_pe32_plus=pe.is_pe32_plus, number_of_sections=pe.number_of_sections,
+            entry_point_rva=pe.address_of_entry_point, image_base=hex_address(pe.image_base))
+    return HuntPeHeaderHit(region=region, valid=False, reason=pe.reason)
 
 
-def _thread_ref_from_info(ti) -> HuntThreadRef:
-    return HuntThreadRef(tid=ti.ThreadId, start_address=hex_address(ti.StartAddress))
+def _thread_ref_from_evidence(ev) -> HuntThreadRef:
+    """`ev` is a dumpex.hunt.injection.models.UnbackedThreadEvidence."""
+    return HuntThreadRef(tid=ev.thread_id, start_address=hex_address(ev.start_address))
 
 
 def _thread_ref_from_context(ctx: dict) -> HuntThreadRef:
     return HuntThreadRef(tid=ctx["ThreadId"], ip=hex_address(ctx["ip"]), ip_reg=ctx["ip_reg"])
 
 
-def _thread_region_hit_from_context_pair(pair) -> HuntThreadRegionHit:
-    ctx, region = pair
-    return HuntThreadRegionHit(thread=_thread_ref_from_context(ctx), region=_region_ref(region))
+def _thread_region_hit_from_rip_hit(hit) -> HuntThreadRegionHit:
+    """`hit` is a dumpex.hunt.injection.models.RipHitEvidence."""
+    thread = HuntThreadRef(tid=hit.thread_id, ip=hex_address(hit.ip), ip_reg=hit.ip_reg)
+    return HuntThreadRegionHit(thread=thread, region=_region_ref(hit.region))
 
 
-def _thread_region_hit_from_info_pair(pair) -> HuntThreadRegionHit:
-    ti, region = pair
-    return HuntThreadRegionHit(thread=_thread_ref_from_info(ti), region=_region_ref(region))
+def _thread_region_hit_from_start_hit(hit) -> HuntThreadRegionHit:
+    """`hit` is a dumpex.hunt.injection.models.StartHitEvidence."""
+    thread = HuntThreadRef(tid=hit.thread_id, start_address=hex_address(hit.start_address))
+    return HuntThreadRegionHit(thread=thread, region=_region_ref(hit.region))
 
 
 def _record_from_injection_report(report) -> HunterRecord:
@@ -78,18 +83,18 @@ def _record_from_injection_report(report) -> HunterRecord:
     corr = report.correlation
 
     details = InjectionDetails(
-        rwx=[_region_ref(r) for r in report.rwx],
+        rwx=[_region_ref(ev.region) for ev in report.rwx],
         hidden_pe_validated=[_pe_hit_ref(h) for h in report.validated_pe_hits],
         hidden_pe_unvalidated=[_pe_hit_ref(h) for h in report.mz_only_hits],
         suspicious_validated_pe_hits=[_pe_hit_ref(h) for h in report.suspicious_pe_hits],
         informational_validated_pe_hits=[_pe_hit_ref(h) for h in report.informational_pe_hits],
-        threads=[_thread_ref_from_info(ti) for ti in report.start_threads],
+        threads=[_thread_ref_from_evidence(ev) for ev in report.start_threads],
         thread_contexts=[_thread_ref_from_context(ctx) for ctx in f["thread_contexts"]],
         rwx_and_pe_alloc_bases=[hex_address(a) for a in f["rwx_and_pe_alloc_bases"]],
-        rip_hits=[_thread_region_hit_from_context_pair(p) for p in corr.rip_hits],
-        rip_full_correlation=[_thread_region_hit_from_context_pair(p)
-                               for p in corr.rip_full_correlation],
-        start_hits=[_thread_region_hit_from_info_pair(p) for p in corr.start_hits],
+        rip_hits=[_thread_region_hit_from_rip_hit(hit) for hit in corr.rip_hits],
+        rip_full_correlation=[_thread_region_hit_from_rip_hit(hit)
+                               for hit in corr.rip_full_correlation],
+        start_hits=[_thread_region_hit_from_start_hit(hit) for hit in corr.start_hits],
     )
 
     return HunterRecord(
