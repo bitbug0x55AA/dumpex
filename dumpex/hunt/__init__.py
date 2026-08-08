@@ -3,7 +3,7 @@ import os
 import sys
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED
-from dumpex.core.memory import va_to_file_offset, prot_str
+from dumpex.core.memory import va_to_file_offset, prot_str, get_memory_regions
 from dumpex.hunt._ui import _print_hunt_header, NOT_EVALUATED
 
 from dumpex.hunt.injection  import _build_injection_report
@@ -30,6 +30,7 @@ from dumpex.hunt.encoding.collect  import _record_from_encoding_report
 
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
+from dumpex.hunt.region_correlation import build_region_correlations
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport
 from dumpex.output.records import HUNTERS
@@ -281,7 +282,16 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         # with, and tests/integration/test_hunt_all_summary_source.py for
         # the proof that a poisoned `results` value cannot leak into it.
         doc_coverage = _hunt_coverage_report(records, summary)
-        summary_presentation.render_hunt_summary(records, summary, doc_coverage.status.value)
+        # get_memory_regions(mf) reads the dump's ALREADY-PARSED
+        # MemoryInfoListStream (see dumpex.core.memory's own docstring) --
+        # this is not a re-scan, and build_region_correlations() itself
+        # reads only these already-parsed regions plus the already-built
+        # `records`, never `mf` again beyond this one call -- see
+        # dumpex.hunt.region_correlation's own module docstring.
+        region_correlations = build_region_correlations(records, get_memory_regions(mf))
+        summary_presentation.render_hunt_summary(
+            records, summary, doc_coverage.status.value,
+            region_correlations=region_correlations)
 
     if collect_records:
         return results, records

@@ -14,6 +14,7 @@ import pytest
 
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt.summary_presentation import render_hunt_summary
+from dumpex.hunt.region_correlation import RegionSignal, RegionCorrelation
 from dumpex.hunt._finding import Finding, TAG_DETECTION, TAG_LEAD, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM
 from dumpex.output.coverage import CoverageReport, CoverageStatus, CoverageLimitation, LimitationCode
 from dumpex.output.records import HUNTERS
@@ -23,10 +24,11 @@ from tests.fixtures.hunt_records import (
 )
 
 
-def _capture(records, summary, doc_coverage_status="complete", width=100):
+def _capture(records, summary, doc_coverage_status="complete", width=100, region_correlations=None):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        render_hunt_summary(records, summary, doc_coverage_status, width=width)
+        render_hunt_summary(records, summary, doc_coverage_status, width=width,
+                             region_correlations=region_correlations)
     return buf.getvalue()
 
 
@@ -261,7 +263,7 @@ def test_render_hunt_summary_signature_has_no_legacy_results_parameter():
     import inspect
     params = set(inspect.signature(render_hunt_summary).parameters)
     assert "results" not in params
-    assert params == {"records", "summary", "doc_coverage_status", "width"}
+    assert params == {"records", "summary", "doc_coverage_status", "width", "region_correlations"}
 
 
 def test_rejects_non_hunter_record_list():
@@ -300,3 +302,137 @@ def test_next_investigation_names_only_hunters_present_in_input():
         # none of the OTHER (clean) hunters should be singled out by name
         # in the generic action list
         assert hunter_name not in next_investigation
+
+
+# ── CORRELATED REGIONS ────────────────────────────────────────────────────
+
+def _two_hunter_correlation(region_base=0x1f400120000, region_size=0x10000,
+                             allocation_base=0x1f400120000):
+    signals = (
+        RegionSignal(hunter="injection", kind="hidden_pe_validated",
+                     label="validated hidden PE", address=region_base,
+                     region_base=region_base, region_size=region_size,
+                     allocation_base=allocation_base),
+        RegionSignal(hunter="injection", kind="rip_hit",
+                     label="live RIP/EIP in suspicious region", address=region_base,
+                     region_base=region_base, region_size=region_size,
+                     allocation_base=allocation_base),
+        RegionSignal(hunter="cs-beacon", kind="valid_config",
+                     label="structurally valid Beacon config", address=region_base,
+                     region_base=region_base, region_size=region_size,
+                     allocation_base=allocation_base),
+        RegionSignal(hunter="cs-beacon", kind="context_corroborated",
+                     label="context corroborated", address=region_base,
+                     region_base=region_base, region_size=region_size,
+                     allocation_base=allocation_base),
+        RegionSignal(hunter="yara", kind="rule_hit", label="RuleA, RuleB", address=region_base,
+                     region_base=region_base, region_size=region_size,
+                     allocation_base=allocation_base),
+    )
+    return RegionCorrelation(region_base=region_base, region_size=region_size,
+                              allocation_base=allocation_base, signals=signals,
+                              hunters=("injection", "cs-beacon", "yara"))
+
+
+def test_correlated_regions_appears_when_correlations_present():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, region_correlations=[_two_hunter_correlation()])
+    assert "CORRELATED REGIONS" in out
+
+
+def test_correlated_regions_absent_when_no_correlations():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    out_without = _capture(records, summary)
+    out_with_empty = _capture(records, summary, region_correlations=[])
+    assert "CORRELATED REGIONS" not in out_without
+    assert "CORRELATED REGIONS" not in out_with_empty
+    # Passing region_correlations=None/[] must not otherwise change a
+    # single byte of the rest of the card.
+    assert out_without == out_with_empty
+
+
+def test_correlated_regions_section_is_between_other_hunters_and_next_investigation():
+    records = _all_clean_records()   # everything clean -> lands in OTHER HUNTERS
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, region_correlations=[_two_hunter_correlation()])
+    other_idx = out.index("OTHER HUNTERS")
+    correlated_idx = out.index("CORRELATED REGIONS")
+    next_idx = out.index("NEXT INVESTIGATION")
+    assert other_idx < correlated_idx < next_idx
+
+
+def test_correlated_regions_shows_hunter_names_evidence_and_address():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    corr = _two_hunter_correlation()
+    out = _capture(records, summary, region_correlations=[corr])
+    block = out.split("CORRELATED REGIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    assert "Process Injection" in block
+    assert "Cobalt Strike Beacon" in block
+    assert "YARA Rules" in block
+    assert "validated hidden PE" in block
+    assert "structurally valid Beacon config" in block
+    assert "context corroborated" in block
+    assert "RuleA, RuleB" in block
+    assert f"0x{corr.region_base:016x}" in block
+    assert f"0x{corr.allocation_base:016x}" in block
+    assert f"size=0x{corr.region_size:x}" in block
+
+
+def test_correlated_regions_contains_colocation_disclaimer_once():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    corr1 = _two_hunter_correlation(region_base=0x1000, region_size=0x1000, allocation_base=0x1000)
+    corr2 = _two_hunter_correlation(region_base=0x2000, region_size=0x1000, allocation_base=0x2000)
+    out = _capture(records, summary, region_correlations=[corr1, corr2])
+    block = out.split("CORRELATED REGIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    assert block.count("does not change hunter scores or verdicts") == 1
+
+
+def test_correlated_regions_wraps_at_narrow_width_without_breaking_indent():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, region_correlations=[_two_hunter_correlation()], width=80)
+    block = out.split("CORRELATED REGIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    for line in block.splitlines():
+        if line.strip():
+            assert len(re.sub(r"\x1b\[[0-9;]*m", "", line)) <= 80
+
+
+def test_correlated_regions_never_emits_decoded_or_raw_bytes():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, region_correlations=[_two_hunter_correlation()])
+    block = out.split("CORRELATED REGIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    for banned in ("decoded", "raw_bytes", "fields", "BeaconType", "c2_host"):
+        assert banned not in block
+
+
+def test_render_hunt_summary_rejects_invalid_region_correlations_type():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    with pytest.raises(TypeError):
+        _capture(records, summary, region_correlations=[{"not": "a RegionCorrelation"}])
+
+
+def test_correlated_regions_are_capped_with_an_omission_notice():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    many = [_two_hunter_correlation(region_base=0x1000 * i, region_size=0x1000,
+                                     allocation_base=0x1000 * i) for i in range(1, 26)]
+    out = _capture(records, summary, region_correlations=many)
+    block = out.split("CORRELATED REGIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    # Only the cap's worth of numbered entries are printed...
+    assert "  20. Region" in block
+    assert "  21. Region" not in block
+    # ...and the omission is stated explicitly, not silently dropped.
+    assert "5 additional correlated region(s) omitted" in block

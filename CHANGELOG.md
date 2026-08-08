@@ -13,6 +13,35 @@ console and through `--txt`. This also removes the CSV conversion layer,
 whose nested values were JSON-encoded inside cells and whose single-file
 mode concatenated multiple table shapes into one non-standard CSV file.
 
+## `--hunt all` console/`--txt` gains a `CORRELATED REGIONS` section
+
+`--hunt all`'s printed `HUNT SUMMARY` card (and its `--txt` copy) can now
+end with a `CORRELATED REGIONS` section, shown after `OTHER HUNTERS` and
+before `NEXT INVESTIGATION`: whenever two or more *different* hunters
+each produced real, structured evidence that resolves to the exact same
+normalized MemoryInfo region (`BaseAddress`/`RegionSize`, half-open
+containment), that region's evidence is listed together, region base and
+allocation base in dumpex's usual fixed-width hex, hunter verdict badges,
+and a short evidence line per hunter. See
+[docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md#correlated-regions-console-and-txt-output-only)
+for the full read on what this section does and does not mean.
+
+- **Console/`--txt` presentation only.** `--json`,
+  `schema_version`, and every finding id are unchanged; no hunter's own
+  `score`/`confidence`/`verdict_level`/`coverage` is recomputed or
+  affected in any way — co-location is never treated as a scoring
+  signal.
+- **No re-scan.** The correlation is built entirely from the same
+  `HunterRecord`s and the same already-parsed MemoryInfo list `--hunt
+  all` already had in hand for this run
+  ([`dumpex/hunt/region_correlation.py`](dumpex/hunt/region_correlation.py)).
+- **Same allocation is not the same region.** Two MemoryInfo sub-regions
+  that only share an `AllocationBase` (routine after a `VirtualProtect`
+  split) are never merged into one entry.
+- **Omitted when nothing correlates.** A run with no cross-hunter
+  overlap prints exactly what it always did — no empty section, no other
+  change to `HUNT SUMMARY`.
+
 ## `--hunt cs-beacon` structured fields keyed by name (schema v2.7)
 
 `--hunt cs-beacon`/`--hunt all --json`/`--csv` output re-keys each parsed

@@ -71,6 +71,49 @@ selected) and, from there, the process exit code — see
 `not_evaluated`, that is the tool telling you it could not verify a
 clean result, not a milder form of "clean."
 
+## CORRELATED REGIONS (console and TXT output only)
+
+`--hunt all`'s printed `HUNT SUMMARY` card can end with a `CORRELATED
+REGIONS` section, listed after `OTHER HUNTERS` and before `NEXT
+INVESTIGATION`. It appears only when **two or more different hunters**
+each found real evidence that resolves to the exact same normalized
+memory region — the same `(BaseAddress, RegionSize)` pair from the
+dump's own MemoryInfo list. `--txt` is a plain-text copy of the console
+output, so whatever you see there is exactly what lands in the `.txt`
+file too.
+
+What it means, and what it doesn't:
+
+- **It is a location fact, not a verdict.** Two hunters landing on the
+  same region says their evidence is co-located in memory — nothing
+  about *why*. It never changes any hunter's own `score`, `confidence`,
+  `verdict_level`, or `coverage.status`, and it is not itself scored.
+  Keep reading each hunter's own `status`/`verdict_level` for the actual
+  disposition.
+- **It requires genuinely different hunters.** One hunter with several
+  pieces of evidence in one region does not produce an entry here — that
+  is normal for a single detection, not a correlation.
+- **Same allocation is not the same region.** A single `VirtualAlloc`
+  call is routinely split into several MemoryInfo sub-regions after
+  `VirtualProtect` (a header page, a reprotected code page, a guard
+  page, ...). This section keys strictly on each sub-region's own
+  `BaseAddress`/`RegionSize` — two hunters that only share an
+  `AllocationBase` are not correlated; the sub-region's own base address
+  is shown as `Region`, with the shared allocation (when known) shown
+  separately as supplementary context under `Allocation`.
+- **No entry doesn't mean no malicious evidence.** It only means no
+  *reliable, same-region* overlap was found between two different
+  hunters — every hunter's own individual findings above this section
+  (in `REVIEW FIRST`/`NEEDS ATTENTION`) still stand on their own and
+  need the same triage attention whether or not anything correlates.
+
+This section never appears in `--json`/`--csv` — it is a `--hunt all`
+console/`--txt` presentation convenience only, never part of
+`result.data.records`, `schema_version`, or any finding id. If you're
+carrying `--json` forward into a case record per the workflow above,
+re-derive any region-level correlation you need from the structured
+`details` fields already in that JSON yourself.
+
 ## Exit codes for scripting
 
 `--hunt`'s process exit code is derived from `result.coverage.status` —
