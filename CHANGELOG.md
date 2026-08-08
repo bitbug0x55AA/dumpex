@@ -5,6 +5,56 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Fixed: `--hunt stomping` no longer reports a clean IOC scan over memory it never read
+
+The stomping hunter's IOC-string scan skips executable `MEM_IMAGE` regions
+larger than 5 MB — string extraction over a huge mapping is expensive and
+can never contribute to the score. Those skips were dropped silently: no
+count, no addresses, no coverage record, and the check still printed
+
+```text
+[✓] IOC strings in module code regions
+    Status : CLEAN — no IOC patterns in executable module memory
+```
+
+even when a 40 MB executable mapping had never been looked at. Large
+executable regions are exactly where planted strings can hide, so this
+read as evidence of absence where there was no evidence at all.
+
+Every otherwise-eligible region skipped for size is now recorded before it
+is skipped, with the same `targets` identity every other hunter's
+oversized skips carry (VA, size, the 5 MB cap it exceeded, dump-file
+offset, allocation base, state/type/protection) under a new
+`ioc_string_scan` coverage source:
+
+```jsonc
+{
+  "code": "SCAN_REGION_OVERSIZED_SKIPPED", "source": "ioc_string_scan",
+  "affected_count": 1,
+  "targets": [{ "kind": "memory_region", "base_address": "0x00007ff600100000",
+                "size": 6291456, "size_limit": 5242880, "file_offset": null,
+                "allocation_base": "0x00007ff600000000", "state": "MEM_COMMIT",
+                "type": "MEM_IMAGE", "protection": "PAGE_EXECUTE_READWRITE" }]
+}
+```
+
+- **The check reports `INCOMPLETE`, never `CLEAN`,** when an eligible
+  region was skipped or failed to read, and the console names the
+  region(s) to follow up on with `--extract`/`--strings` or an external
+  scanner.
+- **`coverage_status` is `"partial"`** with the skipped regions in
+  `coverage.reasons`, and a score-0 run is therefore `INCONCLUSIVE`
+  instead of `NOT_DETECTED_IN_SCANNED_SCOPE` — the status/coverage pair
+  the output contract requires, and a scan that examined part of its own
+  scope is not a clean bill of health. IOC-scan **read failures** were
+  already counted on the console but likewise left coverage reading
+  `"complete"`; they now downgrade it too.
+- **Scores, verdicts, and findings are unchanged.** A verified content
+  change still scores and still reports `DETECTED` (with
+  `coverage_status: "partial"`), so an oversized region can neither invent
+  nor hide a detection; when the IOC lead does fire, its `limitations` now
+  say how much of the scope the hit list came from.
+
 ## Skipped oversized scan targets are identified, not just counted (schema v2.8)
 
 A hunt that skipped memory for exceeding a scan's size cap used to report

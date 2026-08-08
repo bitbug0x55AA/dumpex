@@ -19,6 +19,33 @@ from dumpex.hunt.stomping.config import MAX_DIFF_RANGES
 from dumpex.hunt.stomping import correlation
 
 
+# Labels for the unscored IOC-string scan's own coverage gaps, in ONE place
+# because THREE consumers describe the same gap: the hunter's
+# coverage_reasons, the stomping.ioc_string_lead Finding's `limitations`,
+# and presentation.py's own IOC check line. Rendered through the shared
+# CoverageTracker.build_reasons, so the VA/size preview matches the
+# structured SCAN_REGION_OVERSIZED_SKIPPED.targets list rather than
+# describing the same skips a second, slightly different way. The wording
+# says "never scanned", not "skipped": an analyst has to be able to tell
+# that this memory was not looked at, not merely that something found in it
+# was suppressed.
+_IOC_OVERSIZE_LABEL    = ("oversized executable module region(s) never scanned for IOC "
+                           "strings")
+_IOC_READ_FAILED_LABEL = "region(s) failed to read and were not scanned for IOC strings"
+_IOC_SHORT_READ_LABEL  = ("region(s) returned fewer bytes than declared and were only "
+                           "partially scanned for IOC strings")
+
+
+def ioc_coverage_reasons(ioc_scan) -> list:
+    """The IOC sub-scan's coverage gaps as human-readable reason strings —
+    empty when the scan got through every eligible region. `presentation`
+    renders these verbatim rather than recomposing its own wording (see
+    that module's docstring: it reads from the Report, never recomputes)."""
+    return ioc_scan.coverage.build_reasons(oversize_label=_IOC_OVERSIZE_LABEL,
+                                            read_failed_label=_IOC_READ_FAILED_LABEL,
+                                            short_read_label=_IOC_SHORT_READ_LABEL)
+
+
 def _ioc_verbose_facts(ioc_hits) -> list:
     """Finding.verbose_facts for stomping.ioc_string_lead -- console/--txt
     --verbose-only, uncapped, per-TOKEN detail (absolute VA, encoding,
@@ -55,6 +82,10 @@ class Report:
     findings: dict
     findings_list: list
     ioc_scan: object = None
+    # The IOC sub-scan's own gap reasons, derived ONCE here (see
+    # ioc_coverage_reasons) so presentation.py renders the same strings
+    # coverage_reasons and the Finding's limitations already carry.
+    ioc_coverage_reasons: list = field(default_factory=list)
     verified_changes: list = field(default_factory=list)
     score: int = 0
     status: str = None
@@ -70,6 +101,7 @@ def build_report(scan, ioc_scan, thread_contexts: list, ref_dir: "str|None",
                 "score": 0, "max_score": 2}
     findings_list = []
     protection_leads = scan.protection_leads
+    ioc_reasons = ioc_coverage_reasons(ioc_scan)
 
     # Finalize verified_changes: RIP correlation (correlation.py) + display
     # truncation, from each raw VerifiedChangeCandidate.
@@ -296,10 +328,13 @@ def build_report(scan, ioc_scan, thread_contexts: list, ref_dir: "str|None",
                        "an investigative lead only and does NOT contribute to the stomping "
                        "score; see stomping.verified_content_change for the only signal "
                        "that scores.",
+            # An IOC lead found in PART of the eligible scope must carry the
+            # unexamined remainder with it: "N regions had IOC strings" is
+            # a floor, not a total, whenever an eligible region was never
+            # read (oversized) or could not be read at all.
             limitations=["Not corroborated by any structural (section/protection) evidence "
-                         "on its own."] + ([f"{ioc_scan.ioc_read_failed} otherwise-eligible region(s) "
-                         f"could not be read and were not scanned for IOC strings."]
-                         if ioc_scan.ioc_read_failed else []),
+                         "on its own."]
+                        + [f"Coverage gap — {reason}." for reason in ioc_reasons],
             tag=TAG_LEAD,
         ))
 
@@ -355,9 +390,46 @@ def build_report(scan, ioc_scan, thread_contexts: list, ref_dir: "str|None",
             coverage_reasons.append(f"{cc['relocation_failed']} section(s) needed "
                                      f"relocation normalization that could not be completed "
                                      f"(unsupported machine type or malformed relocation table)")
+    # The unscored IOC-string sub-scan's own gaps are reported here too —
+    # they are a real limit on what this hunter examined, and were
+    # previously not represented anywhere at all.
+    coverage_reasons.extend(ioc_reasons)
 
     evaluated = mem_info_available and module_list_available
-    complete  = not (scan.read_failed or scan.parse_failed or not content_complete)
+
+    # ── What an incomplete UNSCORED sub-scan does to this hunter's
+    # coverage/status — decided explicitly, not left implicit ───────────
+    # `complete` covers BOTH the scored verified-content diff and the
+    # unscored IOC-string region scan: a region the IOC scan skipped for
+    # being oversized, or could not read, is eligible memory this hunter
+    # never looked at, so nothing here may report "complete". That single
+    # boolean then flows into status the same way it does for every other
+    # hunter (dumpex.hunt._coverage.derive_status), which means a score-0
+    # run with an IOC gap is INCONCLUSIVE rather than
+    # NOT_DETECTED_IN_SCANNED_SCOPE.
+    #
+    # That is deliberate, not an accident of reusing one variable:
+    #
+    #   - coverage_status and status are not independently choosable. The
+    #     wire contract pins the pair (schema hunterRecord: status
+    #     NOT_DETECTED_IN_SCANNED_SCOPE requires coverage.status
+    #     "complete"; INCONCLUSIVE requires "partial"), and the typed
+    #     CoverageReport this package's __init__ builds turns ANY
+    #     limitation into "partial". Recording the skipped regions —
+    #     which is the whole point — therefore settles status too.
+    #   - the alternative (record nothing, keep saying "complete") is
+    #     exactly the bug being fixed: an unexamined 5 MiB+ executable
+    #     mapping reported as a clean, complete scan.
+    #
+    # What an IOC gap still does NOT do: change `score`, `verdict_level`
+    # for a real detection, or suppress any finding. A DETECTED run stays
+    # DETECTED with coverage_status "partial" (derive_status lets a real
+    # hit win over incomplete coverage), so an oversized region can
+    # neither invent nor hide a verified content change — it only stops a
+    # score-0 result from being presented as a clean bill of health over
+    # memory nobody read.
+    complete = not (scan.read_failed or scan.parse_failed or not content_complete
+                     or not ioc_scan.coverage.complete)
     coverage_status = derive_coverage_status(evaluated, complete)
     findings["coverage_status"]  = coverage_status
     findings["coverage_reasons"] = coverage_reasons
@@ -372,6 +444,7 @@ def build_report(scan, ioc_scan, thread_contexts: list, ref_dir: "str|None",
     findings["review_priority"] = review_priority(findings_list, score, status)
 
     return Report(findings=findings, findings_list=findings_list, ioc_scan=ioc_scan,
+                  ioc_coverage_reasons=ioc_reasons,
                   verified_changes=verified_changes, score=score, status=status,
                   coverage_status=coverage_status, coverage_reasons=coverage_reasons,
                   ref_dir=ref_dir)

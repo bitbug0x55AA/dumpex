@@ -953,7 +953,7 @@ re-running the hunt. `targets` names them:
 ```
 
 - `kind` is `"memory_region"` (a MemoryInfoListStream region — `--hunt
-  pipe`, `--hunt obfuscation`) or `"memory_segment"` (a
+  pipe`, `--hunt obfuscation`, `--hunt stomping`) or `"memory_segment"` (a
   Memory64List/MemoryList segment — `--hunt cs-beacon`, `--hunt yara`).
   A segment carries no MemoryInfo, so `allocation_base`/`state`/`type`/
   `protection` are always `null` for one.
@@ -995,6 +995,17 @@ Three region × layer skips over one physical region, each naming its own
 threshold — which also answers the question the sum destroyed: whether a
 region was missed by every layer or only by the strictest one. Deduplicate
 on `targets[*].base_address` to count distinct physical regions.
+
+`source` names the scan the gap belongs to, and one hunter can have more
+than one: `--hunt stomping` reports `section_content_diff` gaps (its
+scored, `--ref-dir` content comparison) and `ioc_string_scan` gaps (its
+unscored IOC-string region scan, capped at 5 MB per executable
+`MEM_IMAGE` region) separately. An `ioc_string_scan` limitation means
+part of the executable module memory was never examined for IOC strings —
+so that check reports `INCOMPLETE` rather than `CLEAN`, `coverage.status`
+is `"partial"`, and a score-0 run is `INCONCLUSIVE` rather than
+`NOT_DETECTED_IN_SCANNED_SCOPE`. It never changes `score`, and a real
+detection stays `DETECTED` with `coverage.status: "partial"`.
 
 `dumpex-output-v2.7.schema.json` stays byte-frozen and remains
 shipped/installable for validating output produced before this change.

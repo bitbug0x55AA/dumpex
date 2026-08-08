@@ -63,6 +63,57 @@ The string-based IOC scan is retained as an unscored, low-confidence
 lead — see hunt/_finding.py for why raw string matches never drive a
 verdict on their own in phase two.
 
+What an INCOMPLETE IOC sub-scan does and does not change
+────────────────────────────────────────────────────────
+That IOC scan skips any otherwise-eligible executable MEM_IMAGE region
+larger than config.IOC_SCAN_MAX (5 MiB); a read of an eligible region can
+also fail outright, or come back with fewer bytes than the region's own
+declared size (a short read still gets its readable prefix scanned -- a
+real hit in it is still reported -- but the region is not fully covered).
+All three are RECORDED, never dropped: the oversized ones keep their full
+region identity (VA, size, dump-file offset, allocation base, state/type/
+protection, and the cap they exceeded) as dumpex.output.coverage.
+ScanTargets on the scan's CoverageTracker, and surface as a
+SCAN_REGION_OVERSIZED_SKIPPED / SCAN_REGION_READ_FAILED /
+SCAN_REGION_SHORT_READ coverage limitation under the `ioc_string_scan`
+source. The deliberate, explicitly-chosen consequences are:
+
+  - the IOC CHECK is rendered INCOMPLETE, never "CLEAN — no IOC patterns
+    in executable module memory": that sentence is a claim about all
+    eligible executable module memory, and it may only be printed when
+    all of it was actually read;
+  - `coverage_status` becomes "partial", with the skipped regions named in
+    `coverage_reasons` — memory that was never read is not covered memory,
+    and the typed CoverageReport turns any limitation into "partial"
+    regardless;
+  - and therefore, at score 0, `status` is INCONCLUSIVE rather than
+    NOT_DETECTED_IN_SCANNED_SCOPE. coverage_status and status are NOT
+    independently choosable: the output contract pins the pair (see the
+    schema's hunterRecord — NOT_DETECTED_IN_SCANNED_SCOPE requires
+    coverage.status "complete"), so recording the gap settles the status
+    too. This applies to the IOC scan's read failures as well, which
+    previously left a run reporting a complete, clean scan;
+  - `score`, `verdict_level` for a detection, and the findings themselves
+    are UNCHANGED. A DETECTED run stays DETECTED with coverage_status
+    "partial" (a real hit wins over incomplete coverage — see
+    dumpex.hunt._coverage.derive_status), so an oversized region can
+    neither invent nor hide a verified content change; it only stops a
+    score-0 result from being presented as a clean bill of health over
+    memory nobody read. See aggregate.build_report for the same decision
+    stated at the point it is applied.
+  - ONE exception to "coverage_status/status move together": if
+    ModuleListStream is absent, `evaluated` is False regardless of the IOC
+    scan (the scored content-diff check needs that stream and never runs
+    at all — see `evaluated = mem_info_available and module_list_available`
+    below), so the hunter is NOT_EVALUATED no matter what the IOC scan
+    found. The IOC scan itself only needs MemoryInfoListStream, so it can
+    still run in this case and still find a real gap — that gap is still
+    surfaced as a coverage.limitations[] entry alongside the otherwise-
+    unrelated NOT_EVALUATED result, rather than silently dropped just
+    because build_coverage_report()'s own group-absent short-circuit fires
+    for the UNRELATED "modules" source. See _stomping_coverage_report
+    below for where this is appended after that call returns.
+
 This is a package, not a single file: memory_scan.py collects module/
 section/protection facts and runs the unscored IOC-string region scan;
 disk_reference.py owns reference-file lookup, build-identity matching,
@@ -109,7 +160,7 @@ from dumpex.hunt._ui import _print_hunt_header
 from dumpex.hunt._runtime import HunterRuntime
 from dumpex.output.coverage import (
     build_coverage_report, observe_source, EvaluationRequirement, SourceRequirement,
-    CoverageLimitation, LimitationCode,
+    CoverageLimitation, LimitationCode, CoverageReport, CoverageStatus,
 )
 
 from dumpex.hunt.stomping.config import PE_VALIDATE_READ_MAX
@@ -120,7 +171,7 @@ from dumpex.hunt.stomping import aggregate
 from dumpex.hunt.stomping import presentation
 
 
-def _stomping_coverage_report(scan, ref_dir, mem_info_available, module_list_available):
+def _stomping_coverage_report(scan, ioc_scan, ref_dir, mem_info_available, module_list_available):
     """Real dumpex.output.coverage.CoverageReport for a stomping run --
     built at each gap site aggregate.build_report() already derives
     coverage_status/coverage_reasons from (never parsed back out of that
@@ -131,10 +182,26 @@ def _stomping_coverage_report(scan, ref_dir, mem_info_available, module_list_ava
     AND-of-presence: EITHER one being absent alone is NOT_EVALUATED,
     unlike a combined group's OR-of-absence semantics (see comparison.py's
     own baseline.modules/target.modules precedent for the same pattern).
-    `reference_files`/`module_headers`/`section_content_diff` are
-    synthetic sources (not real minidump streams), mirroring injection's
-    own `hidden_pe_scan` pattern -- see dumpex.output.coverage's newly
-    added STOMPING_*/MODULE_HEADER_* codes."""
+    `reference_files`/`module_headers`/`section_content_diff`/
+    `ioc_string_scan` are synthetic sources (not real minidump streams),
+    mirroring injection's own `hidden_pe_scan` pattern -- see
+    dumpex.output.coverage's newly added STOMPING_*/MODULE_HEADER_* codes.
+
+    The `ioc_string_scan` limitations come from the UNSCORED IOC-string
+    region scan: an eligible executable MEM_IMAGE region over
+    config.IOC_SCAN_MAX (identified by ScanTarget, not merely counted), one
+    whose read failed, or one that returned fewer bytes than declared.
+    They downgrade coverage.status to "partial" like any other limitation
+    -- see this package's docstring for what that does and does not change
+    about the hunter's verdict.
+
+    These are appended to the report build_coverage_report() itself
+    returns, AFTER that call, rather than folded into `completeness_checks`
+    like every other gap here -- see the comment at the append site for
+    why: this scan can run (and find real gaps) even when the `modules`
+    evaluation-group source is ABSENT, a case build_coverage_report()
+    itself short-circuits to NOT_EVALUATED while discarding every
+    pre-built CoverageLimitation passed to it."""
     cc = scan.coverage_counts
     sources = {
         "memory_info": observe_source("memory_info", present=mem_info_available,
@@ -146,6 +213,7 @@ def _stomping_coverage_report(scan, ref_dir, mem_info_available, module_list_ava
                                            items=["supplied"] if ref_dir is not None else []),
         "section_content_diff": observe_source("section_content_diff", present=True,
                                                 items=["scanned"]),
+        "ioc_string_scan": observe_source("ioc_string_scan", present=True, items=["scanned"]),
     }
     completeness_checks = []
     if scan.read_failed:
@@ -186,11 +254,59 @@ def _stomping_coverage_report(scan, ref_dir, mem_info_available, module_list_ava
                 code=LimitationCode.STOMPING_RELOCATION_FAILED, source="section_content_diff",
                 affected_count=cc["relocation_failed"]))
 
-    return build_coverage_report(
+    report = build_coverage_report(
         sources,
         evaluation_groups=[EvaluationRequirement(("memory_info",)),
                            EvaluationRequirement(("modules",))],
         completeness_checks=completeness_checks)
+
+    # The IOC-string scan's own gaps are appended to the ALREADY-BUILT
+    # report, never folded into `completeness_checks` above like every
+    # other gap in this function. Reason: scan_ioc_strings() only needs
+    # MemoryInfoListStream (it does its own module lookup per-region via
+    # addr_to_module(), tolerating an empty/absent module list) -- so it
+    # can run, and find a REAL oversized/short/failed region, even when
+    # `modules` is ABSENT and the "modules" evaluation_groups member above
+    # fires build_coverage_report()'s own NOT_EVALUATED short-circuit.
+    # That short-circuit unconditionally drops every pre-built
+    # CoverageLimitation passed in `completeness_checks` (see its own
+    # comment: "a pre-built business fact never applies when nothing was
+    # evaluated") -- correct for every OTHER gap here, whose own scan
+    # never ran without `modules`/`memory_info`, but wrong for this one.
+    # Appending here instead means: hunter-level `status` is untouched
+    # (still NOT_EVALUATED when the core module/section walk genuinely
+    # couldn't run -- see aggregate.py's own `evaluated` derivation, which
+    # this does not change), while the one gap this scan actually
+    # observed is never silently dropped from --json purely because a
+    # DIFFERENT part of the hunter had nothing to evaluate. `status` and
+    # `coverage.status` staying literally NOT_EVALUATED here, alongside a
+    # real limitation entry, mirrors the same shape build_coverage_report()
+    # itself already uses for a FAILED (not ABSENT) completeness-check
+    # source under this exact short-circuit -- an established precedent
+    # for "not evaluated overall, but this one fact still gets surfaced",
+    # not a new exception invented here.
+    ioc_coverage = ioc_scan.coverage
+    ioc_limitations = []
+    if ioc_coverage.skipped_oversize:
+        ioc_limitations.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="ioc_string_scan",
+            affected_count=ioc_coverage.skipped_oversize,
+            targets=ioc_coverage.skipped_oversize_targets))
+    if ioc_coverage.read_failed:
+        ioc_limitations.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_READ_FAILED, source="ioc_string_scan",
+            affected_count=ioc_coverage.read_failed))
+    if ioc_coverage.short_reads:
+        ioc_limitations.append(CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_SHORT_READ, source="ioc_string_scan",
+            affected_count=ioc_coverage.short_reads))
+    if not ioc_limitations:
+        return report
+
+    status = (CoverageStatus.PARTIAL if report.status == CoverageStatus.COMPLETE
+              else report.status)
+    return CoverageReport(status=status, sources=report.sources,
+                           limitations=[*report.limitations, *ioc_limitations])
 
 
 def _build_stomping_report(mf: MinidumpFile, ref_dir: str = None):
@@ -319,7 +435,7 @@ def _build_stomping_report(mf: MinidumpFile, ref_dir: str = None):
     report = aggregate.build_report(scan, ioc_scan, thread_contexts, ref_dir,
                                      mem_info_available, module_list_available)
     report.coverage_report = _stomping_coverage_report(
-        scan, ref_dir, mem_info_available, module_list_available)
+        scan, ioc_scan, ref_dir, mem_info_available, module_list_available)
     return report
 
 

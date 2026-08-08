@@ -4195,7 +4195,7 @@
       ]
     },
     "coverageLimitation": {
-      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does. `allOf` below constrains each KNOWN code's disallowed fields to their default (null/[]), pins `source` where fixed, and mirrors the value-shape rules dumpex.output.coverage._CODE_SPECS/CoverageLimitation.__post_init__ enforce that JSON Schema CAN express (minItems, exact array contents, non-null requirements, one-field-implies-another-field dependencies) -- each `if` matches only that one `code` value, so an unrecognized future code matches none of them and stays fully open; `code` itself remains a plain string, not an enum. This is NOT full parity with the Python model: rules comparing two field VALUES for inequality (source != counterpart_source) or against another object's state entirely outside this fragment (counterpart_source's own record_count, a sibling entry in result.coverage.sources) are Python-only and cannot be expressed here -- see CoverageLimitation.__post_init__ and _validate_source_absent_against_sources for those, and, new in schema_version 2.8, SCAN_REGION_OVERSIZED_SKIPPED's own affected_count == len(targets) rule (a count compared against another field's array LENGTH, which JSON Schema cannot express either). Also new in 2.8: three source-keyed branches on SCAN_REGION_OVERSIZED_SKIPPED pin `scope` and every `targets[*].kind` to the fixed contract each known source (`pipe_name_scan`/`segment_scan`/`encoding_scan`) actually produces -- mirroring dumpex.output.coverage._SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS; an unrecognized future `source` value matches none of the three and stays unconstrained on this axis, same as an unrecognized `code`.",
+      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does. `allOf` below constrains each KNOWN code's disallowed fields to their default (null/[]), pins `source` where fixed, and mirrors the value-shape rules dumpex.output.coverage._CODE_SPECS/CoverageLimitation.__post_init__ enforce that JSON Schema CAN express (minItems, exact array contents, non-null requirements, one-field-implies-another-field dependencies) -- each `if` matches only that one `code` value, so an unrecognized future code matches none of them and stays fully open; `code` itself remains a plain string, not an enum. This is NOT full parity with the Python model: rules comparing two field VALUES for inequality (source != counterpart_source) or against another object's state entirely outside this fragment (counterpart_source's own record_count, a sibling entry in result.coverage.sources) are Python-only and cannot be expressed here -- see CoverageLimitation.__post_init__ and _validate_source_absent_against_sources for those, and, new in schema_version 2.8, SCAN_REGION_OVERSIZED_SKIPPED's own affected_count == len(targets) rule (a count compared against another field's array LENGTH, which JSON Schema cannot express either). Also new in 2.8: four source-keyed branches on SCAN_REGION_OVERSIZED_SKIPPED pin `scope` and every `targets[*].kind` to the fixed contract each known source (`pipe_name_scan`/`ioc_string_scan`/`segment_scan`/`encoding_scan`) actually produces -- mirroring dumpex.output.coverage._SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS; an unrecognized future `source` value matches none of the four and stays unconstrained on this axis, same as an unrecognized `code`.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -5205,6 +5205,34 @@
               },
               "source": {
                 "const": "pipe_name_scan"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "scope": {
+                "const": null
+              },
+              "targets": {
+                "items": {
+                  "properties": {
+                    "kind": {
+                      "const": "memory_region"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "code": {
+                "const": "SCAN_REGION_OVERSIZED_SKIPPED"
+              },
+              "source": {
+                "const": "ioc_string_scan"
               }
             }
           },

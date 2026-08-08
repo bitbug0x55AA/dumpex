@@ -7,6 +7,19 @@ REF_FILE_MAX_READ = 64 * 1024 * 1024   # cap on a --ref-dir reference file read;
                                         # legitimate DLLs/EXEs are far smaller,
                                         # this just bounds a pathological input
 
+IOC_SCAN_MAX = 5 * 1024 * 1024   # the unscored IOC-string region scan skips
+                                  # executable MEM_IMAGE regions larger than
+                                  # this (string extraction over a huge
+                                  # mapping is the most expensive thing this
+                                  # hunter does, and it can never score) —
+                                  # every skip is RECORDED as a coverage gap
+                                  # with the region's own identity, never
+                                  # silently dropped: see
+                                  # memory_scan.scan_ioc_strings and this
+                                  # package's docstring for what an
+                                  # incomplete IOC sub-scan does (and does
+                                  # not) change about the hunter's verdict.
+
 MAX_DIFF_RANGES = 20        # cap on how many differing byte ranges are KEPT
                              # for display/facts — a section with more than
                              # this many separate diffs is already

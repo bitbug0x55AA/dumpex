@@ -7,6 +7,8 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import addr_to_module, prot_str, _extract_ioc_strings
 from dumpex.core.pe_utils import (parse_pe_header, expected_protection_name,
     section_protection_deviates)
+from dumpex.hunt._coverage import CoverageTracker, region_scan_target
+from dumpex.hunt.stomping.config import IOC_SCAN_MAX
 from dumpex.hunt.stomping.models import IocScan
 
 # API-name tokens that ALSO commonly appear in benign/legitimate code paths
@@ -99,11 +101,27 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
     Scan every executable MEM_IMAGE region for IOC-pattern strings — an
     unscored, low-confidence lead (see dumpex/hunt/_finding.py for why raw
     string matches never drive a verdict on their own in phase two).
+
+    Every region that passes the eligibility filters (committed,
+    MEM_IMAGE, executable) but is then NOT actually read IN FULL is
+    accounted for on the returned IocScan.coverage: over IOC_SCAN_MAX -> a
+    skipped-oversize ScanTarget carrying that exact region's VA/size/
+    file offset/protection and the cap it exceeded; read raised -> a
+    read-failure count; fewer bytes came back than RegionSize -> a
+    short-read count (the readable prefix is still scanned -- a real hit
+    in it is still a real hit -- but this must not be miscounted as a
+    complete read of the region: a short read that happens to land on an
+    all-zero/patternless prefix is indistinguishable from "nothing here"
+    without this flag, and the unread remainder could hide anything).
+    None of these three may be dropped silently — a scan that examined
+    only part of its own eligible scope must not be renderable as a
+    complete, clean IOC result (see presentation.py / this package's
+    docstring).
     """
     ioc_hits = []
     skipped_wl = []
     weak_only_skipped = []
-    ioc_read_failed = 0
+    coverage = CoverageTracker()
 
     for r in regions:
         mtype = prot_str(r.Type)
@@ -113,7 +131,13 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
             continue
         if "EXECUTE" not in p:
             continue
-        if r.RegionSize > 0x500000:
+        # Eligible from here on, so the next two `continue`s are not filter
+        # misses but coverage gaps -- a region this scan was supposed to
+        # read and didn't. Both are recorded on `coverage`; the `continue`s
+        # further down (no hits / weak-only hits) are results from a region
+        # that WAS fully read, not gaps.
+        if r.RegionSize > IOC_SCAN_MAX:
+            coverage.note_skipped_oversize(region_scan_target(mf, r, IOC_SCAN_MAX))
             continue
 
         mod      = addr_to_module(r.BaseAddress, modules)
@@ -123,8 +147,18 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            ioc_read_failed += 1
+            coverage.note_read_failed()
             continue
+        if len(data) < r.RegionSize:
+            # Fewer bytes came back than the region's own declared size --
+            # not the same as "read fine, nothing here" (see
+            # dumpex.hunt.pipe.memory_scan.scan_pipe_names for the same
+            # distinction). Still scan whatever WAS returned -- a real IOC
+            # hit in the readable prefix is still a real hit -- but this
+            # region must not silently count toward a "complete" IOC scan.
+            coverage.note_short_read()
+            if not data:
+                continue
 
         strings = _extract_ioc_strings(data, r.BaseAddress)
         patterns = ([ioc_patterns] if is_wl else [ioc_patterns, net_ioc_patterns])
@@ -141,4 +175,4 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
         ioc_hits.append((r, mod, hits, not is_wl))
 
     return IocScan(ioc_hits=ioc_hits, skipped_wl=skipped_wl,
-                    weak_only_skipped=weak_only_skipped, ioc_read_failed=ioc_read_failed)
+                    weak_only_skipped=weak_only_skipped, coverage=coverage)
