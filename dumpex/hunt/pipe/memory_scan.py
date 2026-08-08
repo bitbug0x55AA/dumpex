@@ -8,6 +8,7 @@ import os
 import hashlib
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import addr_to_module, prot_str
+from dumpex.hunt._coverage import region_scan_target
 from dumpex.hunt.pipe.config import (PIPE_SCAN_MAX, PIPE_MAX_MATCHES_PER_REGION,
     PIPE_C2_MAX_HITS_PER_REGION, PIPE_C2_CONTEXT_BYTES, PIPE_C2_TOKEN_PREVIEW,
     PIPE_NAME_MAX_CHARS)
@@ -124,7 +125,8 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
         if prot_str(r.State) != "MEM_COMMIT":
             continue
         if r.RegionSize > PIPE_SCAN_MAX:
-            coverage_counts.note_skipped_oversize()
+            coverage_counts.note_skipped_oversize(
+                region_scan_target(mf, r, PIPE_SCAN_MAX))
             continue
         if pipe_name_budget.exhausted() and c2_budget.exhausted():
             break   # nothing left this loop could still usefully collect

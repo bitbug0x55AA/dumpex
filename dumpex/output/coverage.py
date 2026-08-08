@@ -12,7 +12,10 @@ coverage fell short, with human text rendered from its code -- never a
 hand-written string at the call site) -> CoverageReport (the reduction of
 all of a command's sources + limitations into one status) -> a single
 exit_code_for() mapping, so "which status becomes which process exit
-code" is defined exactly once.
+code" is defined exactly once. A limitation whose subject is a specific
+thing that went unexamined also carries typed ScanTarget references
+identifying it (CoverageLimitation.targets), rather than leaving the
+count as the only machine-readable fact.
 
 The reducer (build_coverage_report) is the single place that turns a
 SourceObservation's state into a CoverageLimitation for a source a
@@ -158,6 +161,36 @@ def _require_optional_nonnegative_int(value, field_name: str) -> None:
             not isinstance(value, int) or isinstance(value, bool) or value < 0):
         raise ValueError(
             f"{field_name} must be None or a plain non-negative int (not bool), got {value!r}")
+
+
+def _require_positive_int(value, field_name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        raise ValueError(
+            f"{field_name} must be a plain positive int (not bool), got {value!r}")
+
+
+# The largest value _hex_address()'s f"0x{n:016x}" still renders as
+# exactly 16 hex digits -- one past this overflows into a 17+-digit
+# string that fails the schema's own hexAddress pattern
+# (^0x[0-9a-f]{16}$). A raw Python int has no such ceiling on its own, so
+# ScanTarget's address-typed fields (which the caller could otherwise
+# hand an arbitrary int, unlike base_address values sourced from an
+# actual 8-byte minidump field) must enforce it explicitly at
+# construction time rather than let a value the Python model accepted
+# fail only later, downstream, against the JSON Schema.
+_UINT64_MAX = 0xffffffffffffffff
+
+
+def _require_uint64(value, field_name: str) -> None:
+    if not isinstance(value, int) or isinstance(value, bool) or not (0 <= value <= _UINT64_MAX):
+        raise ValueError(
+            f"{field_name} must be a plain int in [0, {_UINT64_MAX:#x}] (a uint64 address, "
+            f"not bool), got {value!r}")
+
+
+def _require_optional_uint64(value, field_name: str) -> None:
+    if value is not None:
+        _require_uint64(value, field_name)
 
 
 def _normalize_tuple(value, field_name: str) -> tuple:
@@ -461,7 +494,17 @@ class LimitationCode(str, Enum):
     # CoverageTracker's generic skipped_oversize/read_failed/short_reads
     # counters (pipe's memory-string scan, obfuscation's seven decode-
     # layer scans) rather than each minting its own near-identical code.
-    # caller_buildable; affected_count.
+    # caller_buildable. Unlike its READ_FAILED/SHORT_READ companions, this
+    # one is NOT count-only: `targets` carries a ScanTarget per skipped
+    # region/segment (VA, size, file offset, MemoryInfo facts, and the cap
+    # it exceeded) and affected_count must equal len(targets) exactly --
+    # "coverage is partial" is not actionable without knowing WHICH
+    # addresses to go extract, rescan, or recollect. `scope` names the
+    # scan LAYER when a hunter runs several with different caps over
+    # overlapping regions (obfuscation's sleep_mask/entropy/decode): one
+    # limitation per layer, so a single physical region skipped by three
+    # layers reads as three region x layer skips rather than being summed
+    # into a bogus "3 regions" count.
     SCAN_REGION_READ_FAILED = "SCAN_REGION_READ_FAILED"
     # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED: N region(s) a scan
     # could not read at all (raised/returned nothing usable).
@@ -542,6 +585,196 @@ class LimitationCode(str, Enum):
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
 LIMITATION_SOURCE_KEY_MISMATCH = LimitationCode.SOURCE_KEY_MISMATCH
+
+
+# ── Scan targets ──────────────────────────────────────────────────────────
+# A coverage limitation whose whole point is "this specific thing was NOT
+# looked at" is not operationally actionable as a bare count: an analyst
+# reading `SCAN_REGION_OVERSIZED_SKIPPED, affected_count: 2` learns that
+# the result is incomplete but not WHICH virtual addresses need targeted
+# extraction, a rescan, or a wider recollection. ScanTarget is the typed
+# reference that closes that gap -- carried on the limitation itself
+# (see CoverageLimitation.targets), deliberately NOT smuggled into a
+# hunter-specific `details` blob, so every hunter identifies its skipped
+# targets the same way and a single JSON consumer can read all of them.
+
+class ScanTargetKind(str, Enum):
+    MEMORY_REGION  = "memory_region"    # a MemoryInfoListStream region
+    MEMORY_SEGMENT = "memory_segment"   # a Memory64List/MemoryList segment
+
+
+SCAN_TARGET_MEMORY_REGION  = ScanTargetKind.MEMORY_REGION
+SCAN_TARGET_MEMORY_SEGMENT = ScanTargetKind.MEMORY_SEGMENT
+
+
+def _hex_address(n) -> "str | None":
+    """dumpex's fixed-width (16 hex digit, zero-padded, lowercase, "0x"-
+    prefixed) address convention -- byte-identical to dumpex.output.
+    records.hex_address(), which this module cannot import: records.py
+    imports THIS module (CoverageReport), and the dependency direction
+    domain model -> output adapter must not be reversed for a four-line
+    formatter. The wire shape is pinned by the schema's own hexAddress
+    $def either way, and test_output_coverage.py asserts the two agree."""
+    return None if n is None else f"0x{n:016x}"
+
+
+def _format_bytes(n: int) -> str:
+    """Exact-unit byte formatting for rendered limitation text -- never
+    rounds down to a unit the value isn't a whole multiple of (mirrors
+    dumpex.hunt.yara_hunt.scanner._format_size, whose own docstring
+    explains why `n // (1024*1024)` reporting "0 MB" for a 512 KiB cap is
+    a real bug rather than cosmetic)."""
+    if n and n % (1024 * 1024) == 0:
+        return f"{n // (1024 * 1024)} MB"
+    if n and n % 1024 == 0:
+        return f"{n // 1024} KB"
+    return f"{n} bytes"
+
+
+@dataclass(frozen=True)
+class ScanTarget:
+    """ONE region/segment a scan did not examine, with enough identity for
+    an analyst to disposition the gap without re-running the whole hunt:
+    what kind of thing it is, where it lives (VA, and the dump-file byte
+    offset when the bytes were actually captured), how big it is, and
+    which configured cap it exceeded.
+
+    `size_limit` is the threshold that caused the skip, stored per target
+    rather than once per limitation on purpose: the SAME physical region
+    can exceed several different scan layers' caps (obfuscation's
+    sleep-mask 10 MiB, entropy 10 MiB and decode 2 MiB limits all apply to
+    overlapping region sets), and a reader must be able to tell "one
+    region skipped by three layers" from "three regions skipped". WHICH
+    layer is named by the owning CoverageLimitation's own `scope` -- one
+    limitation per scan layer, never a merged list (see
+    dumpex.hunt.encoding.aggregate), so the layer is recorded exactly once
+    instead of being duplicated onto every target where it could drift.
+
+    `allocation_base`/`state`/`type`/`protection` are the MemoryInfo facts
+    that let a reader decide whether the gap covers executable private
+    memory or an ordinary large heap/mapping; they stay None for a
+    segment-table target, which carries no MemoryInfo at all."""
+    kind: ScanTargetKind
+    base_address: int
+    size: int
+    size_limit: int
+    file_offset: "int | None" = None       # byte offset into the .dmp, not an address
+    allocation_base: "int | None" = None
+    state: "str | None" = None             # e.g. "MEM_COMMIT"
+    type: "str | None" = None              # e.g. "MEM_PRIVATE"
+    protection: "str | None" = None        # e.g. "PAGE_READWRITE"
+
+    def __post_init__(self):
+        object.__setattr__(self, "kind", ScanTargetKind(self.kind))
+        # base_address/allocation_base are address-typed (rendered through
+        # _hex_address()'s fixed-width f"0x{n:016x}"), so they're bounded
+        # to a real uint64 -- unlike file_offset, a plain byte count with
+        # no such ceiling in the schema. A value the Python model accepted
+        # but that overflowed 16 hex digits would fail validation only
+        # later, against the JSON Schema, downstream of where the mistake
+        # was actually made.
+        _require_uint64(self.base_address, "ScanTarget.base_address")
+        _require_positive_int(self.size, "ScanTarget.size")
+        _require_positive_int(self.size_limit, "ScanTarget.size_limit")
+        # A target only belongs on an oversized-skip limitation if it
+        # genuinely exceeded the cap -- a target whose size fits inside
+        # size_limit would be evidence AGAINST the very claim the
+        # limitation makes, and is far more likely a caller passing the
+        # wrong region than a real gap.
+        if self.size <= self.size_limit:
+            raise ValueError(
+                f"ScanTarget.size ({self.size}) must exceed size_limit ({self.size_limit}) "
+                f"-- a target that fits inside the cap was not skipped for being oversized")
+        _require_optional_nonnegative_int(self.file_offset, "ScanTarget.file_offset")
+        _require_optional_uint64(self.allocation_base, "ScanTarget.allocation_base")
+        _require_optional_str(self.state, "ScanTarget.state")
+        _require_optional_str(self.type, "ScanTarget.type")
+        _require_optional_str(self.protection, "ScanTarget.protection")
+        if self.kind == ScanTargetKind.MEMORY_SEGMENT and any(
+                v is not None for v in (self.allocation_base, self.state,
+                                         self.type, self.protection)):
+            raise ValueError(
+                "ScanTarget(kind=memory_segment) carries no MemoryInfo -- allocation_base/"
+                "state/type/protection must stay None; use kind=memory_region for a "
+                "MemoryInfoListStream region")
+
+    def to_dict(self) -> dict:
+        """Addresses follow dumpex's fixed-width hex convention;
+        `file_offset` stays a plain byte offset (it is a position inside
+        the .dmp file, not an address in the target's address space)."""
+        return {
+            "kind":            self.kind.value,
+            "base_address":    _hex_address(self.base_address),
+            "size":            self.size,
+            "size_limit":      self.size_limit,
+            "file_offset":     self.file_offset,
+            "allocation_base": _hex_address(self.allocation_base),
+            "state":           self.state,
+            "type":            self.type,
+            "protection":      self.protection,
+        }
+
+    def describe(self) -> str:
+        """The one-target fragment the console preview is built from --
+        VA first (what an analyst pastes into --extract/--strings), then
+        the size and the cap it blew past."""
+        return (f"{_hex_address(self.base_address)} "
+                f"({_format_bytes(self.size)} > {_format_bytes(self.size_limit)} limit)")
+
+
+def _normalize_scan_target_tuple(value, field_name: str) -> tuple:
+    value = _normalize_tuple(value, field_name)
+    # Exact type, not isinstance: a subclass could override to_dict()/
+    # describe() and put arbitrary content on the wire under a shape the
+    # schema says is closed (same reasoning the hunt evidence model uses
+    # for rejecting Correlation subclasses).
+    if any(type(v) is not ScanTarget for v in value):
+        raise ValueError(
+            f"{field_name} must contain only ScanTarget instances, got "
+            f"{[type(v).__name__ for v in value]!r}")
+    return value
+
+
+# How many targets the RENDERED text names before it stops and points at
+# the JSON. The machine-readable list is never truncated -- only this
+# human preview is (see format_scan_target_preview).
+_TARGET_PREVIEW_LIMIT = 3
+
+
+def scan_target_noun(targets) -> str:
+    """The right plural noun for a list of ScanTargets -- "region(s)" for
+    memory_region, "segment(s)" for memory_segment, or the neutral
+    "target(s)" when a list mixes both kinds (defensive: no production
+    call site builds a mixed-kind list today, since one hunter's own
+    skip-site always feeds one kind, but the renderer must not silently
+    mislabel a segment as a region if that ever changes -- see the
+    cs-beacon/YARA fix this exists for, where the fixed word "region(s)"
+    was wrong for segment-table skips)."""
+    kinds = {t.kind for t in targets}
+    if kinds == {ScanTargetKind.MEMORY_REGION}:
+        return "region(s)"
+    if kinds == {ScanTargetKind.MEMORY_SEGMENT}:
+        return "segment(s)"
+    return "target(s)"
+
+
+def format_scan_target_preview(targets, limit: int = _TARGET_PREVIEW_LIMIT) -> str:
+    """The bounded, human-readable target list shared by the JSON-facing
+    renderer (_render_scan_region_oversized_skipped) and the v1.1
+    `coverage_reasons` strings hunters still build from their own
+    CoverageTracker (dumpex.hunt._coverage.CoverageTracker.build_reasons)
+    -- one implementation so the console and --json never drift into
+    describing the same skips differently. Only the TEXT is bounded; the
+    full list always ships in the JSON, and the overflow clause says so
+    rather than truncating silently."""
+    targets = tuple(targets)
+    shown = targets[:limit]
+    listed = ", ".join(t.describe() for t in shown)
+    remaining = len(targets) - len(shown)
+    if remaining:
+        return f"{listed}, +{remaining} more (see coverage.limitations[].targets in --json output)"
+    return listed
+
 
 # PID_SOURCES_ABSENT's rendered sentence names these three sources
 # explicitly and only these -- it must never be selected for, or attached
@@ -810,7 +1043,21 @@ def _render_stomping_relocation_failed(limitation: "CoverageLimitation") -> str:
 
 
 def _render_scan_region_oversized_skipped(limitation: "CoverageLimitation") -> str:
-    return f"{limitation.affected_count} oversized region(s) skipped"
+    """`scope`, when set, names the SCAN LAYER whose own cap did the
+    skipping -- obfuscation runs three layers with three different caps
+    over overlapping region sets, so "N oversized region(s) skipped" with
+    no layer named is genuinely ambiguous there (see this code's own enum
+    comment). The noun ("region(s)" vs "segment(s)") is derived from the
+    targets' own `kind`, never hardcoded -- this code's name says "REGION"
+    but cs-beacon/YARA attach it to memory_segment targets (Memory64List
+    entries, not MemoryInfo regions), and the rendered text must not
+    mislabel what was actually skipped. The target preview is bounded; the
+    full list always stays in the JSON, and the text says so rather than
+    silently truncating."""
+    layer = f" by the {limitation.scope} scan" if limitation.scope else ""
+    noun = scan_target_noun(limitation.targets)
+    return (f"{limitation.affected_count} oversized {noun} skipped{layer}: "
+            f"{format_scan_target_preview(limitation.targets)}")
 
 
 def _render_scan_region_read_failed(limitation: "CoverageLimitation") -> str:
@@ -884,6 +1131,79 @@ def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimi
                 f"CoverageLimitation(code={code_label}) requires affected_count to be a "
                 f"positive integer, got {limitation.affected_count!r}")
     return _validate
+
+
+# Per-`source` contract for SCAN_REGION_OVERSIZED_SKIPPED: which
+# ScanTargetKind that source's own scan loop can possibly produce, and
+# which `scope` values are legal for it. `source` itself stays an open
+# vocabulary (see this code's own enum comment -- unlike the fixed_source
+# codes elsewhere in this module, a new hunter can use this code with a
+# source name not listed here), so a source absent from this dict is
+# simply not checked -- this closes the contract only for the sources
+# that already exist today, without blocking a future one.
+#
+# `None` in the scope set means "no scope at all" (pipe_name_scan/
+# segment_scan, which run exactly one scan loop -- see dumpex.hunt.pipe/
+# dumpex.hunt.cs_beacon/dumpex.hunt.yara_hunt's own coverage-report
+# builders); encoding_scan is the one source that runs three independent
+# layers over overlapping region sets and therefore requires `scope` to
+# say WHICH one (see dumpex.hunt.encoding.aggregate.OVERSIZE_SCAN_LAYERS
+# -- this module cannot import that constant directly, since the
+# dependency direction is domain model -> output adapter, never
+# backwards, so the three layer names are duplicated here as the wire
+# contract rather than imported).
+_SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS = {
+    "pipe_name_scan": (ScanTargetKind.MEMORY_REGION, frozenset({None})),
+    "segment_scan":   (ScanTargetKind.MEMORY_SEGMENT, frozenset({None})),
+    "encoding_scan":  (ScanTargetKind.MEMORY_REGION,
+                        frozenset({"sleep_mask", "entropy", "decode"})),
+}
+
+
+def _validate_scan_region_oversized_skipped_fields(limitation: "CoverageLimitation") -> None:
+    """`affected_count` on this code means exactly one thing: how many
+    entries `targets` holds. Anything else reopens the ambiguity this
+    code's targets list exists to close -- a count that disagrees with the
+    emitted targets leaves a consumer with two contradictory answers to
+    "how many things were skipped", and an empty targets list is the old,
+    unactionable bare-count shape all over again.
+
+    For a KNOWN source (see _SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_
+    CONTRACTS), `scope` and every target's own `kind` are additionally
+    checked against that source's fixed contract -- e.g. `segment_scan`
+    (cs-beacon/YARA) can only ever produce memory_segment targets, and
+    `encoding_scan` (obfuscation) requires `scope` to name one of its
+    three real layers, never an unscoped or misspelled value. Schema
+    validation alone cannot express this (a source string and a target's
+    kind are two different fields on two different objects), so it is
+    enforced here, at construction time, for every source this module
+    already knows about."""
+    _require_positive_affected_count("SCAN_REGION_OVERSIZED_SKIPPED")(limitation)
+    if not limitation.targets:
+        raise ValueError(
+            "CoverageLimitation(code=SCAN_REGION_OVERSIZED_SKIPPED) requires a non-empty "
+            "targets tuple -- an oversized skip must identify the region/segment it "
+            "skipped, not just count it")
+    if limitation.affected_count != len(limitation.targets):
+        raise ValueError(
+            f"CoverageLimitation(code=SCAN_REGION_OVERSIZED_SKIPPED).affected_count="
+            f"{limitation.affected_count!r} must equal len(targets)="
+            f"{len(limitation.targets)} -- the count and the emitted targets must agree")
+
+    contract = _SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS.get(limitation.source)
+    if contract is None:
+        return
+    expected_kind, allowed_scopes = contract
+    if limitation.scope not in allowed_scopes:
+        raise ValueError(
+            f"CoverageLimitation(code=SCAN_REGION_OVERSIZED_SKIPPED, source={limitation.source!r}) "
+            f"requires scope to be one of {sorted(s for s in allowed_scopes if s)!r}"
+            f"{' or unset' if None in allowed_scopes else ''}, got {limitation.scope!r}")
+    wrong_kind = [t.kind.value for t in limitation.targets if t.kind != expected_kind]
+    if wrong_kind:
+        raise ValueError(
+            f"CoverageLimitation(code=SCAN_REGION_OVERSIZED_SKIPPED, source={limitation.source!r}) "
+            f"requires every target's kind to be {expected_kind.value!r}, got {wrong_kind!r}")
 
 
 def _render_pid_sources_absent(limitation: "CoverageLimitation") -> str:
@@ -1235,8 +1555,8 @@ _CODE_SPECS = {
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED: _CodeSpec(
         render=_render_scan_region_oversized_skipped, caller_buildable=True,
-        validate_fields=_require_positive_affected_count("SCAN_REGION_OVERSIZED_SKIPPED"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_validate_scan_region_oversized_skipped_fields,
+        allowed_fields=frozenset({"scope", "affected_count", "targets"})),
     LimitationCode.SCAN_REGION_READ_FAILED: _CodeSpec(
         render=_render_scan_region_read_failed, caller_buildable=True,
         validate_fields=_require_positive_affected_count("SCAN_REGION_READ_FAILED"),
@@ -1323,6 +1643,7 @@ _STRUCTURED_FIELD_DEFAULTS = {
     "related_tids": (),
     "thread_id": None,
     "detail": None,
+    "targets": (),
 }
 
 
@@ -1339,7 +1660,10 @@ class CoverageLimitation:
     `related_sources` is SOURCE_GROUP_ABSENT's full source list, in
     caller-declared order. `related_tids` is PID_THREAD_LIST_FALLBACK's
     full TID list (the renderer truncates/formats it, never the caller).
-    `thread_id` is PID_EXCEPTION_TID_FALLBACK's single TID. Human text is
+    `thread_id` is PID_EXCEPTION_TID_FALLBACK's single TID. `targets` is
+    the typed list of region/segment references a scan-coverage code
+    (today: SCAN_REGION_OVERSIZED_SKIPPED) identifies as the exact things
+    it did not examine -- see ScanTarget. Human text is
     never written at the call site -- see render_limitation(). `code` is
     a closed vocabulary (unlike `source`, which stays open) since every
     branch of render_limitation() is hand-written per code; an
@@ -1356,6 +1680,7 @@ class CoverageLimitation:
     related_tids: tuple = field(default_factory=tuple)
     thread_id: "int | None" = None
     detail: "str | None" = None   # SOURCE_FAILED only: the underlying error text
+    targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
 
     def __post_init__(self):
         object.__setattr__(self, "code", LimitationCode(self.code))
@@ -1375,6 +1700,8 @@ class CoverageLimitation:
             self.related_sources, "CoverageLimitation.related_sources"))
         object.__setattr__(self, "related_tids",
                             _normalize_tuple(self.related_tids, "CoverageLimitation.related_tids"))
+        object.__setattr__(self, "targets", _normalize_scan_target_tuple(
+            self.targets, "CoverageLimitation.targets"))
         spec = _CODE_SPECS[self.code]
         if spec.min_related_sources is not None and len(self.related_sources) < spec.min_related_sources:
             raise ValueError(
@@ -1426,6 +1753,7 @@ class CoverageLimitation:
             "related_tids": list(self.related_tids),
             "thread_id": self.thread_id,
             "detail": self.detail,
+            "targets": [t.to_dict() for t in self.targets],
         }
 
 

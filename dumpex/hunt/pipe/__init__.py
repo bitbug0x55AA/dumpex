@@ -112,7 +112,8 @@ def _pipe_coverage_report(mem_info_available, handle_stream_available, coverage_
     if coverage_counts.skipped_oversize:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="pipe_name_scan",
-            affected_count=coverage_counts.skipped_oversize))
+            affected_count=coverage_counts.skipped_oversize,
+            targets=coverage_counts.skipped_oversize_targets))
     if coverage_counts.read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="pipe_name_scan",

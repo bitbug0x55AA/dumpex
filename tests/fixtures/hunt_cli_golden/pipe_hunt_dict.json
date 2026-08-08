@@ -12,6 +12,7 @@
         "related_tids": [],
         "scope": null,
         "source": "pipe_name_scan",
+        "targets": [],
         "thread_id": null,
         "unavailable_fields": []
       }

@@ -36,6 +36,53 @@ from dataclasses import dataclass, field
 from dumpex.hunt._ui import (
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE,
 )
+from dumpex.core.memory import prot_str, va_to_file_offset
+from dumpex.output.coverage import (
+    ScanTarget, ScanTargetKind, format_scan_target_preview,
+)
+
+
+def region_scan_target(mf, region, size_limit: int) -> ScanTarget:
+    """A ScanTarget for one MemoryInfoListStream region a scan skipped for
+    exceeding `size_limit`. The ONE place a raw minidump region becomes a
+    skipped-target reference -- pipe's memory scan and all three of
+    obfuscation's layer scans go through this rather than each
+    re-deriving the same seven fields (and each getting a slightly
+    different answer for, say, whether `AllocationBase` is present).
+
+    `file_offset` is looked up per skipped region rather than for every
+    region walked: this only runs on the skip path, which is rare by
+    construction (a region has to be over the layer's cap to get here)."""
+    base = region.BaseAddress
+    return ScanTarget(
+        kind=ScanTargetKind.MEMORY_REGION,
+        base_address=base,
+        size=region.RegionSize,
+        size_limit=size_limit,
+        # None when the region's bytes were never written to the .dmp at
+        # all -- an important distinction for an investigator deciding
+        # between "extract it from this dump" and "recollect".
+        file_offset=va_to_file_offset(mf, base),
+        allocation_base=getattr(region, "AllocationBase", None),
+        state=prot_str(region.State),
+        type=prot_str(region.Type),
+        protection=prot_str(region.Protect),
+    )
+
+
+def segment_scan_target(segment, size_limit: int) -> ScanTarget:
+    """A ScanTarget for one memory-segment-table entry (CS Beacon/YARA
+    scan over Memory64List/MemoryList) skipped for exceeding
+    `size_limit`. A segment carries no MemoryInfo, so state/type/
+    protection stay unset -- but its own `start_file_address` IS the file
+    offset, no VA translation needed."""
+    return ScanTarget(
+        kind=ScanTargetKind.MEMORY_SEGMENT,
+        base_address=segment.start_virtual_address,
+        size=segment.size,
+        size_limit=size_limit,
+        file_offset=segment.start_file_address,
+    )
 
 
 def derive_coverage_status(evaluated: bool, complete: bool) -> str:
@@ -78,7 +125,10 @@ class CoverageTracker:
     Reusable accumulator for the generic shape a "scan every region/item,
     skip/fail on some of them" loop keeps running into across hunters:
     how many items existed, how many were actually scanned, and how many
-    were skipped/failed for each of a handful of common reasons.
+    were skipped/failed for each of a handful of common reasons. The
+    oversized-skip reason additionally retains the items themselves (see
+    skipped_oversize_targets) -- the only gap here a caller can act on
+    directly, and only if it knows which addresses were missed.
 
     Not every hunter's coverage gaps fit this generic shape exactly —
     the verified-content-diff loop in dumpex.hunt.stomping has several
@@ -96,15 +146,32 @@ class CoverageTracker:
     """
     total:            int = 0   # eligible items found (before any skip/fail)
     scanned:          int = 0   # items actually read and analyzed
-    skipped_oversize: int = 0   # eligible item skipped only for exceeding a size cap
     read_failed:      int = 0   # read raised/returned nothing usable
     short_reads:      int = 0   # read succeeded but returned less than expected
     timed_out:        int = 0   # abandoned once a deadline was hit
     budget_exhausted: bool = False
     reasons: list = field(default_factory=list)
+    # One ScanTarget per eligible item skipped ONLY for exceeding a size
+    # cap. Unlike the other gap reasons, this one keeps the item itself,
+    # not just a tally: "coverage is partial" is not actionable unless an
+    # investigator can see WHICH virtual addresses to go extract, rescan,
+    # or recollect (see dumpex.output.coverage.ScanTarget).
+    skipped_oversize_targets: list = field(default_factory=list)
 
-    def note_skipped_oversize(self):
-        self.skipped_oversize += 1
+    @property
+    def skipped_oversize(self) -> int:
+        """Derived, never stored: the count and the retained targets are
+        the same fact, so there is nothing for them to drift apart on."""
+        return len(self.skipped_oversize_targets)
+
+    def note_skipped_oversize(self, target: ScanTarget):
+        """`target` is required -- a skip that can't name what it skipped
+        is exactly the unactionable shape this tracker moved away from."""
+        if type(target) is not ScanTarget:
+            raise TypeError(
+                f"note_skipped_oversize() requires a ScanTarget identifying the skipped "
+                f"region/segment, got {type(target).__name__}")
+        self.skipped_oversize_targets.append(target)
 
     def note_read_failed(self):
         self.read_failed += 1
@@ -136,7 +203,12 @@ class CoverageTracker:
         """
         out = []
         if self.skipped_oversize:
-            out.append(f"{self.skipped_oversize} {oversize_label}")
+            # Same bounded VA/size preview the structured limitation
+            # renders (dumpex.output.coverage.format_scan_target_preview),
+            # so the console reason and --json's own coverage.reasons
+            # describe the identical skips identically.
+            out.append(f"{self.skipped_oversize} {oversize_label}: "
+                        f"{format_scan_target_preview(self.skipped_oversize_targets)}")
         if self.read_failed:
             out.append(f"{self.read_failed} {read_failed_label}")
         if self.short_reads:

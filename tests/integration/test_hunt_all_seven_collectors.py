@@ -3,7 +3,7 @@ End-to-end integration test for PR2b: run all 7 hunters' real
 collect_*_record() functions against ONE shared synthetic MinidumpFile,
 feed the resulting 7 HunterRecords through the real
 dumpex.hunt.summary.build_hunt_summary() reducer, and confirm the whole
-envelope validates against dumpex-output-v2.7.schema.json -- the exact
+envelope validates against dumpex-output-v2.8.schema.json -- the exact
 shape `--hunt all`'s real CLI wiring (`cli.py` -> `dumpex.hunt.
 collect_hunt()`, shipped in PR4) produces, built here independently of
 that CLI/dispatcher code (see tests/integration/
@@ -31,7 +31,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def validator():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema)
@@ -78,7 +78,7 @@ def test_all_seven_collectors_feed_the_real_summary_reducer_and_validate(validat
 
     doc = {
         "meta": {
-            "schema_version": "2.7",
+            "schema_version": "2.8",
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "x", "finished_at": "y", "duration_seconds": 1,
                           "command": "hunt_all", "options": {"hunt": "all"}},

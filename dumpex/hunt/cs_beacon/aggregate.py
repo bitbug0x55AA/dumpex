@@ -84,7 +84,7 @@ def build_report(scan_outcome, hit_records: list, mem_info_available: bool,
     complete = (scan_outcome.coverage.complete and not scan_outcome.budget_exhausted
                 and mem_info_available)
     coverage_reasons = scan_outcome.coverage.build_reasons(
-        oversize_label="oversized segment(s) (>50 MB) skipped",
+        oversize_label="oversized segment(s) skipped",
         read_failed_label="segment(s) failed to read",
         short_read_label="segment(s) returned fewer bytes than declared (short read) — "
                           "not fully scanned",

@@ -5,6 +5,75 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Skipped oversized scan targets are identified, not just counted (schema v2.8)
+
+A hunt that skipped memory for exceeding a scan's size cap used to report
+only a tally, which told an investigator the result was incomplete but not
+which addresses to act on:
+
+```jsonc
+// before (schema v2.7)
+{ "code": "SCAN_REGION_OVERSIZED_SKIPPED", "source": "pipe_name_scan", "affected_count": 2 }
+```
+
+Every such limitation now carries a `targets` array naming exactly what
+was skipped — kind (memory region vs. memory segment), virtual address,
+size, dump-file offset, allocation base/state/type/protection where
+MemoryInfo is available, and the configured cap the target exceeded:
+
+```jsonc
+// after (schema v2.8)
+{
+  "code": "SCAN_REGION_OVERSIZED_SKIPPED", "source": "pipe_name_scan",
+  "affected_count": 1,
+  "targets": [{ "kind": "memory_region", "base_address": "0x00007ff000001000",
+                "size": 16777216, "size_limit": 8388608, "file_offset": 4096,
+                "allocation_base": "0x00007ff000000000", "state": "MEM_COMMIT",
+                "type": "MEM_PRIVATE", "protection": "PAGE_EXECUTE_READWRITE" }]
+}
+```
+
+The gap can now be dispositioned directly: check whether it covers
+executable private memory or an ordinary large mapping, run `--extract`/
+`--strings` against the address, rescan it with another tool, or decide a
+broader recollection is needed. Applies to `--hunt pipe` (regions over
+8 MB), `--hunt cs-beacon` and `--hunt yara` (segments over 50 MB), and
+`--hunt obfuscation` (sleep-mask/entropy regions over 10 MB, decode
+regions over 2 MB).
+
+- **`affected_count` now has one unambiguous meaning** — it equals
+  `targets`' length exactly.
+- **Console and `--txt`** show a bounded preview (address, size, and the
+  limit it exceeded) with `+N more (see coverage.limitations[].targets in
+  --json output)` when the list is abbreviated; `--json` always carries
+  the complete list.
+- **Every other limitation code emits `targets: []`.** A consumer that
+  ignores the new key sees the v2.7 shape unchanged.
+- **The rendered noun matches what was actually skipped.** `--hunt
+  cs-beacon` and `--hunt yara` attach this code to Memory64List/MemoryList
+  *segments*, not MemoryInfo regions — the rendered text (both
+  `coverage.reasons` and the console verdict line) now says `segment(s)`
+  there, not `region(s)`.
+
+### Fixed: `--hunt obfuscation` no longer double-counts skipped regions
+
+Obfuscation runs three region scans with three different size caps
+(sleep-mask 10 MB, entropy 10 MB, decode 2 MB) over overlapping candidate
+sets, and used to sum their counters into a single `N oversized region(s)
+skipped`. One 12 MB private region exceeds all three caps, so that sum
+reported **three regions** where there was one. It now emits one
+limitation per scan layer, each carrying `scope`
+(`sleep_mask`/`entropy`/`decode`), its own targets, and its own
+threshold — three region × layer skips over one physical region, which is
+what actually happened. Deduplicate on `targets[*].base_address` to count
+distinct regions. Coverage status, scores, verdicts, and findings are
+unchanged.
+
+`dumpex-output-v2.7.schema.json` stays frozen and installable for
+validating output produced before this change; see
+[docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md) for the full `scanTarget`
+shape.
+
 ## CSV output removed
 
 The `--csv` option has been removed. Structured results are now exported

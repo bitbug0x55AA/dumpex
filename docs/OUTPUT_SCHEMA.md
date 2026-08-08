@@ -24,11 +24,12 @@ promise. Automation must use `--json`, never scrape `--txt`.
 
 Every command now shares a single JSON contract. `--hunt` was the last
 holdout on the older v1.1 contract; it has since migrated onto v2, and
-the whole v2 envelope has since moved onto v2.7:
+the whole v2 envelope has since moved onto v2.8:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.7 (current) | [`dumpex-output-v2.7.schema.json`](../dumpex/schemas/dumpex-output-v2.7.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.8 (current) | [`dumpex-output-v2.8.schema.json`](../dumpex/schemas/dumpex-output-v2.8.schema.json) |
+| — (historical) | v2.7 | [`dumpex-output-v2.7.schema.json`](../dumpex/schemas/dumpex-output-v2.7.schema.json) — frozen, kept only to validate output produced before `schema_version 2.8`; no command emits this anymore |
 | — (historical) | v2.6 | [`dumpex-output-v2.6.schema.json`](../dumpex/schemas/dumpex-output-v2.6.schema.json) — frozen, kept only to validate output produced before `schema_version 2.7`; no command emits this anymore |
 | — (historical) | v2.5 | [`dumpex-output-v2.5.schema.json`](../dumpex/schemas/dumpex-output-v2.5.schema.json) — frozen, kept only to validate output produced before `schema_version 2.6`; no command emits this anymore |
 | — (historical) | v2.4 | [`dumpex-output-v2.4.schema.json`](../dumpex/schemas/dumpex-output-v2.4.schema.json) — frozen, kept only to validate output produced before `schema_version 2.5`; no command emits this anymore |
@@ -60,7 +61,14 @@ property from each field's own value (see "Hunt records" below — UNLIKE
 the 2.6 change, this one IS visible as a `$defs` diff: `fields` itself
 gained a `propertyNames` pattern and a per-field `additionalProperties:
 false` shape, specifically so a document still shaped like 2.6 fails
-validation against 2.7 rather than silently passing)
+validation against 2.7 rather than silently passing), then from `"2.7"`
+to `"2.8"` when the shared `coverageLimitation` $def gained a `targets`
+array (and the `scanTarget` $def it holds), so a limitation reporting
+that a scan skipped something can identify WHAT it skipped rather than
+only counting it (see "Coverage limitations and skipped scan targets"
+below — `coverageLimitation` is `additionalProperties: false` with a
+closed `required` list, so this too is a visible, validator-enforced
+`$defs` diff)
 (see "v2 structured output" below) — a
 new value on an existing closed enum, a new field on an already-closed
 (`additionalProperties: false`) object, or the removal of a field a
@@ -68,21 +76,23 @@ command has ever actually emitted (whether or not the schema itself
 enforced that field's presence), always bumps the version per this
 document's own versioning policy, even though an already-migrated
 command's own output is otherwise unaffected (the `"report"`/`"hunt"`/
-`finding`-extension/cs-beacon-`raw`-removal/cs-beacon-field-rekey changes
+`finding`-extension/cs-beacon-`raw`-removal/cs-beacon-field-rekey/
+coverage-`targets` changes
 specifically must NOT be folded into `dumpex-output-v2.2.schema.json`/
-`v2.3.schema.json`/`v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`
+`v2.3.schema.json`/`v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/
+`v2.7.schema.json`
 in place: those files were already shipped/used by earlier-migrated
 commands' output before each change existed, so they stay byte-frozen —
 each change gets its own new schema_version instead). `dumpex-output-
 v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`/
-`v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`
+`v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/`v2.7.schema.json`
 stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`) for validating output captured before
-each respective
+`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`) for validating output captured
+before each respective
 change; none is deleted or overwritten, following the same precedent
 v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
-v2.7 contract.
+v2.8 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -220,7 +230,7 @@ basenames.
 ## Hunt result semantics (v1.1 field names — historical)
 
 Each hunter reported its findings and decision fields inside the v1.1
-`hunt` object using the field names below. Under the current v2.7
+`hunt` object using the field names below. Under the current v2.8
 contract these same concepts live on `HunterRecord` — see "Hunt records"
 below for the `status`/`coverage.status`/`verdict_level`/`confidence`
 mapping `--hunt` now uses. The important decision fields were:
@@ -257,7 +267,7 @@ still validates each hunter's internal result dict (all seven hunters, both
 typical and edge-case verdicts) against this file on every test run,
 including the negative cases it must reject — this is legacy-compatibility
 coverage for the v1.1 shape itself, independent of the CLI's own
-`--hunt --json` output, which is now v2.7 (see "Hunt records" below).
+`--hunt --json` output, which is now v2.8 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -282,14 +292,14 @@ tool validates its own output — only the test suite and external `--json`
 consumers do), so none of them are collected into the frozen executable.
 They are instead uploaded as separate `dumpex-output-v*.schema.json`
 files alongside `dumpex.exe` in the release ZIP — every version currently
-packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`), the same
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`), the same
 set `pip install dumpex` already ships (see "Reproducing a run" below for
 how an installed package reaches these via `importlib.resources`) — so an
 EXE-only install (no `pip install dumpex`, no source checkout) still has
 a way to get the schema for whatever output it's holding. Current CLI
 output (from any command, including `--hunt`) always validates against
-`dumpex-output-v2.7.schema.json`, the current contract — this section's
-own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.6` are
+`dumpex-output-v2.8.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.7` are
 shipped only to validate output produced by an older dumpex version, not
 anything a current install can produce.
 
@@ -350,7 +360,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.7",
+    "schema_version": "2.8",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -899,6 +909,95 @@ presentation-only and carries no schema impact of its own.
 `dumpex-output-v2.6.schema.json` stays byte-frozen and remains
 shipped/installable for validating output produced before this change,
 the same precedent every earlier frozen schema file follows.
+
+### Coverage limitations and skipped scan targets
+
+`result.coverage.limitations[]` is the structured, machine-readable form
+of `result.coverage.reasons[]` — one entry per specific way coverage fell
+short, with its human text rendered from a hardcoded per-`code` template
+rather than composed at the call site (see
+[`dumpex/output/coverage.py`](../dumpex/output/coverage.py)).
+
+`schema_version 2.8` adds a `targets` array to every limitation (and the
+`scanTarget` `$def` its items follow). Before it, a hunt that skipped
+oversized memory could only say *how many* things it skipped:
+
+```json
+{ "code": "SCAN_REGION_OVERSIZED_SKIPPED", "source": "pipe_name_scan", "affected_count": 2 }
+```
+
+That tells an investigator the result is incomplete but not which
+addresses to go after, so the gap could not be dispositioned without
+re-running the hunt. `targets` names them:
+
+```json
+{
+  "code": "SCAN_REGION_OVERSIZED_SKIPPED",
+  "source": "pipe_name_scan",
+  "scope": null,
+  "affected_count": 1,
+  "targets": [
+    {
+      "kind": "memory_region",
+      "base_address": "0x00007ff000001000",
+      "size": 16777216,
+      "size_limit": 8388608,
+      "file_offset": 4096,
+      "allocation_base": "0x00007ff000000000",
+      "state": "MEM_COMMIT",
+      "type": "MEM_PRIVATE",
+      "protection": "PAGE_EXECUTE_READWRITE"
+    }
+  ]
+}
+```
+
+- `kind` is `"memory_region"` (a MemoryInfoListStream region — `--hunt
+  pipe`, `--hunt obfuscation`) or `"memory_segment"` (a
+  Memory64List/MemoryList segment — `--hunt cs-beacon`, `--hunt yara`).
+  A segment carries no MemoryInfo, so `allocation_base`/`state`/`type`/
+  `protection` are always `null` for one.
+- Addresses use the same fixed-width hex convention as every other
+  address in this contract (`hexAddress`). `file_offset` is a byte offset
+  inside the `.dmp`, not an address, and stays a plain integer; it is
+  `null` when those bytes were never captured — which is itself the
+  answer to "can I extract this from the dump I already have, or do I
+  need to recollect?".
+- `size_limit` is the configured cap that caused the skip, recorded per
+  target rather than once per limitation.
+- `affected_count` equals `targets`' length exactly, so the count and the
+  identified targets can never disagree. Every other limitation code
+  emits `targets: []`; a consumer that ignores the key sees the v2.7
+  shape unchanged.
+
+Console output shows a bounded preview (the first few targets, then
+`+N more (see coverage.limitations[].targets in --json output)`); the
+JSON list is never truncated.
+
+`scope`, on this code, names the **scan layer** whose own cap did the
+skipping. `--hunt obfuscation` runs three region scans with three
+different caps (sleep-mask 10 MB, entropy 10 MB, decode 2 MB) over
+overlapping candidate sets, and previously summed their three counters
+into one `N oversized region(s) skipped`. A single 12 MB private region
+exceeds all three caps, so that sum reported **three regions** where
+there was one — sending an analyst looking for two allocations that never
+existed. It now emits one limitation per layer:
+
+```json
+[
+  { "code": "SCAN_REGION_OVERSIZED_SKIPPED", "scope": "sleep_mask", "affected_count": 1, "targets": [ ... ] },
+  { "code": "SCAN_REGION_OVERSIZED_SKIPPED", "scope": "entropy",    "affected_count": 1, "targets": [ ... ] },
+  { "code": "SCAN_REGION_OVERSIZED_SKIPPED", "scope": "decode",     "affected_count": 1, "targets": [ ... ] }
+]
+```
+
+Three region × layer skips over one physical region, each naming its own
+threshold — which also answers the question the sum destroyed: whether a
+region was missed by every layer or only by the strictest one. Deduplicate
+on `targets[*].base_address` to count distinct physical regions.
+
+`dumpex-output-v2.7.schema.json` stays byte-frozen and remains
+shipped/installable for validating output produced before this change.
 
 ## Reproducing a run
 

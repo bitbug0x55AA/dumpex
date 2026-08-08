@@ -1,6 +1,6 @@
 """
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
-v2 envelopes built around them) against dumpex-output-v2.7.schema.json
+v2 envelopes built around them) against dumpex-output-v2.8.schema.json
 (the current schema) -- originally the PR3 "Schema v2.4" hunt migration
 step (see docs/hunt_migration_field_matrix.md and the migration plan's own
 PR3 description), carried forward onto v2.5's extended `finding` $def
@@ -50,7 +50,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -116,7 +116,7 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):
     return {
         "meta": {
-            "schema_version": "2.7",
+            "schema_version": "2.8",
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01Z",
                           "duration_seconds": 1.0, "command": command, "options": options or {}},

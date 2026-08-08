@@ -1,30 +1,48 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.7.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.7") for each of the six
+dumpex/schemas/dumpex-output-v2.8.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.8") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
 hand-written fixture JSON, so a shape change in any of them is caught
 here. dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
 dumpex-output-v2.2.schema.json, dumpex-output-v2.3.schema.json,
-dumpex-output-v2.4.schema.json, dumpex-output-v2.5.schema.json, and
-dumpex-output-v2.6.schema.json (the frozen historical shapes) are also
-exercised directly (see the "schema version history" section below) to
-prove each still validates a genuine document from its own era and still
-rejects a `result.kind` it was never updated to know about -- v2.7 is a
-strict superset of v2.6 for these six recon-command kinds (v2.7's only
-actual change is re-keying `--hunt cs-beacon`'s
-csBeaconDetails.configs[*].fields by field NAME instead of numeric ID --
-see tests/hunt/test_cs_beacon_collect.py for that; none of it is visible
-to this file's own six recon-command kinds), so every real document that
-validated against v2.6 continues to validate against v2.7 unchanged, just
-carrying the new version label. v2.6 itself was a strict superset of v2.5
-for these six kinds too (v2.6's only actual change was removing `raw`
-from csBeaconDetails.configs[*].fields[*]), and v2.5 was a strict
-superset of v2.4 (v2.5's only actual change was extending the hunt
+dumpex-output-v2.4.schema.json, dumpex-output-v2.5.schema.json,
+dumpex-output-v2.6.schema.json, and dumpex-output-v2.7.schema.json (the
+frozen historical shapes) are also exercised directly (see the "schema
+version history" section below) to prove each still validates a genuine
+document from its own era and still rejects a `result.kind` it was never
+updated to know about -- v2.7 is a strict superset of v2.6 for these six
+recon-command kinds (v2.7's only actual change is re-keying `--hunt
+cs-beacon`'s csBeaconDetails.configs[*].fields by field NAME instead of
+numeric ID -- see tests/hunt/test_cs_beacon_collect.py for that; none of
+it is visible to this file's own six recon-command kinds), so every real
+document that validated against v2.6 continues to validate against v2.7
+unchanged, just carrying the new version label. v2.6 itself was a strict
+superset of v2.5 for these six kinds too (v2.6's only actual change was
+removing `raw` from csBeaconDetails.configs[*].fields[*]), and v2.5 was a
+strict superset of v2.4 (v2.5's only actual change was extending the hunt
 `finding` $def with id/severity/technique_ids/evidence_refs/iocs/rule_id/
 rule_version -- see test_json_schema_v2_5_hunt.py for that).
+
+v2.8 breaks that "strict superset, old document still validates
+unmodified" chain for the FIRST time since v2.0: it adds a `targets`
+array to the shared `coverageLimitation` $def (see "SCAN_REGION_
+OVERSIZED_SKIPPED source contract" below) and, following this schema's
+own established convention that every CoverageLimitation field is always
+emitted and therefore `required` (matching unavailable_fields/
+available_fields/etc., all required even when empty), `targets` is
+`required` too -- not merely additive-and-optional. All six recon
+commands can emit coverageLimitation entries (SOURCE_ABSENT/SOURCE_
+FAILED/...), so a genuine v2.7-era document of any of these six kinds,
+which never had a `targets` key at all, now FAILS validation against
+v2.8 with `'targets' is a required property` -- this is exactly why the
+version bump was necessary, not an oversight. `dumpex-output-v2.7.
+schema.json` stays installed specifically so that already-collected
+v2.7-era output remains validatable against ITS OWN frozen schema (see
+test_a_genuine_v2_7_era_document_still_validates_against_the_v2_7_schema
+below), not against v2.8.
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -60,7 +78,7 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -74,6 +92,18 @@ def schema_v2_6():
 def validator_v2_6(schema_v2_6):
     jsonschema.Draft202012Validator.check_schema(schema_v2_6)
     return jsonschema.Draft202012Validator(schema_v2_6)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_7():
+    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_7(schema_v2_7):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_7)
+    return jsonschema.Draft202012Validator(schema_v2_7)
 
 
 @pytest.fixture(scope="module")
@@ -162,6 +192,17 @@ def source_observation_schema(schema):
 @pytest.fixture(scope="module")
 def coverage_limitation_schema(schema):
     return schema["$defs"]["coverageLimitation"]
+
+
+@pytest.fixture(scope="module")
+def coverage_limitation_validator(schema):
+    # Unlike the bare `coverage_limitation_schema` fixture above (fine for
+    # every existing test, none of which populates `targets` with a real
+    # scanTarget item), a SCAN_REGION_OVERSIZED_SKIPPED document's own
+    # `targets[*]` is `$ref: "#/$defs/scanTarget"` -- that $ref only
+    # resolves when $defs is still reachable from the validated root, so
+    # these tests need the wrapped form (see _fragment_validator above).
+    return _fragment_validator(schema, "coverageLimitation")
 
 
 def _fragment_validator(schema, def_name):
@@ -350,7 +391,8 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
     assert doc["result"]["coverage"]["limitations"] == [
         {"code": "PEB_UNAVAILABLE", "source": "peb", "scope": "dump", "affected_count": None,
          "unavailable_fields": [], "available_fields": [], "counterpart_source": None,
-         "related_sources": [], "related_tids": [], "thread_id": None, "detail": None}]
+         "related_sources": [], "related_tids": [], "thread_id": None, "detail": None,
+         "targets": []}]
 
 
 # ── negative cases: documents that MUST fail schema validation ───────────
@@ -362,7 +404,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.7",
+            "schema_version": "2.8",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -685,6 +727,72 @@ def test_coverage_limitation_source_failed_nonnull_affected_count_rejected_by_sc
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(doc)
 
 
+# ── SCAN_REGION_OVERSIZED_SKIPPED source contract (schema_version 2.8) ────
+# Mirrors dumpex.output.coverage._SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_
+# CONTRACTS at the schema level: for a KNOWN source, both `scope` and
+# every targets[*].kind are pinned to what that source's own scan loop
+# can actually produce. Without this, the schema would accept a document
+# the Python model itself refuses to construct -- e.g. a hand-rolled or
+# third-party-produced JSON claiming segment_scan skipped a memory_region,
+# which nothing on the wire contract would catch.
+
+def _scan_target(kind, base_address="0x0000000000001000", size=100, size_limit=50):
+    return {"kind": kind, "base_address": base_address, "size": size,
+            "size_limit": size_limit, "file_offset": None, "allocation_base": None,
+            "state": None, "type": None, "protection": None}
+
+
+def _oversized_skipped_doc(source, scope, kind):
+    return {
+        "code": "SCAN_REGION_OVERSIZED_SKIPPED", "source": source, "scope": scope,
+        "affected_count": 1, "unavailable_fields": [], "available_fields": [],
+        "counterpart_source": None, "related_sources": [], "related_tids": [],
+        "thread_id": None, "detail": None, "targets": [_scan_target(kind)],
+    }
+
+
+@pytest.mark.parametrize("source,scope,kind", [
+    ("pipe_name_scan", None, "memory_region"),
+    ("segment_scan", None, "memory_segment"),
+    ("encoding_scan", "sleep_mask", "memory_region"),
+    ("encoding_scan", "entropy", "memory_region"),
+    ("encoding_scan", "decode", "memory_region"),
+])
+def test_oversized_skipped_correct_source_scope_kind_combos_validate(
+        source, scope, kind, coverage_limitation_validator):
+    doc = _oversized_skipped_doc(source, scope, kind)
+    assert list(coverage_limitation_validator.iter_errors(doc)) == []
+
+
+@pytest.mark.parametrize("source,scope,kind", [
+    # The exact bug this contract exists to catch: a segment-table source
+    # claiming a MemoryInfo region target, and vice versa.
+    ("segment_scan", None, "memory_region"),
+    ("pipe_name_scan", None, "memory_segment"),
+    # encoding_scan requires a real layer scope -- neither unscoped nor a
+    # misspelled/unknown layer name is legal.
+    ("encoding_scan", None, "memory_region"),
+    ("encoding_scan", "sleepmask", "memory_region"),
+    # A known source's scope pinned to null must not accept an unrelated
+    # non-null value either.
+    ("pipe_name_scan", "unexpected", "memory_region"),
+    ("segment_scan", "unexpected", "memory_segment"),
+])
+def test_oversized_skipped_wrong_source_scope_kind_combos_rejected_by_schema(
+        source, scope, kind, coverage_limitation_validator):
+    doc = _oversized_skipped_doc(source, scope, kind)
+    assert list(coverage_limitation_validator.iter_errors(doc)) != []
+
+
+def test_oversized_skipped_unknown_source_stays_unconstrained_by_schema(
+        coverage_limitation_validator):
+    # `source` is an open vocabulary for this code (see LimitationCode's
+    # own enum comment) -- a source this schema hasn't been taught about
+    # yet must not be rejected just for an unfamiliar scope/kind pairing.
+    doc = _oversized_skipped_doc("future_scan", "anything", "memory_segment")
+    assert list(coverage_limitation_validator.iter_errors(doc)) == []
+
+
 def test_coverage_limitation_unknown_future_code_stays_open_in_schema(coverage_limitation_schema):
     # `code` deliberately stays a plain string, not an enum, so a future
     # LimitationCode the schema hasn't been updated for isn't rejected
@@ -695,7 +803,7 @@ def test_coverage_limitation_unknown_future_code_stays_open_in_schema(coverage_l
         "code": "SOME_FUTURE_CODE", "source": "anything", "scope": "whatever",
         "affected_count": 99, "unavailable_fields": [], "available_fields": [],
         "counterpart_source": None, "related_sources": [], "related_tids": [],
-        "thread_id": None, "detail": "free text",
+        "thread_id": None, "detail": "free text", "targets": [],
     }
     jsonschema.validate(doc, coverage_limitation_schema)
 
@@ -1146,6 +1254,37 @@ def test_a_genuine_v2_6_era_document_still_validates_against_the_v2_6_schema(val
     doc = _minimal_valid_doc(kind="modules")
     doc["meta"]["schema_version"] = "2.6"
     assert validator_v2_6.is_valid(doc)
+
+
+def test_a_genuine_v2_7_era_document_still_validates_against_the_v2_7_schema(validator_v2_7):
+    # Unlike every earlier version in this chain, v2.8's change (a new
+    # `required` `targets` array on the shared `coverageLimitation` $def
+    # -- see this file's own module docstring) DOES touch these six
+    # recon commands' own shape: a v2.7-era coverageLimitation entry
+    # never had a `targets` key at all, so it fails against v2.8 with
+    # `'targets' is a required property` (see
+    # test_v2_7_era_coverage_limitation_is_rejected_by_v2_8_schema below).
+    # `dumpex-output-v2.7.schema.json` stays installed so a genuine
+    # v2.7-era document keeps validating against ITS OWN frozen schema.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.7"
+    assert validator_v2_7.is_valid(doc)
+
+
+def test_v2_7_era_coverage_limitation_is_rejected_by_v2_8_schema(coverage_limitation_schema):
+    # The concrete counterpart to the module docstring's claim: a
+    # coverageLimitation dict shaped exactly like v2.7 produced it (no
+    # `targets` key -- that field didn't exist yet) is NOT accepted by
+    # the current (v2.8) schema. This is what makes the version bump
+    # necessary rather than cosmetic.
+    v27_doc = {
+        "code": "SOURCE_ABSENT", "source": "modules", "scope": "dump",
+        "affected_count": None, "unavailable_fields": [], "available_fields": [],
+        "counterpart_source": None, "related_sources": [], "related_tids": [],
+        "thread_id": None, "detail": None,
+    }
+    assert "targets" not in v27_doc
+    assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(v27_doc)
 
 
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):

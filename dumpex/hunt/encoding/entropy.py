@@ -8,7 +8,7 @@ import math
 from collections import Counter
 
 from dumpex.core.memory import addr_to_module, prot_str
-from dumpex.hunt._coverage import CoverageTracker
+from dumpex.hunt._coverage import CoverageTracker, region_scan_target
 from dumpex.hunt.encoding.config import (
     EncodingConfig, ENTROPY_PRIVATE_THRESHOLD, ENTROPY_RWX_THRESHOLD, ENTROPY_SCAN_MAX,
 )
@@ -46,7 +46,8 @@ def _scan_entropy(regions, modules, mf, susp_prots, read_region, config: Encodin
         if addr_to_module(r.BaseAddress, modules):
             continue
         if r.RegionSize > config.entropy_scan_max:
-            coverage.note_skipped_oversize()
+            coverage.note_skipped_oversize(
+                region_scan_target(mf, r, config.entropy_scan_max))
             continue
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)

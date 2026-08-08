@@ -22,8 +22,39 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
 from dumpex.hunt.encoding.classification import _structural_note
 from dumpex.output.coverage import (
     build_coverage_report, observe_source, EvaluationRequirement, CoverageLimitation,
-    LimitationCode,
+    LimitationCode, format_scan_target_preview, scan_target_noun,
 )
+
+
+# The obfuscation hunter runs three independent region scans, each with
+# its own size cap (SLEEP_MASK_REGION_MAX / ENTROPY_SCAN_MAX / DECODE_
+# SCAN_MAX) over overlapping candidate sets. Order is fixed here so the
+# per-layer limitations/reasons come out in a stable, reproducible order
+# regardless of dict insertion order at the call site.
+OVERSIZE_SCAN_LAYERS = ("sleep_mask", "entropy", "decode")
+
+
+def oversized_layer_reasons(oversized_by_layer: dict) -> list:
+    """One reason string per scan LAYER that skipped something, never a
+    single summed one.
+
+    Summing the three layers' counters and rendering "N oversized
+    region(s) skipped" is wrong, not merely imprecise: one physical region
+    over 10 MiB exceeds the sleep-mask cap, the entropy cap AND the 2 MiB
+    decode cap, so the sum counts three region x layer skips and then
+    labels them three REGIONS. An investigator reading that goes looking
+    for two allocations that do not exist. Keeping the layers apart also
+    answers the question the sum destroys: whether a given region was
+    missed by every layer or only by the strictest one."""
+    out = []
+    for layer in OVERSIZE_SCAN_LAYERS:
+        targets = oversized_by_layer.get(layer) or ()
+        if not targets:
+            continue
+        noun = scan_target_noun(targets)
+        out.append(f"{len(targets)} oversized {noun} skipped by the {layer} scan: "
+                    f"{format_scan_target_preview(targets)}")
+    return out
 
 
 # The four *_verbose_fact() functions below build Finding.verbose_facts --
@@ -91,7 +122,7 @@ def _compressed_verbose_fact(mf, h) -> str:
 
 
 def _encoding_coverage_report(mem_info_available: bool, fully_skipped: bool, region_count: int,
-                               total_size_skipped: int, total_read_failed: int,
+                               oversized_by_layer: dict, total_read_failed: int,
                                total_short_reads: int, budget_exhausted: bool,
                                exhausted_reason: str):
     """Real dumpex.output.coverage.CoverageReport for an obfuscation run
@@ -118,10 +149,18 @@ def _encoding_coverage_report(mem_info_available: bool, fully_skipped: bool, reg
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.ENCODING_ALL_REGIONS_FILTERED, source="encoding_scan",
             affected_count=region_count))
-    if total_size_skipped:
+    # ONE limitation per scan layer, each scoped to that layer and
+    # carrying only its own targets -- never a single merged entry whose
+    # affected_count is the sum of three overlapping region sets (see
+    # oversized_layer_reasons above for why that sum is a wrong answer,
+    # not a rounded one).
+    for layer in OVERSIZE_SCAN_LAYERS:
+        targets = oversized_by_layer.get(layer) or ()
+        if not targets:
+            continue
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="encoding_scan",
-            affected_count=total_size_skipped))
+            scope=layer, affected_count=len(targets), targets=targets))
     if total_read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="encoding_scan",
@@ -177,7 +216,11 @@ class EncodingReport:
     mem_info_available: bool = True
     fully_skipped: bool = False
     regions_count: int = 0
-    total_size_skipped: int = 0
+    # {scan layer -> tuple[ScanTarget]} for the regions THAT layer's own
+    # size cap skipped. Kept per layer rather than as one total: see
+    # oversized_layer_reasons()'s docstring for why summing them and
+    # calling the result a region count is a correctness bug.
+    oversized_by_layer: dict = field(default_factory=dict)
     total_read_failed: int = 0
     total_short_reads: int = 0
     budget_exhausted: bool = False
@@ -549,19 +592,31 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
                                or decode_coverage.scanned)
     fully_skipped = mem_info_available and bool(regions) and not any_region_scanned
     report.fully_skipped = fully_skipped
-    total_size_skipped = (sleep_mask_coverage.skipped_oversize + entropy_coverage.skipped_oversize
-                           + decode_coverage.skipped_oversize)
+    # Each layer's own oversized skips stay attributed to that layer.
+    # read_failed/short_reads ARE still summed: those two are per-read
+    # facts about work actually attempted, and the layers' region sets
+    # differ enough (only decode reads MEM_IMAGE at all) that a shared
+    # total does not carry the same "one region counted three times as
+    # three regions" claim an oversize sum does -- and, unlike an
+    # oversize skip, neither is rendered as a distinct-region count an
+    # investigator would go hunting addresses for.
+    oversized_by_layer = {
+        "sleep_mask": tuple(sleep_mask_coverage.skipped_oversize_targets),
+        "entropy":    tuple(entropy_coverage.skipped_oversize_targets),
+        "decode":     tuple(decode_coverage.skipped_oversize_targets),
+    }
     total_read_failed  = (sleep_mask_coverage.read_failed + entropy_coverage.read_failed
                            + decode_coverage.read_failed)
     total_short_reads  = (sleep_mask_coverage.short_reads + entropy_coverage.short_reads
                            + decode_coverage.short_reads)
     budget_exhausted = decode_budget.exhausted()
     findings['budget_exhausted'] = budget_exhausted
-    report.total_size_skipped, report.total_read_failed, report.total_short_reads = (
-        total_size_skipped, total_read_failed, total_short_reads)
+    report.oversized_by_layer = oversized_by_layer
+    report.total_read_failed, report.total_short_reads = total_read_failed, total_short_reads
     report.budget_exhausted = budget_exhausted
     report.exhausted_reason = decode_budget.exhausted_reason
-    coverage_gap = bool(total_size_skipped or total_read_failed or total_short_reads or budget_exhausted)
+    any_oversized = any(oversized_by_layer.values())
+    coverage_gap = bool(any_oversized or total_read_failed or total_short_reads or budget_exhausted)
 
     # Coverage tracked independently of status/score — see dumpex.hunt.stomping /
     # dumpex.hunt.pipe for why: a nonzero score must not silently imply every
@@ -572,8 +627,7 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
     if fully_skipped:
         coverage_reasons.append(f"all {len(regions)} region(s) filtered out by every layer's "
                                  f"size/type limits — nothing was actually scanned")
-    if total_size_skipped:
-        coverage_reasons.append(f"{total_size_skipped} oversized region(s) skipped")
+    coverage_reasons.extend(oversized_layer_reasons(oversized_by_layer))
     if total_read_failed:
         coverage_reasons.append(f"{total_read_failed} region(s) failed to read")
     if total_short_reads:
@@ -614,7 +668,7 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
         findings[key] = [h.to_dict() for h in findings[key]]
 
     report.coverage_report = _encoding_coverage_report(
-        mem_info_available, fully_skipped, len(regions), total_size_skipped,
+        mem_info_available, fully_skipped, len(regions), oversized_by_layer,
         total_read_failed, total_short_reads, budget_exhausted, decode_budget.exhausted_reason)
 
     return report

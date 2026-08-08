@@ -19,7 +19,9 @@ motivated this rework:
 """
 import pytest
 
+from dumpex.output.records import hex_address
 from dumpex.output.coverage import (
+    ScanTarget, ScanTargetKind, scan_target_noun,
     SourceObservation, observe_source, CoverageLimitation, render_limitation,
     CoverageReport, SourceRequirement, EvaluationRequirement, build_coverage_report,
     combine_coverage_reports, exit_code_for,
@@ -286,7 +288,7 @@ def test_coverage_limitation_to_dict_minimal_emits_every_field():
         "code": "SOURCE_ABSENT", "source": "modules", "scope": None,
         "affected_count": None, "unavailable_fields": [], "available_fields": [],
         "counterpart_source": None, "related_sources": [], "related_tids": [],
-        "thread_id": None, "detail": None,
+        "thread_id": None, "detail": None, "targets": [],
     }
 
 
@@ -1820,3 +1822,251 @@ def test_thread_context_partial_rejects_non_positive_affected_count():
     with pytest.raises(ValueError, match="positive int"):
         CoverageLimitation(code=LimitationCode.THREAD_CONTEXT_PARTIAL,
                             source="thread_context", affected_count=0)
+
+
+# ── ScanTarget / SCAN_REGION_OVERSIZED_SKIPPED targets ────────────────────
+# The typed skipped-target reference (schema_version 2.8): a limitation
+# saying a scan skipped something must name WHAT it skipped, or a "partial"
+# result gives an investigator nothing to act on.
+
+def _region_target(base=0x1000, size=32 * 1024, limit=16 * 1024, **kw):
+    return ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=base,
+                       size=size, size_limit=limit, **kw)
+
+
+def test_scan_target_to_dict_uses_fixed_width_hex_and_byte_offsets():
+    target = _region_target(base=0x7ff000001000, file_offset=4096,
+                             allocation_base=0x7ff000000000, state="MEM_COMMIT",
+                             type="MEM_PRIVATE", protection="PAGE_EXECUTE_READWRITE")
+    assert target.to_dict() == {
+        "kind": "memory_region",
+        "base_address": "0x00007ff000001000",
+        "size": 32 * 1024,
+        "size_limit": 16 * 1024,
+        # A position inside the .dmp file, not an address -- stays a plain
+        # int rather than being hex-formatted like the two addresses above.
+        "file_offset": 4096,
+        "allocation_base": "0x00007ff000000000",
+        "state": "MEM_COMMIT",
+        "type": "MEM_PRIVATE",
+        "protection": "PAGE_EXECUTE_READWRITE",
+    }
+
+
+def test_scan_target_hex_matches_the_records_module_hex_convention():
+    # coverage.py cannot import records.py (records.py imports THIS
+    # module), so its address formatter is a deliberate second copy --
+    # this is what keeps the two from drifting.
+    target = _region_target(base=0x7ff000001000, allocation_base=0x40)
+    assert target.to_dict()["base_address"] == hex_address(0x7ff000001000)
+    assert target.to_dict()["allocation_base"] == hex_address(0x40)
+
+
+def test_scan_target_accepts_the_maximum_legal_uint64_address():
+    # 0xffffffffffffffff is the largest value _hex_address()'s
+    # f"0x{n:016x}" still renders as exactly 16 hex digits -- the
+    # boundary the schema's hexAddress pattern (^0x[0-9a-f]{16}$) itself
+    # draws. Must construct cleanly and round-trip through to_dict().
+    max_addr = 0xffffffffffffffff
+    target = _region_target(base=max_addr, allocation_base=max_addr)
+    d = target.to_dict()
+    assert d["base_address"] == "0xffffffffffffffff"
+    assert d["allocation_base"] == "0xffffffffffffffff"
+    assert len(d["base_address"]) == len(d["allocation_base"]) == 18   # "0x" + 16 hex digits
+
+
+def test_scan_target_rejects_the_first_illegal_address_past_uint64_max():
+    # One past the boundary: _hex_address() would render 17 hex digits,
+    # which fails the schema's own hexAddress pattern downstream -- must
+    # be caught here, at construction, not later at serialization/schema
+    # validation time.
+    over_max = 0xffffffffffffffff + 1
+    with pytest.raises(ValueError, match="uint64"):
+        _region_target(base=over_max)
+    with pytest.raises(ValueError, match="uint64"):
+        _region_target(allocation_base=over_max)
+
+
+def test_scan_target_rejects_negative_addresses():
+    with pytest.raises(ValueError, match="uint64"):
+        _region_target(base=-1)
+    with pytest.raises(ValueError, match="uint64"):
+        _region_target(allocation_base=-1)
+
+
+def test_scan_target_requires_size_to_exceed_its_own_limit():
+    # A target that fits inside the cap is evidence AGAINST the oversized
+    # skip it would be attached to -- almost always the wrong region.
+    with pytest.raises(ValueError, match="must exceed size_limit"):
+        _region_target(size=1024, limit=1024)
+    with pytest.raises(ValueError, match="must exceed size_limit"):
+        _region_target(size=512, limit=1024)
+
+
+def test_memory_segment_target_rejects_memory_info_fields():
+    with pytest.raises(ValueError, match="carries no MemoryInfo"):
+        ScanTarget(kind=ScanTargetKind.MEMORY_SEGMENT, base_address=0x1000,
+                    size=2048, size_limit=1024, state="MEM_COMMIT")
+    segment = ScanTarget(kind=ScanTargetKind.MEMORY_SEGMENT, base_address=0x1000,
+                          size=2048, size_limit=1024, file_offset=0x200)
+    assert segment.to_dict()["state"] is None
+    assert segment.to_dict()["file_offset"] == 0x200
+
+
+def test_oversized_skipped_limitation_requires_targets_that_agree_with_the_count():
+    with pytest.raises(ValueError, match="non-empty targets"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="pipe_name_scan", affected_count=1)
+    with pytest.raises(ValueError, match=r"must equal len\(targets\)"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="pipe_name_scan", affected_count=2,
+                            targets=[_region_target()])
+
+
+def test_targets_are_rejected_on_codes_that_do_not_use_them():
+    with pytest.raises(ValueError, match="does not use targets"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_READ_FAILED,
+                            source="pipe_name_scan", affected_count=1,
+                            targets=[_region_target()])
+
+
+def test_targets_must_be_scan_target_instances_exactly():
+    class SneakyTarget(ScanTarget):
+        def to_dict(self):
+            return {"anything": "at all"}
+
+    with pytest.raises(ValueError, match="only ScanTarget instances"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="pipe_name_scan", affected_count=1,
+                            targets=[SneakyTarget(kind=ScanTargetKind.MEMORY_REGION,
+                                                    base_address=0x1000, size=2048,
+                                                    size_limit=1024)])
+
+
+def test_oversized_skipped_renders_va_size_and_threshold():
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="pipe_name_scan",
+        affected_count=1,
+        targets=[_region_target(base=0x1000, size=16 * 1024 * 1024,
+                                 limit=8 * 1024 * 1024)])
+    assert render_limitation(limitation) == (
+        "1 oversized region(s) skipped: 0x0000000000001000 (16 MB > 8 MB limit)")
+
+
+def test_oversized_skipped_names_the_scan_layer_when_scoped():
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="encoding_scan",
+        scope="decode", affected_count=1,
+        targets=[_region_target(base=0x2000, size=4 * 1024 * 1024,
+                                 limit=2 * 1024 * 1024)])
+    assert render_limitation(limitation) == (
+        "1 oversized region(s) skipped by the decode scan: "
+        "0x0000000000002000 (4 MB > 2 MB limit)")
+
+
+def test_oversized_skipped_console_preview_is_bounded_but_json_is_complete():
+    targets = [_region_target(base=0x1000 * (i + 1)) for i in range(6)]
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="pipe_name_scan",
+        affected_count=6, targets=targets)
+    text = render_limitation(limitation)
+    assert "region(s)" in text
+    assert text.count("(32 KB > 16 KB limit)") == 3
+    assert "+3 more (see coverage.limitations[].targets in --json output)" in text
+    # ...while the machine-readable side keeps every one of them.
+    assert len(limitation.to_dict()["targets"]) == 6
+
+
+def _segment_target(base=0x1000, size=32 * 1024, limit=16 * 1024, **kw):
+    return ScanTarget(kind=ScanTargetKind.MEMORY_SEGMENT, base_address=base,
+                       size=size, size_limit=limit, **kw)
+
+
+def test_oversized_skipped_renders_segment_not_region_for_segment_scan():
+    # cs-beacon/YARA attach this code to Memory64List/MemoryList segments,
+    # not MemoryInfo regions -- the rendered noun must say so, not the
+    # fixed "region(s)" the code's own NAME (SCAN_REGION_OVERSIZED_SKIPPED)
+    # would suggest.
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="segment_scan",
+        affected_count=1,
+        targets=[_segment_target(base=0x50000, size=0x9000, limit=0x8000,
+                                  file_offset=0x5000)])
+    text = render_limitation(limitation)
+    assert "segment(s)" in text
+    assert "region(s)" not in text
+
+
+def test_oversized_skipped_segment_preview_bounded_json_complete():
+    targets = [_segment_target(base=0x1000 * (i + 1)) for i in range(5)]
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="segment_scan",
+        affected_count=5, targets=targets)
+    text = render_limitation(limitation)
+    assert "5 oversized segment(s) skipped" in text
+    assert text.count("(32 KB > 16 KB limit)") == 3
+    assert "+2 more (see coverage.limitations[].targets in --json output)" in text
+    assert len(limitation.to_dict()["targets"]) == 5
+
+
+def test_scan_target_noun_is_neutral_for_mixed_kinds():
+    mixed = [_region_target(), _segment_target(base=0x9000)]
+    assert scan_target_noun(mixed) == "target(s)"
+
+
+def test_oversized_skipped_rejects_wrong_target_kind_for_known_source():
+    # segment_scan (cs-beacon/YARA) can only ever produce memory_segment
+    # targets -- a memory_region target attached to it is a caller bug,
+    # not a legal combination, even though it would otherwise pass the
+    # generic count/non-empty checks.
+    with pytest.raises(ValueError, match="requires every target's kind to be 'memory_segment'"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="segment_scan", affected_count=1,
+                            targets=[_region_target()])
+    # ...and the reverse: pipe_name_scan/encoding_scan only ever produce
+    # memory_region targets.
+    with pytest.raises(ValueError, match="requires every target's kind to be 'memory_region'"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="pipe_name_scan", affected_count=1,
+                            targets=[_segment_target()])
+
+
+def test_oversized_skipped_rejects_scope_for_source_that_never_scopes():
+    with pytest.raises(ValueError, match="requires scope to be"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="segment_scan", scope="unexpected",
+                            affected_count=1, targets=[_segment_target()])
+    with pytest.raises(ValueError, match="requires scope to be"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="pipe_name_scan", scope="unexpected",
+                            affected_count=1, targets=[_region_target()])
+
+
+def test_oversized_skipped_requires_a_real_layer_scope_for_encoding_scan():
+    # encoding_scan (obfuscation) runs three named layers over overlapping
+    # region sets -- unscoped, or a misspelled/unknown layer name, must
+    # not silently pass: that ambiguity is exactly what per-layer scope
+    # exists to close (see dumpex.hunt.encoding.aggregate).
+    with pytest.raises(ValueError, match="requires scope to be"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="encoding_scan", affected_count=1,
+                            targets=[_region_target()])
+    with pytest.raises(ValueError, match="requires scope to be"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="encoding_scan", scope="sleepmask",
+                            affected_count=1, targets=[_region_target()])
+    for layer in ("sleep_mask", "entropy", "decode"):
+        limitation = CoverageLimitation(
+            code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="encoding_scan",
+            scope=layer, affected_count=1, targets=[_region_target()])
+        assert f"by the {layer} scan" in render_limitation(limitation)
+
+
+def test_oversized_skipped_unknown_source_is_not_kind_or_scope_constrained():
+    # `source` stays an open vocabulary for this code (see its own enum
+    # comment) -- a future hunter using a source name not in the known
+    # contract table must not be blocked from using this code at all.
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="future_scan",
+        scope="anything", affected_count=1, targets=[_segment_target()])
+    assert render_limitation(limitation)

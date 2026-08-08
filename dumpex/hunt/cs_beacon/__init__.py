@@ -123,7 +123,8 @@ def _cs_beacon_coverage_report(scan_outcome, mem_info_available, thread_list_str
     if cc.skipped_oversize:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="segment_scan",
-            affected_count=cc.skipped_oversize))
+            affected_count=cc.skipped_oversize,
+            targets=cc.skipped_oversize_targets))
     if cc.read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="segment_scan",

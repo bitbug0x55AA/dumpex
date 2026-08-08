@@ -22,7 +22,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -196,6 +196,18 @@ def test_oversized_region_is_skipped(monkeypatch, hunter_record_validator):
                if l.code.value == "SCAN_REGION_OVERSIZED_SKIPPED")
     assert lim.source == "pipe_name_scan"
     assert lim.affected_count == 1
+    # The skipped region is IDENTIFIED, not merely counted -- an analyst
+    # reading this JSON has the VA to hand to --extract/--strings and the
+    # threshold that caused the skip, without re-running the hunt.
+    assert len(lim.targets) == lim.affected_count
+    target = lim.targets[0]
+    assert target.kind.value == "memory_region"
+    assert target.base_address == region_base
+    assert target.size == 0x10000
+    assert target.size_limit == 0x100
+    assert (target.state, target.type, target.protection) == (
+        "MEM_COMMIT", "MEM_PRIVATE", "PAGE_READWRITE")
+    assert target.to_dict()["base_address"] == f"0x{region_base:016x}"
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 

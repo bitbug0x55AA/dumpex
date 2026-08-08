@@ -21,7 +21,15 @@ class ScanOutcome:
     against every compiled rule file."""
     all_hits: list = field(default_factory=list)
     scanned: int = 0
-    skipped: int = 0
+    # One dumpex.output.coverage.ScanTarget per segment skipped ONLY for
+    # exceeding config.max_seg_scan -- the segment itself is retained, not
+    # just tallied, so a partial result names the exact VAs an
+    # investigator still has to rescan or recollect. `skipped` stays
+    # readable as a plain count, derived from this list so the two can
+    # never disagree (mirrors dumpex.hunt._coverage.CoverageTracker,
+    # which yara_hunt deliberately does not use -- see its own docstring
+    # on hunters whose gap reasons don't fit that generic shape).
+    skipped_targets: list = field(default_factory=list)
     read_failed: int = 0
     short_reads: int = 0
     timed_out: int = 0
@@ -34,6 +42,10 @@ class ScanOutcome:
     context_unverified: int = 0
     triggered_rules: set = field(default_factory=set)
     unverified_rules: set = field(default_factory=set)
+
+    @property
+    def skipped(self) -> int:
+        return len(self.skipped_targets)
 
 
 @dataclass

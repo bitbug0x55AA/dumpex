@@ -5,6 +5,7 @@ whole-scan budgets (deadline, total bytes, hit cap). Only collects facts
 """
 import time
 from minidump.minidumpfile import MinidumpFile
+from dumpex.hunt._coverage import segment_scan_target
 from dumpex.hunt.yara_hunt.config import YaraConfig, SCOPE_PRIVATE_OR_UNBACKED
 from dumpex.hunt.yara_hunt.models import ScanOutcome
 from dumpex.hunt.yara_hunt import context as context_mod
@@ -34,7 +35,7 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
     reader = mf.get_reader()
 
     all_hits     = []
-    skipped      = 0
+    skipped_targets = []   # ScanTarget per oversized segment -- see ScanOutcome
     read_failed  = 0
     short_reads  = 0   # read succeeded but returned fewer bytes than seg.size —
                        # whatever wasn't returned was never actually scanned,
@@ -79,7 +80,7 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             budget_exhausted = True
             break
         if seg.size > config.max_seg_scan:
-            skipped += 1
+            skipped_targets.append(segment_scan_target(seg, config.max_seg_scan))
             continue
         if total_bytes_scanned + seg.size > config.max_total_bytes_scanned:
             # Checked against the segment's declared size BEFORE reading —
@@ -265,7 +266,8 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
                 break
 
     return ScanOutcome(
-        all_hits=all_hits, scanned=scanned, skipped=skipped, read_failed=read_failed,
+        all_hits=all_hits, scanned=scanned, skipped_targets=skipped_targets,
+        read_failed=read_failed,
         short_reads=short_reads, timed_out=timed_out, match_failed=match_failed,
         truncated=truncated, budget_exhausted=budget_exhausted,
         total_bytes_scanned=total_bytes_scanned, suppressed_module_pe=suppressed_module_pe,

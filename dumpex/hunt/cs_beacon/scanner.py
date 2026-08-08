@@ -9,7 +9,7 @@ below for why each check is placed where it is).
 """
 import time
 
-from dumpex.hunt._coverage import CoverageTracker
+from dumpex.hunt._coverage import CoverageTracker, segment_scan_target
 from dumpex.hunt.cs_beacon.config import CSBeaconConfig
 from dumpex.hunt.cs_beacon.models import Candidate, ScanOutcome
 from dumpex.hunt.cs_beacon.parser import _cs_decode_and_parse_tlv, _cs_sanity_check
@@ -112,7 +112,8 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
                               f"found — total scanned-bytes budget exhausted")
             break
         if seg.size > config.max_seg_scan:
-            coverage_counts.note_skipped_oversize()
+            coverage_counts.note_skipped_oversize(
+                segment_scan_target(seg, config.max_seg_scan))
             continue
         try:
             data = reader.read(seg.start_virtual_address, seg.size)
