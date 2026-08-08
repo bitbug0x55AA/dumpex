@@ -100,6 +100,27 @@ def _report(score=0, results=(), evidence=None, coverage=None):
                             evidence=evidence if evidence is not None else InjectionEvidence())
 
 
+def _correlation_for(rwx=(), validated_pe_hits=(), **overrides):
+    """Build the Correlation InjectionEvidence now REQUIRES to match a
+    given `rwx`/`validated_pe_hits` pair -- group_regions_by_allocation()'s
+    own grouping, reproduced here so ordinary fixtures don't need to
+    hand-write a consistent correlation for every test that isn't
+    specifically exercising the correlation-vs-bucket relationship itself.
+    Snapshots `rwx`/`validated_pe_hits` at call time (never holds the
+    caller's own list), so it is safe to call before a test goes on to
+    mutate the list it passed in."""
+    rwx_by_alloc, pe_by_alloc = {}, {}
+    for ev in rwx:
+        rwx_by_alloc.setdefault(ev.region.allocation_base, []).append(ev.region)
+    for h in validated_pe_hits:
+        pe_by_alloc.setdefault(h.region.allocation_base, []).append(h.region)
+    kwargs = dict(rwx_by_alloc=rwx_by_alloc, pe_by_alloc=pe_by_alloc,
+                  rwx_and_pe_alloc_bases=set(rwx_by_alloc) & set(pe_by_alloc),
+                  suspicious_alloc_bases=set(rwx_by_alloc) | set(pe_by_alloc))
+    kwargs.update(overrides)
+    return Correlation(**kwargs)
+
+
 DOMAIN_TYPES = [CheckResult, CoverageSnapshot, InjectionEvidence, InjectionReport,
                  ThreadContext, CorrelatedAllocationEvidence]
 
@@ -236,7 +257,7 @@ def test_mutating_the_results_list_after_construction_cannot_change_the_report()
 
 def test_mutating_an_evidence_list_after_construction_cannot_change_the_report():
     rwx_list = [_rwx()]
-    evidence = InjectionEvidence(rwx=rwx_list)
+    evidence = InjectionEvidence(rwx=rwx_list, correlation=_correlation_for(rwx=rwx_list))
     rwx_list.append(_rwx(0x7ffe30000000))
     assert len(evidence.rwx) == 1
 
@@ -352,6 +373,19 @@ def test_check_result_evidence_rejects_a_frozen_object_holding_a_mutable_collect
 def test_check_result_evidence_rejects_a_non_frozen_dataclass():
     with pytest.raises(TypeError):
         _check(evidence=(_MutableEvidence(),))
+
+
+def test_frozen_dataclass_with_undeclared_instance_state_is_rejected():
+    # A subclass (or any code holding a reference before this function
+    # ever sees it) can attach extra state a frozen dataclass's own
+    # declared fields say nothing about -- object.__setattr__ bypasses
+    # frozen's blocked __setattr__ just as easily for an undeclared
+    # attribute as for a declared one. Only walking dataclasses.fields()
+    # would never see this at all.
+    ev = _rwx()
+    object.__setattr__(ev, "extra_payload", [])
+    with pytest.raises(TypeError, match="does not match its own declared"):
+        require_recursively_immutable(ev, "test")
 
 
 class _MutablePayloadWrapper:
@@ -474,7 +508,8 @@ def test_report_owns_its_correlation_maps_not_the_callers():
     rwx = _rwx()
     backing = {rwx.region.allocation_base: [rwx.region]}
     hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region)
-    correlation = Correlation(rwx_by_alloc=backing, rip_hits=[hit])
+    correlation = Correlation(rwx_by_alloc=backing, rip_hits=[hit],
+                               suspicious_alloc_bases={rwx.region.allocation_base})
     evidence = InjectionEvidence(rwx=(rwx,), correlation=correlation)
 
     backing[0x999000] = ["tampered"]
@@ -534,7 +569,7 @@ def test_report_stores_no_second_copy_of_its_evidence():
     # drift from it.
     rwx = _rwx()
     report = _report(results=(_check(evidence=(rwx,)),),
-                      evidence=InjectionEvidence(rwx=(rwx,)))
+                      evidence=InjectionEvidence(rwx=(rwx,), correlation=_correlation_for(rwx=(rwx,))))
     assert report.results[0].evidence[0] is report.evidence.rwx[0]
 
 
@@ -542,9 +577,11 @@ def test_report_rejects_a_result_citing_evidence_no_bucket_accounts_for():
     # Both halves are individually well-formed; together they claim two
     # different regions for the same observation. Constructing that Report
     # at all is what "exactly one canonical representation" forbids.
+    bucket_rwx = (_rwx(0x7ffe20000000),)
     with pytest.raises(ValueError, match="not one of this Report's own evidence"):
         _report(results=(_check(evidence=(_rwx(0x7ffe10000000),)),),
-                 evidence=InjectionEvidence(rwx=(_rwx(0x7ffe20000000),)))
+                 evidence=InjectionEvidence(rwx=bucket_rwx,
+                                             correlation=_correlation_for(rwx=bucket_rwx)))
 
 
 def test_report_rejects_a_result_citing_an_equal_but_separate_copy():
@@ -554,7 +591,8 @@ def test_report_rejects_a_result_citing_an_equal_but_separate_copy():
     assert bucket_item == identical_copy and bucket_item is not identical_copy
     with pytest.raises(ValueError):
         _report(results=(_check(evidence=(identical_copy,)),),
-                 evidence=InjectionEvidence(rwx=(bucket_item,)))
+                 evidence=InjectionEvidence(rwx=(bucket_item,),
+                                             correlation=_correlation_for(rwx=(bucket_item,))))
 
 
 def test_report_accepts_results_citing_correlation_hit_evidence():
@@ -576,7 +614,8 @@ def test_suspicious_and_informational_must_be_drawn_from_validated():
     validated = _pe_hit(0x7ffe20000000)
     with pytest.raises(ValueError, match="not one of"):
         InjectionEvidence(validated_pe_hits=(validated,),
-                           suspicious_pe_hits=(_pe_hit(0x7ffe30000000),))
+                           suspicious_pe_hits=(_pe_hit(0x7ffe30000000),),
+                           correlation=_correlation_for(validated_pe_hits=(validated,)))
 
 
 def test_a_subset_bucket_rejects_an_equal_but_separate_copy():
@@ -584,46 +623,52 @@ def test_a_subset_bucket_rejects_an_equal_but_separate_copy():
     assert validated == identical_copy and validated is not identical_copy
     with pytest.raises(ValueError):
         InjectionEvidence(validated_pe_hits=(validated,),
-                           suspicious_pe_hits=(identical_copy,))
+                           suspicious_pe_hits=(identical_copy,),
+                           correlation=_correlation_for(validated_pe_hits=(validated,)))
 
 
 def test_a_validated_hit_cannot_be_both_scoreable_and_context_only():
     hit = _pe_hit()
     with pytest.raises(ValueError, match="partition|both"):
         InjectionEvidence(validated_pe_hits=(hit,), suspicious_pe_hits=(hit,),
-                           informational_pe_hits=(hit,))
+                           informational_pe_hits=(hit,),
+                           correlation=_correlation_for(validated_pe_hits=(hit,)))
 
 
 def test_a_validated_hit_in_neither_half_of_the_split_is_rejected():
     # A hit no projection would ever account for: it scores nothing and is
     # reported nowhere.
+    validated = (_pe_hit(0x7ffe20000000), _pe_hit(0x7ffe30000000))
     with pytest.raises(ValueError, match="partition"):
-        InjectionEvidence(validated_pe_hits=(_pe_hit(0x7ffe20000000),
-                                              _pe_hit(0x7ffe30000000)),
-                           suspicious_pe_hits=())
+        InjectionEvidence(validated_pe_hits=validated, suspicious_pe_hits=(),
+                           correlation=_correlation_for(validated_pe_hits=validated))
 
 
 def test_split_buckets_must_keep_validated_order():
     first, second = _pe_hit(0x7ffe20000000), _pe_hit(0x7ffe30000000)
-    InjectionEvidence(validated_pe_hits=(first, second),
-                       suspicious_pe_hits=(first, second))
+    validated = (first, second)
+    correlation = _correlation_for(validated_pe_hits=validated)
+    InjectionEvidence(validated_pe_hits=validated, suspicious_pe_hits=(first, second),
+                       correlation=correlation)
     with pytest.raises(ValueError, match="relative order"):
-        InjectionEvidence(validated_pe_hits=(first, second),
-                           suspicious_pe_hits=(second, first))
+        InjectionEvidence(validated_pe_hits=validated, suspicious_pe_hits=(second, first),
+                           correlation=correlation)
 
 
 def test_mz_only_and_validated_hits_must_be_disjoint():
     hit = _pe_hit()
     with pytest.raises(ValueError, match="both mz_only_hits and validated"):
         InjectionEvidence(validated_pe_hits=(hit,), suspicious_pe_hits=(hit,),
-                           mz_only_hits=(hit,))
+                           mz_only_hits=(hit,),
+                           correlation=_correlation_for(validated_pe_hits=(hit,)))
 
 
 def test_genuinely_disjoint_mz_only_hits_are_accepted():
     validated, mz_only = _pe_hit(0x7ffe20000000), _pe_hit(0x7ffe30000000)
     evidence = InjectionEvidence(validated_pe_hits=(validated,),
                                   suspicious_pe_hits=(validated,),
-                                  mz_only_hits=(mz_only,))
+                                  mz_only_hits=(mz_only,),
+                                  correlation=_correlation_for(validated_pe_hits=(validated,)))
     assert evidence.mz_only_hits == (mz_only,)
 
 
@@ -656,19 +701,48 @@ def test_correlated_allocation_regions_must_match_what_correlation_recorded():
             allocation_base=_ALLOC, regions=[_region(0x7ffe90000000)])])
 
 
+def test_correlation_rwx_by_alloc_must_hold_the_buckets_own_regions_in_order():
+    # Same allocation, two distinct sub-regions (the routine VirtualProtect
+    # split) -- same KEY, but the map lists them in the wrong order.
+    rwx_a1 = RwxRegionEvidence(region=_region(0x1000, alloc=0x1000), location=_location(0x1000))
+    rwx_a2 = RwxRegionEvidence(region=_region(0x1500, alloc=0x1000), location=_location(0x1500))
+    rwx = (rwx_a1, rwx_a2)
+    reversed_map = {0x1000: (rwx_a2.region, rwx_a1.region)}
+    correlation = Correlation(rwx_by_alloc=reversed_map, suspicious_alloc_bases={0x1000})
+    with pytest.raises(ValueError, match="in the order"):
+        InjectionEvidence(rwx=rwx, correlation=correlation)
+
+
+def test_correlation_rwx_and_pe_alloc_bases_must_equal_the_real_intersection():
+    rwx = (_rwx(0x1000),)
+    validated = (_pe_hit(0x2000),)   # different allocations -- no real overlap
+    correlation = _correlation_for(rwx=rwx, validated_pe_hits=validated,
+                                    rwx_and_pe_alloc_bases={0x1000})   # wrong: claims overlap
+    with pytest.raises(ValueError, match="rwx_and_pe_alloc_bases"):
+        InjectionEvidence(rwx=rwx, validated_pe_hits=validated, correlation=correlation)
+
+
+def test_correlation_suspicious_alloc_bases_must_equal_the_real_union():
+    rwx = (_rwx(0x1000), _rwx(0x2000))
+    validated = (_pe_hit(0x1000),)
+    correlation = _correlation_for(rwx=rwx, validated_pe_hits=validated,
+                                    suspicious_alloc_bases={0x1000})   # wrong: missing 0x2000
+    with pytest.raises(ValueError, match="suspicious_alloc_bases"):
+        InjectionEvidence(rwx=rwx, validated_pe_hits=validated, correlation=correlation)
+
+
 def test_correlated_allocations_must_be_sorted_and_unique():
     rwx_a, rwx_b = _rwx(0x1000), _rwx(0x2000)
-    correlation = Correlation(
-        rwx_by_alloc={0x1000: [rwx_a.region], 0x2000: [rwx_b.region]},
-        pe_by_alloc={0x1000: (), 0x2000: ()},
-        rwx_and_pe_alloc_bases={0x1000, 0x2000})
+    pe_a, pe_b = _pe_hit(0x1000), _pe_hit(0x2000)
+    rwx, validated = (rwx_a, rwx_b), (pe_a, pe_b)
+    correlation = _correlation_for(rwx=rwx, validated_pe_hits=validated)
     descending = [CorrelatedAllocationEvidence(allocation_base=0x2000,
-                                                regions=[rwx_b.region]),
+                                                regions=[rwx_b.region, pe_b.region]),
                    CorrelatedAllocationEvidence(allocation_base=0x1000,
-                                                regions=[rwx_a.region])]
+                                                regions=[rwx_a.region, pe_a.region])]
     with pytest.raises(ValueError, match="ascending"):
-        InjectionEvidence(rwx=[rwx_a, rwx_b], correlation=correlation,
-                           correlated_allocations=descending)
+        InjectionEvidence(rwx=rwx, validated_pe_hits=validated, suspicious_pe_hits=validated,
+                           correlation=correlation, correlated_allocations=descending)
 
 
 def test_report_rejects_a_result_citing_a_merely_nested_object():

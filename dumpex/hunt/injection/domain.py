@@ -91,21 +91,34 @@ def _require_items_of(value, field_name: str, expected) -> tuple:
     this check at construction time rather than surfacing later as a
     projector that happens to read the wrong attribute."""
     items = as_tuple(value, field_name)
-    seen = set()
     for index, item in enumerate(items):
         if not isinstance(item, expected):
             raise TypeError(
                 f"{field_name}[{index}] must be a {expected.__name__}, got "
                 f"{type(item).__name__}: {item!r}")
-        # One evidence object is one observation. The same object listed
-        # twice in one bucket, or an equal-but-distinct duplicate of it,
-        # is the same fact counted twice -- which every projection would
-        # then render twice and every count would over-report.
-        if id(item) in seen:
-            raise ValueError(
-                f"{field_name}[{index}] is already in this bucket: {item!r}")
-        seen.add(id(item))
+    # Immutability is confirmed before the dedup check below relies on
+    # hashing: every type this function accepts as a leaf/container is
+    # hashable by construction (a frozen dataclass whose own fields are
+    # all themselves proven hashable here, or a tuple/frozenset/scalar of
+    # them), so this also guarantees the `set()` below cannot raise.
     require_recursively_immutable(items, field_name)
+    # One evidence object is one observation. The same object listed
+    # twice in one bucket, or an EQUAL-BUT-DISTINCT duplicate of it (two
+    # separately-constructed value objects describing the same region/
+    # hit/thread), is the same fact counted twice -- which every
+    # projection would then render twice and every count would
+    # over-report. Equality dedup (not `id()`) is what actually catches
+    # the second case: two distinct objects with identical fields compare
+    # equal and hash equal, so a `set()` here is a strictly stronger check
+    # than an identity set -- it also happens to catch the same-object-
+    # twice case, since `x == x` trivially holds.
+    seen = set()
+    for index, item in enumerate(items):
+        if item in seen:
+            raise ValueError(
+                f"{field_name}[{index}] is already in this bucket (identical "
+                f"or equal to an earlier item): {item!r}")
+        seen.add(item)
     return items
 
 
@@ -149,15 +162,98 @@ def _own_correlation(correlation) -> Correlation:
 
 def _require_subset(subset, superset, subset_name: str, superset_name: str) -> None:
     """Every item of `subset` must BE (by identity) an item of
-    `superset` -- not merely equal to one. An equal-but-distinct copy is
-    a second representation of the same fact, and the two are then free to
-    be rendered from different objects."""
+    `superset` -- not merely equal to one. This mirrors how the real
+    producers build these relationships: `aggregate._split_scoreable_pe_hits`
+    partitions `validated_pe_hits`' own list into suspicious/informational,
+    and `correlation.correlate` filters `rip_hits`' own list into
+    `rip_full_correlation` -- both by reference, never by reconstructing an
+    equal copy. An equal-but-distinct object here would mean this
+    Report's own subset was NOT built that way, which is itself a
+    signal the buckets disagree about where an item's own identity came
+    from."""
     allowed = {id(item) for item in superset}
     for item in subset:
         if id(item) not in allowed:
             raise ValueError(
                 f"{subset_name} holds an item that is not one of "
                 f"{superset_name}'s own objects: {item!r}")
+
+
+def _group_by_allocation(items, region_of) -> dict:
+    """`{allocation_base: (region, ...)}`, built from `items` in order --
+    the exact grouping `dumpex.core.memory.group_regions_by_allocation`
+    (the only real producer of `Correlation.rwx_by_alloc`/`pe_by_alloc`)
+    performs, re-derived here so `_require_correlation_matches_buckets`
+    has something to compare the stored maps against. A key appears only
+    when at least one item actually mapped to it -- the source function's
+    own `dict.setdefault(key, []).append(...)` never creates an
+    empty-valued key, so neither does this."""
+    groups: dict = {}
+    for item in items:
+        groups.setdefault(region_of(item).allocation_base, []).append(region_of(item))
+    return {base: tuple(regions) for base, regions in groups.items()}
+
+
+def _require_grouped_map_matches(actual, expected: dict, actual_name: str,
+                                  source_name: str) -> None:
+    """`actual` (a `Correlation` map) must hold EXACTLY `expected`'s keys,
+    and for each key, the identical region objects in the identical order
+    -- not equal copies, not a different grouping order. Order matters:
+    it is what a projection iterates when it lists "every region sharing
+    this allocation"."""
+    actual_keys, expected_keys = set(actual), set(expected)
+    if actual_keys != expected_keys:
+        raise ValueError(
+            f"{actual_name} covers allocation base(s) "
+            f"{sorted(hex(b) for b in actual_keys)}, but grouping "
+            f"{source_name} by allocation base gives "
+            f"{sorted(hex(b) for b in expected_keys)} -- {actual_name} must be "
+            f"exactly that grouping, not an independently supplied map")
+    for base in expected_keys:
+        if [id(r) for r in actual[base]] != [id(r) for r in expected[base]]:
+            raise ValueError(
+                f"{actual_name}[0x{base:x}] does not hold exactly "
+                f"{source_name}'s own region objects, in the order those "
+                f"regions appear in {source_name}")
+
+
+def _require_correlation_matches_buckets(correlation: Correlation, rwx: tuple,
+                                          validated_pe_hits: tuple) -> None:
+    """`Correlation.rwx_by_alloc`/`pe_by_alloc`/`rwx_and_pe_alloc_bases`/
+    `suspicious_alloc_bases` are not independent facts a caller supplies
+    alongside the top-level `rwx`/`validated_pe_hits` buckets -- they are
+    `dumpex.hunt.injection.correlation.correlate()`'s own derivation FROM
+    those exact buckets (group `[ev.region for ev in rwx]` and
+    `[h.region for h in validated_pe_hits]` by allocation base; the two
+    alloc-base sets are this correlation's intersection and union). A
+    Correlation describing a DIFFERENT set of regions than the buckets it
+    is attached to would let one projection read "what shares this
+    allocation" from the buckets and another read it from the
+    Correlation, with no guarantee the two agree.
+    """
+    expected_rwx_by_alloc = _group_by_allocation(rwx, lambda ev: ev.region)
+    expected_pe_by_alloc = _group_by_allocation(validated_pe_hits, lambda h: h.region)
+    _require_grouped_map_matches(correlation.rwx_by_alloc, expected_rwx_by_alloc,
+                                  "InjectionEvidence.correlation.rwx_by_alloc",
+                                  "InjectionEvidence.rwx")
+    _require_grouped_map_matches(correlation.pe_by_alloc, expected_pe_by_alloc,
+                                  "InjectionEvidence.correlation.pe_by_alloc",
+                                  "InjectionEvidence.validated_pe_hits")
+
+    expected_rwx_and_pe = set(expected_rwx_by_alloc) & set(expected_pe_by_alloc)
+    if set(correlation.rwx_and_pe_alloc_bases) != expected_rwx_and_pe:
+        raise ValueError(
+            f"InjectionEvidence.correlation.rwx_and_pe_alloc_bases "
+            f"({sorted(hex(b) for b in correlation.rwx_and_pe_alloc_bases)}) must be "
+            f"exactly the allocation bases rwx and validated_pe_hits share "
+            f"({sorted(hex(b) for b in expected_rwx_and_pe)})")
+    expected_suspicious = set(expected_rwx_by_alloc) | set(expected_pe_by_alloc)
+    if set(correlation.suspicious_alloc_bases) != expected_suspicious:
+        raise ValueError(
+            f"InjectionEvidence.correlation.suspicious_alloc_bases "
+            f"({sorted(hex(b) for b in correlation.suspicious_alloc_bases)}) must be "
+            f"exactly every allocation base carrying RWX or a validated PE "
+            f"({sorted(hex(b) for b in expected_suspicious)})")
 
 
 @dataclass(frozen=True)
@@ -306,26 +402,39 @@ class InjectionEvidence:
         self._require_bucket_relations()
 
     def _require_bucket_relations(self) -> None:
-        """The identity relationships between buckets, which come straight
-        from how the scan/correlation layer produces them:
+        """The relationships between buckets, which come straight from how
+        the scan/correlation layer produces them:
 
           * `suspicious_pe_hits` and `informational_pe_hits` are the exact
             partition of `validated_pe_hits` that
             `aggregate._split_scoreable_pe_hits` produces -- every hit in
             one or the other, never both, never a hit belonging to
-            neither, and each keeping validated's own relative order;
+            neither, and each keeping validated's own relative order.
+            Enforced by IDENTITY: the real producer partitions
+            `validated_pe_hits`' own list by reference, never by
+            reconstructing an equal copy (see `_require_subset`'s own
+            docstring);
           * `mz_only_hits` and `validated_pe_hits` are the two disjoint
-            halves of `memory_scan.split_hidden_pe_hits`' output;
+            halves of `memory_scan.split_hidden_pe_hits`' output.
+            Enforced by EQUALITY, unlike the split above: these two
+            buckets are not built one FROM the other by reference (they
+            are the two independent output lists of one classification
+            pass), so the fact this check protects is "no hit is claimed
+            on both sides of that classification", which an
+            equal-but-distinct copy violates exactly as much as the
+            literal same object would;
+          * `correlation.rwx_by_alloc`/`pe_by_alloc`/
+            `rwx_and_pe_alloc_bases`/`suspicious_alloc_bases` are exactly
+            `rwx`/`validated_pe_hits` grouped by allocation base (see
+            `_require_correlation_matches_buckets`), by IDENTITY --
+            `group_regions_by_allocation` groups references, never copies;
           * `correlated_allocations` is the materialized join of
             `correlation.rwx_and_pe_alloc_bases` with the two
             per-allocation maps -- one entry per correlated allocation,
             ascending by base, each holding exactly that allocation's RWX
-            regions followed by its validated-PE regions.
-
-        Enforced by identity: an equal-but-distinct copy in a subset
-        bucket is a second object describing the same hit, and the two are
-        then free to be rendered independently.
+            regions followed by its validated-PE regions, by IDENTITY.
         """
+        _require_correlation_matches_buckets(self.correlation, self.rwx, self.validated_pe_hits)
         _require_subset(self.suspicious_pe_hits, self.validated_pe_hits,
                          "InjectionEvidence.suspicious_pe_hits",
                          "InjectionEvidence.validated_pe_hits")
@@ -358,9 +467,14 @@ class InjectionEvidence:
                     f"relative order -- evidence ordering is part of the output "
                     f"contract, not an implementation detail")
 
-        validated_ids = {id(hit) for hit in self.validated_pe_hits}
+        # Equality, not identity: an equal-but-distinct HiddenPeEvidence in
+        # mz_only_hits describing the same region as one in
+        # validated_pe_hits is still claiming that region on both sides of
+        # a mutually exclusive classification, whether or not it is the
+        # literal same Python object.
+        validated_set = set(self.validated_pe_hits)
         for hit in self.mz_only_hits:
-            if id(hit) in validated_ids:
+            if hit in validated_set:
                 raise ValueError(
                     f"InjectionEvidence: {hit!r} is in both mz_only_hits and "
                     f"validated_pe_hits -- a hit either passed structural PE "

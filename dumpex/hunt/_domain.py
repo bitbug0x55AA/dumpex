@@ -139,17 +139,42 @@ def require_recursively_immutable(value, field_name: str) -> None:
     unlike a `str` used AS an evidence item, which is a pre-rendered
     console fact and is rejected by `_require_evidence_items()` instead.
 
-    An enum member is accepted only after its own `value` and any
-    non-internal instance attribute pass the same check: `Enum` puts no
-    constraint whatsoever on what a member's value may be, so `class
-    Layer(Enum): RWX = []` is a perfectly ordinary enum holding a mutable
-    list.
+    An enum member is accepted only after its own `value` and every
+    instance attribute -- ALL of them, not merely the ones that happen not
+    to start with `_` -- pass the same check: `Enum` puts no constraint
+    whatsoever on what a member's value (or any attribute a member's own
+    `__init__` chooses to set) may be, so `class Layer(Enum): RWX = []` is
+    a perfectly ordinary enum holding a mutable list, and so is a member
+    that stashes one in `self._payload` from its own `__init__` -- leading
+    underscores are an ordinary Python naming convention, not a boundary
+    this function may trust.
+
+    A frozen dataclass instance is likewise validated by ITS OWN state,
+    not by its declared fields alone: `dataclasses.fields()` lists only
+    what the dataclass decorator generated `__init__`/`__eq__` for, and
+    says nothing about what a subclass's own `__init__` (or any code
+    holding a reference before this function ever sees it) may have set
+    via `object.__setattr__`. `vars(value)`, when the instance has a
+    `__dict__` at all (a `slots=True` dataclass does not, and so cannot
+    hold undeclared state in the first place), must contain EXACTLY the
+    declared field names -- anything else is instance state this function
+    would otherwise never look at.
     """
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         if not value.__dataclass_params__.frozen:
             raise TypeError(
                 f"{field_name} must be recursively immutable, but holds a "
                 f"non-frozen dataclass {type(value).__name__}: {value!r}")
+        declared = {f.name for f in dataclasses.fields(value)}
+        instance_state = getattr(value, "__dict__", None)
+        if instance_state is not None and set(instance_state) != declared:
+            raise TypeError(
+                f"{field_name} holds a {type(value).__name__} whose instance "
+                f"state does not match its own declared dataclass fields "
+                f"(extra: {sorted(set(instance_state) - declared)}) -- only "
+                f"declared fields are validated for immutability, so anything "
+                f"else is unchecked instance state a subclass or a caller "
+                f"could have attached")
         for f in dataclasses.fields(value):
             require_recursively_immutable(getattr(value, f.name),
                                            f"{field_name}.{f.name}")
@@ -160,12 +185,16 @@ def require_recursively_immutable(value, field_name: str) -> None:
         # past on its str-ness alone, without its value being looked at.
         require_recursively_immutable(value.value, f"{field_name}.value")
         for attribute, attribute_value in vars(value).items():
-            # Enum's own bookkeeping (_name_/_value_/_sort_order_/
-            # __objclass__) is all underscore-prefixed; anything else is
-            # an attribute someone attached to the member itself.
-            if not attribute.startswith("_"):
-                require_recursively_immutable(attribute_value,
-                                               f"{field_name}.{attribute}")
+            # `__objclass__` is the ONE genuinely Enum-internal attribute
+            # that isn't itself a plain immutable leaf (it's a reference
+            # to the enum class -- a `type` object, always present, never
+            # user-supplied): exempted by exact name, not by a leading-
+            # underscore heuristic. `_name_`/`_value_`/`_sort_order_` are
+            # ordinary str/str/int leaves and pass this same call like any
+            # other attribute -- no exemption needed, and none given.
+            if attribute == "__objclass__":
+                continue
+            require_recursively_immutable(attribute_value, f"{field_name}.{attribute}")
         return
     if type(value) in _IMMUTABLE_CONTAINERS:
         for item in value:
