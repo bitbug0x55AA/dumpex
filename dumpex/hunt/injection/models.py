@@ -162,6 +162,23 @@ class CorrelatedAllocationEvidence:
     regions: tuple           # tuple[RegionRef, ...] once constructed
 
     def __post_init__(self):
+        # list/tuple only, never "anything iterable": a bare string would
+        # silently explode into its characters, a set/dict would carry
+        # hash-order-dependent ordering into a field whose order IS the
+        # contract, and a generator would work once and then read empty.
+        # Element type is checked too -- this tuple is what every
+        # projection renders, so a non-RegionRef here surfaces as a
+        # projector reading an attribute that does not exist rather than
+        # as a construction error.
+        if not isinstance(self.regions, (list, tuple)):
+            raise TypeError(
+                f"CorrelatedAllocationEvidence.regions must be a list or tuple, "
+                f"got {type(self.regions).__name__}")
+        for index, region in enumerate(self.regions):
+            if not isinstance(region, RegionRef):
+                raise TypeError(
+                    f"CorrelatedAllocationEvidence.regions[{index}] must be a "
+                    f"RegionRef, got {type(region).__name__}: {region!r}")
         object.__setattr__(self, "regions", tuple(self.regions))
 
 

@@ -35,6 +35,7 @@ the shape is fixed once rather than re-derived per hunter as each one
 migrates.
 """
 import dataclasses
+import enum
 from types import MappingProxyType
 
 from dumpex.hunt._finding import (
@@ -48,11 +49,29 @@ from dumpex.hunt._finding import (
 # whatever holds them -- `frozen` only stops attribute REASSIGNMENT, so a
 # frozen dataclass field holding a list still lets a caller do
 # `report.evidence.rwx.append(...)` (or keep the original list and mutate
-# it after construction). `types.MappingProxyType` is deliberately NOT in
-# this tuple and is NOT a dict subclass: it is the read-only mapping view
+# it after construction). Named separately from the general rejection
+# below only so the error message can say what specifically went wrong;
+# `types.MappingProxyType` is deliberately NOT here and is NOT a dict
+# subclass -- it is the read-only mapping view
 # dumpex.hunt.injection.models.Correlation already normalizes its
 # per-allocation maps to.
 _MUTABLE_CONTAINERS = (list, set, dict, bytearray)
+
+# The ONLY leaf values `require_recursively_immutable` accepts. This is a
+# deliberate allowlist, not a denylist of known-bad types: a denylist
+# treats every unrecognized object as an immutable leaf, which is exactly
+# how a `MinidumpFile`, a `read_region` resolver, or any custom class
+# wrapping a mutable payload gets to sit inside a "frozen" evidence object
+# and stay reachable from -- and mutable through -- a constructed Report.
+# The whole point of the guardrail is that such a reference cannot be
+# retained at all, so anything not proven immutable is refused.
+#
+# `enum.Enum` covers dumpex.output.coverage's `str, Enum` vocabularies
+# (SourceState/LimitationCode/CoverageStatus) and any future non-str enum.
+# A value type that genuinely belongs here later (a date, a Decimal) is
+# added deliberately, with the reasoning written down, rather than
+# admitted by default.
+_IMMUTABLE_LEAF_TYPES = (type(None), bool, int, float, complex, str, bytes, enum.Enum)
 
 
 def as_tuple(value, field_name: str) -> tuple:
@@ -84,11 +103,18 @@ def require_recursively_immutable(value, field_name: str) -> None:
     can quietly change after the fact, which is exactly the failure this
     migration's "Report is recursively immutable" guardrail names.
 
-    Walks dataclass fields, tuple/frozenset items, and MappingProxyType
-    keys/values, and rejects:
+    Recurses through exactly three container shapes -- frozen dataclass
+    fields, tuple/frozenset items, and MappingProxyType keys/values -- and
+    accepts only `_IMMUTABLE_LEAF_TYPES` as a leaf. EVERYTHING else is
+    rejected, including a type this module simply does not recognize:
 
       * any list/set/dict/bytearray anywhere in the graph;
-      * any dataclass instance that is not itself frozen.
+      * any dataclass instance that is not itself frozen;
+      * any other object -- a `MinidumpFile`, a `read_region` resolver, a
+        custom class wrapping a mutable payload. Treating an unrecognized
+        object as an immutable leaf is precisely the escape hatch that
+        would let a frozen evidence object keep a dump handle reachable
+        (and its payload mutable) inside an otherwise-"immutable" Report.
 
     Plain scalars (int/float/str/bytes/bool/None) and enum members are
     accepted as leaves -- a `str` INSIDE an evidence object (a resolved
@@ -97,10 +123,6 @@ def require_recursively_immutable(value, field_name: str) -> None:
     pre-rendered console fact and is rejected by
     `_require_evidence_items()` instead.
     """
-    if isinstance(value, _MUTABLE_CONTAINERS):
-        raise TypeError(
-            f"{field_name} must be recursively immutable, but holds a mutable "
-            f"{type(value).__name__}: {value!r}")
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         if not value.__dataclass_params__.frozen:
             raise TypeError(
@@ -109,13 +131,28 @@ def require_recursively_immutable(value, field_name: str) -> None:
         for f in dataclasses.fields(value):
             require_recursively_immutable(getattr(value, f.name),
                                            f"{field_name}.{f.name}")
-    elif isinstance(value, (tuple, frozenset)):
+        return
+    if isinstance(value, (tuple, frozenset)):
         for item in value:
             require_recursively_immutable(item, f"{field_name}[]")
-    elif isinstance(value, MappingProxyType):
+        return
+    if isinstance(value, MappingProxyType):
         for key, item in value.items():
             require_recursively_immutable(key, f"{field_name}{{key}}")
             require_recursively_immutable(item, f"{field_name}{{}}")
+        return
+    if isinstance(value, _IMMUTABLE_LEAF_TYPES):
+        return
+    if isinstance(value, _MUTABLE_CONTAINERS):
+        raise TypeError(
+            f"{field_name} must be recursively immutable, but holds a mutable "
+            f"{type(value).__name__}: {value!r}")
+    raise TypeError(
+        f"{field_name} must be recursively immutable, but holds a "
+        f"{type(value).__name__} that is neither an immutable leaf nor an "
+        f"immutable container: {value!r} -- an unrecognized object cannot be "
+        f"assumed immutable, and a dump/resolver/projector reference must not "
+        f"be reachable from the domain model at all")
 
 
 def _require_evidence_items(value, field_name: str) -> tuple:
@@ -186,7 +223,12 @@ class CheckResult:
                           Objects here are the SAME instances the Report's
                           own evidence buckets hold -- shared references
                           to immutable value objects, never a second copy
-                          that could drift from the first.
+                          that could drift from the first. That is a
+                          checked invariant, not a convention: the Report
+                          enforces it by identity at construction (see
+                          dumpex.hunt.injection.domain.InjectionReport's
+                          own `_require_results_cite_this_reports_own_
+                          evidence`).
 
                           Legitimately empty for a check whose entire
                           claim is about a coverage GAP rather than about

@@ -196,8 +196,12 @@ class InjectionEvidence:
     Held once. `InjectionReport.results` reference these SAME objects
     rather than carrying their own copies, so "what the RWX check
     reported" and "what `rwx` contains" cannot describe the same region
-    differently. Buckets exist independently of the checks because they
-    are not the same set: `validated_pe_hits` is the FULL validated-PE
+    differently -- enforced by identity when the Report is constructed
+    (see `InjectionReport._require_results_cite_this_reports_own_evidence`
+    and `canonical_items()` below).
+
+    Buckets exist independently of the checks because they are not the
+    same set: `validated_pe_hits` is the FULL validated-PE
     set the legacy dict exposes, while the checks report its
     suspicious/informational split (see aggregate._split_scoreable_pe_hits).
     """
@@ -231,6 +235,34 @@ class InjectionEvidence:
                 f"InjectionEvidence.correlation must be a Correlation, got "
                 f"{type(self.correlation).__name__}: {self.correlation!r}")
         require_recursively_immutable(self.correlation, "InjectionEvidence.correlation")
+
+    def canonical_items(self) -> tuple:
+        """Every evidence object this container holds AT THE TOP LEVEL --
+        the exact set a `CheckResult` on the same Report may cite, and the
+        set `InjectionReport` enforces citations against.
+
+        Top-level deliberately: an object merely REACHABLE from here (a
+        `RegionRef` nested inside an `RwxRegionEvidence`, or inside
+        `Correlation.rwx_by_alloc`) is not citable on its own. Admitting
+        nested objects would make the containment check vacuous -- almost
+        anything is reachable from something -- and would let a check
+        report a bare region that no bucket ever accounted for. A future
+        check that genuinely needs to cite something new has to have it
+        added to a bucket first, which is the point.
+
+        `Correlation`'s own hit tuples are included: `rip_hits`/
+        `rip_full_correlation`/`start_hits` ARE top-level evidence
+        collections (the live-execution correlation checks cite them
+        directly), they just live on the correlation result rather than in
+        a separate bucket that would duplicate them.
+        """
+        items = []
+        for name in self._ITEM_TYPES:
+            items.extend(getattr(self, name))
+        items.extend(self.correlation.rip_hits)
+        items.extend(self.correlation.rip_full_correlation)
+        items.extend(self.correlation.start_hits)
+        return tuple(items)
 
 
 @dataclass(frozen=True)
@@ -266,6 +298,37 @@ class InjectionReport:
                 f"{type(self.evidence).__name__}: {self.evidence!r}")
         object.__setattr__(self, "results", _require_items_of(
             self.results, "InjectionReport.results", CheckResult))
+        self._require_results_cite_this_reports_own_evidence()
+
+    def _require_results_cite_this_reports_own_evidence(self) -> None:
+        """"Exactly one canonical result/evidence representation" is a
+        structural claim, and this is what makes it one.
+
+        Type-checking `results` and `evidence` separately is not enough:
+        it admits a Report whose RWX check reports a region at 0x1000
+        while `evidence.rwx` holds a different region at 0x2000. Both
+        halves are individually well-formed, and every projection built
+        from them would disagree about what this hunter actually observed
+        -- the exact parallel-representation drift this model exists to
+        remove, present from the moment of construction.
+
+        Membership is checked by IDENTITY, not equality: two equal-but-
+        distinct value objects are a second copy of the same fact, which
+        is what "held once" forbids, even though nothing could later make
+        them differ. Identity also makes the check exact -- a citation
+        either is one of this Report's own evidence objects or it is not.
+        """
+        canonical = {id(item) for item in self.evidence.canonical_items()}
+        for result in self.results:
+            for item in result.evidence:
+                if id(item) not in canonical:
+                    raise ValueError(
+                        f"InjectionReport: check {result.check!r} cites evidence "
+                        f"that is not one of this Report's own evidence objects: "
+                        f"{item!r} -- a result may only reference the SAME "
+                        f"objects InjectionEvidence holds (see "
+                        f"InjectionEvidence.canonical_items), never a second "
+                        f"copy or an unaccounted-for item")
 
     @property
     def max_score(self) -> int:

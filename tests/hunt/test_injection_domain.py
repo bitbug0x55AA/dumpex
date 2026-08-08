@@ -217,6 +217,25 @@ def test_mutating_a_correlated_allocations_region_list_changes_nothing():
     assert len(correlated.regions) == 1
 
 
+@pytest.mark.parametrize("not_a_sequence", [
+    pytest.param("ab", id="bare-string"),
+    pytest.param({"region": None}, id="dict"),
+    pytest.param({_region()}, id="set"),
+    pytest.param(iter(()), id="generator"),
+])
+def test_correlated_allocation_regions_must_be_a_list_or_tuple(not_a_sequence):
+    # `tuple(value)` alone would accept every one of these -- silently
+    # turning "ab" into ("a", "b"), and taking hash-order-dependent
+    # ordering from a set/dict into a field whose order is the contract.
+    with pytest.raises(TypeError):
+        CorrelatedAllocationEvidence(allocation_base=0x1000, regions=not_a_sequence)
+
+
+def test_correlated_allocation_regions_must_hold_region_refs():
+    with pytest.raises(TypeError):
+        CorrelatedAllocationEvidence(allocation_base=0x1000, regions=[_rwx()])
+
+
 # ── 3. Poison objects: what the model must refuse to retain ───────────────
 
 class _FakeResolver:
@@ -297,6 +316,59 @@ def test_check_result_evidence_rejects_a_non_frozen_dataclass():
         _check(evidence=(_MutableEvidence(),))
 
 
+class _MutablePayloadWrapper:
+    """An arbitrary custom object holding a mutable payload. A denylist
+    walker that only knows list/dict/set/dataclass would treat this as an
+    immutable leaf and let `hits` stay mutable through the Report."""
+
+    def __init__(self):
+        self.hits = []
+
+
+@pytest.mark.parametrize("smuggled", [
+    pytest.param(_FakeMinidumpFile(), id="minidump-file"),
+    pytest.param(_FakeResolver(), id="address-resolver"),
+    pytest.param(_MutablePayloadWrapper(), id="custom-mutable-payload"),
+    pytest.param(object(), id="bare-object"),
+    pytest.param(RegionRef, id="class-object"),
+])
+def test_frozen_evidence_cannot_smuggle_an_unrecognized_object_in_a_field(smuggled):
+    # The evidence ITEM is a frozen dataclass, so the item-level check
+    # passes -- the escape hatch is one level down, in a field the scan
+    # layer's own value objects do not type-check. An unrecognized object
+    # is never assumed immutable.
+    smuggling = RwxRegionEvidence(region=smuggled, location=_location())
+    with pytest.raises(TypeError):
+        _check(evidence=(smuggling,))
+    with pytest.raises(TypeError):
+        InjectionEvidence(rwx=(smuggling,))
+
+
+def test_immutable_leaves_and_containers_are_still_accepted():
+    # The allowlist must not be so strict that legitimate evidence fails:
+    # scalars, None, bytes, enum members, tuples, frozensets and the
+    # MappingProxyType Correlation normalizes to all pass.
+    import enum
+
+    class _State(enum.Enum):
+        PRESENT = "present"
+
+    @dataclasses.dataclass(frozen=True)
+    class _Leaves:
+        a: object = None
+        b: object = 0x1000
+        c: object = "PAGE_EXECUTE_READWRITE"
+        d: object = b"MZ"
+        e: object = 1.5
+        f: object = _State.PRESENT
+        g: object = dataclasses.field(default_factory=tuple)
+        h: object = dataclasses.field(default_factory=frozenset)
+
+    require_recursively_immutable(_Leaves(), "leaves")
+    require_recursively_immutable(
+        Correlation(rwx_by_alloc={0x1000: [_region()]}), "correlation")
+
+
 @pytest.mark.parametrize("not_a_sequence", [
     pytest.param({"rwx": ()}, id="dict"),
     pytest.param("VA=0x1000", id="bare-string"),
@@ -349,6 +421,46 @@ def test_report_stores_no_second_copy_of_its_evidence():
     report = _report(results=(_check(evidence=(rwx,)),),
                       evidence=InjectionEvidence(rwx=(rwx,)))
     assert report.results[0].evidence[0] is report.evidence.rwx[0]
+
+
+def test_report_rejects_a_result_citing_evidence_no_bucket_accounts_for():
+    # Both halves are individually well-formed; together they claim two
+    # different regions for the same observation. Constructing that Report
+    # at all is what "exactly one canonical representation" forbids.
+    with pytest.raises(ValueError, match="not one of this Report's own evidence"):
+        _report(results=(_check(evidence=(_rwx(0x7ffe10000000),)),),
+                 evidence=InjectionEvidence(rwx=(_rwx(0x7ffe20000000),)))
+
+
+def test_report_rejects_a_result_citing_an_equal_but_separate_copy():
+    # Equality is not enough: an equal-but-distinct object is a second
+    # copy of the same fact, which is what "held once" forbids.
+    bucket_item, identical_copy = _rwx(), _rwx()
+    assert bucket_item == identical_copy and bucket_item is not identical_copy
+    with pytest.raises(ValueError):
+        _report(results=(_check(evidence=(identical_copy,)),),
+                 evidence=InjectionEvidence(rwx=(bucket_item,)))
+
+
+def test_report_accepts_results_citing_correlation_hit_evidence():
+    # rip_hits/rip_full_correlation/start_hits are top-level evidence too,
+    # they just live on the correlation result rather than in a bucket
+    # that would duplicate them.
+    hit = RipHitEvidence(thread_id=0x1, ip=0x7ffe10000010, ip_reg="RIP", region=_region())
+    evidence = InjectionEvidence(correlation=Correlation(rip_hits=[hit]))
+    report = _report(results=(_check(check="injection.allocation_correlation",
+                                      evidence=(hit,)),), evidence=evidence)
+    assert report.results[0].evidence[0] is report.evidence.correlation.rip_hits[0]
+
+
+def test_report_rejects_a_result_citing_a_merely_nested_object():
+    # A RegionRef reachable INSIDE an RwxRegionEvidence is not itself a
+    # citable evidence item -- allowing nested objects would make the
+    # containment check vacuous.
+    rwx = _rwx()
+    with pytest.raises(ValueError):
+        _report(results=(_check(evidence=(rwx.region,)),),
+                 evidence=InjectionEvidence(rwx=(rwx,)))
 
 
 # ── 4. Derived judgment fields ────────────────────────────────────────────
