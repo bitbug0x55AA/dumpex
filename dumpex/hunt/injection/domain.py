@@ -38,6 +38,7 @@ dict, the v2.7 `HunterRecord`, and the console renderer become pure
 projections of this type in the follow-up issues; this one only fixes the
 shape and proves its immutability.
 """
+import dataclasses
 from dataclasses import dataclass, field
 
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
@@ -90,13 +91,73 @@ def _require_items_of(value, field_name: str, expected) -> tuple:
     this check at construction time rather than surfacing later as a
     projector that happens to read the wrong attribute."""
     items = as_tuple(value, field_name)
+    seen = set()
     for index, item in enumerate(items):
         if not isinstance(item, expected):
             raise TypeError(
                 f"{field_name}[{index}] must be a {expected.__name__}, got "
                 f"{type(item).__name__}: {item!r}")
+        # One evidence object is one observation. The same object listed
+        # twice in one bucket, or an equal-but-distinct duplicate of it,
+        # is the same fact counted twice -- which every projection would
+        # then render twice and every count would over-report.
+        if id(item) in seen:
+            raise ValueError(
+                f"{field_name}[{index}] is already in this bucket: {item!r}")
+        seen.add(id(item))
     require_recursively_immutable(items, field_name)
     return items
+
+
+def _own_correlation(correlation) -> Correlation:
+    """Return a Correlation the DOMAIN owns, and validate its contents.
+
+    `Correlation` normalizes its per-allocation maps to
+    `types.MappingProxyType`, which is a read-only VIEW rather than an
+    immutable value: whoever still holds the dict behind it can mutate it
+    afterwards. `Correlation.__post_init__` wraps a FRESH dict, so
+    re-running it here (`dataclasses.replace`) is what makes the mapping
+    behind the stored proxies unreachable to the caller -- the copy
+    boundary the "mutating constructor inputs cannot change the Report"
+    guardrail needs. Evidence identity is unaffected: re-normalizing
+    rebuilds the containers, never the hits or region refs inside them.
+
+    Contents are validated field by field rather than by handing the whole
+    Correlation to `require_recursively_immutable`, which refuses a
+    MappingProxyType outright (correctly -- it cannot tell an owned proxy
+    from a borrowed one; only this function, which just created it, can).
+    """
+    if not isinstance(correlation, Correlation):
+        raise TypeError(
+            f"InjectionEvidence.correlation must be a Correlation, got "
+            f"{type(correlation).__name__}: {correlation!r}")
+    owned = dataclasses.replace(correlation)
+    for map_name in ("rwx_by_alloc", "pe_by_alloc"):
+        for allocation_base, regions in getattr(owned, map_name).items():
+            require_recursively_immutable(
+                allocation_base, f"InjectionEvidence.correlation.{map_name}{{key}}")
+            require_recursively_immutable(
+                regions, f"InjectionEvidence.correlation.{map_name}{{}}")
+    for name in ("rwx_and_pe_alloc_bases", "suspicious_alloc_bases",
+                 "rip_hits", "rip_full_correlation", "start_hits"):
+        require_recursively_immutable(getattr(owned, name),
+                                       f"InjectionEvidence.correlation.{name}")
+    _require_subset(owned.rip_full_correlation, owned.rip_hits,
+                     "correlation.rip_full_correlation", "correlation.rip_hits")
+    return owned
+
+
+def _require_subset(subset, superset, subset_name: str, superset_name: str) -> None:
+    """Every item of `subset` must BE (by identity) an item of
+    `superset` -- not merely equal to one. An equal-but-distinct copy is
+    a second representation of the same fact, and the two are then free to
+    be rendered from different objects."""
+    allowed = {id(item) for item in superset}
+    for item in subset:
+        if id(item) not in allowed:
+            raise ValueError(
+                f"{subset_name} holds an item that is not one of "
+                f"{superset_name}'s own objects: {item!r}")
 
 
 @dataclass(frozen=True)
@@ -204,6 +265,15 @@ class InjectionEvidence:
     same set: `validated_pe_hits` is the FULL validated-PE
     set the legacy dict exposes, while the checks report its
     suspicious/informational split (see aggregate._split_scoreable_pe_hits).
+
+    Buckets are not independent of EACH OTHER, though, and the
+    relationships between them are enforced by identity too (see
+    `_require_bucket_relations`). Type-checking each bucket on its own
+    still admits a `validated_pe_hits` describing a PE at 0x1000 while
+    `suspicious_pe_hits` -- which is supposed to be a subset of it --
+    describes one at 0x2000: two buckets asserting different facts about
+    the same split, exactly the drift this model exists to remove, one
+    level below the result-versus-bucket case.
     """
     rwx:                   tuple = field(default_factory=tuple)
     validated_pe_hits:     tuple = field(default_factory=tuple)
@@ -227,14 +297,96 @@ class InjectionEvidence:
     }
 
     def __post_init__(self):
+        # Correlation first: the bucket relations below are checked
+        # against the OWNED copy's containers, never the caller's.
+        object.__setattr__(self, "correlation", _own_correlation(self.correlation))
         for name, item_type in self._ITEM_TYPES.items():
             object.__setattr__(self, name, _require_items_of(
                 getattr(self, name), f"InjectionEvidence.{name}", item_type))
-        if not isinstance(self.correlation, Correlation):
-            raise TypeError(
-                f"InjectionEvidence.correlation must be a Correlation, got "
-                f"{type(self.correlation).__name__}: {self.correlation!r}")
-        require_recursively_immutable(self.correlation, "InjectionEvidence.correlation")
+        self._require_bucket_relations()
+
+    def _require_bucket_relations(self) -> None:
+        """The identity relationships between buckets, which come straight
+        from how the scan/correlation layer produces them:
+
+          * `suspicious_pe_hits` and `informational_pe_hits` are the exact
+            partition of `validated_pe_hits` that
+            `aggregate._split_scoreable_pe_hits` produces -- every hit in
+            one or the other, never both, never a hit belonging to
+            neither, and each keeping validated's own relative order;
+          * `mz_only_hits` and `validated_pe_hits` are the two disjoint
+            halves of `memory_scan.split_hidden_pe_hits`' output;
+          * `correlated_allocations` is the materialized join of
+            `correlation.rwx_and_pe_alloc_bases` with the two
+            per-allocation maps -- one entry per correlated allocation,
+            ascending by base, each holding exactly that allocation's RWX
+            regions followed by its validated-PE regions.
+
+        Enforced by identity: an equal-but-distinct copy in a subset
+        bucket is a second object describing the same hit, and the two are
+        then free to be rendered independently.
+        """
+        _require_subset(self.suspicious_pe_hits, self.validated_pe_hits,
+                         "InjectionEvidence.suspicious_pe_hits",
+                         "InjectionEvidence.validated_pe_hits")
+        _require_subset(self.informational_pe_hits, self.validated_pe_hits,
+                         "InjectionEvidence.informational_pe_hits",
+                         "InjectionEvidence.validated_pe_hits")
+        suspicious_ids = {id(hit) for hit in self.suspicious_pe_hits}
+        informational_ids = {id(hit) for hit in self.informational_pe_hits}
+        overlap = suspicious_ids & informational_ids
+        if overlap:
+            raise ValueError(
+                "InjectionEvidence: a validated PE hit is in both "
+                "suspicious_pe_hits and informational_pe_hits -- the split is "
+                "a partition, and a hit that scores cannot also be "
+                "context-only")
+        if len(suspicious_ids) + len(informational_ids) != len(self.validated_pe_hits):
+            raise ValueError(
+                f"InjectionEvidence: suspicious_pe_hits "
+                f"({len(suspicious_ids)}) + informational_pe_hits "
+                f"({len(informational_ids)}) must partition validated_pe_hits "
+                f"({len(self.validated_pe_hits)}) exactly -- a validated hit "
+                f"in neither is a hit no projection would ever account for")
+        for name, subset_ids in (("suspicious_pe_hits", suspicious_ids),
+                                  ("informational_pe_hits", informational_ids)):
+            in_validated_order = [id(hit) for hit in self.validated_pe_hits
+                                   if id(hit) in subset_ids]
+            if in_validated_order != [id(hit) for hit in getattr(self, name)]:
+                raise ValueError(
+                    f"InjectionEvidence.{name} must keep validated_pe_hits' own "
+                    f"relative order -- evidence ordering is part of the output "
+                    f"contract, not an implementation detail")
+
+        validated_ids = {id(hit) for hit in self.validated_pe_hits}
+        for hit in self.mz_only_hits:
+            if id(hit) in validated_ids:
+                raise ValueError(
+                    f"InjectionEvidence: {hit!r} is in both mz_only_hits and "
+                    f"validated_pe_hits -- a hit either passed structural PE "
+                    f"validation or it did not")
+
+        bases = [item.allocation_base for item in self.correlated_allocations]
+        if bases != sorted(bases) or len(set(bases)) != len(bases):
+            raise ValueError(
+                f"InjectionEvidence.correlated_allocations must be in ascending "
+                f"allocation-base order with no repeats, got "
+                f"{[hex(b) for b in bases]}")
+        if set(bases) != set(self.correlation.rwx_and_pe_alloc_bases):
+            raise ValueError(
+                f"InjectionEvidence.correlated_allocations must materialize "
+                f"exactly correlation.rwx_and_pe_alloc_bases "
+                f"({sorted(hex(b) for b in self.correlation.rwx_and_pe_alloc_bases)}), "
+                f"got {sorted(hex(b) for b in bases)}")
+        for item in self.correlated_allocations:
+            expected = (self.correlation.rwx_by_alloc.get(item.allocation_base, ())
+                        + self.correlation.pe_by_alloc.get(item.allocation_base, ()))
+            if [id(r) for r in item.regions] != [id(r) for r in expected]:
+                raise ValueError(
+                    f"InjectionEvidence.correlated_allocations entry for "
+                    f"0x{item.allocation_base:x} must hold exactly that "
+                    f"allocation's own RWX regions followed by its validated-PE "
+                    f"regions, as correlation already recorded them")
 
     def canonical_items(self) -> tuple:
         """Every evidence object this container holds AT THE TOP LEVEL --

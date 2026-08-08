@@ -24,6 +24,7 @@ Acceptance criteria exercised here:
      dumpex.hunt._finding/_coverage already own.
 """
 import dataclasses
+import enum
 from types import MappingProxyType
 
 import pytest
@@ -50,24 +51,24 @@ from dumpex.hunt.injection.models import (
 # ── Builders (plain helpers, not fixtures: several tests need two or ──────
 # three independent instances within one test).
 
-def _region(base=0x7ffe10000000, protect="PAGE_EXECUTE_READWRITE"):
-    return RegionRef(base_address=base, allocation_base=base, size=0x1000,
-                      type="MEM_PRIVATE", protect=protect)
+def _region(base=0x7ffe10000000, protect="PAGE_EXECUTE_READWRITE", alloc=None):
+    return RegionRef(base_address=base, allocation_base=base if alloc is None else alloc,
+                      size=0x1000, type="MEM_PRIVATE", protect=protect)
 
 
 def _location(va=0x7ffe10000000):
     return Location(va=va, region_base=va, file_offset=0x400)
 
 
-def _rwx(base=0x7ffe10000000):
-    return RwxRegionEvidence(region=_region(base), location=_location(base))
+def _rwx(base=0x7ffe10000000, alloc=None):
+    return RwxRegionEvidence(region=_region(base, alloc=alloc), location=_location(base))
 
 
-def _pe_hit(base=0x7ffe20000000):
+def _pe_hit(base=0x7ffe20000000, alloc=None):
     pe = PeHeaderInfo(valid=True, machine_name="AMD64", is_pe32_plus=True,
                        number_of_sections=1, address_of_entry_point=0x1000,
                        image_base=0x140000000, reason="")
-    return HiddenPeEvidence(region=_region(base, "PAGE_READWRITE"), pe=pe,
+    return HiddenPeEvidence(region=_region(base, "PAGE_READWRITE", alloc=alloc), pe=pe,
                              in_module_list=False, location=_location(base))
 
 
@@ -128,31 +129,45 @@ def _walk(value):
             yield from _walk(item)
 
 
-def _populated_report():
-    rwx, pe_hit, thread = _rwx(), _pe_hit(), _thread()
+_ALLOC = 0x7ffe10000000
+
+
+def _correlated_evidence(**overrides):
+    """One realistic correlated allocation: an RWX sub-region and a
+    validated-PE sub-region of the SAME allocation (the split a
+    VirtualProtect routinely produces), plus the correlation result that
+    recorded the join."""
+    rwx = _rwx(_ALLOC)
+    pe_hit = _pe_hit(_ALLOC + 0x1000, alloc=_ALLOC)
     correlation = Correlation(
-        rwx_by_alloc={rwx.region.allocation_base: [rwx.region]},
-        pe_by_alloc={pe_hit.region.allocation_base: [pe_hit.region]},
-        rwx_and_pe_alloc_bases={rwx.region.allocation_base},
-        suspicious_alloc_bases={rwx.region.allocation_base},
-        rip_hits=[RipHitEvidence(thread_id=0x1, ip=0x7ffe10000010, ip_reg="RIP",
+        rwx_by_alloc={_ALLOC: [rwx.region]},
+        pe_by_alloc={_ALLOC: [pe_hit.region]},
+        rwx_and_pe_alloc_bases={_ALLOC},
+        suspicious_alloc_bases={_ALLOC},
+        rip_hits=[RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP",
                                   region=rwx.region)],
         start_hits=[StartHitEvidence(thread_id=0x1, start_address=0x9999000,
                                       region=rwx.region)],
     )
-    evidence = InjectionEvidence(
+    kwargs = dict(
         rwx=[rwx], validated_pe_hits=[pe_hit], suspicious_pe_hits=[pe_hit],
-        start_threads=[thread],
-        thread_contexts=[ThreadContext(thread_id=0x1, ip=0x7ffe10000010,
+        start_threads=[_thread()],
+        thread_contexts=[ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10,
                                         ip_reg="RIP", is_wow64=False)],
         correlated_allocations=[CorrelatedAllocationEvidence(
-            allocation_base=rwx.region.allocation_base, regions=[rwx.region, pe_hit.region])],
+            allocation_base=_ALLOC, regions=[rwx.region, pe_hit.region])],
         correlation=correlation,
     )
+    kwargs.update(overrides)
+    return InjectionEvidence(**kwargs)
+
+
+def _populated_report():
+    evidence = _correlated_evidence()
     results = (
-        _check(evidence=(rwx,), evidence_limit=20),
+        _check(evidence=evidence.rwx, evidence_limit=20),
         _check(check="injection.allocation_correlation", tag=TAG_DETECTION,
-               confidence=CONFIDENCE_HIGH, evidence=correlation.rip_hits),
+               confidence=CONFIDENCE_HIGH, evidence=evidence.correlation.rip_hits),
     )
     return InjectionReport(score=3, coverage=_coverage(), results=results, evidence=evidence)
 
@@ -167,10 +182,33 @@ def test_every_nested_value_object_rejects_attribute_assignment():
     assert seen > 20, "the walk did not actually reach the nested evidence"
 
 
+def _reachable(value):
+    """Every object reachable from `value`. Deliberately an INDEPENDENT
+    walk rather than a call into `require_recursively_immutable`: the
+    point is to assert the property directly, so a hole opened in the
+    production validator cannot also silence the test that checks it."""
+    yield value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        for f in dataclasses.fields(value):
+            yield from _reachable(getattr(value, f.name))
+    elif isinstance(value, (tuple, frozenset)):
+        for item in value:
+            yield from _reachable(item)
+    elif isinstance(value, MappingProxyType):
+        for key, item in value.items():
+            yield from _reachable(key)
+            yield from _reachable(item)
+
+
 def test_no_mutable_collection_is_reachable_from_a_report():
     # The whole-graph assertion the top-level `frozen=True` check cannot
     # make: a frozen Report holding a plain list is still mutable in place.
-    require_recursively_immutable(_populated_report(), "InjectionReport")
+    for value in _reachable(_populated_report()):
+        assert not isinstance(value, (list, set, dict, bytearray)), (
+            f"a mutable {type(value).__name__} is reachable from the Report: {value!r}")
+        if dataclasses.is_dataclass(value) and not isinstance(value, type):
+            assert value.__dataclass_params__.frozen is True, (
+                f"a non-frozen {type(value).__name__} is reachable from the Report")
 
 
 def test_report_collections_reject_in_place_mutation():
@@ -344,15 +382,48 @@ def test_frozen_evidence_cannot_smuggle_an_unrecognized_object_in_a_field(smuggl
         InjectionEvidence(rwx=(smuggling,))
 
 
+class _State(enum.Enum):
+    PRESENT = "present"
+
+
+class _StrState(str, enum.Enum):
+    PRESENT = "present"
+
+
+class _EnumWithMutableValue(enum.Enum):
+    LAYERS = ["base64"]      # Enum places no constraint at all on a value
+
+
+class _EnumWithMutableAttribute(enum.Enum):
+    """A member's own instance attributes are no more constrained than its
+    value -- `vars(member)` carries them alongside Enum's bookkeeping."""
+    LAYER = "base64"
+
+    def __init__(self, _value):
+        self.payload = []
+
+
+class _StrWithMutableAttribute(str):
+    """A subclass of an immutable builtin, carrying a mutable payload.
+    Every `isinstance(x, str)` test in the world says this is a string."""
+
+    def __new__(cls):
+        instance = super().__new__(cls, "MEM_PRIVATE")
+        instance.payload = []
+        return instance
+
+
+class _TupleWithMutableAttribute(tuple):
+    def __new__(cls):
+        instance = super().__new__(cls, ())
+        instance.payload = []
+        return instance
+
+
 def test_immutable_leaves_and_containers_are_still_accepted():
     # The allowlist must not be so strict that legitimate evidence fails:
-    # scalars, None, bytes, enum members, tuples, frozensets and the
-    # MappingProxyType Correlation normalizes to all pass.
-    import enum
-
-    class _State(enum.Enum):
-        PRESENT = "present"
-
+    # scalars, None, bytes, plain and str-backed enum members, tuples and
+    # frozensets all pass.
     @dataclasses.dataclass(frozen=True)
     class _Leaves:
         a: object = None
@@ -361,12 +432,56 @@ def test_immutable_leaves_and_containers_are_still_accepted():
         d: object = b"MZ"
         e: object = 1.5
         f: object = _State.PRESENT
-        g: object = dataclasses.field(default_factory=tuple)
-        h: object = dataclasses.field(default_factory=frozenset)
+        g: object = _StrState.PRESENT
+        h: object = dataclasses.field(default_factory=tuple)
+        i: object = dataclasses.field(default_factory=frozenset)
 
     require_recursively_immutable(_Leaves(), "leaves")
-    require_recursively_immutable(
-        Correlation(rwx_by_alloc={0x1000: [_region()]}), "correlation")
+
+
+@pytest.mark.parametrize("smuggled", [
+    pytest.param(_EnumWithMutableValue.LAYERS, id="enum-with-mutable-value"),
+    pytest.param(_EnumWithMutableAttribute.LAYER, id="enum-with-mutable-attribute"),
+    pytest.param(_StrWithMutableAttribute(), id="str-subclass-with-payload"),
+    pytest.param(_TupleWithMutableAttribute(), id="tuple-subclass-with-payload"),
+    pytest.param(MappingProxyType({0x1000: ()}), id="mapping-proxy-view"),
+])
+def test_frozen_evidence_cannot_smuggle_a_mutable_payload_past_the_allowlist(smuggled):
+    smuggling = RwxRegionEvidence(region=smuggled, location=_location())
+    with pytest.raises(TypeError):
+        _check(evidence=(smuggling,))
+    with pytest.raises(TypeError):
+        InjectionEvidence(rwx=(smuggling,))
+
+
+def test_a_mapping_proxy_view_stays_mutable_through_its_backing_dict():
+    # The concrete reason a proxy is refused rather than walked: it is a
+    # live view, so validating its contents at construction proves nothing
+    # about what it will report afterwards.
+    backing = {0x1000: ()}
+    view = MappingProxyType(backing)
+    smuggling = RwxRegionEvidence(region=view, location=_location())
+    with pytest.raises(TypeError, match="read-only view is not an immutable value"):
+        InjectionEvidence(rwx=(smuggling,))
+    backing[0x2000] = ("changed after the fact",)
+    assert view[0x2000] == ("changed after the fact",)
+
+
+def test_report_owns_its_correlation_maps_not_the_callers():
+    # InjectionEvidence re-creates the correlation so the dicts behind its
+    # read-only views are unreachable to whoever built it -- while the hit
+    # and region objects inside keep their identity.
+    rwx = _rwx()
+    backing = {rwx.region.allocation_base: [rwx.region]}
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region)
+    correlation = Correlation(rwx_by_alloc=backing, rip_hits=[hit])
+    evidence = InjectionEvidence(rwx=(rwx,), correlation=correlation)
+
+    backing[0x999000] = ["tampered"]
+    assert 0x999000 not in evidence.correlation.rwx_by_alloc
+    assert evidence.correlation.rwx_by_alloc is not correlation.rwx_by_alloc
+    assert evidence.correlation.rip_hits[0] is hit
+    assert evidence.correlation.rwx_by_alloc[rwx.region.allocation_base][0] is rwx.region
 
 
 @pytest.mark.parametrize("not_a_sequence", [
@@ -451,6 +566,109 @@ def test_report_accepts_results_citing_correlation_hit_evidence():
     report = _report(results=(_check(check="injection.allocation_correlation",
                                       evidence=(hit,)),), evidence=evidence)
     assert report.results[0].evidence[0] is report.evidence.correlation.rip_hits[0]
+
+
+# ── Bucket-to-bucket identity relations ───────────────────────────────────
+# Checking each bucket's own item types still lets two buckets that stand
+# in a subset/partition relation describe different facts.
+
+def test_suspicious_and_informational_must_be_drawn_from_validated():
+    validated = _pe_hit(0x7ffe20000000)
+    with pytest.raises(ValueError, match="not one of"):
+        InjectionEvidence(validated_pe_hits=(validated,),
+                           suspicious_pe_hits=(_pe_hit(0x7ffe30000000),))
+
+
+def test_a_subset_bucket_rejects_an_equal_but_separate_copy():
+    validated, identical_copy = _pe_hit(), _pe_hit()
+    assert validated == identical_copy and validated is not identical_copy
+    with pytest.raises(ValueError):
+        InjectionEvidence(validated_pe_hits=(validated,),
+                           suspicious_pe_hits=(identical_copy,))
+
+
+def test_a_validated_hit_cannot_be_both_scoreable_and_context_only():
+    hit = _pe_hit()
+    with pytest.raises(ValueError, match="partition|both"):
+        InjectionEvidence(validated_pe_hits=(hit,), suspicious_pe_hits=(hit,),
+                           informational_pe_hits=(hit,))
+
+
+def test_a_validated_hit_in_neither_half_of_the_split_is_rejected():
+    # A hit no projection would ever account for: it scores nothing and is
+    # reported nowhere.
+    with pytest.raises(ValueError, match="partition"):
+        InjectionEvidence(validated_pe_hits=(_pe_hit(0x7ffe20000000),
+                                              _pe_hit(0x7ffe30000000)),
+                           suspicious_pe_hits=())
+
+
+def test_split_buckets_must_keep_validated_order():
+    first, second = _pe_hit(0x7ffe20000000), _pe_hit(0x7ffe30000000)
+    InjectionEvidence(validated_pe_hits=(first, second),
+                       suspicious_pe_hits=(first, second))
+    with pytest.raises(ValueError, match="relative order"):
+        InjectionEvidence(validated_pe_hits=(first, second),
+                           suspicious_pe_hits=(second, first))
+
+
+def test_mz_only_and_validated_hits_must_be_disjoint():
+    hit = _pe_hit()
+    with pytest.raises(ValueError, match="both mz_only_hits and validated"):
+        InjectionEvidence(validated_pe_hits=(hit,), suspicious_pe_hits=(hit,),
+                           mz_only_hits=(hit,))
+
+
+def test_genuinely_disjoint_mz_only_hits_are_accepted():
+    validated, mz_only = _pe_hit(0x7ffe20000000), _pe_hit(0x7ffe30000000)
+    evidence = InjectionEvidence(validated_pe_hits=(validated,),
+                                  suspicious_pe_hits=(validated,),
+                                  mz_only_hits=(mz_only,))
+    assert evidence.mz_only_hits == (mz_only,)
+
+
+def test_rip_full_correlation_must_be_a_subset_of_rip_hits():
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=_region())
+    other = RipHitEvidence(thread_id=0x2, ip=_ALLOC + 0x20, ip_reg="RIP", region=_region())
+    with pytest.raises(ValueError, match="rip_full_correlation"):
+        InjectionEvidence(correlation=Correlation(rip_hits=[hit],
+                                                   rip_full_correlation=[other]))
+
+
+def test_a_bucket_rejects_the_same_object_listed_twice():
+    rwx = _rwx()
+    with pytest.raises(ValueError, match="already in this bucket"):
+        InjectionEvidence(rwx=(rwx, rwx))
+
+
+def test_correlated_allocations_must_materialize_exactly_the_correlated_bases():
+    evidence = _correlated_evidence()
+    assert [item.allocation_base for item in evidence.correlated_allocations] == [_ALLOC]
+    # Dropping the entry leaves the frozenset claiming a correlated
+    # allocation the bucket does not account for.
+    with pytest.raises(ValueError, match="materialize exactly"):
+        _correlated_evidence(correlated_allocations=())
+
+
+def test_correlated_allocation_regions_must_match_what_correlation_recorded():
+    with pytest.raises(ValueError, match="RWX regions followed by"):
+        _correlated_evidence(correlated_allocations=[CorrelatedAllocationEvidence(
+            allocation_base=_ALLOC, regions=[_region(0x7ffe90000000)])])
+
+
+def test_correlated_allocations_must_be_sorted_and_unique():
+    rwx_a, rwx_b = _rwx(0x1000), _rwx(0x2000)
+    correlation = Correlation(
+        rwx_by_alloc={0x1000: [rwx_a.region], 0x2000: [rwx_b.region]},
+        pe_by_alloc={0x1000: (), 0x2000: ()},
+        rwx_and_pe_alloc_bases={0x1000, 0x2000})
+    descending = [CorrelatedAllocationEvidence(allocation_base=0x2000,
+                                                regions=[rwx_b.region]),
+                   CorrelatedAllocationEvidence(allocation_base=0x1000,
+                                                regions=[rwx_a.region])]
+    with pytest.raises(ValueError, match="ascending"):
+        InjectionEvidence(rwx=[rwx_a, rwx_b], correlation=correlation,
+                           correlated_allocations=descending)
 
 
 def test_report_rejects_a_result_citing_a_merely_nested_object():

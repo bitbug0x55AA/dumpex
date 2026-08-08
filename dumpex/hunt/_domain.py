@@ -66,12 +66,19 @@ _MUTABLE_CONTAINERS = (list, set, dict, bytearray)
 # The whole point of the guardrail is that such a reference cannot be
 # retained at all, so anything not proven immutable is refused.
 #
-# `enum.Enum` covers dumpex.output.coverage's `str, Enum` vocabularies
-# (SourceState/LimitationCode/CoverageStatus) and any future non-str enum.
-# A value type that genuinely belongs here later (a date, a Decimal) is
-# added deliberately, with the reasoning written down, rather than
-# admitted by default.
-_IMMUTABLE_LEAF_TYPES = (type(None), bool, int, float, complex, str, bytes, enum.Enum)
+# Matched by EXACT type (`type(value) in ...`), never isinstance: a
+# subclass of an immutable builtin is not itself immutable. `class
+# Sneaky(str)` with an instance attribute holding a list passes every
+# isinstance check for `str` while carrying a mutable payload that
+# survives into the Report. A value type that genuinely belongs here
+# later (a date, a Decimal) is added deliberately, with the reasoning
+# written down, rather than admitted by an isinstance test.
+_IMMUTABLE_LEAF_TYPES = frozenset({type(None), bool, int, float, complex, str, bytes})
+
+# Containers this module recurses into, also matched by exact type and
+# for the same reason -- a tuple/frozenset SUBCLASS can carry mutable
+# instance attributes that recursing over its items would never see.
+_IMMUTABLE_CONTAINERS = frozenset({tuple, frozenset})
 
 
 def as_tuple(value, field_name: str) -> tuple:
@@ -103,25 +110,40 @@ def require_recursively_immutable(value, field_name: str) -> None:
     can quietly change after the fact, which is exactly the failure this
     migration's "Report is recursively immutable" guardrail names.
 
-    Recurses through exactly three container shapes -- frozen dataclass
-    fields, tuple/frozenset items, and MappingProxyType keys/values -- and
-    accepts only `_IMMUTABLE_LEAF_TYPES` as a leaf. EVERYTHING else is
-    rejected, including a type this module simply does not recognize:
+    Recurses through frozen dataclass fields, tuple/frozenset items, and
+    an enum member's own value, and accepts only `_IMMUTABLE_LEAF_TYPES`
+    as a leaf. EVERYTHING else is rejected, including a type this module
+    simply does not recognize:
 
       * any list/set/dict/bytearray anywhere in the graph;
       * any dataclass instance that is not itself frozen;
+      * any `types.MappingProxyType` -- a read-only VIEW is not an
+        immutable value. Whoever still holds the underlying dict can
+        mutate it and the "frozen" Report's contents change with it, so a
+        proxy is only safe when the mapping behind it is provably
+        unreachable, which this function cannot determine by inspection.
+        A caller that has just built one over its own private dict must
+        validate the keys/values itself rather than hand the proxy here
+        (see dumpex.hunt.injection.domain's own correlation handling);
+      * a subclass of an immutable builtin, or of tuple/frozenset -- see
+        `_IMMUTABLE_LEAF_TYPES`;
       * any other object -- a `MinidumpFile`, a `read_region` resolver, a
         custom class wrapping a mutable payload. Treating an unrecognized
         object as an immutable leaf is precisely the escape hatch that
         would let a frozen evidence object keep a dump handle reachable
         (and its payload mutable) inside an otherwise-"immutable" Report.
 
-    Plain scalars (int/float/str/bytes/bool/None) and enum members are
-    accepted as leaves -- a `str` INSIDE an evidence object (a resolved
-    `prot_str()` protection name, a PE failure reason) is ordinary
-    immutable data, unlike a `str` used AS an evidence item, which is a
-    pre-rendered console fact and is rejected by
-    `_require_evidence_items()` instead.
+    Plain scalars (int/float/str/bytes/bool/None) are accepted as leaves
+    -- a `str` INSIDE an evidence object (a resolved `prot_str()`
+    protection name, a PE failure reason) is ordinary immutable data,
+    unlike a `str` used AS an evidence item, which is a pre-rendered
+    console fact and is rejected by `_require_evidence_items()` instead.
+
+    An enum member is accepted only after its own `value` and any
+    non-internal instance attribute pass the same check: `Enum` puts no
+    constraint whatsoever on what a member's value may be, so `class
+    Layer(Enum): RWX = []` is a perfectly ordinary enum holding a mutable
+    list.
     """
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         if not value.__dataclass_params__.frozen:
@@ -132,27 +154,42 @@ def require_recursively_immutable(value, field_name: str) -> None:
             require_recursively_immutable(getattr(value, f.name),
                                            f"{field_name}.{f.name}")
         return
-    if isinstance(value, (tuple, frozenset)):
+    if isinstance(value, enum.Enum):
+        # Checked before the leaf test on purpose: a `str, Enum` member
+        # (dumpex.output.coverage's vocabularies) would otherwise slip
+        # past on its str-ness alone, without its value being looked at.
+        require_recursively_immutable(value.value, f"{field_name}.value")
+        for attribute, attribute_value in vars(value).items():
+            # Enum's own bookkeeping (_name_/_value_/_sort_order_/
+            # __objclass__) is all underscore-prefixed; anything else is
+            # an attribute someone attached to the member itself.
+            if not attribute.startswith("_"):
+                require_recursively_immutable(attribute_value,
+                                               f"{field_name}.{attribute}")
+        return
+    if type(value) in _IMMUTABLE_CONTAINERS:
         for item in value:
             require_recursively_immutable(item, f"{field_name}[]")
         return
-    if isinstance(value, MappingProxyType):
-        for key, item in value.items():
-            require_recursively_immutable(key, f"{field_name}{{key}}")
-            require_recursively_immutable(item, f"{field_name}{{}}")
-        return
-    if isinstance(value, _IMMUTABLE_LEAF_TYPES):
+    if type(value) in _IMMUTABLE_LEAF_TYPES:
         return
     if isinstance(value, _MUTABLE_CONTAINERS):
         raise TypeError(
             f"{field_name} must be recursively immutable, but holds a mutable "
             f"{type(value).__name__}: {value!r}")
+    if isinstance(value, MappingProxyType):
+        raise TypeError(
+            f"{field_name} must be recursively immutable, but holds a "
+            f"MappingProxyType: {value!r} -- a read-only view is not an "
+            f"immutable value; whoever holds the mapping behind it can still "
+            f"change what this Report reports")
     raise TypeError(
         f"{field_name} must be recursively immutable, but holds a "
         f"{type(value).__name__} that is neither an immutable leaf nor an "
-        f"immutable container: {value!r} -- an unrecognized object cannot be "
-        f"assumed immutable, and a dump/resolver/projector reference must not "
-        f"be reachable from the domain model at all")
+        f"immutable container: {value!r} -- an unrecognized object (or a "
+        f"subclass of an immutable one) cannot be assumed immutable, and a "
+        f"dump/resolver/projector reference must not be reachable from the "
+        f"domain model at all")
 
 
 def _require_evidence_items(value, field_name: str) -> tuple:
