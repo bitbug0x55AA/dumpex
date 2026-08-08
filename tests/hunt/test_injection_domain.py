@@ -622,6 +622,37 @@ def test_evidence_container_rejects_a_non_correlation():
         InjectionEvidence(correlation={"rwx_by_alloc": {}})
 
 
+def test_evidence_container_rejects_a_correlation_subclass():
+    # A subclass could declare its own __slots__ entry beyond Correlation's
+    # own fields -- invisible to require_recursively_immutable's generic
+    # dataclass walk because _own_correlation deliberately never runs that
+    # walk over the container itself (MappingProxyType would be refused
+    # outright). Confirmed: without this check, a subclass's __init__
+    # could plant a live, post-construction-mutable list via
+    # object.__setattr__ that nothing here would ever see.
+    class _EvilCorrelation(Correlation):
+        __slots__ = ("payload",)
+
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            object.__setattr__(self, "payload", [])
+
+    evil = _EvilCorrelation()
+    assert evil.payload == []   # confirms the subclass really carries extra state
+    with pytest.raises(TypeError, match="exactly Correlation"):
+        InjectionEvidence(correlation=evil)
+
+
+def test_correlation_stored_on_the_report_is_never_a_subclass():
+    # Locks in the reconstruction itself, not just the rejection above:
+    # even for an ordinary, successful construction, what ends up on the
+    # Report is built via the bare Correlation(...) constructor, never
+    # dataclasses.replace(correlation) (which would have preserved
+    # type(correlation) exactly, including a subclass).
+    evidence = InjectionEvidence(correlation=Correlation())
+    assert type(evidence.correlation) is Correlation
+
+
 def test_report_holds_no_dump_resolver_or_projection_field():
     field_names = {f.name for f in dataclasses.fields(InjectionReport)}
     assert field_names == {"score", "coverage", "results", "evidence"}

@@ -38,7 +38,6 @@ dict, the v2.7 `HunterRecord`, and the console renderer become pure
 projections of this type in the follow-up issues; this one only fixes the
 shape and proves its immutability.
 """
-import dataclasses
 from dataclasses import dataclass, field
 
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
@@ -147,23 +146,46 @@ def _own_correlation(correlation) -> Correlation:
     `Correlation` normalizes its per-allocation maps to
     `types.MappingProxyType`, which is a read-only VIEW rather than an
     immutable value: whoever still holds the dict behind it can mutate it
-    afterwards. `Correlation.__post_init__` wraps a FRESH dict, so
-    re-running it here (`dataclasses.replace`) is what makes the mapping
-    behind the stored proxies unreachable to the caller -- the copy
-    boundary the "mutating constructor inputs cannot change the Report"
-    guardrail needs. Evidence identity is unaffected: re-normalizing
-    rebuilds the containers, never the hits or region refs inside them.
+    afterwards. Rebuilding a FRESH `Correlation` here is what makes the
+    mapping behind the stored proxies unreachable to the caller -- the
+    copy boundary the "mutating constructor inputs cannot change the
+    Report" guardrail needs. Evidence identity is unaffected: rebuilding
+    the container re-normalizes it, never the hits or region refs inside.
 
     Contents are validated field by field rather than by handing the whole
-    Correlation to `require_recursively_immutable`, which refuses a
+    object to `require_recursively_immutable`, which refuses a
     MappingProxyType outright (correctly -- it cannot tell an owned proxy
     from a borrowed one; only this function, which just created it, can).
+    That per-field validation is exactly why this function must NOT accept
+    -- or, worse, PRESERVE the type of -- a `Correlation` SUBCLASS: a
+    subclass can declare its own `__slots__` entry beyond `Correlation`'s
+    own fields (invisible to both `dataclasses.fields()` and
+    `vars(instance)`, the same gap `require_recursively_immutable`'s own
+    dataclass branch closes for every OTHER evidence type it walks
+    generically -- see that function's own docstring), and nothing here
+    would ever look at it, since this function deliberately never runs
+    that generic walk over the container itself. `isinstance` would admit
+    such a subclass; `dataclasses.replace(correlation)` would have
+    preserved its exact (subclass) type via `type(correlation)(**changes)`.
+    Requiring the EXACT base type, and reconstructing via the bare
+    `Correlation(...)` constructor rather than `dataclasses.replace`, means
+    whatever the caller passed in -- and whatever extra state it may have
+    smuggled in via a mechanism this function does not know to check for --
+    is discarded; only the seven fields named below survive into the
+    object actually stored on the Report.
     """
-    if not isinstance(correlation, Correlation):
+    if type(correlation) is not Correlation:
         raise TypeError(
-            f"InjectionEvidence.correlation must be a Correlation, got "
-            f"{type(correlation).__name__}: {correlation!r}")
-    owned = dataclasses.replace(correlation)
+            f"InjectionEvidence.correlation must be exactly Correlation (not a "
+            f"subclass), got {type(correlation).__name__} -- a subclass could "
+            f"add its own __slots__ entry this validation would never see")
+    owned = Correlation(
+        rwx_by_alloc=correlation.rwx_by_alloc, pe_by_alloc=correlation.pe_by_alloc,
+        rwx_and_pe_alloc_bases=correlation.rwx_and_pe_alloc_bases,
+        suspicious_alloc_bases=correlation.suspicious_alloc_bases,
+        rip_hits=correlation.rip_hits, rip_full_correlation=correlation.rip_full_correlation,
+        start_hits=correlation.start_hits,
+    )
     for map_name in ("rwx_by_alloc", "pe_by_alloc"):
         for allocation_base, regions in getattr(owned, map_name).items():
             require_recursively_immutable(
