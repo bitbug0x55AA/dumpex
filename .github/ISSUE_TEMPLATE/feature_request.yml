@@ -1,0 +1,85 @@
+name: Feature proposal
+description: Propose a new DFIR workflow, command, output capability, or integration.
+title: "[Feature] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the investigator's problem before prescribing an implementation. This helps keep new behavior evidence-driven and avoids coupling dumpex to one analyst workflow.
+
+        Do not include real case dumps, credentials, private infrastructure details, or sensitive indicators.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched existing issues and documentation for this capability.
+          required: true
+        - label: This proposal contains no sensitive case data.
+          required: true
+
+  - type: textarea
+    id: investigator_problem
+    attributes:
+      label: Investigator problem
+      description: What DFIR or SOC decision is difficult today, and who encounters it?
+    validations:
+      required: true
+
+  - type: textarea
+    id: current_workflow
+    attributes:
+      label: Current workflow
+      description: Explain the manual steps, external tools, or workarounds currently required.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe the desired user-visible behavior without requiring a specific internal design.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actionable_output
+    attributes:
+      label: Actionable output
+      description: What should console and structured output tell an investigator to observe or do next?
+
+  - type: textarea
+    id: evidence_semantics
+    attributes:
+      label: Evidence and coverage semantics
+      description: Explain how the feature should distinguish findings, leads, unavailable evidence, partial coverage, and negative results.
+
+  - type: textarea
+    id: resource_limits
+    attributes:
+      label: Resource and safety constraints
+      description: Note expected limits on memory, CPU, I/O, file output, sensitive data, or potentially destructive actions.
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility considerations
+      description: Note possible effects on CLI behavior, JSON schema, console output, exit codes, performance, or downstream automation.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe other approaches and why they do not address the workflow adequately.
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Suggested acceptance criteria
+      description: Optional. List observable outcomes rather than implementation steps.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...

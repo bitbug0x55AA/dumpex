@@ -1,0 +1,108 @@
+name: Detection or coverage issue
+description: Report a false positive, false negative, misleading verdict, or incomplete hunt coverage.
+title: "[Hunt] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for hunter logic, scoring, confidence, evidence, provenance, and coverage problems.
+
+        Do not upload real case dumps or disclose sensitive case data. Describe the evidence using redacted output or a synthetic construction. A clean result in scanned scope is different from complete coverage; please preserve that distinction below.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched for an existing issue covering this detection or coverage behavior.
+          required: true
+        - label: This report contains no real case dump, credential, private infrastructure detail, or sensitive indicator.
+          required: true
+
+  - type: dropdown
+    id: category
+    attributes:
+      label: Issue category
+      options:
+        - False positive
+        - False negative
+        - Partial or missing coverage
+        - Incorrect status, score, confidence, or verdict
+        - Evidence or provenance output
+        - Scan budget, size limit, or performance
+        - Other hunter behavior
+    validations:
+      required: true
+
+  - type: dropdown
+    id: hunter
+    attributes:
+      label: Hunter
+      options:
+        - injection
+        - hollowing
+        - stomping
+        - pipe
+        - cs-beacon
+        - yara
+        - obfuscation
+        - hunt all / cross-hunter
+        - Not hunter-specific
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed result
+      description: Provide redacted findings, limitation codes, target metadata, status fields, and relevant output excerpts.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_semantics
+    attributes:
+      label: Expected detection and coverage semantics
+      description: Explain what should be detected, left as a lead, marked inconclusive, or reported as a coverage gap.
+    validations:
+      required: true
+
+  - type: textarea
+    id: dfir_impact
+    attributes:
+      label: DFIR / SOC impact
+      description: Explain what decision an investigator may make incorrectly or cannot make with the current result.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Safe reproduction or evidence model
+      description: Describe a synthetic memory layout, stream availability, region attributes, rule input, or other safe way to reproduce the behavior.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed_direction
+    attributes:
+      label: Proposed direction
+      description: Optional. Describe a possible fix without treating it as a required implementation.
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Output and compatibility considerations
+      description: Note possible effects on JSON schema, console text, Finding IDs, exit codes, budgets, ordering, or existing automation.
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Suggested acceptance criteria
+      description: Optional. List observable conditions that would demonstrate the issue is fixed.
+      placeholder: |
+        - [ ] ...
+        - [ ] ...
+

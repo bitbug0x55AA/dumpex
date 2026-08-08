@@ -1,0 +1,6 @@
+blank_issues_enabled: true
+contact_links:
+  - name: SOC / DFIR output interpretation guide
+    url: https://github.com/bitbug0x55AA/dumpex/blob/main/docs/SOC_QUICKSTART.md
+    about: Review dumpex status, confidence, and coverage semantics before reporting an output interpretation problem.
+

@@ -1,0 +1,95 @@
+name: Bug report
+description: Report a reproducible dumpex failure or incorrect behavior.
+title: "[Bug] "
+labels: []
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve dumpex.
+
+        Do not upload real case dumps, credentials, private infrastructure details, or sensitive IOC values. Prefer a synthetic fixture, minimal reproduction, or redacted output. If a security issue cannot be described safely in public, do not open a public issue.
+
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Preflight checks
+      options:
+        - label: I searched the existing issues and did not find the same problem.
+          required: true
+        - label: I removed case-sensitive data, credentials, private paths, and sensitive indicators from this report.
+          required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Problem summary
+      description: Describe the incorrect behavior and why it matters.
+      placeholder: dumpex reports ... when ...
+    validations:
+      required: true
+
+  - type: input
+    id: command
+    attributes:
+      label: Command or mode
+      description: Provide the relevant command with sensitive paths and values replaced.
+      placeholder: dumpex sample.dmp --hunt all --json result.json
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest safe sequence that reproduces the problem.
+      placeholder: |
+        1. Run ...
+        2. Inspect ...
+        3. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Include the expected status, coverage, exit code, or output shape where relevant.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Paste a minimal redacted console or JSON excerpt. Use a code block for structured output.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the dumpex version or commit, Python version, OS, installation method, and optional dependency versions relevant to the problem.
+      placeholder: |
+        dumpex version/commit:
+        Python:
+        OS:
+        Install method:
+        Optional dependencies:
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence_scope
+    attributes:
+      label: Evidence and coverage context
+      description: If applicable, include redacted execution_status, coverage.status, limitation codes, affected scan targets, and whether the required minidump streams were present.
+
+  - type: textarea
+    id: additional_context
+    attributes:
+      label: Additional context
+      description: Add a redacted traceback, regression commit, safe synthetic fixture description, or other relevant information.
+
