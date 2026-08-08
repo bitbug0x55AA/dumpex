@@ -66,6 +66,12 @@ jobs:
           coverage report --include="dumpex/core/pe_utils.py"   --fail-under=56
           coverage report --include="dumpex/hunt/_coverage.py"  --fail-under=85
           coverage report --include="dumpex/hunt/_finding.py"   --fail-under=90
+          # dumpex/hunt/_domain.py: the canonical hunter-neutral CheckResult
+          # and the recursive-immutability guard every migrated Report is
+          # validated through. New in this change and pure validation logic
+          # with no console/presentation branches, so the gate sits close to
+          # its measured coverage from day one.
+          coverage report --include="dumpex/hunt/_domain.py"     --fail-under=95
           coverage report --include="dumpex/hunt/hollowing.py"  --fail-under=90
           # dumpex/hunt/encoding/*: encoding.py is a package now, not a
           # single file -- _hunt_encoding (the thin entry point) lives in
@@ -102,6 +108,10 @@ jobs:
           coverage report --include="dumpex/hunt/injection/__init__.py"     --fail-under=95
           coverage report --include="dumpex/hunt/injection/config.py"      --fail-under=95
           coverage report --include="dumpex/hunt/injection/models.py"      --fail-under=95
+          # domain.py is the canonical immutable InjectionReport/
+          # CoverageSnapshot/InjectionEvidence model the hunter is being
+          # migrated onto -- same reasoning as _domain.py above.
+          coverage report --include="dumpex/hunt/injection/domain.py"      --fail-under=95
           coverage report --include="dumpex/hunt/injection/correlation.py" --fail-under=80
           coverage report --include="dumpex/hunt/injection/memory_scan.py" --fail-under=80
           coverage report --include="dumpex/hunt/injection/aggregate.py"   --fail-under=80

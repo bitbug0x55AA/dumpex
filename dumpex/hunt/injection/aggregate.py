@@ -22,13 +22,17 @@ from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
     verdict_level, lead_count, review_priority)
 from dumpex.hunt.injection.config import PE_VALIDATE_READ_MAX
+from dumpex.hunt.injection.domain import VERDICT_LEVEL_BY_SCORE as _VERDICT_LEVEL_BY_SCORE
 from dumpex.hunt.injection.memory_scan import pe_hit_is_context_scoreable
 from dumpex.output.coverage import (
     observe_source, build_coverage_report, CoverageLimitation, LimitationCode, SourceRequirement,
 )
 
-# score -> verdict_level, owned by this hunter (see dumpex.hunt._finding.verdict_level).
-_VERDICT_LEVEL_BY_SCORE = {1: "possible", 2: "likely", 3: "high"}
+# score -> verdict_level, owned by this hunter (see dumpex.hunt._finding.
+# verdict_level). Defined once on the canonical domain model
+# (dumpex.hunt.injection.domain) and imported here rather than restated:
+# the score this module computes and the verdict_level that model derives
+# from a score must never be able to disagree about the same table.
 
 
 def _region_facts(r) -> str:

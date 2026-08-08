@@ -120,6 +120,69 @@ class StartHitEvidence:
 
 
 @dataclass(frozen=True)
+class ThreadContext:
+    """One thread's CURRENT instruction pointer, as
+    dumpex.core.memory.get_thread_contexts() read it out of
+    ThreadListStream's per-thread CONTEXT/WOW64_CONTEXT.
+
+    That function returns plain `{"ThreadId", "ip", "ip_reg", "is_wow64"}`
+    dicts -- the last hand-rolled dict shape still flowing through this
+    hunter's Report (`findings["thread_contexts"]`), and the reason
+    dumpex/hunt/injection/collect.py still needs a dict-subscripting
+    `_thread_ref_from_context(ctx)` adapter where every other ref adapter
+    next to it reads a typed Evidence attribute. This is that dict's typed
+    equivalent: same four facts, same names in Evidence style, immutable,
+    and unable to acquire a stray extra key later.
+
+    A thread whose context could not be parsed at all is simply ABSENT
+    from the collected tuple -- never present with ip=0 (see
+    get_thread_contexts()'s own docstring: "not in this list" means "no
+    live IP available", which is a different claim than "IP is 0")."""
+    thread_id: int
+    ip: int
+    ip_reg: str      # "RIP" (native x64) or "EIP" (WOW64 32-on-64)
+    is_wow64: bool
+
+
+@dataclass(frozen=True)
+class CorrelatedAllocationEvidence:
+    """One AllocationBase that carries BOTH an RWX sub-region AND a
+    validated hidden PE header -- the structural (non-live-execution)
+    correlation aggregate.py currently re-joins at render time by looking
+    each allocation base up in Correlation.rwx_by_alloc and
+    Correlation.pe_by_alloc and concatenating the two.
+
+    Built once as its own value object so that join happens in the
+    correlation layer that already owns those maps, and every projection
+    reads the SAME already-joined region tuple. `regions` keeps that
+    concatenation's existing order (every RWX region for this allocation,
+    then every validated-PE region) -- ordering is part of the output
+    contract, not an implementation detail."""
+    allocation_base: int
+    regions: tuple           # tuple[RegionRef, ...] once constructed
+
+    def __post_init__(self):
+        # list/tuple only, never "anything iterable": a bare string would
+        # silently explode into its characters, a set/dict would carry
+        # hash-order-dependent ordering into a field whose order IS the
+        # contract, and a generator would work once and then read empty.
+        # Element type is checked too -- this tuple is what every
+        # projection renders, so a non-RegionRef here surfaces as a
+        # projector reading an attribute that does not exist rather than
+        # as a construction error.
+        if not isinstance(self.regions, (list, tuple)):
+            raise TypeError(
+                f"CorrelatedAllocationEvidence.regions must be a list or tuple, "
+                f"got {type(self.regions).__name__}")
+        for index, region in enumerate(self.regions):
+            if not isinstance(region, RegionRef):
+                raise TypeError(
+                    f"CorrelatedAllocationEvidence.regions[{index}] must be a "
+                    f"RegionRef, got {type(region).__name__}: {region!r}")
+        object.__setattr__(self, "regions", tuple(self.regions))
+
+
+@dataclass(frozen=True)
 class HiddenPeScan:
     """Result of memory_scan._hunt_hidden_pe(): every MZ-prefixed
     candidate region as a HiddenPeEvidence, plus how many regions could
