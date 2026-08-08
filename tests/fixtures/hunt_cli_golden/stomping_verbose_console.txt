@@ -1,4 +1,4 @@
-  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
+  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=f4b1140fc4606821…)
 
 ══════════════════════════════════════════
   HUNT: Module Stomping
@@ -27,7 +27,8 @@
                   inside the changed range(s).
     Facts:
       - module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes
-        changed_ranges=[+0x0(len 0x2000)] disk_sha256=1c3fdaf62acfdf87… mem_sha256=24c09129af01e155…
+        changed_ranges=[+0x0(len 0x2000)] disk_sha256_prefix=1c3fdaf62acfdf87…
+        mem_sha256_prefix=24c09129af01e155…
     Limitations:
       - IAT/delay-import ranges and hotpatch trampolines are NOT specifically excluded before
         diffing — restricting the diff to executable, non-writable sections already excludes the

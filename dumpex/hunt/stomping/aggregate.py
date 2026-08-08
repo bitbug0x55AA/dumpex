@@ -220,7 +220,8 @@ def build_report(scan, ioc_scan, thread_contexts: list, ref_dir: "str|None",
             live = "  [LIVE RIP/EIP inside changed range]" if vc["rip_in_changed_range"] else ""
             facts.append(f"module={name} section={sec['name']!r} VA=0x{vc['va_start']:x} "
                          f"compared={vc['compared_len']} bytes changed_ranges=[{ranges_str}] "
-                         f"disk_sha256={vc['disk_sha256'][:16]}… mem_sha256={vc['mem_sha256'][:16]}…{live}")
+                         f"disk_sha256_prefix={vc['disk_sha256'][:16]}… "
+                         f"mem_sha256_prefix={vc['mem_sha256'][:16]}…{live}")
         if len(verified_changes) > 15:
             facts.append(f"... and {len(verified_changes)-15} more")
         any_rip = any(vc["rip_in_changed_range"] for vc in verified_changes)

@@ -86,7 +86,7 @@ def render(report, verbose: bool = False) -> dict:
             for rec in records[:3]:
                 detail += (f"\n            C2: {rec['match']}"
                            f"  VA 0x{rec['va']:016x}"
-                           f"  sha256={rec['sha256'][:16]}…")
+                           f"  sha256_prefix={rec['sha256'][:16]}…")
         print(DIM(detail) + "\n")
     if c2_budget.exhausted():
         print(YELLOW(f"  [~] C2-context scan budget exhausted "

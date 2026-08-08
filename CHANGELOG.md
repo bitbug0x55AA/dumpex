@@ -5,6 +5,48 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Fixed: truncated hash prefixes were mislabeled `sha256=` in console/fact text
+
+Several console displays truncated a SHA-256 digest to its first 16 hex
+characters and appended an ellipsis, but still labeled the value
+`sha256=`/`disk_sha256=`/`mem_sha256=` — indistinguishable, at a glance,
+from a complete digest suitable for exact verification or copy/paste into
+another forensic tool. A 16-hex-character value is only a 64-bit prefix.
+
+Every such display is now labeled with an explicit `_prefix` suffix
+instead:
+
+- `--hunt pipe --verbose`'s C2-context lines: `sha256=<16 hex>…` →
+  `sha256_prefix=<16 hex>…`.
+- Rules-loader announcements (`Rules loaded from ... (sha256=...)`, both
+  `--rules-file` and packaged/auto-discovered rules): → `sha256_prefix=`.
+- The `stomping.verified_content_change` Finding's `facts` entry:
+  `disk_sha256=<16 hex>… mem_sha256=<16 hex>…` →
+  `disk_sha256_prefix=<16 hex>… mem_sha256_prefix=<16 hex>…`.
+
+**This is a one-time, expected `Finding.id` change for
+`stomping.verified_content_change` findings.** `Finding.id` is a hash of
+the Finding's own content, including `facts`, so relabeling that fact
+string changes the id of every `stomping.verified_content_change` Finding
+this version produces, even against an unchanged dump. No other hunter's
+Finding IDs are affected — no other hunter embeds a truncated hash in
+`facts`. A downstream consumer that treats Finding IDs as a re-scan
+dedup/idempotency key (see `Finding.id`'s own docstring in
+`dumpex/hunt/_finding.py`) will see this version's
+`stomping.verified_content_change` findings as "new" even for a
+previously-seen dump; this is expected, not a regression, and does not
+indicate a change in what was detected — re-running affected pipelines'
+dedup baselines is the only action needed.
+
+**Schema stays at v2.8** — this is a text/labeling fix, not a field
+addition, removal, or shape change. **The complete, untruncated SHA-256
+values already exist in structured output and are unchanged**:
+`meta.evidence[].sha256`, rule/YARA provenance hashes, and the full
+`disk_sha256`/`mem_sha256`/pipe `sha256` fields in each hunter's
+structured `details` all remain full 64-hex digests with no truncation —
+only the free-text display strings above were mislabeled and are fixed
+here.
+
 ## Fixed: `--hunt stomping` no longer reports a clean IOC scan over memory it never read
 
 The stomping hunter's IOC-string scan skips executable `MEM_IMAGE` regions

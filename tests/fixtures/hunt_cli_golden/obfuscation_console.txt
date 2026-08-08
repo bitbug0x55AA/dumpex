@@ -1,4 +1,4 @@
-  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
+  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=f4b1140fc4606821…)
 
 ══════════════════════════════════════════
   HUNT: Obfuscation Detection

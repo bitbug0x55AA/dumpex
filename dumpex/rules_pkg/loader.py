@@ -409,7 +409,7 @@ def _load_explicit_rules(announce: bool = True) -> dict:
     digest = hashlib.sha256(data).hexdigest()
     _LAST_SOURCE_INFO = {"path": str(path), "sha256": digest, "explicit": True, "version": version}
     if announce:
-        print(GREEN(f"  [·] Rules loaded from --rules-file {path}  (sha256={digest[:16]}…)"))
+        print(GREEN(f"  [·] Rules loaded from --rules-file {path}  (sha256_prefix={digest[:16]}…)"))
     return rules
 
 
@@ -468,7 +468,7 @@ def _load_rules(announce: bool = True) -> dict:
                 _LAST_SOURCE_INFO = {"path": source.display, "sha256": digest,
                                       "explicit": False, "version": version}
                 if announce:
-                    print(DIM(f"  [·] Rules loaded from {source.display}  (sha256={digest[:16]}…)"))
+                    print(DIM(f"  [·] Rules loaded from {source.display}  (sha256_prefix={digest[:16]}…)"))
                 return rules
 
         except Exception as e:

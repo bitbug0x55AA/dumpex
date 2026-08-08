@@ -97,9 +97,9 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes changed_ranges=[+0x0(len 0x2000)] disk_sha256=1c3fdaf62acfdf87\u2026 mem_sha256=24c09129af01e155\u2026"
+        "module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes changed_ranges=[+0x0(len 0x2000)] disk_sha256_prefix=1c3fdaf62acfdf87\u2026 mem_sha256_prefix=24c09129af01e155\u2026"
       ],
-      "id": "finding-57e1922b17e00d94cbc2d4d407bea379",
+      "id": "finding-5540a55811cd7d4d0e964d4fd7665554",
       "inference": "1 module section(s) have relocation-normalized, byte-level content differences from an identity-matched (Machine/SizeOfImage/TimeDateStamp) reference file supplied via --ref-dir.",
       "iocs": [],
       "limitations": [

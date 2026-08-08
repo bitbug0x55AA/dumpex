@@ -19,7 +19,7 @@
       Impact: Injection score cannot reach HIGH (3) in this run regardless of other signals, since
       live-execution confirmation is the only path to that tier.
 
-  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256=f4b1140fc4606821…)
+  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=f4b1140fc4606821…)
 
 ══════════════════════════════════════════
   HUNT: Process Hollowing
