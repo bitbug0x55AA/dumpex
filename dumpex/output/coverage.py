@@ -1143,8 +1143,9 @@ def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimi
 # that already exist today, without blocking a future one.
 #
 # `None` in the scope set means "no scope at all" (pipe_name_scan/
-# segment_scan, which run exactly one scan loop -- see dumpex.hunt.pipe/
-# dumpex.hunt.cs_beacon/dumpex.hunt.yara_hunt's own coverage-report
+# segment_scan/ioc_string_scan, which run exactly one scan loop -- see
+# dumpex.hunt.pipe/dumpex.hunt.cs_beacon/dumpex.hunt.yara_hunt/
+# dumpex.hunt.stomping's own coverage-report
 # builders); encoding_scan is the one source that runs three independent
 # layers over overlapping region sets and therefore requires `scope` to
 # say WHICH one (see dumpex.hunt.encoding.aggregate.OVERSIZE_SCAN_LAYERS
@@ -1153,10 +1154,14 @@ def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimi
 # backwards, so the three layer names are duplicated here as the wire
 # contract rather than imported).
 _SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS = {
-    "pipe_name_scan": (ScanTargetKind.MEMORY_REGION, frozenset({None})),
-    "segment_scan":   (ScanTargetKind.MEMORY_SEGMENT, frozenset({None})),
-    "encoding_scan":  (ScanTargetKind.MEMORY_REGION,
-                        frozenset({"sleep_mask", "entropy", "decode"})),
+    "pipe_name_scan":  (ScanTargetKind.MEMORY_REGION, frozenset({None})),
+    "segment_scan":    (ScanTargetKind.MEMORY_SEGMENT, frozenset({None})),
+    "encoding_scan":   (ScanTargetKind.MEMORY_REGION,
+                         frozenset({"sleep_mask", "entropy", "decode"})),
+    # stomping's unscored IOC-string region scan (dumpex.hunt.stomping.
+    # memory_scan.scan_ioc_strings) -- one scan loop over MemoryInfo
+    # regions, so no scope, same shape as pipe_name_scan.
+    "ioc_string_scan": (ScanTargetKind.MEMORY_REGION, frozenset({None})),
 }
 
 

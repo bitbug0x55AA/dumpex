@@ -753,6 +753,7 @@ def _oversized_skipped_doc(source, scope, kind):
 
 @pytest.mark.parametrize("source,scope,kind", [
     ("pipe_name_scan", None, "memory_region"),
+    ("ioc_string_scan", None, "memory_region"),
     ("segment_scan", None, "memory_segment"),
     ("encoding_scan", "sleep_mask", "memory_region"),
     ("encoding_scan", "entropy", "memory_region"),
@@ -777,6 +778,8 @@ def test_oversized_skipped_correct_source_scope_kind_combos_validate(
     # non-null value either.
     ("pipe_name_scan", "unexpected", "memory_region"),
     ("segment_scan", "unexpected", "memory_segment"),
+    ("ioc_string_scan", None, "memory_segment"),
+    ("ioc_string_scan", "unexpected", "memory_region"),
 ])
 def test_oversized_skipped_wrong_source_scope_kind_combos_rejected_by_schema(
         source, scope, kind, coverage_limitation_validator):

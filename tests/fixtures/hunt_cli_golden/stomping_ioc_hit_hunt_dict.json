@@ -4,6 +4,11 @@
     "limitations": [],
     "reasons": [],
     "sources": {
+      "ioc_string_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
       "memory_info": {
         "detail": null,
         "record_count": 1,

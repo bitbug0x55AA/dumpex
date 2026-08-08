@@ -2062,6 +2062,24 @@ def test_oversized_skipped_requires_a_real_layer_scope_for_encoding_scan():
         assert f"by the {layer} scan" in render_limitation(limitation)
 
 
+def test_oversized_skipped_ioc_string_scan_is_region_kinded_and_unscoped():
+    # stomping's unscored IOC-string scan (dumpex.hunt.stomping.memory_scan)
+    # is a single loop over MemoryInfo regions, so it carries region targets
+    # and no scope -- the same contract as pipe_name_scan.
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="ioc_string_scan",
+        affected_count=1, targets=[_region_target()])
+    assert "region(s)" in render_limitation(limitation)
+    with pytest.raises(ValueError, match="requires every target's kind to be 'memory_region'"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="ioc_string_scan", affected_count=1,
+                            targets=[_segment_target()])
+    with pytest.raises(ValueError, match="requires scope to be"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="ioc_string_scan", scope="unexpected",
+                            affected_count=1, targets=[_region_target()])
+
+
 def test_oversized_skipped_unknown_source_is_not_kind_or_scope_constrained():
     # `source` stays an open vocabulary for this code (see its own enum
     # comment) -- a future hunter using a source name not in the known

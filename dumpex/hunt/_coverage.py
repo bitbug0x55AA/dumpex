@@ -45,10 +45,11 @@ from dumpex.output.coverage import (
 def region_scan_target(mf, region, size_limit: int) -> ScanTarget:
     """A ScanTarget for one MemoryInfoListStream region a scan skipped for
     exceeding `size_limit`. The ONE place a raw minidump region becomes a
-    skipped-target reference -- pipe's memory scan and all three of
-    obfuscation's layer scans go through this rather than each
-    re-deriving the same seven fields (and each getting a slightly
-    different answer for, say, whether `AllocationBase` is present).
+    skipped-target reference -- pipe's memory scan, stomping's unscored
+    IOC-string scan, and all three of obfuscation's layer scans go through
+    this rather than each re-deriving the same seven fields (and each
+    getting a slightly different answer for, say, whether
+    `AllocationBase` is present).
 
     `file_offset` is looked up per skipped region rather than for every
     region walked: this only runs on the skip path, which is rare by
@@ -138,8 +139,11 @@ class CoverageTracker:
     so it keeps its own richer coverage_counts dict rather than forcing
     those into this shape. Use CoverageTracker where the gaps genuinely
     ARE just "region too big / read failed / short read / ran out of
-    time-or-budget" (the per-layer region scans in dumpex.hunt.encoding
-    and the region scan in dumpex.hunt.pipe.memory_scan) — for everything
+    time-or-budget" (the per-layer region scans in dumpex.hunt.encoding,
+    the region scan in dumpex.hunt.pipe.memory_scan, and — in the same
+    hunter whose content-diff loop does NOT fit — the unscored IOC-string
+    region scan in dumpex.hunt.stomping.memory_scan, whose only two gaps
+    are exactly "over the size cap" and "read raised") — for everything
     else, track whatever the hunter's own reasons array needs and call
     derive_status()/derive_coverage_status()
     directly with an explicit `complete` boolean.

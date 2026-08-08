@@ -7,6 +7,7 @@ from tests.fixtures.fakes import (Region, Module, FakeStream, FakeMF, build_pe_h
                                    mem_reader, matching_module_and_ref)
 
 import dumpex.hunt.stomping as stomping
+from dumpex.hunt.stomping.config import IOC_SCAN_MAX
 
 
 # ── normal DLL + PAGE_EXECUTE_WRITECOPY, matching reference -> CLEAN ──────
@@ -387,16 +388,284 @@ def test_ioc_lead_scan_read_failure_is_counted(capsys):
             fh.write(ref_file)
         f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
 
-    # The scored signal is unaffected -- this is purely about the
-    # unscored IOC-string lead's own coverage visibility.
+    # The read failure can't invent a score -- that lead never scores --
+    # but an eligible region this hunter never read is a coverage gap, so
+    # the run must not report a complete, clean scan either. It used to
+    # report exactly that (status NOT_DETECTED_IN_SCANNED_SCOPE,
+    # coverage_status "complete"); see dumpex/hunt/stomping/aggregate.py's
+    # own comment on why coverage_status and status move together here.
     assert f["score"] == 0
-    assert f["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("failed to read and were not scanned for IOC strings" in reason
+               for reason in f["coverage_reasons"]), f["coverage_reasons"]
 
     # The read failure must be surfaced, not silently dropped like a plain
     # `except Exception: continue` would (that was the actual bug: this
     # region's read failure previously vanished with no trace anywhere).
     out = capsys.readouterr().out
     assert "1 region(s) failed to read" in out
+    assert "CLEAN — no IOC patterns in executable module memory" not in out
+
+
+# ── oversized executable MEM_IMAGE regions: recorded before they are ──────
+# skipped, never silently dropped. The IOC-string scan skips any eligible
+# region over IOC_SCAN_MAX (5 MiB) because string extraction over a huge
+# mapping is expensive and can never score — but a skip nobody records is a
+# region an analyst never learns to go re-scan, while the check line still
+# reads "CLEAN — no IOC patterns in executable module memory".
+
+_OVERSIZED = IOC_SCAN_MAX + 0x100000   # 6 MiB: over the cap, never read at
+                                        # all (so no 6 MiB fixture is needed)
+
+
+def _oversized_exec_image_region(base, module_base, size=_OVERSIZED):
+    return Region(base, module_base, size, "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE")
+
+
+def test_only_oversized_ioc_region_is_incomplete_not_clean(capsys):
+    """The one case the old code got most wrong: nothing was found because
+    nothing eligible was ever read, and it still rendered CLEAN."""
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base)
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    oversized_base = module_base + 0x100000
+    regions = [_oversized_exec_image_region(oversized_base, module_base)]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+    stomping.read_region = mem_reader({module_base: header,
+                                        module_base + section["vaddr"]: mem_text})
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(ref_file)
+        f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+
+    # The oversized region can't produce a score -- this lead never scores
+    # -- and the verified content diff itself did compare every eligible
+    # section...
+    assert f["score"] == 0
+    assert f["coverage_counts"]["sections_compared"] == 1
+    # ...but 5 MiB+ of eligible executable module memory was never
+    # examined, so neither coverage nor the verdict may read as clean, and
+    # the reason names the region and the cap it exceeded.
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["verdict_level"] == "inconclusive"
+    reason = next(r for r in f["coverage_reasons"] if "never scanned for IOC strings" in r)
+    assert f"0x{oversized_base:016x}" in reason
+    assert "6 MB > 5 MB limit" in reason
+
+    out = capsys.readouterr().out
+    assert "CLEAN — no IOC patterns in executable module memory" not in out
+    assert "INCOMPLETE" in out
+    # The investigator is told WHICH region needs targeted follow-up, both
+    # at the check line and in the verdict's own coverage reasons.
+    assert f"0x{oversized_base:016x}" in out
+    assert "--extract" in out and "--strings" in out
+    assert "6 MB > 5 MB limit" in out
+
+
+def test_mixed_scanned_and_oversized_regions_keeps_hits_and_the_gap(capsys):
+    """A scanned region's IOC hit and an unscanned oversized region are not
+    mutually exclusive: the hit list is a floor, not a total, so both the
+    lead and the coverage gap have to survive."""
+    filler = bytearray((i * 7) % 251 for i in range(0x2000))
+    filler[0x40:0x40 + 8] = b"mimikatz"
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(
+        module_base=module_base, text_bytes=bytes(filler))
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    scanned_base   = module_base + section["vaddr"]
+    oversized_base = module_base + 0x100000
+    regions = [Region(scanned_base, module_base, section["vsize"],
+                       "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE"),
+               _oversized_exec_image_region(oversized_base, module_base)]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+    stomping.read_region = mem_reader({module_base: header, scanned_base: mem_text})
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(ref_file)
+        f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+
+    ioc_lead = next(x for x in f["findings"] if x["check"] == "stomping.ioc_string_lead")
+    assert "mimikatz" in ioc_lead["facts"][0]
+    # The lead itself carries the unexamined remainder -- a --json consumer
+    # reading only this finding still learns the hit list is incomplete.
+    assert any("never scanned for IOC strings" in lim for lim in ioc_lead["limitations"]), \
+        ioc_lead["limitations"]
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+
+    out = capsys.readouterr().out
+    assert "INCOMPLETE" in out
+    assert f"0x{oversized_base:016x}" in out
+    assert "CLEAN — no IOC patterns in executable module memory" not in out
+
+
+def test_oversized_ioc_region_alongside_a_detection(capsys):
+    """An oversized IOC region must neither suppress nor be suppressed by a
+    real stomping detection: score/status stay DETECTED, and the gap is
+    still reported next to it (a detected dump is exactly when an analyst
+    most wants the addresses that were NOT examined)."""
+    module_base = 0x7ff600000000
+    sections = [{"name": b".text", "vaddr": 0x1000, "vsize": 0x2000, "rawptr": 0x400,
+                 "rawsize": 0x2000, "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}]
+    header = build_pe_header(sections, timestamp=0x11111111, size_of_image=0x5000,
+                              image_base=module_base)
+    text_original = bytes((i * 7) % 251 for i in range(0x2000))
+    ref_file = bytearray(header)
+    ref_file += b'\x00' * (sections[0]["rawptr"] - len(ref_file))
+    ref_file += text_original
+    mem_text = bytearray(text_original)
+    mem_text[0x100:0x110] = b'\xCC' * 0x10   # simulated stomp
+
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    oversized_base = module_base + 0x100000
+    regions = [Region(module_base + 0x1000, module_base, 0x2000, "MEM_COMMIT",
+                       "PAGE_EXECUTE_READ", "MEM_IMAGE"),
+               _oversized_exec_image_region(oversized_base, module_base)]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+    stomping.read_region = mem_reader({module_base: header,
+                                        module_base + 0x1000: bytes(mem_text)})
+    stomping.get_thread_contexts = lambda mf: []
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(bytes(ref_file))
+        f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+
+    assert f["score"] == 1
+    assert f["status"] == "DETECTED"
+    assert f["verdict_level"] == "possible"
+    assert f["coverage_status"] == "partial"
+    out = capsys.readouterr().out
+    assert "Coverage incomplete despite a detection" in out
+    assert f"0x{oversized_base:016x}" in out
+
+
+def test_oversized_region_below_the_cap_is_scanned_normally():
+    """Guard on the boundary itself: a region exactly AT IOC_SCAN_MAX is
+    eligible and scanned (the check is `>`, not `>=`), so the cap can't
+    quietly start reporting coverage gaps for regions it does examine."""
+    module_base = 0x7ff600000000
+    filler = bytearray((i * 7) % 251 for i in range(0x2000))
+    header, mem_text, ref_file, section = matching_module_and_ref(
+        module_base=module_base, text_bytes=bytes(filler))
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    at_cap_base = module_base + 0x100000
+    regions = [_oversized_exec_image_region(at_cap_base, module_base, size=IOC_SCAN_MAX)]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+    stomping.read_region = mem_reader({module_base: header,
+                                        module_base + section["vaddr"]: mem_text})
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(ref_file)
+        f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+
+    assert f["coverage_status"] == "complete"
+    assert f["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
+    assert not [r for r in f["coverage_reasons"] if "IOC strings" in r]
+
+
+# ── a short read (fewer bytes than RegionSize) must be a coverage gap, ────
+# not silently miscounted as CLEAN, while a real hit in the readable
+# prefix still gets reported.
+
+def test_short_read_ioc_region_is_incomplete_and_keeps_hit_in_prefix(capsys):
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base)
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+
+    filler = bytearray((i * 7) % 251 for i in range(0x1000))
+    filler[0x40:0x40 + 8] = b"mimikatz"   # strong IOC token, inside the readable prefix
+    short_read_base = module_base + 0x100000
+    full_size = 0x1000
+    truncated_size = 0x800   # only half comes back -- the token at 0x40 is still included
+    regions = [Region(module_base + section["vaddr"], module_base, section["vsize"],
+                       "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE"),
+               Region(short_read_base, module_base, full_size,
+                      "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_IMAGE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+
+    base_reader = mem_reader({module_base: header, module_base + section["vaddr"]: mem_text,
+                               short_read_base: bytes(filler)})
+
+    def short_reader(mf, addr, size):
+        if addr == short_read_base:
+            return base_reader(mf, addr, size)[:truncated_size]
+        return base_reader(mf, addr, size)
+    stomping.read_region = short_reader
+
+    with tempfile.TemporaryDirectory() as d:
+        with open(os.path.join(d, "legit.dll"), "wb") as fh:
+            fh.write(ref_file)
+        f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
+
+    # The scored signal is unaffected (the content diff compared its own
+    # eligible section fully) -- this is purely about the unscored IOC
+    # scan's own coverage over a DIFFERENT region.
+    assert f["score"] == 0
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    # Unlike an oversized skip, a short read carries no per-target VA (the
+    # shared CoverageTracker only counts short reads -- see
+    # dumpex.hunt._coverage.CoverageTracker.build_reasons -- matching every
+    # other hunter's read_failed/short_reads reasons, which are count-only
+    # too; only skipped_oversize keeps full ScanTarget identity).
+    reason = next(r for r in f["coverage_reasons"]
+                  if "partially scanned for IOC strings" in r)
+    assert "1 region(s)" in reason
+
+    ioc_lead = next(x for x in f["findings"] if x["check"] == "stomping.ioc_string_lead")
+    assert "mimikatz" in ioc_lead["facts"][0]
+    assert any("partially scanned for IOC strings" in lim for lim in ioc_lead["limitations"])
+
+    out = capsys.readouterr().out
+    assert "CLEAN — no IOC patterns in executable module memory" not in out
+    assert "INCOMPLETE" in out
+    assert "mimikatz" in out or "1 strong" in out   # the readable-prefix hit still shows up
+
+
+# ── ModuleListStream absent: hunter-level NOT_EVALUATED, but a real IOC ───
+# oversized-region gap (found by a sub-scan that only needs
+# MemoryInfoListStream) must still show up in coverage_reasons, not be
+# swallowed because the WHOLE hunter never evaluated for an unrelated reason.
+
+def test_oversized_ioc_region_survives_not_evaluated_when_module_list_absent():
+    module_base = 0x7ff600000000
+    oversized_base = module_base + 0x100000
+    oversized_size = IOC_SCAN_MAX + 0x100000
+    regions = [_oversized_exec_image_region(oversized_base, module_base, size=oversized_size)]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        # `modules` stays the FakeMF default (None).
+
+    stomping.read_region = mem_reader({})
+
+    f = stomping._hunt_stomping(MF(), verbose=False, ref_dir=None)
+
+    assert f["status"] == "NOT_EVALUATED"
+    assert f["coverage_status"] == "not_evaluated"
+    assert any("ModuleListStream" in r for r in f["coverage_reasons"])
+    assert any("never scanned for IOC strings" in r for r in f["coverage_reasons"])
 
 
 def test_ioc_lead_finding_printed_exactly_once(capsys):

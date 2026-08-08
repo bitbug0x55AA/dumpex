@@ -30,14 +30,27 @@ def render(report, verbose: bool = False) -> dict:
         print(f"  {DIM(f'[·] Whitelisted network DLLs skipped (network strings expected): {chr(44).join(unique_wl)}')}")
         print()
 
-    if not ioc_scan.ioc_hits:
-        detail = (f"{ioc_scan.ioc_read_failed} region(s) failed to read and were not scanned"
-                  if ioc_scan.ioc_read_failed else "")
+    # The IOC sub-scan's check line. "CLEAN — no IOC patterns in executable
+    # module memory" is a claim about ALL eligible executable module memory,
+    # so it may only be printed when the scan actually read all of it: an
+    # oversized region never scanned, or one whose read failed, makes this
+    # check INCOMPLETE even when nothing was found in the part that WAS
+    # read. When the scan did have hits, the hits themselves are rendered
+    # by the findings_list loop below (their Finding carries the same gap in
+    # `limitations`) — but the check-level coverage statement still belongs
+    # here, since a hit list from a partial scan is a floor, not a total.
+    ioc_reasons = report.ioc_coverage_reasons
+    if ioc_reasons:
         _print_check("IOC strings in module code regions",
-                     GREEN("CLEAN — no IOC patterns in executable module memory")
-                     if not ioc_scan.ioc_read_failed else
-                     YELLOW("INCOMPLETE — some regions could not be read"),
-                     detail)
+                     YELLOW("INCOMPLETE — part of the eligible executable module memory was "
+                            "not examined for IOC strings"),
+                     "; ".join(ioc_reasons))
+        print(YELLOW("  [~] Targeted follow-up needed on the region(s) above: --extract / "
+                      "--strings that VA, or re-scan it with an external scanner — an IOC "
+                      "result cannot be called clean for memory that was never read.\n"))
+    elif not ioc_scan.ioc_hits:
+        _print_check("IOC strings in module code regions",
+                     GREEN("CLEAN — no IOC patterns in executable module memory"))
 
     # ── Print detection/lead findings ─────────────────────────────────────
     level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
@@ -71,6 +84,9 @@ def render(report, verbose: bool = False) -> dict:
     print(f"  {BOLD('[ VERDICT ]')}  {verdict}  ({score}/2, requires --ref-dir; "
           f"protection-deviation and string-IOC leads above are informational and not counted)\n")
 
+    # NOT_EVALUATED/INCONCLUSIVE already carry coverage_reasons inside the
+    # verdict text above; DETECTED does not, so a detection over partial
+    # coverage must not leave a red verdict line standing on its own.
     if status == DETECTED and coverage_status == "partial":
         print(YELLOW(f"  [~] Coverage incomplete despite a detection: {'; '.join(coverage_reasons)} "
                       f"— additional stomped modules may exist beyond what could be checked.\n"))

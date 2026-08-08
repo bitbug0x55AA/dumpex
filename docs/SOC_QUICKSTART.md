@@ -281,6 +281,29 @@ legitimate hotpatch or an EDR inline hook can produce the exact same
 signature. score 2 ("high") additionally requires a thread's current
 RIP/EIP to execute inside the changed bytes.
 
+The **IOC-string scan** over executable `MEM_IMAGE` regions is an
+unscored lead, and it skips any region larger than 5 MB; a region it
+tries to read but gets fewer bytes back than declared is a separate gap
+(`code: "SCAN_REGION_SHORT_READ"` — the readable prefix is still scanned,
+so a real hit there still shows up, but the region isn't fully covered).
+Either way the check reports `INCOMPLETE` instead of `CLEAN`, and a
+`coverage.limitations[]` entry (`source: "ioc_string_scan"`; oversized
+skips additionally carry `code: "SCAN_REGION_OVERSIZED_SKIPPED"` with
+each region's VA, size, protection, and dump-file offset, so you can
+`--extract`/`--strings` it or hand the address to another scanner) names
+the gap.
+
+`coverage.status` for this gap is normally `partial`: a score-0 run is
+`INCONCLUSIVE`, not `NOT_DETECTED_IN_SCANNED_SCOPE`, and a detection is
+still `DETECTED` with `coverage.status: partial` telling you the
+supporting IOC evidence may be under-reported. The one exception: if
+`ModuleListStream` is missing from the dump, the hunter as a whole is
+`NOT_EVALUATED` (its scored content-diff check needs that stream and
+never runs) — the IOC scan only needs `MemoryInfoListStream`, so it can
+still run and still find a real gap, which is reported as a
+`coverage.limitations[]` entry alongside the otherwise-unrelated
+`NOT_EVALUATED` result rather than silently dropped.
+
 ### Named Pipe C2 / Lateral Movement (`pipe`)
 
 The primary, scored signal is a **handle object** from `HandleDataStream`
