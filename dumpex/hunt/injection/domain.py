@@ -155,9 +155,62 @@ def _own_correlation(correlation) -> Correlation:
                  "rip_hits", "rip_full_correlation", "start_hits"):
         require_recursively_immutable(getattr(owned, name),
                                        f"InjectionEvidence.correlation.{name}")
-    _require_subset(owned.rip_full_correlation, owned.rip_hits,
-                     "correlation.rip_full_correlation", "correlation.rip_hits")
+
+    # Self-consistency of Correlation's OWN fields -- independent of
+    # whether rwx_and_pe_alloc_bases/suspicious_alloc_bases themselves
+    # turn out to correctly reflect the top-level rwx/validated_pe_hits
+    # buckets (a separate question `_require_correlation_matches_buckets`
+    # asks later, once those buckets exist). `correlate()` only ever adds
+    # a RipHitEvidence/StartHitEvidence to rip_hits/start_hits when its
+    # region's allocation_base is already in suspicious_alloc_bases -- a
+    # hit whose own region fails that membership test could not have been
+    # produced by the real correlation logic.
+    for hit in owned.rip_hits:
+        if hit.region.allocation_base not in owned.suspicious_alloc_bases:
+            raise ValueError(
+                f"correlation.rip_hits holds {hit!r}, whose allocation base "
+                f"0x{hit.region.allocation_base:x} is not in "
+                f"suspicious_alloc_bases -- correlate() only ever adds a hit "
+                f"whose region already qualified")
+    for hit in owned.start_hits:
+        if hit.region.allocation_base not in owned.suspicious_alloc_bases:
+            raise ValueError(
+                f"correlation.start_hits holds {hit!r}, whose allocation base "
+                f"0x{hit.region.allocation_base:x} is not in "
+                f"suspicious_alloc_bases -- correlate() only ever adds a hit "
+                f"whose region already qualified")
+
+    # rip_full_correlation is `correlate()`'s own filter of rip_hits --
+    # `[hit for hit in rip_hits if hit.region.allocation_base in
+    # rwx_and_pe_alloc_bases]`, over the SAME list, by reference. Checking
+    # this as an EXACT filter (not merely a subset) is what catches both a
+    # hit that should not have qualified (wrong allocation) and a
+    # qualifying hit that was silently dropped, in either direction, while
+    # still requiring rip_hits' own relative order to survive the filter.
+    _require_exact_filtered_subsequence(
+        owned.rip_full_correlation, owned.rip_hits,
+        lambda hit: hit.region.allocation_base in owned.rwx_and_pe_alloc_bases,
+        "correlation.rip_full_correlation", "correlation.rip_hits",
+        "region.allocation_base in rwx_and_pe_alloc_bases")
     return owned
+
+
+def _require_exact_filtered_subsequence(filtered, source, predicate,
+                                         filtered_name: str, source_name: str,
+                                         predicate_description: str) -> None:
+    """`filtered` must equal exactly `[item for item in source if
+    predicate(item)]` -- by identity, in `source`'s own order. Stronger
+    than a subset check both ways: a `filtered` item the predicate
+    rejects, or a qualifying `source` item missing from `filtered`, are
+    both caught, and `filtered` is exactly ONE possible list, not any
+    reordering of the right multiset."""
+    expected = [item for item in source if predicate(item)]
+    if [id(item) for item in filtered] != [id(item) for item in expected]:
+        raise ValueError(
+            f"{filtered_name} must be exactly the items of {source_name} "
+            f"satisfying {predicate_description}, in {source_name}'s own "
+            f"relative order -- got a different set, a different order, or "
+            f"both")
 
 
 def _require_subset(subset, superset, subset_name: str, superset_name: str) -> None:
@@ -254,6 +307,58 @@ def _require_correlation_matches_buckets(correlation: Correlation, rwx: tuple,
             f"({sorted(hex(b) for b in correlation.suspicious_alloc_bases)}) must be "
             f"exactly every allocation base carrying RWX or a validated PE "
             f"({sorted(hex(b) for b in expected_suspicious)})")
+
+
+def _require_ordered_subsequence(hit_keys: list, source_keys: list,
+                                  hits_name: str, source_name: str) -> None:
+    """`hit_keys` must be an order-preserving subsequence of `source_keys`
+    -- every key present, in the same relative order, none invented. This
+    is the one relationship this model CAN verify between a correlation
+    hit list and the thread evidence it was filtered from without a raw
+    region list: `correlate()`'s own geometric "does this ip/StartAddress
+    land inside allocation X" test is not re-derivable here (the domain
+    model deliberately holds no `mf`/region list -- see this module's own
+    docstring), so this does not re-prove WHICH thread_contexts/
+    start_threads entries should have survived the filter, only that every
+    one the Correlation claims survived is a genuine, unfabricated
+    (thread_id, ...) combination drawn from the bucket in its own order.
+    """
+    it = iter(source_keys)
+    for key in hit_keys:
+        for candidate in it:
+            if candidate == key:
+                break
+        else:
+            raise ValueError(
+                f"{hits_name} holds {key!r}, which is not one of {source_name}'s "
+                f"own entries in the expected relative order -- a correlation hit "
+                f"must be drawn from the thread evidence it claims to correlate, "
+                f"never invented or reordered")
+
+
+def _require_rip_hits_match_thread_contexts(rip_hits: tuple, thread_contexts: tuple) -> None:
+    """Every `RipHitEvidence` in `rip_hits` must be an order-preserving
+    subsequence match, by (thread_id, ip, ip_reg), of `InjectionEvidence.
+    thread_contexts` -- `correlate()` builds `rip_hits` by iterating
+    `thread_contexts` and copying those three fields verbatim onto
+    whichever entries pass its geometric filter."""
+    hit_keys = [(hit.thread_id, hit.ip, hit.ip_reg) for hit in rip_hits]
+    source_keys = [(tc.thread_id, tc.ip, tc.ip_reg) for tc in thread_contexts]
+    _require_ordered_subsequence(hit_keys, source_keys,
+                                  "InjectionEvidence.correlation.rip_hits",
+                                  "InjectionEvidence.thread_contexts")
+
+
+def _require_start_hits_match_start_threads(start_hits: tuple, start_threads: tuple) -> None:
+    """Same relationship as `_require_rip_hits_match_thread_contexts`, for
+    `StartHitEvidence`/`start_threads` -- keyed on (thread_id,
+    start_address), the two fields `correlate()` copies verbatim from the
+    `UnbackedThreadEvidence` a `StartHitEvidence` was built from."""
+    hit_keys = [(hit.thread_id, hit.start_address) for hit in start_hits]
+    source_keys = [(t.thread_id, t.start_address) for t in start_threads]
+    _require_ordered_subsequence(hit_keys, source_keys,
+                                  "InjectionEvidence.correlation.start_hits",
+                                  "InjectionEvidence.start_threads")
 
 
 @dataclass(frozen=True)
@@ -432,9 +537,17 @@ class InjectionEvidence:
             `correlation.rwx_and_pe_alloc_bases` with the two
             per-allocation maps -- one entry per correlated allocation,
             ascending by base, each holding exactly that allocation's RWX
-            regions followed by its validated-PE regions, by IDENTITY.
+            regions followed by its validated-PE regions, by IDENTITY;
+          * `correlation.rip_hits`/`start_hits` are drawn from
+            `thread_contexts`/`start_threads` -- see
+            `_require_rip_hits_match_thread_contexts`/
+            `_require_start_hits_match_start_threads` for exactly what is
+            (and, since this model holds no raw region list, is not)
+            verified about that relationship.
         """
         _require_correlation_matches_buckets(self.correlation, self.rwx, self.validated_pe_hits)
+        _require_rip_hits_match_thread_contexts(self.correlation.rip_hits, self.thread_contexts)
+        _require_start_hits_match_start_threads(self.correlation.start_hits, self.start_threads)
         _require_subset(self.suspicious_pe_hits, self.validated_pe_hits,
                          "InjectionEvidence.suspicious_pe_hits",
                          "InjectionEvidence.validated_pe_hits")

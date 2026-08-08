@@ -154,11 +154,21 @@ def require_recursively_immutable(value, field_name: str) -> None:
     what the dataclass decorator generated `__init__`/`__eq__` for, and
     says nothing about what a subclass's own `__init__` (or any code
     holding a reference before this function ever sees it) may have set
-    via `object.__setattr__`. `vars(value)`, when the instance has a
-    `__dict__` at all (a `slots=True` dataclass does not, and so cannot
-    hold undeclared state in the first place), must contain EXACTLY the
-    declared field names -- anything else is instance state this function
-    would otherwise never look at.
+    via `object.__setattr__`. When the instance has a `__dict__` at all (a
+    `slots=True` dataclass does not, and so cannot hold undeclared state in
+    the first place), it must contain no attribute OUTSIDE the declared
+    field names -- that is the only direction that can hide a mutable
+    payload this function would otherwise never look at.
+
+    The reverse is deliberately NOT required: a declared field is allowed
+    to be ABSENT from `vars(value)` (mixed slotted/unslotted inheritance
+    can legitimately store some declared fields in a base class's
+    `__slots__` and the rest in the subclass's own `__dict__`, so a field
+    living in a slot rather than in `__dict__` is not a defect). That
+    field is still validated below regardless of where it physically
+    lives -- `getattr(value, f.name)` reads it the same way either way,
+    and would raise `AttributeError` on its own if a field were somehow
+    truly missing, rather than this function silently accepting it.
     """
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         if not value.__dataclass_params__.frozen:
@@ -167,14 +177,15 @@ def require_recursively_immutable(value, field_name: str) -> None:
                 f"non-frozen dataclass {type(value).__name__}: {value!r}")
         declared = {f.name for f in dataclasses.fields(value)}
         instance_state = getattr(value, "__dict__", None)
-        if instance_state is not None and set(instance_state) != declared:
-            raise TypeError(
-                f"{field_name} holds a {type(value).__name__} whose instance "
-                f"state does not match its own declared dataclass fields "
-                f"(extra: {sorted(set(instance_state) - declared)}) -- only "
-                f"declared fields are validated for immutability, so anything "
-                f"else is unchecked instance state a subclass or a caller "
-                f"could have attached")
+        if instance_state is not None:
+            undeclared = set(instance_state) - declared
+            if undeclared:
+                raise TypeError(
+                    f"{field_name} holds a {type(value).__name__} with "
+                    f"undeclared instance attribute(s) {sorted(undeclared)} -- "
+                    f"only declared fields are validated for immutability, so "
+                    f"anything else is unchecked instance state a subclass or "
+                    f"a caller could have attached")
         for f in dataclasses.fields(value):
             require_recursively_immutable(getattr(value, f.name),
                                            f"{field_name}.{f.name}")

@@ -160,13 +160,14 @@ def _correlated_evidence(**overrides):
     recorded the join."""
     rwx = _rwx(_ALLOC)
     pe_hit = _pe_hit(_ALLOC + 0x1000, alloc=_ALLOC)
+    rip_hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region)
     correlation = Correlation(
         rwx_by_alloc={_ALLOC: [rwx.region]},
         pe_by_alloc={_ALLOC: [pe_hit.region]},
         rwx_and_pe_alloc_bases={_ALLOC},
         suspicious_alloc_bases={_ALLOC},
-        rip_hits=[RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP",
-                                  region=rwx.region)],
+        rip_hits=[rip_hit],
+        rip_full_correlation=[rip_hit],
         start_hits=[StartHitEvidence(thread_id=0x1, start_address=0x9999000,
                                       region=rwx.region)],
     )
@@ -384,8 +385,42 @@ def test_frozen_dataclass_with_undeclared_instance_state_is_rejected():
     # would never see this at all.
     ev = _rwx()
     object.__setattr__(ev, "extra_payload", [])
-    with pytest.raises(TypeError, match="does not match its own declared"):
+    with pytest.raises(TypeError, match="undeclared instance attribute"):
         require_recursively_immutable(ev, "test")
+
+
+def test_frozen_dataclass_missing_a_declared_field_from_its_dict_is_not_rejected():
+    # The reverse of the case above must NOT be an error: mixed slotted/
+    # unslotted inheritance can legitimately store some declared fields in
+    # a __slots__ descriptor rather than in __dict__, so __dict__ holding
+    # FEWER entries than declared fields is not itself a defect -- only an
+    # EXTRA, undeclared entry is. Each field is still validated regardless
+    # of where it physically lives, via getattr().
+    @dataclasses.dataclass(frozen=True)
+    class _SlottedBase:
+        __slots__ = ("a",)
+        a: int
+
+    @dataclasses.dataclass(frozen=True)
+    class _MixedSubclass(_SlottedBase):
+        b: int = 0
+
+    instance = _MixedSubclass(a=1, b=2)
+    # `a` lives in the base class's slot descriptor, not in __dict__ --
+    # confirms this test actually exercises the scenario it claims to.
+    assert "a" not in vars(instance) and "b" in vars(instance)
+    require_recursively_immutable(instance, "test")
+
+
+def test_fully_slotted_dataclass_has_no_dict_at_all_and_is_still_validated():
+    @dataclasses.dataclass(frozen=True, slots=True)
+    class _FullySlotted:
+        a: int = 1
+        b: str = "x"
+
+    instance = _FullySlotted()
+    assert not hasattr(instance, "__dict__")
+    require_recursively_immutable(instance, "test")
 
 
 class _MutablePayloadWrapper:
@@ -510,7 +545,10 @@ def test_report_owns_its_correlation_maps_not_the_callers():
     hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region)
     correlation = Correlation(rwx_by_alloc=backing, rip_hits=[hit],
                                suspicious_alloc_bases={rwx.region.allocation_base})
-    evidence = InjectionEvidence(rwx=(rwx,), correlation=correlation)
+    thread_contexts = (ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP",
+                                      is_wow64=False),)
+    evidence = InjectionEvidence(rwx=(rwx,), thread_contexts=thread_contexts,
+                                  correlation=correlation)
 
     backing[0x999000] = ["tampered"]
     assert 0x999000 not in evidence.correlation.rwx_by_alloc
@@ -598,9 +636,18 @@ def test_report_rejects_a_result_citing_an_equal_but_separate_copy():
 def test_report_accepts_results_citing_correlation_hit_evidence():
     # rip_hits/rip_full_correlation/start_hits are top-level evidence too,
     # they just live on the correlation result rather than in a bucket
-    # that would duplicate them.
-    hit = RipHitEvidence(thread_id=0x1, ip=0x7ffe10000010, ip_reg="RIP", region=_region())
-    evidence = InjectionEvidence(correlation=Correlation(rip_hits=[hit]))
+    # that would duplicate them. A rip_hit can only legitimately reference
+    # an allocation that genuinely carries RWX or a validated PE (see
+    # _require_correlation_matches_buckets/_own_correlation's own
+    # suspicious_alloc_bases membership check), so this needs a real rwx
+    # bucket entry backing it, not a free-floating hit.
+    rwx = _rwx(_ALLOC)
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region)
+    thread_contexts = (ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP",
+                                      is_wow64=False),)
+    evidence = InjectionEvidence(
+        rwx=(rwx,), thread_contexts=thread_contexts,
+        correlation=_correlation_for(rwx=(rwx,), rip_hits=[hit]))
     report = _report(results=(_check(check="injection.allocation_correlation",
                                       evidence=(hit,)),), evidence=evidence)
     assert report.results[0].evidence[0] is report.evidence.correlation.rip_hits[0]
@@ -672,12 +719,61 @@ def test_genuinely_disjoint_mz_only_hits_are_accepted():
     assert evidence.mz_only_hits == (mz_only,)
 
 
+def test_own_correlation_rejects_a_rip_hit_outside_suspicious_alloc_bases():
+    # correlate() only ever appends a RipHitEvidence whose OWN region
+    # already qualified as suspicious -- a hit referencing an allocation
+    # outside suspicious_alloc_bases could not have been produced by it.
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=_region())
+    with pytest.raises(ValueError, match="rip_hits holds"):
+        InjectionEvidence(correlation=Correlation(rip_hits=[hit]))   # suspicious_alloc_bases empty
+
+
+def test_own_correlation_rejects_a_start_hit_outside_suspicious_alloc_bases():
+    hit = StartHitEvidence(thread_id=0x1, start_address=0x9999000, region=_region())
+    with pytest.raises(ValueError, match="start_hits holds"):
+        InjectionEvidence(correlation=Correlation(start_hits=[hit]))
+
+
+def test_rip_hits_must_be_drawn_from_thread_contexts():
+    # suspicious_alloc_bases is satisfied (a real rwx bucket backs it),
+    # but no thread_contexts entry reports this (thread_id, ip, ip_reg) --
+    # a fabricated or stale rip_hit.
+    rwx = _rwx(_ALLOC)
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region)
+    with pytest.raises(ValueError, match="not one of InjectionEvidence.thread_contexts"):
+        InjectionEvidence(rwx=(rwx,), correlation=_correlation_for(rwx=(rwx,), rip_hits=[hit]))
+
+
+def test_start_hits_must_be_drawn_from_start_threads():
+    rwx = _rwx(_ALLOC)
+    hit = StartHitEvidence(thread_id=0x1, start_address=0x9999000, region=rwx.region)
+    with pytest.raises(ValueError, match="not one of InjectionEvidence.start_threads"):
+        InjectionEvidence(rwx=(rwx,), correlation=_correlation_for(rwx=(rwx,), start_hits=[hit]))
+
+
+def test_rip_hits_can_skip_thread_contexts_entries_that_did_not_correlate():
+    # A leading thread_context that never correlated must not block a
+    # later one that did -- the subsequence match has to keep consuming
+    # candidates past a non-matching one, not just check the first.
+    rwx = _rwx(_ALLOC)
+    other_tc = ThreadContext(thread_id=0x2, ip=0x1000, ip_reg="RIP", is_wow64=False)
+    matching_tc = ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", is_wow64=False)
+    hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=rwx.region)
+    evidence = InjectionEvidence(
+        rwx=(rwx,), thread_contexts=(other_tc, matching_tc),
+        correlation=_correlation_for(rwx=(rwx,), rip_hits=[hit]))
+    assert evidence.correlation.rip_hits[0] is hit
+
+
 def test_rip_full_correlation_must_be_a_subset_of_rip_hits():
     hit = RipHitEvidence(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP", region=_region())
     other = RipHitEvidence(thread_id=0x2, ip=_ALLOC + 0x20, ip_reg="RIP", region=_region())
+    thread_contexts = (ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10, ip_reg="RIP",
+                                      is_wow64=False),)
     with pytest.raises(ValueError, match="rip_full_correlation"):
-        InjectionEvidence(correlation=Correlation(rip_hits=[hit],
-                                                   rip_full_correlation=[other]))
+        InjectionEvidence(thread_contexts=thread_contexts,
+                           correlation=Correlation(rip_hits=[hit], rip_full_correlation=[other],
+                                                    suspicious_alloc_bases={_ALLOC}))
 
 
 def test_a_bucket_rejects_the_same_object_listed_twice():
