@@ -26,7 +26,7 @@ stomping" result actually checked anything.
 
 ## The four fields that matter
 
-`--json` wraps every hunter's result in dumpex's shared v2.7
+`--json` wraps every hunter's result in dumpex's shared v2.8
 envelope: `result.kind` is `"hunt"`, and each hunter you selected gets
 its own entry in `result.data.records[]` (`hunter` names which TTP —
 `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, or
@@ -70,6 +70,32 @@ selected) and, from there, the process exit code — see
 `NOT_EVALUATED` — if you see `verdict_level: inconclusive` or
 `not_evaluated`, that is the tool telling you it could not verify a
 clean result, not a milder form of "clean."
+
+### Closing an oversized-region coverage gap
+
+When a hunter skipped memory for exceeding its scan size cap, the
+`SCAN_REGION_OVERSIZED_SKIPPED` entry in `result.coverage.limitations[]`
+names each skipped region/segment under `targets[]` — virtual address,
+size, dump-file offset, and (for a MemoryInfo region) allocation
+base/state/type/protection. Work the gap from there:
+
+1. `type: "MEM_PRIVATE"` with an executable `protection` is worth looking
+   at first; a large `MEM_MAPPED`/heap region usually is not.
+2. `file_offset: null` means those bytes were never written to this dump
+   at all — no local extraction will recover them, so recollect with
+   broader capture coverage.
+3. Otherwise pull the region directly:
+   `dumpex suspect.dmp --extract <base_address> --size <size>`, or
+   `--strings <base_address>`, and rescan the extracted file with YARA or
+   another tool.
+
+`affected_count` equals the number of entries in `targets[]`. For
+`--hunt obfuscation`, each limitation's `scope` names the scan layer
+(`sleep_mask`/`entropy`/`decode`) whose own cap did the skipping — the
+same physical region can appear under more than one layer, so
+deduplicate on `targets[*].base_address` before counting regions. The
+console prints the first few targets and points at `--json` for the
+rest; the JSON list is always complete.
 
 ## CORRELATED REGIONS (console and TXT output only)
 
@@ -187,7 +213,7 @@ first:
 - `severity` — `info` / `low` / `medium` / `high` / `critical`, always
   derived from `tag` + `confidence` — a producer cannot set it
   independently, and the schema itself pins the exact mapping (see
-  `dumpex-output-v2.7.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
+  `dumpex-output-v2.8.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
   `observation` is `info`; every `lead` tops out at `medium`; only a
   `detection` at `confidence: high` reaches `critical`.
 - `technique_ids` — MITRE ATT&CK technique/sub-technique IDs (e.g.
@@ -354,8 +380,8 @@ string in its own place instead.
 
 ### Sanitized `--json` examples
 
-Both examples below are complete, valid v2.7 documents — each validates
-as-is against `dumpex-output-v2.7.schema.json` (see
+Both examples below are complete, valid v2.8 documents — each validates
+as-is against `dumpex-output-v2.8.schema.json` (see
 `tests/integration/test_soc_quickstart_json_examples.py`, which extracts
 these exact fenced blocks and validates them in CI, so this doc can't
 silently drift out of sync with the schema again). A real `--hunt all`
@@ -374,7 +400,7 @@ with `summary.hunter_count: 1` and one matching record. Every command's
 ```json
 {
   "meta": {
-    "schema_version": "2.7",
+    "schema_version": "2.8",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:12:01Z",
@@ -472,7 +498,7 @@ hunter's own `coverage.status`) is what makes this run exit `0` — see
 ```json
 {
   "meta": {
-    "schema_version": "2.7",
+    "schema_version": "2.8",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:14:01Z",

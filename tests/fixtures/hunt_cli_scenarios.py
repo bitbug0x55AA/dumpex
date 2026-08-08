@@ -86,7 +86,7 @@ def _check_injection(exit_code, doc, body):
     # checking for hidden PE headers, so status is DETECTED (score 3/3) but
     # coverage.status is "partial", independent dimensions. This hook only
     # adds the semantics a byte-diff wouldn't itself explain if it failed.
-    assert doc["meta"]["schema_version"] == "2.7"
+    assert doc["meta"]["schema_version"] == "2.8"
     assert doc["meta"]["execution"]["command"] == "hunt_injection"
     assert doc["meta"]["execution"]["started_at"] == "2024-01-01T00:00:00Z"
     assert doc["result"]["kind"] == "hunt"

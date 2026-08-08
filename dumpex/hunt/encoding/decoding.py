@@ -17,7 +17,7 @@ import zlib
 
 from dumpex.core.memory import addr_to_module, prot_str
 from dumpex.hunt._budget import ScanBudget
-from dumpex.hunt._coverage import CoverageTracker
+from dumpex.hunt._coverage import CoverageTracker, region_scan_target
 from dumpex.hunt.encoding.classification import _IOC_PAT, _classify_decoded
 from dumpex.hunt.encoding.config import (
     EncodingConfig, B64_MIN_LEN, XOR_SCAN_MAX, XOR_SAMPLE_SIZE, XOR_SCORE_MIN,
@@ -291,7 +291,8 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
         if prot_str(r.Type) == 'MEM_IMAGE' and _is_system_dll(mod):
             continue
         if r.RegionSize > config.decode_scan_max:
-            coverage.note_skipped_oversize()
+            coverage.note_skipped_oversize(
+                region_scan_target(mf, r, config.decode_scan_max))
             continue
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)

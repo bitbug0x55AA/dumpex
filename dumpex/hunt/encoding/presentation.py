@@ -16,7 +16,7 @@ source of rendered detail).
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import _print_check, _status_text, INCONCLUSIVE, NOT_EVALUATED
 from dumpex.hunt._finding import DetailLevel, TAG_OBSERVATION, leads_suffix
-from dumpex.hunt.encoding.aggregate import EncodingReport
+from dumpex.hunt.encoding.aggregate import EncodingReport, oversized_layer_reasons
 
 
 def _print_sleep_mask(sleep_mask_hits):
@@ -120,12 +120,20 @@ def render(report: EncodingReport, verbose: bool = False):
     if not report.mem_info_available:
         verdict = _status_text(NOT_EVALUATED, "MemoryInfoListStream missing from this dump")
     elif report.fully_skipped:
+        # The total-gap case is the one most worth naming addresses for --
+        # nothing at all was scanned, so every finding below is a
+        # non-result until these regions are looked at some other way.
+        oversized = "; ".join(oversized_layer_reasons(report.oversized_by_layer))
         verdict = _status_text(INCONCLUSIVE,
             f"all {report.regions_count} region(s) filtered out by every layer's size/type limits "
-            f"— nothing was actually scanned")
+            f"— nothing was actually scanned" + (f" ({oversized})" if oversized else ""))
     elif report.status == INCONCLUSIVE:
+        # Per SCAN LAYER, with the actual VA/size of each skipped region --
+        # never one summed "N oversized region(s)" count, which would
+        # report the same physical region up to three times as three
+        # separate regions (see aggregate.oversized_layer_reasons).
         reason = ", ".join(filter(None, [
-            f"{report.total_size_skipped} oversized region(s) skipped" if report.total_size_skipped else "",
+            *oversized_layer_reasons(report.oversized_by_layer),
             f"{report.total_read_failed} region(s) failed to read" if report.total_read_failed else "",
             f"{report.total_short_reads} region(s) short-read" if report.total_short_reads else "",
             f"decode budget exhausted ({report.exhausted_reason})" if report.budget_exhausted else "",

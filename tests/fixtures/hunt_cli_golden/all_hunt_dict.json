@@ -16,6 +16,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "memory_info",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         }
@@ -114,6 +115,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "peb",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         }
@@ -162,6 +164,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "memory_info",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         },
@@ -175,6 +178,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "modules",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         }
@@ -261,6 +265,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "memory_info",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         }
@@ -317,6 +322,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "memory64_list",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         }
@@ -360,6 +366,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "yara_scan",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         }
@@ -403,6 +410,7 @@
           "related_tids": [],
           "scope": "dump",
           "source": "memory_info",
+          "targets": [],
           "thread_id": null,
           "unavailable_fields": []
         }

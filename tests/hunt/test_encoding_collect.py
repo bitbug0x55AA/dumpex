@@ -24,7 +24,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -117,4 +117,61 @@ def test_sleep_mask_layer_short_read_makes_result_inconclusive(hunter_record_val
     assert rec.status == "INCONCLUSIVE"
     assert rec.coverage.status.value == "partial"
     assert any(lim.code.value == "SCAN_REGION_SHORT_READ" for lim in rec.coverage.limitations)
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_one_physical_region_over_every_layer_limit_is_not_counted_three_times(
+        hunter_record_validator):
+    """The double-counting bug this hunter's per-layer limitations exist to
+    fix: ONE 12 MiB private RW region exceeds all three scan layers' caps
+    (sleep-mask 10 MiB, entropy 10 MiB, decode 2 MiB). Summing the three
+    layer counters produced `3 oversized region(s) skipped`, sending an
+    analyst looking for two allocations that were never there. The right
+    answer is three region x layer skips over ONE region -- and the region
+    is named, so that is checkable rather than merely asserted."""
+    region_base = 0x7ff000000000
+    region_size = 12 * 1024 * 1024
+    regions = [Region(region_base, region_base, region_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    # Never actually read -- every layer rejects it on size first.
+    encoding.read_region = mem_reader({})
+
+    console_dict = encoding._hunt_encoding(MF(), verbose=False)
+    rec = collect_obfuscation_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    oversized = [l for l in rec.coverage.limitations
+                 if l.code.value == "SCAN_REGION_OVERSIZED_SKIPPED"]
+
+    # One limitation per LAYER, each scoped and each naming the one region.
+    assert [l.scope for l in oversized] == ["sleep_mask", "entropy", "decode"]
+    assert [l.affected_count for l in oversized] == [1, 1, 1]
+    assert all(len(l.targets) == l.affected_count for l in oversized)
+
+    # ...and no limitation anywhere claims three regions were skipped.
+    assert not any(l.affected_count == 3 for l in oversized)
+    assert {t.base_address for l in oversized for t in l.targets} == {region_base}
+
+    # Each layer reports the threshold that actually caused ITS skip --
+    # that is what distinguishes "missed by every layer" from "missed by
+    # the strictest one", and it is the only per-layer fact that differs.
+    limits = {l.scope: l.targets[0].size_limit for l in oversized}
+    assert limits == {"sleep_mask": 10 * 1024 * 1024,
+                      "entropy":    10 * 1024 * 1024,
+                      "decode":      2 * 1024 * 1024}
+    for lim in oversized:
+        target = lim.targets[0]
+        assert target.kind.value == "memory_region"
+        assert target.size == region_size
+        assert target.to_dict()["base_address"] == f"0x{region_base:016x}"
+
+    reasons = rec.coverage.reasons
+    assert sum("oversized region(s) skipped" in r for r in reasons) == 3
+    assert ("1 oversized region(s) skipped by the decode scan: "
+            f"0x{region_base:016x} (12 MB > 2 MB limit)") in reasons
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []

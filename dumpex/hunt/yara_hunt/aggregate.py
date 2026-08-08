@@ -11,7 +11,10 @@ that; only structure moved, not the output contract.
 from dataclasses import dataclass, field
 
 from dumpex.hunt._ui import DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE
-from dumpex.output.coverage import build_coverage_report, observe_source, CoverageLimitation, LimitationCode
+from dumpex.output.coverage import (
+    build_coverage_report, observe_source, CoverageLimitation, LimitationCode,
+    format_scan_target_preview,
+)
 
 
 def _yara_coverage_report(outcome, compile_failed: int, unverified_count: int = 0):
@@ -35,7 +38,7 @@ def _yara_coverage_report(outcome, compile_failed: int, unverified_count: int = 
     if outcome.skipped:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="segment_scan",
-            affected_count=outcome.skipped))
+            affected_count=outcome.skipped, targets=outcome.skipped_targets))
     if outcome.read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="segment_scan",
@@ -152,7 +155,13 @@ def build_report(outcome, compile_failed: int, *, rules_dir: str = None,
         if any_gap:
             reason = ", ".join(filter(None, [
                 f"{compile_failed} rule file(s) failed to compile" if compile_failed else "",
-                f"{outcome.skipped} oversized segment(s) skipped" if outcome.skipped else "",
+                # Same bounded VA/size preview the structured
+                # SCAN_REGION_OVERSIZED_SKIPPED limitation renders, so the
+                # console verdict reason and --json agree on which
+                # segments were actually missed.
+                (f"{outcome.skipped} oversized segment(s) skipped: "
+                 f"{format_scan_target_preview(outcome.skipped_targets)}")
+                if outcome.skipped else "",
                 f"{outcome.read_failed} segment(s) failed to read" if outcome.read_failed else "",
                 f"{outcome.short_reads} segment(s) short-read" if outcome.short_reads else "",
                 f"{outcome.timed_out} match() call(s) timed out" if outcome.timed_out else "",

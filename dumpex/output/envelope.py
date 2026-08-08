@@ -34,7 +34,7 @@ __all__ = [
     "EvidenceInput", "build_meta_v2", "Result", "Envelope",
 ]
 
-SCHEMA_VERSION = "2.7"
+SCHEMA_VERSION = "2.8"
 
 # CLI options whose VALUE is a filesystem path -- same redaction concern
 # as dumpex.ui.structured's _PATH_OPTION_KEYS, kept as its own copy here

@@ -108,7 +108,7 @@ with `--force`.
 `--extract`/`--strings`/`--report`/`--hunt` all use the v2 contract
 (canonical records, `null` for missing values, normalized hex addresses —
 see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
-All eleven commands support `--json` on this same v2.7 contract;
+All eleven commands support `--json` on this same v2.8 contract;
 `--hunt` was the last to migrate — its `result.kind` is `"hunt"` and
 `result.data.records` holds one `hunterRecord` per hunter.
 `--diff` produces a `kind: "comparison"` result with a two-entry

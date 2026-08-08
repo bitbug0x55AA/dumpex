@@ -22,12 +22,13 @@ def _mk_segment_data(config: bytes, pad_before: int = 0) -> bytes:
 
 
 jsonschema = pytest.importorskip("jsonschema")
-from dumpex.schemas import schema_path
+from dumpex.output.envelope import SCHEMA_VERSION
+from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -182,22 +183,28 @@ def test_executable_private_region_corroborates_scores_2(hunter_record_validator
 
 
 # ── schema_version 2.7 shape: reviewer-requested expanded coverage ────────
-# (more than "two known fields happen to pass")
+# (more than "two known fields happen to pass"). The cs-beacon field
+# shape below was introduced in 2.7 and is unchanged in 2.8; the identity
+# check right underneath tracks whatever the CURRENT schema file is.
 
-def test_v2_7_schema_id_title_and_version_const_all_say_2_7():
+def test_current_schema_id_title_and_version_const_all_agree():
     """Not just 'a document happens to validate' -- the schema FILE ITSELF
-    must actually claim to be 2.7 in every place that matters, or a
-    producer stamping schema_version 2.7 would validate against a schema
-    whose own meta.schema_version.const still says 2.6 and fail."""
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    must actually claim to be the current version in every place that
+    matters, or a producer stamping schema_version 2.8 would validate
+    against a schema whose own meta.schema_version.const still says 2.7
+    and fail. Asserted against SCHEMA_VERSION/CURRENT_SCHEMA rather than a
+    second hardcoded copy of the number, so the next bump can't leave this
+    test silently pinned to the previous one."""
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
-    assert schema["$id"].endswith("dumpex-output-v2.7.schema.json")
-    assert "2.7" in schema["title"]
-    assert schema["$defs"]["meta"]["properties"]["schema_version"]["const"] == "2.7"
+    assert CURRENT_SCHEMA == f"dumpex-output-v{SCHEMA_VERSION}.schema.json"
+    assert schema["$id"].endswith(CURRENT_SCHEMA)
+    assert SCHEMA_VERSION in schema["title"]
+    assert schema["$defs"]["meta"]["properties"]["schema_version"]["const"] == SCHEMA_VERSION
 
 
 def _fields_validator():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/csBeaconDetails", "$defs": schema["$defs"]}
     return jsonschema.Draft202012Validator(wrapper)
@@ -307,3 +314,82 @@ def test_no_is_text_or_similar_leaks_into_legacy_dict_or_hunter_record():
         for field in cfg["fields"].values():
             assert "is_text" not in field
             assert set(field) == {"type", "value"}
+
+
+def test_oversized_segment_skip_identifies_the_segment(monkeypatch, hunter_record_validator):
+    """`CS_MAX_SEG_SCAN` shrunk below this segment's own size, so it's
+    skipped without ever being read. The limitation must name the segment
+    (VA, size, dump-file offset) and the cap it exceeded -- an aggregate
+    count alone tells an analyst coverage is partial but not which
+    address still needs a targeted rescan or a wider recollection."""
+    seg_va, seg_fo = 0x40000, 0x4000
+    seg_size = 0x8000
+    seg = Segment(seg_va, seg_fo, seg_size)
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream([], "infos")
+        _reader                = FakeReader({})
+
+    # Read off cs_beacon's own re-exported global when CSBeaconConfig is
+    # built (see that module's comment) -- patched there, not in config.py.
+    monkeypatch.setattr(cs_beacon, "CS_MAX_SEG_SCAN", 0x1000)
+
+    console_dict = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    rec = collect_cs_beacon_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    lim = next(l for l in rec.coverage.limitations
+               if l.code.value == "SCAN_REGION_OVERSIZED_SKIPPED")
+    assert lim.source == "segment_scan"
+    assert lim.affected_count == 1 == len(lim.targets)
+    target = lim.targets[0]
+    # A segment-table entry carries no MemoryInfo, so those fields stay
+    # unset -- but its own start_file_address IS the dump-file offset.
+    assert target.kind.value == "memory_segment"
+    assert (target.base_address, target.size, target.size_limit) == (seg_va, seg_size, 0x1000)
+    assert target.file_offset == seg_fo
+    assert (target.allocation_base, target.state, target.type, target.protection) == (
+        None, None, None, None)
+    # The rendered text must say "segment(s)", never "region(s)" -- the
+    # target is a Memory64List segment, not a MemoryInfo region, and the
+    # code's own NAME (SCAN_REGION_OVERSIZED_SKIPPED) must not leak a
+    # wrong noun into either coverage.reasons or the console verdict.
+    reason = next(r for r in rec.coverage.reasons if "oversized" in r)
+    assert "segment(s)" in reason
+    assert "region(s)" not in reason
+    assert reason in console_dict["coverage_reasons"]
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_multiple_oversized_segments_preview_truncates_but_json_stays_complete(
+        monkeypatch, hunter_record_validator):
+    """Four segments over the cap: the rendered console/coverage_reasons
+    preview stops at three and points at --json, but every one of the
+    four skipped segments is still present in the structured targets
+    list -- the console truncation must never lose data only the JSON
+    consumer can see."""
+    segs = [Segment(0x10000 * (i + 1), 0x1000 * (i + 1), 0x9000) for i in range(4)]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream(segs, "memory_segments")
+        memory_info          = FakeStream([], "infos")
+        _reader                = FakeReader({})
+
+    monkeypatch.setattr(cs_beacon, "CS_MAX_SEG_SCAN", 0x1000)
+
+    console_dict = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    rec = collect_cs_beacon_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    lim = next(l for l in rec.coverage.limitations
+               if l.code.value == "SCAN_REGION_OVERSIZED_SKIPPED")
+    assert lim.affected_count == 4 == len(lim.targets)
+    assert {t.base_address for t in lim.targets} == {s.start_virtual_address for s in segs}
+
+    reason = next(r for r in rec.coverage.reasons if "oversized" in r)
+    assert "4 oversized segment(s) skipped" in reason
+    assert "+1 more (see coverage.limitations[].targets in --json output)" in reason
+    assert reason in console_dict["coverage_reasons"]
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []

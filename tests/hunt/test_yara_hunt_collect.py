@@ -33,7 +33,7 @@ def _write_rule(d, name, body):
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.7.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -147,4 +147,76 @@ def test_segment_read_failure_makes_result_inconclusive(hunter_record_validator)
     assert rec.status == "INCONCLUSIVE"
     assert rec.coverage.status.value == "partial"
     assert any(lim.code.value == "SCAN_REGION_READ_FAILED" for lim in rec.coverage.limitations)
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_oversized_segment_skip_identifies_the_segment(monkeypatch, hunter_record_validator):
+    """`YARA_MAX_SEG_SCAN` shrunk below this segment's own size: the
+    segment is skipped unscanned, and the limitation names it (VA, size,
+    dump-file offset, and the cap) so it can be rescanned directly with
+    yara rather than only being tallied."""
+    seg_va, seg_fo = 0x50000, 0x5000
+    seg_size = 0x8000
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, seg_size)
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({})
+
+        # Read off yara_hunt's own re-exported global when YaraConfig is
+        # built (see that module's comment) -- patched there, not config.py.
+        monkeypatch.setattr(yara_hunt, "YARA_MAX_SEG_SCAN", 0x1000)
+
+        console_dict = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+        rec = collect_yara_record(MF(), rules_dir=d)
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    lim = next(l for l in rec.coverage.limitations
+               if l.code.value == "SCAN_REGION_OVERSIZED_SKIPPED")
+    assert lim.source == "segment_scan"
+    assert lim.affected_count == 1 == len(lim.targets)
+    target = lim.targets[0]
+    assert target.kind.value == "memory_segment"
+    assert (target.base_address, target.size, target.size_limit) == (seg_va, seg_size, 0x1000)
+    assert target.file_offset == seg_fo
+    # The target is a memory-segment-table entry, not a MemoryInfo region
+    # -- the rendered text (both the structured limitation's own text and
+    # the free-text console verdict reason yara_hunt.aggregate builds
+    # separately) must say "segment(s)", never "region(s)".
+    reason = next(r for r in rec.coverage.reasons if "oversized" in r)
+    assert "segment(s)" in reason
+    assert "region(s)" not in reason
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_multiple_oversized_segments_preview_truncates_but_json_stays_complete(
+        monkeypatch, hunter_record_validator):
+    """Four segments over the cap: console/coverage.reasons preview stops
+    at three and points at --json, but all four skipped segments survive
+    in the structured targets list."""
+    segs = [Segment(0x10000 * (i + 1), 0x1000 * (i + 1), 0x9000) for i in range(4)]
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream(segs, "memory_segments")
+            _reader                = FakeReader({})
+
+        monkeypatch.setattr(yara_hunt, "YARA_MAX_SEG_SCAN", 0x1000)
+
+        console_dict = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+        rec = collect_yara_record(MF(), rules_dir=d)
+
+    _assert_matches_console_dict(rec, console_dict)
+    lim = next(l for l in rec.coverage.limitations
+               if l.code.value == "SCAN_REGION_OVERSIZED_SKIPPED")
+    assert lim.affected_count == 4 == len(lim.targets)
+    assert {t.base_address for t in lim.targets} == {s.start_virtual_address for s in segs}
+
+    reason = next(r for r in rec.coverage.reasons if "oversized" in r)
+    assert "4 oversized segment(s) skipped" in reason
+    assert "+1 more (see coverage.limitations[].targets in --json output)" in reason
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []

@@ -10,7 +10,7 @@ dumpex/hunt/encoding/models.py and dumpex/hunt/encoding/aggregate.py.
 import struct
 
 from dumpex.core.memory import addr_to_module, prot_str
-from dumpex.hunt._coverage import CoverageTracker
+from dumpex.hunt._coverage import CoverageTracker, region_scan_target
 from dumpex.hunt.encoding.classification import _classify_decoded
 from dumpex.hunt.encoding.config import (
     EncodingConfig, SLEEP_MASK_KEY_SIZE, SLEEP_MASK_MIN_REPEAT, SLEEP_MASK_MAX_BYTE_FREQ,
@@ -292,7 +292,8 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
         if addr_to_module(r.BaseAddress, modules):
             continue   # module-backed region — not the beacon's private heap
         if r.RegionSize > config.sleep_mask_region_max:
-            coverage.note_skipped_oversize()
+            coverage.note_skipped_oversize(
+                region_scan_target(mf, r, config.sleep_mask_region_max))
             continue
 
         try:
