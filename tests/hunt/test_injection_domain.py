@@ -168,12 +168,12 @@ def _correlated_evidence(**overrides):
         suspicious_alloc_bases={_ALLOC},
         rip_hits=[rip_hit],
         rip_full_correlation=[rip_hit],
-        start_hits=[StartHitEvidence(thread_id=0x1, start_address=0x9999000,
+        start_hits=[StartHitEvidence(thread_id=0x1, start_address=_ALLOC + 0x30,
                                       region=rwx.region)],
     )
     kwargs = dict(
         rwx=[rwx], validated_pe_hits=[pe_hit], suspicious_pe_hits=[pe_hit],
-        start_threads=[_thread()],
+        start_threads=[_thread(start=_ALLOC + 0x30)],
         thread_contexts=[ThreadContext(thread_id=0x1, ip=_ALLOC + 0x10,
                                         ip_reg="RIP", is_wow64=False)],
         correlated_allocations=[CorrelatedAllocationEvidence(
@@ -421,6 +421,35 @@ def test_fully_slotted_dataclass_has_no_dict_at_all_and_is_still_validated():
     instance = _FullySlotted()
     assert not hasattr(instance, "__dict__")
     require_recursively_immutable(instance, "test")
+
+
+def test_subclass_cannot_hide_mutable_state_in_its_own_extra_slot():
+    # The escape __dict__-only checking missed: a subclass adds its OWN
+    # __slots__ entry beyond its declared dataclass fields. That name
+    # never appears in __dict__ (slots don't populate it) and never
+    # appears in dataclasses.fields() (it isn't an annotated dataclass
+    # field at all) -- so it is invisible to both a __dict__ scan and a
+    # declared-fields walk, yet still holds real, mutable, post-
+    # construction-writable state.
+    @dataclasses.dataclass(frozen=True)
+    class _SlottedBase:
+        __slots__ = ("a",)
+        a: int
+
+    class _Evil(_SlottedBase):
+        __slots__ = ("hidden",)
+
+        def __init__(self, a):
+            object.__setattr__(self, "a", a)
+            object.__setattr__(self, "hidden", [])
+
+    instance = _Evil(1)
+    # Confirms this test actually exercises the scenario it claims to:
+    # no __dict__ at all, and "hidden" absent from declared fields.
+    assert not hasattr(instance, "__dict__")
+    assert "hidden" not in {f.name for f in dataclasses.fields(instance)}
+    with pytest.raises(TypeError, match="undeclared instance attribute"):
+        require_recursively_immutable(instance, "test")
 
 
 class _MutablePayloadWrapper:
@@ -719,6 +748,59 @@ def test_genuinely_disjoint_mz_only_hits_are_accepted():
     assert evidence.mz_only_hits == (mz_only,)
 
 
+def test_own_correlation_rejects_a_rip_hit_whose_ip_is_outside_its_own_region():
+    # region_ref.base_address/size fully determine the region's own
+    # bounds -- this needs no raw MemoryInfo list, unlike proving the
+    # region itself was the geometrically correct pick among every region
+    # in the dump.
+    region = _region(0x1000)   # [0x1000, 0x2000)
+    hit = RipHitEvidence(thread_id=0x1, ip=0x9000, ip_reg="RIP", region=region)
+    with pytest.raises(ValueError, match=r"does not fall within its own region"):
+        InjectionEvidence(correlation=Correlation(
+            rip_hits=[hit], suspicious_alloc_bases={0x1000}))
+
+
+def test_own_correlation_rejects_a_start_hit_whose_address_is_outside_its_own_region():
+    region = _region(0x1000)   # [0x1000, 0x2000)
+    hit = StartHitEvidence(thread_id=0x1, start_address=0x9000, region=region)
+    with pytest.raises(ValueError, match=r"does not fall within its own region"):
+        InjectionEvidence(correlation=Correlation(
+            start_hits=[hit], suspicious_alloc_bases={0x1000}))
+
+
+def test_own_correlation_accepts_a_start_hit_with_no_start_address():
+    # start_address=None is 0-substituted for the geometric lookup only
+    # (matching correlate()'s own `ti.start_address or 0`) -- a region
+    # genuinely containing VA 0 must accept a None start_address hit.
+    region = _region(0x0, protect="PAGE_EXECUTE_READWRITE")
+    rwx = RwxRegionEvidence(region=region, location=Location(va=0, region_base=0, file_offset=None))
+    hit = StartHitEvidence(thread_id=0x1, start_address=None, region=region)
+    unbacked = UnbackedThreadEvidence(thread_id=0x1, start_address=None,
+                                       location=Location(va=0, region_base=0, file_offset=None))
+    evidence = InjectionEvidence(
+        rwx=(rwx,), start_threads=(unbacked,),
+        correlation=_correlation_for(rwx=(rwx,), start_hits=[hit]))
+    assert evidence.correlation.start_hits[0] is hit
+
+
+def test_own_correlation_rejects_a_rip_hit_whose_ip_is_at_the_regions_upper_bound():
+    # Half-open interval: base_address + size is one past the last valid
+    # byte, matching _region_for_addr's own `addr < BaseAddress + Size`.
+    region = _region(0x1000)   # size 0x1000 -> [0x1000, 0x2000)
+    hit = RipHitEvidence(thread_id=0x1, ip=0x2000, ip_reg="RIP", region=region)
+    with pytest.raises(ValueError, match=r"does not fall within its own region"):
+        InjectionEvidence(correlation=Correlation(
+            rip_hits=[hit], suspicious_alloc_bases={0x1000}))
+
+
+def test_own_correlation_rejects_a_rip_hit_whose_ip_is_below_the_regions_base():
+    region = _region(0x1000)
+    hit = RipHitEvidence(thread_id=0x1, ip=0xfff, ip_reg="RIP", region=region)
+    with pytest.raises(ValueError, match=r"does not fall within its own region"):
+        InjectionEvidence(correlation=Correlation(
+            rip_hits=[hit], suspicious_alloc_bases={0x1000}))
+
+
 def test_own_correlation_rejects_a_rip_hit_outside_suspicious_alloc_bases():
     # correlate() only ever appends a RipHitEvidence whose OWN region
     # already qualified as suspicious -- a hit referencing an allocation
@@ -746,7 +828,7 @@ def test_rip_hits_must_be_drawn_from_thread_contexts():
 
 def test_start_hits_must_be_drawn_from_start_threads():
     rwx = _rwx(_ALLOC)
-    hit = StartHitEvidence(thread_id=0x1, start_address=0x9999000, region=rwx.region)
+    hit = StartHitEvidence(thread_id=0x1, start_address=_ALLOC + 0x30, region=rwx.region)
     with pytest.raises(ValueError, match="not one of InjectionEvidence.start_threads"):
         InjectionEvidence(rwx=(rwx,), correlation=_correlation_for(rwx=(rwx,), start_hits=[hit]))
 

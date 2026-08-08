@@ -80,6 +80,44 @@ _IMMUTABLE_LEAF_TYPES = frozenset({type(None), bool, int, float, complex, str, b
 # instance attributes that recursing over its items would never see.
 _IMMUTABLE_CONTAINERS = frozenset({tuple, frozenset})
 
+# `__slots__`/`__dict__` names that are Python's own opt-in mechanisms,
+# never a place user data lives: `__dict__` appearing IN a `__slots__`
+# tuple just means the class re-enables an instance dict (already handled
+# by the `__dict__`-contents check below); `__weakref__` is a C-level
+# descriptor enabling weak references, never a container a caller could
+# stash a mutable payload in.
+_NON_DATA_SLOT_NAMES = frozenset({"__weakref__", "__dict__"})
+
+
+def _own_slot_names(cls) -> set:
+    """Every attribute name any class in `cls`'s MRO declares via its OWN
+    `__slots__` (i.e. read from that class's `__dict__`, never through
+    attribute lookup/inheritance -- the MRO walk already visits every
+    class, so inheritance would only add redundant re-reads of a base
+    class's own entry).
+
+    This exists because a slot-backed attribute is invisible to both
+    `dataclasses.fields()` (unless it was ALSO declared as an annotated
+    dataclass field) and to `vars(instance)`/`instance.__dict__` (a slot
+    never populates the instance dict at all -- that is the entire point
+    of using `__slots__`). A subclass that adds its own `__slots__` entry
+    beyond its declared dataclass fields gets a place to hold arbitrary
+    mutable state that neither of those two views would ever reveal.
+
+    `__slots__` may be declared as a single bare string (meaning ONE slot
+    with that name) or any other iterable of strings -- a bare string must
+    never be iterated directly, or `__slots__ = "hidden"` would silently
+    decompose into six one-character "slot names" instead of the single
+    slot it actually declares.
+    """
+    names = set()
+    for klass in cls.__mro__:
+        raw = klass.__dict__.get("__slots__")
+        if raw is None:
+            continue
+        names.update((raw,) if isinstance(raw, str) else raw)
+    return names - _NON_DATA_SLOT_NAMES
+
 
 def as_tuple(value, field_name: str) -> tuple:
     """Accept a list OR tuple and return a tuple -- a defensive copy, so
@@ -154,21 +192,31 @@ def require_recursively_immutable(value, field_name: str) -> None:
     what the dataclass decorator generated `__init__`/`__eq__` for, and
     says nothing about what a subclass's own `__init__` (or any code
     holding a reference before this function ever sees it) may have set
-    via `object.__setattr__`. When the instance has a `__dict__` at all (a
-    `slots=True` dataclass does not, and so cannot hold undeclared state in
-    the first place), it must contain no attribute OUTSIDE the declared
-    field names -- that is the only direction that can hide a mutable
-    payload this function would otherwise never look at.
+    via `object.__setattr__`. Undeclared state can hide in TWO places, not
+    just one:
 
-    The reverse is deliberately NOT required: a declared field is allowed
-    to be ABSENT from `vars(value)` (mixed slotted/unslotted inheritance
-    can legitimately store some declared fields in a base class's
-    `__slots__` and the rest in the subclass's own `__dict__`, so a field
-    living in a slot rather than in `__dict__` is not a defect). That
-    field is still validated below regardless of where it physically
-    lives -- `getattr(value, f.name)` reads it the same way either way,
-    and would raise `AttributeError` on its own if a field were somehow
-    truly missing, rather than this function silently accepting it.
+      * an attribute in `instance.__dict__` that isn't a declared field
+        (the common case: no `__slots__` anywhere in the hierarchy, or a
+        `__dict__` re-enabled somewhere in it); and
+      * an attribute backed by a `__slots__` ENTRY somewhere in the class's
+        MRO that isn't a declared field -- this one is invisible to
+        `vars(instance)` entirely (that is what `__slots__` is FOR: it
+        stops the attribute from ever reaching an instance `__dict__`),
+        so checking `__dict__` alone would miss a subclass that adds its
+        own `__slots__ = ("hidden",)` to hold a mutable payload no
+        declared field ever exposes.
+
+    Both are checked the same way: the offending name must not appear
+    OUTSIDE the declared field names. The reverse is deliberately NOT
+    required for either: a declared field is allowed to be ABSENT from
+    `vars(value)` (mixed slotted/unslotted inheritance can legitimately
+    store some declared fields in a base class's `__slots__` and the rest
+    in the subclass's own `__dict__`, so a field living in a slot rather
+    than in `__dict__` is not a defect). That field is still validated
+    below regardless of where it physically lives -- `getattr(value,
+    f.name)` reads it the same way either way, and would raise
+    `AttributeError` on its own if a field were somehow truly missing,
+    rather than this function silently accepting it.
     """
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         if not value.__dataclass_params__.frozen:
@@ -177,15 +225,17 @@ def require_recursively_immutable(value, field_name: str) -> None:
                 f"non-frozen dataclass {type(value).__name__}: {value!r}")
         declared = {f.name for f in dataclasses.fields(value)}
         instance_state = getattr(value, "__dict__", None)
-        if instance_state is not None:
-            undeclared = set(instance_state) - declared
-            if undeclared:
-                raise TypeError(
-                    f"{field_name} holds a {type(value).__name__} with "
-                    f"undeclared instance attribute(s) {sorted(undeclared)} -- "
-                    f"only declared fields are validated for immutability, so "
-                    f"anything else is unchecked instance state a subclass or "
-                    f"a caller could have attached")
+        undeclared = (set(instance_state) if instance_state is not None else set()) - declared
+        undeclared |= _own_slot_names(type(value)) - declared
+        if undeclared:
+            raise TypeError(
+                f"{field_name} holds a {type(value).__name__} with "
+                f"undeclared instance attribute(s) {sorted(undeclared)} -- "
+                f"only declared fields are validated for immutability, so "
+                f"anything else (whether stored in __dict__ or in a "
+                f"__slots__ entry the class hierarchy adds beyond its "
+                f"declared dataclass fields) is unchecked instance state a "
+                f"subclass or a caller could have attached")
         for f in dataclasses.fields(value):
             require_recursively_immutable(getattr(value, f.name),
                                            f"{field_name}.{f.name}")

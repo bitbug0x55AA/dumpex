@@ -83,6 +83,25 @@ def _require_optional_count(value, field_name: str) -> None:
         _require_count(value, field_name)
 
 
+def _require_address_inside_region(addr: int, region, hit, hits_name: str) -> None:
+    """`addr` must fall within `[region.base_address, region.base_address +
+    region.size)` -- `dumpex.hunt.injection.correlation._region_for_addr`'s
+    own containment test, re-run against the SAME `RegionRef` the hit
+    already carries. Both operands (`addr` and the region's own bounds)
+    live entirely on the hit itself, so this needs no raw MemoryInfo list
+    -- unlike proving THAT region is the geometrically correct one among
+    every region in the dump (which this model cannot re-derive; see
+    `_require_rip_hits_match_thread_contexts`'s own docstring), whether the
+    address the hit claims lands inside the region it was paired with is
+    fully checkable from the hit's own fields."""
+    if not (region.base_address <= addr < region.base_address + region.size):
+        raise ValueError(
+            f"{hits_name} holds {hit!r}, whose address 0x{addr:x} does not fall "
+            f"within its own region [0x{region.base_address:x}, "
+            f"0x{region.base_address + region.size:x}) -- correlate() only ever "
+            f"attaches the region that geometrically contains the address")
+
+
 def _require_items_of(value, field_name: str, expected) -> tuple:
     """Normalize to a tuple and require every item to be an instance of
     `expected` -- the poison-object barrier for the Report's own evidence
@@ -164,7 +183,15 @@ def _own_correlation(correlation) -> Correlation:
     # a RipHitEvidence/StartHitEvidence to rip_hits/start_hits when its
     # region's allocation_base is already in suspicious_alloc_bases -- a
     # hit whose own region fails that membership test could not have been
-    # produced by the real correlation logic.
+    # produced by the real correlation logic. Each hit's own address must
+    # ALSO fall geometrically inside its own region -- unlike "is this
+    # region among the ones the buckets recorded" (which needs the raw
+    # MemoryInfo list this model deliberately does not hold, see
+    # `_require_rip_hits_match_thread_contexts`'s own docstring), "does
+    # this ip/start_address fall within [region.base_address,
+    # region.base_address + region.size)" is fully determined by the hit's
+    # own fields -- `_region_for_addr`'s own containment test, re-run here
+    # against the SAME region the hit already carries.
     for hit in owned.rip_hits:
         if hit.region.allocation_base not in owned.suspicious_alloc_bases:
             raise ValueError(
@@ -172,6 +199,7 @@ def _own_correlation(correlation) -> Correlation:
                 f"0x{hit.region.allocation_base:x} is not in "
                 f"suspicious_alloc_bases -- correlate() only ever adds a hit "
                 f"whose region already qualified")
+        _require_address_inside_region(hit.ip, hit.region, hit, "correlation.rip_hits")
     for hit in owned.start_hits:
         if hit.region.allocation_base not in owned.suspicious_alloc_bases:
             raise ValueError(
@@ -179,6 +207,14 @@ def _own_correlation(correlation) -> Correlation:
                 f"0x{hit.region.allocation_base:x} is not in "
                 f"suspicious_alloc_bases -- correlate() only ever adds a hit "
                 f"whose region already qualified")
+        # 0-substituted lookup address, matching correlate()'s own
+        # `ti.start_address or 0` -- start_hit.start_address itself stays
+        # the thread's TRUE (possibly None) value, never the substitution
+        # (see StartHitEvidence's own docstring); the geometric test uses
+        # the same local substitution correlate() used to find this region
+        # in the first place.
+        _require_address_inside_region(hit.start_address or 0, hit.region, hit,
+                                        "correlation.start_hits")
 
     # rip_full_correlation is `correlate()`'s own filter of rip_hits --
     # `[hit for hit in rip_hits if hit.region.allocation_base in
