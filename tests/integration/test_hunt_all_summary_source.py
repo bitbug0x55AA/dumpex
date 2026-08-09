@@ -112,8 +112,8 @@ def test_poisoned_console_dict_cannot_leak_into_hunt_summary(monkeypatch, tmp_pa
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        results, records = hunt.cmd_hunt(mf, "all", verbose=False, yara_dir=str(rules_dir),
-                                          collect_records=True)
+        results, records, _actions, _diagnostics = hunt.cmd_hunt(
+            mf, "all", verbose=False, yara_dir=str(rules_dir), collect_records=True)
     out = buf.getvalue()
 
     # The legacy per-hunter results dict WAS poisoned (sanity check that
@@ -150,8 +150,8 @@ def test_correlated_regions_end_to_end_from_two_real_hunters(tmp_path):
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        results, records = hunt.cmd_hunt(mf, "all", verbose=False, yara_dir=str(rules_dir),
-                                          collect_records=True)
+        results, records, _actions, _diagnostics = hunt.cmd_hunt(
+            mf, "all", verbose=False, yara_dir=str(rules_dir), collect_records=True)
     out = buf.getvalue()
 
     injection_record = next(r for r in records if r.hunter == "injection")
@@ -220,8 +220,8 @@ def test_correlated_regions_source_is_real_records_and_real_memory_info_not_resu
 
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        results, records = hunt.cmd_hunt(mf, "all", verbose=False, yara_dir=str(rules_dir),
-                                          collect_records=True)
+        results, records, _actions, _diagnostics = hunt.cmd_hunt(
+            mf, "all", verbose=False, yara_dir=str(rules_dir), collect_records=True)
 
     # results was poisoned (sanity check the setup actually took effect).
     assert results["injection"]["score"] == 0

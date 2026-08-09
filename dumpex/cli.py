@@ -24,12 +24,12 @@ from dumpex.commands.report   import cmd_report
 from dumpex.commands.diff     import cmd_diff
 from dumpex.hunt              import cmd_hunt
 from dumpex.hunt.summary      import build_hunt_summary
-from dumpex.hunt              import _hunt_coverage_report, _investigation_actions_json
+from dumpex.hunt              import _hunt_coverage_report
 from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # All eleven commands are migrated onto the v2 envelope (see dumpex/output/
-# and dumpex-output-v2.9.schema.json); --diff produces a kind="comparison"
+# and dumpex-output-v2.10.schema.json); --diff produces a kind="comparison"
 # result via V2Output.from_evidence() (two dumps), --report produces a
 # kind="report" result (one TriageCardRecord per triage card -- see
 # dumpex.commands.report's own module docstring), --hunt produces a
@@ -154,6 +154,10 @@ def main():
                             help='Reference-module directory for --hunt stomping')
     hunt_group.add_argument('--rules-file', metavar='FILE', default=None,
                             help='Explicit rules.yaml/.yml/.json for --hunt')
+    hunt_group.add_argument('--triage-skipped', action='store_true',
+                            help='--hunt all: opt-in budgeted deep-content triage of the '
+                                 'skipped-target investigation queue (real, bounded reads '
+                                 '-- no effect on a single-hunter --hunt)')
 
     report_group = parser.add_argument_group("report options")
     report_group.add_argument('--report-tid', metavar='TID',
@@ -266,6 +270,7 @@ def main():
             opts["yara_dir"] = args.yara_dir
             opts["ref_dir"] = args.ref_dir
             opts["rules_file"] = args.rules_file
+            opts["triage_skipped"] = args.triage_skipped
         if args.list:
             opts["filter"] = args.filter
         if args.strings:
@@ -391,16 +396,21 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
         # (unchanged) and the v2.4 HunterRecord conversion below, in the
         # same call -- see cmd_hunt()'s own docstring. Calling cmd_hunt()
         # for console and dumpex.hunt.collect_hunt() separately for JSON
-        # would scan every selected hunter twice.
-        _, hunt_records = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
-                                    ref_dir=args.ref_dir, collect_records=True)
+        # would scan every selected hunter twice. Likewise,
+        # investigation_actions/deep_diagnostics come straight back from
+        # this SAME call (cmd_hunt() computes them, optionally running
+        # --triage-skipped's own budgeted content reads, exactly once
+        # internally) -- never recomputed here, which would silently
+        # double the deep-triage read budget for one invocation.
+        _, hunt_records, investigation_actions, deep_diagnostics = cmd_hunt(
+            mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
+            ref_dir=args.ref_dir, collect_records=True, triage_skipped=args.triage_skipped)
         hunt_summary = build_hunt_summary(hunt_records, selected=args.hunt)
-        hunt_summary["investigation_actions"] = _investigation_actions_json(
-            hunt_records, args.hunt, mf)
+        hunt_summary["investigation_actions"] = [a.to_dict() for a in investigation_actions]
         exit_code = _apply_command_result(
             CommandResult(kind="hunt", records=hunt_records,
                           coverage=_hunt_coverage_report(hunt_records, hunt_summary),
-                          summary=hunt_summary))
+                          summary=hunt_summary, diagnostics=deep_diagnostics))
     elif args.diff:
         exit_code = _apply_command_result(
             cmd_diff(mf, mf_reference, args.diff_mode, verbose=args.verbose))

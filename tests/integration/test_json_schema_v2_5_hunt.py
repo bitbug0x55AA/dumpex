@@ -1,6 +1,6 @@
 """
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
-v2 envelopes built around them) against dumpex-output-v2.9.schema.json
+v2 envelopes built around them) against dumpex-output-v2.10.schema.json
 (the current schema) -- originally the PR3 "Schema v2.4" hunt migration
 step (see docs/hunt_migration_field_matrix.md and the migration plan's own
 PR3 description), carried forward onto v2.5's extended `finding` $def
@@ -8,12 +8,15 @@ PR3 description), carried forward onto v2.5's extended `finding` $def
 dumpex/hunt/_finding.py), v2.6's `csBeaconDetails.configs[*].fields[*]`
 `raw`-removal, v2.7's re-keying of that same `fields` by field NAME
 (see dumpex/hunt/cs_beacon/collect.py's `_config_dict()`), v2.8's
-`coverageLimitation.targets`/`scanTarget` (see #16), and v2.9's
-`huntSummary.investigation_actions` (issue #19's default, metadata-only
-skipped-target queue -- see dumpex.hunt._investigation). Every schema
-bump since v2.5 has been structurally IDENTICAL for every shape THIS file
-exercises: `cs_beacon_detected()` (tests/fixtures/hunt_records.py) builds
-its `CsBeaconDetails.configs` entry as a bare `{"cs_version": 4,
+`coverageLimitation.targets`/`scanTarget` (see #16), v2.9's
+`huntSummary.investigation_actions` (issue #19 Phase 1's default,
+metadata-only skipped-target queue -- see dumpex.hunt._investigation), and
+v2.10's `triageInfo.content_reason_codes` (issue #19 Phase 2's opt-in
+`--triage-skipped` budgeted deep-content triage -- see
+dumpex.hunt._deep_triage). Every schema bump since v2.5 has been
+structurally IDENTICAL for every shape THIS file exercises:
+`cs_beacon_detected()` (tests/fixtures/hunt_records.py) builds its
+`CsBeaconDetails.configs` entry as a bare `{"cs_version": 4,
 "c2_host": "example.test"}` dict with no `fields` key at all, so it never
 touches v2.7's new `csBeaconDetails.configs[*].fields` constraint (a
 `properties` entry only applies when that property is actually present) --
@@ -24,8 +27,11 @@ HunterRecords ever carry a SCAN_REGION_OVERSIZED_SKIPPED limitation, so
 `hunt_summary_for()`'s v2.9 `investigation_actions` addition is `[]` for
 every existing test in this file (still required and validated -- see
 `tests/fixtures/hunt_records.hunt_summary_for()`'s own docstring); the
-populated-queue shape is exercised separately below and in
-tests/hunt/test_investigation.py. Built directly from
+populated-queue shape (mode == "metadata", content_reason_codes always
+`[]`) is exercised separately below and in tests/hunt/test_investigation.py,
+and the v2.10 mode == "deep"/content_reason_codes shape in
+tests/hunt/test_deep_triage.py plus the dedicated section near the bottom
+of this file. Built directly from
 tests/fixtures/hunt_records.py's synthetic HunterRecord fixtures, NOT
 through a real hunter collect_*() pipeline -- only injection's
 collect_injection_record() exists so far; the other six hunters' real
@@ -58,7 +64,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.9.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.10.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -124,7 +130,7 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):
     return {
         "meta": {
-            "schema_version": "2.9",
+            "schema_version": "2.10",
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01Z",
                           "duration_seconds": 1.0, "command": command, "options": options or {}},
@@ -705,6 +711,271 @@ def test_investigation_actions_rejects_hunters_field_on_non_rescan_type(validato
     summary = hunt_summary_for(records, selected="all")
     action = summary["investigation_actions"][0]
     action["recommended_actions"][0]["hunters"] = ["pipe"]   # inspect_metadata doesn't use hunters
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+# ── v2.10: triageInfo.content_reason_codes (issue #19 Phase 2) ──────────────
+# hunt_summary_for()'s own investigation_actions are always mode ==
+# "metadata" (nothing in this file's fixtures runs --triage-skipped's real
+# dumpex.hunt._deep_triage.run_deep_triage() -- that's exercised directly,
+# against real reads, in tests/hunt/test_deep_triage.py). These tests hand-
+# construct a plausible `mode == "deep"` triage dict on top of an otherwise
+# real, schema-valid investigationAction (same "mutate one real document"
+# style as the negative tests directly above) to exercise the v2.10
+# allOf branches a synthetic metadata-only fixture can never reach.
+
+def test_content_reason_codes_deep_completed_with_indicator_validates(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": ["IOC_PATTERN_STRING_MATCH"],
+        "findings": [{
+            "type": "ioc_string", "address": "0x000001d400001230", "offset": 16,
+            "encoding": "ASCII", "value": "http://evil.example/beacon",
+            "is_network_pattern": True, "module_context": None,
+        }],
+        "finding_count": 1, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc)) == []
+
+
+def test_content_reason_codes_deep_not_captured_with_no_read_validates(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "not_captured", "bytes_examined": 0,
+        "region_fully_examined": False, "content_reason_codes": [], "findings": [],
+        "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc)) == []
+
+
+def test_content_reason_codes_rejects_nonempty_for_metadata_mode(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"]["content_reason_codes"] = ["IOC_PATTERN_STRING_MATCH"]
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_content_reason_codes_rejects_unknown_enum_value(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": ["NOT_A_REAL_CODE"],
+        "findings": [], "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_content_reason_codes_accepts_mz_header_detected_independent_of_injected_pe(validator):
+    # issue #19 Phase 2 review, item 3: MZ_HEADER_DETECTED (the raw fact)
+    # must validate on its own, without INJECTED_PE_HEADER (the stronger,
+    # confirmed-unregistered fact) -- e.g. when module classification was
+    # unavailable, only the former is reachable.
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": ["MZ_HEADER_DETECTED"],
+        "findings": [{
+            "type": "mz_header", "address": "0x000001d400000000", "offset": None,
+            "encoding": None, "value": None, "is_network_pattern": None,
+            "module_context": "unavailable",
+        }],
+        "finding_count": 1, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc)) == []
+
+
+def test_content_reason_codes_rejects_duplicate_values(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True,
+        "content_reason_codes": ["IOC_PATTERN_STRING_MATCH", "IOC_PATTERN_STRING_MATCH"],
+        "findings": [], "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_content_reason_codes_rejects_nonempty_for_not_captured_status(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "not_captured", "bytes_examined": 0,
+        "region_fully_examined": False, "content_reason_codes": ["IOC_PATTERN_STRING_MATCH"],
+        "findings": [], "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_deep_completed_requires_region_fully_examined_true(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": False, "content_reason_codes": [], "findings": [],
+        "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_deep_partial_rejects_region_fully_examined_true(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "partial", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": [], "findings": [],
+        "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_deep_budget_deferred_rejects_nonzero_bytes_examined(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "budget_deferred", "bytes_examined": 10,
+        "region_fully_examined": False, "content_reason_codes": [], "findings": [],
+        "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+# ── issue #19 Phase 2 review, item 5: a real-read status must have
+# bytes_examined >= 1 -- an "impossible" zero-byte completed/partial/
+# clamped result must be rejected, not merely discouraged by convention. ──
+
+@pytest.mark.parametrize("status,region_fully_examined", [
+    ("completed", True), ("partial", False), ("clamped", False),
+])
+def test_deep_real_read_status_rejects_zero_bytes_examined(
+        validator, status, region_fully_examined):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": status, "bytes_examined": 0,
+        "region_fully_examined": region_fully_examined, "content_reason_codes": [], "findings": [],
+        "finding_count": 0, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+# ── issue #19 Phase 2 review, item 4: triageInfo.findings -- bounded,
+# structured evidence backing content_reason_codes. ────────────────────────
+
+def test_findings_rejects_nonempty_for_zero_byte_status(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "not_captured", "bytes_examined": 0,
+        "region_fully_examined": False, "content_reason_codes": [],
+        "findings": [{
+            "type": "mz_header", "address": "0x000001d400000000", "offset": None,
+            "encoding": None, "value": None, "is_network_pattern": None,
+            "module_context": "unavailable",
+        }],
+        "finding_count": 1, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_findings_rejects_more_than_twenty_entries(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    one = {
+        "type": "ioc_string", "address": "0x000001d400001230", "offset": 0,
+        "encoding": "ASCII", "value": "http://evil.example", "is_network_pattern": True,
+        "module_context": None,
+    }
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": ["IOC_PATTERN_STRING_MATCH"],
+        "findings": [one] * 21, "finding_count": 21, "findings_truncated": True,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_findings_ioc_string_rejects_module_context_present(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": ["IOC_PATTERN_STRING_MATCH"],
+        "findings": [{
+            "type": "ioc_string", "address": "0x000001d400001230", "offset": 0,
+            "encoding": "ASCII", "value": "http://evil.example", "is_network_pattern": True,
+            "module_context": "unregistered",   # ioc_string must never set this
+        }],
+        "finding_count": 1, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_findings_mz_header_rejects_ioc_only_fields_present(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": ["MZ_HEADER_DETECTED"],
+        "findings": [{
+            "type": "mz_header", "address": "0x000001d400000000", "offset": 0,   # must be null
+            "encoding": None, "value": None, "is_network_pattern": None,
+            "module_context": "unregistered",
+        }],
+        "finding_count": 1, "findings_truncated": False,
+    }
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_findings_value_rejects_over_256_characters(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["triage"] = {
+        "mode": "deep", "status": "completed", "bytes_examined": 4096,
+        "region_fully_examined": True, "content_reason_codes": ["IOC_PATTERN_STRING_MATCH"],
+        "findings": [{
+            "type": "ioc_string", "address": "0x000001d400001230", "offset": 0,
+            "encoding": "ASCII", "value": "A" * 257, "is_network_pattern": False,
+            "module_context": None,
+        }],
+        "finding_count": 1, "findings_truncated": False,
+    }
     doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
     assert list(validator.iter_errors(doc))
 

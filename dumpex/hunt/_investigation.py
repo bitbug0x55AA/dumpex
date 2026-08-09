@@ -49,21 +49,31 @@ the dump's bytes are on disk at all, from `ScanTarget.file_offset`) --
 never folded into priority: a missing file offset means "may need
 recollection," not "more malicious" (explicit issue #19 non-goal).
 
-This module implements ONLY the default, always-on metadata pass. The
-opt-in `--triage-skipped` budgeted deep-content triage (issue #19's
-second, independently-scoped piece) is a deliberate follow-up -- see
-`TriageInfo`'s own docstring for the extension point it leaves.
+This module implements the default, always-on metadata pass AND the
+closed vocabulary/validation `TriageInfo`/`InvestigationAction` share with
+the opt-in `--triage-skipped` budgeted deep-content triage pass (issue
+#19's second, independently-scoped piece) -- see `dumpex.hunt._deep_triage`
+for the engine that actually performs those budgeted reads and constructs
+`TriageInfo(mode="deep", ...)` instances. Nothing in THIS module ever
+reads region content or constructs `mode="deep"` itself; it only defines
+the shape deep triage must produce and validates it (`TriageInfo.
+__post_init__`'s mode=="deep" branch below).
 """
 from dataclasses import dataclass, field
 from enum import Enum
 
 from dumpex.output.coverage import ScanTarget, ScanTargetKind, LimitationCode
-from dumpex.output.records import HUNTERS, HunterRecord
+from dumpex.output.records import (
+    HUNTERS, HunterRecord,
+    MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
+)
 from dumpex.hunt.region_correlation import build_region_correlations
 
 __all__ = [
     "InvestigationPriority", "InvestigationReasonCode", "EvidenceAvailability",
-    "InvestigationActionType", "TriageMode", "TriageStatus", "SkipRelationship", "TriageInfo",
+    "InvestigationActionType", "TriageMode", "TriageStatus", "ContentReasonCode",
+    "ContentFindingType", "ContentFinding", "MAX_FINDINGS_PER_TARGET", "MAX_FINDING_VALUE_LEN",
+    "SkipRelationship", "TriageInfo",
     "RecommendedAction", "InvestigationAction", "build_investigation_queue",
 ]
 
@@ -110,6 +120,123 @@ class InvestigationReasonCode(str, Enum):
 class EvidenceAvailability(str, Enum):
     CAPTURED     = "captured"
     NOT_CAPTURED = "not_captured"
+
+
+class ContentReasonCode(str, Enum):
+    """Closed vocabulary for `TriageInfo.content_reason_codes` -- what the
+    opt-in deep-content read itself (not metadata) found in a target's
+    examined bytes, via `dumpex.hunt._deep_triage`'s reuse of --report's
+    own `_scan_content_range()` string/IOC/MZ scan. Only ever populated for
+    `mode == "deep"` and a status where a real read actually happened
+    (completed/partial/clamped -- see TriageInfo.__post_init__); always
+    `()` otherwise. Deliberately its own closed enum, separate from
+    `InvestigationReasonCode` (metadata-only signals) -- keeping the two
+    apart preserves the metadata pass's own "zero content reads" proof
+    (nothing in InvestigationReasonCode could ever require a read) and
+    lets a JSON consumer tell "why is this HIGH priority" (metadata,
+    always present) apart from "what did the deep read actually find"
+    (deep-triage-only, may never have been attempted)."""
+    IOC_PATTERN_STRING_MATCH     = "IOC_PATTERN_STRING_MATCH"
+    NETWORK_PATTERN_STRING_MATCH = "NETWORK_PATTERN_STRING_MATCH"
+    # MZ_HEADER_DETECTED and INJECTED_PE_HEADER are deliberately separate
+    # facts, not one collapsed code: an MZ header was found at the read's
+    # own start either way, but INJECTED_PE_HEADER additionally requires
+    # CONFIRMING the memory is unregistered (module_context ==
+    # "unregistered") -- when module classification itself is unavailable
+    # (no ModuleListStream), that confirmation cannot be made, and
+    # collapsing the two would silently drop the MZ signal entirely (see
+    # dumpex.hunt._deep_triage._content_reason_codes()'s own docstring).
+    MZ_HEADER_DETECTED = "MZ_HEADER_DETECTED"
+    INJECTED_PE_HEADER = "INJECTED_PE_HEADER"
+
+
+class ContentFindingType(str, Enum):
+    IOC_STRING = "ioc_string"
+    MZ_HEADER  = "mz_header"
+
+
+MAX_FINDINGS_PER_TARGET = 20    # same "top 20" bound --report's own notable-
+                                  # strings preview already uses (dumpex.
+                                  # commands.report._scan_content_range())
+MAX_FINDING_VALUE_LEN = 256      # same order of magnitude as ReportIocString.
+                                  # context_hex's own <=256-byte/<=512-hex-char
+                                  # bound -- a lead, not the full match
+
+
+@dataclass(frozen=True)
+class ContentFinding:
+    """One piece of REAL evidence the opt-in `--triage-skipped` deep read
+    itself found (issue #19 Phase 2) -- `TriageInfo.content_reason_codes`
+    alone only says THAT something was found, never WHAT; this is the
+    bounded, structured record of WHAT, so a JSON consumer doesn't have to
+    re-run `--report --report-addr <base_address>` just to see it (though
+    that remains the way to get the FULL triage card, complete string
+    text, and hexdump context -- this array is a bounded lead, not a
+    substitute).
+
+    `type` discriminates two closed shapes:
+
+      "ioc_string" -- `offset`/`encoding`/`value`/`is_network_pattern` all
+                      set, `module_context` always `None`. `value` is
+                      truncated to `MAX_FINDING_VALUE_LEN` characters.
+      "mz_header"  -- `module_context` set (whether ownership could be
+                      confirmed at all), every ioc_string-only field
+                      `None`.
+
+    `dumpex.hunt._deep_triage.run_deep_triage()` is the only real
+    constructor, and it also caps the NUMBER of `ContentFinding` entries
+    per target at `MAX_FINDINGS_PER_TARGET` before ever constructing one
+    -- `TriageInfo.__post_init__` re-enforces that same cap here too, so
+    this array can never grow unbounded even against adversarial
+    content."""
+    type: str
+    address: str
+    offset: "int | None" = None
+    encoding: "str | None" = None
+    value: "str | None" = None
+    is_network_pattern: "bool | None" = None
+    module_context: "str | None" = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "type", ContentFindingType(self.type).value)
+        _require_str(self.address, "ContentFinding.address")
+        if self.type == ContentFindingType.IOC_STRING.value:
+            if not isinstance(self.offset, int) or isinstance(self.offset, bool) or self.offset < 0:
+                raise ValueError(f"ContentFinding(type='ioc_string').offset must be a "
+                                  f"non-negative int, got {self.offset!r}")
+            if self.encoding not in ("ASCII", "UTF16"):
+                raise ValueError(f"ContentFinding(type='ioc_string').encoding must be "
+                                  f"'ASCII' or 'UTF16', got {self.encoding!r}")
+            _require_str(self.value, "ContentFinding(type='ioc_string').value")
+            if len(self.value) > MAX_FINDING_VALUE_LEN:
+                raise ValueError(f"ContentFinding(type='ioc_string').value must be at most "
+                                  f"{MAX_FINDING_VALUE_LEN} chars -- truncate before "
+                                  f"constructing, got {len(self.value)}")
+            if not isinstance(self.is_network_pattern, bool):
+                raise ValueError(f"ContentFinding(type='ioc_string').is_network_pattern must "
+                                  f"be a bool, got {self.is_network_pattern!r}")
+            if self.module_context is not None:
+                raise ValueError("ContentFinding(type='ioc_string').module_context must be "
+                                  "None -- only type='mz_header' uses it")
+        else:   # mz_header
+            unused = [v for v in (self.offset, self.encoding, self.value, self.is_network_pattern)
+                      if v is not None]
+            if unused:
+                raise ValueError("ContentFinding(type='mz_header') must have "
+                                  "offset/encoding/value/is_network_pattern all None -- only "
+                                  "type='ioc_string' uses them")
+            if self.module_context not in (MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED,
+                                            MODULE_CONTEXT_UNAVAILABLE):
+                raise ValueError(f"ContentFinding(type='mz_header').module_context must be one "
+                                  f"of {MODULE_CONTEXT_RESOLVED!r}/{MODULE_CONTEXT_UNREGISTERED!r}/"
+                                  f"{MODULE_CONTEXT_UNAVAILABLE!r}, got {self.module_context!r}")
+
+    def to_dict(self) -> dict:
+        return {
+            "type": self.type, "address": self.address, "offset": self.offset,
+            "encoding": self.encoding, "value": self.value,
+            "is_network_pattern": self.is_network_pattern, "module_context": self.module_context,
+        }
 
 
 class InvestigationActionType(str, Enum):
@@ -176,28 +303,55 @@ class SkipRelationship:
         }
 
 
+_TRIAGE_ZERO_BYTE_STATUSES = frozenset({
+    TriageStatus.NOT_CAPTURED.value, TriageStatus.BUDGET_DEFERRED.value,
+    TriageStatus.UNREADABLE.value,
+})
+
+
 @dataclass(frozen=True)
 class TriageInfo:
-    """This phase only ever produces `mode="metadata"`, and that mode is
-    pinned to exactly these four values by construction (see
-    `__post_init__`) -- `bytes_examined=0`/`region_fully_examined=False`
-    are the schema-enforced proof that the default pass reads no region
-    content. A future `--triage-skipped` deep-content phase is the
-    intended reason this is its own sub-object rather than inlined
-    fields on `InvestigationAction`: it would add `mode="deep"` with its
-    own `status` vocabulary (partial/clamped/unreadable/budget_deferred)
-    and a real `bytes_examined` -- not implemented here (issue #19's own
-    opt-in, separately-scoped second piece). `mode`/`status` are already
-    widened to the full Phase-2-compatible vocabulary (`TriageMode`/
-    `TriageStatus` below) so the future deep-content triage phase can
-    populate this same sub-object without a schema break -- this phase
-    only ever CONSTRUCTS `mode="metadata"` (enforced below), but a
-    consumer reading `--json` from a future dumpex version will not see
-    an incompatible shape appear here."""
+    """The default metadata pass only ever produces `mode="metadata"`,
+    pinned to exactly these five values by construction (see
+    `__post_init__`) -- `bytes_examined=0`/`region_fully_examined=False`/
+    `content_reason_codes=()`/`findings=()` are the schema-enforced proof
+    that the default pass reads no region content. `mode="deep"` is
+    constructed ONLY by `dumpex.hunt._deep_triage.run_deep_triage()` (the
+    opt-in `--triage-skipped` budgeted deep-content triage, issue #19
+    Phase 2) -- never by this module. `__post_init__` still enforces
+    every mode="deep" invariant here (not in `_deep_triage`) so the two
+    producers (the always-on metadata pass and the opt-in deep pass)
+    share one place a reader can trust: a zero-byte status
+    (not_captured/budget_deferred/unreadable) can never claim bytes were
+    examined or that content was found; a real-read status
+    (completed/partial/clamped) can never claim zero bytes; and only
+    `completed` may claim `region_fully_examined=True`.
+
+    `content_reason_codes` is a quick, closed-vocabulary SUMMARY of what
+    a deep read found; `findings` (bounded at `MAX_FINDINGS_PER_TARGET`
+    `ContentFinding` entries) is the structured EVIDENCE backing it --
+    see `ContentFinding`'s own docstring. Both share the exact same
+    "only populated for a real-read status" rule.
+
+    `finding_count` is the TOTAL number of individual findings the deep
+    read actually produced (an MZ header counts as at most one; every IOC
+    string hit counts as one each) -- BEFORE `dumpex.hunt._deep_triage.
+    _content_signals()`'s own representative-first selection caps the
+    `findings` array at `MAX_FINDINGS_PER_TARGET`. `findings_truncated` is
+    `True` exactly when `finding_count > len(findings)`, i.e. the array
+    does not carry every finding the read produced. Both exist so a JSON
+    consumer can tell "there were exactly 3 findings, all shown" apart
+    from "there were 47 findings, only a bounded representative sample of
+    20 is shown" -- `len(findings)` alone cannot distinguish those two
+    cases once a target is string-dense enough to hit the cap."""
     mode: str = "metadata"
     status: str = "completed"
     bytes_examined: int = 0
     region_fully_examined: bool = False
+    content_reason_codes: tuple = field(default_factory=tuple)
+    findings: tuple = field(default_factory=tuple)
+    finding_count: int = 0
+    findings_truncated: bool = False
 
     def __post_init__(self):
         object.__setattr__(self, "mode", TriageMode(self.mode).value)
@@ -209,24 +363,81 @@ class TriageInfo:
         if not isinstance(self.region_fully_examined, bool):
             raise ValueError(f"TriageInfo.region_fully_examined must be a bool, "
                               f"got {self.region_fully_examined!r}")
+        if not isinstance(self.content_reason_codes, tuple):
+            object.__setattr__(self, "content_reason_codes", tuple(self.content_reason_codes))
+        object.__setattr__(self, "content_reason_codes",
+                            tuple(ContentReasonCode(c).value for c in self.content_reason_codes))
+        if not isinstance(self.findings, tuple):
+            object.__setattr__(self, "findings", tuple(self.findings))
+        if any(type(f) is not ContentFinding for f in self.findings):
+            raise ValueError("TriageInfo.findings must contain only ContentFinding instances")
+        if len(self.findings) > MAX_FINDINGS_PER_TARGET:
+            raise ValueError(f"TriageInfo.findings must have at most "
+                              f"{MAX_FINDINGS_PER_TARGET} entries, got {len(self.findings)}")
+        if not isinstance(self.finding_count, int) or isinstance(self.finding_count, bool) \
+                or self.finding_count < 0:
+            raise ValueError(f"TriageInfo.finding_count must be a non-negative int, "
+                              f"got {self.finding_count!r}")
+        if self.finding_count < len(self.findings):
+            raise ValueError(
+                f"TriageInfo.finding_count ({self.finding_count}) must be >= len(findings) "
+                f"({len(self.findings)}) -- findings is a subset of everything found")
+        if not isinstance(self.findings_truncated, bool):
+            raise ValueError(f"TriageInfo.findings_truncated must be a bool, "
+                              f"got {self.findings_truncated!r}")
+        expect_truncated = self.finding_count > len(self.findings)
+        if self.findings_truncated != expect_truncated:
+            raise ValueError(
+                f"TriageInfo.findings_truncated must be {expect_truncated!r} -- it must equal "
+                f"finding_count > len(findings)")
         if self.mode == TriageMode.METADATA.value:
-            if (self.status, self.bytes_examined, self.region_fully_examined) \
-                    != (TriageStatus.COMPLETED.value, 0, False):
+            if (self.status, self.bytes_examined, self.region_fully_examined,
+                    self.content_reason_codes, self.findings, self.finding_count,
+                    self.findings_truncated) \
+                    != (TriageStatus.COMPLETED.value, 0, False, (), (), 0, False):
                 raise ValueError(
                     "TriageInfo(mode='metadata') must have status='completed', "
-                    "bytes_examined=0, region_fully_examined=False -- the metadata "
-                    "pass never reads region content")
-        # mode == "deep": reserved for the future --triage-skipped phase
-        # (not implemented here -- nothing in this phase constructs it).
-        # No further constraint beyond the type/enum checks above, since
-        # that phase's own real invariants (e.g. which status values are
-        # reachable from which budget outcome) don't exist yet.
+                    "bytes_examined=0, region_fully_examined=False, "
+                    "content_reason_codes=(), findings=(), finding_count=0, "
+                    "findings_truncated=False -- the metadata pass never reads region content")
+            return
+        # mode == "deep" -- dumpex.hunt._deep_triage's own opt-in
+        # --triage-skipped budgeted phase (issue #19 Phase 2). See this
+        # class's own docstring for why these invariants live here rather
+        # than in _deep_triage itself.
+        if self.status in _TRIAGE_ZERO_BYTE_STATUSES:
+            if (self.bytes_examined, self.region_fully_examined, self.content_reason_codes,
+                    self.findings, self.finding_count, self.findings_truncated) \
+                    != (0, False, (), (), 0, False):
+                raise ValueError(
+                    f"TriageInfo(mode='deep', status={self.status!r}) must have "
+                    f"bytes_examined=0, region_fully_examined=False, "
+                    f"content_reason_codes=(), findings=(), finding_count=0, "
+                    f"findings_truncated=False -- no read was attempted, so no content signal "
+                    f"is possible")
+        else:
+            if self.bytes_examined <= 0:
+                raise ValueError(
+                    f"TriageInfo(mode='deep', status={self.status!r}) requires "
+                    f"bytes_examined > 0 -- a completed/partial/clamped read must have "
+                    f"examined at least one byte")
+            expect_fully_examined = self.status == TriageStatus.COMPLETED.value
+            if self.region_fully_examined != expect_fully_examined:
+                raise ValueError(
+                    f"TriageInfo(mode='deep', status={self.status!r}) requires "
+                    f"region_fully_examined={expect_fully_examined!r} -- only a "
+                    f"'completed' read may claim the region was fully examined, and a "
+                    f"'completed' read must claim it")
 
     def to_dict(self) -> dict:
         return {
             "mode": self.mode, "status": self.status,
             "bytes_examined": self.bytes_examined,
             "region_fully_examined": self.region_fully_examined,
+            "content_reason_codes": list(self.content_reason_codes),
+            "findings": [f.to_dict() for f in self.findings],
+            "finding_count": self.finding_count,
+            "findings_truncated": self.findings_truncated,
         }
 
 

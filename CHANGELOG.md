@@ -5,6 +5,102 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## `--triage-skipped`: opt-in budgeted deep-content triage (schema v2.10)
+
+Issue #19 Phase 1 (previous entry below) gave `--hunt all` a default,
+metadata-only investigation queue for oversized skipped targets — real,
+but limited to facts already on hand, with zero additional dump reads.
+Phase 2 adds the follow-up piece that entry deliberately deferred: an
+explicit, opt-in `--triage-skipped` flag that performs a REAL, budgeted
+content read of each queued target, reusing `--report`'s own triage
+collector directly (never spawning a second `dumpex` process) under
+explicit limits — never the unbounded, up-to-256-MiB-per-region behavior
+`--report` itself uses.
+
+```bash
+dumpex --hunt all --triage-skipped sample.dmp --json out.json
+```
+
+- **Budgeted, not unbounded.** Three independent, fixed limits bound the
+  whole pass: a per-target byte cap, a whole-run byte cap, and a maximum
+  target count — once either budget is exhausted, every remaining
+  (already lower-priority, by construction) target in the queue is marked
+  `budget_deferred` rather than silently skipped or silently read past
+  the intended cap.
+- **`investigation_actions[].triage` becomes real.** Where the metadata
+  pass always emits `mode: "metadata"`, `bytes_examined: 0`, a
+  `--triage-skipped` run emits `mode: "deep"` with the real outcome:
+  `completed` (fully examined), `partial` (the dump had fewer bytes than
+  requested — a real evidence gap), `clamped` (deep triage's own budget
+  intentionally capped the read), `unreadable` (the read failed), or
+  `not_captured` (nothing to read — same meaning as before).
+- **New: `triage.content_reason_codes` and `triage.findings`.**
+  `content_reason_codes` is a closed, structured summary of what the deep
+  read itself found in the examined bytes — an IOC-pattern string match,
+  a network-pattern string match, a bare MZ header, and/or an MZ header
+  CONFIRMED to sit in unregistered memory (`MZ_HEADER_DETECTED` and
+  `INJECTED_PE_HEADER` are independent: the former surfaces even when
+  module classification is unavailable, e.g. no `ModuleListStream`).
+  `findings` is the bounded (at most 20 entries), structured EVIDENCE
+  behind that summary — the actual IOC string text (truncated to 256
+  characters — a lead, not the full match) with its address/offset/
+  encoding, or the MZ header's own address and module context. Both are
+  empty for the metadata pass (nothing was read) and empty for any
+  deep-triage outcome that didn't actually complete a read. When a target
+  produces more than 20 findings, the array is filled
+  representative-first (the MZ finding, then one network-pattern IOC
+  finding, then one plain IOC finding, then the rest in offset order) so
+  a reason code is never left without any backing evidence just because
+  plain IOC hits filled every slot first — `triage.finding_count` reports
+  the true total and `triage.findings_truncated` flags when the array
+  doesn't carry all of it.
+- **Never a verdict.** A deep-triage pass that finds nothing is reported
+  as "no generic indicators in examined bytes" — never "clean" — and
+  `coverage_effect` stays `"original_hunter_gap_not_resolved"` regardless
+  of what the deep read found. A generic content scan cannot substitute
+  for the specific hunter logic (pipe/YARA/encoding/etc.) that originally
+  skipped the target; only a real targeted rescan of that hunter closes
+  its own coverage gap.
+- **`chunked_analysis` is now actually emitted** on any target the deep
+  pass could not fully examine (`partial`/`clamped`/`budget_deferred`/
+  `unreadable`), alongside whatever recommendations the metadata pass
+  already produced.
+- **Console**: each SKIPPED TARGET ACTIONS entry gains a `Deep triage:
+  ...` line, plus a bounded DEEP TRIAGE NOTES block (budget-exhausted /
+  read-failed / a one-line run summary) — every word printed is backed by
+  a field already in `--json`, same parity rule the rest of this section
+  already follows. When a real signal was found, the entry also prints a
+  bounded preview of `triage.findings` itself — the actual IOC value/
+  address/encoding or the MZ finding's own `module_context`, not just the
+  reason-code label — up to 3 entries by default, all retained entries
+  (still capped at 20) with `--verbose`. If the read produced more
+  findings than the JSON's own 20-entry cap retained, a `Showing 20 of 47
+  deep-triage findings.` line appears regardless of `--verbose`, since
+  that reflects a data-level truncation, not a console-only one.
+  `MZ_HEADER_DETECTED` and `INJECTED_PE_HEADER` each get their own
+  distinct, human-readable label — neither prints as the raw enum name.
+- **Advisory only, same as Phase 1.** Detection verdicts, hunt summary
+  reduction, and exit codes are never changed by `--triage-skipped` —
+  confirmed identical to the same run without the flag.
+- **No effect outside `--hunt all`.** A single-hunter `--hunt <name>` run
+  never has an investigation queue to begin with, so `--triage-skipped`
+  is a harmless no-op there.
+
+This is schema v2.10: the only shape change is `triageInfo` gaining the
+new, closed-enum `content_reason_codes` array, the new, bounded `findings`
+array, and the new `finding_count`/`findings_truncated` fields
+(`investigation_actions` itself and everything else are unchanged from
+v2.9). Reads correctly regardless of a skipped target's
+own kind — including a `memory_segment` target (YARA/CS-beacon's own
+oversized-skip targets, which carry no MemoryInfoListStream entry at
+all) and a `memory_region` target that only covers part of a larger
+MemoryInfo region — by reading from the target's own recorded address
+rather than resolving a region first.
+
+See [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md#skipped-target-investigation-queue-hunt-all)
+for the field-by-field reading guide, including how to interpret a
+`mode: "deep"` entry.
+
 ## `--hunt all` automatically triages skipped targets (schema v2.9)
 
 Issues #16/#17/#18 made partial coverage from oversized skipped

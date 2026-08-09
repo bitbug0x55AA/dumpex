@@ -32,6 +32,7 @@ from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations
 from dumpex.hunt._investigation import build_investigation_queue
+from dumpex.hunt._deep_triage import run_deep_triage
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport
 from dumpex.output.records import HUNTERS
@@ -66,7 +67,7 @@ def _hunt_coverage_report(records: "list", summary: dict) -> CoverageReport:
 
     `not_evaluated` here is exactly `summary["overall_status"] ==
     "NOT_EVALUATED"` -- the one relationship
-    dumpex-output-v2.9.schema.json's own kind=="hunt" branch enforces as
+    dumpex-output-v2.10.schema.json's own kind=="hunt" branch enforces as
     a biconditional between `coverage.status` and `summary.overall_status`.
     """
     if summary["overall_status"] == "NOT_EVALUATED":
@@ -142,22 +143,40 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
                           coverage=_hunt_coverage_report(records, summary), summary=summary)
 
 def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None,
-             ref_dir: str = None, collect_records: bool = False):
+             ref_dir: str = None, collect_records: bool = False, triage_skipped: bool = False):
     """Run TTP-specific detection playbooks, printing the console report
     exactly as always.
 
     `collect_records=True` (used by cli.py's `--hunt` branch, PR4) makes
     this function ALSO build the v2.4 `HunterRecord` for every selected
-    hunter and return `(results, records)` instead of the bare `results`
-    dict every existing caller already gets back unchanged. Each
-    selected hunter's own `_build_*_report()` is still called EXACTLY
-    ONCE either way -- this function has always called it directly
-    (never through the `_hunt_*()`/`collect_*_record()` compat wrappers,
-    which would each build their own separate Report), feeding that one
-    Report to both this hunter's console-render function and, when
-    `collect_records` is set, `_record_from_*_report()` too. See
-    `collect_hunt()` above for the equivalent silent, JSON-only path
-    used by any caller that doesn't want console output at all.
+    hunter and return `(results, records, investigation_actions,
+    diagnostics)` -- a 4-tuple, always, since issue #19 Phase 2's
+    `--triage-skipped` -- instead of the bare `results` dict every
+    existing caller already gets back unchanged. `investigation_actions`
+    is `list[InvestigationAction]` and `diagnostics` is `list[Diagnostic]`
+    (both `[]` for a single-hunter `ttp`, and `diagnostics` is also `[]`
+    whenever `triage_skipped` is False). Each selected hunter's own
+    `_build_*_report()` is still called EXACTLY ONCE either way -- this
+    function has always called it directly (never through the
+    `_hunt_*()`/`collect_*_record()` compat wrappers, which would each
+    build their own separate Report), feeding that one Report to both
+    this hunter's console-render function and, when `collect_records` is
+    set, `_record_from_*_report()` too. See `collect_hunt()` above for
+    the equivalent silent, JSON-only path used by any caller that
+    doesn't want console output at all (that path stays metadata-only --
+    it has no `triage_skipped` parameter, since nothing in the CLI wires
+    it to `--triage-skipped`; only THIS function, the real `--hunt` CLI
+    entry point, needs that capability).
+
+    `triage_skipped=True` (only meaningful when `ttp == "all"` -- a
+    single-hunter run never has an investigation queue to begin with)
+    runs `dumpex.hunt._deep_triage.run_deep_triage()` on the metadata
+    queue `build_investigation_queue()` already computed below, EXACTLY
+    ONCE -- the resulting `investigation_actions`/diagnostics feed BOTH
+    this function's own console rendering AND (via the 4-tuple above)
+    `--json`, so a real, budgeted content read is never performed twice
+    for one invocation. See `_deep_triage`'s own module docstring for the
+    budget model.
 
     The `--hunt all` console summary card's own "Overall: ..." line is
     derived from the exact same `dumpex.hunt.summary.build_hunt_summary()`
@@ -286,6 +305,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     if ttp == "all" and "obfuscation" not in results:
         results["obfuscation"] = {"score": 0, "status": NOT_EVALUATED}
 
+    investigation_actions = []
+    deep_diagnostics = []
     if ttp == "all":
         # The single cross-hunter renderer (Step 1.5, console presentation
         # patch) -- reads ONLY `records`/`summary`/the document-level
@@ -307,12 +328,24 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         memory_regions = get_memory_regions(mf)
         region_correlations = build_region_correlations(records, memory_regions)
         investigation_actions = build_investigation_queue(records, memory_regions)
+        # --triage-skipped (issue #19 Phase 2): run the real, budgeted
+        # content read EXACTLY ONCE here, over the metadata queue just
+        # built above -- both this call's own console rendering below AND
+        # the (investigation_actions, deep_diagnostics) this function
+        # returns to collect_records=True callers consume the SAME
+        # already-deep-triaged list, never a second independent pass (see
+        # this function's own docstring and dumpex.hunt._deep_triage's
+        # module docstring for why re-running it would silently double
+        # the read budget).
+        if triage_skipped and investigation_actions:
+            investigation_actions, deep_diagnostics = run_deep_triage(mf, investigation_actions)
         summary_presentation.render_hunt_summary(
             records, summary, doc_coverage.status.value,
             region_correlations=region_correlations,
-            investigation_actions=investigation_actions, verbose=verbose)
+            investigation_actions=investigation_actions,
+            deep_triage_diagnostics=deep_diagnostics, verbose=verbose)
 
     if collect_records:
-        return results, records
+        return results, records, investigation_actions, deep_diagnostics
     return results
 

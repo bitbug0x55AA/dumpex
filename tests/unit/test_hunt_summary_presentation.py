@@ -17,7 +17,7 @@ from dumpex.hunt.summary_presentation import render_hunt_summary
 from dumpex.hunt.region_correlation import RegionSignal, RegionCorrelation
 from dumpex.hunt._finding import Finding, TAG_DETECTION, TAG_LEAD, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM
 from dumpex.hunt._investigation import (
-    InvestigationAction, SkipRelationship, TriageInfo, RecommendedAction,
+    InvestigationAction, SkipRelationship, TriageInfo, RecommendedAction, ContentFinding,
 )
 from dumpex.output.coverage import (
     CoverageReport, CoverageStatus, CoverageLimitation, LimitationCode, ScanTarget, ScanTargetKind,
@@ -271,7 +271,7 @@ def test_render_hunt_summary_signature_has_no_legacy_results_parameter():
     params = set(inspect.signature(render_hunt_summary).parameters)
     assert "results" not in params
     assert params == {"records", "summary", "doc_coverage_status", "width", "region_correlations",
-                       "investigation_actions", "verbose"}
+                       "investigation_actions", "deep_triage_diagnostics", "verbose"}
 
 
 def test_rejects_non_hunter_record_list():
@@ -568,3 +568,146 @@ def test_skipped_target_actions_wraps_at_narrow_width_without_breaking():
     for line in block.splitlines():
         if line.strip():
             assert len(re.sub(r"\x1b\[[0-9;]*m", "", line)) <= 80
+
+
+# ── deep-triage findings console rendering (issue #19 Phase 2 review) ──────
+# --triage-skipped's real, structured triage.findings/finding_count/
+# findings_truncated must be reachable from the console, not just --json --
+# console/JSON parity is an explicit requirement of this feature. All of
+# these render from an already-computed TriageInfo -- never a real
+# --triage-skipped run -- same style _action() itself already uses.
+
+def _deep_action(triage, **kwargs):
+    return dataclasses.replace(_action(**kwargs), triage=triage)
+
+
+def _ioc_finding(i=0, is_network_pattern=False):
+    return ContentFinding(
+        type="ioc_string", address=f"0x{0x1230 + i:016x}", offset=16 + i,
+        encoding="ASCII", value=f"http://evil.example/beacon-{i}",
+        is_network_pattern=is_network_pattern)
+
+
+def _mz_finding(module_context="unavailable"):
+    return ContentFinding(type="mz_header", address="0x0000000000001230",
+                           module_context=module_context)
+
+
+def test_deep_triage_mz_signal_uses_friendly_label_not_raw_enum():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True, content_reason_codes=("MZ_HEADER_DETECTED",),
+                         findings=(_mz_finding(),), finding_count=1, findings_truncated=False)
+    out = _capture(records, summary, investigation_actions=[_deep_action(triage)])
+    assert "MZ_HEADER_DETECTED" not in out
+    assert "MZ header detected" in out
+
+
+def test_deep_triage_injected_pe_header_uses_distinct_label_from_mz_detected():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True,
+                         content_reason_codes=("MZ_HEADER_DETECTED", "INJECTED_PE_HEADER"),
+                         findings=(_mz_finding(module_context="unregistered"),),
+                         finding_count=1, findings_truncated=False)
+    out = _capture(records, summary, investigation_actions=[_deep_action(triage)])
+    assert "INJECTED_PE_HEADER" not in out
+    assert "MZ header detected" in out
+    assert "MZ header in confirmed unregistered memory" in out
+
+
+def test_deep_triage_ioc_finding_shows_value_address_encoding():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    finding = _ioc_finding(is_network_pattern=True)
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True,
+                         content_reason_codes=("IOC_PATTERN_STRING_MATCH", "NETWORK_PATTERN_STRING_MATCH"),
+                         findings=(finding,), finding_count=1, findings_truncated=False)
+    out = _collapse_ws(_capture(records, summary, investigation_actions=[_deep_action(triage)]))
+    assert finding.value in out
+    assert finding.address in out
+    assert finding.encoding in out
+    assert "network pattern" in out
+
+
+def test_deep_triage_mz_finding_shows_module_context():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True, content_reason_codes=("MZ_HEADER_DETECTED",),
+                         findings=(_mz_finding(module_context="unavailable"),),
+                         finding_count=1, findings_truncated=False)
+    out = _collapse_ws(_capture(records, summary, investigation_actions=[_deep_action(triage)]))
+    assert "module context: unavailable" in out
+
+
+def test_deep_triage_normal_mode_bounds_findings_preview():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    findings = tuple(_ioc_finding(i) for i in range(5))
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                         findings=findings, finding_count=5, findings_truncated=False)
+    out = _capture(records, summary, investigation_actions=[_deep_action(triage)])
+    for f in findings[:3]:
+        assert f.value in out
+    for f in findings[3:]:
+        assert f.value not in out
+    assert "2 additional retained finding(s)" in out
+    # findings_truncated is False (all 5 were retained in the JSON array) --
+    # the data-level truncation line must not appear.
+    assert "deep-triage findings" not in out
+
+
+def test_deep_triage_verbose_mode_shows_all_retained_findings():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    findings = tuple(_ioc_finding(i) for i in range(5))
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                         findings=findings, finding_count=5, findings_truncated=False)
+    out = _capture(records, summary, investigation_actions=[_deep_action(triage)], verbose=True)
+    for f in findings:
+        assert f.value in out
+    assert "additional retained finding(s)" not in out
+
+
+def test_deep_triage_truncated_shows_total_count_regardless_of_verbose():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    findings = tuple(_ioc_finding(i) for i in range(20))
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                         findings=findings, finding_count=47, findings_truncated=True)
+    action = _deep_action(triage)
+    out_normal = _capture(records, summary, investigation_actions=[action], verbose=False)
+    out_verbose = _capture(records, summary, investigation_actions=[action], verbose=True)
+    assert "Showing 20 of 47 deep-triage findings." in out_normal
+    assert "Showing 20 of 47 deep-triage findings." in out_verbose
+
+
+def test_deep_triage_findings_rendering_does_not_mutate_action_or_json():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    findings = tuple(_ioc_finding(i) for i in range(5))
+    triage = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                         region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                         findings=findings, finding_count=5, findings_truncated=False)
+    action = _deep_action(triage)
+    before = action.to_dict()
+    _capture(records, summary, investigation_actions=[action], verbose=True)
+    after = action.to_dict()
+    assert before == after
+
+
+def test_deep_triage_no_findings_line_when_status_lacks_content_signal():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    triage = TriageInfo(mode="deep", status="not_captured", bytes_examined=0,
+                         region_fully_examined=False)
+    out = _capture(records, summary, investigation_actions=[_deep_action(triage)])
+    assert "deep-triage findings" not in out
+    assert "additional retained finding(s)" not in out

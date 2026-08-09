@@ -1,7 +1,7 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.9.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.9") for each of the six
+dumpex/schemas/dumpex-output-v2.10.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.10") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
@@ -9,9 +9,10 @@ hand-written fixture JSON, so a shape change in any of them is caught
 here. dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
 dumpex-output-v2.2.schema.json, dumpex-output-v2.3.schema.json,
 dumpex-output-v2.4.schema.json, dumpex-output-v2.5.schema.json,
-dumpex-output-v2.6.schema.json, dumpex-output-v2.7.schema.json, and
-dumpex-output-v2.8.schema.json (the frozen historical shapes) are also
-exercised directly (see the "schema version history" section below) to
+dumpex-output-v2.6.schema.json, dumpex-output-v2.7.schema.json,
+dumpex-output-v2.8.schema.json, and dumpex-output-v2.9.schema.json (the
+frozen historical shapes) are also exercised directly (see the "schema
+version history" section below) to
 prove each still validates a genuine document from its own era and
 still rejects a `result.kind` it was never updated to know about --
 v2.7 is a strict superset of v2.6 for these six recon-command kinds
@@ -45,7 +46,7 @@ v2.7-era output remains validatable against ITS OWN frozen schema (see
 test_a_genuine_v2_7_era_document_still_validates_against_the_v2_7_schema
 below), not against v2.8/v2.9.
 
-v2.9 (issue #19) is back to being a strict superset for these six
+v2.9 (issue #19 Phase 1) is back to being a strict superset for these six
 recon-command kinds: its only actual change is `huntSummary.
 investigation_actions` (result.summary for `kind == "hunt"` only -- see
 test_json_schema_v2_5_hunt.py), which none of memory_regions/modules/
@@ -54,6 +55,14 @@ these six kinds keeps validating against v2.9 unchanged, just carrying
 the new version label (see
 test_a_genuine_v2_8_era_document_still_validates_against_the_v2_8_schema
 below, mirroring the v2.6-era precedent rather than the v2.7-era one).
+
+v2.10 (issue #19 Phase 2) is a strict superset for these six kinds too:
+its only actual change is `triageInfo.content_reason_codes` (also under
+`huntSummary`, for `kind == "hunt"` only -- see
+test_json_schema_v2_5_hunt.py), so a v2.9-era document of any of these
+six kinds keeps validating against v2.10 unchanged (see
+test_a_genuine_v2_9_era_document_still_validates_against_the_v2_9_schema
+below).
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -89,8 +98,20 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
+    with schema_path("dumpex-output-v2.10.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_9():
     with schema_path("dumpex-output-v2.9.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_9(schema_v2_9):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_9)
+    return jsonschema.Draft202012Validator(schema_v2_9)
 
 
 @pytest.fixture(scope="module")
@@ -427,7 +448,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.9",
+            "schema_version": "2.10",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -1324,6 +1345,18 @@ def test_a_genuine_v2_8_era_document_still_validates_against_the_v2_8_schema(val
     doc = _minimal_valid_doc(kind="modules")
     doc["meta"]["schema_version"] = "2.8"
     assert validator_v2_8.is_valid(doc)
+
+
+def test_a_genuine_v2_9_era_document_still_validates_against_the_v2_9_schema(validator_v2_9):
+    # v2.10's only actual change is triageInfo.content_reason_codes (also
+    # under huntSummary, for kind == "hunt" only -- see this file's own
+    # module docstring and test_json_schema_v2_5_hunt.py) -- no six-recon
+    # -command shape changed between v2.9 and v2.10, so a v2.9-era
+    # document of any of those kinds must keep validating against the
+    # frozen v2.9 schema unchanged.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.9"
+    assert validator_v2_9.is_valid(doc)
 
 
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):

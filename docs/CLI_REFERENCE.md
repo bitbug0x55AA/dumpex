@@ -66,6 +66,7 @@ for the named commands, not additional command entry points.
 | `--yara-dir DIR` | YARA hunt | Use an explicit directory of `.yar`/`.yara` files instead of packaged rules |
 | `--ref-dir DIR` | stomping hunt | Directory of analyst-supplied reference modules, matched by basename |
 | `--rules-file FILE` | rule-driven hunts | Use an explicit `rules.yaml`, `.yml`, or `.json` file instead of packaged defaults |
+| `--triage-skipped` | `--hunt all` | Opt-in budgeted deep-content triage of the skipped-target investigation queue (see below) |
 
 ### Report options
 
@@ -84,6 +85,23 @@ parse, or does not satisfy the rules schema, dumpex exits non-zero rather
 than silently falling back to the packaged or built-in rule defaults. A run
 that asked for a specific ruleset never produces a verdict from a different
 one.
+
+`--triage-skipped` performs a REAL, budgeted content read of each target in
+`--hunt all`'s own skipped-target investigation queue (see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#skipped-target-investigation-queue)),
+reusing `--report`'s own triage collector directly — never spawning a second
+`dumpex` process, and never the unbounded, up-to-256-MiB-per-region read
+`--report` itself allows. Three fixed limits bound the whole pass (a
+per-target byte cap, a whole-run byte cap, and a maximum target count); once
+either is exhausted, remaining targets are marked `budget_deferred` rather
+than read past the intended budget. This is genuinely more expensive than
+the default metadata-only pass — expect real, if bounded, additional I/O
+and CPU time proportional to the queue's size — which is why it is opt-in
+rather than automatic. It has no effect on a single-hunter `--hunt <name>`
+run (there is no investigation queue to triage), and it never changes a
+hunt's detection verdicts, coverage status, or exit code — only the
+advisory `investigation_actions[].triage`/`.recommended_actions` fields and
+the console's SKIPPED TARGET ACTIONS section.
 
 ## Output and evidence options
 
@@ -108,7 +126,7 @@ with `--force`.
 `--extract`/`--strings`/`--report`/`--hunt` all use the v2 contract
 (canonical records, `null` for missing values, normalized hex addresses —
 see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
-All eleven commands support `--json` on this same v2.9 contract;
+All eleven commands support `--json` on this same v2.10 contract;
 `--hunt` was the last to migrate — its `result.kind` is `"hunt"` and
 `result.data.records` holds one `hunterRecord` per hunter.
 `--diff` produces a `kind: "comparison"` result with a two-entry
@@ -170,6 +188,9 @@ dumpex sample.dmp --hunt obfuscation
 # Use explicit analyst-controlled rules
 dumpex sample.dmp --hunt all --rules-file case-rules.yaml
 dumpex sample.dmp --hunt yara --yara-dir case-yara
+
+# Deep-triage the skipped-target queue under an explicit budget
+dumpex sample.dmp --hunt all --triage-skipped
 ```
 
 ### Focused report

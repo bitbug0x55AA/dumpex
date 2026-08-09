@@ -26,7 +26,7 @@ stomping" result actually checked anything.
 
 ## The four fields that matter
 
-`--json` wraps every hunter's result in dumpex's shared v2.9
+`--json` wraps every hunter's result in dumpex's shared v2.10
 envelope: `result.kind` is `"hunt"`, and each hunter you selected gets
 its own entry in `result.data.records[]` (`hunter` names which TTP —
 `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, or
@@ -122,16 +122,18 @@ Each entry:
   file at all (`targets[].file_offset` not null). A `not_captured`
   target is not thereby more suspicious; it means the next step is
   recollection, not extraction.
-- `triage` records what analysis actually ran — in this schema version
-  always `{"mode": "metadata", "status": "completed", "bytes_examined":
-  0, "region_fully_examined": false}`, the schema-enforced proof that
-  this default pass never reads region content.
+- `triage` records what analysis actually ran — by default (no
+  `--triage-skipped`) always `{"mode": "metadata", "status": "completed",
+  "bytes_examined": 0, "region_fully_examined": false,
+  "content_reason_codes": [], "findings": [], "finding_count": 0,
+  "findings_truncated": false}`, the schema-enforced proof that this
+  default pass never reads region content.
 - `recommended_actions` are structured action objects
   (`inspect_metadata`/`extract_captured_range`/`targeted_hunter_rescan`/
-  `recollect_dump`/`preserve_artifact`), not prose or a shell command —
-  a renderer may turn `targeted_hunter_rescan.hunters` + the target's own
-  `base_address`/`size` into a real `--extract`/`--strings` invocation
-  itself.
+  `recollect_dump`/`preserve_artifact`/`chunked_analysis`), not prose or a
+  shell command — a renderer may turn `targeted_hunter_rescan.hunters` +
+  the target's own `base_address`/`size` into a real
+  `--extract`/`--strings` invocation itself.
 - `coverage_effect` is always `"original_hunter_gap_not_resolved"`: this
   queue is advisory. It never upgrades a hunter's own `score`,
   `verdict_level`, or `coverage.status` — only a real rerun of the
@@ -142,6 +144,80 @@ in the `HUNT SUMMARY` card (priority-ordered, capped with an omission
 notice pointing at `--json`); `--verbose` only expands how much of each
 entry's own already-computed detail is shown — it never changes which
 entries exist, their order, or anything in `--json`.
+
+### Reading a deep-triaged entry (`--triage-skipped`)
+
+`--hunt all --triage-skipped` performs a REAL, budgeted content read of
+each queue entry above — reusing `--report`'s own triage collector under
+an explicit per-target/whole-run/target-count budget, never `--report`'s
+own unbounded (up to 256 MiB per region) default. This is genuinely more
+expensive than the default pass, which is why it's opt-in: expect real,
+bounded additional I/O time proportional to the queue.
+
+`triage.mode` becomes `"deep"` and `triage.status` tells you what
+actually happened:
+
+| `status` | Meaning |
+|---|---|
+| `completed` | The whole target was read (`region_fully_examined: true`). |
+| `partial` | Fewer bytes than requested were actually in the dump — a real evidence gap, not a policy choice. |
+| `clamped` | Deep triage's own budget (per-target cap, whole-run cap, or target-count cutoff) intentionally stopped the read short. |
+| `unreadable` | The read itself failed. |
+| `not_captured` | Same meaning as the metadata pass — the bytes were never captured, so nothing was attempted. |
+| `budget_deferred` | The whole-run budget or target-count cutoff was already exhausted by higher-priority targets before this one was reached. |
+
+`triage.content_reason_codes` is the structured SUMMARY of what the read
+itself found in the examined bytes: `IOC_PATTERN_STRING_MATCH`,
+`NETWORK_PATTERN_STRING_MATCH`, `MZ_HEADER_DETECTED` (an MZ header at the
+read's own start), and/or `INJECTED_PE_HEADER` (that MZ header CONFIRMED
+to sit in memory not backed by any known module — a strictly stronger
+fact; if module classification itself is unavailable, e.g. no
+`ModuleListStream`, only `MZ_HEADER_DETECTED` is reachable, and it still
+surfaces rather than being silently dropped). **Read
+`content_reason_codes: []` as "no generic indicators in the examined
+bytes" — never as "clean."** A generic string/header scan is not the
+hunter-specific logic (pipe's C2 pattern matching, YARA's rule set,
+obfuscation's decode attempts, ...) that originally skipped this target;
+it cannot substitute for a real targeted rescan of that hunter, and
+`coverage_effect` stays `"original_hunter_gap_not_resolved"` regardless
+of what the deep read found.
+
+`triage.findings` is the actual EVIDENCE behind that summary — up to 20
+entries, each either an `ioc_string` (with `offset`/`encoding`/`value`,
+the matched text truncated to 256 characters/`is_network_pattern`) or an
+`mz_header` (with `module_context`). Treat a populated `findings` (or
+`content_reason_codes`) as a lead to pull on with `--report --report-addr
+<base_address>` (for the full triage card, complete string text, and
+hexdump context), not as a finished disposition.
+
+When a target produces more than 20 findings, the array does not simply
+stop at whichever 20 came first in memory offset order — it fills
+representative-first: the MZ finding (if any) first, then one
+network-pattern IOC finding, then one plain IOC finding, then the rest in
+offset order up to the cap. That way a code in `content_reason_codes`
+(e.g. `NETWORK_PATTERN_STRING_MATCH`) is never left with zero backing
+evidence just because 20+ plain IOC hits happened to come first.
+`triage.finding_count` is the TRUE total the read produced (before that
+cap); `triage.findings_truncated` is `true` exactly when `finding_count`
+is larger than `findings.length` — check it before assuming `findings`
+is the complete picture for a string-dense target.
+
+A target whose `status` is anything other than `completed` also gets a
+`chunked_analysis` entry appended to `recommended_actions` — the queue's
+own way of saying "this needs a follow-up read beyond what the budgeted
+pass covered."
+
+The console mirrors `triage.findings` too, not just the reason-code
+summary: each entry with a real signal prints up to 3 representative
+findings by default (the actual IOC value/address/encoding, or the MZ
+finding's own `module_context`) — `MZ_HEADER_DETECTED` and
+`INJECTED_PE_HEADER` each get their own distinct wording, never the raw
+enum name. `--verbose` expands that preview to every retained finding
+(still at most 20). If the read actually produced more findings than
+the JSON's 20-entry cap kept, a `Showing 20 of 47 deep-triage findings.`
+line appears either way — that's a data-level truncation
+(`finding_count` vs. `len(findings)`), independent of `--verbose`'s own
+console-only preview cap.
 
 ## CORRELATED REGIONS (console and TXT output only)
 
@@ -259,7 +335,7 @@ first:
 - `severity` — `info` / `low` / `medium` / `high` / `critical`, always
   derived from `tag` + `confidence` — a producer cannot set it
   independently, and the schema itself pins the exact mapping (see
-  `dumpex-output-v2.9.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
+  `dumpex-output-v2.10.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
   `observation` is `info`; every `lead` tops out at `medium`; only a
   `detection` at `confidence: high` reaches `critical`.
 - `technique_ids` — MITRE ATT&CK technique/sub-technique IDs (e.g.
@@ -449,8 +525,8 @@ string in its own place instead.
 
 ### Sanitized `--json` examples
 
-Both examples below are complete, valid v2.9 documents — each validates
-as-is against `dumpex-output-v2.9.schema.json` (see
+Both examples below are complete, valid v2.10 documents — each validates
+as-is against `dumpex-output-v2.10.schema.json` (see
 `tests/integration/test_soc_quickstart_json_examples.py`, which extracts
 these exact fenced blocks and validates them in CI, so this doc can't
 silently drift out of sync with the schema again). A real `--hunt all`
@@ -461,10 +537,10 @@ enough that showing it here would bury the point, so instead these are
 two genuine single-hunter runs (`--hunt pipe`, `--hunt stomping`), each
 with `summary.hunter_count: 1` and one matching record. Every command's
 `meta.execution.options` always carries `hunt`/`yara_dir`/`ref_dir`/
-`rules_file` together, regardless of which hunter was selected (see
-`_build_options()` in `dumpex/cli.py`) — both examples show all four.
-`summary.investigation_actions` (the default, metadata-only skipped-target
-queue — see [Skipped-target investigation queue](#skipped-target-investigation-queue-hunt-all)
+`rules_file`/`triage_skipped` together, regardless of which hunter was
+selected (see `_build_options()` in `dumpex/cli.py`) — both examples show
+all five. `summary.investigation_actions` (the default, metadata-only
+skipped-target queue — see [Skipped-target investigation queue](#skipped-target-investigation-queue-hunt-all)
 below) is only ever populated for `--hunt all`; both single-hunter
 examples below correctly show it as `[]`.
 
@@ -473,14 +549,14 @@ examples below correctly show it as `[]`.
 ```json
 {
   "meta": {
-    "schema_version": "2.9",
+    "schema_version": "2.10",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:12:01Z",
       "finished_at": "2026-03-14T09:12:02Z",
       "duration_seconds": 1.114,
       "command": "hunt_pipe",
-      "options": { "verbose": false, "hunt": "pipe", "yara_dir": null, "ref_dir": null, "rules_file": null },
+      "options": { "verbose": false, "hunt": "pipe", "yara_dir": null, "ref_dir": null, "rules_file": null, "triage_skipped": false },
       "case_id": "CASE-1234",
       "analyst": "your-handle"
     },
@@ -572,14 +648,14 @@ hunter's own `coverage.status`) is what makes this run exit `0` — see
 ```json
 {
   "meta": {
-    "schema_version": "2.9",
+    "schema_version": "2.10",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:14:01Z",
       "finished_at": "2026-03-14T09:14:02Z",
       "duration_seconds": 0.842,
       "command": "hunt_stomping",
-      "options": { "verbose": false, "hunt": "stomping", "yara_dir": null, "ref_dir": null, "rules_file": null },
+      "options": { "verbose": false, "hunt": "stomping", "yara_dir": null, "ref_dir": null, "rules_file": null, "triage_skipped": false },
       "case_id": "CASE-1234",
       "analyst": "your-handle"
     },

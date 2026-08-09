@@ -100,7 +100,7 @@ def main() -> None:
                          "dumpex-output-v2.3.schema.json", "dumpex-output-v2.4.schema.json",
                          "dumpex-output-v2.5.schema.json", "dumpex-output-v2.6.schema.json",
                          "dumpex-output-v2.7.schema.json", "dumpex-output-v2.8.schema.json",
-                         "dumpex-output-v2.9.schema.json")
+                         "dumpex-output-v2.9.schema.json", "dumpex-output-v2.10.schema.json")
     for schema_filename in _schema_filenames:
         schema_path = importlib.resources.files("dumpex.schemas").joinpath(schema_filename)
         if not schema_path.is_file():

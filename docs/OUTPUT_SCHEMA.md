@@ -24,11 +24,12 @@ promise. Automation must use `--json`, never scrape `--txt`.
 
 Every command now shares a single JSON contract. `--hunt` was the last
 holdout on the older v1.1 contract; it has since migrated onto v2, and
-the whole v2 envelope has since moved onto v2.9:
+the whole v2 envelope has since moved onto v2.10:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.9 (current) | [`dumpex-output-v2.9.schema.json`](../dumpex/schemas/dumpex-output-v2.9.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.10 (current) | [`dumpex-output-v2.10.schema.json`](../dumpex/schemas/dumpex-output-v2.10.schema.json) |
+| — (historical) | v2.9 | [`dumpex-output-v2.9.schema.json`](../dumpex/schemas/dumpex-output-v2.9.schema.json) — frozen, kept only to validate output produced before `schema_version 2.10`; no command emits this anymore |
 | — (historical) | v2.8 | [`dumpex-output-v2.8.schema.json`](../dumpex/schemas/dumpex-output-v2.8.schema.json) — frozen, kept only to validate output produced before `schema_version 2.9`; no command emits this anymore |
 | — (historical) | v2.7 | [`dumpex-output-v2.7.schema.json`](../dumpex/schemas/dumpex-output-v2.7.schema.json) — frozen, kept only to validate output produced before `schema_version 2.8`; no command emits this anymore |
 | — (historical) | v2.6 | [`dumpex-output-v2.6.schema.json`](../dumpex/schemas/dumpex-output-v2.6.schema.json) — frozen, kept only to validate output produced before `schema_version 2.7`; no command emits this anymore |
@@ -75,7 +76,16 @@ closed `required` list, so this too is a visible, validator-enforced
 metadata-only skipped-target investigation queue (see "Hunt investigation
 actions" below — `huntSummary` is `additionalProperties: false` with a
 closed `required` list, the same reason v2.7→v2.8's `coverageLimitation`
-change forced a bump)
+change forced a bump), then from `"2.9"` to `"2.10"` when the shared
+`triageInfo` $def (nested inside each `investigation_actions[]` entry)
+gained a required `content_reason_codes` array — the opt-in `--hunt all
+--triage-skipped` budgeted deep-content triage pass's own structured
+record of what it actually found in a target's examined bytes (an
+IOC-pattern string match, a network-pattern string match, or an
+injected-PE MZ header — see "Hunt investigation actions" below;
+`triageInfo` is `additionalProperties: false` with a closed `required`
+list, the same reason every prior closed-object addition on this list
+forced a bump)
 (see "v2 structured output" below) — a
 new value on an existing closed enum, a new field on an already-closed
 (`additionalProperties: false`) object, or the removal of a field a
@@ -84,23 +94,24 @@ enforced that field's presence), always bumps the version per this
 document's own versioning policy, even though an already-migrated
 command's own output is otherwise unaffected (the `"report"`/`"hunt"`/
 `finding`-extension/cs-beacon-`raw`-removal/cs-beacon-field-rekey/
-coverage-`targets`/hunt-`investigation_actions` changes
+coverage-`targets`/hunt-`investigation_actions`/triage-`content_reason_codes`
+changes
 specifically must NOT be folded into `dumpex-output-v2.2.schema.json`/
 `v2.3.schema.json`/`v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/
-`v2.7.schema.json`/`v2.8.schema.json`
+`v2.7.schema.json`/`v2.8.schema.json`/`v2.9.schema.json`
 in place: those files were already shipped/used by earlier-migrated
 commands' output before each change existed, so they stay byte-frozen —
 each change gets its own new schema_version instead). `dumpex-output-
 v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`/
 `v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/`v2.7.schema.json`/
-`v2.8.schema.json`
+`v2.8.schema.json`/`v2.9.schema.json`
 stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`) for validating output captured
+`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`/`v2.9`) for validating output captured
 before each respective
 change; none is deleted or overwritten, following the same precedent
 v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
-v2.9 contract.
+v2.10 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -238,7 +249,7 @@ basenames.
 ## Hunt result semantics (v1.1 field names — historical)
 
 Each hunter reported its findings and decision fields inside the v1.1
-`hunt` object using the field names below. Under the current v2.9
+`hunt` object using the field names below. Under the current v2.10
 contract these same concepts live on `HunterRecord` — see "Hunt records"
 below for the `status`/`coverage.status`/`verdict_level`/`confidence`
 mapping `--hunt` now uses. The important decision fields were:
@@ -275,7 +286,7 @@ still validates each hunter's internal result dict (all seven hunters, both
 typical and edge-case verdicts) against this file on every test run,
 including the negative cases it must reject — this is legacy-compatibility
 coverage for the v1.1 shape itself, independent of the CLI's own
-`--hunt --json` output, which is now v2.9 (see "Hunt records" below).
+`--hunt --json` output, which is now v2.10 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -300,14 +311,14 @@ tool validates its own output — only the test suite and external `--json`
 consumers do), so none of them are collected into the frozen executable.
 They are instead uploaded as separate `dumpex-output-v*.schema.json`
 files alongside `dumpex.exe` in the release ZIP — every version currently
-packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`), the same
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`, `v2.10`), the same
 set `pip install dumpex` already ships (see "Reproducing a run" below for
 how an installed package reaches these via `importlib.resources`) — so an
 EXE-only install (no `pip install dumpex`, no source checkout) still has
 a way to get the schema for whatever output it's holding. Current CLI
 output (from any command, including `--hunt`) always validates against
-`dumpex-output-v2.9.schema.json`, the current contract — this section's
-own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.8` are
+`dumpex-output-v2.10.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.9` are
 shipped only to validate output produced by an older dumpex version, not
 anything a current install can produce.
 
@@ -368,7 +379,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.9",
+    "schema_version": "2.10",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -1023,6 +1034,10 @@ shipped/installable for validating output produced before this change.
 `schema_version 2.9` adds `investigation_actions` to `huntSummary`
 (`result.summary` when `kind == "hunt"`) — `--hunt all`'s automatically
 built, deduplicated, priority-ordered skipped-target investigation queue.
+`schema_version 2.10` (issue #19 Phase 2) then adds `content_reason_codes`
+to each entry's own `triage` sub-object — the opt-in `--triage-skipped`
+budgeted deep-content triage pass's structured record of what it actually
+found; see the `triage` bullet below.
 It is derived entirely from data every hunter already collected (each
 `SCAN_REGION_OVERSIZED_SKIPPED` limitation's own `targets`, see "Coverage
 limitations and skipped scan targets" above, plus the cross-hunter region
@@ -1057,7 +1072,8 @@ deduplicates on the physical target's own `(kind, base_address, size)`:
       "priority_reason_codes": ["PRIVATE_EXECUTABLE_MEMORY", "RWX_PROTECTION", "MULTIPLE_SCOPES_SKIPPED"],
       "evidence_availability": "captured",
       "triage": { "mode": "metadata", "status": "completed", "bytes_examined": 0,
-                  "region_fully_examined": false },
+                  "region_fully_examined": false, "content_reason_codes": [], "findings": [],
+                  "finding_count": 0, "findings_truncated": false },
       "recommended_actions": [
         { "type": "inspect_metadata" },
         { "type": "extract_captured_range" },
@@ -1068,6 +1084,31 @@ deduplicates on the physical target's own `(kind, base_address, size)`:
     }
   ]
 }
+```
+
+With `--triage-skipped` (schema_version 2.10 or later), the same entry's
+`triage` reflects a real, budgeted content read instead:
+
+```jsonc
+"triage": {
+  "mode": "deep", "status": "clamped", "bytes_examined": 4194304,
+  "region_fully_examined": false,
+  "content_reason_codes": ["IOC_PATTERN_STRING_MATCH", "NETWORK_PATTERN_STRING_MATCH"],
+  "findings": [
+    { "type": "ioc_string", "address": "0x00007ff000001230", "offset": 560,
+      "encoding": "ASCII", "value": "http://evil.example/beacon",
+      "is_network_pattern": true, "module_context": null }
+    /* ... up to 20 total ... */
+  ],
+  "finding_count": 37, "findings_truncated": true
+},
+"recommended_actions": [
+  { "type": "inspect_metadata" },
+  { "type": "extract_captured_range" },
+  { "type": "targeted_hunter_rescan", "hunters": ["pipe", "obfuscation"] },
+  { "type": "preserve_artifact" },
+  { "type": "chunked_analysis" }
+]
 ```
 
 - `target` is the same `scanTarget` `$def` `coverageLimitation.targets[]`
@@ -1091,35 +1132,95 @@ deduplicates on the physical target's own `(kind, base_address, size)`:
   extraction won't work and recollection is the next step, never that the
   target is more malicious (an explicit design goal: this queue must
   never conflate "we don't have the bytes" with "this looks worse").
-- `triage` records what analysis actually produced this entry. This
-  schema version's own `--hunt all` producer always emits `{"mode":
+- `triage` records what analysis actually produced this entry.
+  **Without `--triage-skipped`**, `--hunt all` always emits `{"mode":
   "metadata", "status": "completed", "bytes_examined": 0,
-  "region_fully_examined": false}` — the schema-enforced witness that the
-  default pass performs no region-content read whose cost scales with a
-  skipped target's size. `mode` (`"metadata"`/`"deep"`) and `status`
-  (`"completed"`/`"partial"`/`"clamped"`/`"unreadable"`/`"not_captured"`/
-  `"budget_deferred"`) are already the full Phase-2-compatible vocabulary
-  in this schema version, so a future opt-in, budgeted deep-content
-  triage (reusing `--report`'s own triage collector under an explicit
-  per-target/whole-run byte budget — tracked as a separate,
-  not-yet-implemented follow-up) can populate `mode: "deep"` with a real
-  `bytes_examined`/non-`"completed"` `status` without another schema
-  bump; nothing in this schema version's own producers ever emits
-  `mode: "deep"`.
+  "region_fully_examined": false, "content_reason_codes": [], "findings":
+  [], "finding_count": 0, "findings_truncated": false}` — the
+  schema-enforced witness that the default pass performs no region-content
+  read whose cost scales with a skipped target's size.
+  **With `--triage-skipped`** (issue #19 Phase 2, see
+  `dumpex.hunt._deep_triage.run_deep_triage()`), `mode` is `"deep"` and
+  `status` reflects the real outcome of a budgeted content read reusing
+  `--report`'s own low-level content-scan primitive
+  (`dumpex.commands.report._scan_content_range()`), reading from the
+  target's own recorded address regardless of its `kind` (correctly
+  handling a `memory_segment` target with no MemoryInfoListStream entry,
+  and a `memory_region` target that only covers part of a larger
+  MemoryInfo region): `"completed"` (the whole target was examined —
+  `region_fully_examined: true`, `bytes_examined >= 1`), `"partial"` (the
+  dump had fewer bytes than requested — a real evidence gap,
+  checked BEFORE the clamp check below so a genuine short read is never
+  misreported as a mere budget choice), `"clamped"` (deep triage's own
+  per-target/whole-run/target-count budget intentionally capped the read
+  before reaching the whole target, and the dump had at least that much),
+  `"unreadable"` (the read itself failed), or `"not_captured"` (same
+  meaning as the metadata pass — the bytes were never captured, so
+  nothing was attempted). `bytes_examined` is real for a deep-triage
+  entry (`>= 1` for completed/partial/clamped, always `0` otherwise), and
+  `region_fully_examined` is `true` if and only if `status ==
+  "completed"`.
+
+  `content_reason_codes` is a closed, structured SUMMARY of what the deep
+  read itself found in the examined bytes — `IOC_PATTERN_STRING_MATCH`,
+  `NETWORK_PATTERN_STRING_MATCH`, `MZ_HEADER_DETECTED` (an MZ header at
+  the read's own start), and/or `INJECTED_PE_HEADER` (that MZ header
+  CONFIRMED to sit in unregistered memory — a strictly stronger fact than
+  `MZ_HEADER_DETECTED`; when module classification itself is unavailable,
+  e.g. no `ModuleListStream`, only the weaker `MZ_HEADER_DETECTED` is
+  reachable, and it is never silently dropped just because confirmation
+  wasn't possible) — always `[]` for the metadata pass, and always `[]`
+  for any deep-triage outcome that never completed a read
+  (`not_captured`/`budget_deferred`/`unreadable`); `findings`/
+  `finding_count`/`findings_truncated` are `[]`/`0`/`false` in exactly
+  those same cases.
+
+  `findings` is the bounded, structured EVIDENCE behind that summary — at
+  most 20 entries (`ioc_string` or `mz_header`, see the `contentFinding`
+  $def), sharing the exact same "only populated for a real-read status"
+  rule as `content_reason_codes`. An `ioc_string` finding carries
+  `offset`/`encoding`/`value` (truncated to 256 characters — a bounded
+  lead, not the full match) /`is_network_pattern`; an `mz_header` finding
+  carries only `module_context`. An analyst who needs the complete string
+  text, hexdump context, or an extractable artifact still runs `--report
+  --report-addr <target.base_address>` directly — `findings` is a lead,
+  never a substitute for that.
+
+  When more than 20 findings exist, the array is filled
+  REPRESENTATIVE-FIRST rather than by a bare offset-order cutoff: an
+  `mz_header` finding (if any) always appears first, then one
+  network-pattern `ioc_string` finding (if any), then one plain
+  `ioc_string` finding (if any), and only then the remaining `ioc_string`
+  findings in offset order up to the cap — so a reason code in
+  `content_reason_codes` is never left with zero backing evidence purely
+  because 20+ plain IOC hits filled every slot first. `finding_count` is
+  the TOTAL number of findings the read actually produced, before that
+  cap; `findings_truncated` is `true` exactly when `finding_count` exceeds
+  `findings.length`, so a consumer can tell "3 findings, all shown" apart
+  from "47 findings, a bounded sample of 20 shown."
+
+  **A deep-triage result is never a verdict**: a `"completed"` read with
+  `[]` `content_reason_codes`/`findings` means "no generic indicators in
+  examined bytes," never "clean" — the generic content scan cannot
+  substitute for the specific hunter logic that originally skipped the
+  target, and `coverage_effect` (below) stays unresolved regardless of
+  what the deep read found.
 - `recommended_actions` are structured action objects (`type`, plus
   `hunters` on `targeted_hunter_rescan` only) — never free prose or a raw
   shell command string — from a closed vocabulary: `inspect_metadata`,
   `extract_captured_range` (only when `evidence_availability ==
   "captured"`), `targeted_hunter_rescan` (always; `hunters` is every
   hunter in `skipped_by`, `HUNTERS`' own fixed order), `recollect_dump`
-  (only when `evidence_availability == "not_captured"`), and
-  `preserve_artifact` (only when `priority == "high"` AND
-  `evidence_availability == "captured"` — there is nothing local to
-  preserve for bytes that were never captured in this dump; the schema
-  itself rejects a `preserve_artifact` entry on any `investigation_actions[]`
-  item whose `evidence_availability` is `"not_captured"`).
-  `chunked_analysis` is reserved for the future deep-triage follow-up
-  above and is never emitted by this schema version.
+  (only when `evidence_availability == "not_captured"`), `preserve_artifact`
+  (only when `priority == "high"` AND `evidence_availability ==
+  "captured"` — there is nothing local to preserve for bytes that were
+  never captured in this dump; the schema itself rejects a
+  `preserve_artifact` entry on any `investigation_actions[]` item whose
+  `evidence_availability` is `"not_captured"`), and `chunked_analysis`
+  (only ever emitted by a `--triage-skipped` run, appended whenever that
+  entry's own deep-triage `status` is `"partial"`/`"clamped"`/
+  `"budget_deferred"`/`"unreadable"` — i.e. the target could not be fully
+  examined within budget).
 - `coverage_effect` is always `"original_hunter_gap_not_resolved"` in
   this schema version: this queue is advisory only. It never changes any
   hunter's own `score`/`verdict_level`/`coverage.status`, the document-
@@ -1132,16 +1233,34 @@ The console mirrors this as a `SKIPPED TARGET ACTIONS` section in
 `--hunt all`'s `HUNT SUMMARY` card (priority-ordered, bounded with an
 omission notice pointing at `--json` for the rest — the same convention
 `CORRELATED REGIONS` and the oversized-`targets` preview above both use).
-`--verbose` only changes how much of each already-computed entry's own
-`skipped_by`/reason/action lists — and how many entries — the console
-shows; it never changes `investigation_actions` itself, its order, or any
-other structured field, preserving the existing rule that console
-verbosity can never change structured output (see "CORRELATED REGIONS" in
+With `--triage-skipped`, each entry also gets a `Deep triage: ...` line
+(status, bytes examined, and either the translated `content_reason_codes`
+or the literal wording "No generic indicators in examined bytes" — never
+"clean"), and a bounded `DEEP TRIAGE NOTES` block follows the section
+with the same budget-exhausted/read-failed/summary messages that also
+appear in `diagnostics.warnings[]`. When `content_reason_codes` is
+non-empty, the entry also renders a bounded preview straight from
+`triage.findings` itself (the actual IOC `value`/`address`/`encoding`, or
+an `mz_header` finding's own `module_context`) — up to 3 entries by
+default, every retained entry (still at most 20) with `--verbose`; a
+`Showing 20 of 47 deep-triage findings.` line appears whenever
+`triage.findings_truncated` is `true`, regardless of `--verbose`, since
+that reflects a data-level cap (`MAX_FINDINGS_PER_TARGET`), not a
+console-only one. `MZ_HEADER_DETECTED` and `INJECTED_PE_HEADER` each
+render under their own distinct label — the console never prints a raw
+enum name for either. `--verbose` only changes how much of each
+already-computed entry's own `skipped_by`/reason/action/findings lists —
+and how many entries — the console shows; it never changes
+`investigation_actions` itself, its order, or any other structured
+field, preserving the existing rule that console verbosity can never
+change structured output (see "CORRELATED REGIONS" in
 [SOC_QUICKSTART.md](SOC_QUICKSTART.md#correlated-regions-console-and-txt-output-only)
 for the precedent this follows).
 
-`dumpex-output-v2.8.schema.json` stays byte-frozen and remains
-shipped/installable for validating output produced before this change.
+`dumpex-output-v2.8.schema.json` and `dumpex-output-v2.9.schema.json`
+stay byte-frozen and remain shipped/installable for validating output
+produced before, respectively, the `investigation_actions` and
+`content_reason_codes` additions.
 
 ## Reproducing a run
 

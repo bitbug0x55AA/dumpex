@@ -3,6 +3,7 @@ import ntpath
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
 from dumpex.core.memory import (get_modules, get_memory_regions,
@@ -56,10 +57,140 @@ def _module_context_for(mod, modules_available: bool) -> str:
     return MODULE_CONTEXT_UNREGISTERED if modules_available else MODULE_CONTEXT_UNAVAILABLE
 
 
+class ContentScanResult(NamedTuple):
+    """Region-INDEPENDENT content-read result: strings, IOC-pattern hits
+    (with bounded ±128-byte network-pattern context), notable strings, and
+    the MZ-header/injected-PE tri-state. Shared by `_collect_triage_card`'s
+    own Section 4 (called with a resolved MemoryInfo region's own
+    `BaseAddress`) and `dumpex.hunt._deep_triage` (called with a
+    `ScanTarget`'s own `base_address` directly -- a `ScanTargetKind.
+    MEMORY_SEGMENT` target legitimately has NO corresponding MemoryInfo
+    entry at all, see `dumpex.output.coverage.ScanTarget`'s own docstring,
+    and even a `MEMORY_REGION` target must be read from its OWN
+    base_address, not a resolved region's `BaseAddress` that could differ
+    if the target only coincides with part of a larger region). Extracted
+    from what used to be `_collect_triage_card`'s own inline Section 4 so
+    --report and deep triage can never independently drift on what counts
+    as an IOC pattern, a network pattern, or an injected PE header.
+
+    `string_scan` carries `requested_bytes`/`bytes_read`/`truncated`/
+    `total`/`ascii_count`/`utf16_count` only -- deliberately NOT `clamped`
+    (whether the caller's own `requested_size` was already smaller than
+    some larger whole it could have asked for, e.g. --report's own
+    `region.RegionSize`), since that's a REGION-relative fact this
+    region-independent function has no basis to compute; each caller adds
+    its own `clamped` key afterward from whatever it knows `requested_size`
+    was capped against.
+
+    Never raises for a failed READ -- captured in `.string_scan_error`
+    instead, exactly as `_collect_triage_card`'s own former inline
+    `try/except Exception` did. That catch is now scoped to ONLY the
+    `read_region()` call itself, deliberately -- an exception from the
+    analysis logic that runs on the bytes it returns (string extraction,
+    IOC/MZ pattern matching, `ContentScanResult` construction) is a real
+    programming bug, not an evidence gap, and is allowed to propagate so
+    it surfaces as the test/CLI failure it actually is rather than a
+    misleading `string_scan_error` that reads exactly like an ordinary
+    unreadable region (see issue #19 Phase 2 review, item 6). Callers that
+    want to distinguish "the read failed" from "something else broke"
+    should check `.string_scan_error is not None` rather than wrapping
+    this function in their own try/except (see
+    dumpex.hunt._deep_triage._deep_read_triage()'s own docstring for why
+    it deliberately does NOT catch broadly around this call)."""
+    mz_header_detected: "bool | None"
+    has_injected_pe: "bool | None"
+    ioc_strings: tuple
+    notable_strings: tuple
+    string_scan: "dict | None"
+    string_scan_error: "str | None"
+
+
+def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: int,
+                         module_context: str) -> ContentScanResult:
+    """The read + string/IOC/MZ analysis itself -- see `ContentScanResult`'s
+    own docstring for why this takes a bare `base_address`/`requested_size`
+    rather than a resolved MemoryInfo region. `module_context` (one of
+    MODULE_CONTEXT_RESOLVED/UNREGISTERED/UNAVAILABLE) is supplied by the
+    caller -- both callers already have to resolve it their own way
+    (--report via the region's own module ownership, deep triage via
+    `addr_to_module(target.base_address, modules)` directly) before they
+    can decide `has_injected_pe`, so it is not re-derived here."""
+    # Scoped to ONLY the read itself -- see this function's own docstring
+    # for why the analysis below must NOT be inside this try/except.
+    try:
+        data = read_region(mf, base_address, requested_size)
+    except Exception as e:
+        return ContentScanResult(
+            mz_header_detected=None, has_injected_pe=None,
+            ioc_strings=(), notable_strings=(),
+            string_scan=None, string_scan_error=str(e))
+
+    # Fewer than 2 bytes is not enough to rule out "MZ" -- must stay
+    # unconfirmed (None), not silently read as a confirmed non-match.
+    mz_header_detected = (data[:2] == b'MZ') if len(data) >= 2 else None
+    strings = _extract_strings_from_data(data, min_len=min_len)
+
+    ioc_hits = [(off, enc, s) for off, enc, s in strings
+                if IOC_PATTERNS.search(s)]
+    net_offs = {off for off, enc, s in ioc_hits if NET_PATTERNS.search(s)}
+    notable  = [(off, enc, s) for off, enc, s in strings
+                if not IOC_PATTERNS.search(s) and len(s) > 20][:20]
+
+    ioc_strings = []
+    for off, enc, s in ioc_hits:
+        abs_addr = base_address + off
+        is_net = off in net_offs
+        context_hex = context_base_address = context_hit_offset = None
+        if is_net:
+            ctx_start = max(0, off - 128)
+            ctx_end   = min(len(data), off + 128)
+            chunk     = data[ctx_start:ctx_end]
+            context_hex = chunk.hex()
+            context_base_address = hex_address(base_address + ctx_start)
+            context_hit_offset = off - ctx_start
+        ioc_strings.append(ReportIocString(
+            offset=off, address=hex_address(abs_addr), encoding=enc, text=s,
+            is_network_pattern=is_net, context_hex=context_hex,
+            context_base_address=context_base_address,
+            context_hit_offset=context_hit_offset))
+
+    notable_strings = []
+    for off, enc, s in notable:
+        abs_addr = base_address + off
+        notable_strings.append(StringRecord(
+            offset=off, address=hex_address(abs_addr), encoding=enc, text=s,
+            matched_grep=None))
+
+    n_ascii = sum(1 for _, e, _ in strings if e == 'ASCII')
+    n_utf16 = sum(1 for _, e, _ in strings if e == 'UTF16')
+    string_scan = {
+        "requested_bytes": requested_size, "bytes_read": len(data),
+        "truncated": len(data) < requested_size,
+        "total": len(strings), "ascii_count": n_ascii, "utf16_count": n_utf16,
+    }
+
+    has_injected_pe = None
+    if mz_header_detected is False:
+        has_injected_pe = False
+    elif mz_header_detected is True:
+        if module_context == MODULE_CONTEXT_UNREGISTERED:
+            has_injected_pe = True
+        elif module_context == MODULE_CONTEXT_RESOLVED:
+            has_injected_pe = False
+        else:   # unavailable -- found something suspicious-shaped, can't confirm
+            has_injected_pe = None
+
+    return ContentScanResult(
+        mz_header_detected=mz_header_detected, has_injected_pe=has_injected_pe,
+        ioc_strings=tuple(ioc_strings), notable_strings=tuple(notable_strings),
+        string_scan=string_scan, string_scan_error=None)
+
+
 def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len: int,
                           extract_to: "str | None", force: bool, suspicious_prots,
                           modules: list, regions: list, infos: list, tid_map: dict,
-                          modules_available: bool, string_hit_tuple=None):
+                          modules_available: bool, string_hit_tuple=None,
+                          max_region_read: "int | None" = None):
     """Sections 1-4 + verdict + optional extract from today's single-shot
     cmd_report, unchanged in logic (including the exact MECE
     reconciliation rule for tid_unbacked_detail) -- just building a
@@ -70,7 +201,21 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     carried through only so the record can reproduce the exact matched
     location the string search itself found (see TriageCardRecord.
     string_hit's own docstring for why this isn't re-derived from
-    notable_strings)."""
+    notable_strings).
+
+    `max_region_read` caps ONLY Section 4's string/IOC scan read
+    (`read_size` below) -- `None` (the default) resolves to the CURRENT
+    value of the module-level MAX_REGION_READ at call time (not a value
+    bound once at import time), so every existing --report caller
+    (collect_report()) is byte-for-byte unchanged, including tests that
+    monkeypatch MAX_REGION_READ itself. dumpex.hunt._deep_triage's own
+    opt-in `--triage-skipped`
+    budgeted deep-content triage (issue #19 Phase 2) is the one caller
+    that passes a smaller, explicit per-target budget here instead of
+    silently reusing --report's own 256 MiB default across every skipped
+    target -- see that module's own docstring. The optional `--output`
+    extract branch below is untouched (still reads up to MAX_REGION_READ):
+    it is unreachable from deep triage, which never passes `extract_to`."""
     tid_int  = tid
     addr_int = addr
 
@@ -219,79 +364,33 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     #      injected-PE tri-state from this same content read -- see
     #      Section 2's own note on why there is no separate header peek) ──
     if region is not None:
-        read_size = min(region.RegionSize, MAX_REGION_READ)
-        mz_header_detected = None
-        has_injected_pe = None
-        try:
-            data    = read_region(mf, region.BaseAddress, read_size)
-            # Fewer than 2 bytes is not enough to rule out "MZ" -- must
-            # stay unconfirmed (None), not silently read as a confirmed
-            # non-match the way a plain data[:2] == b'MZ' comparison would
-            # (b'M'[:2] == b'MZ' is False, not "unknown").
-            mz_header_detected = (data[:2] == b'MZ') if len(data) >= 2 else None
-            strings = _extract_strings_from_data(data, min_len=min_len)
-
-            ioc_hits = [(off, enc, s) for off, enc, s in strings
-                        if IOC_PATTERNS.search(s)]
-            net_offs = {off for off, enc, s in ioc_hits if NET_PATTERNS.search(s)}
-            notable  = [(off, enc, s) for off, enc, s in strings
-                        if not IOC_PATTERNS.search(s) and len(s) > 20][:20]
-
-            for off, enc, s in ioc_hits:
-                abs_addr = region.BaseAddress + off
-                is_net = off in net_offs
-                # Bounded ±128-byte hexdump context, computed ONCE here
-                # (where the full region `data` is already in scope) so
-                # render_report_console never needs to re-read the dump
-                # to reproduce it -- see ReportIocString's own docstring.
-                context_hex = context_base_address = context_hit_offset = None
-                if is_net:
-                    ctx_start = max(0, off - 128)
-                    ctx_end   = min(len(data), off + 128)
-                    chunk     = data[ctx_start:ctx_end]
-                    context_hex = chunk.hex()
-                    context_base_address = hex_address(region.BaseAddress + ctx_start)
-                    context_hit_offset = off - ctx_start
-                ioc_strings.append(ReportIocString(
-                    offset=off, address=hex_address(abs_addr), encoding=enc, text=s,
-                    is_network_pattern=is_net, context_hex=context_hex,
-                    context_base_address=context_base_address,
-                    context_hit_offset=context_hit_offset))
-            if ioc_hits:
-                dims['ioc_strings'] = (
-                    f"{len(ioc_hits)} IOC pattern(s) matched "
-                    f"({len(net_offs)} network-protocol hit(s))"
-                )
-
-            for off, enc, s in notable:
-                abs_addr = region.BaseAddress + off
-                notable_strings.append(StringRecord(
-                    offset=off, address=hex_address(abs_addr), encoding=enc, text=s,
-                    matched_grep=None))
-
-            n_ascii = sum(1 for _, e, _ in strings if e == 'ASCII')
-            n_utf16 = sum(1 for _, e, _ in strings if e == 'UTF16')
-            string_scan = {
-                "requested_bytes": read_size, "bytes_read": len(data),
-                "clamped": read_size < region.RegionSize,
-                "truncated": len(data) < read_size,
-                "total": len(strings), "ascii_count": n_ascii, "utf16_count": n_utf16,
-            }
-        except Exception as e:
-            string_scan_error = str(e)
-
-        if mz_header_detected is False:
-            has_injected_pe = False
-        elif mz_header_detected is True:
-            if region_module_context == MODULE_CONTEXT_UNREGISTERED:
-                has_injected_pe = True
-                dims['injected_pe'] = (
-                    f"MZ header at 0x{region.BaseAddress:x} in unregistered private memory"
-                )
-            elif region_module_context == MODULE_CONTEXT_RESOLVED:
-                has_injected_pe = False
-            else:   # unavailable -- found something suspicious-shaped, can't confirm
-                has_injected_pe = None
+        effective_max_region_read = MAX_REGION_READ if max_region_read is None else max_region_read
+        read_size = min(region.RegionSize, effective_max_region_read)
+        scan = _scan_content_range(mf, base_address=region.BaseAddress, requested_size=read_size,
+                                    min_len=min_len, module_context=region_module_context)
+        mz_header_detected = scan.mz_header_detected
+        has_injected_pe = scan.has_injected_pe
+        ioc_strings = list(scan.ioc_strings)
+        notable_strings = list(scan.notable_strings)
+        string_scan_error = scan.string_scan_error
+        string_scan = None
+        if scan.string_scan is not None:
+            # `clamped` is region-relative (this SPECIFIC region's own
+            # RegionSize vs. what was actually requested) -- a fact only
+            # this caller can add; _scan_content_range() itself has no
+            # region to compare against (see its own docstring).
+            string_scan = dict(scan.string_scan)
+            string_scan["clamped"] = read_size < region.RegionSize
+        if ioc_strings:
+            net_count = sum(1 for s in ioc_strings if s.is_network_pattern)
+            dims['ioc_strings'] = (
+                f"{len(ioc_strings)} IOC pattern(s) matched "
+                f"({net_count} network-protocol hit(s))"
+            )
+        if has_injected_pe:
+            dims['injected_pe'] = (
+                f"MZ header at 0x{region.BaseAddress:x} in unregistered private memory"
+            )
 
         region_record = ReportRegionInfo(
             base_address=hex_address(region.BaseAddress), size=region.RegionSize,

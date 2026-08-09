@@ -129,7 +129,7 @@ def test_modules_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert isinstance(doc["meta"]["evidence"], list)
         assert doc["result"]["kind"] == "modules"
         assert doc["result"]["data"]["records"][0]["name"] == "ntdll.dll"
@@ -161,7 +161,7 @@ def test_extract_json_produces_v2_shaped_document_with_artifact(monkeypatch, tmp
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert doc["result"]["kind"] == "extract"
         assert doc["result"]["coverage"]["status"] == "complete"
         assert doc["result"]["data"]["records"][0]["mz_header_detected"] is True
@@ -191,7 +191,7 @@ def test_strings_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert doc["result"]["kind"] == "strings"
         assert doc["result"]["coverage"]["status"] == "complete"
         records = doc["result"]["data"]["records"]
@@ -231,7 +231,7 @@ def test_report_json_produces_v2_shaped_document_with_triage_card(monkeypatch, t
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert doc["result"]["kind"] == "report"
         assert doc["result"]["coverage"]["status"] == "complete"
         records = doc["result"]["data"]["records"]
@@ -431,7 +431,7 @@ def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(mon
         assert exc.value.code == cli.EXIT_PARTIAL == 3   # degraded: no thread_info stream
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert doc["result"]["kind"] == "threads"
         assert doc["result"]["execution_status"] == "completed"
         assert doc["result"]["coverage"]["status"] == "partial"
@@ -464,7 +464,7 @@ def test_peb_missing_json_produces_v2_shaped_document_via_command_result_adapter
         assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert doc["result"]["kind"] == "peb"
         assert doc["result"]["execution_status"] == "completed"
         assert doc["result"]["coverage"]["status"] == "not_evaluated"
@@ -634,7 +634,7 @@ def test_diff_json_produces_comparison_document_with_two_evidence_entries(monkey
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
         assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
         assert [e["file_name"] for e in doc["meta"]["evidence"]] == [
@@ -710,12 +710,111 @@ def test_hunt_json_now_produces_v2_4_shaped_document(monkeypatch, tmp_path):
         assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.9"
+        assert doc["meta"]["schema_version"] == "2.10"
         assert "hunt" not in doc
         assert doc["result"]["kind"] == "hunt"
         assert [r["hunter"] for r in doc["result"]["data"]["records"]] == ["injection"]
     finally:
         os.remove(dump_path)
+
+
+def _oversized_skip_mf():
+    """A minimal `--hunt all`-safe FakeMF with exactly one committed
+    MEM_PRIVATE region, real enough for `dumpex.hunt.pipe`'s own memory
+    scan to run and (with PIPE_SCAN_MAX shrunk below the region's size,
+    see the caller) emit a genuine SCAN_REGION_OVERSIZED_SKIPPED
+    limitation -- same fixture shape as tests/hunt/test_pipe_collect.py's
+    own test_oversized_region_is_skipped(), reused here so `--hunt all`
+    end-to-end (all seven hunters, not just pipe, over ONE shared MF) has
+    a real, non-empty investigation_actions queue to run --triage-skipped
+    against. No memory_segments_64/memory_segments stream is set, so the
+    skipped target's own file_offset is None (evidence_availability ==
+    "not_captured") -- dumpex.hunt._deep_triage.run_deep_triage()'s own
+    real-content-read path is exercised directly, with real bytes, in
+    tests/hunt/test_deep_triage.py instead."""
+    region_base = 0x3000000
+    regions = [Region(region_base, region_base, 0x10000, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream([], "handles")
+
+    return MF()
+
+
+def _run_hunt_all_with_oversized_skip(monkeypatch, tmp_path, *, triage_skipped: bool, label: str):
+    import dumpex.hunt.pipe as pipemod
+    import dumpex.hunt.pipe.memory_scan as memory_scan_mod
+    from tests.fixtures.fakes import mem_reader
+
+    monkeypatch.setattr(memory_scan_mod, "PIPE_SCAN_MAX", 0x100)
+    monkeypatch.setattr(pipemod, "read_region", mem_reader({}))
+
+    dump_path = _make_dump_file()
+    try:
+        mf = _oversized_skip_mf()
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / f"{label}.json")
+        argv = ["dumpex", dump_path, "--hunt", "all", "--json", out_json]
+        if triage_skipped:
+            argv.append("--triage-skipped")
+        monkeypatch.setattr(sys, "argv", argv)
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        exit_code = exc.value.code
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        return exit_code, doc
+    finally:
+        os.remove(dump_path)
+
+
+def test_triage_skipped_flag_is_recorded_in_meta_options(monkeypatch, tmp_path):
+    _exit_code, doc = _run_hunt_all_with_oversized_skip(
+        monkeypatch, tmp_path, triage_skipped=True, label="opts")
+    assert doc["meta"]["execution"]["options"]["triage_skipped"] is True
+
+
+def test_triage_skipped_produces_deep_mode_investigation_actions(monkeypatch, tmp_path):
+    exit_code, doc = _run_hunt_all_with_oversized_skip(
+        monkeypatch, tmp_path, triage_skipped=True, label="deep")
+    actions = doc["result"]["summary"]["investigation_actions"]
+    assert len(actions) == 1
+    triage = actions[0]["triage"]
+    assert triage["mode"] == "deep"
+    # This fixture's target has no memory_segments backing (see
+    # _oversized_skip_mf()'s own docstring) -- not_captured is the one
+    # deep-triage outcome reachable without a real content read.
+    assert triage["status"] == "not_captured"
+    assert triage["bytes_examined"] == 0
+    assert triage["content_reason_codes"] == []
+    assert any(w["code"] == "DEEP_TRIAGE_SUMMARY" for w in doc["diagnostics"]["warnings"])
+
+    jsonschema = pytest.importorskip("jsonschema")
+    from dumpex.schemas import current_schema_path
+    with current_schema_path() as path, open(path, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    assert list(jsonschema.Draft202012Validator(schema).iter_errors(doc)) == []
+
+
+def test_triage_skipped_does_not_change_exit_code_or_coverage(monkeypatch, tmp_path):
+    baseline_exit, baseline_doc = _run_hunt_all_with_oversized_skip(
+        monkeypatch, tmp_path, triage_skipped=False, label="baseline")
+    deep_exit, deep_doc = _run_hunt_all_with_oversized_skip(
+        monkeypatch, tmp_path, triage_skipped=True, label="triaged")
+
+    assert deep_exit == baseline_exit
+    assert deep_doc["result"]["coverage"] == baseline_doc["result"]["coverage"]
+    assert deep_doc["result"]["summary"]["overall_status"] == \
+        baseline_doc["result"]["summary"]["overall_status"]
+    # Metadata-only baseline: mode stays "metadata", proving --triage-skipped
+    # (not the mere presence of a skipped target) is what flips it to "deep".
+    baseline_actions = baseline_doc["result"]["summary"]["investigation_actions"]
+    assert len(baseline_actions) == 1
+    assert baseline_actions[0]["triage"]["mode"] == "metadata"
 
 
 def test_threads_degraded_exits_with_partial_code_even_without_json(monkeypatch):

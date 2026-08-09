@@ -10,6 +10,7 @@ import pytest
 
 from dumpex.hunt._investigation import (
     build_investigation_queue, InvestigationAction, SkipRelationship, TriageInfo,
+    ContentFinding, MAX_FINDINGS_PER_TARGET, MAX_FINDING_VALUE_LEN,
     RecommendedAction, _derive_priority, _has_exec_signal,
 )
 from dumpex.output.coverage import (
@@ -359,15 +360,257 @@ def test_triage_info_rejects_unknown_mode_or_status():
         TriageInfo(mode="metadata", status="not-a-real-status")
 
 
-def test_triage_info_deep_mode_is_reserved_but_constructible():
-    # Phase-2-compatible shape (per the issue's own follow-up comment):
-    # "deep" mode and the wider TriageStatus vocabulary are already valid
-    # so a future --triage-skipped phase does not require a schema break.
-    # This phase never actually constructs mode="deep" itself.
-    info = TriageInfo(mode="deep", status="partial", bytes_examined=4096,
+# ── TriageInfo mode="deep" invariants (issue #19 Phase 2) ──────────────────
+# dumpex.hunt._deep_triage.run_deep_triage() is the only real constructor of
+# mode="deep" TriageInfo instances (see tests/hunt/test_deep_triage.py for
+# that engine's own tests) -- these exercise TriageInfo.__post_init__'s own
+# validation directly, the one place both producers (the always-on
+# metadata pass and the opt-in deep pass) share their invariants.
+
+@pytest.mark.parametrize("status", ["not_captured", "budget_deferred", "unreadable"])
+def test_triage_info_deep_mode_zero_byte_status_accepts_zero_bytes(status):
+    info = TriageInfo(mode="deep", status=status, bytes_examined=0,
+                       region_fully_examined=False, content_reason_codes=())
+    assert info.to_dict() == {
+        "mode": "deep", "status": status, "bytes_examined": 0,
+        "region_fully_examined": False, "content_reason_codes": [], "findings": [],
+        "finding_count": 0, "findings_truncated": False,
+    }
+
+
+@pytest.mark.parametrize("status", ["not_captured", "budget_deferred", "unreadable"])
+def test_triage_info_deep_mode_zero_byte_status_rejects_nonzero_bytes(status):
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status=status, bytes_examined=1,
+                   region_fully_examined=False)
+
+
+@pytest.mark.parametrize("status", ["not_captured", "budget_deferred", "unreadable"])
+def test_triage_info_deep_mode_zero_byte_status_rejects_region_fully_examined(status):
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status=status, bytes_examined=0,
+                   region_fully_examined=True)
+
+
+@pytest.mark.parametrize("status", ["not_captured", "budget_deferred", "unreadable"])
+def test_triage_info_deep_mode_zero_byte_status_rejects_content_reason_codes(status):
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status=status, bytes_examined=0,
+                   region_fully_examined=False,
+                   content_reason_codes=("IOC_PATTERN_STRING_MATCH",))
+
+
+def test_triage_info_deep_mode_completed_requires_region_fully_examined_true():
+    info = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
                        region_fully_examined=True)
-    assert info.to_dict() == {"mode": "deep", "status": "partial",
-                               "bytes_examined": 4096, "region_fully_examined": True}
+    assert info.region_fully_examined is True
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                   region_fully_examined=False)
+
+
+@pytest.mark.parametrize("status", ["partial", "clamped"])
+def test_triage_info_deep_mode_incomplete_read_requires_region_fully_examined_false(status):
+    info = TriageInfo(mode="deep", status=status, bytes_examined=4096,
+                       region_fully_examined=False)
+    assert info.region_fully_examined is False
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status=status, bytes_examined=4096,
+                   region_fully_examined=True)
+
+
+@pytest.mark.parametrize("status", ["completed", "partial", "clamped"])
+def test_triage_info_deep_mode_real_read_status_requires_positive_bytes_examined(status):
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status=status, bytes_examined=0,
+                   region_fully_examined=(status == "completed"))
+
+
+def test_triage_info_deep_mode_completed_accepts_content_reason_codes():
+    info = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                       region_fully_examined=True,
+                       content_reason_codes=("IOC_PATTERN_STRING_MATCH", "INJECTED_PE_HEADER"))
+    assert info.content_reason_codes == ("IOC_PATTERN_STRING_MATCH", "INJECTED_PE_HEADER")
+    assert info.to_dict()["content_reason_codes"] == ["IOC_PATTERN_STRING_MATCH", "INJECTED_PE_HEADER"]
+
+
+def test_triage_info_content_reason_codes_rejects_unknown_value():
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                   region_fully_examined=True, content_reason_codes=("NOT_A_REAL_CODE",))
+
+
+def test_triage_info_metadata_mode_rejects_nonempty_content_reason_codes():
+    with pytest.raises(ValueError):
+        TriageInfo(mode="metadata", status="completed", bytes_examined=0,
+                   region_fully_examined=False,
+                   content_reason_codes=("IOC_PATTERN_STRING_MATCH",))
+
+
+def test_triage_info_metadata_mode_default_still_valid():
+    # Unchanged default-construction contract from Phase 1.
+    info = TriageInfo()
+    assert info.to_dict() == {"mode": "metadata", "status": "completed",
+                               "bytes_examined": 0, "region_fully_examined": False,
+                               "content_reason_codes": [], "findings": [],
+                               "finding_count": 0, "findings_truncated": False}
+
+
+# ── ContentFinding + TriageInfo.findings (issue #19 Phase 2 review, item 4) ──
+
+def _ioc_finding(**overrides):
+    kwargs = dict(type="ioc_string", address="0x000001d400001230", offset=16,
+                  encoding="ASCII", value="http://evil.example/beacon",
+                  is_network_pattern=True)
+    kwargs.update(overrides)
+    return ContentFinding(**kwargs)
+
+
+def _mz_finding(**overrides):
+    kwargs = dict(type="mz_header", address="0x000001d400000000",
+                  module_context="unregistered")
+    kwargs.update(overrides)
+    return ContentFinding(**kwargs)
+
+
+def test_content_finding_ioc_string_valid_round_trips():
+    f = _ioc_finding()
+    assert f.to_dict() == {
+        "type": "ioc_string", "address": "0x000001d400001230", "offset": 16,
+        "encoding": "ASCII", "value": "http://evil.example/beacon",
+        "is_network_pattern": True, "module_context": None,
+    }
+
+
+def test_content_finding_mz_header_valid_round_trips():
+    f = _mz_finding()
+    assert f.to_dict() == {
+        "type": "mz_header", "address": "0x000001d400000000", "offset": None,
+        "encoding": None, "value": None, "is_network_pattern": None,
+        "module_context": "unregistered",
+    }
+
+
+def test_content_finding_ioc_string_rejects_module_context():
+    with pytest.raises(ValueError):
+        _ioc_finding(module_context="unregistered")
+
+
+def test_content_finding_mz_header_rejects_ioc_only_fields():
+    with pytest.raises(ValueError):
+        _mz_finding(offset=0)
+
+
+def test_content_finding_ioc_string_requires_valid_encoding():
+    with pytest.raises(ValueError):
+        _ioc_finding(encoding="LATIN1")
+
+
+def test_content_finding_mz_header_requires_valid_module_context():
+    with pytest.raises(ValueError):
+        _mz_finding(module_context="bogus")
+
+
+def test_content_finding_value_length_is_capped():
+    with pytest.raises(ValueError):
+        _ioc_finding(value="A" * (MAX_FINDING_VALUE_LEN + 1))
+    # Exactly at the cap is fine.
+    _ioc_finding(value="A" * MAX_FINDING_VALUE_LEN)
+
+
+def test_triage_info_findings_must_be_content_finding_instances():
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                   region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                   findings=({"type": "ioc_string"},))
+
+
+def test_triage_info_findings_capped_at_max_per_target():
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                   region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                   findings=tuple(_ioc_finding() for _ in range(MAX_FINDINGS_PER_TARGET + 1)),
+                   finding_count=MAX_FINDINGS_PER_TARGET + 1, findings_truncated=False)
+    # Exactly at the cap is fine.
+    TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+               region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+               findings=tuple(_ioc_finding() for _ in range(MAX_FINDINGS_PER_TARGET)),
+               finding_count=MAX_FINDINGS_PER_TARGET, findings_truncated=False)
+
+
+@pytest.mark.parametrize("status", ["not_captured", "budget_deferred", "unreadable"])
+def test_triage_info_zero_byte_status_rejects_nonempty_findings(status):
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status=status, bytes_examined=0,
+                   region_fully_examined=False, findings=(_mz_finding(),))
+
+
+def test_triage_info_metadata_mode_rejects_nonempty_findings():
+    with pytest.raises(ValueError):
+        TriageInfo(mode="metadata", status="completed", bytes_examined=0,
+                   region_fully_examined=False, findings=(_mz_finding(),))
+
+
+def test_triage_info_deep_completed_accepts_and_round_trips_findings():
+    info = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                       region_fully_examined=True,
+                       content_reason_codes=("IOC_PATTERN_STRING_MATCH", "MZ_HEADER_DETECTED"),
+                       findings=(_ioc_finding(), _mz_finding()),
+                       finding_count=2, findings_truncated=False)
+    assert info.to_dict()["findings"] == [
+        {"type": "ioc_string", "address": "0x000001d400001230", "offset": 16,
+         "encoding": "ASCII", "value": "http://evil.example/beacon",
+         "is_network_pattern": True, "module_context": None},
+        {"type": "mz_header", "address": "0x000001d400000000", "offset": None,
+         "encoding": None, "value": None, "is_network_pattern": None,
+         "module_context": "unregistered"},
+    ]
+    assert info.to_dict()["finding_count"] == 2
+    assert info.to_dict()["findings_truncated"] is False
+
+
+# ── TriageInfo.finding_count/findings_truncated (issue #19 Phase 2 review
+# round 2, item 2) -- see ContentFinding's own findings-selection docstring
+# in dumpex.hunt._deep_triage._content_signals() for why these exist. ─────
+
+def test_triage_info_finding_count_must_be_at_least_len_findings():
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                   region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                   findings=(_ioc_finding(), _mz_finding()), finding_count=1,
+                   findings_truncated=False)
+
+
+def test_triage_info_findings_truncated_must_match_finding_count_vs_findings():
+    # finding_count > len(findings) but findings_truncated left False.
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                   region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                   findings=(_ioc_finding(),), finding_count=5, findings_truncated=False)
+    # finding_count == len(findings) but findings_truncated left True.
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                   region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                   findings=(_ioc_finding(),), finding_count=1, findings_truncated=True)
+    # Correctly matched is fine.
+    info = TriageInfo(mode="deep", status="completed", bytes_examined=4096,
+                       region_fully_examined=True, content_reason_codes=("IOC_PATTERN_STRING_MATCH",),
+                       findings=(_ioc_finding(),), finding_count=5, findings_truncated=True)
+    assert info.finding_count == 5
+    assert info.findings_truncated is True
+
+
+@pytest.mark.parametrize("status", ["not_captured", "budget_deferred", "unreadable"])
+def test_triage_info_zero_byte_status_rejects_nonzero_finding_count(status):
+    with pytest.raises(ValueError):
+        TriageInfo(mode="deep", status=status, bytes_examined=0,
+                   region_fully_examined=False, finding_count=3, findings_truncated=True)
+
+
+def test_triage_info_metadata_mode_rejects_nonzero_finding_count():
+    with pytest.raises(ValueError):
+        TriageInfo(mode="metadata", status="completed", bytes_examined=0,
+                   region_fully_examined=False, finding_count=1, findings_truncated=False)
 
 
 def test_recommended_action_rejects_hunters_on_wrong_type():

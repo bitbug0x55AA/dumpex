@@ -417,6 +417,27 @@ def test_region_read_failure_lowers_coverage_via_aggregate_source_failed(monkeyp
     assert any("could not be read" in r for r in result.coverage.reasons)
 
 
+def test_analysis_bug_after_a_successful_read_propagates_not_swallowed(monkeypatch):
+    """_scan_content_range()'s try/except is scoped to ONLY the read_region()
+    call (issue #19 Phase 2 review, item 6/round 2). A real programming bug
+    in the analysis that runs on the bytes AFTER a successful read (string
+    extraction, IOC/MZ pattern matching, ContentScanResult construction)
+    must propagate as a real exception -- never get silently relabeled as
+    an ordinary string_scan_error/"unreadable" the way a genuine read
+    failure is. Monkeypatching _extract_strings_from_data to raise proves
+    the try/except no longer wraps that call."""
+    mf = _mk_mf(monkeypatch, modules=[], threads=[], regions=[
+        Region(0x9150, 0x9150, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
+        read_map={0x9150: b"perfectly readable bytes"})
+
+    def _broken_extract(data, min_len):
+        raise TypeError("simulated programming bug in string extraction")
+    monkeypatch.setattr(report_mod, "_extract_strings_from_data", _broken_extract)
+
+    with pytest.raises(TypeError, match="simulated programming bug"):
+        collect_report(mf, report_addr="0x9150")
+
+
 def test_short_read_sets_truncated_and_lowers_coverage(monkeypatch):
     mf = _mk_mf(monkeypatch, modules=[], threads=[], regions=[
         Region(0x9200, 0x9200, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")])
