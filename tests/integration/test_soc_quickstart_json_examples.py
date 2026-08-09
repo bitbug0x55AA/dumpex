@@ -1,6 +1,6 @@
 """
 docs/SOC_QUICKSTART.md's "Sanitized `--json` examples" section carries two
-complete, hand-written v2.4 documents (`--hunt pipe` DETECTED, `--hunt
+complete, hand-written v2.9 documents (`--hunt pipe` DETECTED, `--hunt
 stomping` INCONCLUSIVE) meant to be genuinely valid, not just
 representative -- a reader who copies one into a validator should get a
 clean pass. Nothing enforces that at doc-edit time, so this test extracts

@@ -1,13 +1,16 @@
 """
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
-v2 envelopes built around them) against dumpex-output-v2.8.schema.json
+v2 envelopes built around them) against dumpex-output-v2.9.schema.json
 (the current schema) -- originally the PR3 "Schema v2.4" hunt migration
 step (see docs/hunt_migration_field_matrix.md and the migration plan's own
 PR3 description), carried forward onto v2.5's extended `finding` $def
 (id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version -- see
 dumpex/hunt/_finding.py), v2.6's `csBeaconDetails.configs[*].fields[*]`
-`raw`-removal, and v2.7's re-keying of that same `fields` by field NAME
-(see dumpex/hunt/cs_beacon/collect.py's `_config_dict()`). Every schema
+`raw`-removal, v2.7's re-keying of that same `fields` by field NAME
+(see dumpex/hunt/cs_beacon/collect.py's `_config_dict()`), v2.8's
+`coverageLimitation.targets`/`scanTarget` (see #16), and v2.9's
+`huntSummary.investigation_actions` (issue #19's default, metadata-only
+skipped-target queue -- see dumpex.hunt._investigation). Every schema
 bump since v2.5 has been structurally IDENTICAL for every shape THIS file
 exercises: `cs_beacon_detected()` (tests/fixtures/hunt_records.py) builds
 its `CsBeaconDetails.configs` entry as a bare `{"cs_version": 4,
@@ -16,8 +19,13 @@ touches v2.7's new `csBeaconDetails.configs[*].fields` constraint (a
 `properties` entry only applies when that property is actually present) --
 that constraint is instead exercised directly, with a real
 numeric-ID-keyed/name-carrying negative case, in
-tests/hunt/test_cs_beacon_collect.py. Nothing here needed to change beyond
-which schema file is loaded. Built directly from
+tests/hunt/test_cs_beacon_collect.py. None of these fixtures' own
+HunterRecords ever carry a SCAN_REGION_OVERSIZED_SKIPPED limitation, so
+`hunt_summary_for()`'s v2.9 `investigation_actions` addition is `[]` for
+every existing test in this file (still required and validated -- see
+`tests/fixtures/hunt_records.hunt_summary_for()`'s own docstring); the
+populated-queue shape is exercised separately below and in
+tests/hunt/test_investigation.py. Built directly from
 tests/fixtures/hunt_records.py's synthetic HunterRecord fixtures, NOT
 through a real hunter collect_*() pipeline -- only injection's
 collect_injection_record() exists so far; the other six hunters' real
@@ -50,7 +58,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.9.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -116,7 +124,7 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):
     return {
         "meta": {
-            "schema_version": "2.8",
+            "schema_version": "2.9",
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01Z",
                           "duration_seconds": 1.0, "command": command, "options": options or {}},
@@ -371,7 +379,7 @@ def test_hunt_summary_partial_not_evaluated_among_seven_requires_inconclusive(
     # not silently allowed to say NOT_DETECTED_IN_SCANNED_SCOPE.
     good = {"selected": "all", "hunter_count": 7, "detected_count": 0,
             "inconclusive_count": 0, "not_evaluated_count": 3, "overall_status": "INCONCLUSIVE",
-            "highest_verdict_level": "inconclusive", "lead_count": 0}
+            "highest_verdict_level": "inconclusive", "lead_count": 0, "investigation_actions": []}
     assert list(hunt_summary_validator.iter_errors(good)) == []
 
     bad = dict(good)
@@ -578,6 +586,127 @@ def test_meta_yara_rules_normal_shape_with_zero_files_still_has_real_aggregate_s
                                  "aggregate_sha256": "e" * 64,
                                  "compiled_ok": 0, "compile_failed": 0}
     assert list(validator.iter_errors(doc)) == []
+
+
+# ── v2.9: huntSummary.investigation_actions (issue #19) ─────────────────────
+
+def _skipped_pipe_record():
+    from dumpex.output.coverage import (
+        ScanTarget, ScanTargetKind, CoverageLimitation, LimitationCode,
+        CoverageReport, CoverageStatus,
+    )
+    from dumpex.output.records import PipeDetails
+
+    t = ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=0x1000,
+                    size=20 * 1024 * 1024, size_limit=8 * 1024 * 1024, file_offset=123,
+                    allocation_base=0x1000, state="MEM_COMMIT", type="MEM_PRIVATE",
+                    protection="PAGE_EXECUTE_READWRITE")
+    lim = CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                              source="pipe_name_scan", affected_count=1, targets=(t,))
+    details = PipeDetails(handle_pipes=[], private_pipes=[], c2_context=[],
+                           framework_pipes=[], unbacked_in_rgn=[])
+    from dumpex.output.records import HunterRecord
+    # score == 0 with partial coverage (a target was skipped) is
+    # INCONCLUSIVE, never NOT_DETECTED_IN_SCANNED_SCOPE -- see
+    # dumpex.hunt._coverage.derive_status()'s own truth table, enforced
+    # here too by the hunterRecord schema's own cross-field constraint.
+    return HunterRecord(hunter="pipe", status="INCONCLUSIVE", score=0, max_score=3,
+        verdict_level="inconclusive", confidence="low", lead_count=0, review_priority="low",
+        coverage=CoverageReport(status=CoverageStatus.PARTIAL, limitations=[lim]),
+        findings=[], details=details)
+
+
+def test_investigation_actions_empty_for_single_hunter_run(validator):
+    rec = injection_detected()
+    summary = hunt_summary_for([rec], selected="injection")
+    assert summary["investigation_actions"] == []
+    doc = _envelope([rec], summary, options={"hunt": "injection"})
+    assert list(validator.iter_errors(doc)) == []
+
+
+def test_investigation_actions_populated_for_hunt_all_validates(validator):
+    records = [_skipped_pipe_record()] + [
+        r for r in all_seven_detected_variety() if r.hunter != "pipe"]
+    records.sort(key=lambda r: ["injection", "hollowing", "stomping", "pipe", "cs-beacon",
+                                 "yara", "obfuscation"].index(r.hunter))
+    summary = hunt_summary_for(records, selected="all")
+    assert len(summary["investigation_actions"]) == 1
+    action = summary["investigation_actions"][0]
+    assert action["priority"] == "medium"
+    assert action["evidence_availability"] == "captured"
+    assert action["coverage_effect"] == "original_hunter_gap_not_resolved"
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc)) == []
+
+
+def test_investigation_actions_rejects_bad_coverage_effect(validator):
+    records = [_skipped_pipe_record()] + [
+        r for r in all_seven_detected_variety() if r.hunter != "pipe"]
+    records.sort(key=lambda r: ["injection", "hollowing", "stomping", "pipe", "cs-beacon",
+                                 "yara", "obfuscation"].index(r.hunter))
+    summary = hunt_summary_for(records, selected="all")
+    summary["investigation_actions"][0]["coverage_effect"] = "gap_resolved"
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_investigation_actions_rejects_nonempty_for_single_hunter_selected(validator):
+    # huntSummary's own if/then: selected != "all" pins investigation_actions
+    # to maxItems: 0 -- a hand-tampered single-hunter summary claiming a
+    # populated queue must be rejected the same way hunter_count is.
+    rec = injection_detected()
+    summary = dict(hunt_summary_for([rec], selected="injection"))
+    all_records = [_skipped_pipe_record()] + [
+        r for r in all_seven_detected_variety() if r.hunter != "pipe"]
+    all_records.sort(key=lambda r: ["injection", "hollowing", "stomping", "pipe", "cs-beacon",
+                                     "yara", "obfuscation"].index(r.hunter))
+    populated = hunt_summary_for(all_records, selected="all")["investigation_actions"]
+    summary["investigation_actions"] = populated
+    doc = _envelope([rec], summary, options={"hunt": "injection"})
+    assert list(validator.iter_errors(doc))
+
+
+def _all_records_with_one_skip():
+    records = [_skipped_pipe_record()] + [
+        r for r in all_seven_detected_variety() if r.hunter != "pipe"]
+    records.sort(key=lambda r: ["injection", "hollowing", "stomping", "pipe", "cs-beacon",
+                                 "yara", "obfuscation"].index(r.hunter))
+    return records
+
+
+def test_investigation_actions_rejects_preserve_artifact_when_not_captured(validator):
+    # Schema-side counterpart to dumpex.hunt._investigation's own
+    # evidence_availability == "not_captured" -> never preserve_artifact
+    # rule -- a hand-tampered document claiming both must be rejected, not
+    # merely avoided by the real builder.
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["evidence_availability"] = "not_captured"
+    action["target"]["file_offset"] = None
+    action["recommended_actions"].append({"type": "preserve_artifact"})
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_investigation_actions_rejects_targeted_hunter_rescan_with_empty_hunters(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    for entry in action["recommended_actions"]:
+        if entry["type"] == "targeted_hunter_rescan":
+            del entry["hunters"]
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_investigation_actions_rejects_hunters_field_on_non_rescan_type(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    action["recommended_actions"][0]["hunters"] = ["pipe"]   # inspect_metadata doesn't use hunters
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
 
 
 # ── frozen historical schemas stay frozen ───────────────────────────────────

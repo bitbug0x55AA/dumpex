@@ -31,6 +31,7 @@ from dumpex.hunt.encoding.collect  import _record_from_encoding_report
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations
+from dumpex.hunt._investigation import build_investigation_queue
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport
 from dumpex.output.records import HUNTERS
@@ -65,7 +66,7 @@ def _hunt_coverage_report(records: "list", summary: dict) -> CoverageReport:
 
     `not_evaluated` here is exactly `summary["overall_status"] ==
     "NOT_EVALUATED"` -- the one relationship
-    dumpex-output-v2.8.schema.json's own kind=="hunt" branch enforces as
+    dumpex-output-v2.9.schema.json's own kind=="hunt" branch enforces as
     a biconditional between `coverage.status` and `summary.overall_status`.
     """
     if summary["overall_status"] == "NOT_EVALUATED":
@@ -73,6 +74,20 @@ def _hunt_coverage_report(records: "list", summary: dict) -> CoverageReport:
     if any(record.coverage.status != "complete" for record in records):
         return CoverageReport(status="partial")
     return CoverageReport(status="complete")
+
+
+def _investigation_actions_json(records: "list", selected: str, mf: MinidumpFile) -> list:
+    """`result.summary.investigation_actions` -- the default, metadata-
+    only skipped-target queue (issue #19), computed only for `--hunt all`
+    (`selected == "all"`); `[]` for a single-hunter run, so the JSON field
+    stays present and simply empty rather than conditionally omitted (see
+    dumpex.hunt._investigation's own module docstring). `get_memory_regions
+    (mf)` reads the dump's already-parsed MemoryInfoListStream -- not a
+    re-scan, same as `build_region_correlations()`'s own use of it above."""
+    if selected != "all":
+        return []
+    actions = build_investigation_queue(records, get_memory_regions(mf))
+    return [a.to_dict() for a in actions]
 
 
 def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
@@ -122,6 +137,7 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
         records.append(_record_from_encoding_report(_build_encoding_report(mf)))
 
     summary = build_hunt_summary(records, selected=selected)
+    summary["investigation_actions"] = _investigation_actions_json(records, selected, mf)
     return CommandResult(kind="hunt", records=records,
                           coverage=_hunt_coverage_report(records, summary), summary=summary)
 
@@ -284,14 +300,17 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         doc_coverage = _hunt_coverage_report(records, summary)
         # get_memory_regions(mf) reads the dump's ALREADY-PARSED
         # MemoryInfoListStream (see dumpex.core.memory's own docstring) --
-        # this is not a re-scan, and build_region_correlations() itself
-        # reads only these already-parsed regions plus the already-built
-        # `records`, never `mf` again beyond this one call -- see
-        # dumpex.hunt.region_correlation's own module docstring.
-        region_correlations = build_region_correlations(records, get_memory_regions(mf))
+        # this is not a re-scan. Fetched exactly ONCE here and reused for
+        # both build_region_correlations() and build_investigation_queue()
+        # -- each reads only these already-parsed regions plus the
+        # already-built `records`, never `mf` again beyond this one call.
+        memory_regions = get_memory_regions(mf)
+        region_correlations = build_region_correlations(records, memory_regions)
+        investigation_actions = build_investigation_queue(records, memory_regions)
         summary_presentation.render_hunt_summary(
             records, summary, doc_coverage.status.value,
-            region_correlations=region_correlations)
+            region_correlations=region_correlations,
+            investigation_actions=investigation_actions, verbose=verbose)
 
     if collect_records:
         return results, records

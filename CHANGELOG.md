@@ -5,6 +5,83 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## `--hunt all` automatically triages skipped targets (schema v2.9)
+
+Issues #16/#17/#18 made partial coverage from oversized skipped
+regions/segments *visible* (`targets[]` on `SCAN_REGION_OVERSIZED_SKIPPED`),
+but an analyst still had to manually copy each address into `--report
+--report-addr`, dedupe overlapping skips across hunters by hand, and
+reconstruct priority/next-steps themselves.
+
+`--hunt all` now builds that investigation queue automatically, from data
+already collected during the scan — **no additional bytes are read from
+the dump.** `result.summary.investigation_actions` is a new array,
+deduplicated on the physical region/segment (one entry even when several
+hunters or scan layers skipped the same target) and sorted by priority:
+
+```jsonc
+{
+  "investigation_actions": [
+    {
+      "target": { "kind": "memory_region", "base_address": "0x00007ff000001000",
+                  "size": 16777216, "size_limit": 8388608, "file_offset": 4096,
+                  "allocation_base": "0x00007ff000000000", "state": "MEM_COMMIT",
+                  "type": "MEM_PRIVATE", "protection": "PAGE_EXECUTE_READWRITE" },
+      "skipped_by": [
+        { "hunter": "pipe", "source": "pipe_name_scan", "scope": null, "size_limit": 8388608 },
+        { "hunter": "obfuscation", "source": "encoding_scan", "scope": "entropy", "size_limit": 10485760 }
+      ],
+      "priority": "high",
+      "priority_reason_codes": ["PRIVATE_EXECUTABLE_MEMORY", "RWX_PROTECTION", "MULTIPLE_SCOPES_SKIPPED"],
+      "evidence_availability": "captured",
+      "triage": { "mode": "metadata", "status": "completed", "bytes_examined": 0,
+                  "region_fully_examined": false },
+      "recommended_actions": [
+        { "type": "inspect_metadata" },
+        { "type": "extract_captured_range" },
+        { "type": "targeted_hunter_rescan", "hunters": ["pipe", "obfuscation"] },
+        { "type": "preserve_artifact" }
+      ],
+      "coverage_effect": "original_hunter_gap_not_resolved"
+    }
+  ]
+}
+```
+
+- **Two independent priority/evidence axes**, never collapsed into one
+  score: `priority` (`low`/`medium`/`high`) comes from deterministic
+  MemoryInfo facts (private/executable memory) and cross-hunter
+  correlation signals (multiple scopes skipped it, or it coincides with
+  an existing `CORRELATED REGIONS` entry); `evidence_availability`
+  (`captured`/`not_captured`) only says whether the bytes are already in
+  this dump file — a missing capture means "recollect," never "more
+  malicious."
+- **`recommended_actions` are structured, not prose** — a renderer may
+  turn `targeted_hunter_rescan.hunters` plus the target's own
+  `base_address`/`size` into a safe command suggestion.
+- **Advisory only.** `coverage_effect` is always
+  `"original_hunter_gap_not_resolved"`: no score, verdict, coverage
+  status, or exit code is ever upgraded because this queue was built.
+  Only a real rerun of the specific hunter that skipped a target closes
+  its own gap.
+- **`--hunt all` only.** A single-hunter run (`--hunt pipe`, ...) always
+  reports `investigation_actions: []` — this feature does not change
+  single-hunter output.
+- **Console**: a new bounded `SKIPPED TARGET ACTIONS` section in the
+  `HUNT SUMMARY` card, printed after `CORRELATED REGIONS`. `--verbose`
+  only expands how much of each already-computed entry is shown (full
+  `skipped_by`/reason/action lists, more entries) — it never changes
+  which entries exist, their order, or `--json`, preserving the existing
+  rule that console verbosity cannot change structured output.
+
+This is a `--triage-skipped`-free, metadata-only pass by design — a
+budgeted, opt-in deep-content triage (reusing `--report`'s own triage
+collector under an explicit byte/read budget) is tracked as a follow-up
+and is not part of this change.
+
+See [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md#skipped-target-investigation-queue-hunt-all)
+for the full field-by-field reading guide.
+
 ## Fixed: truncated hash prefixes were mislabeled `sha256=` in console/fact text
 
 Several console displays truncated a SHA-256 digest to its first 16 hex

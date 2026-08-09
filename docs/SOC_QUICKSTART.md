@@ -26,7 +26,7 @@ stomping" result actually checked anything.
 
 ## The four fields that matter
 
-`--json` wraps every hunter's result in dumpex's shared v2.8
+`--json` wraps every hunter's result in dumpex's shared v2.9
 envelope: `result.kind` is `"hunt"`, and each hunter you selected gets
 its own entry in `result.data.records[]` (`hunter` names which TTP —
 `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, or
@@ -96,6 +96,52 @@ same physical region can appear under more than one layer, so
 deduplicate on `targets[*].base_address` before counting regions. The
 console prints the first few targets and points at `--json` for the
 rest; the JSON list is always complete.
+
+## Skipped-target investigation queue (hunt all)
+
+`--hunt all` automates the manual workflow above: `result.summary.
+investigation_actions` is a deduplicated, priority-ordered list built
+from the coverage metadata every hunter already collected — **no
+additional bytes are read from the dump to build it.** One physical
+region/segment skipped by several hunters or scan layers is one entry,
+with every `(hunter, source, scope)` that skipped it listed under
+`skipped_by`. It is only ever populated for `--hunt all`; a single-hunter
+run (`--hunt pipe`, `--hunt stomping`, ...) always shows `[]` here — see
+the two single-hunter examples below.
+
+Each entry:
+
+- `priority` (`low`/`medium`/`high`) and `priority_reason_codes` are
+  derived from two independent, deterministic facts: the target's own
+  MemoryInfo facts (`PRIVATE_EXECUTABLE_MEMORY`/`RWX_PROTECTION`) and
+  whether it was skipped by more than one scope or coincides with an
+  existing multi-hunter `CORRELATED REGIONS` entry
+  (`MULTIPLE_SCOPES_SKIPPED`/`CORRELATED_REGION_EVIDENCE`).
+- `evidence_availability` (`captured`/`not_captured`) is a **separate**
+  axis from priority — it only says whether the bytes are in this dump
+  file at all (`targets[].file_offset` not null). A `not_captured`
+  target is not thereby more suspicious; it means the next step is
+  recollection, not extraction.
+- `triage` records what analysis actually ran — in this schema version
+  always `{"mode": "metadata", "status": "completed", "bytes_examined":
+  0, "region_fully_examined": false}`, the schema-enforced proof that
+  this default pass never reads region content.
+- `recommended_actions` are structured action objects
+  (`inspect_metadata`/`extract_captured_range`/`targeted_hunter_rescan`/
+  `recollect_dump`/`preserve_artifact`), not prose or a shell command —
+  a renderer may turn `targeted_hunter_rescan.hunters` + the target's own
+  `base_address`/`size` into a real `--extract`/`--strings` invocation
+  itself.
+- `coverage_effect` is always `"original_hunter_gap_not_resolved"`: this
+  queue is advisory. It never upgrades a hunter's own `score`,
+  `verdict_level`, or `coverage.status` — only a real rerun of the
+  hunter that skipped the target (not yet automated) closes that gap.
+
+The console mirrors this as a bounded `SKIPPED TARGET ACTIONS` section
+in the `HUNT SUMMARY` card (priority-ordered, capped with an omission
+notice pointing at `--json`); `--verbose` only expands how much of each
+entry's own already-computed detail is shown — it never changes which
+entries exist, their order, or anything in `--json`.
 
 ## CORRELATED REGIONS (console and TXT output only)
 
@@ -213,7 +259,7 @@ first:
 - `severity` — `info` / `low` / `medium` / `high` / `critical`, always
   derived from `tag` + `confidence` — a producer cannot set it
   independently, and the schema itself pins the exact mapping (see
-  `dumpex-output-v2.8.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
+  `dumpex-output-v2.9.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
   `observation` is `info`; every `lead` tops out at `medium`; only a
   `detection` at `confidence: high` reaches `critical`.
 - `technique_ids` — MITRE ATT&CK technique/sub-technique IDs (e.g.
@@ -403,8 +449,8 @@ string in its own place instead.
 
 ### Sanitized `--json` examples
 
-Both examples below are complete, valid v2.8 documents — each validates
-as-is against `dumpex-output-v2.8.schema.json` (see
+Both examples below are complete, valid v2.9 documents — each validates
+as-is against `dumpex-output-v2.9.schema.json` (see
 `tests/integration/test_soc_quickstart_json_examples.py`, which extracts
 these exact fenced blocks and validates them in CI, so this doc can't
 silently drift out of sync with the schema again). A real `--hunt all`
@@ -417,13 +463,17 @@ with `summary.hunter_count: 1` and one matching record. Every command's
 `meta.execution.options` always carries `hunt`/`yara_dir`/`ref_dir`/
 `rules_file` together, regardless of which hunter was selected (see
 `_build_options()` in `dumpex/cli.py`) — both examples show all four.
+`summary.investigation_actions` (the default, metadata-only skipped-target
+queue — see [Skipped-target investigation queue](#skipped-target-investigation-queue-hunt-all)
+below) is only ever populated for `--hunt all`; both single-hunter
+examples below correctly show it as `[]`.
 
 #### `--hunt pipe` — a genuine, fully-covered detection
 
 ```json
 {
   "meta": {
-    "schema_version": "2.8",
+    "schema_version": "2.9",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:12:01Z",
@@ -457,7 +507,8 @@ with `summary.hunter_count: 1` and one matching record. Every command's
       "not_evaluated_count": 0,
       "overall_status": "DETECTED",
       "highest_verdict_level": "high",
-      "lead_count": 0
+      "lead_count": 0,
+      "investigation_actions": []
     },
     "data": {
       "records": [
@@ -521,7 +572,7 @@ hunter's own `coverage.status`) is what makes this run exit `0` — see
 ```json
 {
   "meta": {
-    "schema_version": "2.8",
+    "schema_version": "2.9",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:14:01Z",
@@ -558,7 +609,8 @@ hunter's own `coverage.status`) is what makes this run exit `0` — see
       "not_evaluated_count": 0,
       "overall_status": "INCONCLUSIVE",
       "highest_verdict_level": "inconclusive",
-      "lead_count": 0
+      "lead_count": 0,
+      "investigation_actions": []
     },
     "data": {
       "records": [

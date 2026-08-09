@@ -24,12 +24,12 @@ from dumpex.commands.report   import cmd_report
 from dumpex.commands.diff     import cmd_diff
 from dumpex.hunt              import cmd_hunt
 from dumpex.hunt.summary      import build_hunt_summary
-from dumpex.hunt              import _hunt_coverage_report
+from dumpex.hunt              import _hunt_coverage_report, _investigation_actions_json
 from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # All eleven commands are migrated onto the v2 envelope (see dumpex/output/
-# and dumpex-output-v2.8.schema.json); --diff produces a kind="comparison"
+# and dumpex-output-v2.9.schema.json); --diff produces a kind="comparison"
 # result via V2Output.from_evidence() (two dumps), --report produces a
 # kind="report" result (one TriageCardRecord per triage card -- see
 # dumpex.commands.report's own module docstring), --hunt produces a
@@ -395,6 +395,8 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
         _, hunt_records = cmd_hunt(mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
                                     ref_dir=args.ref_dir, collect_records=True)
         hunt_summary = build_hunt_summary(hunt_records, selected=args.hunt)
+        hunt_summary["investigation_actions"] = _investigation_actions_json(
+            hunt_records, args.hunt, mf)
         exit_code = _apply_command_result(
             CommandResult(kind="hunt", records=hunt_records,
                           coverage=_hunt_coverage_report(hunt_records, hunt_summary),

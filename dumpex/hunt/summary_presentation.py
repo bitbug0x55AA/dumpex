@@ -39,6 +39,8 @@ from dumpex.ui.colors import RED, YELLOW, GREEN, DIM, BOLD
 from dumpex.hunt._console import resolve_width, wrap_text, render_kv_block
 from dumpex.hunt.summary import _DETECTED_VERDICT_ORDER
 from dumpex.hunt.region_correlation import RegionCorrelation
+from dumpex.hunt._investigation import InvestigationAction
+from dumpex.output.coverage import _format_bytes
 from dumpex.output.records import HUNTERS, HunterRecord, _HUNT_CONFIDENCES, _HUNT_REVIEW_PRIORITIES
 
 _DISPLAY_NAME = {
@@ -373,6 +375,99 @@ def _render_correlated_regions(correlations: list, records: list, width: int) ->
     return lines
 
 
+# ── SKIPPED TARGET ACTIONS ────────────────────────────────────────────────
+# The default, metadata-only investigation queue (issue #19) --
+# `dumpex.hunt._investigation.build_investigation_queue()` already sorted
+# `actions` by priority/skip-count/address; this section only TRUNCATES
+# and formats that order for the console, exactly like CORRELATED REGIONS
+# above never re-sorts `correlations`. `verbose` controls ONLY how much of
+# each entry's own already-computed skipped_by/reason/action lists gets
+# printed -- never which actions appear, their order, or the JSON, which
+# is always the complete, unabridged list regardless of console verbosity
+# (see this module's own docstring and the `InvestigationAction` module's
+# docstring for why priority/evidence/actions are all pre-derived, never
+# re-computed here).
+_MAX_SKIPPED_ACTIONS_SHOWN = 5
+_MAX_SKIPPED_BY_SHOWN = 3
+_MAX_SKIPPED_ACTIONS_LIST = 3   # recommended_actions preview cap, non-verbose
+
+_PRIORITY_COLOR = {"high": RED, "medium": YELLOW, "low": DIM}
+
+_REASON_CODE_LABEL = {
+    "PRIVATE_EXECUTABLE_MEMORY": "private executable memory",
+    "RWX_PROTECTION": "RWX protection",
+    "MULTIPLE_SCOPES_SKIPPED": "multiple scan scopes skipped this target",
+    "CORRELATED_REGION_EVIDENCE": "correlated with other hunters' evidence in this region",
+}
+_ACTION_TYPE_LABEL = {
+    "inspect_metadata": "inspect metadata and correlated findings",
+    "extract_captured_range": "extract the captured range",
+    "targeted_hunter_rescan": "targeted hunter-specific rescan",
+    "recollect_dump": "recollect a fuller dump",
+    "preserve_artifact": "preserve/export the artifact before external analysis",
+    "chunked_analysis": "chunked analysis",
+}
+
+
+def _skip_relationship_text(rel) -> str:
+    return f"{rel.hunter}/{rel.source}" if rel.scope is None else f"{rel.hunter}/{rel.source}:{rel.scope}"
+
+
+def _bounded_join(items: list, cap: "int | None") -> str:
+    shown = items if cap is None else items[:cap]
+    overflow = len(items) - len(shown)
+    text = ", ".join(shown)
+    if overflow > 0:
+        text += f" (+{overflow} more)"
+    return text
+
+
+def _render_investigation_action_entry(action: InvestigationAction, width: int, verbose: bool) -> list:
+    badge_color = _PRIORITY_COLOR.get(action.priority, DIM)
+    badge = badge_color(f"[{action.priority.upper()}]")
+    header = (f"  {badge} {_hexaddr(action.target.base_address)}  "
+              f"{_format_bytes(action.target.size)}  {action.evidence_availability}")
+    lines = [header]
+
+    skip_cap = None if verbose else _MAX_SKIPPED_BY_SHOWN
+    skip_texts = [_skip_relationship_text(r) for r in action.skipped_by]
+    lines.extend(_wrap_block(f"Skipped by: {_bounded_join(skip_texts, skip_cap)}", width, 7))
+
+    reason_texts = [_REASON_CODE_LABEL.get(c, c) for c in action.priority_reason_codes]
+    why = "; ".join(reason_texts) if reason_texts else "oversized target skipped"
+    lines.extend(_wrap_block(f"Why: {why}", width, 7))
+
+    action_cap = None if verbose else _MAX_SKIPPED_ACTIONS_LIST
+    action_texts = [_ACTION_TYPE_LABEL.get(a.type, a.type) for a in action.recommended_actions]
+    lines.extend(_wrap_block(f"Next: {_bounded_join(action_texts, action_cap)}", width, 7))
+
+    if verbose:
+        lines.extend(_wrap_block(
+            "Coverage effect: original hunter's coverage gap is not resolved by this "
+            "queue entry alone -- only a successful targeted rescan closes it.", width, 7))
+    lines.append("")
+    return lines
+
+
+def _render_investigation_actions(actions: list, width: int, verbose: bool) -> list:
+    """Empty (nothing printed, no header) when `actions` is empty -- same
+    "no empty section" rule `_render_correlated_regions()` follows."""
+    if not actions:
+        return []
+    shown = actions if verbose else actions[:_MAX_SKIPPED_ACTIONS_SHOWN]
+    omitted = len(actions) - len(shown)
+    lines = [f"  {BOLD('SKIPPED TARGET ACTIONS')}", ""]
+    for action in shown:
+        lines.extend(_render_investigation_action_entry(action, width, verbose))
+    if omitted > 0:
+        lines.extend(_wrap_block(
+            f"... {omitted} additional skipped-target action(s) omitted from this summary "
+            f"-- see result.summary.investigation_actions in --json output "
+            f"(or pass --verbose).", width, 2))
+        lines.append("")
+    return lines
+
+
 def _build_next_investigation_steps(review_first_ordered: list, records: list, summary: dict) -> list:
     steps = []
     if review_first_ordered:
@@ -400,7 +495,9 @@ def _build_next_investigation_steps(review_first_ordered: list, records: list, s
 
 def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, *,
                          width: "int | None" = None,
-                         region_correlations: "list | None" = None) -> None:
+                         region_correlations: "list | None" = None,
+                         investigation_actions: "list | None" = None,
+                         verbose: bool = False) -> None:
     """Print the `--hunt all` `HUNT SUMMARY` card. `records` must be the
     same 7-element `list[HunterRecord]` (HUNTERS' own fixed order)
     `dumpex.hunt.summary.build_hunt_summary()` was called with to produce
@@ -412,7 +509,15 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
     build_region_correlations()` already built from these same `records`
     plus the dump's own MemoryInfo list -- `None` or `[]` (the default)
     means CORRELATED REGIONS is omitted entirely, leaving every other
-    section byte-identical to before this parameter existed."""
+    section byte-identical to before this parameter existed.
+    `investigation_actions` is the optional `list[InvestigationAction]`
+    `dumpex.hunt._investigation.build_investigation_queue()` already built
+    from these same `records` plus the dump's MemoryInfo list -- `None` or
+    `[]` (the default) omits SKIPPED TARGET ACTIONS entirely. `verbose`
+    controls ONLY that section's own presentation (how much of each
+    already-computed entry is shown, and how many entries) -- it changes
+    no other section, no ordering, and never the underlying list itself
+    (see `dumpex.hunt._investigation`'s own module docstring)."""
     if not isinstance(records, list) or any(not isinstance(r, HunterRecord) for r in records):
         raise TypeError("render_hunt_summary() records must be a list of HunterRecord")
     if region_correlations is not None and (
@@ -420,6 +525,11 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
             or any(not isinstance(c, RegionCorrelation) for c in region_correlations)):
         raise TypeError("render_hunt_summary() region_correlations must be None or a "
                          "list of RegionCorrelation")
+    if investigation_actions is not None and (
+            not isinstance(investigation_actions, list)
+            or any(not isinstance(a, InvestigationAction) for a in investigation_actions)):
+        raise TypeError("render_hunt_summary() investigation_actions must be None or a "
+                         "list of InvestigationAction")
     w = resolve_width(width)
 
     print(BOLD("══════════════════════════════════════════"))
@@ -444,6 +554,10 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
 
     if region_correlations:
         for line in _render_correlated_regions(region_correlations, records, w):
+            print(line)
+
+    if investigation_actions:
+        for line in _render_investigation_actions(investigation_actions, w, verbose):
             print(line)
 
     steps = _build_next_investigation_steps(review_first_ordered, records, summary)

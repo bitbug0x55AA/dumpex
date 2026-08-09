@@ -16,7 +16,12 @@ from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt.summary_presentation import render_hunt_summary
 from dumpex.hunt.region_correlation import RegionSignal, RegionCorrelation
 from dumpex.hunt._finding import Finding, TAG_DETECTION, TAG_LEAD, CONFIDENCE_HIGH, CONFIDENCE_MEDIUM
-from dumpex.output.coverage import CoverageReport, CoverageStatus, CoverageLimitation, LimitationCode
+from dumpex.hunt._investigation import (
+    InvestigationAction, SkipRelationship, TriageInfo, RecommendedAction,
+)
+from dumpex.output.coverage import (
+    CoverageReport, CoverageStatus, CoverageLimitation, LimitationCode, ScanTarget, ScanTargetKind,
+)
 from dumpex.output.records import HUNTERS
 from tests.fixtures.hunt_records import (
     injection_detected, hollowing_not_evaluated, stomping_inconclusive,
@@ -24,11 +29,13 @@ from tests.fixtures.hunt_records import (
 )
 
 
-def _capture(records, summary, doc_coverage_status="complete", width=100, region_correlations=None):
+def _capture(records, summary, doc_coverage_status="complete", width=100, region_correlations=None,
+             investigation_actions=None, verbose=False):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         render_hunt_summary(records, summary, doc_coverage_status, width=width,
-                             region_correlations=region_correlations)
+                             region_correlations=region_correlations,
+                             investigation_actions=investigation_actions, verbose=verbose)
     return buf.getvalue()
 
 
@@ -263,7 +270,8 @@ def test_render_hunt_summary_signature_has_no_legacy_results_parameter():
     import inspect
     params = set(inspect.signature(render_hunt_summary).parameters)
     assert "results" not in params
-    assert params == {"records", "summary", "doc_coverage_status", "width", "region_correlations"}
+    assert params == {"records", "summary", "doc_coverage_status", "width", "region_correlations",
+                       "investigation_actions", "verbose"}
 
 
 def test_rejects_non_hunter_record_list():
@@ -436,3 +444,127 @@ def test_correlated_regions_are_capped_with_an_omission_notice():
     assert "  21. Region" not in block
     # ...and the omission is stated explicitly, not silently dropped.
     assert "5 additional correlated region(s) omitted" in block
+
+
+# ── SKIPPED TARGET ACTIONS (issue #19) ───────────────────────────────────
+
+def _action(base=0x1f400130000, size=20 * 1024 * 1024, priority="high",
+            reason_codes=("PRIVATE_EXECUTABLE_MEMORY", "MULTIPLE_SCOPES_SKIPPED"),
+            skipped_by=None, evidence_availability="captured", high_action=True):
+    t = ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=base, size=size,
+                    size_limit=8 * 1024 * 1024,
+                    file_offset=(123 if evidence_availability == "captured" else None),
+                    allocation_base=base, state="MEM_COMMIT", type="MEM_PRIVATE",
+                    protection="PAGE_EXECUTE_READWRITE")
+    skipped_by = skipped_by or (
+        SkipRelationship(hunter="pipe", source="pipe_name_scan", size_limit=8 * 1024 * 1024),
+        SkipRelationship(hunter="obfuscation", source="encoding_scan", scope="entropy",
+                          size_limit=10 * 1024 * 1024),
+    )
+    actions = [RecommendedAction(type="inspect_metadata")]
+    if evidence_availability == "captured":
+        actions.append(RecommendedAction(type="extract_captured_range"))
+    else:
+        actions.append(RecommendedAction(type="recollect_dump"))
+    actions.append(RecommendedAction(type="targeted_hunter_rescan", hunters=("pipe", "obfuscation")))
+    if priority == "high" and high_action:
+        actions.append(RecommendedAction(type="preserve_artifact"))
+    return InvestigationAction(
+        target=t, skipped_by=tuple(skipped_by), priority=priority,
+        priority_reason_codes=tuple(reason_codes), evidence_availability=evidence_availability,
+        triage=TriageInfo(), recommended_actions=tuple(actions))
+
+
+def test_skipped_target_actions_appears_when_actions_present():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, investigation_actions=[_action()])
+    assert "SKIPPED TARGET ACTIONS" in out
+
+
+def test_skipped_target_actions_absent_when_no_actions():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out_without = _capture(records, summary)
+    out_with_empty = _capture(records, summary, investigation_actions=[])
+    assert "SKIPPED TARGET ACTIONS" not in out_without
+    assert "SKIPPED TARGET ACTIONS" not in out_with_empty
+    assert out_without == out_with_empty
+
+
+def test_skipped_target_actions_section_is_between_correlated_regions_and_next_investigation():
+    records = _all_clean_records()
+    records[HUNTERS.index("injection")] = injection_detected()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, region_correlations=[_two_hunter_correlation()],
+                    investigation_actions=[_action()])
+    correlated_idx = out.index("CORRELATED REGIONS")
+    skipped_idx = out.index("SKIPPED TARGET ACTIONS")
+    next_idx = out.index("NEXT INVESTIGATION")
+    assert correlated_idx < skipped_idx < next_idx
+
+
+def test_skipped_target_actions_shows_address_priority_and_skipped_by():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action()
+    out = _capture(records, summary, investigation_actions=[action])
+    block = out.split("SKIPPED TARGET ACTIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    assert f"0x{action.target.base_address:016x}" in block
+    assert "HIGH" in block
+    assert "pipe/pipe_name_scan" in block
+    assert "obfuscation/encoding_scan:entropy" in block
+
+
+def test_skipped_target_actions_non_verbose_caps_entries_with_omission_notice():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    many = [_action(base=0x1000 * i) for i in range(1, 8)]
+    out = _capture(records, summary, investigation_actions=many)
+    block = out.split("SKIPPED TARGET ACTIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    for a in many[:5]:
+        assert f"0x{a.target.base_address:016x}" in block
+    for a in many[5:]:
+        assert f"0x{a.target.base_address:016x}" not in block
+    assert "2 additional skipped-target action(s) omitted" in block
+
+
+def test_skipped_target_actions_verbose_shows_every_entry():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    many = [_action(base=0x1000 * i) for i in range(1, 8)]
+    out = _capture(records, summary, investigation_actions=many, verbose=True)
+    block = out.split("SKIPPED TARGET ACTIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    for a in many:
+        assert f"0x{a.target.base_address:016x}" in block
+    assert "omitted" not in block
+
+
+def test_skipped_target_actions_verbose_only_changes_presentation_not_json():
+    """The issue's own hard requirement: --verbose must not change the
+    underlying investigation_actions list or its order -- only how much
+    of each already-computed entry the console shows."""
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    actions = [_action(base=0x2000 * i) for i in range(1, 4)]
+    before = [a.to_dict() for a in actions]
+    _capture(records, summary, investigation_actions=actions, verbose=True)
+    after = [a.to_dict() for a in actions]
+    assert before == after
+
+
+def test_render_hunt_summary_rejects_invalid_investigation_actions_type():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    with pytest.raises(TypeError):
+        _capture(records, summary, investigation_actions=[{"not": "an InvestigationAction"}])
+
+
+def test_skipped_target_actions_wraps_at_narrow_width_without_breaking():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, investigation_actions=[_action()], width=80)
+    block = out.split("SKIPPED TARGET ACTIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    for line in block.splitlines():
+        if line.strip():
+            assert len(re.sub(r"\x1b\[[0-9;]*m", "", line)) <= 80

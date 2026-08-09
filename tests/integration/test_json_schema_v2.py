@@ -1,7 +1,7 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.8.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.8") for each of the six
+dumpex/schemas/dumpex-output-v2.9.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.9") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
@@ -9,25 +9,26 @@ hand-written fixture JSON, so a shape change in any of them is caught
 here. dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
 dumpex-output-v2.2.schema.json, dumpex-output-v2.3.schema.json,
 dumpex-output-v2.4.schema.json, dumpex-output-v2.5.schema.json,
-dumpex-output-v2.6.schema.json, and dumpex-output-v2.7.schema.json (the
-frozen historical shapes) are also exercised directly (see the "schema
-version history" section below) to prove each still validates a genuine
-document from its own era and still rejects a `result.kind` it was never
-updated to know about -- v2.7 is a strict superset of v2.6 for these six
-recon-command kinds (v2.7's only actual change is re-keying `--hunt
-cs-beacon`'s csBeaconDetails.configs[*].fields by field NAME instead of
-numeric ID -- see tests/hunt/test_cs_beacon_collect.py for that; none of
-it is visible to this file's own six recon-command kinds), so every real
-document that validated against v2.6 continues to validate against v2.7
-unchanged, just carrying the new version label. v2.6 itself was a strict
-superset of v2.5 for these six kinds too (v2.6's only actual change was
-removing `raw` from csBeaconDetails.configs[*].fields[*]), and v2.5 was a
-strict superset of v2.4 (v2.5's only actual change was extending the hunt
+dumpex-output-v2.6.schema.json, dumpex-output-v2.7.schema.json, and
+dumpex-output-v2.8.schema.json (the frozen historical shapes) are also
+exercised directly (see the "schema version history" section below) to
+prove each still validates a genuine document from its own era and
+still rejects a `result.kind` it was never updated to know about --
+v2.7 is a strict superset of v2.6 for these six recon-command kinds
+(v2.7's only actual change is re-keying `--hunt cs-beacon`'s
+csBeaconDetails.configs[*].fields by field NAME instead of numeric ID --
+see tests/hunt/test_cs_beacon_collect.py for that; none of it is visible
+to this file's own six recon-command kinds), so every real document that
+validated against v2.6 continues to validate against v2.7 unchanged,
+just carrying the new version label. v2.6 itself was a strict superset
+of v2.5 for these six kinds too (v2.6's only actual change was removing
+`raw` from csBeaconDetails.configs[*].fields[*]), and v2.5 was a strict
+superset of v2.4 (v2.5's only actual change was extending the hunt
 `finding` $def with id/severity/technique_ids/evidence_refs/iocs/rule_id/
 rule_version -- see test_json_schema_v2_5_hunt.py for that).
 
-v2.8 breaks that "strict superset, old document still validates
-unmodified" chain for the FIRST time since v2.0: it adds a `targets`
+v2.8 broke that "strict superset, old document still validates
+unmodified" chain once, the only time since v2.0: it added a `targets`
 array to the shared `coverageLimitation` $def (see "SCAN_REGION_
 OVERSIZED_SKIPPED source contract" below) and, following this schema's
 own established convention that every CoverageLimitation field is always
@@ -36,13 +37,23 @@ available_fields/etc., all required even when empty), `targets` is
 `required` too -- not merely additive-and-optional. All six recon
 commands can emit coverageLimitation entries (SOURCE_ABSENT/SOURCE_
 FAILED/...), so a genuine v2.7-era document of any of these six kinds,
-which never had a `targets` key at all, now FAILS validation against
-v2.8 with `'targets' is a required property` -- this is exactly why the
+which never had a `targets` key at all, FAILS validation against v2.8
+with `'targets' is a required property` -- this is exactly why that
 version bump was necessary, not an oversight. `dumpex-output-v2.7.
 schema.json` stays installed specifically so that already-collected
 v2.7-era output remains validatable against ITS OWN frozen schema (see
 test_a_genuine_v2_7_era_document_still_validates_against_the_v2_7_schema
-below), not against v2.8.
+below), not against v2.8/v2.9.
+
+v2.9 (issue #19) is back to being a strict superset for these six
+recon-command kinds: its only actual change is `huntSummary.
+investigation_actions` (result.summary for `kind == "hunt"` only -- see
+test_json_schema_v2_5_hunt.py), which none of memory_regions/modules/
+threads/sysinfo/pid/peb ever populates, so a v2.8-era document of any of
+these six kinds keeps validating against v2.9 unchanged, just carrying
+the new version label (see
+test_a_genuine_v2_8_era_document_still_validates_against_the_v2_8_schema
+below, mirroring the v2.6-era precedent rather than the v2.7-era one).
 
 Loaded through dumpex.schemas.schema_path() (importlib.resources) so
 this also proves the v2 schema is reachable the way an installed
@@ -78,8 +89,20 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
+    with schema_path("dumpex-output-v2.9.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_8():
     with schema_path("dumpex-output-v2.8.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_8(schema_v2_8):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_8)
+    return jsonschema.Draft202012Validator(schema_v2_8)
 
 
 @pytest.fixture(scope="module")
@@ -404,7 +427,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.8",
+            "schema_version": "2.9",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -1278,7 +1301,8 @@ def test_v2_7_era_coverage_limitation_is_rejected_by_v2_8_schema(coverage_limita
     # The concrete counterpart to the module docstring's claim: a
     # coverageLimitation dict shaped exactly like v2.7 produced it (no
     # `targets` key -- that field didn't exist yet) is NOT accepted by
-    # the current (v2.8) schema. This is what makes the version bump
+    # the current (v2.9) schema either -- v2.9 never relaxed v2.8's own
+    # `targets` requirement. This is what made THAT version bump
     # necessary rather than cosmetic.
     v27_doc = {
         "code": "SOURCE_ABSENT", "source": "modules", "scope": "dump",
@@ -1288,6 +1312,18 @@ def test_v2_7_era_coverage_limitation_is_rejected_by_v2_8_schema(coverage_limita
     }
     assert "targets" not in v27_doc
     assert not jsonschema.Draft202012Validator(coverage_limitation_schema).is_valid(v27_doc)
+
+
+def test_a_genuine_v2_8_era_document_still_validates_against_the_v2_8_schema(validator_v2_8):
+    # v2.9's only actual change is huntSummary.investigation_actions
+    # (result.summary for kind == "hunt" only -- see this file's own
+    # module docstring and test_json_schema_v2_5_hunt.py) -- no six-recon
+    # -command shape changed between v2.8 and v2.9, so a v2.8-era
+    # document of any of those kinds must keep validating against the
+    # frozen v2.8 schema unchanged.
+    doc = _minimal_valid_doc(kind="modules")
+    doc["meta"]["schema_version"] = "2.8"
+    assert validator_v2_8.is_valid(doc)
 
 
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):

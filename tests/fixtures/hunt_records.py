@@ -14,6 +14,7 @@ itself.
 import dataclasses
 
 from dumpex.hunt.summary import build_hunt_summary
+from dumpex.hunt._investigation import build_investigation_queue
 from dumpex.hunt._finding import Finding, TAG_LEAD, CONFIDENCE_MEDIUM
 from dumpex.output.coverage import CoverageReport, CoverageStatus
 from dumpex.output.records import (
@@ -202,9 +203,25 @@ def all_seven_not_evaluated():
     return [_as_not_evaluated(r) for r in all_seven_detected_variety()]
 
 
-def hunt_summary_for(records, selected="all"):
+def hunt_summary_for(records, selected="all", memory_regions=None):
     """Thin delegator to the real production reducer
     (dumpex.hunt.summary.build_hunt_summary) -- every schema test
     that calls this is therefore an end-to-end test of that reducer
-    too, not a second, independently-maintained copy of its logic."""
-    return build_hunt_summary(records, selected=selected)
+    too, not a second, independently-maintained copy of its logic.
+
+    `investigation_actions` (issue #19) is NOT part of build_hunt_summary()
+    itself (see dumpex.hunt._investigation_actions_json()'s own docstring
+    for why it's computed at each real call site instead) -- this
+    delegator adds it the same way, so existing callers that don't pass
+    `memory_regions` keep getting `investigation_actions: []` (still a
+    valid, required field) without having to know this field exists.
+    Pass `memory_regions` (dumpex.core.memory.get_memory_regions(mf)'s own
+    return shape, or a list of tests.fixtures.fakes.Region) to exercise a
+    populated queue."""
+    summary = build_hunt_summary(records, selected=selected)
+    if selected == "all":
+        actions = build_investigation_queue(records, memory_regions or [])
+        summary["investigation_actions"] = [a.to_dict() for a in actions]
+    else:
+        summary["investigation_actions"] = []
+    return summary
