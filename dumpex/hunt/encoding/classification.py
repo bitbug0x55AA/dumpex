@@ -11,6 +11,7 @@ import re
 
 from dumpex.core.pe_utils import parse_pe_header
 from dumpex.hunt.encoding.entropy import _shannon_entropy
+from dumpex.hunt.encoding.models import Classification, PeHeaderInfo, PeSectionInfo
 
 # IOC pattern for plaintext classification
 _IOC_PAT = re.compile(
@@ -48,30 +49,41 @@ def _is_plausible_ip(ip_str: str) -> bool:
     return True
 
 
-def _classify_decoded(data: bytes) -> dict:
-    result = {
-        'type': 'binary',
-        'is_pe': False,
-        'is_shellcode': False,
-        'ioc_strings': [],
-        'hex_prefix': data[:16].hex() if data else '',
-        'entropy': _shannon_entropy(data[:4096]),
-    }
+def _pe_header_info(pe: dict) -> PeHeaderInfo:
+    """Project dumpex.core.pe_utils.parse_pe_header()'s dict into the
+    full-fidelity, immutable PeHeaderInfo -- see that type's own
+    docstring for why every field (not a lean subset) is carried
+    through."""
+    return PeHeaderInfo(
+        valid=pe['valid'], has_mz=pe['has_mz'], has_pe_sig=pe['has_pe_sig'],
+        e_lfanew=pe['e_lfanew'], machine=pe['machine'], machine_name=pe['machine_name'],
+        time_date_stamp=pe['time_date_stamp'], is_pe32_plus=pe['is_pe32_plus'],
+        number_of_sections=pe['number_of_sections'], size_of_image=pe['size_of_image'],
+        address_of_entry_point=pe['address_of_entry_point'], image_base=pe['image_base'],
+        sections=tuple(PeSectionInfo(**s) for s in pe['sections']),
+        data_directories=tuple(pe['data_directories']), reason=pe['reason'])
+
+
+def _classify_decoded(data: bytes) -> Classification:
+    entropy = _shannon_entropy(data[:4096])
+    hex_prefix = data[:16].hex() if data else ''
     if len(data) < 4:
-        return result
+        return Classification(kind='binary', is_pe=False, is_shellcode=False,
+                               hex_prefix=hex_prefix, entropy=entropy)
 
     if data[:2] == b'MZ':
         pe = parse_pe_header(data)
         if pe['valid']:
-            result.update({'type': 'pe', 'is_pe': True, 'pe_info': pe})
-            return result
+            return Classification(kind='pe', is_pe=True, is_shellcode=False,
+                                   hex_prefix=hex_prefix, entropy=entropy,
+                                   pe_info=_pe_header_info(pe))
 
     if data[:6] in (b'\xe8\x00\x00\x00\x00\x58',
                     b'\xe8\x00\x00\x00\x00\x59',
                     b'\xe8\x00\x00\x00\x00\x5b',
                     b'\xe8\x00\x00\x00\x00\x5e'):
-        result.update({'type': 'shellcode', 'is_shellcode': True})
-        return result
+        return Classification(kind='shellcode', is_pe=False, is_shellcode=True,
+                               hex_prefix=hex_prefix, entropy=entropy)
 
     sample = data[:2048]
     printable = sum(1 for b in sample if 32 <= b < 127 or b in (9, 10, 13))
@@ -82,15 +94,15 @@ def _classify_decoded(data: bytes) -> dict:
         iocs = [s for s in raw_iocs
                 if not re.match(r'^\d+\.\d+\.\d+\.\d+', s) or _is_plausible_ip(s)]
         if iocs:
-            result.update({'type': 'ioc_text', 'ioc_strings': iocs[:10]})
-        else:
-            result['type'] = 'plaintext'
-        return result
+            return Classification(kind='ioc_text', is_pe=False, is_shellcode=False,
+                                   ioc_strings=tuple(iocs[:10]), hex_prefix=hex_prefix,
+                                   entropy=entropy)
+        return Classification(kind='plaintext', is_pe=False, is_shellcode=False,
+                               hex_prefix=hex_prefix, entropy=entropy)
 
-    if result['entropy'] > 7.2:
-        result['type'] = 'high_entropy'
-
-    return result
+    kind = 'high_entropy' if entropy > 7.2 else 'binary'
+    return Classification(kind=kind, is_pe=False, is_shellcode=False,
+                           hex_prefix=hex_prefix, entropy=entropy)
 
 
 def _structural_note(has_pe: bool, has_shellcode: bool) -> str:

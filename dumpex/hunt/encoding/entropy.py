@@ -9,10 +9,11 @@ from collections import Counter
 
 from dumpex.core.memory import addr_to_module, prot_str
 from dumpex.hunt._coverage import CoverageTracker, region_scan_target
+from dumpex.hunt._location import resolve_location
 from dumpex.hunt.encoding.config import (
     EncodingConfig, ENTROPY_PRIVATE_THRESHOLD, ENTROPY_RWX_THRESHOLD, ENTROPY_SCAN_MAX,
 )
-from dumpex.hunt.encoding.models import EntropyHit, LayerResult
+from dumpex.hunt.encoding.models import EntropyHit, LayerCoverage, LayerResult, region_ref
 
 
 def _shannon_entropy(data: bytes) -> float:
@@ -63,10 +64,10 @@ def _scan_entropy(regions, modules, mf, susp_prots, read_region, config: Encodin
         coverage.note_scanned()
 
         ent = _shannon_entropy(data)
-        p      = prot_str(r.Protect)
-        is_rwx = any(s in p for s in susp_prots)
-        threshold = config.entropy_rwx_threshold if is_rwx else config.entropy_private_threshold
+        ref = region_ref(r, susp_prots)
+        threshold = config.entropy_rwx_threshold if ref.is_rwx else config.entropy_private_threshold
 
         if ent >= threshold:
-            hits.append(EntropyHit(region=r, entropy=ent, threshold=threshold))
-    return LayerResult(hits=hits, coverage=coverage)
+            location = resolve_location(mf, r.BaseAddress, r.BaseAddress, r.RegionSize)
+            hits.append(EntropyHit(region=ref, location=location, entropy=ent, threshold=threshold))
+    return LayerResult(hits=hits, coverage=LayerCoverage.from_tracker(coverage))

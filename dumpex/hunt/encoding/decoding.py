@@ -18,12 +18,13 @@ import zlib
 from dumpex.core.memory import addr_to_module, prot_str
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._coverage import CoverageTracker, region_scan_target
+from dumpex.hunt._location import resolve_location
 from dumpex.hunt.encoding.classification import _IOC_PAT, _classify_decoded
 from dumpex.hunt.encoding.config import (
     EncodingConfig, B64_MIN_LEN, XOR_SCAN_MAX, XOR_SAMPLE_SIZE, XOR_SCORE_MIN,
     DECOMPRESS_MAX_OUTPUT, DECODE_SCAN_MAX,
 )
-from dumpex.hunt.encoding.models import DecodeResult, Hit
+from dumpex.hunt.encoding.models import DecodeResult, DecodedHit, LayerCoverage, region_ref
 
 _B64_PAT = re.compile(
     rb'(?:[A-Za-z0-9+/]{4}){12,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?'
@@ -80,11 +81,11 @@ def _scan_base64(data: bytes, region_base: int, budget: ScanBudget, config: Enco
             continue
         if not budget.seen_content(decoded):
             continue   # identical payload already seen elsewhere in this hunt
-        cls = _classify_decoded(decoded)
-        if cls['type'] == 'binary' and not cls['ioc_strings']:
+        classification = _classify_decoded(decoded)
+        if classification.kind == 'binary' and not classification.ioc_strings:
             continue
         budget.note_bytes_read(len(decoded))
-        yield m.start(), raw, decoded, cls
+        yield m.start(), raw, decoded, classification
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -150,10 +151,10 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: Encodin
         decoded = data.translate(_xor_table(key))
         if not budget.seen_content(decoded):
             continue
-        cls = _classify_decoded(decoded)
-        if cls['is_pe'] or cls['is_shellcode'] or cls['ioc_strings']:
+        classification = _classify_decoded(decoded)
+        if classification.is_pe or classification.is_shellcode or classification.ioc_strings:
             budget.note_bytes_read(len(decoded))
-            yield key, decoded, cls
+            yield key, decoded, classification
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -269,13 +270,17 @@ def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget, config: 
 # in _hunt_encoding. Feeds all three sub-layers from one shared region read.
 # ══════════════════════════════════════════════════════════════════════════
 
-def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig, budget: ScanBudget) -> DecodeResult:
+def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig, budget: ScanBudget,
+                        susp_prots=()) -> DecodeResult:
     """
     Layers 2-4 combined: reads each eligible region ONCE and feeds Base64,
     single-byte XOR, and GZIP/ZLIB decoding from that one read, applying
     the shared budget's take_hit() gate to each candidate before it's
-    kept. Returns a DecodeResult of standardized Hit lists (one per
-    sub-layer) plus the shared region-level CoverageTracker.
+    kept. Returns a DecodeResult of standardized DecodedHit lists (one
+    per sub-layer) plus the shared region-level CoverageTracker.
+
+    `susp_prots` (default `()`) is threaded through to `region_ref()` so
+    each hit's `region.is_rwx` is resolved once here, at scan time.
     """
     base64_hits, xor_hits, compressed_hits = [], [], []
     coverage = CoverageTracker()
@@ -304,26 +309,34 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
             if not data:
                 continue
         coverage.note_scanned()
+        ref = region_ref(r, susp_prots)
 
-        for off, raw, decoded, cls in _scan_base64(data, r.BaseAddress, budget, config):
+        for off, raw, decoded, classification in _scan_base64(data, r.BaseAddress, budget, config):
             # take_hit() is the ONLY gate for whether this candidate is
             # actually kept — its return value MUST be checked (unlike the
             # old note_hit(), whose result could be silently ignored while
             # still appending the item regardless).
             if not budget.take_hit(len(decoded)):
                 break
-            base64_hits.append(Hit(layer='base64', region=r, offset=off, decoded=decoded, cls=cls,
-                                    complete=True, raw=raw))
+            abs_va = r.BaseAddress + off
+            location = resolve_location(mf, abs_va, r.BaseAddress, r.RegionSize)
+            base64_hits.append(DecodedHit(layer='base64', region=ref, location=location,
+                                           decoded=decoded, classification=classification,
+                                           complete=True, raw=raw,
+                                           known_module=addr_to_module(abs_va, modules) is not None))
 
         if prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= config.xor_scan_max:
-            for key, decoded, cls in _scan_xor(data, r.BaseAddress, budget, config):
+            for key, decoded, classification in _scan_xor(data, r.BaseAddress, budget, config):
                 if not budget.take_hit(len(decoded)):
                     break
-                xor_hits.append(Hit(layer='xor', region=r, offset=0, decoded=decoded, cls=cls,
-                                     complete=True, key=key))
+                location = resolve_location(mf, r.BaseAddress, r.BaseAddress, r.RegionSize)
+                xor_hits.append(DecodedHit(layer='xor', region=ref, location=location,
+                                            decoded=decoded, classification=classification,
+                                            complete=True, key=key,
+                                            known_module=mod is not None))
 
         if not budget.exhausted():
-            for off, algo, decoded, cls, complete in _scan_compressed(data, r.BaseAddress, budget, config):
+            for off, algo, decoded, classification, complete in _scan_compressed(data, r.BaseAddress, budget, config):
                 if not budget.take_hit(len(decoded)):
                     break
                 # complete=False means decompression hit the output cap
@@ -332,7 +345,12 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
                 # PREFIX, not a fully end-to-end-validated stream (see
                 # _bounded_decompress). Downstream confidence must reflect
                 # that, not treat it identically to a complete decode.
-                compressed_hits.append(Hit(layer=algo, region=r, offset=off, decoded=decoded, cls=cls,
-                                            complete=complete))
+                abs_va = r.BaseAddress + off
+                location = resolve_location(mf, abs_va, r.BaseAddress, r.RegionSize)
+                compressed_hits.append(DecodedHit(layer=algo, region=ref, location=location,
+                                                   decoded=decoded, classification=classification,
+                                                   complete=complete,
+                                                   known_module=addr_to_module(abs_va, modules) is not None))
 
-    return DecodeResult(base64=base64_hits, xor=xor_hits, compressed=compressed_hits, coverage=coverage)
+    return DecodeResult(base64=base64_hits, xor=xor_hits, compressed=compressed_hits,
+                        coverage=LayerCoverage.from_tracker(coverage))

@@ -11,13 +11,14 @@ import struct
 
 from dumpex.core.memory import addr_to_module, prot_str
 from dumpex.hunt._coverage import CoverageTracker, region_scan_target
+from dumpex.hunt._location import resolve_location
 from dumpex.hunt.encoding.classification import _classify_decoded
 from dumpex.hunt.encoding.config import (
     EncodingConfig, SLEEP_MASK_KEY_SIZE, SLEEP_MASK_MIN_REPEAT, SLEEP_MASK_MAX_BYTE_FREQ,
     SLEEP_MASK_MIN_ACBD, SLEEP_MASK_MAX_CANDIDATES, SLEEP_MASK_MAX_WINDOWS,
     SLEEP_MASK_REGION_MAX, SLEEP_MASK_VALIDATE_SAMPLE, SLEEP_MASK_VALIDATION_MARKER,
 )
-from dumpex.hunt.encoding.models import Hit, LayerResult
+from dumpex.hunt.encoding.models import DecodedHit, LayerCoverage, LayerResult, region_ref
 
 
 def _sm_xor(data: bytes, key: bytes, offset: int) -> bytes:
@@ -225,7 +226,8 @@ def _sm_validate_and_decode(data: bytes, candidates: list,
     return confirmed
 
 
-def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig = None, budget=None) -> LayerResult:
+def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig = None, budget=None,
+                      susp_prots=()) -> LayerResult:
     """
     Layer 0: scan PAGE_READWRITE MEM_PRIVATE regions for CS Sleep Mask
     XOR encoding and attempt key recovery + decode.
@@ -261,10 +263,14 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
     here, and threaded into _sm_recover_candidates/_sm_validate_and_decode
     so a single expensive region can't run unbounded either.
 
-    Returns a LayerResult whose hits are Hit objects carrying `key`
-    (recovered XOR key) and `key_offset` (rotation offset that decoded
-    correctly), in addition to the common region/offset/decoded/cls
-    fields.
+    `susp_prots` (default `()`) is the rules-derived suspicious-protection
+    string list, threaded through to `region_ref()` so each hit's
+    `region.is_rwx` is resolved once here rather than by aggregate.py.
+
+    Returns a LayerResult whose hits are DecodedHit objects carrying
+    `key` (recovered XOR key) and `key_offset` (rotation offset that
+    decoded correctly), in addition to the common region/location/
+    decoded/classification fields.
     """
     if config is None:
         config = EncodingConfig(
@@ -320,8 +326,11 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
             validate_sample=config.sleep_mask_validate_sample,
             validation_marker=config.sleep_mask_validation_marker, budget=budget)
         for key, offset, decoded in confirmed:
-            cls = _classify_decoded(decoded)
-            hits.append(Hit(layer='sleep_mask', region=r, offset=0, decoded=decoded, cls=cls,
-                             complete=True, key=key, key_offset=offset))
+            classification = _classify_decoded(decoded)
+            hits.append(DecodedHit(
+                layer='sleep_mask', region=region_ref(r, susp_prots),
+                location=resolve_location(mf, r.BaseAddress, r.BaseAddress, r.RegionSize),
+                decoded=decoded, classification=classification,
+                complete=True, key=key, key_offset=offset))
 
-    return LayerResult(hits=hits, coverage=coverage)
+    return LayerResult(hits=hits, coverage=LayerCoverage.from_tracker(coverage))

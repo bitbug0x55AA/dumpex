@@ -1148,7 +1148,7 @@ def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimi
 # dumpex.hunt.stomping's own coverage-report
 # builders); encoding_scan is the one source that runs three independent
 # layers over overlapping region sets and therefore requires `scope` to
-# say WHICH one (see dumpex.hunt.encoding.aggregate.OVERSIZE_SCAN_LAYERS
+# say WHICH one (see dumpex.hunt.encoding.domain.OVERSIZE_SCAN_LAYERS
 # -- this module cannot import that constant directly, since the
 # dependency direction is domain model -> output adapter, never
 # backwards, so the three layer names are duplicated here as the wire

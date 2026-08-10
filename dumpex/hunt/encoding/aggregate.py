@@ -1,255 +1,48 @@
 """
-Aggregation layer for dumpex.hunt.encoding: the ONLY place score, status,
-coverage_status, verdict_level, confidence, lead_count, and
-review_priority are computed for this hunter. Takes the raw LayerResult/
-DecodeResult objects the scan layers (sleep_mask, entropy, decoding)
-produced and turns them into Finding objects plus the final `findings`
-JSON dict — and, since presentation.py must render exactly what was
-decided here (not recompute it), also returns an EncodingReport bundling
-everything the console renderer needs (deduped hit lists, tags, notes).
+Aggregation layer for dumpex.hunt.encoding: the ONLY place score,
+coverage, and the seven `CheckResult`s (sleep_mask/entropy/base64/xor/
+compressed/structural_payload/shellcode_bootstrap_lead) are computed for
+this hunter. Takes the typed evidence the scan layers (sleep_mask,
+entropy, decoding) produced -- with `Location`/`RegionRef` already
+resolved once at scan time -- and turns them into an immutable
+`EncodingReport` (dumpex.hunt.encoding.domain).
 
-Nothing here prints. Nothing in dumpex/hunt/encoding/presentation.py
-decides tag/score/confidence — it only formats what this module already
-decided.
+Nothing here prints, and nothing here builds rendered `facts`/
+`verbose_facts` text: `CheckResult.evidence` carries the typed value
+objects; report_facts.py/report_legacy.py/report_record.py/
+report_console.py are the pure projections that render them (see
+domain.py's own docstring for why this split removes the parallel-
+representation drift the pre-migration `EncodingReport` had).
+
+Takes ONLY typed evidence tuples plus int/bool/str scalars -- no `mf`, no
+`modules`, no raw `regions` list, no `susp_prots`, no live `ScanBudget`
+object. `dumpex/hunt/encoding/__init__.py` is where those raw inputs
+still live; it converts them into the typed evidence and scalars this
+module consumes.
 """
-from dataclasses import dataclass, field
-
-from dumpex.core.memory import addr_to_module, prot_str, va_to_file_offset
-from dumpex.hunt._coverage import derive_status, derive_coverage_status
-from dumpex.hunt._finding import (Finding, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    CONFIDENCE_HIGH, TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION, overall_confidence,
-    verdict_level, lead_count, review_priority)
+from dumpex.hunt._domain import CheckResult
+from dumpex.hunt._finding import CONFIDENCE_LOW, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH, \
+    TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION
 from dumpex.hunt.encoding.classification import _structural_note
-from dumpex.output.coverage import (
-    build_coverage_report, observe_source, EvaluationRequirement, CoverageLimitation,
-    LimitationCode, format_scan_target_preview, scan_target_noun,
-)
+from dumpex.hunt.encoding.domain import CoverageSnapshot, EncodingEvidence, EncodingReport
 
 
-# The obfuscation hunter runs three independent region scans, each with
-# its own size cap (SLEEP_MASK_REGION_MAX / ENTROPY_SCAN_MAX / DECODE_
-# SCAN_MAX) over overlapping candidate sets. Order is fixed here so the
-# per-layer limitations/reasons come out in a stable, reproducible order
-# regardless of dict insertion order at the call site.
-OVERSIZE_SCAN_LAYERS = ("sleep_mask", "entropy", "decode")
-
-
-def oversized_layer_reasons(oversized_by_layer: dict) -> list:
-    """One reason string per scan LAYER that skipped something, never a
-    single summed one.
-
-    Summing the three layers' counters and rendering "N oversized
-    region(s) skipped" is wrong, not merely imprecise: one physical region
-    over 10 MiB exceeds the sleep-mask cap, the entropy cap AND the 2 MiB
-    decode cap, so the sum counts three region x layer skips and then
-    labels them three REGIONS. An investigator reading that goes looking
-    for two allocations that do not exist. Keeping the layers apart also
-    answers the question the sum destroys: whether a given region was
-    missed by every layer or only by the strictest one."""
-    out = []
-    for layer in OVERSIZE_SCAN_LAYERS:
-        targets = oversized_by_layer.get(layer) or ()
-        if not targets:
-            continue
-        noun = scan_target_noun(targets)
-        out.append(f"{len(targets)} oversized {noun} skipped by the {layer} scan: "
-                    f"{format_scan_target_preview(targets)}")
-    return out
-
-
-# The four *_verbose_fact() functions below build Finding.verbose_facts --
-# console/--txt --verbose-only detail (see that field's own docstring) for
-# sleep_mask/entropy/base64/xor/compressed. Every field they carry beyond
-# the corresponding Finding.facts entry above (built inline in build_report
-# below) is file offset -- plus, for sleep_mask/base64, a couple of fields
-# --json were never given (region size, raw Base64 length) -- so this
-# is presentation formatting living in aggregate.py, not hunter logic in
-# presentation.py: presentation.py never needs `mf` or these raw hit lists
-# for detail purposes (see dumpex/hunt/encoding/presentation.py's own
-# module docstring).
-def _sleep_mask_verbose_fact(mf, h) -> str:
-    r = h.region
-    fo = va_to_file_offset(mf, r.BaseAddress)
-    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{r.BaseAddress:016x} File_offset={fo_str} Region_size=0x{r.RegionSize:x} "
-            f"XOR_key={h.key.hex()} rotation_offset={h.key_offset} Decoded_type={h.cls['type'].upper()}")
-    if h.cls['ioc_strings']:
-        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:4])}"
-    return fact
-
-
-def _entropy_verbose_fact(mf, h, susp_prots) -> str:
-    r = h.region
-    p = prot_str(r.Protect)
-    fo = va_to_file_offset(mf, r.BaseAddress)
-    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    rwx = " [RWX]" if any(s in p for s in susp_prots) else ""
-    return (f"VA=0x{r.BaseAddress:016x}{rwx} File_offset={fo_str} Size=0x{r.RegionSize:x} "
-            f"Entropy={h.entropy:.3f}bits threshold={h.threshold} Protection={p}")
-
-
-def _base64_verbose_fact(mf, h) -> str:
-    abs_va = h.region.BaseAddress + h.offset
-    fo = va_to_file_offset(mf, abs_va)
-    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{abs_va:016x} File_offset={fo_str} Decoded_type={h.cls['type'].upper()} "
-            f"Decoded_size={len(h.decoded)}bytes B64_length={len(h.raw)}chars")
-    if h.cls['ioc_strings']:
-        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:3])}"
-    return fact
-
-
-def _xor_verbose_fact(mf, h) -> str:
-    r = h.region
-    fo = va_to_file_offset(mf, r.BaseAddress)
-    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{r.BaseAddress:016x} File_offset={fo_str} XOR_key=0x{h.key:02x} "
-            f"Decoded_type={h.cls['type'].upper()}")
-    if h.cls['ioc_strings']:
-        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:3])}"
-    return fact
-
-
-def _compressed_verbose_fact(mf, h) -> str:
-    abs_va = h.region.BaseAddress + h.offset
-    fo = va_to_file_offset(mf, abs_va)
-    fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{abs_va:016x} File_offset={fo_str} Algorithm={h.layer.upper()} "
-            f"Decoded_type={h.cls['type'].upper()} Decoded_size={len(h.decoded)}bytes")
-    if h.cls['ioc_strings']:
-        fact += f" IOC_strings={', '.join(h.cls['ioc_strings'][:3])}"
-    return fact
-
-
-def _encoding_coverage_report(mem_info_available: bool, fully_skipped: bool, region_count: int,
-                               oversized_by_layer: dict, total_read_failed: int,
-                               total_short_reads: int, budget_exhausted: bool,
-                               exhausted_reason: str):
-    """Real dumpex.output.coverage.CoverageReport for an obfuscation run
-    -- built at each gap site this function's own caller already derives
-    coverage_status/coverage_reasons from. `memory_info` is this
-    hunter's ONLY evaluation_sources gate (matching its own `evaluated =
-    mem_info_available` -- no OR/AND combination needed, unlike pipe/
-    stomping's multi-source gates)."""
-    sources = {
-        "memory_info": observe_source("memory_info", present=mem_info_available,
-                                       items=["present"] if mem_info_available else []),
-        "encoding_scan": observe_source("encoding_scan", present=True, items=["scanned"]),
-    }
-    # "memory_info" is NOT a completeness_check here (unlike modules/
-    # thread_info elsewhere): it's this hunter's ONLY evaluation_sources
-    # member, so by the time completeness_checks is even consulted (past
-    # the NOT_EVALUATED short-circuit), it's already guaranteed present
-    # -- listing it again would be a pure no-op, not a bug (contrast
-    # dumpex.hunt.pipe's own _pipe_coverage_report, where memory_info is
-    # a SEPARATE source from the evaluation gate and listing it WOULD be
-    # a real bug -- see that function's own comment).
-    completeness_checks = []
-    if fully_skipped:
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.ENCODING_ALL_REGIONS_FILTERED, source="encoding_scan",
-            affected_count=region_count))
-    # ONE limitation per scan layer, each scoped to that layer and
-    # carrying only its own targets -- never a single merged entry whose
-    # affected_count is the sum of three overlapping region sets (see
-    # oversized_layer_reasons above for why that sum is a wrong answer,
-    # not a rounded one).
-    for layer in OVERSIZE_SCAN_LAYERS:
-        targets = oversized_by_layer.get(layer) or ()
-        if not targets:
-            continue
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="encoding_scan",
-            scope=layer, affected_count=len(targets), targets=targets))
-    if total_read_failed:
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.SCAN_REGION_READ_FAILED, source="encoding_scan",
-            affected_count=total_read_failed))
-    if total_short_reads:
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.SCAN_REGION_SHORT_READ, source="encoding_scan",
-            affected_count=total_short_reads))
-    if budget_exhausted:
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="encoding_scan",
-            detail=exhausted_reason))
-
-    return build_coverage_report(
-        sources, evaluation_sources=EvaluationRequirement(("memory_info",)),
-        completeness_checks=completeness_checks)
-
-# score -> verdict_level, owned by this hunter (see _finding.verdict_level).
-# No "3": this hunter's max score is 2 (confirmed sleep-mask decode and/or
-# a validated PE payload — no third independent structural signal).
-_VERDICT_LEVEL_BY_SCORE = {1: "likely", 2: "high"}
-
-
-@dataclass
-class EncodingReport:
-    """Everything dumpex/hunt/encoding/presentation.py needs to render the
-    console output, precomputed here so presentation.py makes no
-    tag/score/confidence decisions of its own -- only formatting."""
-    findings: dict                # the full JSON-facing result dict
-    findings_list: list            # list[Finding] (for the verdict line's leads_suffix)
-
-    sleep_mask_hits: list = field(default_factory=list)   # list[Hit]
-    entropy_hits: list = field(default_factory=list)       # list[EntropyHit]
-
-    base64_hits: list = field(default_factory=list)        # deduped list[Hit]
-    base64_tag: str = None
-    base64_note: str = None
-    xor_hits: list = field(default_factory=list)
-    xor_tag: str = None
-    xor_note: str = None
-    compressed_hits: list = field(default_factory=list)
-    compressed_tag: str = None
-    compressed_note: str = None
-
-    all_pe_hits: list = field(default_factory=list)         # list[Hit]
-    pe_any_incomplete: bool = False
-    pe_all_incomplete: bool = False
-
-    all_shellcode_hits: list = field(default_factory=list)  # list[Hit]
-    shellcode_context_hits: list = field(default_factory=list)
-    shellcode_confidence: str = None
-
-    mem_info_available: bool = True
-    fully_skipped: bool = False
-    regions_count: int = 0
-    # {scan layer -> tuple[ScanTarget]} for the regions THAT layer's own
-    # size cap skipped. Kept per layer rather than as one total: see
-    # oversized_layer_reasons()'s docstring for why summing them and
-    # calling the result a region count is a correctness bug.
-    oversized_by_layer: dict = field(default_factory=dict)
-    total_read_failed: int = 0
-    total_short_reads: int = 0
-    budget_exhausted: bool = False
-    exhausted_reason: str = ""
-
-    score: int = 0
-    status: str = None
-    verdict_level: str = None   # SAME value as findings['verdict_level'] -- presentation.py
-                                 # must branch on this, not re-derive its own score->tier
-                                 # mapping, so a scoring-contract change can't make JSON and
-                                 # console verdict text silently disagree.
-    coverage_report: object = None   # dumpex.output.coverage.CoverageReport (v2.4 migration only)
-
-
-def _dedup_by_region(hits: list) -> list:
-    """First hit per distinct region.BaseAddress, preserving order --
+def _dedup_by_region(hits: tuple) -> tuple:
+    """First hit per distinct region.base_address, preserving order --
     matches the original per-layer console/JSON reporting, which counts
     "N region(s) with X" rather than every individual candidate string
-    match within the same region."""
+    match within the same region. Returns the SAME hit objects (never
+    copies), so the result is a valid subset-by-identity of `hits`."""
     seen = set()
     unique = []
     for h in hits:
-        if h.region.BaseAddress not in seen:
-            seen.add(h.region.BaseAddress)
+        if h.region.base_address not in seen:
+            seen.add(h.region.base_address)
             unique.append(h)
-    return unique
+    return tuple(unique)
 
 
-def _classify_section(hits: list, ioc_only_note="IOC-style string(s) found — treated as a lead",
+def _classify_section(hits: tuple, ioc_only_note="IOC-style string(s) found — treated as a lead",
                        no_content_note="no structural or IOC content found"):
     """Shared has_pe/has_shellcode/ioc_only/tag/note derivation for the
     three decode-layer observation sections (base64/xor/compressed) --
@@ -257,10 +50,11 @@ def _classify_section(hits: list, ioc_only_note="IOC-style string(s) found — t
     base64's note wording is more verbose than xor/compressed's in the
     original console output (an existing inconsistency, not something
     this refactor should quietly erase), hence the overridable defaults."""
-    has_pe        = any(h.cls['is_pe'] for h in hits)
-    has_shellcode = any(h.cls['is_shellcode'] for h in hits)
+    has_pe        = any(h.classification.is_pe for h in hits)
+    has_shellcode = any(h.classification.is_shellcode for h in hits)
     structural = has_pe or has_shellcode
-    ioc_only   = [h for h in hits if h.cls['ioc_strings'] and not (h.cls['is_pe'] or h.cls['is_shellcode'])]
+    ioc_only   = [h for h in hits if h.classification.ioc_strings
+                  and not (h.classification.is_pe or h.classification.is_shellcode)]
     tag  = TAG_LEAD if ioc_only and not structural else TAG_OBSERVATION
     note = (_structural_note(has_pe, has_shellcode) if structural else
             ioc_only_note if ioc_only else
@@ -268,51 +62,45 @@ def _classify_section(hits: list, ioc_only_note="IOC-style string(s) found — t
     return has_pe, has_shellcode, ioc_only, tag, note
 
 
-def build_report(mf, sleep_mask_result, entropy_result, decode_result,
-                  modules, regions, susp_prots, mem_info_available, decode_budget) -> EncodingReport:
+def build_report(sleep_mask_hits: tuple, entropy_hits: tuple, base64_hits: tuple,
+                  xor_hits: tuple, compressed_hits: tuple, *,
+                  memory_info_stream: bool, region_count: int, any_region_scanned: bool,
+                  sleep_mask_oversized: tuple = (), entropy_oversized: tuple = (),
+                  decode_oversized: tuple = (), read_failed: int = 0, short_reads: int = 0,
+                  budget_exhausted: bool = False, exhausted_reason: str = "") -> EncodingReport:
     """
-    Turn the three scan layers' raw results into the final findings dict
-    plus an EncodingReport for presentation.py. This is the ONLY place
-    score/status/coverage_status/verdict_level/confidence/lead_count/
-    review_priority are computed for this hunter.
+    Turn the scan layers' typed evidence into the final `EncodingReport`.
+    This is the ONLY place score/coverage/the seven CheckResults are
+    computed for this hunter.
+
+    `base64_hits`/`xor_hits`/`compressed_hits` are the RAW (undeduped)
+    hit tuples the decode scan layer produced -- one entry per candidate
+    match, so the SAME region can appear more than once. Deduplication
+    (`_dedup_by_region`) happens here, once, and only for the
+    base64/xor/compressed OBSERVATION checks' own evidence (and,
+    downstream, `report_legacy.py`'s `findings['base64']`/etc, which
+    reads that same CheckResult's evidence rather than re-deriving it).
+    `structural_payload`/`shellcode_bootstrap_lead` deliberately partition
+    the RAW, undeduped lists instead: a region with two decode candidates
+    at different offsets -- one structural, one not -- must not have its
+    structural hit silently dropped because dedup happened to keep the
+    OTHER occurrence first (a real detection-semantics requirement, not
+    an implementation detail).
     """
-    sleep_mask_hits = sleep_mask_result.hits
-    sleep_mask_coverage = sleep_mask_result.coverage
-    entropy_hits = entropy_result.hits
-    entropy_coverage = entropy_result.coverage
-    decode_coverage = decode_result.coverage
+    all_source_hits = sleep_mask_hits + base64_hits + xor_hits + compressed_hits
+    pe_hits = tuple(h for h in all_source_hits if h.classification.is_pe)
+    shellcode_hits = tuple(h for h in all_source_hits if h.classification.is_shellcode)
+    shellcode_context_hits = tuple(
+        h for h in shellcode_hits if h.region.type == "MEM_PRIVATE" and h.region.is_rwx)
 
-    findings = {
-        'sleep_mask': [],
-        'entropy':    [],
-        'base64':     [],
-        'xor':        [],
-        'compressed': [],
-        'hidden_pe':       [],
-        'hidden_shellcode': [],
-        'score': 0,
-    }
-    findings_list = []
-
-    report = EncodingReport(findings=findings, findings_list=findings_list,
-                             sleep_mask_hits=sleep_mask_hits, entropy_hits=entropy_hits)
-
-    pe_hits, shellcode_hits = [], []
+    results = []
 
     # ── Sleep Mask ──────────────────────────────────────────────────────
     if sleep_mask_hits:
-        for h in sleep_mask_hits:
-            if h.cls['is_pe']:
-                findings['hidden_pe'].append(h)
-            elif h.cls['is_shellcode']:
-                findings['hidden_shellcode'].append(h)
-        findings['sleep_mask'] = sleep_mask_hits
-        findings_list.append(Finding(
+        results.append(CheckResult(
             check="obfuscation.sleep_mask_confirmed",
-            facts=[f"VA=0x{h.region.BaseAddress:x} key={h.key.hex()} "
-                   f"rotation_offset={h.key_offset} decoded_type={h.cls['type']}"
-                   for h in sleep_mask_hits[:10]],
-            verbose_facts=[_sleep_mask_verbose_fact(mf, h) for h in sleep_mask_hits],
+            evidence=sleep_mask_hits,
+            evidence_limit=10,
             inference=f"{len(sleep_mask_hits)} region(s) decode cleanly under a recovered "
                        f"repeating-key XOR AND contain the literal 'sha256\\x00' marker "
                        f"that Cobalt Strike's sleep-mask-encoded beacon memory always "
@@ -330,12 +118,10 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
 
     # ── Entropy ───────────────────────────────────────────────────────────
     if entropy_hits:
-        findings['entropy'] = entropy_hits
-        findings_list.append(Finding(
+        results.append(CheckResult(
             check="obfuscation.entropy_observation",
-            facts=[f"VA=0x{h.region.BaseAddress:x} entropy={h.entropy:.3f} threshold={h.threshold} "
-                   f"protect={prot_str(h.region.Protect)}" for h in entropy_hits[:15]],
-            verbose_facts=[_entropy_verbose_fact(mf, h, susp_prots) for h in entropy_hits],
+            evidence=entropy_hits,
+            evidence_limit=15,
             inference=f"{len(entropy_hits)} MEM_PRIVATE region(s) exceed the Shannon-entropy "
                        f"threshold typical of encrypted/compressed/packed content.",
             confidence=CONFIDENCE_LOW,
@@ -351,37 +137,18 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
             tag=TAG_OBSERVATION,
         ))
 
-    # ── Base64 / XOR / Compressed (decode layers) ──────────────────────────
-    for h in decode_result.base64:
-        if h.cls['is_pe']:
-            pe_hits.append(h)
-        elif h.cls['is_shellcode']:
-            shellcode_hits.append(h)
-    for h in decode_result.xor:
-        if h.cls['is_pe']:
-            pe_hits.append(h)
-        elif h.cls['is_shellcode']:
-            shellcode_hits.append(h)
-    for h in decode_result.compressed:
-        if h.cls['is_pe']:
-            pe_hits.append(h)
-        elif h.cls['is_shellcode']:
-            shellcode_hits.append(h)
-
-    base64_unique = _dedup_by_region(decode_result.base64)
+    # ── Base64 / XOR / Compressed (decode layers, deduped) ───────────────
+    base64_unique = _dedup_by_region(base64_hits)
     if base64_unique:
         has_pe, has_shellcode, ioc_only, tag, note = _classify_section(
             base64_unique,
             ioc_only_note="IOC-style string(s) found inside decoded content — treated "
                           "as a lead, not a detection",
             no_content_note="no structural or IOC content found in decoded data")
-        report.base64_tag, report.base64_note = tag, note
-        findings['base64'] = base64_unique
-        findings_list.append(Finding(
+        results.append(CheckResult(
             check="obfuscation.base64_observation",
-            facts=[f"VA=0x{h.region.BaseAddress+h.offset:x} decoded_type={h.cls['type']} "
-                   f"decoded_size={len(h.decoded)}" for h in base64_unique[:15]],
-            verbose_facts=[_base64_verbose_fact(mf, h) for h in base64_unique],
+            evidence=base64_unique,
+            evidence_limit=15,
             inference=f"{len(base64_unique)} region(s) contain data that decodes cleanly as "
                        f"Base64.",
             confidence=CONFIDENCE_LOW,
@@ -397,16 +164,13 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
             tag=tag,
         ))
 
-    xor_unique = _dedup_by_region(decode_result.xor)
+    xor_unique = _dedup_by_region(xor_hits)
     if xor_unique:
         has_pe, has_shellcode, ioc_only, tag, note = _classify_section(xor_unique)
-        report.xor_tag, report.xor_note = tag, note
-        findings['xor'] = xor_unique
-        findings_list.append(Finding(
+        results.append(CheckResult(
             check="obfuscation.xor_observation",
-            facts=[f"VA=0x{h.region.BaseAddress:x} key=0x{h.key:02x} decoded_type={h.cls['type']}"
-                   for h in xor_unique[:15]],
-            verbose_facts=[_xor_verbose_fact(mf, h) for h in xor_unique],
+            evidence=xor_unique,
+            evidence_limit=15,
             inference=f"{len(xor_unique)} region(s) decode plausibly under a brute-forced "
                        f"single-byte XOR key (already filtered to require IOC content or a "
                        f"structural PE/shellcode match before being surfaced at all).",
@@ -421,18 +185,15 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
             tag=tag,
         ))
 
-    compressed_unique = _dedup_by_region(decode_result.compressed)
+    compressed_unique = _dedup_by_region(compressed_hits)
     if compressed_unique:
         has_pe, has_shellcode, ioc_only, tag, note = _classify_section(compressed_unique)
-        report.compressed_tag, report.compressed_note = tag, note
-        findings['compressed'] = compressed_unique
-        findings_list.append(Finding(
+        results.append(CheckResult(
             check="obfuscation.compressed_observation",
-            facts=[f"VA=0x{h.region.BaseAddress+h.offset:x} algo={h.layer} decoded_type={h.cls['type']} "
-                   f"decoded_size={len(h.decoded)}" for h in compressed_unique[:15]],
-            verbose_facts=[_compressed_verbose_fact(mf, h) for h in compressed_unique],
-            inference=f"{len(compressed_unique)} region(s) contain data that decompresses cleanly "
-                       f"as GZIP/ZLIB.",
+            evidence=compressed_unique,
+            evidence_limit=15,
+            inference=f"{len(compressed_unique)} region(s) contain data that decompresses "
+                       f"cleanly as GZIP/ZLIB.",
             confidence=CONFIDENCE_LOW,
             rationale="GZIP/ZLIB is a general-purpose compression format used throughout "
                        "ordinary software (updates, resources, network payloads) — its "
@@ -443,48 +204,15 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
                          "proof, on their own."],
             tag=tag,
         ))
-    report.base64_hits, report.xor_hits, report.compressed_hits = base64_unique, xor_unique, compressed_unique
 
     # ── Structural PE payload (drives score, together with sleep-mask) ─────
-    # A PE header that passes full structural validation
-    # (dumpex.core.pe_utils.parse_pe_header — DOS/COFF/optional header/
-    # complete section table, not just an 'MZ' prefix), found via ANY layer
-    # (Base64, XOR, GZIP/ZLIB; sleep mask is scored separately above). This
-    # — not "an encoding scheme was merely detected" — is what can move the
-    # obfuscation verdict, per phase-two policy.
-    all_pe_hits = list(findings['hidden_pe']) + pe_hits
-    if all_pe_hits:
-        # A gzip/zlib hit whose decompression stopped at the output cap
-        # before reaching end-of-stream (complete=False) was never verified
-        # end-to-end — the visible PE structure is real, but truncation/
-        # corruption beyond the cap can't be ruled out the way it can for a
-        # fully-decoded stream. That's disclosed as a limitation whenever
-        # ANY hit is incomplete, but only pulls confidence down to MEDIUM
-        # when EVERY hit in this batch is incomplete -- one fully
-        # end-to-end-verified PE in the batch is itself enough to justify
-        # HIGH, regardless of what else showed up alongside it; a single
-        # unverified extra hit must not drag a genuinely confirmed
-        # detection down.
-        any_incomplete = any(not h.complete for h in all_pe_hits)
-        all_incomplete = all(not h.complete for h in all_pe_hits)
-        report.pe_any_incomplete, report.pe_all_incomplete = any_incomplete, all_incomplete
-        facts = []
-        for h in all_pe_hits:
-            abs_va = h.region.BaseAddress + h.offset
-            known  = addr_to_module(abs_va, modules)
-            reg_str = "registered" if known else "UNREGISTERED"
-            facts.append(f"type=PE encoding={h.layer} container_VA=0x{abs_va:x} "
-                         f"module_status={reg_str} decoded_size={len(h.decoded)}"
-                         + ("" if h.complete else " decode=incomplete(output-cap)"))
-        findings['hidden_pe'] = all_pe_hits
-        findings_list.append(Finding(
+    if pe_hits:
+        any_incomplete = any(not h.complete for h in pe_hits)
+        all_incomplete = all(not h.complete for h in pe_hits)
+        results.append(CheckResult(
             check="obfuscation.structural_payload",
-            facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
-            # Full, uncapped -- facts above is capped for --json (a
-            # sentinel entry, not a real "this is everything" claim); every
-            # field it carries per hit is already complete, so the only
-            # delta verbose_facts provides is completeness, not new fields.
-            verbose_facts=facts,
+            evidence=pe_hits,
+            evidence_limit=20,
             inference="Decoded/decompressed content from one or more obfuscation layers "
                        "structurally validates as a PE image.",
             confidence=CONFIDENCE_MEDIUM if all_incomplete else CONFIDENCE_HIGH,
@@ -502,40 +230,10 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
                             if any_incomplete else [])),
             tag=TAG_DETECTION,
         ))
-    report.all_pe_hits = all_pe_hits
 
     # ── Shellcode bootstrap pattern — LEAD ONLY, never scored ──────────────
-    # A 6-byte "call $+5; pop reg" prefix is a real, commonly-seen shellcode
-    # idiom, but 6 bytes is far too little evidence to score on its own —
-    # it has no structural validation comparable to a full PE header (no
-    # section table, no plausible entry point, no instruction-stream
-    # corroboration), and can occur by chance in high-entropy or
-    # adversarially-crafted data. It is reported as an investigative lead
-    # and explicitly does NOT contribute to the obfuscation score.
-    all_shellcode_hits = list(findings['hidden_shellcode']) + shellcode_hits
-    if all_shellcode_hits:
-        # A bare 6-byte prefix match is weak on its own, but one sitting
-        # inside a region that's ALSO executable+private (the same
-        # combination dumpex/hunt/injection/ and hollowing.py treat as suspicious) is a
-        # meaningfully stronger combination than either signal alone —
-        # still not structural proof (no section table, no entry-point
-        # check), so this stays tag=LEAD and never touches score, but the
-        # combo is worth flagging above a bare "6 bytes matched somewhere".
-        context_hits = [h for h in all_shellcode_hits
-                        if prot_str(h.region.Type) == 'MEM_PRIVATE'
-                        and any(s in prot_str(h.region.Protect) for s in susp_prots)]
-        report.shellcode_context_hits = context_hits
-        facts = []
-        for h in all_shellcode_hits:
-            abs_va = h.region.BaseAddress + h.offset
-            in_context = h in context_hits
-            facts.append(f"type=shellcode_bootstrap encoding={h.layer} container_VA=0x{abs_va:x} "
-                         f"decoded_size={len(h.decoded)} prefix={h.decoded[:6].hex()}"
-                         + (f" container_protect={prot_str(h.region.Protect)} (executable+private)"
-                            if in_context else ""))
-        findings['hidden_shellcode'] = all_shellcode_hits
-        confidence = CONFIDENCE_MEDIUM if context_hits else CONFIDENCE_LOW
-        report.shellcode_confidence = confidence
+    if shellcode_hits:
+        confidence = CONFIDENCE_MEDIUM if shellcode_context_hits else CONFIDENCE_LOW
         rationale = ("A 6-byte prefix match has no structural validation behind it "
                      "(no section table, no entry-point plausibility check, no "
                      "instruction-stream/control-flow corroboration) — nowhere near the "
@@ -544,131 +242,47 @@ def build_report(mf, sleep_mask_result, entropy_result, decode_result,
                      "disassembly-based corroboration (e.g. a sustained run of valid "
                      "instructions, a recognizable API-resolution idiom) before being "
                      "treated as a detection.")
-        if context_hits:
-            rationale += (f" Confidence raised to MEDIUM because {len(context_hits)} of "
-                           f"{len(all_shellcode_hits)} match(es) sit inside a region that is "
-                           f"ALSO executable+private (MEM_PRIVATE + one of "
-                           f"{', '.join(susp_prots)}) — the same combination "
-                           f"dumpex/hunt/injection/ and hollowing.py treat as suspicious on its own — worth "
-                           f"an analyst's closer look even though it still isn't structural proof.")
-        findings_list.append(Finding(
+        if shellcode_context_hits:
+            rationale += (f" Confidence raised to MEDIUM because {len(shellcode_context_hits)} "
+                           f"of {len(shellcode_hits)} match(es) sit inside a region that is "
+                           f"ALSO executable+private (MEM_PRIVATE + a rules-defined "
+                           f"suspicious protection) — the same combination "
+                           f"dumpex/hunt/injection/ and hollowing.py treat as suspicious on "
+                           f"its own — worth an analyst's closer look even though it still "
+                           f"isn't structural proof.")
+        results.append(CheckResult(
             check="obfuscation.shellcode_bootstrap_lead",
-            facts=facts[:20] + ([f"... and {len(facts)-20} more"] if len(facts) > 20 else []),
-            verbose_facts=facts,   # full, uncapped -- see structural_payload's own comment above
-            inference=f"{len(all_shellcode_hits)} decoded payload(s) begin with a "
+            evidence=shellcode_hits,
+            evidence_limit=20,
+            inference=f"{len(shellcode_hits)} decoded payload(s) begin with a "
                        f"call-$+5-style shellcode bootstrap prefix (6 bytes)"
-                       + (f", {len(context_hits)} of them inside an executable+private region"
-                          if context_hits else "") + ".",
+                       + (f", {len(shellcode_context_hits)} of them inside an "
+                          f"executable+private region" if shellcode_context_hits else "") + ".",
             confidence=confidence,
             rationale=rationale,
             limitations=["6 bytes is not enough evidence to rule out coincidence, "
                          "especially inside high-entropy or adversarially-crafted data."],
             tag=TAG_LEAD,
         ))
-    report.all_shellcode_hits = all_shellcode_hits
 
     # ── Verdict ───────────────────────────────────────────────────────────
     # Score reflects STRUCTURAL detections only — confirmed sleep-mask
     # decode and/or a validated PE payload, found via any layer. Raw
     # entropy/Base64/GZIP/XOR presence and the shellcode-bootstrap prefix
     # (reported above as observations/leads) never contribute.
-    score = int(bool(sleep_mask_hits)) + int(bool(all_pe_hits))
-    findings['score'] = score
-    findings['max_score'] = 2
-    report.score = score
-    report.mem_info_available = mem_info_available
-    report.regions_count = len(regions)
+    score = int(bool(sleep_mask_hits)) + int(bool(pe_hits))
 
-    # Every layer has its own size/type filters (SLEEP_MASK_REGION_MAX,
-    # ENTROPY_SCAN_MAX, DECODE_SCAN_MAX) — regions can exist (mem_info
-    # available) while every single one gets filtered out by every layer
-    # (e.g. a dump with only huge regions), meaning nothing was actually
-    # read despite MemoryInfoListStream being present. A negative result
-    # in that case is not the same claim as "scanned and clean". This must
-    # catch partial gaps too, not just the all-skipped extreme: one region
-    # scanned fine and a second one skipped/unreadable is still an
-    # incomplete scope, even though *something* got scanned.
-    any_region_scanned = bool(sleep_mask_coverage.scanned or entropy_coverage.scanned
-                               or decode_coverage.scanned)
-    fully_skipped = mem_info_available and bool(regions) and not any_region_scanned
-    report.fully_skipped = fully_skipped
-    # Each layer's own oversized skips stay attributed to that layer.
-    # read_failed/short_reads ARE still summed: those two are per-read
-    # facts about work actually attempted, and the layers' region sets
-    # differ enough (only decode reads MEM_IMAGE at all) that a shared
-    # total does not carry the same "one region counted three times as
-    # three regions" claim an oversize sum does -- and, unlike an
-    # oversize skip, neither is rendered as a distinct-region count an
-    # investigator would go hunting addresses for.
-    oversized_by_layer = {
-        "sleep_mask": tuple(sleep_mask_coverage.skipped_oversize_targets),
-        "entropy":    tuple(entropy_coverage.skipped_oversize_targets),
-        "decode":     tuple(decode_coverage.skipped_oversize_targets),
-    }
-    total_read_failed  = (sleep_mask_coverage.read_failed + entropy_coverage.read_failed
-                           + decode_coverage.read_failed)
-    total_short_reads  = (sleep_mask_coverage.short_reads + entropy_coverage.short_reads
-                           + decode_coverage.short_reads)
-    budget_exhausted = decode_budget.exhausted()
-    findings['budget_exhausted'] = budget_exhausted
-    report.oversized_by_layer = oversized_by_layer
-    report.total_read_failed, report.total_short_reads = total_read_failed, total_short_reads
-    report.budget_exhausted = budget_exhausted
-    report.exhausted_reason = decode_budget.exhausted_reason
-    any_oversized = any(oversized_by_layer.values())
-    coverage_gap = bool(any_oversized or total_read_failed or total_short_reads or budget_exhausted)
-
-    # Coverage tracked independently of status/score — see dumpex.hunt.stomping /
-    # dumpex.hunt.pipe for why: a nonzero score must not silently imply every
-    # region was scanned.
-    coverage_reasons = []
-    if not mem_info_available:
-        coverage_reasons.append("MemoryInfoListStream missing from this dump")
-    if fully_skipped:
-        coverage_reasons.append(f"all {len(regions)} region(s) filtered out by every layer's "
-                                 f"size/type limits — nothing was actually scanned")
-    coverage_reasons.extend(oversized_layer_reasons(oversized_by_layer))
-    if total_read_failed:
-        coverage_reasons.append(f"{total_read_failed} region(s) failed to read")
-    if total_short_reads:
-        coverage_reasons.append(f"{total_short_reads} region(s) returned fewer bytes than "
-                                 f"declared (short read) — not fully scanned")
-    if budget_exhausted:
-        coverage_reasons.append(f"decode budget exhausted ({decode_budget.exhausted_reason})")
-
-    complete = not (fully_skipped or coverage_gap)
-    coverage_status = derive_coverage_status(mem_info_available, complete)
-    findings['coverage_status']  = coverage_status
-    findings['coverage_reasons'] = coverage_reasons
-
-    status = derive_status(mem_info_available, score > 0, complete)
-    findings['status'] = status
-    report.status = status
-    findings['verdict_level'] = verdict_level(score, _VERDICT_LEVEL_BY_SCORE, status=status)
-    report.verdict_level = findings['verdict_level']
-    findings['confidence'] = overall_confidence(findings_list, score)
-    findings['findings'] = [f.to_dict() for f in findings_list]
-    findings['lead_count'] = lead_count(findings_list)
-    findings['review_priority'] = review_priority(findings_list, score, status)
-
-    # `findings` (returned to the caller, and from there straight into
-    # dumpex.ui.structured.StructuredOutput's --json output) must hold
-    # JSON-safe data, never the raw Hit/EntropyHit objects `report` above
-    # keeps for presentation.py to render console detail from.
-    # dumpex.ui.structured._json_safe has no dataclass case and falls back
-    # to str(obj) for anything it doesn't recognize -- for a Hit, that
-    # means the region object's live memory address AND the full raw
-    # `decoded` bytes end up embedded in a single opaque JSON string
-    # instead of a clean, reproducible structure. Converting HERE, in one
-    # place, after every hit list has reached its final form, is safer
-    # than converting at each of the seven assignment sites above (harder
-    # to accidentally miss one).
-    for key in ('sleep_mask', 'entropy', 'base64', 'xor', 'compressed',
-                'hidden_pe', 'hidden_shellcode'):
-        findings[key] = [h.to_dict() for h in findings[key]]
-
-    report.coverage_report = _encoding_coverage_report(
-        mem_info_available, fully_skipped, len(regions), oversized_by_layer,
-        total_read_failed, total_short_reads, budget_exhausted, decode_budget.exhausted_reason)
-
-    return report
+    coverage = CoverageSnapshot(
+        memory_info_stream=memory_info_stream, region_count=region_count,
+        any_region_scanned=any_region_scanned,
+        sleep_mask_oversized=sleep_mask_oversized, entropy_oversized=entropy_oversized,
+        decode_oversized=decode_oversized, read_failed=read_failed, short_reads=short_reads,
+        budget_exhausted=budget_exhausted, exhausted_reason=exhausted_reason,
+    )
+    evidence = EncodingEvidence(
+        sleep_mask_hits=sleep_mask_hits, entropy_hits=entropy_hits,
+        base64_hits=base64_hits, xor_hits=xor_hits, compressed_hits=compressed_hits,
+        pe_hits=pe_hits, shellcode_hits=shellcode_hits,
+        shellcode_context_hits=shellcode_context_hits,
+    )
+    return EncodingReport(score=score, coverage=coverage, results=tuple(results), evidence=evidence)

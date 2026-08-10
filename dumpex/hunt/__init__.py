@@ -16,8 +16,7 @@ from dumpex.hunt.pipe.presentation import render as _render_pipe_console
 from dumpex.hunt.cs_beacon  import (_build_cs_beacon_report, _print_cs_beacon_pre_build_console,
     _render_cs_beacon_post_build_console)
 from dumpex.hunt.yara_hunt  import _build_yara_report, _render_yara_console
-from dumpex.hunt.encoding   import (_build_encoding_report, _print_encoding_pre_build_console,
-    _render_encoding_console)
+from dumpex.hunt.encoding   import _build_encoding_report, _render_encoding_console
 
 from dumpex.hunt.injection.collect import _record_from_injection_report
 from dumpex.hunt.hollowing          import _record_from_hollowing_report
@@ -248,7 +247,6 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         results["yara"] = _render_yara_console(report, verbose)
         records.append(_record_from_yara_report(report))
     if run_obfuscation:
-        _print_encoding_pre_build_console()
         report = _build_encoding_report(mf)
         results["obfuscation"] = _render_encoding_console(report, verbose)
         records.append(_record_from_encoding_report(report))

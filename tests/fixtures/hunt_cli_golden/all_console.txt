@@ -90,25 +90,16 @@
   HUNT: Obfuscation Detection
 ══════════════════════════════════════════
 
-  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …
-  [*] Layer 1: Shannon entropy scan …
-  [*] Layers 2-4: Base64 / XOR / GZIP scan …
-  [✓] CS Sleep Mask XOR-encoded beacon memory
-      Status : CLEAN — no sleep mask XOR encoding detected
+  VERDICT     NOT EVALUATED — no required stream present in this dump
+  Confidence  none
+  Score       0/2
+  Coverage    NOT EVALUATED
+  Review      none
 
-  [✓] High-entropy private memory
-      Status : CLEAN — no anomalous entropy in private regions
+  COVERAGE
 
-  [✓] Base64 encoded payloads
-      Status : CLEAN — no significant Base64 payloads found
-
-  [✓] XOR single-byte obfuscation
-      Status : CLEAN — no single-byte XOR payloads identified
-
-  [✓] Compressed data (GZIP/ZLIB)
-      Status : CLEAN — no compressed payloads found
-
-  [ VERDICT ]  NOT EVALUATED — MemoryInfoListStream missing from this dump  (0/2 — structural detections only; entropy/Base64/GZIP/shellcode-prefix are observations/leads, never a verdict by themselves)
+  [-] NOT EVALUATED
+      MemoryInfoListStream missing from this dump
 
 ══════════════════════════════════════════
   HUNT SUMMARY

@@ -22,8 +22,13 @@ parameters were dropped; injection's Report/parallel-findings/mutable-
 collection boundaries converted with the Injection 2C cutover (production
 now builds `dumpex.hunt.injection.domain.InjectionReport`, and the old
 dict-`Report` module `dumpex.hunt.injection.aggregate.Report` no longer
-exists). To use the file as a red/green implementation checklist, run it
-with ``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
+exists); obfuscation's Report/parallel-findings/mutable-collection/
+aggregate boundaries converted with the Encoding pilot (issue #5) --
+production now builds `dumpex.hunt.encoding.domain.EncodingReport`, and
+the old dict-`EncodingReport` in `dumpex.hunt.encoding.aggregate` and
+`dumpex.hunt.encoding.presentation` no longer exist. To use the file as a
+red/green implementation checklist, run it with
+``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
 """
 import dataclasses
 import enum
@@ -35,7 +40,8 @@ from dumpex.hunt import _finding, hollowing
 from dumpex.hunt.cs_beacon import aggregate as cs_beacon_aggregate
 from dumpex.hunt.cs_beacon import presentation as cs_beacon_presentation
 from dumpex.hunt.encoding import aggregate as encoding_aggregate
-from dumpex.hunt.encoding import presentation as encoding_presentation
+from dumpex.hunt.encoding import domain as encoding_domain
+from dumpex.hunt.encoding import _render_encoding_console as encoding_render
 from dumpex.hunt.injection import aggregate as injection_aggregate
 from dumpex.hunt.injection import _render_injection_console as injection_render
 from dumpex.hunt.injection import domain as injection_domain
@@ -59,7 +65,7 @@ REPORT_TYPES = [
     pytest.param(stomping_aggregate.Report, id="stomping", marks=_PENDING),
     pytest.param(pipe_aggregate.Report, id="pipe", marks=_PENDING),
     pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
-    pytest.param(encoding_aggregate.EncodingReport, id="obfuscation", marks=_PENDING),
+    pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
     pytest.param(yara_aggregate.Report, id="yara", marks=_PENDING),
 ]
 
@@ -77,7 +83,7 @@ PARALLEL_FINDING_REPORT_TYPES = [
     pytest.param(stomping_aggregate.Report, id="stomping", marks=_PENDING),
     pytest.param(pipe_aggregate.Report, id="pipe", marks=_PENDING),
     pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
-    pytest.param(encoding_aggregate.EncodingReport, id="obfuscation", marks=_PENDING),
+    pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
 ]
 
 
@@ -96,22 +102,25 @@ MUTABLE_COLLECTION_REPORT_TYPES = [
     pytest.param(stomping_aggregate.Report, id="stomping", marks=_PENDING),
     pytest.param(pipe_aggregate.Report, id="pipe", marks=_PENDING),
     pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
-    pytest.param(encoding_aggregate.EncodingReport, id="obfuscation", marks=_PENDING),
+    pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
 ]
 
 # Per-(report_type, required-field-name) construction overrides, consulted
 # before the generic {}/[]/None guesses below -- needed for a Report type
 # whose required fields are ordinary validated scalars/value-objects (not
 # the old dict-`Report`'s own `findings`/`findings_list` collections),
-# which legitimately reject `None` at construction. `InjectionReport` is
-# the first (and, while the migration is in progress, only) type that
-# needs one: its required fields are `score` (an int) and `coverage` (a
-# `CoverageSnapshot`), both of which validate their input.
+# which legitimately reject `None` at construction. `InjectionReport`/
+# `EncodingReport` both need one: their required fields are `score` (an
+# int) and `coverage` (a `CoverageSnapshot`), both of which validate their
+# input.
 _REQUIRED_FIELD_OVERRIDES = {
     (injection_domain.InjectionReport, "score"): 0,
     (injection_domain.InjectionReport, "coverage"): injection_domain.CoverageSnapshot(
         memory_info_stream=False, thread_info_stream=False,
         module_list_stream=False, thread_list_stream=False),
+    (encoding_domain.EncodingReport, "score"): 0,
+    (encoding_domain.EncodingReport, "coverage"): encoding_domain.CoverageSnapshot(
+        memory_info_stream=False),
 }
 
 
@@ -158,7 +167,7 @@ def test_finding_detail_level_replaces_string_projection_modes():
 AGGREGATORS_WITH_PENDING_BOUNDARY_FIXES = [
     pytest.param(injection_aggregate.build_report, id="injection"),
     pytest.param(pipe_aggregate.build_report, id="pipe", marks=_PENDING),
-    pytest.param(encoding_aggregate.build_report, id="obfuscation", marks=_PENDING),
+    pytest.param(encoding_aggregate.build_report, id="obfuscation"),
 ]
 
 
@@ -207,7 +216,7 @@ RENDERERS = [
     pytest.param(stomping_presentation.render, id="stomping"),
     pytest.param(pipe_presentation.render, id="pipe"),
     pytest.param(cs_beacon_presentation.render, id="cs-beacon"),
-    pytest.param(encoding_presentation.render, id="obfuscation"),
+    pytest.param(encoding_render, id="obfuscation"),
     pytest.param(yara_presentation.render_result, id="yara", marks=_PENDING),
 ]
 

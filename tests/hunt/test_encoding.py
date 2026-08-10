@@ -161,9 +161,11 @@ def test_verbose_shows_file_offset_and_b64_length_not_shown_normally(capsys, mon
     # value printed is always the vacuous "(not captured)" placeholder.
     # Monkeypatched here to a real, non-None value so the assertion below
     # actually exercises the printed offset text, not just its label.
-    # Patched on aggregate (not presentation) -- that's where Finding.
-    # verbose_facts is now built, see aggregate.py's own comment on why.
-    monkeypatch.setattr(encoding.aggregate, "va_to_file_offset", lambda mf, va: 0x1234)
+    # Patched on dumpex.hunt._location (the ONE shared resolver import
+    # point resolve_location() calls into) rather than on aggregate --
+    # aggregate.py no longer imports va_to_file_offset at all; resolution
+    # now happens in each scan layer, before aggregate.py ever sees it.
+    monkeypatch.setattr("dumpex.hunt._location.va_to_file_offset", lambda mf, va: 0x1234)
 
     region_base = 0x300000
     pe_bytes = build_pe_header(
@@ -195,7 +197,7 @@ def test_verbose_file_offset_zero_is_not_mistaken_for_not_captured(capsys, monke
     # very start of the dump file) -- the printed-offset logic must branch
     # on `fo is not None`, not on `fo` being truthy, or a real offset of 0
     # would misprint as "(not captured)".
-    monkeypatch.setattr(encoding.aggregate, "va_to_file_offset", lambda mf, va: 0)
+    monkeypatch.setattr("dumpex.hunt._location.va_to_file_offset", lambda mf, va: 0)
 
     region_base = 0x300000
     pe_bytes = build_pe_header(
@@ -224,9 +226,9 @@ def test_verbose_xor_detail_includes_decoding_evidence(capsys, monkeypatch):
     compact line and Finding.facts already read, through the real
     end-to-end scan/aggregate/render path (not a direct call into a
     presentation-layer helper -- there is no such per-hunter helper left
-    to call; see dumpex/hunt/encoding/presentation.py's own module
+    to call; see dumpex/hunt/encoding/report_console.py's own module
     docstring for why)."""
-    monkeypatch.setattr(encoding.aggregate, "va_to_file_offset", lambda mf, va: 0x456)
+    monkeypatch.setattr("dumpex.hunt._location.va_to_file_offset", lambda mf, va: 0x456)
 
     key = 0x5A
     plaintext = b"beacon http://185.220.101.5/submit.php callback data padding here for length"
@@ -329,5 +331,3 @@ def test_verbose_lists_every_shellcode_hit_beyond_the_facts_cap(capsys):
     for i in range(n):
         va = region_base + i * 0x1000
         assert f"0x{va:016x}" in verbose_out, f"shellcode hit {i} (VA 0x{va:x}) missing from --verbose output"
-    shellcode_block = verbose_out.split("obfuscation.shellcode_bootstrap_lead", 1)[1].split("\n\n", 1)[0]
-    assert "Facts:" not in shellcode_block

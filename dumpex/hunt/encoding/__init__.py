@@ -38,13 +38,16 @@ Address semantics: every hit reports VA (process) + .dmp file offset,
 consistent with the rest of Dumpex.
 
 This is a package, not a single file: each scan layer (sleep_mask,
-entropy, decoding) returns standardized data (models.py) and decides
-neither score/status/verdict nor prints anything; aggregate.py is the
-ONE place score/status/coverage_status/verdict_level/confidence/
-lead_count/review_priority get computed; presentation.py is the ONE
-place anything gets printed to the console. This __init__.py is the thin
-entry point: build config, call the three scan layers, aggregate, print,
-return the findings dict.
+entropy, decoding) returns standardized, immutable evidence (models.py)
+and decides neither score/status/verdict nor prints anything;
+aggregate.py is the ONE place score/coverage/the seven CheckResults get
+computed, building the immutable `EncodingReport` (domain.py);
+report_console.py is the ONE place anything gets printed to the console.
+This __init__.py is the thin entry point: build config, call the three
+scan layers, aggregate into one Report, then project it to console/
+legacy-dict/typed-record (report_console.py/report_legacy.py/
+report_record.py) -- see dumpex/hunt/injection/ for the completed
+reference pilot this package's architecture mirrors.
 
 The stable contract is `_hunt_encoding` itself (imported by
 dumpex/hunt/__init__.py): same signature, and the SAME meaning for every
@@ -79,10 +82,8 @@ need them directly, as this package's own tests do.
 import time
 from minidump.minidumpfile import MinidumpFile
 
-from dumpex.ui.colors import DIM
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import get_modules, get_memory_regions, read_region
-from dumpex.hunt._ui import _print_hunt_header
 from dumpex.hunt._budget import ScanBudget
 
 from dumpex.hunt.encoding.config import (
@@ -100,7 +101,7 @@ from dumpex.hunt.encoding.sleep_mask import _scan_sleep_mask
 from dumpex.hunt.encoding.entropy import _scan_entropy
 from dumpex.hunt.encoding.decoding import scan_decode_layers
 from dumpex.hunt.encoding.aggregate import build_report
-from dumpex.hunt.encoding import presentation
+from dumpex.hunt.encoding import report_console, report_legacy
 
 
 def _build_encoding_report(mf: MinidumpFile):
@@ -108,13 +109,9 @@ def _build_encoding_report(mf: MinidumpFile):
     EncodingReport -- the ONE place this pipeline is assembled, shared
     by `_hunt_encoding()` (console path, below) and
     `collect_obfuscation_record()` (the v2.4 migration's HunterRecord-
-    producing path). Prints nothing at all (see `_hunt_encoding()`/
-    `collect_hunt()` for the two console/typed-record consumers of the
-    same Report -- PR4 of the `--hunt` v2.4 migration unified every
-    hunter onto this build-once, multiple-consumers shape). Takes no
-    `verbose` parameter: --verbose only ever gates what presentation.py
-    prints from an already-built Report's `Finding.verbose_facts` (see
-    Finding.print()'s own docstring) -- it was never a scan-time or
+    producing path). Prints nothing at all. Takes no `verbose` parameter:
+    --verbose only ever gates what report_console.py prints from an
+    already-built Report's own evidence -- it was never a scan-time or
     aggregation-time decision, so threading it through this function and
     into `build_report()` was dead plumbing.
     """
@@ -157,12 +154,26 @@ def _build_encoding_report(mf: MinidumpFile):
         deadline=time.monotonic() + ENCODING_BUDGET_TIME_SECONDS,
     )
 
-    sleep_mask_result = _scan_sleep_mask(regions, modules, mf, read_region, config, decode_budget)
+    sleep_mask_result = _scan_sleep_mask(regions, modules, mf, read_region, config, decode_budget,
+                                         susp_prots=susp_prots)
     entropy_result = _scan_entropy(regions, modules, mf, susp_prots, read_region, config)
-    decode_result = scan_decode_layers(regions, modules, mf, read_region, config, decode_budget)
+    decode_result = scan_decode_layers(regions, modules, mf, read_region, config, decode_budget,
+                                        susp_prots=susp_prots)
 
-    report = build_report(mf, sleep_mask_result, entropy_result, decode_result,
-                           modules, regions, susp_prots, mem_info_available, decode_budget)
+    sm_cov, ent_cov, dec_cov = (sleep_mask_result.coverage, entropy_result.coverage,
+                                decode_result.coverage)
+    report = build_report(
+        tuple(sleep_mask_result.hits), tuple(entropy_result.hits),
+        tuple(decode_result.base64), tuple(decode_result.xor), tuple(decode_result.compressed),
+        memory_info_stream=mem_info_available, region_count=len(regions),
+        any_region_scanned=bool(sm_cov.scanned or ent_cov.scanned or dec_cov.scanned),
+        sleep_mask_oversized=tuple(sm_cov.skipped_oversize_targets),
+        entropy_oversized=tuple(ent_cov.skipped_oversize_targets),
+        decode_oversized=tuple(dec_cov.skipped_oversize_targets),
+        read_failed=sm_cov.read_failed + ent_cov.read_failed + dec_cov.read_failed,
+        short_reads=sm_cov.short_reads + ent_cov.short_reads + dec_cov.short_reads,
+        budget_exhausted=decode_budget.exhausted(), exhausted_reason=decode_budget.exhausted_reason,
+    )
     return report
 
 
@@ -171,60 +182,27 @@ def _hunt_encoding(mf: MinidumpFile, verbose: bool = False) -> dict:
     Scan process memory for encoded / obfuscated payloads.
 
     Runs five detection layers (see `_build_encoding_report()`'s own
-    docstring above), aggregates their results into Finding objects plus
-    score/status/coverage (dumpex.hunt.encoding.aggregate), prints the
-    console report (dumpex.hunt.encoding.presentation), and returns the
-    findings dict.
+    docstring above), aggregates their results into the immutable
+    `EncodingReport` (dumpex.hunt.encoding.domain/aggregate), prints the
+    verdict-first console report (dumpex.hunt.encoding.report_console),
+    and returns the v1.1-shaped legacy findings dict
+    (dumpex.hunt.encoding.report_legacy).
 
-    The header and all three "Layer N: ..." progress lines now print
-    BEFORE calling the (fully silent) `_build_encoding_report()`, as one
-    contiguous block, rather than immediately before each layer actually
-    runs. This does trade away real-time "which layer is currently
-    running" feedback during a long scan (Layer 0 alone can run for up
-    to ENCODING_BUDGET_TIME_SECONDS) -- the same trade-off already made
-    for cs-beacon's and yara's own single/multi "Scanning N segment(s)"
-    progress lines when their builders were unified onto this same
-    build-once shape (see dumpex.hunt.cs_beacon._hunt_cs_beacon's own
-    docstring) -- but no consumer that only observes a fully-captured
-    console block (including
-    tests/integration/test_hunt_cli_compat_freeze.py's own byte-exact
-    fixtures) can tell the difference, since none of the three scan
-    layers print anything themselves (see this package's own docstring).
-
-    `get_rules()` is called here too, redundantly, before the header
-    print -- it prints a one-time "Rules loaded from ..." line the FIRST
-    time it's ever called in a process, and the pre-split function
-    called it (via `susp_prots = get_rules()[...]`) before printing the
-    header; the builder calls it again internally (a cheap cache hit
-    after the first real load, see dumpex.rules_pkg.loader.get_rules),
-    so this preserves that print order without the builder itself
-    printing anything (same fix as dumpex.hunt.stomping._hunt_stomping's
-    own docstring explains).
+    Unlike the pre-migration version, nothing prints before
+    `_build_encoding_report()` returns: `report_console.render_console_lines`
+    is a pure post-hoc projection of the already-built Report (see that
+    module's own docstring on why the old "Layer N: ..." pre-scan
+    progress announcements moved into a verbose-only summary block
+    instead of printing in real time), mirroring
+    dumpex.hunt.injection's own build-once, print-after shape.
     """
-    _print_encoding_pre_build_console()
     report = _build_encoding_report(mf)
     return _render_encoding_console(report, verbose)
-
-
-def _print_encoding_pre_build_console() -> None:
-    """The header + three "Layer N: ..." progress lines, extracted so
-    `dumpex.hunt.collect_hunt()`'s console+JSON orchestrator (see that
-    function's own docstring) can print the exact same lines
-    `_hunt_encoding()` does, BEFORE calling `_build_encoding_report()`
-    itself, without duplicating this print sequence (and its
-    `get_rules()` print-ordering fix, see `_hunt_encoding()`'s own
-    docstring) as a second copy."""
-    get_rules()
-    _print_hunt_header("Obfuscation Detection")
-    print(DIM("  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …"))
-    print(DIM("  [*] Layer 1: Shannon entropy scan …"))
-    print(DIM("  [*] Layers 2-4: Base64 / XOR / GZIP scan …"))
 
 
 def _render_encoding_console(report, verbose: bool = False) -> dict:
     """Render the console report for an ALREADY-BUILT encoding
     `EncodingReport`, returning the same v1.1-shaped findings dict
-    `_hunt_encoding()` always has -- extracted for the same reason as
-    `_print_encoding_pre_build_console()` above."""
-    presentation.render(report, verbose)
-    return report.findings
+    `_hunt_encoding()` always has."""
+    report_console.print_console(report, verbose)
+    return report_legacy.project_legacy_dict(report)

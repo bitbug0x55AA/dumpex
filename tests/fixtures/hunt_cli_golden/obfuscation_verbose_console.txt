@@ -1,47 +1,22 @@
-  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=f4b1140fc4606821…)
 
 ══════════════════════════════════════════
   HUNT: Obfuscation Detection
 ══════════════════════════════════════════
 
-  [*] Layer 0: CS Sleep Mask XOR scan (frequency analysis) …
-  [*] Layer 1: Shannon entropy scan …
-  [*] Layers 2-4: Base64 / XOR / GZIP scan …
-  [✓] CS Sleep Mask XOR-encoded beacon memory
-      Status : CLEAN — no sleep mask XOR encoding detected
+  Layers scanned:
+    Layer 0: CS Sleep Mask XOR scan (frequency analysis)
+    Layer 1: Shannon entropy scan
+    Layers 2-4: Base64 / XOR / GZIP scan
 
-  [✓] High-entropy private memory
-      Status : CLEAN — no anomalous entropy in private regions
+  VERDICT     LIKELY — one structural indicator (sleep-mask decode or PE payload)
+  Confidence  high
+  Score       1/2
+  Coverage    COMPLETE
+  Review      high
 
-  [i] Base64 encoded payloads (observation)
-      Status : OBSERVATION — PE payload(s) found — see obfuscation.structural_payload below (scored)
-      Detail : 1 region(s) with Base64-decodable data
+  KEY SIGNALS
 
-  [✓] XOR single-byte obfuscation
-      Status : CLEAN — no single-byte XOR payloads identified
-
-  [✓] Compressed data (GZIP/ZLIB)
-      Status : CLEAN — no compressed payloads found
-
-  [!] Structural PE payload inside encoded data
-      Status : DETECTION — executable payload concealed by encoding
-      Detail : 1 PE payload(s) found inside encoded/compressed data
-
-  obfuscation.base64_observation  [LOW]  OBSERVATION
-    Inference   : 1 region(s) contain data that decodes cleanly as Base64.
-    Confidence  : low — Base64 is a generic, ubiquitous encoding used constantly by benign software
-                  (certificates, config blobs, telemetry, embedded assets) — its mere presence
-                  carries no information about intent. Reported as an observation and never drives
-                  the obfuscation score by itself; only a decoded PE header or shellcode bootstrap
-                  pattern (see obfuscation.structural_payload) does.
-    Facts:
-      - VA=0x0000000000300000 File_offset=(not captured) Decoded_type=PE Decoded_size=1184bytes
-        B64_length=1580chars
-    Limitations:
-      - IOC-style strings inside decoded content are a lead, not proof — see
-        obfuscation.base64_observation facts / stomping-style string caveats.
-
-  obfuscation.structural_payload  [HIGH]  DETECTION
+  Structural PE payload inside encoded data  [HIGH]  DETECTION  (obfuscation.structural_payload)
     Inference   : Decoded/decompressed content from one or more obfuscation layers structurally
                   validates as a PE image.
     Confidence  : high — Unlike raw entropy/Base64/GZIP presence, this checks WHAT the decoded bytes
@@ -54,5 +29,17 @@
       - Structural validation reduces but does not eliminate false positives from
         adversarially-crafted or coincidental byte sequences in high-entropy data.
 
-  [ VERDICT ]  LIKELY — one structural indicator (sleep-mask decode or PE payload)  (1/2 — structural detections only; entropy/Base64/GZIP/shellcode-prefix are observations/leads, never a verdict by themselves)
+  Base64 encoded payloads  [LOW]  OBSERVATION  (obfuscation.base64_observation)
+    Inference   : 1 region(s) contain data that decodes cleanly as Base64.
+    Confidence  : low — Base64 is a generic, ubiquitous encoding used constantly by benign software
+                  (certificates, config blobs, telemetry, embedded assets) — its mere presence
+                  carries no information about intent. Reported as an observation and never drives
+                  the obfuscation score by itself; only a decoded PE header or shellcode bootstrap
+                  pattern (see obfuscation.structural_payload) does.
+    Facts:
+      - VA=0x0000000000300000 File_offset=(not captured) Decoded_type=PE Decoded_size=1184bytes
+        B64_length=1580chars
+    Limitations:
+      - IOC-style strings inside decoded content are a lead, not proof — see
+        obfuscation.base64_observation facts / stomping-style string caveats.
 

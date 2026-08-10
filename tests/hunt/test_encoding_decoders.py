@@ -27,31 +27,31 @@ def test_classify_decoded_recognizes_valid_pe():
                                   "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
                                 size_of_image=0x2000, trailing_padding=0x300)
     cls = classification._classify_decoded(pe_bytes)
-    assert cls["type"] == "pe"
-    assert cls["is_pe"] is True
+    assert cls.kind == "pe"
+    assert cls.is_pe is True
 
 
 def test_classify_decoded_recognizes_shellcode_bootstrap():
     data = b'\xe8\x00\x00\x00\x00\x58' + b'\x90' * 100
     cls = classification._classify_decoded(data)
-    assert cls["type"] == "shellcode"
-    assert cls["is_shellcode"] is True
+    assert cls.kind == "shellcode"
+    assert cls.is_shellcode is True
 
 
 def test_classify_decoded_finds_ioc_text():
     data = b"beacon check-in: http://185.220.101.5:8080/gate.php" + b" " * 50
     cls = classification._classify_decoded(data)
-    assert cls["type"] == "ioc_text"
-    assert cls["ioc_strings"]
+    assert cls.kind == "ioc_text"
+    assert cls.ioc_strings
 
 
 def test_classify_decoded_plain_text_has_no_ioc():
     data = b"the quick brown fox jumps over the lazy dog, nothing suspicious here at all" * 3
     cls = classification._classify_decoded(data)
-    assert cls["type"] == "plaintext"
-    assert cls["ioc_strings"] == []
-    assert cls["is_pe"] is False
-    assert cls["is_shellcode"] is False
+    assert cls.kind == "plaintext"
+    assert cls.ioc_strings == ()
+    assert cls.is_pe is False
+    assert cls.is_shellcode is False
 
 
 def test_classify_decoded_high_entropy_binary():
@@ -59,13 +59,13 @@ def test_classify_decoded_high_entropy_binary():
     random.seed(3)
     data = bytes(random.getrandbits(8) for _ in range(4096))
     cls = classification._classify_decoded(data)
-    assert cls["type"] in ("high_entropy", "binary")
-    assert cls["is_pe"] is False
+    assert cls.kind in ("high_entropy", "binary")
+    assert cls.is_pe is False
 
 
 def test_classify_decoded_too_short_is_binary():
     cls = classification._classify_decoded(b'\x01\x02')
-    assert cls["type"] == "binary"
+    assert cls.kind == "binary"
 
 
 # ── _is_plausible_ip ────────────────────────────────────────────────────────
