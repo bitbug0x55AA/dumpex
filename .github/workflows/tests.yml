@@ -86,7 +86,15 @@ jobs:
           coverage report --include="dumpex/hunt/encoding/sleep_mask.py"    --fail-under=85
           coverage report --include="dumpex/hunt/encoding/decoding.py"      --fail-under=78
           coverage report --include="dumpex/hunt/encoding/aggregate.py"     --fail-under=90
-          coverage report --include="dumpex/hunt/encoding/presentation.py" --fail-under=65
+          # The canonical report cutover split the old presentation.py into
+          # the immutable domain model and independent console/facts/legacy/
+          # record projectors. Gate every new boundary so stale paths fail
+          # visibly and no output projection is left without coverage.
+          coverage report --include="dumpex/hunt/encoding/domain.py"         --fail-under=95
+          coverage report --include="dumpex/hunt/encoding/report_console.py" --fail-under=90
+          coverage report --include="dumpex/hunt/encoding/report_facts.py"   --fail-under=90
+          coverage report --include="dumpex/hunt/encoding/report_legacy.py"  --fail-under=90
+          coverage report --include="dumpex/hunt/encoding/report_record.py"  --fail-under=95
           # dumpex/hunt/cs_beacon/*: same reasoning as encoding/* above --
           # cs_beacon.py is a package now, not a single file. parser.py and
           # presentation.py have low coverage because most Malleable C2/
