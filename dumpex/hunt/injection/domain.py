@@ -3,14 +3,15 @@ hunter -- `InjectionReport` plus the coverage snapshot and evidence
 container it is built from.
 
 This is the "one canonical result representation" side of the hunt
-output-source migration. Today's `dumpex.hunt.injection.aggregate.Report`
-keeps the same facts several times over: `findings` (a dict whose
-`"findings"` key holds already-rendered Finding dicts, alongside Evidence
-tuples under other keys), `findings_list` (the same findings a second time
-as Finding objects), and then `rwx`/`validated_pe_hits`/`mz_only_hits`/
-`suspicious_pe_hits`/`informational_pe_hits`/`start_threads` as a third
-copy of the evidence those findings were rendered from. Nothing structural
-keeps those three in agreement.
+output-source migration. Before the Injection 2C cutover,
+`dumpex.hunt.injection.aggregate.Report` kept the same facts several times
+over: `findings` (a dict whose `"findings"` key held already-rendered
+Finding dicts, alongside Evidence tuples under other keys), `findings_list`
+(the same findings a second time as Finding objects), and then
+`rwx`/`validated_pe_hits`/`mz_only_hits`/`suspicious_pe_hits`/
+`informational_pe_hits`/`start_threads` as a third copy of the evidence
+those findings were rendered from. Nothing structural kept those three in
+agreement.
 
 `InjectionReport` stores each fact exactly once:
 
@@ -27,16 +28,16 @@ keeps those three in agreement.
 and DERIVES everything else -- `status`, `verdict_level`, `confidence`,
 `lead_count`, `review_priority`, `max_score` -- as properties, through the
 same shared reducers (`dumpex.hunt._coverage`, `dumpex.hunt._finding`)
-today's aggregate.py already calls. A derived property cannot drift from
-the score/coverage/results it is derived from, which is the failure mode
+`aggregate.py` calls. A derived property cannot drift from the
+score/coverage/results it is derived from, which is the failure mode
 storing all seven judgment fields side by side in a dict invites.
 
-Additive as of this change: nothing constructs an `InjectionReport` in
-production yet (see the Injection 2A issue's "no aggregate or caller
-cutover" non-goal), and no console/JSON behavior changes. The legacy v1.1
-dict, the v2.7 `HunterRecord`, and the console renderer become pure
-projections of this type in the follow-up issues; this one only fixes the
-shape and proves its immutability.
+Production-live as of the Injection 2C cutover: `dumpex.hunt.injection.
+aggregate.build_report()` is the ONE place that constructs an
+`InjectionReport`, and the legacy v1.1 dict, the current-schema
+`HunterRecord`, and the console renderer (`dumpex.hunt.injection.
+report_legacy`/`report_record`/`report_console`) are pure projections of
+it -- no other representation of a hunt result exists in this package.
 """
 from dataclasses import dataclass, field
 

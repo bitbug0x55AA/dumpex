@@ -18,7 +18,6 @@ import io
 import re
 
 import dumpex.hunt as hunt
-import dumpex.hunt.injection.presentation as injection_presentation
 from tests.fixtures.fakes import Region, Module, ThreadInfo, Ctx, Thread, FakeStream, FakeMF, \
     build_pe_header, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ, mem_reader
 import dumpex.hunt.injection as injection
@@ -85,7 +84,7 @@ def _correlated_two_hunter_mf():
 
 
 def test_poisoned_console_dict_cannot_leak_into_hunt_summary(monkeypatch, tmp_path, capsys):
-    real_render = injection_presentation.render
+    real_render = injection._render_injection_console
 
     def poisoned_render(report, verbose=False):
         # Print exactly what the real renderer would (so this test only
@@ -177,7 +176,7 @@ def test_correlated_regions_source_is_real_records_and_real_memory_info_not_resu
     inputs at all, not merely that its OUTPUT happens to look right, which
     `test_poisoned_console_dict_cannot_leak_into_hunt_summary` above already
     covers for the rest of the card)."""
-    real_render = injection_presentation.render
+    real_render = injection._render_injection_console
 
     def poisoned_render(report, verbose=False):
         real_render(report, verbose)

@@ -4,8 +4,7 @@ from tests.fixtures.fakes import (Region, Module, ThreadInfo, Ctx, Thread, FakeS
                                    mem_reader)
 
 import dumpex.hunt.injection as injection
-import dumpex.hunt.injection.presentation as injection_presentation
-import dumpex.hunt.injection.legacy as injection_legacy
+import dumpex.hunt.injection.report_legacy as injection_report_legacy
 
 
 # ── embedded PE inside a loaded module's own range -> NOT hidden PE ───────
@@ -572,13 +571,13 @@ def test_coverage_only_finding_limitation_surfaces_once_under_coverage_as_impact
 
 def test_legacy_findings_dict_called_on_normal_return_path(monkeypatch):
     calls = []
-    real = injection_legacy.legacy_findings_dict
+    real = injection_report_legacy.project_legacy_dict
 
-    def spy(findings):
-        result = real(findings)
+    def spy(report):
+        result = real(report)
         calls.append(result)
         return result
-    monkeypatch.setattr(injection_presentation, "legacy_findings_dict", spy)
+    monkeypatch.setattr(injection_report_legacy, "project_legacy_dict", spy)
 
     f = injection._hunt_injection(_full_correlation_mf(), verbose=False)
     assert len(calls) == 1
@@ -588,13 +587,13 @@ def test_legacy_findings_dict_called_on_normal_return_path(monkeypatch):
 
 def test_legacy_findings_dict_called_on_not_evaluated_path(monkeypatch):
     calls = []
-    real = injection_legacy.legacy_findings_dict
+    real = injection_report_legacy.project_legacy_dict
 
-    def spy(findings):
-        result = real(findings)
+    def spy(report):
+        result = real(report)
         calls.append(result)
         return result
-    monkeypatch.setattr(injection_presentation, "legacy_findings_dict", spy)
+    monkeypatch.setattr(injection_report_legacy, "project_legacy_dict", spy)
 
     f = injection._hunt_injection(FakeMF(), verbose=False)
     assert f["status"] == "NOT_EVALUATED"

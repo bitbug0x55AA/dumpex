@@ -1,16 +1,16 @@
 """`InjectionReport` -> current-schema (v2.10) `HunterRecord` pure
-projector -- the `InjectionReport` equivalent of
-`dumpex.hunt.injection.collect._record_from_injection_report`.
+projector. Since the Injection 2C cutover, `dumpex.hunt.injection.collect.
+_record_from_injection_report` is simply this module's own
+`project_hunter_record`, re-exported under that name.
 
 Deliberately does not import `dumpex.hunt.injection.collect`/`aggregate`
-(see `report_legacy.py`'s own docstring for why) -- the five small
-Hunt*Ref-builder helpers below duplicate `collect.py`'s own field-for-
-field shape, pure functions of `dumpex.hunt.injection.models` types.
-Unlike `collect.py`'s own `_thread_ref_from_context`, `thread_contexts`
+-- the five small Hunt*Ref-builder helpers below are pure functions of
+`dumpex.hunt.injection.models` types, entirely independent of how
+`aggregate.py` builds the `InjectionReport` they project. `thread_contexts`
 here never needs to subscript a raw dict -- `InjectionEvidence.
-thread_contexts` is already a tuple of typed `ThreadContext` objects (2A),
-so the same typed-attribute read every other ref builder here already
-uses applies to it too.
+thread_contexts` is already a tuple of typed `ThreadContext` objects, so
+the same typed-attribute read every other ref builder here already uses
+applies to it too.
 """
 from dumpex.hunt.injection.domain import InjectionReport
 from dumpex.hunt.injection.report_facts import finding_from_check_result, project_coverage_report

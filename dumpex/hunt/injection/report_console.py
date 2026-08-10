@@ -1,24 +1,21 @@
-"""`InjectionReport` -> console lines pure projector -- the
-`InjectionReport` equivalent of `dumpex.hunt.injection.presentation.
-render()`, minus that function's two conflated responsibilities: this
-module never prints (returns the exact lines a caller would print) and
-never returns a legacy-dict projection (see `report_legacy.py` for that,
-now an independent pure function of the SAME `InjectionReport` rather
-than something `render()` calls as a side effect of rendering console
-text).
+"""`InjectionReport` -> console lines pure projector -- this is now the
+ONE console renderer for the injection hunter (the pre-2C-cutover
+`dumpex.hunt.injection.presentation.render()`, which conflated printing,
+legacy-dict projection, and rendering off the old dict-`Report`, has been
+deleted). This module never prints (returns the exact lines a caller would
+print) and never returns a legacy-dict projection (see `report_legacy.py`
+for that, an independent pure function of the SAME `InjectionReport`);
+`dumpex.hunt.injection._render_injection_console()` (in
+`dumpex/hunt/injection/__init__.py`) composes `print_console()` below with
+`report_legacy.project_legacy_dict()` for callers that need both.
 
-Reproduces the approved verdict-first structure `presentation.py` already
-implements byte-for-byte for the same underlying facts (verdict block ->
+Reproduces the approved verdict-first structure the old `presentation.py`
+implemented, byte-for-byte for the same underlying facts (verdict block ->
 KEY SIGNALS -> WHY THIS VERDICT (normal only) -> unified COVERAGE ->
 verbose hint) -- see tests/hunt/test_injection_projectors.py's golden-
 scenario parity test, which diffs this module's output against
 tests/fixtures/hunt_cli_golden/injection_console.txt/
-injection_verbose_console.txt for an equivalent scenario. Deliberately
-does not import `presentation.py` (see `report_legacy.py`'s own docstring
-for why); the presentation constants/helpers below are intentional,
-reviewed duplicates of it, expected to collapse into one implementation
-once the 2C cutover retires the old module (see
-`dumpex.hunt.injection.domain`'s own module docstring).
+injection_verbose_console.txt for an equivalent scenario.
 
 This is also the one place this hunter's normal/verbose CONSOLE detail
 POLICY lives: `report_facts.finding_from_check_result` builds a compat

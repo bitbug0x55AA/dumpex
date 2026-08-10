@@ -39,33 +39,29 @@ allocation shows page-type + PE-header + live-execution convergence"
 to anything else" (low confidence) is explicit, not implied by wording.
 
 This is a package, not a single file: memory_scan.py/thread_scan.py only
-collect facts (RWX regions, hidden-PE candidates, unbacked threads) and
-never score or print; correlation.py establishes AllocationBase/RIP/
-StartAddress relationships between those facts; aggregate.py is the ONE
-place score/status/coverage_status/verdict_level/confidence/lead_count/
-review_priority get computed; presentation.py is the ONE place anything
-gets printed to the console. This __init__.py is the thin entry point:
-run the scans, correlate, aggregate, render, return the findings dict.
+collect facts (RWX regions, hidden-PE candidates, unbacked threads,
+resolved thread contexts) and never score or print; correlation.py
+establishes AllocationBase/RIP/StartAddress relationships between those
+facts; aggregate.py is the ONE place score/coverage/CheckResult get
+computed, returning the canonical, immutable `dumpex.hunt.injection.
+domain.InjectionReport`; report_console.py is the ONE place anything gets
+printed to the console, as a pure projection of that Report (see
+report_facts.py/report_legacy.py/report_record.py for the other
+projections). This __init__.py is the thin entry point: run the scans,
+correlate, aggregate, render, return the legacy findings dict.
 
 The stable contract is `_hunt_injection` itself (imported by
 dumpex/hunt/__init__.py): same signature, same fields, same score/status/
-coverage/JSON shape as before this package split — this refactor only
-changes internal structure. Internally, aggregate.py now builds
-`findings["rwx"]`/`hidden_pe_validated`/`hidden_pe_unvalidated`/
-`threads`/`rip_hits`/`rip_full_correlation`/`start_hits` from frozen
-dumpex.hunt.injection.models Evidence dataclasses (the injection Evidence
-migration) rather than raw minidump Region/ThreadInfo objects or
-hand-rolled dicts -- but presentation.render() never hands one of those
-dataclasses back to a caller: dumpex.hunt.injection.legacy.
-legacy_findings_dict() projects every one of them into a plain, JSON-safe
-dict (stable field names -- base_address/allocation_base/size/type/
-protect for a region, etc. -- see that module's own docstring) before
-`_hunt_injection()`/`cmd_hunt()`'s bare `results["injection"]` return.
-Those field names are NOT the raw minidump attribute names
-(BaseAddress/AllocationBase/...) a caller reading this dict pre-migration
-would have used -- that specific element-attribute-name promise is what
-changed; the dict-of-dicts SHAPE and every top-level key did not.
-`read_region` is re-exported here and
+coverage/JSON shape as this package has always had -- internally, every
+fact flows through one immutable `InjectionReport` rather than a
+dict-keyed `Report` carrying parallel `findings`/`findings_list`
+representations. `report_console.render_console_lines()`/`print_console()`
+never hand a typed Evidence dataclass back to a caller:
+`dumpex.hunt.injection.report_legacy.project_legacy_dict()` projects every
+one of them into a plain, JSON-safe dict (stable field names --
+base_address/allocation_base/size/type/protect for a region, etc. -- see
+that module's own docstring) before `_hunt_injection()`/`cmd_hunt()`'s
+bare `results["injection"]` return. `read_region` is re-exported here and
 remains monkeypatchable (`injection.read_region = fake` before calling
 `_hunt_injection()` still changes its behavior — see
 dumpex/hunt/_runtime.py) because it is threaded explicitly into
@@ -78,26 +74,25 @@ them from their actual module (dumpex.hunt.injection.memory_scan/
 package's own tests do.
 """
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import get_memory_regions, get_thread_contexts, read_region
+from dumpex.core.memory import get_memory_regions, read_region
 from dumpex.hunt._runtime import HunterRuntime
 
 from dumpex.hunt.injection import memory_scan
 from dumpex.hunt.injection import thread_scan
 from dumpex.hunt.injection import correlation
 from dumpex.hunt.injection import aggregate
-from dumpex.hunt.injection import presentation
+from dumpex.hunt.injection import report_console
+from dumpex.hunt.injection import report_legacy
 
 
 def _build_injection_report(mf: MinidumpFile):
-    """Run the scan/correlate/aggregate pipeline and return the
-    aggregate.Report -- the ONE place this pipeline is assembled, shared by
-    `_hunt_injection()` (console path, below) and
-    `dumpex.hunt.injection.collect.collect_injection_record()` (the v2.4
-    migration's HunterRecord-producing path). Both consuming the exact
-    same Report is what guarantees they can never compute a different
-    score/status/coverage for the same input -- extracted from
-    `_hunt_injection` itself (see PR2 of the `--hunt` v2.4 migration),
-    behavior unchanged."""
+    """Run the scan/correlate/aggregate pipeline and return the canonical
+    `dumpex.hunt.injection.domain.InjectionReport` -- the ONE place this
+    pipeline is assembled, shared by `_hunt_injection()` (console path,
+    below) and `dumpex.hunt.injection.collect.collect_injection_record()`
+    (the HunterRecord-producing path). Both consuming the exact same
+    Report is what guarantees they can never compute a different
+    score/status/coverage for the same input."""
     # RWX/hidden-PE need MemoryInfoListStream; unbacked-thread needs
     # ThreadInfoListStream; hidden-PE and unbacked-thread BOTH additionally
     # need ModuleListStream to tell known from unknown — computed first so
@@ -121,7 +116,7 @@ def _build_injection_report(mf: MinidumpFile):
         mf, runtime.read_region, module_list_available=module_list_stream)
     validated_pe_hits, mz_only_hits = memory_scan.split_hidden_pe_hits(hidden_pe_scan)
     start_threads = thread_scan._hunt_unbacked_threads(mf, module_list_available=module_list_stream)
-    thread_contexts = get_thread_contexts(mf)   # [{ThreadId, ip, ip_reg, is_wow64}, ...]
+    thread_contexts = thread_scan.resolve_thread_contexts(mf)   # tuple[ThreadContext, ...]
 
     # Explicit counts so a PARTIAL context gap is visible even when it
     # doesn't zero out thread_context entirely (some threads parsed, some
@@ -133,14 +128,31 @@ def _build_injection_report(mf: MinidumpFile):
     correlation_result = correlation.correlate(
         rwx, validated_pe_hits, thread_contexts, start_threads, regions)
 
-    thread_info_entries = mf.thread_info.infos if thread_info_stream else []
-    module_list         = mf.modules.modules if module_list_stream else []
+    # Record counts only -- computed HERE, at the scan boundary that still
+    # has `mf`, so aggregate.build_report() itself never receives a raw
+    # dump-derived list (mf.memory_info.infos/mf.thread_info.infos/
+    # mf.modules.modules), only the resulting int.
+    region_count      = len(regions)
+    thread_info_count = len(mf.thread_info.infos) if thread_info_stream else 0
+    module_count       = len(mf.modules.modules) if module_list_stream else 0
 
     return aggregate.build_report(
         rwx, hidden_pe_scan, validated_pe_hits, mz_only_hits, start_threads,
         thread_contexts, correlation_result, memory_info_stream, thread_info_stream,
         module_list_stream, thread_list_stream, threads_total, contexts_parsed,
-        all_regions=regions, thread_info_entries=thread_info_entries, module_list=module_list)
+        region_count=region_count, thread_info_count=thread_info_count,
+        module_count=module_count)
+
+
+def _render_injection_console(report, verbose: bool = False) -> dict:
+    """Print the verdict-first console projection of `report`, then return
+    the legacy v1.1 dict projection of the SAME `report` -- the ONE place
+    both projections of an already-built Report happen together, for
+    callers that need both (this module's own `_hunt_injection()`, and
+    `dumpex.hunt.__init__.run_hunt()`, which also needs the printed console
+    output and the returned dict from one already-built Report)."""
+    report_console.print_console(report, verbose)
+    return report_legacy.project_legacy_dict(report)
 
 
 def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
@@ -150,6 +162,4 @@ def _hunt_injection(mf: MinidumpFile, verbose: bool = False) -> dict:
     noise; correlation by allocation and live execution raises confidence.
     Returns dict of findings for use in --hunt all summary.
     """
-    report = _build_injection_report(mf)
-
-    return presentation.render(report, verbose)
+    return _render_injection_console(_build_injection_report(mf), verbose)

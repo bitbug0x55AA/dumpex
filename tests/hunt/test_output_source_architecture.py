@@ -18,9 +18,12 @@ that satisfies it (not left around as a permanently-skipped assertion) --
 Finding.print()'s `level` contract and injection's aggregate/renderer
 boundaries were the first three to convert; obfuscation's renderer boundary
 converted incidentally when its unused `mf`/`susp_prots`/`modules`
-parameters were dropped. To use the file as a red/green implementation
-checklist, run it with
-``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
+parameters were dropped; injection's Report/parallel-findings/mutable-
+collection boundaries converted with the Injection 2C cutover (production
+now builds `dumpex.hunt.injection.domain.InjectionReport`, and the old
+dict-`Report` module `dumpex.hunt.injection.aggregate.Report` no longer
+exists). To use the file as a red/green implementation checklist, run it
+with ``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
 """
 import dataclasses
 import enum
@@ -34,7 +37,8 @@ from dumpex.hunt.cs_beacon import presentation as cs_beacon_presentation
 from dumpex.hunt.encoding import aggregate as encoding_aggregate
 from dumpex.hunt.encoding import presentation as encoding_presentation
 from dumpex.hunt.injection import aggregate as injection_aggregate
-from dumpex.hunt.injection import presentation as injection_presentation
+from dumpex.hunt.injection import _render_injection_console as injection_render
+from dumpex.hunt.injection import domain as injection_domain
 from dumpex.hunt.pipe import aggregate as pipe_aggregate
 from dumpex.hunt.pipe import presentation as pipe_presentation
 from dumpex.hunt.stomping import aggregate as stomping_aggregate
@@ -50,7 +54,7 @@ _PENDING = pytest.mark.xfail(
 
 
 REPORT_TYPES = [
-    pytest.param(injection_aggregate.Report, id="injection", marks=_PENDING),
+    pytest.param(injection_domain.InjectionReport, id="injection"),
     pytest.param(hollowing.Report, id="hollowing", marks=_PENDING),
     pytest.param(stomping_aggregate.Report, id="stomping", marks=_PENDING),
     pytest.param(pipe_aggregate.Report, id="pipe", marks=_PENDING),
@@ -68,7 +72,7 @@ def test_domain_report_is_a_frozen_dataclass(report_type):
 
 
 PARALLEL_FINDING_REPORT_TYPES = [
-    pytest.param(injection_aggregate.Report, id="injection", marks=_PENDING),
+    pytest.param(injection_domain.InjectionReport, id="injection"),
     pytest.param(hollowing.Report, id="hollowing", marks=_PENDING),
     pytest.param(stomping_aggregate.Report, id="stomping", marks=_PENDING),
     pytest.param(pipe_aggregate.Report, id="pipe", marks=_PENDING),
@@ -88,12 +92,27 @@ def test_report_does_not_store_parallel_findings_representations(report_type):
 
 
 MUTABLE_COLLECTION_REPORT_TYPES = [
-    pytest.param(injection_aggregate.Report, id="injection", marks=_PENDING),
+    pytest.param(injection_domain.InjectionReport, id="injection"),
     pytest.param(stomping_aggregate.Report, id="stomping", marks=_PENDING),
     pytest.param(pipe_aggregate.Report, id="pipe", marks=_PENDING),
     pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
     pytest.param(encoding_aggregate.EncodingReport, id="obfuscation", marks=_PENDING),
 ]
+
+# Per-(report_type, required-field-name) construction overrides, consulted
+# before the generic {}/[]/None guesses below -- needed for a Report type
+# whose required fields are ordinary validated scalars/value-objects (not
+# the old dict-`Report`'s own `findings`/`findings_list` collections),
+# which legitimately reject `None` at construction. `InjectionReport` is
+# the first (and, while the migration is in progress, only) type that
+# needs one: its required fields are `score` (an int) and `coverage` (a
+# `CoverageSnapshot`), both of which validate their input.
+_REQUIRED_FIELD_OVERRIDES = {
+    (injection_domain.InjectionReport, "score"): 0,
+    (injection_domain.InjectionReport, "coverage"): injection_domain.CoverageSnapshot(
+        memory_info_stream=False, thread_info_stream=False,
+        module_list_stream=False, thread_list_stream=False),
+}
 
 
 @pytest.mark.parametrize("report_type", MUTABLE_COLLECTION_REPORT_TYPES)
@@ -105,8 +124,10 @@ def test_report_does_not_retain_mutable_collection_state(report_type):
             field.default is dataclasses.MISSING
             and field.default_factory is dataclasses.MISSING
         ):
+            override_key = (report_type, field.name)
             required_values[field.name] = (
-                {} if field.name == "findings"
+                _REQUIRED_FIELD_OVERRIDES[override_key] if override_key in _REQUIRED_FIELD_OVERRIDES
+                else {} if field.name == "findings"
                 else [] if field.name == "findings_list"
                 else None
             )
@@ -152,8 +173,36 @@ def test_aggregate_accepts_evidence_not_dump_or_projection_state(build_report):
     )
 
 
+def test_injection_aggregate_receives_only_typed_evidence_and_scalars():
+    """Narrower than the name-blacklist check above: `mf`/`verbose` are not
+    the only way a raw dump reference can cross into aggregate.py -- a
+    keyword-only `all_regions`/`thread_info_entries`/`module_list` (a raw
+    minidump Region/ThreadInfo/Module list, passed straight from
+    `_build_injection_report()`) crossed that same boundary without ever
+    matching that blacklist. This is a whitelist instead: every parameter
+    `build_report()` accepts must be one of the typed Evidence/Correlation/
+    HiddenPeScan objects it's built from, or a plain bool/int scalar --
+    counts derived from a raw list (`region_count`/`thread_info_count`/
+    `module_count`) are the scan layer's job to compute; aggregate only
+    ever sees the resulting int."""
+    allowed = {
+        "rwx", "hidden_pe_scan", "validated_pe_hits", "mz_only_hits",
+        "start_threads", "thread_contexts", "correlation",
+        "memory_info_stream", "thread_info_stream", "module_list_stream",
+        "thread_list_stream", "threads_total", "contexts_parsed",
+        "region_count", "thread_info_count", "module_count",
+    }
+    parameter_names = set(inspect.signature(injection_aggregate.build_report).parameters)
+    unexpected = parameter_names - allowed
+    assert not unexpected, (
+        f"dumpex.hunt.injection.aggregate.build_report accepts unexpected "
+        f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
+        f"typed evidence or a scalar count, never a raw dump-derived list"
+    )
+
+
 RENDERERS = [
-    pytest.param(injection_presentation.render, id="injection"),
+    pytest.param(injection_render, id="injection"),
     pytest.param(hollowing._render_hollowing_console, id="hollowing", marks=_PENDING),
     pytest.param(stomping_presentation.render, id="stomping"),
     pytest.param(pipe_presentation.render, id="pipe"),

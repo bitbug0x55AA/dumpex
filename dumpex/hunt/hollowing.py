@@ -340,7 +340,7 @@ def _hollowing_evaluated_coverage_report(*, base_region_found: bool, mz_read_fai
     are synthetic sources (not real minidump streams) purely so PE-style
     per-check gaps have a source key to attach a limitation to — the
     same pattern injection's own `hidden_pe_scan` source uses (see
-    dumpex.hunt.injection.aggregate.build_report)."""
+    dumpex.hunt.injection.report_facts.project_coverage_report)."""
     sources = {
         "peb":                observe_source("peb", present=True, items=["present"]),
         "image_base_region":  observe_source("image_base_region", present=base_region_found,

@@ -1,8 +1,8 @@
 """Unbacked-thread (StartAddress) scan. Only collects facts."""
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import get_modules, get_thread_infos, addr_to_module
+from dumpex.core.memory import get_modules, get_thread_contexts, get_thread_infos, addr_to_module
 from dumpex.hunt._location import resolve_location
-from dumpex.hunt.injection.models import UnbackedThreadEvidence
+from dumpex.hunt.injection.models import ThreadContext, UnbackedThreadEvidence
 
 
 def _hunt_unbacked_threads(mf: MinidumpFile, module_list_available: bool = True) -> tuple:
@@ -46,3 +46,15 @@ def _hunt_unbacked_threads(mf: MinidumpFile, module_list_available: bool = True)
                 thread_id=ti.ThreadId, start_address=ti.StartAddress,
                 location=resolve_location(mf, lookup_address, lookup_address)))
     return tuple(hits)
+
+
+def resolve_thread_contexts(mf: MinidumpFile) -> tuple:
+    """`dumpex.core.memory.get_thread_contexts(mf)`'s raw
+    `{"ThreadId", "ip", "ip_reg", "is_wow64"}` dicts, resolved once here
+    into typed, immutable `ThreadContext` evidence (dumpex.hunt.injection.
+    models) -- the scan/enrichment step that lets correlation.py and the
+    domain model (dumpex.hunt.injection.domain) work exclusively with typed
+    evidence and never see a raw per-thread CONTEXT dict."""
+    return tuple(ThreadContext(thread_id=c["ThreadId"], ip=c["ip"], ip_reg=c["ip_reg"],
+                                is_wow64=c["is_wow64"])
+                 for c in get_thread_contexts(mf))

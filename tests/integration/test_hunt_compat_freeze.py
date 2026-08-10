@@ -48,11 +48,12 @@ What this deliberately does NOT pin, and why:
     `_json_safe()` string form. `injection`'s `rwx`/`hidden_pe_validated`/
     `hidden_pe_unvalidated`/`threads`/`rip_hits`/`rip_full_correlation`/
     `start_hits` fields no longer have this defect at all: internally,
-    aggregate.py now builds these from frozen Evidence dataclasses (see
-    dumpex/hunt/injection/models.py), but presentation.render() never
-    returns those dataclasses (or their repr) to a caller -- dumpex.hunt.
-    injection.legacy.legacy_findings_dict() projects every one of them
-    into a plain, JSON-safe dict (stable keys: base_address/
+    aggregate.py builds the canonical, immutable `InjectionReport` (see
+    dumpex/hunt/injection/domain.py) from frozen Evidence dataclasses (see
+    dumpex/hunt/injection/models.py), and `_render_injection_console()`
+    never returns those dataclasses (or their repr) to a caller -- dumpex.
+    hunt.injection.report_legacy.project_legacy_dict() projects every one
+    of them into a plain, JSON-safe dict (stable keys: base_address/
     allocation_base/size/type/protect for a region, plus region/
     in_module_list/pe for a hidden-PE hit, etc. -- see that module's own
     docstring) before `_hunt_injection()`/`cmd_hunt()` ever hand the
@@ -126,10 +127,10 @@ def test_injection_detected_full_correlation(monkeypatch):
     # Post-migration (see module docstring): findings["rwx"] no longer
     # holds a raw minidump Region (the old defect this assertion used to
     # pin the shape of) NOR an internal Evidence dataclass/its repr --
-    # dumpex.hunt.injection.legacy.legacy_findings_dict() projects it into
-    # a plain, JSON-safe dict before presentation.render() ever returns
-    # it, so this checks the dict's actual keys directly rather than
-    # relying on _json_safe()'s str(obj) fallback at all.
+    # dumpex.hunt.injection.report_legacy.project_legacy_dict() projects
+    # it into a plain, JSON-safe dict before _render_injection_console()
+    # ever returns it, so this checks the dict's actual keys directly
+    # rather than relying on _json_safe()'s str(obj) fallback at all.
     assert f["rwx"][0] == {
         "base_address": 0x7ff700000000, "allocation_base": 0x7ff700000000,
         "size": 0x1000, "type": "MEM_PRIVATE", "protect": "PAGE_EXECUTE_READWRITE",

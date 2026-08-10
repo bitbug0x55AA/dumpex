@@ -19,15 +19,14 @@ domain.py) -- everything `report_legacy.py`, `report_record.py`, and
   * the coverage snapshot projected into the structured v2.4
     `dumpex.output.coverage.CoverageReport` shape.
 
-This module owns no dependency on `dumpex.hunt.injection.aggregate`,
-`presentation`, `legacy`, or `collect` -- those are the PRODUCTION modules
-this issue is explicitly not allowed to touch or read from (see the
-Injection 2B issue's own "no aggregate/caller cutover" non-goal). Every
-fact string below is written to match today's `aggregate.py` output
+This module owns no dependency on `dumpex.hunt.injection.aggregate` or
+`collect` -- since the Injection 2C cutover, `aggregate.build_report()` is
+itself the ONE place an `InjectionReport` is constructed, and this module
+stays a pure function of that already-built Report rather than reaching
+into `aggregate.py`'s own construction internals. Every fact string below
+is written to match `aggregate.py`'s inference/rationale/facts text
 byte-for-byte for the same evidence, verified by
-tests/hunt/test_injection_projectors.py's golden-scenario parity test --
-not by importing aggregate.py's own private helpers, which would reach
-into a module slated for removal once the 2C cutover lands.
+tests/hunt/test_injection_projectors.py's golden-scenario parity test.
 """
 from dumpex.hunt._finding import Finding
 from dumpex.hunt._coverage import derive_coverage_status

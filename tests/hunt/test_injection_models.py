@@ -196,11 +196,12 @@ def test_correlation_alloc_base_sets_are_frozensets_and_reject_mutation():
 
 
 # ── Evidence must never leak into the legacy findings dict a caller gets ──
-# (dumpex.hunt.injection.legacy.legacy_findings_dict()). presentation.
-# render() is what _hunt_injection()/cmd_hunt()'s bare results["injection"]
-# actually returns -- these exercise it end to end, not just the projector
-# function in isolation, so a future change that stops calling the
-# projector (or calls it on the wrong dict) is still caught.
+# (dumpex.hunt.injection.report_legacy.project_legacy_dict()).
+# `_render_injection_console()` is what _hunt_injection()/cmd_hunt()'s bare
+# results["injection"] actually returns -- these exercise it end to end,
+# not just the projector function in isolation, so a future change that
+# stops calling the projector (or calls it on the wrong Report) is still
+# caught.
 
 def test_hunt_injection_return_value_never_holds_evidence_dataclasses():
     from dumpex.hunt.injection import _hunt_injection
@@ -221,35 +222,38 @@ def test_hunt_injection_return_value_never_holds_evidence_dataclasses():
 
 
 def test_legacy_findings_dict_rwx_and_hidden_pe_shape():
-    from dumpex.hunt.injection.legacy import legacy_findings_dict
+    from dumpex.hunt.injection.domain import InjectionEvidence, InjectionReport
+    from dumpex.hunt.injection.report_legacy import project_legacy_dict
     from dumpex.hunt.injection.models import (
         RegionRef, PeHeaderInfo, RwxRegionEvidence, HiddenPeEvidence,
     )
     from dumpex.hunt._location import Location
+    from tests.hunt.test_injection_domain import _coverage, _correlation_for
 
-    region = RegionRef(base_address=0x1000, allocation_base=0x1000, size=0x1000,
-                        type="MEM_PRIVATE", protect="PAGE_EXECUTE_READWRITE")
-    loc = Location(va=0x1000, region_base=0x1000, file_offset=None)
-    rwx_ev = RwxRegionEvidence(region=region, location=loc)
+    rwx_region = RegionRef(base_address=0x1000, allocation_base=0x1000, size=0x1000,
+                            type="MEM_PRIVATE", protect="PAGE_EXECUTE_READWRITE")
+    pe_region = RegionRef(base_address=0x2000, allocation_base=0x2000, size=0x1000,
+                           type="MEM_PRIVATE", protect="PAGE_READWRITE")
+    rwx_loc = Location(va=0x1000, region_base=0x1000, file_offset=None)
+    pe_loc = Location(va=0x2000, region_base=0x2000, file_offset=None)
+    rwx_ev = RwxRegionEvidence(region=rwx_region, location=rwx_loc)
     pe = PeHeaderInfo(valid=True, machine_name="AMD64", is_pe32_plus=True,
                        number_of_sections=1, address_of_entry_point=0x10, image_base=0x400000,
                        reason="")
-    pe_ev = HiddenPeEvidence(region=region, pe=pe, in_module_list=False, location=loc)
+    pe_ev = HiddenPeEvidence(region=pe_region, pe=pe, in_module_list=False, location=pe_loc)
 
-    findings = {
-        "rwx": (rwx_ev,), "hidden_pe_validated": (pe_ev,), "hidden_pe_unvalidated": (),
-        "suspicious_validated_pe_hits": (), "informational_validated_pe_hits": (),
-        "threads": (), "rip_hits": (), "rip_full_correlation": (), "start_hits": (),
-        "score": 1,
-    }
-    out = legacy_findings_dict(findings)
+    evidence = InjectionEvidence(
+        rwx=[rwx_ev], validated_pe_hits=[pe_ev], informational_pe_hits=[pe_ev],
+        correlation=_correlation_for(rwx=[rwx_ev], validated_pe_hits=[pe_ev]))
+    report = InjectionReport(score=1, coverage=_coverage(), results=(), evidence=evidence)
+    out = project_legacy_dict(report)
 
     assert out["rwx"] == [{"base_address": 0x1000, "allocation_base": 0x1000,
                             "size": 0x1000, "type": "MEM_PRIVATE",
                             "protect": "PAGE_EXECUTE_READWRITE"}]
     assert out["hidden_pe_validated"] == [{
-        "region": {"base_address": 0x1000, "allocation_base": 0x1000, "size": 0x1000,
-                   "type": "MEM_PRIVATE", "protect": "PAGE_EXECUTE_READWRITE"},
+        "region": {"base_address": 0x2000, "allocation_base": 0x2000, "size": 0x1000,
+                   "type": "MEM_PRIVATE", "protect": "PAGE_READWRITE"},
         "in_module_list": False,
         "pe": {"valid": True, "machine_name": "AMD64", "is_pe32_plus": True,
                "number_of_sections": 1, "address_of_entry_point": 0x10,
@@ -277,15 +281,14 @@ def test_hunt_injection_not_evaluated_branch_also_uses_the_projector():
         assert f[key] == []
 
 
-def test_legacy_findings_dict_does_not_mutate_its_input():
-    from dumpex.hunt.injection.legacy import legacy_findings_dict
-
-    findings = {"rwx": (), "hidden_pe_validated": (), "hidden_pe_unvalidated": (),
-                "suspicious_validated_pe_hits": (), "informational_validated_pe_hits": (),
-                "threads": (), "rip_hits": (), "rip_full_correlation": (), "start_hits": ()}
-    original = dict(findings)
-    legacy_findings_dict(findings)
-    assert findings == original
+# `project_legacy_dict` not mutating its input, and being pure/order-
+# independent across repeated calls, is already covered for the canonical
+# `InjectionReport` by tests/hunt/test_injection_projectors.py's
+# `test_projectors_are_order_independent_and_pure`/
+# `test_console_verbose_and_normal_never_change_json_projections` -- no
+# separate test needed here now that this module builds an `InjectionReport`
+# (itself immutable by construction, see test_injection_domain.py) rather
+# than handing a raw dict to a standalone projector function.
 
 
 # ── StartAddress=None must never be fabricated into a fake known address ──
@@ -343,14 +346,14 @@ def test_console_facts_do_not_crash_and_display_zero_for_none_start_address(caps
 
 def test_correlate_returns_frozen_region_ref_hits_not_raw_regions():
     mf, reader, rwx_base, pe_base = _fake_mf_with_rwx_and_hidden_pe()
-    from dumpex.core.memory import get_memory_regions, get_thread_contexts
+    from dumpex.core.memory import get_memory_regions
 
     rwx = memory_scan._hunt_rwx(mf)
     scan = memory_scan._hunt_hidden_pe(mf, reader, module_list_available=True)
     validated_pe_hits, _mz_only = memory_scan.split_hidden_pe_hits(scan)
     start_threads = thread_scan._hunt_unbacked_threads(mf, module_list_available=True)
     regions = get_memory_regions(mf)
-    thread_contexts = get_thread_contexts(mf)
+    thread_contexts = thread_scan.resolve_thread_contexts(mf)   # typed ThreadContext tuple
 
     corr = correlation.correlate(rwx, validated_pe_hits, thread_contexts, start_threads, regions)
 

@@ -1,21 +1,18 @@
-"""`InjectionReport` -> legacy v1.1 findings-dict pure projector -- the
-`InjectionReport` equivalent of `dumpex.hunt.injection.aggregate.
-build_report`'s own `findings` dict plus
-`dumpex.hunt.injection.legacy.legacy_findings_dict`'s Evidence-dataclass ->
-plain-dict conversion, both replayed here as ONE pure function of an
-already-built, already-frozen `InjectionReport`.
+"""`InjectionReport` -> legacy v1.1 findings-dict pure projector -- since
+the Injection 2C cutover, this is the ONE place that dict gets built (the
+pre-cutover `dumpex.hunt.injection.aggregate.build_report`'s own `findings`
+dict, and `dumpex.hunt.injection.legacy.legacy_findings_dict`'s
+Evidence-dataclass -> plain-dict conversion that ran on top of it, have
+both been deleted; this module replaces both as ONE pure function of an
+already-built, already-frozen `InjectionReport`).
 
-Deliberately does not import `dumpex.hunt.injection.aggregate`/`legacy`:
-this module (and the sibling `report_record.py`/`report_console.py`
-projectors) must depend only on the canonical `InjectionReport`/typed
-evidence, never on the production `aggregate.Report` shape those two
-modules are built around (see the Injection 2B issue's own "no aggregate/
-caller cutover" non-goal). The six small dict-builder helpers below
-duplicate `legacy.py`'s own field-for-field shape rather than reach into
-it -- both are pure functions of `dumpex.hunt.injection.models` types with
-no dependency on `aggregate.Report` at all, so there is nothing to drift:
-a parity test in tests/hunt/test_injection_projectors.py pins this
-module's output against `legacy.py`'s for equivalent evidence.
+Deliberately does not import `dumpex.hunt.injection.aggregate`: this
+module (and the sibling `report_record.py`/`report_console.py` projectors)
+depends only on the canonical `InjectionReport`/typed evidence, never on
+`aggregate.py`'s own construction internals -- the six small dict-builder
+helpers below are pure functions of `dumpex.hunt.injection.models` types,
+independently verified against production output by
+tests/hunt/test_injection_projectors.py's golden-scenario parity test.
 """
 from dumpex.hunt.injection.domain import InjectionReport
 from dumpex.hunt.injection.report_facts import finding_from_check_result, project_coverage_v1

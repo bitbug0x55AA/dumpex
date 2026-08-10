@@ -6,8 +6,7 @@ from dumpex.ui.colors import RED
 from dumpex.core.memory import va_to_file_offset, prot_str, get_memory_regions
 from dumpex.hunt._ui import _print_hunt_header, NOT_EVALUATED
 
-from dumpex.hunt.injection  import _build_injection_report
-from dumpex.hunt.injection.presentation import render as _render_injection_console
+from dumpex.hunt.injection  import _build_injection_report, _render_injection_console
 from dumpex.hunt.hollowing  import (_build_hollowing_report, _render_hollowing_console,
     _print_hollowing_pre_build_console)
 from dumpex.hunt.stomping   import _build_stomping_report, _print_stomping_pre_build_console
