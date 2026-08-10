@@ -25,15 +25,16 @@ augments it with `verbose_facts` for the three checks whose evidence type
 has a richer, uncapped --verbose rendering, entirely locally, so
 `report_legacy.py`/`report_record.py` never execute this policy at all.
 """
-import dataclasses
-
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, _status_text
 from dumpex.hunt._finding import (
-    DetailLevel, Finding, leads_suffix, render_finding_lines,
-    TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION,
+    DetailLevel, leads_suffix, render_finding_lines, TAG_DETECTION, TAG_LEAD,
 )
-from dumpex.hunt._console import resolve_width, wrap_text, render_kv_block
+from dumpex.hunt._console import resolve_width, render_kv_block
+from dumpex.hunt._report_console import (
+    header_lines, sorted_for_display, render_key_signal_compact,
+    render_why_this_verdict, render_coverage, with_verbose_facts,
+)
 from dumpex.hunt.injection.domain import InjectionReport
 from dumpex.hunt.injection.report_facts import finding_from_check_result, project_coverage_v1
 
@@ -89,15 +90,12 @@ def _verbose_facts_for(result) -> tuple:
     return tuple(renderer(item) for item in result.evidence)
 
 
-def _console_finding(result, report: InjectionReport) -> Finding:
+def _console_finding(result, report: InjectionReport):
     """The compat `Finding` `report_facts.finding_from_check_result`
     builds, augmented with `verbose_facts` -- this module's own
     normal/verbose detail policy (see this module's own docstring)."""
     finding = finding_from_check_result(result, report)
-    verbose_facts = _verbose_facts_for(result)
-    if not verbose_facts:
-        return finding
-    return dataclasses.replace(finding, verbose_facts=list(verbose_facts))
+    return with_verbose_facts(finding, _verbose_facts_for(result))
 
 
 _TITLES = {
@@ -111,29 +109,7 @@ _TITLES = {
     "injection.structural_allocation_correlation":   "RWX and hidden PE share an allocation",
 }
 
-_TAG_ICON  = {TAG_DETECTION: RED("[!]"), TAG_LEAD: YELLOW("[~]"), TAG_OBSERVATION: DIM("[i]")}
-_TAG_LABEL = {TAG_DETECTION: "DETECTION", TAG_LEAD: "LEAD", TAG_OBSERVATION: "CONTEXT"}
-_TAG_RANK  = {TAG_DETECTION: 0, TAG_LEAD: 1, TAG_OBSERVATION: 2}
-_LABEL_WIDTH = max(len(label) for label in _TAG_LABEL.values())
-
-_COVERAGE_ICON = {"complete": GREEN("[✓]"), "partial": YELLOW("[~]"), "not_evaluated": DIM("[-]")}
-
 _COVERAGE_ONLY_CHECKS = frozenset({"injection.rip_correlation_unavailable"})
-
-
-def _header_lines(title: str) -> list:
-    """The exact lines `dumpex.hunt._ui._print_hunt_header` prints, as
-    data instead of a side effect -- that helper only knows how to
-    `print()`, and this module must stay pure (see this module's own
-    docstring)."""
-    bar = BOLD("══════════════════════════════════════════")
-    return ["", bar, BOLD(f"  HUNT: {title}"), bar, ""]
-
-
-def _sorted_for_display(findings: list) -> list:
-    key_signal_findings = [f for f in findings if f.check not in _COVERAGE_ONLY_CHECKS]
-    return [f for _, f in sorted(enumerate(key_signal_findings),
-                                  key=lambda pair: (_TAG_RANK.get(pair[1].tag, 3), pair[0]))]
 
 
 def _coverage_only_impacts(findings: list, coverage_reasons: list) -> list:
@@ -147,11 +123,6 @@ def _coverage_only_impacts(findings: list, coverage_reasons: list) -> list:
                 seen.add(limitation)
                 impacts.append(limitation)
     return impacts
-
-
-def _wrap_block(text: str, width: int, indent: int) -> list:
-    pad = " " * indent
-    return [pad + line for line in wrap_text(text, max(1, width - indent), hang_indent=0)]
 
 
 def _render_verdict_block(status: str, score: int, max_score: int, confidence: str,
@@ -176,41 +147,6 @@ def _render_verdict_block(status: str, score: int, max_score: int, confidence: s
     return render_kv_block(pairs, indent=2)
 
 
-def _render_key_signal_compact(finding, width: int) -> list:
-    title = _TITLES.get(finding.check, finding.check)
-    label = _TAG_LABEL.get(finding.tag, finding.tag.upper())
-    icon  = _TAG_ICON.get(finding.tag, DIM("[?]"))
-    lines = [f"  {icon} {label:<{_LABEL_WIDTH}}  {title}"]
-    lines.extend(_wrap_block(finding.inference, width, 6))
-    return lines
-
-
-def _render_why_this_verdict(driving, width: int) -> list:
-    lines = [f"  {BOLD('WHY THIS VERDICT')}", ""]
-    lines.append("  Inference")
-    lines.extend(_wrap_block(driving.inference, width, 4))
-    lines.append("")
-    lines.append(f"  Confidence: {driving.confidence.upper()}")
-    lines.extend(_wrap_block(driving.rationale, width, 4))
-    if driving.limitations:
-        lines.append("")
-        lines.append("  Caveat")
-        lines.extend(_wrap_block(driving.limitations[0], width, 4))
-    lines.append("")
-    return lines
-
-
-def _render_coverage(coverage_status: str, reasons: list, impacts: list, width: int) -> list:
-    icon = _COVERAGE_ICON.get(coverage_status, DIM("[?]"))
-    lines = [f"  {BOLD('COVERAGE')}", "", f"  {icon} {coverage_status.replace('_', ' ').upper()}"]
-    for reason in reasons:
-        lines.extend(_wrap_block(reason, width, 6))
-    for impact in impacts:
-        lines.extend(_wrap_block(f"Impact: {impact}", width, 6))
-    lines.append("")
-    return lines
-
-
 def render_console_lines(report: InjectionReport, verbose: bool = False,
                           width: "int | None" = None) -> list:
     """Pure `InjectionReport -> list[str]` projection -- one line per list
@@ -225,14 +161,14 @@ def render_console_lines(report: InjectionReport, verbose: bool = False,
     w = resolve_width(width)
     level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
 
-    lines = list(_header_lines("Process Injection"))
+    lines = list(header_lines("Process Injection"))
 
     lines.extend(_render_verdict_block(report.status, report.score, report.max_score,
                                         report.confidence, coverage_status,
                                         report.review_priority, findings))
     lines.append("")
 
-    ordered = _sorted_for_display(findings)
+    ordered = sorted_for_display(findings, exclude_checks=_COVERAGE_ONLY_CHECKS)
     if ordered:
         lines.append(f"  {BOLD('KEY SIGNALS')}")
         lines.append("")
@@ -241,17 +177,17 @@ def render_console_lines(report: InjectionReport, verbose: bool = False,
                 title = _TITLES.get(f.check, f.check)
                 lines.extend(render_finding_lines(f, level=level, indent=2, width=w, title=title))
             else:
-                lines.extend(_render_key_signal_compact(f, w))
+                lines.extend(render_key_signal_compact(f, w, _TITLES))
                 lines.append("")
 
     if not verbose:
         driving = ordered[0] if ordered and ordered[0].tag in (TAG_DETECTION, TAG_LEAD) else None
         if driving is not None:
-            lines.extend(_render_why_this_verdict(driving, w))
+            lines.extend(render_why_this_verdict(driving, w))
 
     if coverage_reasons:
         impacts = _coverage_only_impacts(findings, coverage_reasons)
-        lines.extend(_render_coverage(coverage_status, coverage_reasons, impacts, w))
+        lines.extend(render_coverage(coverage_status, coverage_reasons, w, impacts))
 
     evidence = report.evidence
     if not verbose and (evidence.rwx or evidence.validated_pe_hits or evidence.start_threads):

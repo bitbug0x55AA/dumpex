@@ -23,15 +23,16 @@ POLICY lives: `report_facts.finding_from_check_result` builds a compat
 entirely locally, so `report_legacy.py`/`report_record.py` never execute
 this policy at all.
 """
-import dataclasses
-
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, _status_text
 from dumpex.hunt._finding import (
-    DetailLevel, Finding, leads_suffix, render_finding_lines,
-    TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION,
+    DetailLevel, leads_suffix, render_finding_lines, TAG_DETECTION, TAG_LEAD,
 )
-from dumpex.hunt._console import resolve_width, wrap_text, render_kv_block
+from dumpex.hunt._console import resolve_width, render_kv_block
+from dumpex.hunt._report_console import (
+    header_lines, sorted_for_display, render_key_signal_compact,
+    render_why_this_verdict, render_coverage, with_verbose_facts,
+)
 from dumpex.hunt.encoding.domain import EncodingReport
 from dumpex.hunt.encoding.report_facts import finding_from_check_result, project_coverage_v1
 
@@ -133,12 +134,9 @@ def _verbose_facts_for(result, report: EncodingReport) -> tuple:
     return tuple(renderer(item) for item in result.evidence)
 
 
-def _console_finding(result, report: EncodingReport) -> Finding:
+def _console_finding(result, report: EncodingReport):
     finding = finding_from_check_result(result, report)
-    verbose_facts = _verbose_facts_for(result, report)
-    if not verbose_facts:
-        return finding
-    return dataclasses.replace(finding, verbose_facts=list(verbose_facts))
+    return with_verbose_facts(finding, _verbose_facts_for(result, report))
 
 
 _TITLES = {
@@ -150,19 +148,6 @@ _TITLES = {
     "obfuscation.structural_payload":      "Structural PE payload inside encoded data",
     "obfuscation.shellcode_bootstrap_lead": "Shellcode bootstrap pattern inside encoded data",
 }
-
-_TAG_ICON  = {TAG_DETECTION: RED("[!]"), TAG_LEAD: YELLOW("[~]"), TAG_OBSERVATION: DIM("[i]")}
-_TAG_LABEL = {TAG_DETECTION: "DETECTION", TAG_LEAD: "LEAD", TAG_OBSERVATION: "CONTEXT"}
-_TAG_RANK  = {TAG_DETECTION: 0, TAG_LEAD: 1, TAG_OBSERVATION: 2}
-_LABEL_WIDTH = max(len(label) for label in _TAG_LABEL.values())
-
-_COVERAGE_ICON = {"complete": GREEN("[✓]"), "partial": YELLOW("[~]"), "not_evaluated": DIM("[-]")}
-
-
-def _header_lines(title: str) -> list:
-    bar = BOLD("══════════════════════════════════════════")
-    return ["", bar, BOLD(f"  HUNT: {title}"), bar, ""]
-
 
 def _scan_layers_lines() -> list:
     """Verbose-only scan-detail block replacing the pre-migration
@@ -178,16 +163,6 @@ def _scan_layers_lines() -> list:
         DIM("    Layers 2-4: Base64 / XOR / GZIP scan"),
         "",
     ]
-
-
-def _sorted_for_display(findings: list) -> list:
-    return [f for _, f in sorted(enumerate(findings),
-                                  key=lambda pair: (_TAG_RANK.get(pair[1].tag, 3), pair[0]))]
-
-
-def _wrap_block(text: str, width: int, indent: int) -> list:
-    pad = " " * indent
-    return [pad + line for line in wrap_text(text, max(1, width - indent), hang_indent=0)]
 
 
 def _render_verdict_block(status: str, verdict_level: str, score: int, max_score: int,
@@ -214,39 +189,6 @@ def _render_verdict_block(status: str, verdict_level: str, score: int, max_score
     return render_kv_block(pairs, indent=2)
 
 
-def _render_key_signal_compact(finding, width: int) -> list:
-    title = _TITLES.get(finding.check, finding.check)
-    label = _TAG_LABEL.get(finding.tag, finding.tag.upper())
-    icon  = _TAG_ICON.get(finding.tag, DIM("[?]"))
-    lines = [f"  {icon} {label:<{_LABEL_WIDTH}}  {title}"]
-    lines.extend(_wrap_block(finding.inference, width, 6))
-    return lines
-
-
-def _render_why_this_verdict(driving, width: int) -> list:
-    lines = [f"  {BOLD('WHY THIS VERDICT')}", ""]
-    lines.append("  Inference")
-    lines.extend(_wrap_block(driving.inference, width, 4))
-    lines.append("")
-    lines.append(f"  Confidence: {driving.confidence.upper()}")
-    lines.extend(_wrap_block(driving.rationale, width, 4))
-    if driving.limitations:
-        lines.append("")
-        lines.append("  Caveat")
-        lines.extend(_wrap_block(driving.limitations[0], width, 4))
-    lines.append("")
-    return lines
-
-
-def _render_coverage(coverage_status: str, reasons: list, width: int) -> list:
-    icon = _COVERAGE_ICON.get(coverage_status, DIM("[?]"))
-    lines = [f"  {BOLD('COVERAGE')}", "", f"  {icon} {coverage_status.replace('_', ' ').upper()}"]
-    for reason in reasons:
-        lines.extend(_wrap_block(reason, width, 6))
-    lines.append("")
-    return lines
-
-
 def render_console_lines(report: EncodingReport, verbose: bool = False,
                           width: "int | None" = None) -> list:
     """Pure `EncodingReport -> list[str]` projection -- one line per list
@@ -257,7 +199,7 @@ def render_console_lines(report: EncodingReport, verbose: bool = False,
     w = resolve_width(width)
     level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
 
-    lines = list(_header_lines("Obfuscation Detection"))
+    lines = list(header_lines("Obfuscation Detection"))
     if verbose:
         lines.extend(_scan_layers_lines())
 
@@ -266,7 +208,7 @@ def render_console_lines(report: EncodingReport, verbose: bool = False,
                                         report.review_priority, findings))
     lines.append("")
 
-    ordered = _sorted_for_display(findings)
+    ordered = sorted_for_display(findings)
     if ordered:
         lines.append(f"  {BOLD('KEY SIGNALS')}")
         lines.append("")
@@ -275,16 +217,16 @@ def render_console_lines(report: EncodingReport, verbose: bool = False,
                 title = _TITLES.get(f.check, f.check)
                 lines.extend(render_finding_lines(f, level=level, indent=2, width=w, title=title))
             else:
-                lines.extend(_render_key_signal_compact(f, w))
+                lines.extend(render_key_signal_compact(f, w, _TITLES))
                 lines.append("")
 
     if not verbose:
         driving = ordered[0] if ordered and ordered[0].tag in (TAG_DETECTION, TAG_LEAD) else None
         if driving is not None:
-            lines.extend(_render_why_this_verdict(driving, w))
+            lines.extend(render_why_this_verdict(driving, w))
 
     if coverage_reasons:
-        lines.extend(_render_coverage(coverage_status, coverage_reasons, w))
+        lines.extend(render_coverage(coverage_status, coverage_reasons, w))
 
     evidence = report.evidence
     has_raw_evidence = bool(evidence.sleep_mask_hits or evidence.entropy_hits
