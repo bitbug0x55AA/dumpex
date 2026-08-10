@@ -1,0 +1,271 @@
+"""`InjectionReport` -> console lines pure projector -- the
+`InjectionReport` equivalent of `dumpex.hunt.injection.presentation.
+render()`, minus that function's two conflated responsibilities: this
+module never prints (returns the exact lines a caller would print) and
+never returns a legacy-dict projection (see `report_legacy.py` for that,
+now an independent pure function of the SAME `InjectionReport` rather
+than something `render()` calls as a side effect of rendering console
+text).
+
+Reproduces the approved verdict-first structure `presentation.py` already
+implements byte-for-byte for the same underlying facts (verdict block ->
+KEY SIGNALS -> WHY THIS VERDICT (normal only) -> unified COVERAGE ->
+verbose hint) -- see tests/hunt/test_injection_projectors.py's golden-
+scenario parity test, which diffs this module's output against
+tests/fixtures/hunt_cli_golden/injection_console.txt/
+injection_verbose_console.txt for an equivalent scenario. Deliberately
+does not import `presentation.py` (see `report_legacy.py`'s own docstring
+for why); the presentation constants/helpers below are intentional,
+reviewed duplicates of it, expected to collapse into one implementation
+once the 2C cutover retires the old module (see
+`dumpex.hunt.injection.domain`'s own module docstring).
+
+This is also the one place this hunter's normal/verbose CONSOLE detail
+POLICY lives: `report_facts.finding_from_check_result` builds a compat
+`Finding` carrying only wire-shaped `facts` (never `verbose_facts` -- see
+that module's own docstring for why); `_console_finding` below is what
+augments it with `verbose_facts` for the three checks whose evidence type
+has a richer, uncapped --verbose rendering, entirely locally, so
+`report_legacy.py`/`report_record.py` never execute this policy at all.
+"""
+import dataclasses
+
+from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
+from dumpex.hunt._ui import NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, _status_text
+from dumpex.hunt._finding import (
+    DetailLevel, Finding, leads_suffix, render_finding_lines,
+    TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION,
+)
+from dumpex.hunt._console import resolve_width, wrap_text, render_kv_block
+from dumpex.hunt.injection.domain import InjectionReport
+from dumpex.hunt.injection.report_facts import finding_from_check_result, project_coverage_v1
+
+
+# ── Verbose-only evidence-item fact rendering (console policy only) ──────
+# Byte-identical to aggregate.py's own _rwx_verbose_fact/
+# _hidden_pe_verbose_fact/_unbacked_thread_verbose_fact -- see
+# report_facts.py's own fact-string builders for why these are duplicated
+# rather than imported from aggregate.py.
+
+def _rwx_verbose_fact(ev) -> str:
+    r, location = ev.region, ev.location
+    fo_str = f"0x{location.file_offset:x}" if location.file_offset is not None else "(not captured)"
+    return (f"VA (process)=0x{r.base_address:016x} size=0x{r.size:x} "
+            f"AllocationBase=0x{r.allocation_base:016x} File_offset={fo_str} "
+            f"{r.protect} {r.type}")
+
+
+def _hidden_pe_verbose_fact(ev) -> str:
+    r, pe, location = ev.region, ev.pe, ev.location
+    fo_str = f"0x{location.file_offset:x}" if location.file_offset is not None else "(not captured)"
+    return (f"VA (process)=0x{r.base_address:016x} AllocationBase=0x{r.allocation_base:016x} "
+            f"File_offset={fo_str} Page_type={r.type} {r.protect} "
+            f"PE_machine={pe.machine_name} PE_sections={pe.number_of_sections} "
+            f"Entry_point_RVA=0x{pe.address_of_entry_point:x} "
+            f"Declared_ImageBase=0x{pe.image_base:x}")
+
+
+def _unbacked_thread_verbose_fact(ev) -> str:
+    fo_str = f"0x{ev.location.file_offset:x}" if ev.location.file_offset is not None else "(not captured)"
+    return (f"TID=0x{ev.thread_id:x} StartAddress_VA=0x{(ev.start_address or 0):016x} "
+            f"File_offset={fo_str}")
+
+
+# Only these three checks carry the richer, uncapped --verbose detail --
+# see aggregate.py's own _rwx_verbose_fact/_hidden_pe_verbose_fact/
+# _unbacked_thread_verbose_fact comment for why the other checks don't.
+_VERBOSE_ITEM_RENDERERS = {
+    "injection.rwx_regions":                  _rwx_verbose_fact,
+    "injection.hidden_pe_validated":          _hidden_pe_verbose_fact,
+    "injection.unbacked_thread_startaddress": _unbacked_thread_verbose_fact,
+}
+
+
+def _verbose_facts_for(result) -> tuple:
+    """Uncapped, only for the three checks with a richer verbose
+    rendering (see `_VERBOSE_ITEM_RENDERERS`); every other check gets no
+    verbose_facts, matching aggregate.py's own Finding(...) calls, which
+    simply never pass verbose_facts= for those checks."""
+    renderer = _VERBOSE_ITEM_RENDERERS.get(result.check)
+    if renderer is None:
+        return ()
+    return tuple(renderer(item) for item in result.evidence)
+
+
+def _console_finding(result, report: InjectionReport) -> Finding:
+    """The compat `Finding` `report_facts.finding_from_check_result`
+    builds, augmented with `verbose_facts` -- this module's own
+    normal/verbose detail policy (see this module's own docstring)."""
+    finding = finding_from_check_result(result, report)
+    verbose_facts = _verbose_facts_for(result)
+    if not verbose_facts:
+        return finding
+    return dataclasses.replace(finding, verbose_facts=list(verbose_facts))
+
+
+_TITLES = {
+    "injection.rwx_regions":                        "RWX memory",
+    "injection.hidden_pe_validated":                 "Hidden PE header",
+    "injection.hidden_pe_validated_context_only":    "Hidden PE header (context-only)",
+    "injection.mz_prefix_unvalidated":               "Unvalidated MZ prefix",
+    "injection.unbacked_thread_startaddress":        "Unbacked thread start",
+    "injection.rip_correlation_unavailable":         "RIP/EIP correlation unavailable",
+    "injection.allocation_correlation":              "Live execution in a correlated allocation",
+    "injection.structural_allocation_correlation":   "RWX and hidden PE share an allocation",
+}
+
+_TAG_ICON  = {TAG_DETECTION: RED("[!]"), TAG_LEAD: YELLOW("[~]"), TAG_OBSERVATION: DIM("[i]")}
+_TAG_LABEL = {TAG_DETECTION: "DETECTION", TAG_LEAD: "LEAD", TAG_OBSERVATION: "CONTEXT"}
+_TAG_RANK  = {TAG_DETECTION: 0, TAG_LEAD: 1, TAG_OBSERVATION: 2}
+_LABEL_WIDTH = max(len(label) for label in _TAG_LABEL.values())
+
+_COVERAGE_ICON = {"complete": GREEN("[✓]"), "partial": YELLOW("[~]"), "not_evaluated": DIM("[-]")}
+
+_COVERAGE_ONLY_CHECKS = frozenset({"injection.rip_correlation_unavailable"})
+
+
+def _header_lines(title: str) -> list:
+    """The exact lines `dumpex.hunt._ui._print_hunt_header` prints, as
+    data instead of a side effect -- that helper only knows how to
+    `print()`, and this module must stay pure (see this module's own
+    docstring)."""
+    bar = BOLD("══════════════════════════════════════════")
+    return ["", bar, BOLD(f"  HUNT: {title}"), bar, ""]
+
+
+def _sorted_for_display(findings: list) -> list:
+    key_signal_findings = [f for f in findings if f.check not in _COVERAGE_ONLY_CHECKS]
+    return [f for _, f in sorted(enumerate(key_signal_findings),
+                                  key=lambda pair: (_TAG_RANK.get(pair[1].tag, 3), pair[0]))]
+
+
+def _coverage_only_impacts(findings: list, coverage_reasons: list) -> list:
+    seen = set(coverage_reasons)
+    impacts = []
+    for f in findings:
+        if f.check not in _COVERAGE_ONLY_CHECKS:
+            continue
+        for limitation in f.limitations:
+            if limitation not in seen:
+                seen.add(limitation)
+                impacts.append(limitation)
+    return impacts
+
+
+def _wrap_block(text: str, width: int, indent: int) -> list:
+    pad = " " * indent
+    return [pad + line for line in wrap_text(text, max(1, width - indent), hang_indent=0)]
+
+
+def _render_verdict_block(status: str, score: int, max_score: int, confidence: str,
+                           coverage_status: str, review_priority: str,
+                           findings: list) -> list:
+    if status == NOT_EVALUATED:
+        verdict_text = _status_text(status, "no required stream present in this dump")
+    else:
+        verdict_text = (
+            RED("HIGH CONFIDENCE INJECTION") if score >= 3 else
+            YELLOW("LIKELY INJECTION") if score == 2 else
+            YELLOW("POSSIBLE INJECTION") if score == 1 else
+            GREEN("CLEAN" + leads_suffix(findings)) if status == NOT_DETECTED_IN_SCANNED_SCOPE else
+            YELLOW("INCONCLUSIVE — partial stream coverage" + leads_suffix(findings)))
+    pairs = [
+        ("VERDICT",    verdict_text),
+        ("Confidence", confidence),
+        ("Score",      f"{score}/{max_score}"),
+        ("Coverage",   coverage_status.replace("_", " ").upper()),
+        ("Review",     review_priority),
+    ]
+    return render_kv_block(pairs, indent=2)
+
+
+def _render_key_signal_compact(finding, width: int) -> list:
+    title = _TITLES.get(finding.check, finding.check)
+    label = _TAG_LABEL.get(finding.tag, finding.tag.upper())
+    icon  = _TAG_ICON.get(finding.tag, DIM("[?]"))
+    lines = [f"  {icon} {label:<{_LABEL_WIDTH}}  {title}"]
+    lines.extend(_wrap_block(finding.inference, width, 6))
+    return lines
+
+
+def _render_why_this_verdict(driving, width: int) -> list:
+    lines = [f"  {BOLD('WHY THIS VERDICT')}", ""]
+    lines.append("  Inference")
+    lines.extend(_wrap_block(driving.inference, width, 4))
+    lines.append("")
+    lines.append(f"  Confidence: {driving.confidence.upper()}")
+    lines.extend(_wrap_block(driving.rationale, width, 4))
+    if driving.limitations:
+        lines.append("")
+        lines.append("  Caveat")
+        lines.extend(_wrap_block(driving.limitations[0], width, 4))
+    lines.append("")
+    return lines
+
+
+def _render_coverage(coverage_status: str, reasons: list, impacts: list, width: int) -> list:
+    icon = _COVERAGE_ICON.get(coverage_status, DIM("[?]"))
+    lines = [f"  {BOLD('COVERAGE')}", "", f"  {icon} {coverage_status.replace('_', ' ').upper()}"]
+    for reason in reasons:
+        lines.extend(_wrap_block(reason, width, 6))
+    for impact in impacts:
+        lines.extend(_wrap_block(f"Impact: {impact}", width, 6))
+    lines.append("")
+    return lines
+
+
+def render_console_lines(report: InjectionReport, verbose: bool = False,
+                          width: "int | None" = None) -> list:
+    """Pure `InjectionReport -> list[str]` projection -- one line per list
+    element, no trailing newline characters, no `print()` calls, no
+    legacy-dict return value. `render_console_lines(report, False)` and
+    `render_console_lines(report, True)` may be called in either order (or
+    repeatedly) against the SAME `report` with no effect on each other, on
+    `report` itself, or on `report_legacy.project_legacy_dict`/
+    `report_record.project_hunter_record`'s output for that `report`."""
+    findings = [_console_finding(r, report) for r in report.results]
+    coverage_dict, coverage_status, coverage_reasons = project_coverage_v1(report.coverage)
+    w = resolve_width(width)
+    level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
+
+    lines = list(_header_lines("Process Injection"))
+
+    lines.extend(_render_verdict_block(report.status, report.score, report.max_score,
+                                        report.confidence, coverage_status,
+                                        report.review_priority, findings))
+    lines.append("")
+
+    ordered = _sorted_for_display(findings)
+    if ordered:
+        lines.append(f"  {BOLD('KEY SIGNALS')}")
+        lines.append("")
+        for f in ordered:
+            if verbose:
+                title = _TITLES.get(f.check, f.check)
+                lines.extend(render_finding_lines(f, level=level, indent=2, width=w, title=title))
+            else:
+                lines.extend(_render_key_signal_compact(f, w))
+                lines.append("")
+
+    if not verbose:
+        driving = ordered[0] if ordered and ordered[0].tag in (TAG_DETECTION, TAG_LEAD) else None
+        if driving is not None:
+            lines.extend(_render_why_this_verdict(driving, w))
+
+    if coverage_reasons:
+        impacts = _coverage_only_impacts(findings, coverage_reasons)
+        lines.extend(_render_coverage(coverage_status, coverage_reasons, impacts, w))
+
+    evidence = report.evidence
+    if not verbose and (evidence.rwx or evidence.validated_pe_hits or evidence.start_threads):
+        lines.append(DIM("  Use --verbose for complete per-region evidence and file offsets.\n"))
+
+    return lines
+
+
+def print_console(report: InjectionReport, verbose: bool = False) -> None:
+    """Thin, side-effecting convenience wrapper -- prints exactly what
+    `render_console_lines` returns. Never the target of a test or of the
+    other two projectors' parity checks; `render_console_lines` itself is."""
+    for line in render_console_lines(report, verbose):
+        print(line)
