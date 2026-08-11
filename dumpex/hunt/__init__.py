@@ -9,8 +9,7 @@ from dumpex.hunt._ui import _print_hunt_header, NOT_EVALUATED
 from dumpex.hunt.injection  import _build_injection_report, _render_injection_console
 from dumpex.hunt.hollowing  import (_build_hollowing_report, _render_hollowing_console,
     _print_hollowing_pre_build_console)
-from dumpex.hunt.stomping   import _build_stomping_report, _print_stomping_pre_build_console
-from dumpex.hunt.stomping.presentation import render as _render_stomping_console
+from dumpex.hunt.stomping   import _build_stomping_report, _render_stomping_console
 from dumpex.hunt.pipe       import _build_pipe_report, _print_pipe_pre_build_console
 from dumpex.hunt.pipe.presentation import render as _render_pipe_console
 from dumpex.hunt.cs_beacon  import (_build_cs_beacon_report, _print_cs_beacon_pre_build_console,
@@ -222,7 +221,6 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         results["hollowing"] = _render_hollowing_console(mf, report, verbose)
         records.append(_record_from_hollowing_report(report))
     if run_stomping:
-        _print_stomping_pre_build_console()
         report = _build_stomping_report(mf, ref_dir=ref_dir)
         results["stomping"] = _render_stomping_console(report, verbose)
         records.append(_record_from_stomping_report(report))

@@ -225,26 +225,7 @@
       "protection_leads": [],
       "verified_changes": []
     },
-    "findings": [
-      {
-        "check": "stomping.protection_deviation_lead",
-        "confidence": "low",
-        "evidence_refs": [],
-        "facts": [
-          "0 module(s) checked"
-        ],
-        "id": "finding-c5c269b700a207a66efd343cb8224e8b",
-        "inference": "No module section declared executable-but-not-writable shows a live protection state outside the normal set.",
-        "iocs": [],
-        "limitations": [],
-        "rationale": "Absence of a protection anomaly is weak evidence of absence \u2014 stomping via careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not show up here at all.",
-        "rule_id": "stomping.protection_deviation_lead",
-        "rule_version": null,
-        "severity": "info",
-        "tag": "observation",
-        "technique_ids": []
-      }
-    ],
+    "findings": [],
     "hunter": "stomping",
     "lead_count": 0,
     "max_score": 2,

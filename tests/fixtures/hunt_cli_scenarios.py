@@ -168,16 +168,20 @@ def _check_stomping_ioc_hit(exit_code, doc, body):
     # Regression guard for the duplicate-print bug this scenario exists
     # for: presentation.py used to hand-render its own summary line for
     # this Finding (under the human label "IOC strings in module code
-    # regions (lead)" -- NOT the raw check id, so counting occurrences of
-    # "stomping.ioc_string_lead" alone does NOT catch that block coming
-    # back: confirmed by temporarily reintroducing it and finding this
-    # check-id count still read 1) AND ALSO print every Finding in
+    # regions (lead)") AND ALSO print every Finding in
     # report.findings_list unconditionally. Checked here (not just via a
     # golden byte-diff) so a `scripts/update_hunt_cli_goldens.py` run made
     # WHILE the bug is back fails before it can write a fixture that
     # "fixes" the diff by baking the duplicate in as the new expected
     # output.
-    assert body.count("stomping.ioc_string_lead") == 1
+    #
+    # Counted on the check's human TITLE, which is what the verdict-first
+    # console (issue #8) prints in BOTH modes -- the raw check id only
+    # appears under --verbose, so counting that alone would read 0 in
+    # normal mode and prove nothing (it also never caught the original
+    # bug, whose duplicate block used the human label rather than the id).
+    assert body.count("IOC strings in module code regions") == 1
+    assert body.count("stomping.ioc_string_lead") <= 1
     assert "IOC strings in module code regions (lead)" not in body
 
 

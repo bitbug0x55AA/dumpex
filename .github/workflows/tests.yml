@@ -136,12 +136,27 @@ jobs:
           # package now, not a single file.
           coverage report --include="dumpex/hunt/stomping/__init__.py"        --fail-under=85
           coverage report --include="dumpex/hunt/stomping/config.py"         --fail-under=95
-          coverage report --include="dumpex/hunt/stomping/models.py"         --fail-under=95
           coverage report --include="dumpex/hunt/stomping/correlation.py"    --fail-under=85
-          coverage report --include="dumpex/hunt/stomping/aggregate.py"      --fail-under=75
           coverage report --include="dumpex/hunt/stomping/disk_reference.py" --fail-under=70
-          coverage report --include="dumpex/hunt/stomping/memory_scan.py"    --fail-under=70
-          coverage report --include="dumpex/hunt/stomping/presentation.py"   --fail-under=55
+          coverage report --include="dumpex/hunt/stomping/memory_scan.py"    --fail-under=85
+          # models.py stopped being a handful of mutable DTOs and became
+          # this hunter's whole immutable Evidence vocabulary (identity
+          # snapshots + per-field validation), so its gate moves up with
+          # its new role rather than staying at the old DTO threshold.
+          coverage report --include="dumpex/hunt/stomping/models.py"         --fail-under=95
+          # The canonical report cutover moved every Finding/facts/coverage
+          # decision out of the old mutable Report and the old
+          # presentation.py into the immutable domain model plus four
+          # independent projectors. aggregate.py is now pure evidence ->
+          # CheckResult reduction, hence the much higher gate. Every new
+          # boundary is gated so a stale path fails visibly and no output
+          # projection is left without coverage.
+          coverage report --include="dumpex/hunt/stomping/aggregate.py"       --fail-under=95
+          coverage report --include="dumpex/hunt/stomping/domain.py"          --fail-under=95
+          coverage report --include="dumpex/hunt/stomping/report_console.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/stomping/report_facts.py"    --fail-under=90
+          coverage report --include="dumpex/hunt/stomping/report_legacy.py"   --fail-under=95
+          coverage report --include="dumpex/hunt/stomping/report_record.py"   --fail-under=95
           # dumpex/hunt/pipe/*: same reasoning -- pipe.py is a package now,
           # not a single file.
           coverage report --include="dumpex/hunt/pipe/__init__.py"      --fail-under=95

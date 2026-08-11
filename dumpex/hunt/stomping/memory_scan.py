@@ -1,15 +1,33 @@
 """Module header parsing, per-section protection deviation checks, and
 the unscored IOC-string region scan. Only collects facts — never scores,
 never prints.
+
+Since the canonical-Report migration this is also one of the two places
+(with correlation.py) that a raw minidump `Module`/`MinidumpMemoryInfo`/
+`parse_pe_header()` section dict is allowed to be touched at all: every
+function here returns the immutable Evidence value objects
+dumpex/hunt/stomping/models.py defines, with module basenames and
+`prot_str()` protections resolved ONCE, here, so aggregate.py and the
+report_* projectors never see a raw object or re-derive a formatted one.
 """
-import ntpath
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import addr_to_module, prot_str, _extract_ioc_strings
+from dumpex.core.memory import (addr_to_module, prot_str, va_to_file_offset,
+    _extract_ioc_strings)
 from dumpex.core.pe_utils import (parse_pe_header, expected_protection_name,
     section_protection_deviates)
 from dumpex.hunt._coverage import CoverageTracker, region_scan_target
 from dumpex.hunt.stomping.config import IOC_SCAN_MAX
-from dumpex.hunt.stomping.models import IocScan
+from dumpex.hunt.stomping.models import (
+    IocCoverage, IocHitEvidence, IocScanResult, IocTokenHit, ProtectionLeadEvidence,
+    _module_basename, module_ref, region_ref, section_ref,
+)
+
+# `_module_basename` is re-exported (imported above from models.py, where
+# it now lives alongside `module_ref()` -- resolving a basename IS part of
+# building a ModuleRef) so dumpex.hunt.stomping.disk_reference's existing
+# `from ...memory_scan import _module_basename` keeps working unchanged.
+__all__ = ["_module_basename", "read_module_header", "section_va_range",
+            "check_section_protection", "scan_ioc_strings"]
 
 # API-name tokens that ALSO commonly appear in benign/legitimate code paths
 # (loader stubs, debuggers, security tooling itself) -- flagged as "weak"
@@ -17,18 +35,6 @@ from dumpex.hunt.stomping.models import IocScan
 # have them inflate the apparent strength of an IOC hit.
 _WEAK_IOC_TERMS = {"virtualalloc", "writeprocessmemory",
                    "createremotethread", "wsasocket", "base64"}
-
-
-def _module_basename(module) -> str:
-    """
-    Module paths recorded in a minidump are from the ORIGINAL Windows
-    system (e.g. 'C:\\Windows\\System32\\foo.dll'). os.path.basename only
-    splits on '/' when running on a POSIX analysis host, so it returns the
-    whole backslash-separated string unchanged there — ntpath.basename
-    always applies Windows path rules regardless of the host OS this
-    tool itself runs on.
-    """
-    return ntpath.basename(module.name or "") if module.name else ""
 
 
 def _regions_covering(start: int, end: int, regions: list) -> list:
@@ -61,42 +67,69 @@ def section_va_range(module_base: int, section: dict) -> "tuple[int, int]":
     return va_start, va_end
 
 
-def check_section_protection(module, section: dict, va_start: int, va_end: int, regions: list) -> list:
+def check_section_protection(mf: MinidumpFile, module, section: dict, va_start: int,
+                              va_end: int, regions: list) -> tuple:
     """
     Protection-deviation LEAD candidates for one eligible (executable,
     non-writable) section — informational, never scored (see
     dumpex/hunt/stomping/__init__.py's module docstring for why WRITECOPY
     is excluded and why deviation alone still isn't proof either way).
+
+    Returns a tuple of immutable `ProtectionLeadEvidence`, not the
+    pre-migration `{"module": <Module>, "region": <MinidumpMemoryInfo>,
+    ...}` dicts: identity/protection strings are snapshotted here, so the
+    two live minidump objects those dicts used to carry all the way into
+    the JSON projection are unreachable from the Report.
+
+    `module`/`section`/`file_offset` are resolved once for the whole
+    section rather than per covering region -- a section can overlap
+    several MemoryInfo regions, and rebuilding the same identity per
+    region would both repeat a `va_to_file_offset()` lookup and make
+    equal-but-distinct copies of a value object the evidence buckets then
+    dedup on. All three are resolved LAZILY, only once a region actually
+    deviates, so the (rare) skip path costs nothing.
     """
     leads = []
+    module_snapshot = None
+    section_snapshot = None
+    file_offset = None
     for region in _regions_covering(va_start, va_end, regions):
         if prot_str(region.State) != "MEM_COMMIT":
             continue
         actual = prot_str(region.Protect)
-        if section_protection_deviates(actual, section):
-            leads.append({
-                "module": module, "section": section, "region": region,
-                "expected": expected_protection_name(section["is_readable"],
-                                                       section["is_writable"], section["is_executable"]),
-                "actual": actual,
-                "va_start": va_start, "va_end": va_end,
-            })
-    return leads
+        if not section_protection_deviates(actual, section):
+            continue
+        if module_snapshot is None:
+            module_snapshot, section_snapshot = module_ref(module), section_ref(section)
+            file_offset = va_to_file_offset(mf, va_start)
+        leads.append(ProtectionLeadEvidence(
+            module=module_snapshot, section=section_snapshot, region=region_ref(region),
+            expected=expected_protection_name(section["is_readable"], section["is_writable"],
+                                               section["is_executable"]),
+            actual=actual, va_start=va_start, va_end=va_end, file_offset=file_offset))
+    return tuple(leads)
 
 
-def _classify_ioc_hits(strings, patterns) -> list:
+def _classify_ioc_hits(strings, patterns, region_base: int) -> tuple:
+    """Every IOC-pattern token match across one region's extracted strings,
+    as immutable `IocTokenHit`s with their absolute VA already resolved --
+    `_extract_ioc_strings` reports region-relative offsets, and resolving
+    the VA here (once) is what stops two projectors adding
+    `region.base_address + offset` independently."""
     hits = []
     for off, enc, s in strings:
         for pat in patterns:
             for m in pat.finditer(s):
                 token = m.group(0)
-                hits.append((off + m.start(), enc, token,
-                             token.casefold() in _WEAK_IOC_TERMS))
-    return hits
+                offset = off + m.start()
+                hits.append(IocTokenHit(offset=offset, va=region_base + offset, encoding=enc,
+                                         token=token,
+                                         is_weak=token.casefold() in _WEAK_IOC_TERMS))
+    return tuple(hits)
 
 
 def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list,
-                      whitelist, ioc_patterns, net_ioc_patterns) -> IocScan:
+                      whitelist, ioc_patterns, net_ioc_patterns) -> IocScanResult:
     """
     Scan every executable MEM_IMAGE region for IOC-pattern strings — an
     unscored, low-confidence lead (see dumpex/hunt/_finding.py for why raw
@@ -104,8 +137,8 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
 
     Every region that passes the eligibility filters (committed,
     MEM_IMAGE, executable) but is then NOT actually read IN FULL is
-    accounted for on the returned IocScan.coverage: over IOC_SCAN_MAX -> a
-    skipped-oversize ScanTarget carrying that exact region's VA/size/
+    accounted for on the returned IocScanResult.coverage: over IOC_SCAN_MAX
+    -> a skipped-oversize ScanTarget carrying that exact region's VA/size/
     file offset/protection and the cap it exceeded; read raised -> a
     read-failure count; fewer bytes came back than RegionSize -> a
     short-read count (the readable prefix is still scanned -- a real hit
@@ -115,12 +148,15 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
     without this flag, and the unread remainder could hide anything).
     None of these three may be dropped silently — a scan that examined
     only part of its own eligible scope must not be renderable as a
-    complete, clean IOC result (see presentation.py / this package's
+    complete, clean IOC result (see report_console.py / this package's
     docstring).
+
+    The live `CoverageTracker` is frozen into an `IocCoverage` before it is
+    returned, so nothing downstream can mutate this scan's own result.
     """
     ioc_hits = []
     skipped_wl = []
-    weak_only_skipped = []
+    weak_only_regions = 0
     coverage = CoverageTracker()
 
     for r in regions:
@@ -162,17 +198,19 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
 
         strings = _extract_ioc_strings(data, r.BaseAddress)
         patterns = ([ioc_patterns] if is_wl else [ioc_patterns, net_ioc_patterns])
-        hits = _classify_ioc_hits(strings, patterns)
+        hits = _classify_ioc_hits(strings, patterns, r.BaseAddress)
 
         if not hits:
             if is_wl:
                 skipped_wl.append(mod_name)
             continue
-        strong_hits = [h for h in hits if not h[3]]
-        if not strong_hits:
-            weak_only_skipped.append((r, mod, hits))
+        if not any(not h.is_weak for h in hits):
+            weak_only_regions += 1
             continue
-        ioc_hits.append((r, mod, hits, not is_wl))
+        ioc_hits.append(IocHitEvidence(region=region_ref(r),
+                                        module=module_ref(mod) if mod else None,
+                                        tokens=hits, not_whitelisted=not is_wl))
 
-    return IocScan(ioc_hits=ioc_hits, skipped_wl=skipped_wl,
-                    weak_only_skipped=weak_only_skipped, coverage=coverage)
+    return IocScanResult(hits=tuple(ioc_hits),
+                          coverage=IocCoverage.from_tracker(coverage, skipped_wl),
+                          weak_only_regions=weak_only_regions)
