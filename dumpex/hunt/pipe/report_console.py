@@ -249,9 +249,13 @@ def _scan_detail_lines(report: PipeReport) -> list:
 
 
 # How many items each EVIDENCE DETAIL list enumerates before summarizing
-# the remainder. Records within a selected C2-context region are already
-# acquisition-bounded by `PIPE_C2_MAX_HITS_PER_REGION`, so the console
-# renders every record retained in the immutable Report.
+# the remainder. This caps the number of REGIONS shown, not the records
+# within one -- the console renders every record a shown region's own
+# RegionC2Records retained, since acquisition itself is what bounds that
+# list now: context-only evidence per region is capped at
+# `PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION`, and proximity evidence is bounded
+# only by the whole-hunt c2_budget (see memory_scan.scan_pipe_names) --
+# there is no separate console-side truncation of either.
 _DETAIL_LIMIT = 10
 
 

@@ -17,9 +17,10 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import addr_to_module, prot_str, va_to_file_offset
 from dumpex.hunt._coverage import region_scan_target
 from dumpex.hunt.pipe.config import (PIPE_SCAN_MAX, PIPE_MAX_MATCHES_PER_REGION,
-    PIPE_C2_MAX_HITS_PER_REGION, PIPE_C2_CONTEXT_BYTES, PIPE_C2_TOKEN_PREVIEW,
-    PIPE_NAME_MAX_CHARS)
-from dumpex.hunt.pipe.patterns import PIPE_PAT_ASCII, PIPE_PAT_UTF16, _iter_c2_matches
+    PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION, PIPE_C2_CONTEXT_BYTES,
+    PIPE_C2_TOKEN_PREVIEW, PIPE_NAME_MAX_CHARS, PIPE_CONTEXT_DISTANCE)
+from dumpex.hunt.pipe.patterns import (PIPE_PAT_ASCII, PIPE_PAT_UTF16, _iter_c2_matches,
+    is_proximity_match)
 from dumpex.hunt.pipe.models import (
     C2ContextRecord, PipeNameScanResult, PipeScanCoverage, PipeStringEvidence, RegionC2Records,
     region_ref,
@@ -122,6 +123,25 @@ def dedupe_private_pipes(private_pipes: list) -> list:
     return deduped
 
 
+def _build_c2_record(data: bytes, start: int, end: int, token: bytes,
+                      region_base: int) -> C2ContextRecord:
+    """One `C2ContextRecord` from a raw match span -- shared by both the
+    proximity and context-only retention passes in `scan_pipe_names()` so
+    the context-window-slicing/hashing logic isn't duplicated between
+    them."""
+    ctx_half  = PIPE_C2_CONTEXT_BYTES // 2
+    ctx_start = max(0, start - ctx_half)
+    ctx_end   = min(len(data), end + ctx_half)
+    context   = bytes(data[ctx_start:ctx_end][:PIPE_C2_CONTEXT_BYTES])
+    match_b   = data[start:end]
+    return C2ContextRecord(
+        match=token[:PIPE_C2_TOKEN_PREVIEW],
+        context=context,
+        va=region_base + start,
+        sha256=hashlib.sha256(match_b).hexdigest(),
+        original_length=end - start)
+
+
 def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
                      coverage_counts, pipe_name_budget, c2_budget, c2_pattern) -> PipeNameScanResult:
     """
@@ -206,28 +226,55 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
                     file_offset=va_to_file_offset(mf, va)))
 
         if len(string_leads) > pipes_before and not c2_budget.exhausted():
-            # Stream C2 matches directly over `data` (bounded per-match
-            # span, see patterns._iter_c2_matches) and build small, bounded
-            # records right here while `data` is still in scope — the raw
-            # region bytes are never cached or retained past this loop
-            # iteration. Only C2-context gathering stops once its budget is
-            # spent; pipe-name detection is unaffected.
+            # Build small, bounded C2ContextRecords right here while `data`
+            # is still in scope — the raw region bytes are never cached or
+            # retained past this loop iteration. Only C2-context gathering
+            # stops once its budget is spent; pipe-name detection is
+            # unaffected.
+            #
+            # Retention is proximity-first AND budget-driven (issue #24 and
+            # its own follow-up) via TWO independent streaming passes over
+            # `_iter_c2_matches`, rather than one pass that buffers every
+            # examined match before retaining any of them: buffering is
+            # itself an unbounded-memory concern for a crafted, C2-pattern-
+            # dense region, exactly the failure mode a per-region "matches
+            # examined" ceiling was wrongly reintroduced to paper over.
+            region_pipe_offsets = [hit.offset for hit in string_leads[pipes_before:]]
             records = []
-            for start, end, token in _iter_c2_matches(data, c2_pattern, PIPE_C2_MAX_HITS_PER_REGION):
-                ctx_half  = PIPE_C2_CONTEXT_BYTES // 2
-                ctx_start = max(0, start - ctx_half)
-                ctx_end   = min(len(data), end + ctx_half)
-                context   = bytes(data[ctx_start:ctx_end][:PIPE_C2_CONTEXT_BYTES])
-                match_b   = data[start:end]
-                record = C2ContextRecord(
-                    match=token[:PIPE_C2_TOKEN_PREVIEW],
-                    context=context,
-                    va=r.BaseAddress + start,
-                    sha256=hashlib.sha256(match_b).hexdigest(),
-                    original_length=end - start)
+
+            # Pass 1 — proximity evidence (within PIPE_CONTEXT_DISTANCE of
+            # one of THIS region's own pipe-name hits): NO per-region cap
+            # of its own. Retained for as long as the whole-hunt c2_budget
+            # has room, full stop — a region with many corroborating
+            # matches keeps every one of them the budget allows.
+            for start, end, token in _iter_c2_matches(data, c2_pattern, c2_budget):
+                if not is_proximity_match(start, region_pipe_offsets, PIPE_CONTEXT_DISTANCE):
+                    continue
+                record = _build_c2_record(data, start, end, token, r.BaseAddress)
                 if not c2_budget.take_hit(len(record.context) + len(record.match)):
                     break
                 records.append(record)
+
+            # Pass 2 — context-only evidence: a SEPARATE, small, fixed
+            # per-region quota (PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION) so it
+            # can only ever claim a modest, bounded slice of c2_budget and
+            # can never compete with or displace proximity evidence above
+            # — re-scanning `data` is cheap regex work, not the resource
+            # c2_budget bounds (see its own construction in
+            # dumpex/hunt/pipe/__init__.py).
+            if not c2_budget.exhausted():
+                context_kept = 0
+                for start, end, token in _iter_c2_matches(data, c2_pattern, c2_budget):
+                    if context_kept >= PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION:
+                        break
+                    if is_proximity_match(start, region_pipe_offsets, PIPE_CONTEXT_DISTANCE):
+                        continue
+                    record = _build_c2_record(data, start, end, token, r.BaseAddress)
+                    if not c2_budget.take_hit(len(record.context) + len(record.match)):
+                        break
+                    records.append(record)
+                    context_kept += 1
+
             if records:
                 c2_regions.append(RegionC2Records(region=region, records=tuple(records)))
 

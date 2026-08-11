@@ -100,7 +100,7 @@ def _iter_printable_runs(data: bytes):
         yield m.start(), m.group().decode('utf-16-le', errors='replace'), True
 
 
-def _iter_c2_matches(data: bytes, pattern, max_per_region: int):
+def _iter_c2_matches(data: bytes, pattern, budget):
     """
     Stream C2_PAT matches against each ASCII/UTF16LE printable run found in
     `data` individually — matching the same string boundaries a human or
@@ -112,6 +112,24 @@ def _iter_c2_matches(data: bytes, pattern, max_per_region: int):
     never matches) and UTF16LE C2 strings entirely (interleaved NUL bytes
     prevent any match against a pattern written for contiguous ASCII).
 
+    There is deliberately NO fixed "matches examined" ceiling here (issue
+    #24's own follow-up): a caller deciding whether a match is proximity-
+    relevant (see `is_proximity_match`) has to see every match in the
+    region, and a count-based cutoff before that -- at 5, at 200, at any
+    fixed N -- silently reintroduces the exact scan-order false negative
+    issue #24 reports, just at a different threshold, with nothing in
+    `dumpex.hunt.pipe.models.PipeScanCoverage` to show it happened.
+
+    Instead, `budget` (the whole-hunt c2_budget, a
+    `dumpex.hunt._budget.ScanBudget`) is polled every 16 examined matches
+    — the same convention `dumpex.hunt.encoding.decoding`'s own XOR-key
+    brute force uses for its cheap-per-iteration loop — so a scan that
+    gets cut short is cut short by the SAME accountable budget that
+    already feeds `PipeScanCoverage.c2_budget_exhausted` /
+    `c2_budget_reason`, and only by an expired whole-hunt deadline or a
+    budget already exhausted from an earlier region — never by a count
+    silently reached partway through this one.
+
     Each run's decoded text is used only transiently for matching here;
     only the short, bounded match token and its BYTE offset within `data`
     are ever yielded — the full run itself (which can be enormous) is
@@ -119,12 +137,12 @@ def _iter_c2_matches(data: bytes, pattern, max_per_region: int):
     """
     count = 0
     for run_offset, text, is_utf16 in _iter_printable_runs(data):
-        if count >= max_per_region:
+        if not budget.poll():
             return
         for m in pattern.finditer(text):
-            if count >= max_per_region:
-                return
             count += 1
+            if count % 16 == 0 and not budget.poll():
+                return
             if is_utf16:
                 byte_start = run_offset + m.start() * 2
                 byte_end   = run_offset + m.end() * 2
@@ -132,3 +150,22 @@ def _iter_c2_matches(data: bytes, pattern, max_per_region: int):
                 byte_start = run_offset + m.start()
                 byte_end   = run_offset + m.end()
             yield byte_start, byte_end, m.group(0)
+
+
+def is_proximity_match(start: int, pipe_offsets, context_distance: int) -> bool:
+    """
+    True if a C2 match's region-relative byte offset `start` is proximity
+    evidence — within `context_distance` of AT LEAST ONE offset in
+    `pipe_offsets` (that SAME region's own retained pipe-name hit offsets;
+    both share `data`'s coordinate space, so no VA resolution is needed
+    here). False means context-only evidence.
+
+    A pure predicate rather than a batch "select" function (issue #24's
+    original fix used one, which required buffering every examined match
+    before retaining any of them — see memory_scan.scan_pipe_names for
+    why that buffering was itself a bounded-memory concern for a crafted,
+    match-dense region, and why retention is now two independent
+    streaming passes over `_iter_c2_matches` instead of one buffered
+    pass over this function's output).
+    """
+    return any(abs(start - po) <= context_distance for po in pipe_offsets)

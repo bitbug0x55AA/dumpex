@@ -17,7 +17,27 @@ PIPE_CONTEXT_DISTANCE = 4096   # +/- byte window, anchored on a pipe-name
                                 # to the pipe reference. 4 KiB is one page.
 
 PIPE_MAX_MATCHES_PER_REGION = 50    # cap raw \pipe\ matches processed per region
-PIPE_C2_MAX_HITS_PER_REGION = 5     # cap C2_PAT matches recorded per pipe-bearing region
+
+# There is DELIBERATELY no fixed "matches EXAMINED per region" ceiling for
+# C2_PAT (issue #24, and its own follow-up): a count-based cutoff on the
+# EXAMINE phase reintroduces the exact scan-order false negative issue #24
+# reports, just at whatever number the constant is set to — match #201 is
+# discarded exactly as silently as match #6 was, and neither c2_budget nor
+# PipeScanCoverage would show anything wrong. patterns._iter_c2_matches
+# instead polls c2_budget's own DEADLINE (whole-hunt, PIPE_C2_BUDGET_
+# TIME_SECONDS below) as it walks the region, so a scan that gets cut short
+# is cut short by the same budget that already feeds
+# PipeScanCoverage.c2_budget_exhausted -- never silently.
+PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION = 5   # cap CONTEXT-ONLY (non-proximity) C2_PAT matches
+                                           # RETAINED per pipe-bearing region -- a small, fixed
+                                           # quota for representative context, kept SEPARATE from
+                                           # proximity evidence so it can never compete with or
+                                           # displace it. Proximity evidence (within
+                                           # PIPE_CONTEXT_DISTANCE of a pipe-name hit in the same
+                                           # region) has NO per-region cap of its own at all --
+                                           # it is retained for as long as the whole-hunt c2_budget
+                                           # (below) has room, full stop. See
+                                           # memory_scan.scan_pipe_names.
 PIPE_C2_CONTEXT_BYTES       = 512   # total context window (before+after) kept per match
 PIPE_C2_TOKEN_PREVIEW       = 256   # bound on the match token itself — every one of
                                      # C2_PAT's own patterns (a literal "http://", an

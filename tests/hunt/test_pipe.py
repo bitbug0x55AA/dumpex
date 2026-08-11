@@ -112,6 +112,151 @@ def test_pipe_and_c2_100_bytes_apart_scores_2():
     assert f["score"] == 2
 
 
+# ── 5 unrelated C2 matches earlier in scan order must not evict the 6th, ───
+# proximity-relevant match from the bounded per-region retention (issue #24:
+# the per-region C2 cap used to stop scanning in SCAN ORDER, before
+# proximity to the pipe name was even known)
+
+def test_c2_beyond_scan_order_cap_still_corroborates():
+    region_base = 0x1000000
+    region_size = 0x10000
+    data = bytearray(region_size)
+
+    # Five unrelated C2-pattern matches, first in scan order, each isolated
+    # by null bytes (separate printable runs) and each far beyond
+    # PIPE_CONTEXT_DISTANCE from where the pipe name sits below.
+    unrelated_token = b"http://x"
+    for off in (0x10, 0x110, 0x210, 0x310, 0x410):
+        data[off:off + len(unrelated_token)] = unrelated_token
+
+    pipe_name = b"\\\\.\\pipe\\my_custom_ipc_channel"
+    pipe_offset = 0x3000
+    data[pipe_offset:pipe_offset + len(pipe_name)] = pipe_name
+
+    # The SIXTH C2-pattern match, within PIPE_CONTEXT_DISTANCE of the pipe
+    # name -- this is the record the old first-N-in-scan-order cap would
+    # never even see, since the 5 unrelated matches above already exhausted
+    # it.
+    c2_offset = pipe_offset + len(pipe_name) + 50
+    c2_token = b"http://198.51.100.7:8080/submit.php"
+    data[c2_offset:c2_offset + len(c2_token)] = c2_token
+
+    regions = [Region(region_base, region_base, region_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+    handle_list = [Handle(0x99, "File", r"\Device\NamedPipe\my_custom_ipc_channel")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream(handle_list, "handles")
+    pipemod.read_region = mem_reader({region_base: bytes(data)})
+
+    f = pipemod._hunt_pipe(MF(), verbose=False)
+    tags = {finding["check"]: (finding["tag"], finding["confidence"]) for finding in f["findings"]}
+    assert tags.get("pipe.corroboration", (None,))[0] == "detection", (
+        "the proximity-relevant 6th C2 match must be retained even though "
+        "5 unrelated matches occurred earlier in scan order")
+    assert f["score"] == 2
+
+
+# ── same regression, but with 200 unrelated matches -- past the OLD, ───────
+# now-removed PIPE_C2_MAX_SCAN_PER_REGION=200 "matches examined" ceiling.
+# That ceiling was itself a P1 follow-up to issue #24: capping the EXAMINE
+# phase at a fixed count reintroduces the identical scan-order false
+# negative at a higher threshold, invisibly to c2_budget/coverage. There is
+# now no such cap at all -- the 201st match must still be scanned and
+# retained, and default-sized budgets must not be exhausted by getting
+# there.
+
+def test_c2_beyond_200_unrelated_matches_still_corroborates():
+    region_base = 0x1000000
+    region_size = 0x10000
+    data = bytearray(region_size)
+
+    unrelated_token = b"http://x"
+    for i in range(200):
+        off = 0x10 + i * 0x20
+        data[off:off + len(unrelated_token)] = unrelated_token
+
+    pipe_name = b"\\\\.\\pipe\\my_custom_ipc_channel"
+    pipe_offset = 0x8000
+    data[pipe_offset:pipe_offset + len(pipe_name)] = pipe_name
+
+    # The 201st C2-pattern match, within PIPE_CONTEXT_DISTANCE of the pipe
+    # name -- the record a fixed "matches examined" cap of 200 would never
+    # even see.
+    c2_offset = pipe_offset + len(pipe_name) + 50
+    c2_token = b"http://198.51.100.7:8080/submit.php"
+    data[c2_offset:c2_offset + len(c2_token)] = c2_token
+
+    regions = [Region(region_base, region_base, region_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+    handle_list = [Handle(0x99, "File", r"\Device\NamedPipe\my_custom_ipc_channel")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream(handle_list, "handles")
+    pipemod.read_region = mem_reader({region_base: bytes(data)})
+
+    f = pipemod._hunt_pipe(MF(), verbose=False)
+    tags = {finding["check"]: (finding["tag"], finding["confidence"]) for finding in f["findings"]}
+    assert tags.get("pipe.corroboration", (None,))[0] == "detection", (
+        "the proximity-relevant 201st C2 match must still be retained even "
+        "though 200 unrelated matches occurred earlier in scan order")
+    assert f["score"] == 2
+    assert f["coverage_status"] == "complete", (
+        "200 unrelated matches must not itself exhaust a whole-hunt budget "
+        "on default-sized budgets -- this scenario must remain fully "
+        "covered, not just correctly scored")
+
+
+# ── c2_budget already exhausted -> partial coverage, never a silently ──────
+# lower score as though the full scoring scope had been evaluated (issue
+# #24's own acceptance criteria). Proximity evidence is now gated ENTIRELY
+# by the whole-hunt c2_budget (no separate per-region cap of its own), so
+# its exhaustion must be visible end to end.
+
+def test_c2_budget_exhaustion_marks_coverage_partial(monkeypatch):
+    region_base = 0x1000000
+    region_size = 0x10000
+    pipe_name = b"\\\\.\\pipe\\my_custom_ipc_channel"
+    data = bytearray(region_size)
+    data[0x100:0x100 + len(pipe_name)] = pipe_name
+    c2_offset = 0x100 + len(pipe_name) + 50
+    c2_token = b"http://198.51.100.7:8080/submit.php"
+    data[c2_offset:c2_offset + len(c2_token)] = c2_token
+
+    regions = [Region(region_base, region_base, region_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+    handle_list = [Handle(0x99, "File", r"\Device\NamedPipe\my_custom_ipc_channel")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream(handle_list, "handles")
+    pipemod.read_region = mem_reader({region_base: bytes(data)})
+
+    # Force the whole-hunt C2 budget to already be exhausted before the
+    # scan begins -- `dumpex.hunt.pipe.__init__` binds this constant into
+    # its own module namespace at import time (`from ...config import
+    # PIPE_C2_BUDGET_MAX_HITS`), so patching it here, like this module's
+    # existing `pipemod.read_region`/`pipemod.get_thread_contexts`
+    # monkeypatches, changes what `_build_pipe_report()` actually
+    # constructs.
+    monkeypatch.setattr(pipemod, "PIPE_C2_BUDGET_MAX_HITS", 0)
+
+    f = pipemod._hunt_pipe(MF(), verbose=False)
+    assert f["coverage_status"] == "partial"
+    tags = {finding["check"] for finding in f["findings"]}
+    assert "pipe.corroboration" not in tags, (
+        "with c2_budget exhausted before any hit could be taken, no C2 "
+        "record could have been retained to corroborate anything")
+
+
 # ── pipe + nearby C2 + nearby RIP -> score 3 ────────────────────────────────
 
 def test_pipe_nearby_c2_and_rip_scores_3():
