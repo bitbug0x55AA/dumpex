@@ -175,8 +175,7 @@ def _corroboration_verbose_facts(ev) -> list:
              f"Region=0x{ev.string_hit.region.base_address:x} "
              f"protect={ev.string_hit.region.protect}"]
     facts.extend(f"  ↳ c2_va=0x{rec.va:016x} c2_match={rec.match!r} "
-                 f"{_proximity_text(rec.va, ev.pipe_va)} "
-                 f"sha256_prefix={rec.sha256[:16]}…"
+                 f"{_proximity_text(rec.va, ev.pipe_va)}"
                  for rec in ev.nearby_c2)
     if ev.rip_hit is not None:
         tc = ev.rip_hit
@@ -250,12 +249,10 @@ def _scan_detail_lines(report: PipeReport) -> list:
 
 
 # How many items each EVIDENCE DETAIL list enumerates before summarizing
-# the remainder, and how many C2 records one region enumerates inside it.
-# The latter reproduces the pre-migration renderer's own `records[:3]`
-# slice; the former is new, and exists because the pre-migration blocks
-# were unbounded (see `_evidence_detail_lines`).
-_DETAIL_LIMIT          = 10
-_C2_RECORDS_PER_REGION = 3
+# the remainder. Records within a selected C2-context region are already
+# acquisition-bounded by `PIPE_C2_MAX_HITS_PER_REGION`, so the console
+# renders every record retained in the immutable Report.
+_DETAIL_LIMIT = 10
 
 
 def _more_lines(items, w: int) -> list:
@@ -336,12 +333,8 @@ def _evidence_detail_lines(report: PipeReport, w: int) -> list:
                                  "no corresponding open handle for this exact name")
             lines.extend(wrap_block(f"Region 0x{ev.region.base_address:x}  "
                                      f"pipe: {ev.pipe_name}  ({correlation_note})", w, 6))
-            for rec in ev.records[:_C2_RECORDS_PER_REGION]:
-                lines.extend(wrap_block(f"C2: {rec.match}  VA 0x{rec.va:016x}  "
-                                         f"sha256_prefix={rec.sha256[:16]}…", w, 8))
-            if len(ev.records) > _C2_RECORDS_PER_REGION:
-                lines.extend(wrap_block(
-                    f"... and {len(ev.records) - _C2_RECORDS_PER_REGION} more record(s)", w, 8))
+            for rec in ev.records:
+                lines.extend(wrap_block(f"C2: {rec.match}  VA 0x{rec.va:016x}", w, 8))
         lines.extend(_more_lines(evidence.c2_context, w))
         lines.append("")
 
