@@ -54,6 +54,36 @@ def test_no_ref_dir_is_inconclusive_partial():
     assert f["status"] == "INCONCLUSIVE"
 
 
+# ── --ref-dir="" (empty string, not None) must behave exactly like no ─────
+# --ref-dir at all: `ref_dir_supplied` must normalize on truthiness, not on
+# `is not None`, or coverage_status comes back "partial" with an EMPTY
+# coverage_reasons (nothing explains the gap, and the console's COVERAGE
+# section silently never renders at all).
+
+def test_ref_dir_empty_string_matches_ref_dir_none():
+    module_base = 0x7ff600000000
+    header, mem_text, ref_file, section = matching_module_and_ref(module_base)
+    mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
+    regions = [Region(module_base + section["vaddr"], module_base, section["vsize"],
+                       "MEM_COMMIT", "PAGE_EXECUTE_WRITECOPY", "MEM_IMAGE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+    stomping.read_region = mem_reader({module_base: header, module_base + section["vaddr"]: mem_text})
+
+    f_none  = stomping._hunt_stomping(MF(), verbose=False, ref_dir=None)
+    f_empty = stomping._hunt_stomping(MF(), verbose=False, ref_dir="")
+
+    assert f_empty["coverage_status"] == "partial"
+    assert f_empty["status"] == "INCONCLUSIVE"
+    # The whole point: a "partial" result must always carry a non-empty
+    # explanation, and ref_dir="" must give the SAME one ref_dir=None does.
+    assert f_empty["coverage_reasons"]
+    assert f_empty["coverage_reasons"] == f_none["coverage_reasons"]
+    assert f_empty["coverage_counts"] == f_none["coverage_counts"]
+
+
 # ── --ref-dir given but empty (no matching file) -> INCONCLUSIVE/partial ──
 
 def test_empty_ref_dir_is_inconclusive_partial():
@@ -459,13 +489,20 @@ def test_only_oversized_ioc_region_is_incomplete_not_clean(capsys):
     assert "6 MB > 5 MB limit" in reason
 
     out = capsys.readouterr().out
-    assert "CLEAN — no IOC patterns in executable module memory" not in out
-    assert "INCOMPLETE" in out
-    # The investigator is told WHICH region needs targeted follow-up, both
-    # at the check line and in the verdict's own coverage reasons.
+    # The verdict-first console (issue #8) renders this in the unified
+    # COVERAGE section rather than as a separate pre-verdict check line --
+    # the claim itself is unchanged: nothing may read as clean.
+    assert "CLEAN" not in out
+    assert "COVERAGE" in out and "PARTIAL" in out
+    # The investigator is told WHICH region needs targeted follow-up, in
+    # the coverage reason and its accompanying impact line.
     assert f"0x{oversized_base:016x}" in out
     assert "--extract" in out and "--strings" in out
-    assert "6 MB > 5 MB limit" in out
+    # The cap itself is named too -- asserted on the tail fragment only,
+    # since COVERAGE reasons word-wrap to the terminal width and this
+    # preview can legitimately break between "(6" and "MB > 5 MB limit)".
+    # The unwrapped, exact text is asserted on `coverage_reasons` above.
+    assert "5 MB limit" in out
 
 
 def test_mixed_scanned_and_oversized_regions_keeps_hits_and_the_gap(capsys):
@@ -504,9 +541,9 @@ def test_mixed_scanned_and_oversized_regions_keeps_hits_and_the_gap(capsys):
     assert f["status"] == "INCONCLUSIVE"
 
     out = capsys.readouterr().out
-    assert "INCOMPLETE" in out
+    assert "COVERAGE" in out and "PARTIAL" in out
     assert f"0x{oversized_base:016x}" in out
-    assert "CLEAN — no IOC patterns in executable module memory" not in out
+    assert "CLEAN" not in out
 
 
 def test_oversized_ioc_region_alongside_a_detection(capsys):
@@ -638,8 +675,8 @@ def test_short_read_ioc_region_is_incomplete_and_keeps_hit_in_prefix(capsys):
     assert any("partially scanned for IOC strings" in lim for lim in ioc_lead["limitations"])
 
     out = capsys.readouterr().out
-    assert "CLEAN — no IOC patterns in executable module memory" not in out
-    assert "INCOMPLETE" in out
+    assert "CLEAN" not in out
+    assert "COVERAGE" in out and "PARTIAL" in out
     assert "mimikatz" in out or "1 strong" in out   # the readable-prefix hit still shows up
 
 
@@ -675,8 +712,13 @@ def test_ioc_lead_finding_printed_exactly_once(capsys):
     ioc_scan.ioc_hits fired, that same Finding got printed twice (once as
     an ad-hoc summary, once again via Finding.print()). Nothing exercised
     a non-empty ioc_hits case before, so this shipped unnoticed. Fixed by
-    dropping the ad-hoc summary block entirely -- the unified findings_list
-    loop is now the only thing that prints this check."""
+    dropping the ad-hoc summary block entirely -- report_console.py's
+    single KEY SIGNALS loop is now the only thing that renders this check.
+
+    Counted on the check's human TITLE rather than its raw check id: the
+    verdict-first console (issue #8) prints the id only under --verbose,
+    so a count of "stomping.ioc_string_lead" would read 0 in normal mode
+    and prove nothing."""
     filler = bytearray((i * 7) % 251 for i in range(0x2000))
     filler[0x40:0x40 + 8] = b"mimikatz"   # strong (non-weak) IOC token, >= 8 printable chars
     header, mem_text, ref_file, section = matching_module_and_ref(module_base=0x7ff600000000,
@@ -703,7 +745,8 @@ def test_ioc_lead_finding_printed_exactly_once(capsys):
     assert "mimikatz" in ioc_findings[0]["facts"][0]
 
     out = capsys.readouterr().out
-    assert out.count("stomping.ioc_string_lead") == 1
+    assert out.count("IOC strings in module code regions") == 1
+    assert out.count("stomping.ioc_string_lead") <= 1
     # The bug: a hand-rendered "(lead)" summary line for this exact check,
     # printed unconditionally alongside (not instead of) the Finding block
     # below it -- must not come back.

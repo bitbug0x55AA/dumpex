@@ -1,21 +1,20 @@
-  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=f4b1140fc4606821…)
 
 ══════════════════════════════════════════
   HUNT: Module Stomping
 ══════════════════════════════════════════
 
-  [*] Scanning executable MEM_IMAGE regions for IOC strings (lead only)...
+  Scan detail:
+    Executable MEM_IMAGE regions scanned for IOC strings (unscored lead only)
 
-  stomping.protection_deviation_lead  [LOW]  OBSERVATION
-    Inference   : No module section declared executable-but-not-writable shows a live protection
-                  state outside the normal set.
-    Confidence  : low — Absence of a protection anomaly is weak evidence of absence — stomping via
-                  careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not
-                  show up here at all.
-    Facts:
-      - 1 module(s) checked
+  VERDICT     VERIFIED MODULE CODE MODIFICATION — content differs from reference file, but no observed thread executes inside the changed range (uncorroborated; consistent with hotpatch/EDR-hook activity as well as stomping)
+  Confidence  medium
+  Score       1/2  (only a verified content-diff scores; requires --ref-dir)
+  Coverage    COMPLETE
+  Review      high
 
-  stomping.verified_content_change  [MEDIUM]  DETECTION
+  KEY SIGNALS
+
+  Verified module code modification  [MEDIUM]  DETECTION  (stomping.verified_content_change)
     Inference   : 1 module section(s) have relocation-normalized, byte-level content differences
                   from an identity-matched (Machine/SizeOfImage/TimeDateStamp) reference file
                   supplied via --ref-dir.
@@ -23,9 +22,10 @@
                   relocation-normalized reference, but no observed thread is currently executing
                   inside the changed range(s).
     Facts:
-      - module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes
-        changed_ranges=[+0x0(len 0x2000)] disk_sha256_prefix=52a0eef5d9945c5a…
-        mem_sha256_prefix=14161ad8540739ba…
+      - module=legit.dll section='.text' VA=0x00007ff600001000 File_offset=(not captured)
+        compared=8192 bytes changed_ranges=[+0x0(len 0x2000)]
+        disk_sha256=52a0eef5d9945c5a31a591c4ccf7dd95d361b81526594dc3b11bb1fd4a61e74f
+        mem_sha256=14161ad8540739baae175eb4ef0b5330ec7b87081820273ec7f587f44bc611b0
     Limitations:
       - IAT/delay-import ranges and hotpatch trampolines are NOT specifically excluded before
         diffing — restricting the diff to executable, non-writable sections already excludes the
@@ -39,7 +39,7 @@
         x86/x64 linkers emit; an exotic or corrupt relocation table would leave some fixups
         un-normalized.
 
-  stomping.ioc_string_lead  [LOW]  LEAD
+  IOC strings in module code regions  [LOW]  LEAD  (stomping.ioc_string_lead)
     Inference   : 1 strong + 0 weak IOC-keyword token(s) found across 1 executable module region(s).
     Confidence  : low — A string match proves only that the bytes exist somewhere in the region — it
                   is trivial to plant, coincidentally match tool/API names, or survive from
@@ -51,5 +51,12 @@
     Limitations:
       - Not corroborated by any structural (section/protection) evidence on its own.
 
-  [ VERDICT ]  VERIFIED MODULE CODE MODIFICATION — content differs from reference file, but no observed thread executes inside the changed range (uncorroborated; consistent with hotpatch/EDR-hook activity as well as stomping)  (1/2, requires --ref-dir; protection-deviation and string-IOC leads above are informational and not counted)
+  Section protection deviation  [LOW]  OBSERVATION  (stomping.protection_deviation_lead)
+    Inference   : No module section declared executable-but-not-writable shows a live protection
+                  state outside the normal set.
+    Confidence  : low — Absence of a protection anomaly is weak evidence of absence — stomping via
+                  careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not
+                  show up here at all.
+    Facts:
+      - 1 module(s) checked
 

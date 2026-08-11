@@ -34,22 +34,19 @@
   HUNT: Module Stomping
 ══════════════════════════════════════════
 
-  [*] Scanning executable MEM_IMAGE regions for IOC strings (lead only)...
+  VERDICT     NOT EVALUATED — no required stream present in this dump
+  Confidence  none
+  Score       0/2  (only a verified content-diff scores; requires --ref-dir)
+  Coverage    NOT EVALUATED
+  Review      none
 
-  [✓] IOC strings in module code regions
-      Status : CLEAN — no IOC patterns in executable module memory
+  COVERAGE
 
-  stomping.protection_deviation_lead  [LOW]  OBSERVATION
-    Inference   : No module section declared executable-but-not-writable shows a live protection
-                  state outside the normal set.
-    Confidence  : low — Absence of a protection anomaly is weak evidence of absence — stomping via
-                  careful VirtualProtect bookkeeping (reprotect to RX before the dump) would not
-                  show up here at all.
-    Facts: available — use --verbose to list
-
-  [ VERDICT ]  NOT EVALUATED — MemoryInfoListStream missing from this dump; ModuleListStream missing from this dump; --ref-dir not supplied — verified content comparison (the only scored signal) was not performed for any module  (0/2, requires --ref-dir; protection-deviation and string-IOC leads above are informational and not counted)
-
-  [·] --ref-dir not supplied — verified content-diff (the only scored signal) was not attempted; reported as INCONCLUSIVE/partial coverage, not a clean result.
+  [-] NOT EVALUATED
+      MemoryInfoListStream missing from this dump
+      ModuleListStream missing from this dump
+      --ref-dir not supplied — verified content comparison (the only scored signal) was not
+      performed for any module
 
 
 ══════════════════════════════════════════
