@@ -7,8 +7,7 @@ from dumpex.core.memory import va_to_file_offset, prot_str, get_memory_regions
 from dumpex.hunt._ui import _print_hunt_header, NOT_EVALUATED
 
 from dumpex.hunt.injection  import _build_injection_report, _render_injection_console
-from dumpex.hunt.hollowing  import (_build_hollowing_report, _render_hollowing_console,
-    _print_hollowing_pre_build_console)
+from dumpex.hunt.hollowing  import _build_hollowing_report, _render_hollowing_console
 from dumpex.hunt.stomping   import _build_stomping_report, _render_stomping_console
 from dumpex.hunt.pipe       import _build_pipe_report, _render_pipe_console
 from dumpex.hunt.cs_beacon  import (_build_cs_beacon_report, _print_cs_beacon_pre_build_console,
@@ -17,7 +16,7 @@ from dumpex.hunt.yara_hunt  import _build_yara_report, _render_yara_console
 from dumpex.hunt.encoding   import _build_encoding_report, _render_encoding_console
 
 from dumpex.hunt.injection.collect import _record_from_injection_report
-from dumpex.hunt.hollowing          import _record_from_hollowing_report
+from dumpex.hunt.hollowing.collect import _record_from_hollowing_report
 from dumpex.hunt.stomping.collect  import _record_from_stomping_report
 from dumpex.hunt.pipe.collect      import _record_from_pipe_report
 from dumpex.hunt.cs_beacon.collect import _record_from_cs_beacon_report
@@ -215,9 +214,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         results["injection"] = _render_injection_console(report, verbose)
         records.append(_record_from_injection_report(report))
     if run_hollowing:
-        _print_hollowing_pre_build_console()
         report = _build_hollowing_report(mf)
-        results["hollowing"] = _render_hollowing_console(mf, report, verbose)
+        results["hollowing"] = _render_hollowing_console(report, verbose)
         records.append(_record_from_hollowing_report(report))
     if run_stomping:
         report = _build_stomping_report(mf, ref_dir=ref_dir)

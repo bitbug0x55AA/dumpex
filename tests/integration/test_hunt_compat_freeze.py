@@ -182,7 +182,13 @@ def test_hollowing_not_evaluated(monkeypatch):
     assert f["lead_count"] == 0
     assert f["review_priority"] == "none"
     assert f["findings"] == []
-    assert "PEB not available" in console
+    # The pre-migration renderer's "[!] PEB not available — cannot run
+    # hollowing check." line is gone: the verdict-first console (issue #10)
+    # states the PEB's absence once, as the NOT EVALUATED verdict reason,
+    # and again as a COVERAGE reason with its own judgment impact -- never
+    # as a bare notice printed ahead of the verdict.
+    assert "NOT EVALUATED — PEB stream missing from this dump" in console
+    assert "PEB stream missing from this dump" in console
 
 
 # ── stomping ─────────────────────────────────────────────────────────────

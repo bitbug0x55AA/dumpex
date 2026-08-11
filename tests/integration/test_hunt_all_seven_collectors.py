@@ -17,7 +17,7 @@ import pytest
 from tests.fixtures.fakes import FakeMF, FakeStream
 
 from dumpex.hunt.injection.collect import collect_injection_record
-from dumpex.hunt.hollowing import collect_hollowing_record
+from dumpex.hunt.hollowing.collect import collect_hollowing_record
 from dumpex.hunt.stomping.collect import collect_stomping_record
 from dumpex.hunt.pipe.collect import collect_pipe_record
 from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record

@@ -224,8 +224,13 @@ def test_clean_status_containing_lowercase_anomalous_prose_is_not_misclassified_
     # Regression: obfuscation/presentation.py's own CLEAN status text says
     # "no anomalous entropy in private regions" -- case-INSENSITIVE
     # matching would fold "anomalous" up to match the "ANOMAL" stem
-    # (itself a deliberate match for the ALL-CAPS "ANOMALOUS PROTECTION"
-    # status hollowing.py emits), wrongly turning a clean result red.
+    # (itself a deliberate match for the ALL-CAPS "ANOMALOUS"/"ANOMALY"
+    # status words `_RED_WORDS` exists to catch), wrongly turning a clean
+    # result red. The hollowing hunter this comment used to name no longer
+    # routes anything through `classify_status_icon` at all (it renders a
+    # verdict-first report -- see dumpex/hunt/hollowing/report_console.py),
+    # but the regression case itself is about that function, which every
+    # remaining `_print_check` caller still uses.
     # Matching stays case-sensitive specifically so lowercase prose never
     # collides with an ALL-CAPS status keyword.
     icon = _plain(_console.classify_status_icon(

@@ -72,7 +72,33 @@ jobs:
           # with no console/presentation branches, so the gate sits close to
           # its measured coverage from day one.
           coverage report --include="dumpex/hunt/_domain.py"     --fail-under=95
-          coverage report --include="dumpex/hunt/hollowing.py"  --fail-under=90
+          # dumpex/hunt/hollowing/*: same reasoning as the packages below
+          # -- hollowing.py is a package now, not a single file. The
+          # canonical report cutover (issue #10) split the old single-file
+          # module into an immutable domain model, a scan/enrichment layer
+          # that resolves the image base once, the one statement of the
+          # correlation requirement, and four independent projectors. Every
+          # new boundary is gated so a stale path fails visibly and no
+          # output projection is left without coverage.
+          coverage report --include="dumpex/hunt/hollowing/__init__.py"       --fail-under=95
+          coverage report --include="dumpex/hunt/hollowing/config.py"        --fail-under=95
+          # models.py is this hunter's whole immutable Evidence vocabulary
+          # (identity snapshots + per-field validation), directly exercised
+          # by tests/hunt/test_hollowing_domain.py.
+          coverage report --include="dumpex/hunt/hollowing/models.py"        --fail-under=95
+          # memory_scan.py is the only layer that still touches `mf`/a raw
+          # region/module/PEB. Slightly lower than its neighbours: the
+          # header-read classification has one branch per outcome and the
+          # region walk one per miss, all covered, but this is the file most
+          # likely to grow a rarely-hit dump-shape branch.
+          coverage report --include="dumpex/hunt/hollowing/memory_scan.py"   --fail-under=90
+          coverage report --include="dumpex/hunt/hollowing/correlation.py"   --fail-under=95
+          coverage report --include="dumpex/hunt/hollowing/aggregate.py"     --fail-under=95
+          coverage report --include="dumpex/hunt/hollowing/domain.py"        --fail-under=95
+          coverage report --include="dumpex/hunt/hollowing/report_console.py" --fail-under=95
+          coverage report --include="dumpex/hunt/hollowing/report_facts.py"   --fail-under=90
+          coverage report --include="dumpex/hunt/hollowing/report_legacy.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/hollowing/report_record.py"  --fail-under=95
           # dumpex/hunt/encoding/*: encoding.py is a package now, not a
           # single file -- _hunt_encoding (the thin entry point) lives in
           # __init__.py; each scan layer, the aggregation logic, and the

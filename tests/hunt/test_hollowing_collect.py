@@ -14,7 +14,7 @@ import pytest
 from tests.fixtures.fakes import Region, Module, Peb, FakeStream, FakeMF, mem_reader
 
 import dumpex.hunt.hollowing as hollowing
-from dumpex.hunt.hollowing import collect_hollowing_record
+from dumpex.hunt.hollowing.collect import collect_hollowing_record
 from dumpex.output.records import HunterRecord, HollowingDetails
 
 jsonschema = pytest.importorskip("jsonschema")

@@ -26,7 +26,7 @@ import pytest
 import dumpex.rules_pkg.loader as rules_loader
 import dumpex.hunt.yara_hunt as yara_hunt_mod
 from dumpex.hunt import collect_hunt
-from dumpex.hunt.hollowing import collect_hollowing_record
+from dumpex.hunt.hollowing.collect import collect_hollowing_record
 from dumpex.hunt.stomping.collect import collect_stomping_record
 from dumpex.hunt.pipe.collect import collect_pipe_record
 from dumpex.hunt.encoding.collect import collect_obfuscation_record

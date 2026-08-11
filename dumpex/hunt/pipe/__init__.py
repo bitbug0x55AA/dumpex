@@ -78,8 +78,9 @@ identical problem: `report_console.render_console_lines` emits the header
 itself via `dumpex.hunt._report_console.header_lines()`, and the builder's
 own `get_rules(announce=False)` call is now the only one this hunter
 makes -- so a `--hunt pipe` run no longer prints a "Rules loaded from ..."
-line at all (`--hunt all` still does: hollowing's own pre-build console,
-which runs earlier, still announces it). Rule PROVENANCE is unaffected --
+line at all (nor does `--hunt all` any more: hollowing's own pre-build
+console, the last remaining announcer, went the same way with issue #10).
+Rule PROVENANCE is unaffected --
 it is reported in --json `meta.rules` from
 `dumpex.rules_pkg.loader.get_rules_source_info()`, which
 `get_rules(announce=False)` populates exactly the same way.

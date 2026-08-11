@@ -19,15 +19,23 @@
       Impact: Injection score cannot reach HIGH (3) in this run regardless of other signals, since
       live-execution confirmation is the only path to that tier.
 
-  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=f4b1140fc4606821…)
 
 ══════════════════════════════════════════
   HUNT: Process Hollowing
 ══════════════════════════════════════════
 
-  [!] PEB not available — cannot run hollowing check.
+  VERDICT     NOT EVALUATED — PEB stream missing from this dump
+  Confidence  none
+  Score       0/2  (requires MEM_PRIVATE at the image base correlated with a second structural anomaly; single signals are leads only)
+  Coverage    NOT EVALUATED
+  Review      none
 
-  [ VERDICT ]  NOT EVALUATED — PEB stream missing from this dump
+  COVERAGE
+
+  [-] NOT EVALUATED
+      PEB stream missing from this dump
+      Impact: Every hollowing check is anchored on the image base the PEB itself reports — without
+      that stream nothing was examined at all, so a score of 0 here is not a clean result.
 
 
 ══════════════════════════════════════════

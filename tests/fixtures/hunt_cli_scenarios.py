@@ -109,6 +109,30 @@ def _build_hollowing(monkeypatch, tmp_path) -> BuiltScenario:
     return BuiltScenario(mf=mf)
 
 
+def _check_hollowing(exit_code, doc, body):
+    # Regression guard for the duplicate rendering the verdict-first
+    # console (issue #10) removed: the pre-migration renderer printed a
+    # terse `_print_check` status block for each of the four checks AND
+    # THEN every Finding in construction order, so each check reached the
+    # transcript twice, in two different vocabularies. Counted on the
+    # check's human TITLE, which is what the new console prints in BOTH
+    # modes (the raw check id only appears under --verbose, so counting
+    # that alone would read 0 in normal mode and prove nothing). Checked
+    # here rather than only via a golden byte-diff so a
+    # `scripts/update_hunt_cli_goldens.py` run made WHILE the duplication
+    # is back fails before it can write a fixture baking it in.
+    for title in ("Correlated structural hollowing indicators",
+                  "MEM_PRIVATE memory at the image base",
+                  "RWX protection at the image base"):
+        assert body.count(title) == 1, title
+    # The raw image-base facts belong to the bounded --verbose evidence
+    # section only; normal-mode triage output must not carry them.
+    if "IMAGE BASE\n" in body:
+        assert "PEB ImagePath:" in body
+    else:
+        assert "PEB ImagePath" not in body
+
+
 def _build_stomping(monkeypatch, tmp_path) -> BuiltScenario:
     from tests.fixtures.fakes import FakeMF, FakeStream, Region, Module, mem_reader, matching_module_and_ref
     import dumpex.hunt.stomping as stomping
@@ -307,7 +331,8 @@ def _build_obfuscation(monkeypatch, tmp_path) -> BuiltScenario:
 SCENARIOS = {
     "injection": HuntCliScenario("injection", "injection", _build_injection,
                                   expected_exit_code=3, extra_checks=_check_injection),
-    "hollowing": HuntCliScenario("hollowing", "hollowing", _build_hollowing),
+    "hollowing": HuntCliScenario("hollowing", "hollowing", _build_hollowing,
+                                  extra_checks=_check_hollowing),
     "stomping": HuntCliScenario("stomping", "stomping", _build_stomping),
     "stomping_ioc_hit": HuntCliScenario("stomping_ioc_hit", "stomping", _build_stomping_ioc_hit,
                                          extra_checks=_check_stomping_ioc_hit),

@@ -1531,12 +1531,15 @@ class InjectionDetails:
 class HollowingDetails:
     """New JSON surface for `--hunt hollowing` (today's v1.1 output has NO
     detail fields at all -- see the field matrix's hollowing section for
-    why). Mirrors the four checks hollowing.py's console section already
-    computes but never persists: memory type / MZ header / RWX protection
-    at the image base, and the PEB-vs-module-list name compare.
+    why). Mirrors the four checks the hollowing hunter already computes
+    but never persisted: memory type / MZ header / RWX protection at the
+    image base, and the PEB-vs-module-list name compare.
     `image_base` is `None` exactly when the PEB itself is missing (the
     hunter's own NOT_EVALUATED case, confirmed by
-    dumpex.hunt.hollowing._build_hollowing_report()'s early return) --
+    dumpex.hunt.hollowing._build_hollowing_report()'s early return, and
+    structurally guaranteed since the canonical-Report migration by
+    dumpex.hunt.hollowing.domain.HollowingReport's own context/peb_present
+    invariant) --
     there is no image base to report at all in that case, unlike every
     other hunter's `HunterRecord`, which always has SOME evidence to
     convert even when coverage is incomplete."""

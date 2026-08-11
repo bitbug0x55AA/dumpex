@@ -36,7 +36,13 @@ Report/parallel-findings/mutable-collection/aggregate boundaries converted
 with the Pipe migration (issue #7) -- production now builds
 `dumpex.hunt.pipe.domain.PipeReport`, and the old mutable
 `dumpex.hunt.pipe.aggregate.Report` and `dumpex.hunt.pipe.presentation` no
-longer exist. To use the file as a
+longer exist; hollowing's Report/parallel-findings/mutable-collection/
+aggregate/renderer boundaries converted with the Hollowing migration
+(issue #10) -- production now builds
+`dumpex.hunt.hollowing.domain.HollowingReport`, the old mutable
+`dumpex.hunt.hollowing.Report` (and the single-file module that held it) no
+longer exists, and `_render_hollowing_console` no longer takes `mf`. To use
+the file as a
 red/green implementation checklist, run it with
 ``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
 """
@@ -46,12 +52,15 @@ import inspect
 
 import pytest
 
-from dumpex.hunt import _finding, hollowing
+from dumpex.hunt import _finding
 from dumpex.hunt.cs_beacon import aggregate as cs_beacon_aggregate
 from dumpex.hunt.cs_beacon import presentation as cs_beacon_presentation
 from dumpex.hunt.encoding import aggregate as encoding_aggregate
 from dumpex.hunt.encoding import domain as encoding_domain
 from dumpex.hunt.encoding import _render_encoding_console as encoding_render
+from dumpex.hunt.hollowing import aggregate as hollowing_aggregate
+from dumpex.hunt.hollowing import domain as hollowing_domain
+from dumpex.hunt.hollowing import _render_hollowing_console as hollowing_render
 from dumpex.hunt.injection import aggregate as injection_aggregate
 from dumpex.hunt.injection import _render_injection_console as injection_render
 from dumpex.hunt.injection import domain as injection_domain
@@ -73,7 +82,7 @@ _PENDING = pytest.mark.xfail(
 
 REPORT_TYPES = [
     pytest.param(injection_domain.InjectionReport, id="injection"),
-    pytest.param(hollowing.Report, id="hollowing", marks=_PENDING),
+    pytest.param(hollowing_domain.HollowingReport, id="hollowing"),
     pytest.param(stomping_domain.StompingReport, id="stomping"),
     pytest.param(pipe_domain.PipeReport, id="pipe"),
     pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
@@ -91,7 +100,7 @@ def test_domain_report_is_a_frozen_dataclass(report_type):
 
 PARALLEL_FINDING_REPORT_TYPES = [
     pytest.param(injection_domain.InjectionReport, id="injection"),
-    pytest.param(hollowing.Report, id="hollowing", marks=_PENDING),
+    pytest.param(hollowing_domain.HollowingReport, id="hollowing"),
     pytest.param(stomping_domain.StompingReport, id="stomping"),
     pytest.param(pipe_domain.PipeReport, id="pipe"),
     pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
@@ -111,6 +120,7 @@ def test_report_does_not_store_parallel_findings_representations(report_type):
 
 MUTABLE_COLLECTION_REPORT_TYPES = [
     pytest.param(injection_domain.InjectionReport, id="injection"),
+    pytest.param(hollowing_domain.HollowingReport, id="hollowing"),
     pytest.param(stomping_domain.StompingReport, id="stomping"),
     pytest.param(pipe_domain.PipeReport, id="pipe"),
     pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
@@ -122,8 +132,8 @@ MUTABLE_COLLECTION_REPORT_TYPES = [
 # whose required fields are ordinary validated scalars/value-objects (not
 # the old dict-`Report`'s own `findings`/`findings_list` collections),
 # which legitimately reject `None` at construction. `InjectionReport`/
-# `EncodingReport`/`StompingReport`/`PipeReport` all need one: their
-# required fields are `score` (an int) and `coverage` (a
+# `EncodingReport`/`StompingReport`/`PipeReport`/`HollowingReport` all need
+# one: their required fields are `score` (an int) and `coverage` (a
 # `CoverageSnapshot`), both of which validate their input.
 _REQUIRED_FIELD_OVERRIDES = {
     (injection_domain.InjectionReport, "score"): 0,
@@ -139,6 +149,12 @@ _REQUIRED_FIELD_OVERRIDES = {
     (pipe_domain.PipeReport, "score"): 0,
     (pipe_domain.PipeReport, "coverage"): pipe_domain.CoverageSnapshot(
         memory_info_stream=False, handle_data_stream=False),
+    (hollowing_domain.HollowingReport, "score"): 0,
+    # peb_present=False is also what pins `context` to its own None default:
+    # HollowingReport refuses a Report that claims the run evaluated while
+    # carrying no resolved image base (see its own __post_init__).
+    (hollowing_domain.HollowingReport, "coverage"): hollowing_domain.CoverageSnapshot(
+        peb_present=False),
 }
 
 
@@ -195,6 +211,11 @@ AGGREGATORS_WITH_PENDING_BOUNDARY_FIXES = [
     # no `mf`, no `verbose`, and no `ref_dir` PATH (only a
     # `ref_dir_supplied` bool), so it satisfies this contract on arrival.
     pytest.param(stomping_aggregate.build_report, id="stomping"),
+    # Added (never _PENDING) with the Hollowing migration: its new
+    # signature takes typed evidence tuples plus an already-resolved
+    # `ImageBaseContext` and bool scalars only -- no `mf`, no `verbose`, no
+    # raw regions/modules lists, and no `peb` object.
+    pytest.param(hollowing_aggregate.build_report, id="hollowing"),
 ]
 
 
@@ -239,7 +260,7 @@ def test_injection_aggregate_receives_only_typed_evidence_and_scalars():
 
 RENDERERS = [
     pytest.param(injection_render, id="injection"),
-    pytest.param(hollowing._render_hollowing_console, id="hollowing", marks=_PENDING),
+    pytest.param(hollowing_render, id="hollowing"),
     pytest.param(stomping_render, id="stomping"),
     pytest.param(pipe_render, id="pipe"),
     pytest.param(cs_beacon_presentation.render, id="cs-beacon"),
