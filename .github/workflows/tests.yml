@@ -161,13 +161,35 @@ jobs:
           # not a single file.
           coverage report --include="dumpex/hunt/pipe/__init__.py"      --fail-under=95
           coverage report --include="dumpex/hunt/pipe/config.py"       --fail-under=95
-          coverage report --include="dumpex/hunt/pipe/models.py"       --fail-under=95
-          coverage report --include="dumpex/hunt/pipe/correlation.py"  --fail-under=78
-          coverage report --include="dumpex/hunt/pipe/aggregate.py"    --fail-under=78
           coverage report --include="dumpex/hunt/pipe/patterns.py"    --fail-under=75
-          coverage report --include="dumpex/hunt/pipe/presentation.py" --fail-under=70
           coverage report --include="dumpex/hunt/pipe/handle_scan.py" --fail-under=70
-          coverage report --include="dumpex/hunt/pipe/memory_scan.py" --fail-under=58
+          # memory_scan.py's gate moves up (from 58) with the canonical
+          # report cutover: it now builds typed PipeStringEvidence/
+          # C2ContextRecord/PipeScanCoverage rather than hand-rolled dicts,
+          # and tests/hunt/test_pipe_domain.py exercises those construction
+          # paths directly.
+          coverage report --include="dumpex/hunt/pipe/memory_scan.py" --fail-under=65
+          # models.py stopped being three mutable DTOs and became this
+          # hunter's whole immutable Evidence vocabulary (identity
+          # snapshots + per-field validation), so its gate moves up with
+          # its new role rather than staying at the old DTO threshold.
+          coverage report --include="dumpex/hunt/pipe/models.py"       --fail-under=95
+          # The canonical report cutover moved every Finding/facts/coverage
+          # decision out of the old mutable Report and the old
+          # presentation.py into the immutable domain model plus four
+          # independent projectors. aggregate.py is now pure evidence ->
+          # CheckResult reduction, hence the much higher gate (was 78).
+          # correlation.py now produces typed evidence instead of tuples,
+          # also directly tested, so its gate rises from 78 too. Every new
+          # boundary is gated so a stale path fails visibly and no output
+          # projection is left without coverage.
+          coverage report --include="dumpex/hunt/pipe/correlation.py"  --fail-under=85
+          coverage report --include="dumpex/hunt/pipe/aggregate.py"    --fail-under=95
+          coverage report --include="dumpex/hunt/pipe/domain.py"         --fail-under=95
+          coverage report --include="dumpex/hunt/pipe/report_console.py" --fail-under=95
+          coverage report --include="dumpex/hunt/pipe/report_facts.py"   --fail-under=90
+          coverage report --include="dumpex/hunt/pipe/report_legacy.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/pipe/report_record.py"  --fail-under=95
           # dumpex/hunt/yara_hunt/*: same reasoning -- yara_hunt.py is a
           # package now, not a single file. context.py's PE_In_Private_Memory
           # classification policy has dedicated coverage

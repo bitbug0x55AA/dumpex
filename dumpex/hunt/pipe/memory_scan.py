@@ -3,17 +3,27 @@ records gathered from the same pipe-bearing regions. Only collects facts
 — never scores, never prints. Applies TWO INDEPENDENT whole-hunt budgets
 (pipe_name_budget, c2_budget) — see dumpex/hunt/pipe/config.py for why
 they must never be merged.
+
+Produces typed `dumpex.hunt.pipe.models` evidence rather than hand-rolled
+dicts: this is the ONE place a raw `MinidumpMemoryInfo` becomes a
+`RegionRef` identity snapshot (`prot_str()` resolved once, here) and the
+ONE place a string hit's absolute VA and .dmp `file_offset` are resolved
+(`va_to_file_offset()` called once per retained hit, here) -- never
+re-derived at aggregate or render time.
 """
 import os
 import hashlib
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import addr_to_module, prot_str
+from dumpex.core.memory import addr_to_module, prot_str, va_to_file_offset
 from dumpex.hunt._coverage import region_scan_target
 from dumpex.hunt.pipe.config import (PIPE_SCAN_MAX, PIPE_MAX_MATCHES_PER_REGION,
     PIPE_C2_MAX_HITS_PER_REGION, PIPE_C2_CONTEXT_BYTES, PIPE_C2_TOKEN_PREVIEW,
     PIPE_NAME_MAX_CHARS)
 from dumpex.hunt.pipe.patterns import PIPE_PAT_ASCII, PIPE_PAT_UTF16, _iter_c2_matches
-from dumpex.hunt.pipe.models import PipeNameScan
+from dumpex.hunt.pipe.models import (
+    C2ContextRecord, PipeNameScanResult, PipeScanCoverage, PipeStringEvidence, RegionC2Records,
+    region_ref,
+)
 
 
 def _is_system_dll(module) -> bool:
@@ -52,7 +62,12 @@ def _extract_pipe_name(data, m, is_utf16, max_chars=PIPE_NAME_MAX_CHARS) -> dict
     was actually cut.
 
     Returns a dict: {"preview", "sha256", "original_length",
-    "truncated", "encoding"}.
+    "truncated", "encoding"}. Deliberately still a plain dict and
+    deliberately still private: it is a transient intermediate consumed
+    exactly once, three lines later, by the `PipeStringEvidence`
+    construction in `scan_pipe_names()` -- it never crosses a module
+    boundary, so promoting it to its own frozen value object would add a
+    type without adding a barrier.
     """
     end = m.end()
     if is_utf16:
@@ -100,7 +115,7 @@ def dedupe_private_pipes(private_pipes: list) -> list:
     seen = set()
     deduped = []
     for hit in private_pipes:
-        key = (hit["region"].BaseAddress, hit["sha256"])
+        key = (hit.region.base_address, hit.sha256)
         if key not in seen:
             seen.add(key)
             deduped.append(hit)
@@ -108,18 +123,25 @@ def dedupe_private_pipes(private_pipes: list) -> list:
 
 
 def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
-                     coverage_counts, pipe_name_budget, c2_budget, c2_pattern) -> PipeNameScan:
+                     coverage_counts, pipe_name_budget, c2_budget, c2_pattern) -> PipeNameScanResult:
     """
     Walk every committed, not-oversized region: collect '\\pipe\\' string
-    occurrences (private_pipes / image_pipes) under pipe_name_budget, and
-    — for any region that yielded a NEW private pipe name and while
-    c2_budget still has room — C2-context match records under c2_budget.
-    The two budgets are independent: pipe-name collection (Checks A/C/D's
-    raw material) is unaffected by c2_budget running out, and vice versa.
+    occurrences (private leads / expected system-DLL references) under
+    pipe_name_budget, and — for any region that yielded a NEW private pipe
+    name and while c2_budget still has room — C2-context match records
+    under c2_budget. The two budgets are independent: pipe-name collection
+    (the handle-correlation checks' raw material) is unaffected by
+    c2_budget running out, and vice versa.
+
+    Returns a fully immutable `PipeNameScanResult` -- including a frozen
+    `PipeScanCoverage` snapshot of the still-live tracker/budgets this
+    function was handed, so neither can be mutated after the scan finishes
+    and silently change what the Report reports.
     """
-    private_pipes = []
-    image_pipes = []
-    region_c2_records = {}
+    string_leads = []
+    image_pipe_refs = 0
+    image_pipe_modules = []
+    c2_regions = []
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
@@ -147,7 +169,11 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             coverage_counts.note_short_read()
             if not data:
                 continue
-        pipes_before = len(private_pipes)
+
+        # Resolved ONCE per region, here, rather than per hit or at render
+        # time -- every projection reads these already-resolved strings.
+        region = region_ref(r)
+        pipes_before = len(string_leads)
 
         region_matches = 0
         for pat, is_utf16 in ((PIPE_PAT_ASCII, False), (PIPE_PAT_UTF16, True)):
@@ -162,45 +188,51 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
                 info = _extract_pipe_name(data, m, is_utf16)
                 if not pipe_name_budget.take_hit(len(info["preview"])):
                     break
-                hit = {"region": r, "offset": m.start(), "name": info["preview"],
-                       "sha256": info["sha256"], "original_length": info["original_length"],
-                       "truncated": info["truncated"], "encoding": info["encoding"]}
                 if "MEM_IMAGE" in mtype and _is_system_dll(mod):
-                    image_pipes.append({**hit, "module": os.path.basename(mod.name)})
-                else:
-                    private_pipes.append(hit)
+                    # Expected, and never a lead: counted (plus the module
+                    # names) as a --verbose scan-detail fact rather than
+                    # retained as evidence.
+                    image_pipe_refs += 1
+                    image_pipe_modules.append(os.path.basename(mod.name))
+                    continue
+                va = r.BaseAddress + m.start()
+                string_leads.append(PipeStringEvidence(
+                    region=region, offset=m.start(), name=info["preview"],
+                    sha256=info["sha256"], original_length=info["original_length"],
+                    truncated=info["truncated"], encoding=info["encoding"], va=va,
+                    # Resolved here, once per retained hit -- None means
+                    # those bytes were never written to the .dmp at all,
+                    # which is NOT the same claim as "offset zero".
+                    file_offset=va_to_file_offset(mf, va)))
 
-        if len(private_pipes) > pipes_before and not c2_budget.exhausted():
+        if len(string_leads) > pipes_before and not c2_budget.exhausted():
             # Stream C2 matches directly over `data` (bounded per-match
             # span, see patterns._iter_c2_matches) and build small, bounded
             # records right here while `data` is still in scope — the raw
             # region bytes are never cached or retained past this loop
-            # iteration. Only Check B's C2-context gathering stops once
-            # its budget is spent; pipe-name detection (Checks A/C/D) is
-            # unaffected.
+            # iteration. Only C2-context gathering stops once its budget is
+            # spent; pipe-name detection is unaffected.
             records = []
             for start, end, token in _iter_c2_matches(data, c2_pattern, PIPE_C2_MAX_HITS_PER_REGION):
                 ctx_half  = PIPE_C2_CONTEXT_BYTES // 2
                 ctx_start = max(0, start - ctx_half)
                 ctx_end   = min(len(data), end + ctx_half)
-                context   = data[ctx_start:ctx_end][:PIPE_C2_CONTEXT_BYTES]
+                context   = bytes(data[ctx_start:ctx_end][:PIPE_C2_CONTEXT_BYTES])
                 match_b   = data[start:end]
-                record = {
-                    "match":           token[:PIPE_C2_TOKEN_PREVIEW],
-                    "context":         context,
-                    "va":              r.BaseAddress + start,
-                    "sha256":          hashlib.sha256(match_b).hexdigest(),
-                    "original_length": end - start,
-                }
-                if not c2_budget.take_hit(len(record["context"]) + len(record["match"])):
+                record = C2ContextRecord(
+                    match=token[:PIPE_C2_TOKEN_PREVIEW],
+                    context=context,
+                    va=r.BaseAddress + start,
+                    sha256=hashlib.sha256(match_b).hexdigest(),
+                    original_length=end - start)
+                if not c2_budget.take_hit(len(record.context) + len(record.match)):
                     break
                 records.append(record)
             if records:
-                region_c2_records[r.BaseAddress] = records
+                c2_regions.append(RegionC2Records(region=region, records=tuple(records)))
 
-    private_pipes = dedupe_private_pipes(private_pipes)
-
-    return PipeNameScan(private_pipes=private_pipes, image_pipes=image_pipes,
-                         region_c2_records=region_c2_records,
-                         coverage_counts=coverage_counts,
-                         pipe_name_budget=pipe_name_budget, c2_budget=c2_budget)
+    coverage = PipeScanCoverage.from_scan(
+        coverage_counts, pipe_name_budget, c2_budget,
+        image_pipe_refs=image_pipe_refs, image_pipe_modules=image_pipe_modules)
+    return PipeNameScanResult(string_leads=tuple(dedupe_private_pipes(string_leads)),
+                               c2_regions=tuple(c2_regions), coverage=coverage)

@@ -53,16 +53,21 @@
   HUNT: Named Pipe C2 / Lateral Movement
 ══════════════════════════════════════════
 
-  [-] Open pipe handles (HandleDataStream)
-      Status : NOT AVAILABLE — dump was not captured with MiniDumpWithHandleData
+  VERDICT     NOT EVALUATED — neither MemoryInfoListStream nor HandleDataStream present in this dump
+  Confidence  none
+  Score       0/3  (handle-anchored; bare pipe strings are unscored leads)
+  Coverage    NOT EVALUATED
+  Review      none
 
-  [✓] Pipe name strings in non-system memory
-      Status : CLEAN — no pipe-name byte patterns found
+  COVERAGE
 
-  [✓] Known C2 framework pipe naming pattern (string leads)
-      Status : CLEAN — no known framework patterns among string leads
-
-  [ VERDICT ]  NOT EVALUATED — MemoryInfoListStream missing from this dump; HandleDataStream missing from this dump (needs MiniDumpWithHandleData) — the primary, scored pipe-handle check could not run  (0/3 — handle-anchored; string leads shown above are informational only)
+  [-] NOT EVALUATED
+      MemoryInfoListStream missing from this dump
+      HandleDataStream missing from this dump (needs MiniDumpWithHandleData) — the primary, scored
+      pipe-handle check could not run
+      Impact: The primary, scored pipe-handle check could not run at all — any '\pipe\' string this
+      run did find stays an unscored lead (a bare string never becomes handle evidence), so a score
+      of 0 here is not a clean result.
 
 
 ══════════════════════════════════════════

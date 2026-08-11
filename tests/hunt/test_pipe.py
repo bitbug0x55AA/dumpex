@@ -196,12 +196,14 @@ def test_short_read_region_makes_result_inconclusive():
 
 
 # ── HandleDataStream missing AND a short-read region gap co-occurring ─────
-# must not have the console verdict silently drop the short-read note just
-# because the "no HandleDataStream" branch fires first — --json's
+# must not have the console silently drop the short-read note just because
+# the "no HandleDataStream" gap is also present — --json's
 # coverage_reasons already carried both, but a prior version had the
-# console re-derive a narrower reason string for other branches and used a
-# fixed message here that never mentioned any OTHER coexisting gap. See
-# aggregate.build_report's verdict_reason for the fix.
+# console re-derive a narrower reason string of its own. Since the
+# canonical-report migration (issue #7) there is only one source: every
+# gap comes from `report_facts.project_coverage_v1`, and the console
+# renders that ONE list in its unified COVERAGE section (see
+# dumpex/hunt/pipe/report_console.py).
 
 def test_missing_handle_stream_and_short_read_both_reported(capsys):
     region_base = 0x2100000
@@ -233,10 +235,10 @@ def test_missing_handle_stream_and_short_read_both_reported(capsys):
 # ── --verbose must list EVERY open pipe handle, not just the first 20 ─────
 # pipe.open_handles' Finding.facts (built for --json) cap the list
 # at 20 with a "... and N more" sentinel -- --verbose is supposed to mean
-# "the complete list"; this used to come from presentation.py's own
-# uncapped hand-written expansion before rendering was centralized on
-# Finding.print(). Regression test for that completeness claim silently
-# becoming false again.
+# "the complete list"; that expansion now lives in
+# `report_console._verbose_facts_for`, which renders every evidence item
+# uncapped. Regression test for that completeness claim silently becoming
+# false again.
 
 def test_verbose_lists_every_handle_beyond_the_facts_cap(capsys):
     region_base = 0x2200000

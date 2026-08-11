@@ -1,81 +1,54 @@
-  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  (sha256_prefix=f4b1140fc4606821…)
 
 ══════════════════════════════════════════
   HUNT: Named Pipe C2 / Lateral Movement
 ══════════════════════════════════════════
 
-  [!] Open pipe handles (HandleDataStream)
-      Status : SUSPICIOUS — framework-pattern match
-      Detail : 1 pipe handle(s)
+  VERDICT     HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT — handle-confirmed pipe with BOTH nearby C2 context and live RIP/EIP execution
+  Confidence  high
+  Score       3/3  (handle-anchored; bare pipe strings are unscored leads)
+  Coverage    PARTIAL
+  Review      high
 
-  [~] Pipe name strings in non-system memory (lead only)
-      Status : LEAD — not scored, see handle checks above
-      Detail : 1 occurrence(s)
+  KEY SIGNALS
 
-  [!] Handle-confirmed pipe corroborated by memory evidence
-      Status : SUSPICIOUS — C2 context and/or execution within 4096 bytes of handle-confirmed pipe
-      Detail : ObjectName=\Device\NamedPipe\msagent_1337  pipe_va=0x1230101
+  [!] DETECTION  Handle-confirmed pipe corroborated by memory evidence
+      1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution
+      within ±4096 bytes of a matching pipe-name string's own address.
 
-  [~] Known C2 framework pipe naming pattern (string lead attribution)
-      Status : NOTABLE — matches known Cobalt Strike pipe naming, lead only
-      Detail : 1 match(es) on string leads — framework attribution (not scored):
-          Pipe     : \.\pipe\msagent_1337
-          Framework: Cobalt Strike
-          Technique: SMB Beacon peer-to-peer pipe — default msagent pipe name
-          MITRE    : T1090.001
+  [!] DETECTION  Known C2 framework pipe naming convention on an open handle
+      1 open pipe handle(s) match a known C2/lateral-movement framework naming convention.
 
-  pipe.open_handles  [MEDIUM]  OBSERVATION
-    Inference   : Process holds 1 open handle(s) to named pipe object(s), per HandleDataStream.
-    Confidence  : medium — HandleDataStream is the OS's own record of what this process actually has
-                  open — far stronger than a bare string match, but having ANY pipe handle open is
-                  completely ordinary for most Windows processes (IPC, RPC, print spooler, etc.);
-                  only a handle whose name matches a known C2/lateral-movement framework convention,
-                  or one corroborated by nearby C2 context / active execution, is treated as a
-                  detection.
-    Facts: available — use --verbose to list
-    Limitations:
-      - Presence of a pipe handle is not inherently suspicious.
+  [i] CONTEXT    Open pipe handles (HandleDataStream)
+      Process holds 1 open handle(s) to named pipe object(s), per HandleDataStream.
 
-  pipe.handle_framework_match  [MEDIUM]  DETECTION
-    Inference   : 1 open pipe handle(s) match a known C2/lateral-movement framework naming
-                  convention.
-    Confidence  : medium — An OS-confirmed open handle (not just a string sitting in memory) whose
-                  name matches a specific, narrow framework convention (e.g. Cobalt Strike's
-                  msagent_/postex_ or PsExec's psexesvc) is meaningfully unlikely to be coincidental
-                  — raised to HIGH only when further corroborated (see pipe.corroboration below).
-    Facts: available — use --verbose to list
-    Limitations:
-      - Framework pipe-name conventions can be renamed/customized by an operator; absence of a match
-        does not mean absence of C2.
+  [~] LEAD       Pipe name strings in non-system memory
+      1 occurrence(s) of a '\pipe\' name found in non-system-DLL memory via byte-pattern scan.
 
-  pipe.string_scan_lead  [LOW]  LEAD
-    Inference   : 1 occurrence(s) of a '\pipe\' name found in non-system-DLL memory via byte-pattern
-                  scan.
-    Confidence  : low — A string match proves only that these bytes exist somewhere in memory — not
-                  that any handle was ever opened by that name, nor that the name isn't
-                  leftover/freed heap data or an unrelated buffer. Reported as a lead for the
-                  analyst and to locate regions for C2-context/execution correlation; does NOT
-                  contribute to the pipe score on its own.
-    Facts: available — use --verbose to list
-    Limitations:
-      - No corresponding open handle found for this exact name.
+  WHY THIS VERDICT
 
-  pipe.corroboration  [HIGH]  DETECTION
-    Inference   : 1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP
-                  execution within ±4096 bytes of a matching pipe-name string's own address.
-    Confidence  : high — Combines an OS-confirmed open handle with BOTH independent memory signals
-                  (C2 artifacts AND live execution), both within 4096 bytes of that pipe's name
-                  string — the strongest correlation this hunter can produce.
-    Facts: available — use --verbose to list
-    Limitations:
-      - Name correlation between a handle's ObjectName and a string scan hit uses exact match on the
-        canonicalized pipe name (prefix stripped, casefolded) — still not a cryptographic guarantee
-        both refer to the identical kernel object if the process has multiple same-named pipe
-        instances.
-      - Proximity window is ±4096 bytes, not a proof of logical association — an unrelated string or
-        thread could coincidentally fall within that window in a dense region.
+  Inference
+    1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution within
+    ±4096 bytes of a matching pipe-name string's own address.
 
-  [ VERDICT ]  HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT  (3/3 — handle-anchored; string leads shown above are informational only)
+  Confidence: HIGH
+    Combines an OS-confirmed open handle with BOTH independent memory signals (C2 artifacts AND live
+    execution), both within 4096 bytes of that pipe's name string — the strongest correlation this
+    hunter can produce.
 
-  Use --verbose to expand handle list, pipe names, and C2 strings.
+  Caveat
+    Name correlation between a handle's ObjectName and a string scan hit uses exact match on the
+    canonicalized pipe name (prefix stripped, casefolded) — still not a cryptographic guarantee both
+    refer to the identical kernel object if the process has multiple same-named pipe instances.
+
+  COVERAGE
+
+  [~] PARTIAL
+      1 region(s) returned fewer bytes than declared (short read) — not fully scanned
+      Impact: A pipe name or C2 artifact in memory that was never read cannot be ruled out —
+      targeted follow-up needed on the region(s) above: --extract / --strings that VA, or re-scan it
+      with an external scanner.
+      Impact: Coverage incomplete despite a detection — additional pipe channels may exist beyond
+      what could be checked.
+
+  Use --verbose for the full handle list, canonicalized pipe names, VA/file offsets, and nearby C2 context.
 

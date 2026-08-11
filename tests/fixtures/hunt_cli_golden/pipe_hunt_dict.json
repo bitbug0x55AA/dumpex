@@ -194,7 +194,7 @@
       "inference": "1 occurrence(s) of a '\\pipe\\' name found in non-system-DLL memory via byte-pattern scan.",
       "iocs": [],
       "limitations": [
-        "No corresponding open handle found for this exact name."
+        "Every one of these 1 occurrence(s) shares a canonical name with an open handle reported above (see pipe.open_handles/pipe.handle_framework_match/pipe.corroboration) \u2014 the string match itself is still not scored; see those checks for the scored handle evidence."
       ],
       "rationale": "A string match proves only that these bytes exist somewhere in memory \u2014 not that any handle was ever opened by that name, nor that the name isn't leftover/freed heap data or an unrelated buffer. Reported as a lead for the analyst and to locate regions for C2-context/execution correlation; does NOT contribute to the pipe score on its own.",
       "rule_id": "pipe.string_scan_lead",

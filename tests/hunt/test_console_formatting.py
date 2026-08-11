@@ -207,9 +207,14 @@ def test_unrecognized_status_is_neutral_not_green():
 
 def test_clean_status_containing_the_word_leads_is_not_misclassified_as_lead():
     # Regression: "LEAD" as a bare substring also matches inside "leads"
-    # (the plural noun) -- pipe/presentation.py's own CLEAN status text
-    # ("no known framework patterns among string leads") must classify as
-    # green, not yellow, despite containing that substring.
+    # (the plural noun) -- the pipe hunter's own pre-verdict-first CLEAN
+    # status text ("no known framework patterns among string leads") must
+    # classify as green, not yellow, despite containing that substring.
+    # That exact line no longer reaches the console (the pipe hunter now
+    # renders a verdict-first report -- see dumpex/hunt/pipe/
+    # report_console.py), but it stays here as the regression case for
+    # `classify_status_icon` itself, which every remaining `_print_check`
+    # caller still routes through.
     icon = _plain(_console.classify_status_icon(
         "CLEAN — no known framework patterns among string leads"))
     assert icon == "[✓]"

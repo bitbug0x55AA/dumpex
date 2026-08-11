@@ -1,9 +1,15 @@
 """
-Unit tests for dumpex.hunt.pipe.collect.collect_pipe_record() -- PR2b's
+Unit tests for dumpex.hunt.pipe.collect.collect_pipe_record() -- the
 HunterRecord-producing path for the pipe hunter. Every scenario here
 mirrors tests/hunt/test_pipe.py's own fixtures (same literal inputs),
 confirming collect_pipe_record() and the console path (_hunt_pipe())
 always agree on the same underlying Report.
+
+Since the canonical-report migration (issue #7) both paths are pure
+projections of one immutable `dumpex.hunt.pipe.domain.PipeReport` (see
+tests/hunt/test_pipe_projectors.py for the projector-level equivalents of
+these coverage assertions, driven from hand-built Reports rather than
+through a full scan).
 """
 import json
 
@@ -83,7 +89,7 @@ def test_missing_handle_stream_is_partial(hunter_record_validator):
 
 
 def test_memory_info_absent_alone_does_not_force_partial(hunter_record_validator):
-    # Regression: _pipe_coverage_report() initially listed "memory_info"
+    # Regression: report_facts.project_coverage_report() initially listed "memory_info"
     # as its own completeness_check, which would flip coverage.status to
     # "partial" whenever memory_info was absent -- but this hunter's real
     # `complete` boolean never consults mem_info_available at all (only
@@ -169,7 +175,7 @@ def test_short_read_region_makes_result_inconclusive(hunter_record_validator):
 def test_oversized_region_is_skipped(monkeypatch, hunter_record_validator):
     """`PIPE_SCAN_MAX` shrunk (via monkeypatch, auto-restored) below this
     region's own size, so it's skipped without ever being read --
-    exercises `_pipe_coverage_report()`'s SCAN_REGION_OVERSIZED_SKIPPED
+    exercises `report_facts.project_coverage_report()`'s SCAN_REGION_OVERSIZED_SKIPPED
     branch (memory_scan.scan_pipe_names' own `r.RegionSize > PIPE_SCAN_MAX`
     check, note_skipped_oversize())."""
     region_base = 0x3000000
@@ -213,7 +219,7 @@ def test_oversized_region_is_skipped(monkeypatch, hunter_record_validator):
 
 def test_region_read_failure_is_tracked(hunter_record_validator):
     """`read_region` raising (a real read failure, not a short read)
-    exercises `_pipe_coverage_report()`'s SCAN_REGION_READ_FAILED branch
+    exercises `report_facts.project_coverage_report()`'s SCAN_REGION_READ_FAILED branch
     (memory_scan.scan_pipe_names' own `except Exception:
     coverage_counts.note_read_failed()`)."""
     region_base = 0x4000000
@@ -247,7 +253,7 @@ def test_c2_budget_deadline_exhausted_is_tracked(monkeypatch, hunter_record_vali
     PIPE_C2_BUDGET_TIME_SECONDS` deadline is already in the past --
     `c2_budget.exhausted()` is True from the start (see
     dumpex.hunt._budget.ScanBudget.exhausted's own deadline check),
-    exercising `_pipe_coverage_report()`'s c2_context-scoped
+    exercising `report_facts.project_coverage_report()`'s c2_context-scoped
     SCAN_BUDGET_EXHAUSTED branch independently of pipe_name_budget."""
     region_base = 0x5000000
     regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT",
@@ -280,7 +286,7 @@ def test_c2_budget_deadline_exhausted_is_tracked(monkeypatch, hunter_record_vali
 
 def test_pipe_name_budget_deadline_exhausted_is_tracked(monkeypatch, hunter_record_validator):
     """Same as the c2_budget case above but for `PIPE_NAME_BUDGET_TIME_
-    SECONDS` -- exercises `_pipe_coverage_report()`'s pipe_name-scoped
+    SECONDS` -- exercises `report_facts.project_coverage_report()`'s pipe_name-scoped
     SCAN_BUDGET_EXHAUSTED branch."""
     region_base = 0x6000000
     regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT",
