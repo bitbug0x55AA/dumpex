@@ -160,3 +160,144 @@ def test_no_repeating_pattern_no_candidates_no_score():
 
     f = encoding._hunt_encoding(MF(), verbose=False)
     assert f["score"] == 0
+
+
+# ── issue #25: validation must cover the COMPLETE region, not just a prefix ─
+# `validate_sample` used to be a hard search boundary: a candidate/rotation
+# combination was checked ONLY against the first `validate_sample` bytes of
+# the region, so a correctly recovered key whose decoded marker happened to
+# sit past that boundary was silently rejected as unconfirmed. It is now a
+# per-chunk streaming size instead -- `_sm_marker_in_region` walks the WHOLE
+# region in chunks of this size -- so a small `validate_sample` below is used
+# purely to keep these tests fast, not because the boundary still matters.
+
+def test_validate_and_decode_finds_marker_immediately_before_chunk_boundary():
+    chunk_size = 500
+    marker_offset = chunk_size - 20   # fully inside the first chunk
+    _, encoded = _sleep_masked_region(marker_offset=marker_offset)
+    candidates = sleep_mask._sm_recover_candidates(encoded)
+    confirmed = sleep_mask._sm_validate_and_decode(encoded, candidates, validate_sample=chunk_size)
+    assert len(confirmed) == 1
+    key, offset, decoded = confirmed[0]
+    assert key == _KEY
+    assert offset == 0
+    assert _MARKER in decoded
+
+
+def test_validate_and_decode_finds_marker_spanning_chunk_boundary():
+    chunk_size = 500
+    marker_offset = chunk_size - 3   # straddles the boundary between chunk 0 and chunk 1
+    _, encoded = _sleep_masked_region(marker_offset=marker_offset)
+    candidates = sleep_mask._sm_recover_candidates(encoded)
+    confirmed = sleep_mask._sm_validate_and_decode(encoded, candidates, validate_sample=chunk_size)
+    assert len(confirmed) == 1
+    key, offset, decoded = confirmed[0]
+    assert key == _KEY
+    assert offset == 0
+    assert _MARKER in decoded
+
+
+def test_validate_and_decode_finds_marker_immediately_after_chunk_boundary():
+    # This is the exact shape of the reported bug: with the OLD prefix-only
+    # search, a marker placed past `validate_sample` bytes was never found
+    # even though the key was recovered correctly.
+    chunk_size = 500
+    marker_offset = chunk_size + 10   # fully inside the second chunk
+    _, encoded = _sleep_masked_region(marker_offset=marker_offset)
+    candidates = sleep_mask._sm_recover_candidates(encoded)
+    assert candidates, "expected the key to still be recoverable structurally"
+    confirmed = sleep_mask._sm_validate_and_decode(encoded, candidates, validate_sample=chunk_size)
+    assert len(confirmed) == 1
+    key, offset, decoded = confirmed[0]
+    assert key == _KEY
+    assert offset == 0
+    assert _MARKER in decoded
+
+
+def test_validate_and_decode_stops_when_budget_runs_out_mid_search():
+    # Deterministic stand-in for the shared ScanBudget: returns True from
+    # poll() for a fixed number of calls, then False forever -- lets this
+    # test simulate the budget running out PARTWAY through the chunked
+    # marker search without depending on wall-clock timing.
+    class _CountdownBudget:
+        def __init__(self, allowed):
+            self._remaining = allowed
+            self.exhausted_reason = ""
+
+        def poll(self):
+            if self._remaining <= 0:
+                self.exhausted_reason = self.exhausted_reason or "test-exhausted"
+                return False
+            self._remaining -= 1
+            return True
+
+        def exhausted(self):
+            return self._remaining <= 0
+
+    chunk_size = 32
+    marker_offset = 3 * chunk_size + 5   # sits in the 4th chunk (index 3)
+    total_len = 6 * chunk_size
+    plaintext = bytearray(b'\x00' * total_len)
+    plaintext[marker_offset:marker_offset + len(_MARKER)] = _MARKER
+    encoded = sleep_mask._sm_xor(bytes(plaintext), _KEY, 0)
+
+    # 4 successful polls cover chunks at pos 0, 32, 64 (none contain the
+    # marker) before the 5th poll call -- for the chunk at pos 96, the one
+    # that DOES contain the marker -- returns False first.
+    budget = _CountdownBudget(allowed=4)
+    confirmed = sleep_mask._sm_validate_and_decode(
+        encoded, [(_KEY, 999)], validate_sample=chunk_size, budget=budget)
+
+    # Cut short by the budget, not a completed search: must not be reported
+    # as a confirmed negative even though the marker WAS present.
+    assert confirmed == []
+    assert budget.exhausted()
+
+
+def test_hunt_encoding_reports_partial_coverage_when_budget_runs_out_during_validation(monkeypatch):
+    # Integration-level companion to the unit test above: the REAL
+    # ScanBudget instance _hunt_encoding builds is what _sm_validate_and_decode
+    # polls, so exhausting it PARTWAY through validation -- not before Layer 0
+    # even starts, unlike test_sleep_mask_budget_exhaustion_leaves_partial_coverage
+    # above -- must still surface as partial coverage / budget_exhausted at
+    # the top level rather than a silent score == 0 clean negative.
+    from dumpex.hunt._budget import ScanBudget as RealScanBudget
+
+    class _CountdownScanBudget(RealScanBudget):
+        def __init__(self, *a, **kw):
+            super().__init__(*a, **kw)
+            self._countdown = 16   # 13 (candidate recovery) + 1 (validate
+                                    # outer loop) + 2 chunk polls, then the
+                                    # poll for the chunk holding the marker fails
+
+        def poll(self):
+            if self.exhausted():
+                return False
+            if self._countdown <= 0:
+                self.exhausted_reason = self.exhausted_reason or "test-exhausted"
+                return False
+            self._countdown -= 1
+            return True
+
+    monkeypatch.setattr(encoding, "ScanBudget", _CountdownScanBudget)
+    monkeypatch.setattr(encoding, "SLEEP_MASK_VALIDATE_SAMPLE", 32)
+
+    region_base = 0xA0000
+    # marker_offset=101 sits inside the chunk starting at pos=64 (covers
+    # 64..102 with overlap) -- the chunk the countdown above is tuned to
+    # never reach.
+    _, encoded = _sleep_masked_region(marker_offset=101)
+    regions = [Region(region_base, region_base, len(encoded), "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({region_base: encoded})
+
+    f = encoding._hunt_encoding(MF(), verbose=False)
+    assert f["score"] == 0
+    assert f["coverage_status"] == "partial"
+    assert f["budget_exhausted"] is True
+    tags = {finding["check"] for finding in f["findings"]}
+    assert "obfuscation.sleep_mask_confirmed" not in tags

@@ -52,15 +52,20 @@ SLEEP_MASK_MIN_ACBD        = 20.0      # min average consecutive byte difference
                                         # (rejects keys like 01 02 03 … or 00 00 00)
 SLEEP_MASK_MAX_CANDIDATES  = 10        # max candidates to try per region
 SLEEP_MASK_REGION_MAX      = 10 * 1024 * 1024   # skip regions > 10 MB
-SLEEP_MASK_VALIDATE_SAMPLE = 2 * 1024 * 1024    # search only the first N bytes of
-                                        # each candidate x rotation combination for
-                                        # the validation marker before committing to
-                                        # a full-region decode. Unbounded, up to
+SLEEP_MASK_VALIDATE_SAMPLE = 2 * 1024 * 1024    # streaming chunk size used while
+                                        # searching each candidate x rotation
+                                        # combination for the validation marker
+                                        # across the COMPLETE eligible region (see
+                                        # _sm_marker_in_region) -- bounds how much is
+                                        # decoded at once, not how much of the region
+                                        # is searched. The full-region decode still
+                                        # only runs for a combination that actually
+                                        # found the marker. Unbounded, up to
                                         # MAX_CANDIDATES x KEY_SIZE x REGION_MAX
-                                        # (10 x 13 x 10MB ~= 1.3GB) of XOR work is
-                                        # done per region; mirrors the same
-                                        # sample-then-full-decode pattern _scan_xor
-                                        # already uses (XOR_SAMPLE_SIZE).
+                                        # (10 x 13 x 10MB ~= 1.3GB) of XOR work can be
+                                        # done per region in the worst case (no early
+                                        # match) -- the shared ScanBudget, polled once
+                                        # per chunk, is what actually bounds this.
 SLEEP_MASK_VALIDATION_MARKER = b'sha256\x00'    # always present in beacon memory
 SLEEP_MASK_MAX_WINDOWS      = 200_000  # hard cap on windows counted per region, across
                                         # all key_size alignment offsets. Without this, a

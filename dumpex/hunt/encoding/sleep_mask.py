@@ -174,6 +174,41 @@ def _sm_recover_candidates(data: bytes,
     return candidates
 
 
+def _sm_marker_in_region(data: bytes, key: bytes, offset: int, key_size: int,
+                          chunk_size: int, marker: bytes, budget=None):
+    """
+    Search the COMPLETE region for `marker` under one (key, offset)
+    combination, decoding bounded chunks rather than the whole region at
+    once. Returns True if found, False if the entire region was searched
+    without a match, or None if the shared budget ran out before the
+    search finished (the caller must NOT treat that as a confirmed
+    negative -- it means coverage is partial, not clean).
+
+    Chunk `pos` in the region is decoded with `_sm_xor(chunk, key,
+    (offset + pos) % key_size)`: XOR-ing a slice starting at absolute
+    position `pos` with rotation `(offset + pos) % key_size` produces
+    exactly the same bytes a single whole-region `_sm_xor(data, key,
+    offset)` would have produced at that slice — `_sm_xor`'s rotation
+    math is modular, so splitting the region into chunks changes nothing
+    about which key byte lines up with which data byte.
+
+    Each chunk read extends `overlap = len(marker) - 1` bytes past
+    `chunk_size` so a marker straddling a chunk boundary is still found
+    whole in one of the two chunks that overlap it.
+    """
+    overlap = len(marker) - 1
+    pos = 0
+    while pos < len(data):
+        if budget is not None and not budget.poll():
+            return None
+        end = min(pos + chunk_size + overlap, len(data))
+        chunk = _sm_xor(data[pos:end], key, (offset + pos) % key_size)
+        if marker in chunk:
+            return True
+        pos += chunk_size
+    return False
+
+
 def _sm_validate_and_decode(data: bytes, candidates: list,
                              key_size: int = SLEEP_MASK_KEY_SIZE,
                              validate_sample: int = SLEEP_MASK_VALIDATE_SAMPLE,
@@ -181,48 +216,68 @@ def _sm_validate_and_decode(data: bytes, candidates: list,
                              budget=None) -> list:
     """
     Try each candidate key at each rotation offset and look for the validation
-    marker sha256\\x00, which is always present in beacon process memory.
+    marker sha256\\x00, which is always present in beacon process memory,
+    ACROSS THE COMPLETE eligible region (up to SLEEP_MASK_REGION_MAX) --
+    not just its first `validate_sample` bytes.
 
-    Algorithm (from cs-analyze-processdump.py ProcessBinaryFile inner loop):
+    Algorithm (from cs-analyze-processdump.py ProcessBinaryFile inner loop,
+    adapted to stream in bounded chunks rather than decode-then-search):
         for offset in range(key_size):
-            decoded = Xor(data, key, offset)
-            if b'sha256\\x00' in decoded:
-                → confirmed hit
+            for chunk in region, in validate_sample-sized pieces:
+                if b'sha256\\x00' in Xor(chunk, key, offset):
+                    → confirmed hit
 
-    Two-phase like _scan_xor's sample-then-full-decode: up to
-    MAX_CANDIDATES x key_size XOR passes over the WHOLE region would be
-    up to ~1.3GB of work for a 10MB region (10 candidates x 13 rotations).
-    Each combination is first tried against only the first
-    validate_sample bytes; the full-region decode (needed to return
-    complete decoded content) only runs for combinations that actually
-    found the marker in the sample — expected to be rare (at most a
-    handful of real hits), not all ~130 combinations.
+    Prior to this, each combination was checked only against the first
+    validate_sample bytes: a recovered key whose decoded marker happened
+    to sit beyond that prefix was silently rejected, even though the key
+    was correct and the marker WAS present later in the same region (see
+    https://github.com/bitbug0x55AA/dumpex/issues/25). `validate_sample`
+    is now a per-chunk streaming size rather than a hard search
+    boundary — `_sm_marker_in_region` walks the whole region in chunks of
+    this size, so the total work per (candidate, rotation) is bounded the
+    same way (one chunk decoded at a time) while actually covering
+    everything up to SLEEP_MASK_REGION_MAX. The full-region decode
+    (needed to return complete decoded content) still only runs for a
+    combination that actually found the marker somewhere — expected to be
+    rare (at most a handful of real hits), not all ~130 combinations.
 
     `budget` (default None -- skips polling, so this stays directly
     callable exactly as before for standalone/unit-test use) lets
     _scan_sleep_mask pass through the shared whole-hunt ScanBudget,
-    checked once per candidate key: this is the genuinely expensive loop
-    (up to ~130 XOR-over-2MB combinations per region), so a single huge
-    region shouldn't be able to run it unbounded even alone, on top of
-    the per-region loop in _scan_sleep_mask bounding total REGION count.
+    polled once per CHUNK (not just once per candidate key): this is the
+    genuinely expensive loop (now up to ~130 XOR-over-full-region
+    combinations per region, worst case), so a single huge region can't
+    run it unbounded even alone, on top of the per-region loop in
+    _scan_sleep_mask bounding total REGION count. If the budget runs out
+    mid-search, `_sm_marker_in_region` returns None and the candidate
+    loop stops immediately -- the shared ScanBudget itself then reports
+    exhausted() to _build_encoding_report, which is what turns into
+    partial coverage on the final report; a candidate/rotation combo cut
+    short this way is never treated as a confirmed negative.
 
     Returns list of (key_bytes, offset, decoded_bytes) for confirmed hits.
     """
     confirmed = []
-    sample_len = min(len(data), validate_sample)
-    marker_len = len(validation_marker)
+    chunk_size = max(1, validate_sample)
     for key, _count in candidates:
         if budget is not None and not budget.poll():
             break
+        hit_offset = None
+        budget_ran_out = False
         for offset in range(key_size):
-            # Sample includes marker_len extra bytes of overlap so a match
-            # straddling the sample boundary isn't missed.
-            sample = _sm_xor(data[:sample_len + marker_len], key, offset)
-            if validation_marker not in sample:
-                continue
-            decoded = sample if sample_len >= len(data) else _sm_xor(data, key, offset)
-            confirmed.append((key, offset, decoded))
-            break   # one confirmed decode per key is sufficient
+            result = _sm_marker_in_region(
+                data, key, offset, key_size, chunk_size, validation_marker, budget)
+            if result is None:
+                budget_ran_out = True
+                break
+            if result:
+                hit_offset = offset
+                break   # one confirmed decode per key is sufficient
+        if hit_offset is not None:
+            decoded = _sm_xor(data, key, hit_offset)
+            confirmed.append((key, hit_offset, decoded))
+        if budget_ran_out:
+            break
     return confirmed
 
 
@@ -256,12 +311,15 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
     ScanBudget instance _hunt_encoding shares with layers 2-4: unlike
     entropy's cheap linear per-region scan, sleep-mask's candidate
     recovery + validation is genuinely expensive per region (up to ~130
-    XOR-over-2MB combinations, see _sm_validate_and_decode), so a dump
-    with many qualifying ≤10MB regions could otherwise make this layer's
-    total running time grow unboundedly with region COUNT even though
-    each region alone stays within its own caps. Checked once per region
-    here, and threaded into _sm_recover_candidates/_sm_validate_and_decode
-    so a single expensive region can't run unbounded either.
+    candidate/rotation combinations, each now streamed in chunks across
+    the COMPLETE region rather than just its first 2MB, see
+    _sm_validate_and_decode / _sm_marker_in_region), so a dump with many
+    qualifying ≤10MB regions could otherwise make this layer's total
+    running time grow unboundedly with region COUNT even though each
+    region alone stays within its own caps. Checked once per region here,
+    and threaded into _sm_recover_candidates/_sm_validate_and_decode
+    (polled once per chunk there) so a single expensive region can't run
+    unbounded either.
 
     `susp_prots` (default `()`) is the rules-derived suspicious-protection
     string list, threaded through to `region_ref()` so each hit's
