@@ -130,6 +130,30 @@ def _all_checks_report() -> PipeReport:
                        evidence=evidence)
 
 
+def _five_c2_records_report() -> "tuple[PipeReport, tuple]":
+    """One retained C2-context region at the scanner's current five-hit
+    acquisition cap, also used as handle corroboration so both verbose
+    console C2 render paths exercise the same complete record set."""
+    handle = _handle()
+    lead = _string_lead()
+    matches = ("http://", "198.51.100.7", "198.51.100.7:8080", "submit.php",
+               "beacon.example")
+    records = tuple(
+        _c2_record(match=match, va=_PIPE_VA + 0x20 + i * 0x10,
+                   sha256=f"{i + 1:064x}", original_length=len(match))
+        for i, match in enumerate(matches)
+    )
+    corroborated = _corroborated(handle=handle, string_hit=lead, nearby_c2=records)
+    result = _check(
+        check="pipe.corroboration", tag=TAG_DETECTION, confidence=CONFIDENCE_HIGH,
+        evidence=(corroborated,), evidence_limit=10)
+    evidence = PipeEvidence(
+        handle_pipes=(handle,), string_leads=(lead,),
+        corroborated_handles=(corroborated,),
+        c2_context=(_c2_context(records=records, string_hit=lead),))
+    return PipeReport(score=2, coverage=_coverage(), results=(result,), evidence=evidence), records
+
+
 def _string_lead_only_report() -> PipeReport:
     """No handle evidence at all -- the "bare pipe strings are leads and
     never become scored handle evidence" shape, including a framework
@@ -391,6 +415,39 @@ def test_corroboration_verbose_facts_expand_per_signal_not_per_handle():
     assert "c2_match='http://'" in verbose[1]
     assert "c2_match='198.51.100.7:8080'" in verbose[2]
     assert "live_rip=TID:0x999@RIP" in verbose[3]
+    assert not any("sha256_prefix=" in fact for fact in verbose)
+
+
+def test_verbose_console_shows_all_five_retained_c2_records_without_digests_or_summary():
+    report, records = _five_c2_records_report()
+    verbose = strip_ansi("\n".join(render_console_lines(report, verbose=True)))
+
+    for rec in records:
+        assert f"C2: {rec.match} VA 0x{rec.va:016x}" in verbose
+        assert f"c2_va=0x{rec.va:016x} c2_match={rec.match!r}" in verbose
+    assert "more record(s)" not in verbose
+    assert "sha256_prefix=" not in verbose
+
+
+def test_five_retained_c2_records_keep_full_sha256_and_wire_shapes_in_both_json_projections():
+    report, records = _five_c2_records_report()
+    legacy_records = project_legacy_dict(report)["c2_context"][0][2]
+    current_records = project_hunter_record(report).details.c2_context[0]["records"]
+
+    assert len(legacy_records) == len(current_records) == len(records) == 5
+    assert [item["match"] for item in legacy_records] == [rec.match for rec in records]
+    assert [item["match"] for item in current_records] == [rec.match for rec in records]
+    assert all(set(item) == {"match", "context", "va", "sha256", "original_length"}
+               for item in legacy_records)
+    assert all(set(item) == {"match", "context", "va", "sha256", "original_length"}
+               for item in current_records)
+    for source, legacy, current in zip(records, legacy_records, current_records):
+        assert legacy["sha256"] == current["sha256"] == source.sha256
+        assert len(legacy["sha256"]) == 64
+        assert legacy["va"] == source.va
+        assert current["va"] == f"0x{source.va:016x}"
+        assert legacy["context"] == source.context
+        assert current["context"] == source.context.hex()
 
 
 # ── 3. State-matrix tests ─────────────────────────────────────────────────
