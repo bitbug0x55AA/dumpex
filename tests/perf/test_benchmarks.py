@@ -10,10 +10,12 @@ thresholds are set generously (seconds, not milliseconds) to avoid
 flakiness on a slow CI runner while still catching an actual O(n) ->
 O(n^2) regression or a budget that silently stopped being enforced.
 """
+import struct
 import time
 import tracemalloc
 
-from tests.fixtures.fakes import Region, Segment, FakeReader, FakeStream, FakeMF, mem_reader
+from tests.fixtures.fakes import (Region, Segment, FakeReader, FakeStream, FakeMF, mem_reader,
+                                   build_pe_header, IMAGE_SCN_MEM_EXECUTE, IMAGE_SCN_MEM_READ)
 
 import dumpex.hunt.cs_beacon as cs_beacon
 import dumpex.hunt.pipe as pipemod
@@ -162,3 +164,83 @@ def test_encoding_many_regions_completes_within_time_budget():
     # to an uninstrumented run.
     assert elapsed < 20.0, f"Encoding scan of {n} regions took {elapsed:.2f}s"
     assert f["coverage_status"] == "complete"
+
+
+# ── XOR structural scan: a single, MAXIMALLY candidate-heavy region must ──
+# still complete quickly -- see dumpex issue #27's own acceptance criteria
+# ("Performance benchmarks cover worst-case candidate-heavy regions").
+# _scan_xor_structural's derivation generators (decoding.py's
+# _xor_derive_pe_candidates/_xor_derive_shellcode_candidates) walk the
+# WHOLE region in a single offset-ordered pass with no per-region
+# candidate-count cap (an earlier, removed cap turned out to be capable of
+# silently starving a genuine candidate -- see
+# tests/hunt/test_encoding_decoders.py's own regression test for that) --
+# so the only thing standing between a region packed with pre-filter-
+# passing decoys and unbounded work is the shared ScanBudget's
+# note_attempt() gate. This packs a full XOR_SCAN_MAX-sized (512 KB)
+# region almost entirely with decoys that pass the cheap MZ+e_lfanew+
+# PE\0\0 pre-filter but fail full structural validation (so EVERY one of
+# them reaches, and spends, a real decode+parse_pe_header attempt) to
+# exercise that path at its worst plausible case.
+
+def _decoy_pe_bytes(salt: int):
+    """A structurally INVALID PE that still passes the cheap MZ+e_lfanew+
+    PE\\0\\0 pre-filter (correct signature, corrupted Machine field) --
+    the maximally expensive kind of non-candidate, since it always
+    reaches a full decode + parse_pe_header call before being rejected.
+    `salt` is stamped into the trailing padding (unused by both the
+    pre-filter and parse_pe_header's early Machine-field rejection) so
+    each decoy's PLAINTEXT is distinct -- defeating ScanBudget's own
+    content dedup, which would otherwise let every decoy past the first
+    skip straight to a cheap hash-dedup instead of genuinely re-running
+    _classify_decoded/parse_pe_header, understating the worst case."""
+    decoy = bytearray(build_pe_header(
+        [{"name": b".text", "vaddr": 0x1000, "vsize": 0x200, "rawptr": 0x400,
+          "rawsize": 0x200, "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+        size_of_image=0x2000, trailing_padding=0x300))
+    struct.pack_into('<H', decoy, 0x80 + 4, 0xDEAD)   # coff Machine field -> unrecognized
+    struct.pack_into('<I', decoy, len(decoy) - 4, salt)
+    return bytes(decoy)
+
+
+def test_xor_structural_candidate_heavy_region_completes_within_time_budget():
+    region_base = 0x680000000
+    decoy_len = len(_decoy_pe_bytes(0))
+
+    real_pe = build_pe_header(
+        [{"name": b".text", "vaddr": 0x1000, "vsize": 0x200, "rawptr": 0x400,
+          "rawsize": 0x200, "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+        size_of_image=0x2000, trailing_padding=0x300)
+
+    region_size = 512 * 1024   # == XOR_SCAN_MAX -- the largest region this layer scans
+    budget_room = region_size - len(real_pe)
+    n_decoys = budget_room // decoy_len
+
+    chunks = []
+    for i in range(n_decoys):
+        key = (i % 254) + 1   # cycle through keys 1..254, never 0
+        chunks.append(bytes(b ^ key for b in _decoy_pe_bytes(i)))
+    data = b''.join(chunks)
+    data += bytes(b ^ 0xFE for b in real_pe)   # one genuine PE, past every decoy
+    data = data.ljust(region_size, b'\x00')
+
+    regions = [Region(region_base, region_base, len(data), "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+    encoding.read_region = mem_reader({region_base: data})
+
+    start = time.perf_counter()
+    f = encoding._hunt_encoding(MF(), verbose=False)
+    elapsed = time.perf_counter() - start
+
+    assert elapsed < 20.0, (f"XOR structural scan of a {region_size // 1024}KB "
+                             f"candidate-heavy region ({n_decoys} decoys) took {elapsed:.2f}s")
+    # Whether the real PE is reached depends on the shared attempt budget
+    # (2000, whole-hunt) vs. how many decoys preceded it here -- either
+    # outcome is fine for a PERFORMANCE test, but if the budget WAS
+    # exhausted that must be visible, never a silent clean/complete miss.
+    if f["score"] == 0:
+        assert f["coverage_status"] == "partial"

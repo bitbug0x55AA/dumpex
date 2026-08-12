@@ -18,9 +18,19 @@ Detection layers (applied per memory region):
   Layer 2: Base64 detection      — standard + URL-safe; minimum 80 chars (60
                                    decoded bytes) — see B64_MIN_LEN
 
-  Layer 3: XOR single-byte BF    — MEM_PRIVATE regions ≤ 512 KB only;
-                                   sample-first heuristic to avoid O(n×255)
-                                   full-region cost
+  Layer 3: XOR single-byte BF    — MEM_PRIVATE regions ≤ 512 KB only; two
+                                   independent candidate-selection strategies:
+                                   a sample+printable/keyword heuristic over
+                                   the region prefix (text/IOC content), and
+                                   an offset-independent structural search
+                                   that derives the key directly from the
+                                   MZ/PE\x00\x00 or shellcode-bootstrap byte
+                                   patterns themselves, anywhere in the
+                                   region -- see dumpex/hunt/encoding/
+                                   decoding.py's _scan_xor_structural() and
+                                   issue #27 for why the prefix heuristic
+                                   alone cannot reach a binary structural
+                                   payload.
 
   Layer 4: GZIP / ZLIB           — magic-byte scan + decompress attempt
 
@@ -90,6 +100,7 @@ from dumpex.hunt.encoding.config import (
     EncodingConfig,
     ENTROPY_PRIVATE_THRESHOLD, ENTROPY_RWX_THRESHOLD, ENTROPY_SCAN_MAX,
     B64_MIN_LEN, XOR_SCAN_MAX, XOR_SAMPLE_SIZE, XOR_SCORE_MIN,
+    XOR_STRUCTURAL_WINDOW,
     DECOMPRESS_MAX_OUTPUT, DECODE_SCAN_MAX,
     SLEEP_MASK_KEY_SIZE, SLEEP_MASK_MIN_REPEAT, SLEEP_MASK_MAX_BYTE_FREQ,
     SLEEP_MASK_MIN_ACBD, SLEEP_MASK_MAX_CANDIDATES, SLEEP_MASK_REGION_MAX,
@@ -128,6 +139,7 @@ def _build_encoding_report(mf: MinidumpFile):
         entropy_private_threshold=ENTROPY_PRIVATE_THRESHOLD, entropy_rwx_threshold=ENTROPY_RWX_THRESHOLD,
         entropy_scan_max=ENTROPY_SCAN_MAX, b64_min_len=B64_MIN_LEN, xor_scan_max=XOR_SCAN_MAX,
         xor_sample_size=XOR_SAMPLE_SIZE, xor_score_min=XOR_SCORE_MIN,
+        xor_structural_window=XOR_STRUCTURAL_WINDOW,
         decompress_max_output=DECOMPRESS_MAX_OUTPUT, decode_scan_max=DECODE_SCAN_MAX,
         sleep_mask_key_size=SLEEP_MASK_KEY_SIZE, sleep_mask_min_repeat=SLEEP_MASK_MIN_REPEAT,
         sleep_mask_max_byte_freq=SLEEP_MASK_MAX_BYTE_FREQ, sleep_mask_min_acbd=SLEEP_MASK_MIN_ACBD,

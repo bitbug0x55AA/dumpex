@@ -32,8 +32,40 @@ ENTROPY_SCAN_MAX          = 10 * 1024 * 1024   # entropy scan: skip regions > 10
 B64_MIN_LEN               = 80                 # minimum Base64 string length
 
 XOR_SCAN_MAX              = 512 * 1024         # max region for single-byte XOR BF
-XOR_SAMPLE_SIZE           = 4096               # bytes sampled before full decode
-XOR_SCORE_MIN             = 0.68               # printable ratio to accept a key
+XOR_SAMPLE_SIZE           = 4096               # bytes sampled before full decode (text/
+                                                # keyword candidate path only -- see
+                                                # XOR_STRUCTURAL_* below for the offset-
+                                                # independent structural path that does NOT
+                                                # sample)
+XOR_SCORE_MIN             = 0.68               # printable ratio to accept a key (text/
+                                                # keyword candidate path only)
+
+XOR_STRUCTURAL_WINDOW = 128 * 1024   # bytes decoded per structural PE/shellcode candidate
+                                      # once its key is derived directly from a matching
+                                      # MZ+PE\0\0 (or shellcode-bootstrap) signature --
+                                      # bounds parse_pe_header()'s input regardless of how
+                                      # large the eligible region is. A full PE header plus
+                                      # up to 96 sections' table needs at most
+                                      # e_lfanew(<=0x1000, itself range-checked) + a 16-bit
+                                      # optional-header size + 96*40 section-table bytes --
+                                      # well under this.
+                                      #
+                                      # There is deliberately NO separate per-region cap on
+                                      # how many structural candidates get decoded+parsed:
+                                      # an earlier version had one (XOR_STRUCTURAL_MAX_
+                                      # CANDIDATES), but a cap applied while candidates were
+                                      # still discovered key-by-key (not offset-by-offset)
+                                      # could be exhausted by decoys using low key values
+                                      # before a genuine payload under a higher key was ever
+                                      # reached -- silently, with 0 hits and no coverage
+                                      # signal (dumpex issue #27 follow-up). Candidates are
+                                      # now found in a single offset-ordered pass (see
+                                      # decoding._xor_derive_pe_candidates /
+                                      # _xor_derive_shellcode_candidates) and the actual
+                                      # decode+parse attempt is gated solely by the shared,
+                                      # whole-hunt ScanBudget's note_attempt() -- which
+                                      # already surfaces exhaustion as an explicit
+                                      # coverage_status="partial", not a silent drop.
 
 DECOMPRESS_MAX_OUTPUT = 8 * 1024 * 1024   # cap decompressed output per candidate; a small
                                            # compressed blob can expand enormously (zip
@@ -98,6 +130,7 @@ class EncodingConfig:
     xor_scan_max: int = XOR_SCAN_MAX
     xor_sample_size: int = XOR_SAMPLE_SIZE
     xor_score_min: float = XOR_SCORE_MIN
+    xor_structural_window: int = XOR_STRUCTURAL_WINDOW
 
     decompress_max_output: int = DECOMPRESS_MAX_OUTPUT
     decode_scan_max: int = DECODE_SCAN_MAX

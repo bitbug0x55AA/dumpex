@@ -6,11 +6,19 @@ and GZIP/ZLIB decompression.
 per-region read loop (one shared read + coverage pass feeds all three
 sub-layers, since they all need the same region bytes) and returns a
 DecodeResult of standardized Hit objects. `_scan_base64`/`_scan_xor`/
-`_scan_compressed` below it are lower-level generators over an
-already-read `data: bytes` buffer -- kept as their own testable units
-(existing unit tests call them directly), yielding raw tuples rather
-than Hit objects; `scan_decode_layers` is what converts each yield into
-a Hit and applies the budget's take_hit() gate.
+`_scan_xor_structural`/`_scan_compressed` below it are lower-level
+generators over an already-read `data: bytes` buffer -- kept as their
+own testable units (existing unit tests call them directly), yielding
+raw `(offset, key, decoded, classification)` / `(offset, raw, decoded,
+classification)` tuples rather than Hit objects; `scan_decode_layers` is
+what converts each yield into a Hit and applies the budget's take_hit()
+gate. `_scan_xor` (a sample+printable/keyword heuristic, scoped to the
+region prefix) and `_scan_xor_structural` (offset-independent key
+derivation from the MZ/PE\\0\\0 or shellcode-bootstrap byte patterns
+themselves) are two independent candidate-selection strategies for the
+same single-byte-XOR layer -- see `_scan_xor_structural`'s own docstring
+and dumpex issue #27 for why a text-oriented prefix heuristic alone
+cannot reach a binary structural payload.
 """
 import re
 import zlib
@@ -22,6 +30,7 @@ from dumpex.hunt._location import resolve_location
 from dumpex.hunt.encoding.classification import _IOC_PAT, _classify_decoded
 from dumpex.hunt.encoding.config import (
     EncodingConfig, B64_MIN_LEN, XOR_SCAN_MAX, XOR_SAMPLE_SIZE, XOR_SCORE_MIN,
+    XOR_STRUCTURAL_WINDOW,
     DECOMPRESS_MAX_OUTPUT, DECODE_SCAN_MAX,
 )
 from dumpex.hunt.encoding.models import DecodeResult, DecodedHit, LayerCoverage, region_ref
@@ -121,13 +130,31 @@ def _score_xor_key(data: bytes, key: int) -> float:
 
 
 def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None):
-    # The key-scoring pass below is already tightly bounded (exactly 255
-    # keys scored against a fixed 4KB sample, only for MEM_PRIVATE regions
-    # <= XOR_SCAN_MAX) — it doesn't draw on the shared decode/decompress
-    # attempt budget, only on the dedup/retention accounting shared with
-    # the other layers once a candidate actually decodes. It still polls
-    # the budget periodically (every 16 keys) so an expired deadline stops
-    # the loop promptly instead of always running all 255 keys first.
+    """
+    Text/keyword candidate path: scores all 255 keys against a fixed
+    prefix sample and keeps only the top 5 whose SAMPLE looks printable
+    AND contains an IOC/keyword match. This is deliberately a heuristic
+    over the region PREFIX only -- it is what recovers a key from
+    plaintext-ish content (IOC strings, C2 keywords) that has no other
+    structural signature to derive a key from. It is NOT the path that
+    finds structural (PE/shellcode) payloads anymore -- see
+    `_scan_xor_structural()` below, which derives candidate keys directly
+    from the MZ/PE\\0\\0 or shellcode-bootstrap byte patterns themselves,
+    anywhere in the region, independent of printable ratio, keywords, or
+    region offset. A structural candidate found there can never be
+    "outranked" or dropped by this function's top-5 text-scored cutoff,
+    because the two paths are entirely independent -- this satisfies
+    issue #27 without changing this function's own, still-supported,
+    IOC-text behavior.
+
+    The key-scoring pass below is already tightly bounded (exactly 255
+    keys scored against a fixed 4KB sample, only for MEM_PRIVATE regions
+    <= XOR_SCAN_MAX) — it doesn't draw on the shared decode/decompress
+    attempt budget, only on the dedup/retention accounting shared with
+    the other layers once a candidate actually decodes. It still polls
+    the budget periodically (every 16 keys) so an expired deadline stops
+    the loop promptly instead of always running all 255 keys first.
+    """
     xor_sample_size = config.xor_sample_size if config is not None else XOR_SAMPLE_SIZE
     xor_score_min   = config.xor_score_min   if config is not None else XOR_SCORE_MIN
     sample = data[:xor_sample_size]
@@ -154,7 +181,168 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: Encodin
         classification = _classify_decoded(decoded)
         if classification.is_pe or classification.is_shellcode or classification.ioc_strings:
             budget.note_bytes_read(len(decoded))
-            yield key, decoded, classification
+            yield 0, key, decoded, classification
+
+
+# ── Structural candidate path (offset-independent, no printable/keyword gate) ──
+#
+# `_scan_xor`'s sample+printable/keyword heuristic above cannot find a
+# structural payload that: starts after the sampled prefix, is mostly
+# non-printable binary (a PE image or shellcode, almost by definition),
+# or contains no configured IOC keyword -- see dumpex issue #27. The two
+# functions below close that gap by deriving the XOR key directly from
+# the byte pattern being searched for, instead of guessing a key first
+# and hoping the result looks printable:
+#
+#   MZ + PE\0\0:  data[p] ^ key == 'M' fixes key from a single byte; the
+#                 second MZ byte, the (decoded) e_lfanew range, and the
+#                 4-byte PE\0\0 signature at that (decoded) offset are
+#                 then checked directly against the STILL-ENCODED buffer
+#                 (translate a handful of bytes, not the whole region) --
+#                 all three together before a candidate is accepted, so
+#                 coincidental raw 'MZ' pairs (common -- ~1 per 2KB per
+#                 key) are cheaply rejected without ever spending a full
+#                 decode/parse_pe_header call or a budget attempt on them.
+#   shellcode:    same idea, keyed off the fixed 5-byte 'e8 00 00 00 00'
+#                 call-$+5 prefix (coincidence probability ~1/256**4 per
+#                 position -- no extra pre-filter needed).
+#
+# This scans the WHOLE region (not a sample), so a payload at any offset
+# -- including past XOR_SAMPLE_SIZE, at a non-page-aligned offset, or
+# starting mid-region -- is found the same way a payload at offset 0 is.
+
+_PE_SIG = b'PE\x00\x00'
+_SHELLCODE_HEAD = bytes((0xE8, 0x00, 0x00, 0x00, 0x00))
+_SHELLCODE_TAILS = (0x58, 0x59, 0x5B, 0x5E)
+
+
+def _xor_derive_pe_candidates(data: bytes, budget: ScanBudget):
+    """
+    Single left-to-right pass over `data`, yielding (offset, key) for
+    every position where the ONE key that makes it decode to 'M' (0x4D)
+    ALSO produces the second 'MZ' byte, a plausible e_lfanew, and an
+    exact 'PE\\0\\0' signature at that (decoded) offset -- all checked
+    against small byte slices of the still-encoded buffer, no full
+    decode.
+
+    Candidates are produced in OFFSET order, not grouped by key value.
+    An earlier version of this function looped `for key in
+    range(1, 256)` and searched the whole buffer per key -- which meant
+    candidates using a NUMERICALLY LOWER key were always discovered (and
+    counted against a since-removed per-region cap) before candidates
+    using a higher key, regardless of which one actually sat earlier in
+    the region. A region salted with enough low-key decoys could exhaust
+    that cap before a genuine payload encoded under a higher key was ever
+    reached, even with 0 hits and no budget/coverage signal to explain
+    why (dumpex issue #27 follow-up). Scanning by offset instead removes
+    that bias entirely: candidates surface in the same relative order
+    they actually occur at, independent of their key's numeric value.
+
+    No candidate-count cap here: the caller (_scan_xor_structural) gates
+    the actual, expensive decode+parse attempt through the shared
+    ScanBudget's note_attempt(), which already has explicit
+    budget_exhausted -> coverage_status="partial" semantics wired through
+    aggregate.py/report_legacy.py -- a second, silent, region-local cap
+    duplicated (and, as above, could still starve) that same protection
+    instead of composing with it.
+    """
+    n = len(data)
+    for idx in range(n - 1):
+        if idx % 4096 == 0 and not budget.poll():
+            return
+        key = data[idx] ^ 0x4D
+        if key == 0 or (data[idx + 1] ^ key) != 0x5A:
+            continue
+        if idx + 0x40 > n:
+            continue
+        e_lfanew = int.from_bytes(
+            bytes(b ^ key for b in data[idx + 0x3C:idx + 0x40]), 'little')
+        if e_lfanew < 4 or e_lfanew > 0x1000:
+            continue
+        sig_off = idx + e_lfanew
+        if sig_off + 4 > n:
+            continue
+        if bytes(b ^ key for b in data[sig_off:sig_off + 4]) != _PE_SIG:
+            continue
+        yield idx, key
+
+
+def _xor_derive_shellcode_candidates(data: bytes, budget: ScanBudget):
+    """Single left-to-right pass, yielding (offset, key) for every
+    position where the key derived from the fixed 5-byte
+    'e8 00 00 00 00' call-$+5 prefix ALSO produces one of the recognized
+    pop-register tail bytes -- see `_xor_derive_pe_candidates` for why
+    this is offset-ordered and uncapped."""
+    n = len(data)
+    for idx in range(n - 5):
+        if idx % 4096 == 0 and not budget.poll():
+            return
+        key = data[idx] ^ 0xE8
+        if key == 0:
+            continue
+        if (data[idx + 1] ^ key) or (data[idx + 2] ^ key) or \
+           (data[idx + 3] ^ key) or (data[idx + 4] ^ key):
+            continue
+        if (data[idx + 5] ^ key) not in _SHELLCODE_TAILS:
+            continue
+        yield idx, key
+
+
+def _scan_xor_structural(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None):
+    """
+    Offset-independent structural candidate path -- see module comment
+    above. Every (offset, key) the two derivation generators produce has
+    already passed a cheap, high-confidence structural pre-filter, so
+    each one here spends exactly one shared-budget attempt on a bounded
+    decode (`xor_structural_window` bytes, not the whole region) and a
+    real `_classify_decoded()` call, which is what actually rejects an
+    adversarial decoy: a crafted MZ+PE\\0\\0 header with a truncated or
+    implausible section table fails `parse_pe_header`'s full structural
+    validation (`classification.is_pe` stays False) even though it passed
+    every cheap pre-filter above -- and, because candidates are found and
+    tried independently, in OFFSET order, one rejected decoy never stops
+    a later, genuinely valid candidate elsewhere in the same region from
+    being evaluated. If the shared budget's attempt limit IS reached
+    partway through (e.g. an adversarially large run of pre-filter-
+    passing decoys), `budget.exhausted()` short-circuits the remaining
+    candidates here -- and that exhaustion is not silent: it is the same
+    `ScanBudget` __init__.py's `_build_encoding_report` already threads
+    into `coverage.budget_exhausted` / `coverage_status="partial"` for
+    every other layer sharing this budget.
+    """
+    window = config.xor_structural_window if config is not None else XOR_STRUCTURAL_WINDOW
+    n = len(data)
+    tried = set()
+
+    def _attempt(offset, key):
+        if (offset, key) in tried:
+            return None
+        tried.add((offset, key))
+        if budget.exhausted() or not budget.note_attempt():
+            return None
+        end = min(n, offset + window)
+        decoded = data[offset:end].translate(_xor_table(key))
+        if not budget.seen_content(decoded):
+            return None
+        classification = _classify_decoded(decoded)
+        if classification.is_pe or classification.is_shellcode:
+            budget.note_bytes_read(len(decoded))
+            return decoded, classification
+        return None
+
+    for offset, key in _xor_derive_pe_candidates(data, budget):
+        if budget.exhausted():
+            return
+        result = _attempt(offset, key)
+        if result is not None:
+            yield offset, key, result[0], result[1]
+
+    for offset, key in _xor_derive_shellcode_candidates(data, budget):
+        if budget.exhausted():
+            return
+        result = _attempt(offset, key)
+        if result is not None:
+            yield offset, key, result[0], result[1]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -326,14 +514,32 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
                                            known_module=addr_to_module(abs_va, modules) is not None))
 
         if prot_str(r.Type) == 'MEM_PRIVATE' and r.RegionSize <= config.xor_scan_max:
-            for key, decoded, classification in _scan_xor(data, r.BaseAddress, budget, config):
+            # Structural candidates (offset-independent key derivation) are
+            # tried BEFORE the text/keyword sample path, so when a region
+            # has both, _dedup_by_region's "first hit per region" evidence
+            # for obfuscation.xor_observation prefers the structural one —
+            # cosmetic only: obfuscation.structural_payload itself (the
+            # score-driving check) partitions the RAW, undeduped hit list
+            # in aggregate.py, so scoring never depended on this order.
+            for off, key, decoded, classification in _scan_xor_structural(data, r.BaseAddress, budget, config):
                 if not budget.take_hit(len(decoded)):
                     break
-                location = resolve_location(mf, r.BaseAddress, r.BaseAddress, r.RegionSize)
+                abs_va = r.BaseAddress + off
+                location = resolve_location(mf, abs_va, r.BaseAddress, r.RegionSize)
                 xor_hits.append(DecodedHit(layer='xor', region=ref, location=location,
                                             decoded=decoded, classification=classification,
                                             complete=True, key=key,
-                                            known_module=mod is not None))
+                                            known_module=addr_to_module(abs_va, modules) is not None))
+
+            for off, key, decoded, classification in _scan_xor(data, r.BaseAddress, budget, config):
+                if not budget.take_hit(len(decoded)):
+                    break
+                abs_va = r.BaseAddress + off
+                location = resolve_location(mf, abs_va, r.BaseAddress, r.RegionSize)
+                xor_hits.append(DecodedHit(layer='xor', region=ref, location=location,
+                                            decoded=decoded, classification=classification,
+                                            complete=True, key=key,
+                                            known_module=addr_to_module(abs_va, modules) is not None))
 
         if not budget.exhausted():
             for off, algo, decoded, classification, complete in _scan_compressed(data, r.BaseAddress, budget, config):
