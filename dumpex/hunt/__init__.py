@@ -62,7 +62,7 @@ def _hunt_coverage_report(records: "list", summary: dict) -> CoverageReport:
 
     `not_evaluated` here is exactly `summary["overall_status"] ==
     "NOT_EVALUATED"` -- the one relationship
-    dumpex-output-v2.11.schema.json's own kind=="hunt" branch enforces as
+    dumpex-output-v2.12.schema.json's own kind=="hunt" branch enforces as
     a biconditional between `coverage.status` and `summary.overall_status`.
     """
     if summary["overall_status"] == "NOT_EVALUATED":

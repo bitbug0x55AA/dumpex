@@ -1,7 +1,7 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.11.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.11") for each of the six
+dumpex/schemas/dumpex-output-v2.12.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.12") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
@@ -98,7 +98,7 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -436,7 +436,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
         {"code": "PEB_UNAVAILABLE", "source": "peb", "scope": "dump", "affected_count": None,
          "unavailable_fields": [], "available_fields": [], "counterpart_source": None,
          "related_sources": [], "related_tids": [], "thread_id": None, "detail": None,
-         "targets": []}]
+         "targets": [], "budget_limit": None, "budget_consumed": None}]
 
 
 # ── negative cases: documents that MUST fail schema validation ───────────
@@ -448,7 +448,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.11",
+            "schema_version": "2.12",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
@@ -783,7 +783,8 @@ def test_coverage_limitation_source_failed_nonnull_affected_count_rejected_by_sc
 def _scan_target(kind, base_address="0x0000000000001000", size=100, size_limit=50):
     return {"kind": kind, "base_address": base_address, "size": size,
             "size_limit": size_limit, "file_offset": None, "allocation_base": None,
-            "state": None, "type": None, "protection": None}
+            "state": None, "type": None, "protection": None,
+            "captured_size": None, "capture_state": None}
 
 
 def _oversized_skipped_doc(source, scope, kind):
@@ -792,6 +793,7 @@ def _oversized_skipped_doc(source, scope, kind):
         "affected_count": 1, "unavailable_fields": [], "available_fields": [],
         "counterpart_source": None, "related_sources": [], "related_tids": [],
         "thread_id": None, "detail": None, "targets": [_scan_target(kind)],
+        "budget_limit": None, "budget_consumed": None,
     }
 
 
@@ -851,6 +853,7 @@ def test_coverage_limitation_unknown_future_code_stays_open_in_schema(coverage_l
         "affected_count": 99, "unavailable_fields": [], "available_fields": [],
         "counterpart_source": None, "related_sources": [], "related_tids": [],
         "thread_id": None, "detail": "free text", "targets": [],
+        "budget_limit": None, "budget_consumed": None,
     }
     jsonschema.validate(doc, coverage_limitation_schema)
 

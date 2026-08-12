@@ -255,7 +255,9 @@ class LayerCoverage:
     crosses the scan/aggregate boundary is frozen here."""
     scanned: int = 0
     read_failed: int = 0
+    read_failed_targets: tuple = field(default_factory=tuple)   # issue #28
     short_reads: int = 0
+    short_read_targets: tuple = field(default_factory=tuple)    # issue #28
     budget_exhausted: bool = False
     skipped_oversize_targets: tuple = field(default_factory=tuple)
 
@@ -266,6 +268,10 @@ class LayerCoverage:
         _require_bool(self.budget_exhausted, "LayerCoverage.budget_exhausted")
         object.__setattr__(self, "skipped_oversize_targets", _require_typed_tuple(
             self.skipped_oversize_targets, ScanTarget, "LayerCoverage.skipped_oversize_targets"))
+        object.__setattr__(self, "read_failed_targets", _require_typed_tuple(
+            self.read_failed_targets, ScanTarget, "LayerCoverage.read_failed_targets"))
+        object.__setattr__(self, "short_read_targets", _require_typed_tuple(
+            self.short_read_targets, ScanTarget, "LayerCoverage.short_read_targets"))
         # Depth check, same reasoning as DecodedHit/EntropyHit's own
         # __post_init__: the four scalar/bool checks above only look at
         # LayerCoverage's own direct fields, so this is what still catches
@@ -276,7 +282,10 @@ class LayerCoverage:
     @classmethod
     def from_tracker(cls, tracker) -> "LayerCoverage":
         return cls(scanned=tracker.scanned, read_failed=tracker.read_failed,
-                   short_reads=tracker.short_reads, budget_exhausted=tracker.budget_exhausted,
+                   read_failed_targets=tuple(tracker.read_failed_targets),
+                   short_reads=tracker.short_reads,
+                   short_read_targets=tuple(tracker.short_read_targets),
+                   budget_exhausted=tracker.budget_exhausted,
                    skipped_oversize_targets=tuple(tracker.skipped_oversize_targets))
 
 

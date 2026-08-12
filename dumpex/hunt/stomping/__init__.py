@@ -351,7 +351,10 @@ def _build_stomping_report(mf: MinidumpFile, ref_dir: str = None):
         ref_dir_supplied=bool(ref_dir),
         header_read_failed=header_read_failed, header_parse_failed=len(parse_failures),
         ioc_oversized=ioc_coverage.skipped_oversize_targets,
-        ioc_read_failed=ioc_coverage.read_failed, ioc_short_reads=ioc_coverage.short_reads,
+        ioc_read_failed=ioc_coverage.read_failed,
+        ioc_read_failed_targets=ioc_coverage.read_failed_targets,
+        ioc_short_reads=ioc_coverage.short_reads,
+        ioc_short_read_targets=ioc_coverage.short_read_targets,
         ioc_whitelisted_modules=ioc_coverage.whitelisted_skipped,
         **counts)
 

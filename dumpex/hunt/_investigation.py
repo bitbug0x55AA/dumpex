@@ -18,9 +18,12 @@ its own `CoverageLimitation` -- see #16's fix). Neither case exists as a
 single actionable item anywhere today: each hunter's own
 `dumpex.hunt._coverage.CoverageTracker` is scoped to that one hunter's one
 scan call. `build_investigation_queue()` is the one place that dedup
-happens, keyed on `(ScanTarget.kind, base_address, size)` -- the physical
-identity of the thing that was skipped, independent of who skipped it or
-under which cap.
+happens, keyed on `(base_address, size)` -- the physical identity of the
+thing that was skipped, independent of who skipped it, under which cap,
+or which `ScanTarget.kind` they happened to describe it with (a
+`memory_region` target from one hunter and a `memory_segment` target
+from another, naming the same range, merge into ONE action -- see
+`_dedup_key()`/`_merge_target_group()`).
 
 Priority is derived from exactly two independent boolean facts, each
 itself derived from data already on the records (never a fresh read):
@@ -62,6 +65,7 @@ __post_init__`'s mode=="deep" branch below).
 from dataclasses import dataclass, field
 from enum import Enum
 
+from dumpex.core.memory import prot_str
 from dumpex.output.coverage import ScanTarget, ScanTargetKind, LimitationCode
 from dumpex.output.records import (
     HUNTERS, HunterRecord,
@@ -73,9 +77,89 @@ __all__ = [
     "InvestigationPriority", "InvestigationReasonCode", "EvidenceAvailability",
     "InvestigationActionType", "TriageMode", "TriageStatus", "ContentReasonCode",
     "ContentFindingType", "ContentFinding", "MAX_FINDINGS_PER_TARGET", "MAX_FINDING_VALUE_LEN",
-    "SkipRelationship", "TriageInfo",
+    "SkipCause", "SkipRelationship", "TriageInfo",
     "RecommendedAction", "InvestigationAction", "build_investigation_queue",
 ]
+
+
+class SkipCause(str, Enum):
+    """Why a `(hunter, source, scope)` skipped this target -- issue #28:
+    `hunter`/`source`/`scope` alone cannot distinguish an oversized region
+    a scan never attempted from one it attempted and failed to read, read
+    short, or ran out of scan budget on -- the SAME (hunter, source,
+    scope) can legitimately produce more than one of these for different
+    targets (e.g. pipe's own pipe_name_scan both skips one oversized
+    region AND fails to read a different, ordinarily-sized one), so the
+    cause is part of a SkipRelationship's own identity, not a detail of
+    the target it names."""
+    OVERSIZED_SKIPPED = "oversized_skipped"
+    READ_FAILED       = "read_failed"
+    SHORT_READ        = "short_read"
+    SCAN_TRUNCATED    = "scan_truncated"
+    SCAN_NOT_STARTED  = "scan_not_started"
+    MATCH_FAILED      = "match_failed"
+    MATCH_TIMED_OUT   = "match_timed_out"
+    HIT_CAP_REACHED       = "hit_cap_reached"
+    SCAN_BUDGET_EXHAUSTED = "scan_budget_exhausted"
+
+
+# Every LimitationCode build_investigation_queue() draws targets from, and
+# the SkipCause each one means -- the single place this mapping lives, so
+# widening the queue to a new target-bearing code (see this code's own
+# _CODE_SPECS entry in dumpex.output.coverage) means adding one entry here,
+# not touching the queue-building logic itself.
+_TARGET_BEARING_LIMITATION_CAUSES = {
+    LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED: SkipCause.OVERSIZED_SKIPPED,
+    LimitationCode.SCAN_REGION_READ_FAILED:       SkipCause.READ_FAILED,
+    LimitationCode.SCAN_REGION_SHORT_READ:        SkipCause.SHORT_READ,
+    LimitationCode.PE_HEADER_READ_FAILED:         SkipCause.READ_FAILED,
+    LimitationCode.PE_HEADER_SHORT_READ:          SkipCause.SHORT_READ,
+    LimitationCode.PE_HEADER_SCAN_TRUNCATED:      SkipCause.SCAN_TRUNCATED,
+    LimitationCode.PE_HEADER_SCAN_NOT_STARTED:    SkipCause.SCAN_NOT_STARTED,
+    LimitationCode.YARA_MATCH_FAILED:             SkipCause.MATCH_FAILED,
+    LimitationCode.YARA_MATCH_TIMED_OUT:          SkipCause.MATCH_TIMED_OUT,
+    LimitationCode.YARA_HIT_CAP_REACHED:          SkipCause.HIT_CAP_REACHED,
+    LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED:    SkipCause.SCAN_BUDGET_EXHAUSTED,
+    LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED: SkipCause.SCAN_BUDGET_EXHAUSTED,
+}
+
+
+# Every resource-budget name ANY hunter's own scan-budget-exhaustion code
+# can put in `scope` (issue #28 P5/P6 follow-up) -- duplicated here, not
+# imported, since this module sits alongside dumpex.output.coverage on
+# the domain-model/cross-hunter side, never importing hunt-package
+# internals (same "closed vocabulary duplicated at a module boundary"
+# precedent that module's own per-hunter *_BUDGET_KINDS copies already
+# document). Only used to validate `SkipRelationship.budget_kind` below
+# -- `_budget_fields_from_limitation()` doesn't need to distinguish WHICH
+# hunter a kind belongs to, only that the owning `CoverageLimitation`
+# actually carries one.
+_BUDGET_KINDS = frozenset({
+    # injection (dumpex.hunt.injection.memory_scan._ScanBudget)
+    "reads_per_region", "total_bytes", "validations_per_region", "validations_total",
+    # yara_hunt.scanner
+    "max_total_hits", "scan_deadline_seconds", "max_total_bytes_scanned",
+    # cs_beacon.scanner (scan_deadline_seconds shared with yara_hunt -- the
+    # same underlying fact for both)
+    "max_total_scanned_bytes", "max_candidates", "max_decoded_bytes", "max_hits",
+})
+
+
+def _budget_fields_from_limitation(limitation) -> tuple:
+    """(budget_kind, budget_limit, budget_consumed) read straight off a
+    `CoverageLimitation`'s own `scope`/`budget_limit`/`budget_consumed`
+    (issue #28 P6 follow-up -- a prior version of this function PARSED
+    them out of `detail` text instead, which broke the moment a code that
+    also uses `detail` for its own free-text reason -- e.g. CS_BEACON_
+    SCAN_BUDGET_EXHAUSTED's human-readable budget_reason -- needed both
+    at once; see `dumpex.output.coverage.CoverageLimitation.budget_limit`'s
+    own docstring). `(None, None, None)` unless the limitation actually
+    carries a budget attribution at all -- every OTHER code's `scope`
+    (e.g. obfuscation's own layer-name `scope`) never has `budget_limit`
+    set alongside it, so this falls through safely."""
+    if limitation.budget_limit is None:
+        return None, None, None
+    return limitation.scope, limitation.budget_limit, limitation.budget_consumed
 
 
 class InvestigationPriority(str, Enum):
@@ -119,6 +203,7 @@ class InvestigationReasonCode(str, Enum):
 
 class EvidenceAvailability(str, Enum):
     CAPTURED     = "captured"
+    PARTIAL      = "partial"
     NOT_CAPTURED = "not_captured"
 
 
@@ -275,31 +360,112 @@ def _require_positive_int(value, name: str) -> int:
     return value
 
 
+def _require_nonnegative_int(value, name: str) -> int:
+    # Distinct from _require_positive_int above: a configured scan budget
+    # (issue #28 P6 follow-up) can legitimately be `0` -- e.g.
+    # PE_SCAN_MAX_VALIDATIONS_TOTAL=0, meaning "no validations at all" --
+    # unlike size_limit (an oversized-skip target's cap, which can never
+    # legally be 0: a target that "exceeds" a 0 cap while itself having a
+    # positive size is not a meaningful oversized-skip scenario in
+    # practice, and every real producer's own configured caps are
+    # positive). budget_limit/budget_consumed are the two fields that
+    # actually need this relaxed floor.
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{name} must be a non-negative int, got {value!r}")
+    return value
+
+
+def _require_optional_positive_int(value, name: str) -> "int | None":
+    if value is not None:
+        _require_positive_int(value, name)
+    return value
+
+
 @dataclass(frozen=True)
 class SkipRelationship:
-    """One `(hunter, source, scope)` that skipped a physical target --
-    `hunter` is the owning `HunterRecord.hunter` (e.g. "pipe"), `source`/
-    `scope` are the owning `CoverageLimitation.source`/`.scope` (e.g.
-    "pipe_name_scan"/None, or "encoding_scan"/"entropy"). `size_limit` is
-    THIS relationship's own cap -- the same physical target can legally
-    have different `size_limit`s under different hunters/scopes (see
-    `ScanTarget`'s own docstring)."""
+    """One `(hunter, source, scope, cause)` that skipped a physical target
+    -- `hunter` is the owning `HunterRecord.hunter` (e.g. "pipe"),
+    `source`/`scope` are the owning `CoverageLimitation.source`/`.scope`
+    (e.g. "pipe_name_scan"/None, or "encoding_scan"/"entropy"). `cause`
+    (issue #28) is WHY this relationship skipped the target -- see
+    `SkipCause`'s own docstring for why `hunter`/`source`/`scope` alone
+    cannot distinguish an oversized-skip from a read-failed/short-read/
+    scan-truncated gap from the same scan source. `size_limit` is THIS
+    relationship's own cap, set only when `cause` is
+    `oversized_skipped` -- the same physical target can legally have
+    different `size_limit`s under different hunters/scopes (see
+    `ScanTarget`'s own docstring); every other cause leaves it `None`,
+    since there is no cap being exceeded for an I/O failure or a scan-
+    budget exhaustion.
+
+    `budget_kind`/`budget_limit`/`budget_consumed` (issue #28 P5
+    follow-up) are the STRUCTURED counterpart of what previously only
+    reached `scope` (the kind) and the owning `CoverageLimitation.detail`
+    free text (limit/consumed) for `scan_truncated`/`scan_not_started` --
+    parsed once here, at construction, from the owning limitation's own
+    `scope`/`detail` (see `_budget_fields_from_limitation()`), so a JSON
+    consumer reading `investigation_actions[].skipped_by[]` never has to
+    parse `detail`'s free text itself just to learn a numeric limit. All
+    three stay `None` together for every OTHER cause -- there is no
+    budget being tracked for an oversized-skip, a plain read failure, or
+    a YARA match failure/timeout."""
     hunter: str
     source: str
+    cause: str = SkipCause.OVERSIZED_SKIPPED.value
     scope: "str | None" = None
-    size_limit: int = 0
+    size_limit: "int | None" = None
+    budget_kind: "str | None" = None
+    budget_limit: "int | None" = None
+    budget_consumed: "int | None" = None
 
     def __post_init__(self):
         if self.hunter not in HUNTERS:
             raise ValueError(f"SkipRelationship.hunter must be one of {HUNTERS}, got {self.hunter!r}")
         _require_str(self.source, "SkipRelationship.source")
+        object.__setattr__(self, "cause", SkipCause(self.cause).value)
         _require_optional_str(self.scope, "SkipRelationship.scope")
-        _require_positive_int(self.size_limit, "SkipRelationship.size_limit")
+        _require_optional_positive_int(self.size_limit, "SkipRelationship.size_limit")
+        if self.cause == SkipCause.OVERSIZED_SKIPPED.value and self.size_limit is None:
+            raise ValueError(
+                "SkipRelationship(cause='oversized_skipped') requires size_limit -- an "
+                "oversized-skip relationship always has the cap it exceeded")
+        if self.cause != SkipCause.OVERSIZED_SKIPPED.value and self.size_limit is not None:
+            raise ValueError(
+                f"SkipRelationship(cause={self.cause!r}) must leave size_limit unset -- only "
+                f"an oversized-skip relationship has a cap it exceeded, got "
+                f"size_limit={self.size_limit!r}")
+        budget_values = (self.budget_kind, self.budget_limit, self.budget_consumed)
+        if any(v is None for v in budget_values) and any(v is not None for v in budget_values):
+            raise ValueError(
+                f"SkipRelationship.budget_kind/budget_limit/budget_consumed must be all None "
+                f"or all set together, got {budget_values!r}")
+        if self.budget_kind is not None:
+            if self.budget_kind not in _BUDGET_KINDS:
+                raise ValueError(f"SkipRelationship.budget_kind must be one of "
+                                  f"{sorted(_BUDGET_KINDS)}, got {self.budget_kind!r}")
+            _require_nonnegative_int(self.budget_limit, "SkipRelationship.budget_limit")
+            _require_nonnegative_int(self.budget_consumed, "SkipRelationship.budget_consumed")
+            if self.budget_consumed != self.budget_limit:
+                raise ValueError(
+                    f"SkipRelationship.budget_consumed ({self.budget_consumed}) must equal "
+                    f"budget_limit ({self.budget_limit}) -- a budget is only ever attributed "
+                    f"as an exhaustion reason once fully consumed")
+            # issue #28 P6 follow-up: originally injection-only
+            # (scan_truncated/scan_not_started); now also YARA's own
+            # hit_cap_reached/scan_budget_exhausted and CS Beacon's own
+            # scan_budget_exhausted.
+            if self.cause not in (SkipCause.SCAN_TRUNCATED.value, SkipCause.SCAN_NOT_STARTED.value,
+                                    SkipCause.HIT_CAP_REACHED.value, SkipCause.SCAN_BUDGET_EXHAUSTED.value):
+                raise ValueError(
+                    f"SkipRelationship(cause={self.cause!r}) must leave budget_kind/_limit/"
+                    f"_consumed unset -- this cause never tracks a scan budget")
 
     def to_dict(self) -> dict:
         return {
-            "hunter": self.hunter, "source": self.source,
+            "hunter": self.hunter, "source": self.source, "cause": self.cause,
             "scope": self.scope, "size_limit": self.size_limit,
+            "budget_kind": self.budget_kind, "budget_limit": self.budget_limit,
+            "budget_consumed": self.budget_consumed,
         }
 
 
@@ -584,25 +750,127 @@ def _recommended_actions(priority: str, evidence_availability: str, hunters: tup
     """`hunters` must be non-empty -- `build_investigation_queue()` only
     ever calls this with the real set of hunters that skipped the target
     (see `RecommendedAction.__post_init__`, which also enforces this).
-    `preserve_artifact` ("preserve/export the artifact before external
-    analysis") is only offered when there IS a local artifact to preserve
-    -- i.e. the bytes are actually `captured` in this dump; a `high`
-    -priority target whose bytes were never captured gets `recollect_dump`
-    instead, never a preserve suggestion for bytes that don't exist here."""
+
+    `evidence_availability == "partial"` (issue #28 P1 follow-up) gets
+    BOTH `extract_captured_range` and `recollect_dump` -- the classic
+    short-read shape: a real prefix IS sitting in the dump already in
+    hand (worth extracting now) AND the rest of the target genuinely
+    isn't there (recollection is still the only way to see the whole
+    thing), so recommending only one of the two would silently drop a
+    real, actionable option. `preserve_artifact` ("preserve/export the
+    artifact before external analysis") is only offered when there IS a
+    local artifact to preserve at all -- captured or partial -- never for
+    a target whose bytes are entirely absent from this dump."""
     actions = [RecommendedAction(type=InvestigationActionType.INSPECT_METADATA.value)]
-    if evidence_availability == EvidenceAvailability.CAPTURED.value:
+    has_captured_bytes = evidence_availability in (
+        EvidenceAvailability.CAPTURED.value, EvidenceAvailability.PARTIAL.value)
+    if has_captured_bytes:
         actions.append(RecommendedAction(type=InvestigationActionType.EXTRACT_CAPTURED_RANGE.value))
-    else:
+    if evidence_availability != EvidenceAvailability.CAPTURED.value:
         actions.append(RecommendedAction(type=InvestigationActionType.RECOLLECT_DUMP.value))
     actions.append(RecommendedAction(
         type=InvestigationActionType.TARGETED_HUNTER_RESCAN.value, hunters=hunters))
-    if priority == InvestigationPriority.HIGH.value and evidence_availability == EvidenceAvailability.CAPTURED.value:
+    if priority == InvestigationPriority.HIGH.value and has_captured_bytes:
         actions.append(RecommendedAction(type=InvestigationActionType.PRESERVE_ARTIFACT.value))
     return tuple(actions)
 
 
+def _evidence_availability_for(target: ScanTarget) -> str:
+    """Three-way evidence-availability fact (issue #28 P1 follow-up),
+    preferring `target.capture_state` -- the STRUCTURAL "how much of this
+    target's own size is actually in the .dmp file" answer (see
+    `dumpex.core.memory.va_range_captured_bytes`) -- over the older,
+    coarser "does the start address resolve to a file offset at all"
+    check. `capture_state` is `None` only for a target that never went
+    through `region_scan_target()`/`segment_scan_target()` (every real
+    producer does); that legacy fallback is kept so a hand-built
+    `ScanTarget` (e.g. in a test) still gets a sensible answer rather than
+    raising."""
+    state = target.capture_state
+    if state == "complete":
+        return EvidenceAvailability.CAPTURED.value
+    if state == "partial":
+        return EvidenceAvailability.PARTIAL.value
+    if state == "none":
+        return EvidenceAvailability.NOT_CAPTURED.value
+    return (EvidenceAvailability.CAPTURED.value if target.file_offset is not None
+            else EvidenceAvailability.NOT_CAPTURED.value)
+
+
 def _dedup_key(target: ScanTarget):
-    return (target.kind, target.base_address, target.size)
+    """The PHYSICAL identity of a skipped/gap target (issue #28 P4
+    follow-up) -- deliberately `(base_address, size)` ONLY. `kind` is
+    NOT part of a target's physical identity: the same VA range can
+    surface as a `memory_region` target (MemoryInfo-sourced, e.g. from
+    pipe/injection/encoding/stomping) under one hunter and as a
+    `memory_segment` target (Memory64List/MemoryList-sourced, e.g. from
+    CS Beacon/YARA) under another. Keying on `kind` too used to produce
+    TWO separate investigation actions for what is really one physical
+    range -- each seeing only its own hunter's relationship, so neither
+    ever crossed the `>1 distinct scope` threshold `MULTIPLE_SCOPES_
+    SKIPPED`/priority escalation depends on. See `_merge_target_group()`
+    for how a group's one representative target is built once `kind` no
+    longer splits it."""
+    return (target.base_address, target.size)
+
+
+def _find_matching_memory_info(base_address: int, size: int, memory_regions: list):
+    """The raw MemoryInfo region (from `get_memory_regions(mf)`) whose
+    own `[BaseAddress, BaseAddress+RegionSize)` contains
+    `[base_address, base_address+size)` -- an exact-bounds match is the
+    common case (a segment built from the same allocation a MemoryInfo
+    region already describes), a strictly-containing match is kept too
+    since Memory64List/MemoryList segment boundaries need not line up
+    exactly with MemoryInfo region boundaries. `None` when nothing in
+    this dump's own MemoryInfoListStream covers the range at all."""
+    end = base_address + size
+    for r in memory_regions:
+        if r.BaseAddress <= base_address and end <= r.BaseAddress + r.RegionSize:
+            return r
+    return None
+
+
+def _merge_target_group(targets: list, memory_regions: list) -> ScanTarget:
+    """One representative `ScanTarget` for a dedup group that may mix
+    `memory_region` and `memory_segment` kinds describing the SAME
+    physical `(base_address, size)` range (issue #28 P4 follow-up) --
+    see `_dedup_key()`'s own docstring for why `kind` is no longer part
+    of a group's identity.
+
+    A `memory_region` target already carries this dump's own MemoryInfo
+    facts (allocation_base/state/type/protection) -- used directly, and
+    in insertion order when more than one is present (matches the
+    single-kind behavior this function replaces). A group with ONLY
+    `memory_segment` targets carries none of that: `memory_regions`
+    (already read by `build_investigation_queue()` to resolve
+    `CORRELATED_REGION_EVIDENCE`) is searched for a MemoryInfo region
+    covering the same range, and if one exists, a NEW `memory_region`
+    target is built from it -- this dump's own type/protection facts,
+    plus the SEGMENT's own file_offset/captured_size (a segment is
+    definitionally backed by the file, so its own capture facts are at
+    least as trustworthy as anything freshly re-derived from MemoryInfo
+    could be). Falls back to the bare segment target, unchanged, when no
+    matching MemoryInfo region exists -- exactly today's behavior for a
+    segment-only group."""
+    region_targets = [t for t in targets if t.kind == ScanTargetKind.MEMORY_REGION]
+    if region_targets:
+        return region_targets[0]
+    segment_target = targets[0]
+    info = _find_matching_memory_info(segment_target.base_address, segment_target.size, memory_regions)
+    if info is None:
+        return segment_target
+    return ScanTarget(
+        kind=ScanTargetKind.MEMORY_REGION,
+        base_address=segment_target.base_address,
+        size=segment_target.size,
+        size_limit=segment_target.size_limit,
+        file_offset=segment_target.file_offset,
+        allocation_base=getattr(info, "AllocationBase", None),
+        state=prot_str(info.State),
+        type=prot_str(info.Type),
+        protection=prot_str(info.Protect),
+        captured_size=segment_target.captured_size,
+    )
 
 
 def _sort_key(action: InvestigationAction):
@@ -617,22 +885,42 @@ def build_investigation_queue(records: list, memory_regions: list) -> list:
     tolerance `build_region_correlations()` itself has); `memory_regions`
     is `dumpex.core.memory.get_memory_regions(mf)`'s own return value,
     read only to resolve `CORRELATED_REGION_EVIDENCE` -- never re-scanned.
-    Returns `[]` when no hunter skipped anything for being oversized."""
+    Returns `[]` when no hunter skipped anything for a supported, target-
+    bearing reason (see `_TARGET_BEARING_LIMITATION_CAUSES`)."""
     if not isinstance(records, list) or any(not isinstance(r, HunterRecord) for r in records):
         raise TypeError("build_investigation_queue() records must be a list of HunterRecord")
 
-    groups: dict = {}   # dedup_key -> {"target": ScanTarget, "skips": {(hunter,source,scope): SkipRelationship}}
+    groups: dict = {}   # dedup_key -> {"targets": [ScanTarget, ...], "skips": {(hunter,source,scope,cause): SkipRelationship}}
     for record in records:
         for limitation in record.coverage.limitations:
-            if limitation.code != LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED:
+            cause = _TARGET_BEARING_LIMITATION_CAUSES.get(limitation.code)
+            if cause is None:
                 continue
             for target in limitation.targets:
                 key = _dedup_key(target)
-                entry = groups.setdefault(key, {"target": target, "skips": {}})
-                skip_key = (record.hunter, limitation.source, limitation.scope)
+                entry = groups.setdefault(key, {"targets": [], "skips": {}})
+                # Every target instance the group has seen is kept (not
+                # just the first) -- a group can legitimately mix
+                # `memory_region` and `memory_segment` kinds for the
+                # same physical range (see `_dedup_key()`'s own
+                # docstring), and `_merge_target_group()` needs the
+                # whole set to pick/build the one representative below.
+                entry["targets"].append(target)
+                # `cause` is part of the skip key, not just of the
+                # SkipRelationship's own payload (issue #28): the SAME
+                # (hunter, source, scope) can skip different targets for
+                # different reasons (e.g. pipe's pipe_name_scan both skips
+                # one oversized region and fails to read another,
+                # ordinarily-sized one) -- collapsing those into one
+                # dict key would silently keep only whichever cause was
+                # seen first for that (hunter, source, scope).
+                skip_key = (record.hunter, limitation.source, limitation.scope, cause.value)
+                budget_kind, budget_limit, budget_consumed = _budget_fields_from_limitation(limitation)
                 entry["skips"].setdefault(skip_key, SkipRelationship(
-                    hunter=record.hunter, source=limitation.source,
-                    scope=limitation.scope, size_limit=target.size_limit))
+                    hunter=record.hunter, source=limitation.source, cause=cause.value,
+                    scope=limitation.scope, size_limit=target.size_limit,
+                    budget_kind=budget_kind, budget_limit=budget_limit,
+                    budget_consumed=budget_consumed))
 
     if not groups:
         return []
@@ -644,10 +932,10 @@ def build_investigation_queue(records: list, memory_regions: list) -> list:
 
     actions = []
     for entry in groups.values():
-        target = entry["target"]
+        target = _merge_target_group(entry["targets"], memory_regions)
         skipped_by = tuple(sorted(
             entry["skips"].values(),
-            key=lambda s: (HUNTERS.index(s.hunter), s.source, s.scope or "")))
+            key=lambda s: (HUNTERS.index(s.hunter), s.source, s.scope or "", s.cause)))
 
         reason_codes = []
         has_exec = _has_exec_signal(target)
@@ -660,7 +948,16 @@ def build_investigation_queue(records: list, memory_regions: list) -> list:
             reason_codes.append(InvestigationReasonCode.RWX_PROTECTION.value)
 
         has_correlation = False
-        if len(skipped_by) > 1:
+        # Distinct (hunter, source, scope) count, NOT len(skipped_by):
+        # `cause` is part of skip_key (see above), so the SAME hunter/
+        # source/scope can legitimately contribute more than one
+        # SkipRelationship for this target (e.g. injection's hidden_pe_scan
+        # finding both a read failure AND a short read on different reads
+        # within the SAME region). That is not a cross-hunter/cross-scope
+        # correlation signal -- only genuinely distinct scopes skipping the
+        # same physical target are.
+        distinct_scopes = {(s.hunter, s.source, s.scope) for s in skipped_by}
+        if len(distinct_scopes) > 1:
             reason_codes.append(InvestigationReasonCode.MULTIPLE_SCOPES_SKIPPED.value)
             has_correlation = True
         if (target.kind == ScanTargetKind.MEMORY_REGION
@@ -669,9 +966,7 @@ def build_investigation_queue(records: list, memory_regions: list) -> list:
             has_correlation = True
 
         priority = _derive_priority(has_exec, has_correlation)
-        evidence_availability = (EvidenceAvailability.CAPTURED.value
-                                  if target.file_offset is not None
-                                  else EvidenceAvailability.NOT_CAPTURED.value)
+        evidence_availability = _evidence_availability_for(target)
         hunters = tuple(h for h in HUNTERS if any(s.hunter == h for s in skipped_by))
 
         actions.append(InvestigationAction(

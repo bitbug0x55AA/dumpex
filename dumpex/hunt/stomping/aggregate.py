@@ -46,7 +46,8 @@ def build_report(protection_leads: tuple = (), rip_correlated_leads: tuple = (),
                   short_reads: int = 0, relocation_failed: int = 0,
                   header_read_failed: int = 0, header_parse_failed: int = 0,
                   ioc_oversized: tuple = (), ioc_read_failed: int = 0,
-                  ioc_short_reads: int = 0,
+                  ioc_read_failed_targets: tuple = (), ioc_short_reads: int = 0,
+                  ioc_short_read_targets: tuple = (),
                   ioc_whitelisted_modules: tuple = ()) -> StompingReport:
     """
     Turn the scan/correlation layers' typed evidence into the final
@@ -70,7 +71,9 @@ def build_report(protection_leads: tuple = (), rip_correlated_leads: tuple = (),
         short_reads=short_reads, relocation_failed=relocation_failed,
         header_read_failed=header_read_failed, header_parse_failed=header_parse_failed,
         ioc_oversized=ioc_oversized, ioc_read_failed=ioc_read_failed,
-        ioc_short_reads=ioc_short_reads, ioc_whitelisted_modules=ioc_whitelisted_modules,
+        ioc_read_failed_targets=ioc_read_failed_targets, ioc_short_reads=ioc_short_reads,
+        ioc_short_read_targets=ioc_short_read_targets,
+        ioc_whitelisted_modules=ioc_whitelisted_modules,
     )
 
     results = []

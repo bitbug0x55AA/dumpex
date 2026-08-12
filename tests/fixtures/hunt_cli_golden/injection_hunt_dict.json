@@ -5,6 +5,8 @@
       {
         "affected_count": 1,
         "available_fields": [],
+        "budget_consumed": null,
+        "budget_limit": null,
         "code": "PE_HEADER_SHORT_READ",
         "counterpart_source": null,
         "detail": null,
@@ -12,13 +14,27 @@
         "related_tids": [],
         "scope": null,
         "source": "hidden_pe_scan",
-        "targets": [],
+        "targets": [
+          {
+            "allocation_base": "0x00007ff700000000",
+            "base_address": "0x00007ff700002000",
+            "capture_state": "none",
+            "captured_size": 0,
+            "file_offset": null,
+            "kind": "memory_region",
+            "protection": "PAGE_READWRITE",
+            "size": 4096,
+            "size_limit": null,
+            "state": "MEM_COMMIT",
+            "type": "MEM_PRIVATE"
+          }
+        ],
         "thread_id": null,
         "unavailable_fields": []
       }
     ],
     "reasons": [
-      "1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short read) -- not fully examined"
+      "1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short read) -- not fully examined: 0x00007ff700002000 (4 KB)"
     ],
     "sources": {
       "hidden_pe_scan": {

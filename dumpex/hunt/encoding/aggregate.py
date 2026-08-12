@@ -66,7 +66,11 @@ def build_report(sleep_mask_hits: tuple, entropy_hits: tuple, base64_hits: tuple
                   xor_hits: tuple, compressed_hits: tuple, *,
                   memory_info_stream: bool, region_count: int, any_region_scanned: bool,
                   sleep_mask_oversized: tuple = (), entropy_oversized: tuple = (),
-                  decode_oversized: tuple = (), read_failed: int = 0, short_reads: int = 0,
+                  decode_oversized: tuple = (),
+                  sleep_mask_read_failed: tuple = (), entropy_read_failed: tuple = (),
+                  decode_read_failed: tuple = (),
+                  sleep_mask_short_read: tuple = (), entropy_short_read: tuple = (),
+                  decode_short_read: tuple = (),
                   budget_exhausted: bool = False, exhausted_reason: str = "") -> EncodingReport:
     """
     Turn the scan layers' typed evidence into the final `EncodingReport`.
@@ -276,7 +280,11 @@ def build_report(sleep_mask_hits: tuple, entropy_hits: tuple, base64_hits: tuple
         memory_info_stream=memory_info_stream, region_count=region_count,
         any_region_scanned=any_region_scanned,
         sleep_mask_oversized=sleep_mask_oversized, entropy_oversized=entropy_oversized,
-        decode_oversized=decode_oversized, read_failed=read_failed, short_reads=short_reads,
+        decode_oversized=decode_oversized,
+        sleep_mask_read_failed=sleep_mask_read_failed, entropy_read_failed=entropy_read_failed,
+        decode_read_failed=decode_read_failed,
+        sleep_mask_short_read=sleep_mask_short_read, entropy_short_read=entropy_short_read,
+        decode_short_read=decode_short_read,
         budget_exhausted=budget_exhausted, exhausted_reason=exhausted_reason,
     )
     evidence = EncodingEvidence(

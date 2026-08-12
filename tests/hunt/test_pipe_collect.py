@@ -28,7 +28,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -244,6 +244,50 @@ def test_region_read_failure_is_tracked(hunter_record_validator):
     lim = next(l for l in rec.coverage.limitations if l.code.value == "SCAN_REGION_READ_FAILED")
     assert lim.source == "pipe_name_scan"
     assert lim.affected_count == 1
+    # issue #28: the failed region's own identity is retained, not just
+    # counted -- and no size_limit, since this region was never skipped
+    # for being oversized (it was attempted and failed).
+    assert len(lim.targets) == 1
+    target = lim.targets[0]
+    assert target.base_address == region_base
+    assert target.size == 0x1000
+    assert target.size_limit is None
+    assert (target.state, target.type, target.protection) == (
+        "MEM_COMMIT", "MEM_PRIVATE", "PAGE_READWRITE")
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_region_short_read_retains_the_exact_region_as_a_target(hunter_record_validator):
+    """`read_region` returning fewer bytes than the region's own declared
+    size (issue #28) exercises SCAN_REGION_SHORT_READ's own targets, the
+    same way test_region_read_failure_is_tracked exercises SCAN_REGION_
+    READ_FAILED's."""
+    region_base = 0x4100000
+    regions = [Region(region_base, region_base, 0x1000, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = FakeStream([], "handles")
+
+    def short_reader(mf, addr, size):
+        return b"\x00" * (size // 2)   # fewer bytes than requested, no exception
+    pipemod.read_region = short_reader
+
+    console_dict = pipemod._hunt_pipe(MF(), verbose=False)
+    rec = collect_pipe_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    lim = next(l for l in rec.coverage.limitations if l.code.value == "SCAN_REGION_SHORT_READ")
+    assert lim.source == "pipe_name_scan"
+    assert lim.affected_count == 1
+    assert len(lim.targets) == 1
+    target = lim.targets[0]
+    assert target.base_address == region_base
+    assert target.size_limit is None
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 

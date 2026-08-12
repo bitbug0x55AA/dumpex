@@ -490,10 +490,10 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            coverage.note_read_failed()
+            coverage.note_read_failed(region_scan_target(mf, r))
             continue
         if len(data) < r.RegionSize:
-            coverage.note_short_read()
+            coverage.note_short_read(region_scan_target(mf, r))
             if not data:
                 continue
         coverage.note_scanned()

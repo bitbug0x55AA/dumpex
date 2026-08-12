@@ -96,6 +96,11 @@ def project_legacy_dict(report: InjectionReport) -> dict:
         # other two rather than folded into either -- "we stopped early"
         # is a different fact from "the dump would not give us the bytes".
         "pe_scan_truncated":                 report.coverage.pe_scan_truncated,
+        # Fourth counter of the same family (issue #28): a LATER region the
+        # whole-hunt scan budget was already exhausted before its own
+        # search ever started -- distinct from pe_scan_truncated's "we
+        # started this region and stopped partway through".
+        "pe_scan_not_started":               report.coverage.pe_scan_not_started,
         "findings":                          [finding_from_check_result(r, report).to_dict()
                                                 for r in report.results],
         "lead_count":                        report.lead_count,

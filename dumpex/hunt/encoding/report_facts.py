@@ -124,6 +124,22 @@ def oversized_layer_reasons(coverage: CoverageSnapshot) -> list:
     return out
 
 
+def _read_failed_layer_reasons(coverage: CoverageSnapshot) -> list:
+    """Read-failed companion to oversized_layer_reasons() -- one reason
+    per layer, same "never a single summed one" rule (issue #28)."""
+    return [f"{len(targets)} region(s) failed to read under the {layer} scan: "
+            f"{format_scan_target_preview(targets)}"
+            for layer, targets in coverage.read_failed_targets_by_layer()]
+
+
+def _short_read_layer_reasons(coverage: CoverageSnapshot) -> list:
+    """Short-read companion to oversized_layer_reasons() (issue #28)."""
+    return [f"{len(targets)} region(s) returned fewer bytes than declared under the "
+            f"{layer} scan (short read) — not fully scanned: "
+            f"{format_scan_target_preview(targets)}"
+            for layer, targets in coverage.short_read_targets_by_layer()]
+
+
 def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
     """`(coverage_dict, coverage_status, coverage_reasons)` -- the v1.1
     shape the pre-migration `aggregate.build_report` assembled,
@@ -138,11 +154,8 @@ def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
         reasons.append(f"all {coverage.region_count} region(s) filtered out by every layer's "
                         f"size/type limits — nothing was actually scanned")
     reasons.extend(oversized_layer_reasons(coverage))
-    if coverage.read_failed:
-        reasons.append(f"{coverage.read_failed} region(s) failed to read")
-    if coverage.short_reads:
-        reasons.append(f"{coverage.short_reads} region(s) returned fewer bytes than "
-                        f"declared (short read) — not fully scanned")
+    reasons.extend(_read_failed_layer_reasons(coverage))
+    reasons.extend(_short_read_layer_reasons(coverage))
     if coverage.budget_exhausted:
         reasons.append(f"decode budget exhausted ({coverage.exhausted_reason})")
     coverage_status = derive_coverage_status(coverage.evaluated, coverage.complete)
@@ -169,14 +182,14 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="encoding_scan",
             scope=layer, affected_count=len(targets), targets=targets))
-    if coverage.read_failed:
+    for layer, targets in coverage.read_failed_targets_by_layer():
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="encoding_scan",
-            affected_count=coverage.read_failed))
-    if coverage.short_reads:
+            scope=layer, affected_count=len(targets), targets=targets))
+    for layer, targets in coverage.short_read_targets_by_layer():
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="encoding_scan",
-            affected_count=coverage.short_reads))
+            scope=layer, affected_count=len(targets), targets=targets))
     if coverage.budget_exhausted:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="encoding_scan",

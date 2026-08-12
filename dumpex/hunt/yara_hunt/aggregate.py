@@ -42,25 +42,41 @@ def _yara_coverage_report(outcome, compile_failed: int, unverified_count: int = 
     if outcome.read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="segment_scan",
-            affected_count=outcome.read_failed))
+            affected_count=outcome.read_failed, targets=outcome.read_failed_targets))
     if outcome.short_reads:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="segment_scan",
-            affected_count=outcome.short_reads))
+            affected_count=outcome.short_reads, targets=outcome.short_read_targets))
     if outcome.match_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.YARA_MATCH_FAILED, source="segment_scan",
-            affected_count=outcome.match_failed))
+            affected_count=outcome.match_failed, targets=outcome.match_failed_targets))
     if outcome.timed_out:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.YARA_MATCH_TIMED_OUT, source="segment_scan",
-            affected_count=outcome.timed_out))
+            affected_count=outcome.timed_out, targets=outcome.timed_out_targets))
     if outcome.truncated:
         completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.YARA_HIT_CAP_REACHED, source="segment_scan"))
+            code=LimitationCode.YARA_HIT_CAP_REACHED, source="segment_scan",
+            affected_count=len(outcome.truncated_targets), targets=outcome.truncated_targets,
+            # issue #28 P6 follow-up: max_total_hits is the only budget
+            # YARA_HIT_CAP_REACHED could ever mean -- no ambiguity to
+            # resolve, unlike YARA_SCAN_BUDGET_EXHAUSTED below.
+            scope="max_total_hits", budget_limit=outcome.truncated_budget_limit,
+            budget_consumed=outcome.truncated_budget_limit))
     if outcome.budget_exhausted:
+        # issue #28 P6 follow-up: unlike every other target-bearing code
+        # here, budget_exhausted_targets can legitimately be empty (the
+        # deadline discovered only after the scan's very last pairing
+        # already finished) -- affected_count/targets stay unset TOGETHER
+        # in that case (mirrors CS Beacon's own CS_BEACON_SCAN_BUDGET_
+        # EXHAUSTED, which already allows this), not affected_count=0.
+        targets = outcome.budget_exhausted_targets
         completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED, source="segment_scan"))
+            code=LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED, source="segment_scan",
+            affected_count=(len(targets) or None), targets=targets,
+            scope=outcome.budget_exhausted_kind, budget_limit=outcome.budget_exhausted_limit,
+            budget_consumed=outcome.budget_exhausted_limit))
     if unverified_count:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED, source="yara_context",

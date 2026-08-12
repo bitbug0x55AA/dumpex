@@ -37,20 +37,74 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
     all_hits     = []
     skipped_targets = []   # ScanTarget per oversized segment -- see ScanOutcome
     read_failed  = 0
+    read_failed_targets = []   # ScanTarget per failed segment -- issue #28
     short_reads  = 0   # read succeeded but returned fewer bytes than seg.size —
+    short_read_targets = []   # ScanTarget per short-read segment -- issue #28
                        # whatever wasn't returned was never actually scanned,
                        # so this must not be indistinguishable from a clean
                        # full-segment scan (mirrors the same check in
                        # dumpex.hunt.cs_beacon).
     scanned      = 0
     timed_out    = 0
+    # ScanTarget per TIMED-OUT CALL, not deduplicated per segment (issue
+    # #28 P4 follow-up) -- `timed_out` itself counts calls, not segments
+    # (unlike read_failed/short_reads, which dedupe to one per region/
+    # segment; see this variable's own rendered text, "N match() call(s)
+    # timed out"), so a segment whose search timed out against two
+    # different rule files contributes its ScanTarget to this list TWICE,
+    # keeping len(timed_out_targets) == timed_out exactly (the invariant
+    # dumpex.output.coverage._require_optional_targets_matching_count
+    # enforces) rather than silently changing what `timed_out` has always
+    # counted.
+    timed_out_targets = []
     match_failed = 0   # non-timeout exception from compiled.match() — the
                        # (segment, rule-file) pair was never actually
                        # evaluated and must not be indistinguishable from
                        # "evaluated, no match"
+    match_failed_targets = []   # ScanTarget per FAILED CALL -- see timed_out_targets' own comment
     truncated    = False   # hit config.max_total_hits before finishing the scan
     budget_exhausted   = False   # hit the whole-scan time/byte budget before
                                   # finishing every segment
+    # The index (into `segs`) of the segment being processed when
+    # `truncated`/`budget_exhausted` first became True -- issue #28 P5
+    # follow-up. `segs[index:]` (the segment mid-processing when the stop
+    # happened, plus every later one never started at all) becomes that
+    # gap's own `targets`; set at most once each (the FIRST stop is what
+    # actually ended the scan -- a later flag flip on the SAME segment
+    # still names that same segment, never a later, unreached one).
+    truncated_stop_index = None
+    budget_exhausted_stop_index = None
+    # WHICH of the two independent whole-scan budgets (issue #28 P6
+    # follow-up) first tripped budget_exhausted -- "scan_deadline_seconds"
+    # (wall clock) or "max_total_bytes_scanned" (bytes read) -- set once,
+    # alongside budget_exhausted_stop_index, by whichever call site fires
+    # first (mirrors dumpex.hunt.injection.memory_scan._ScanBudget.
+    # last_exhausted_kind).
+    budget_exhausted_kind = None
+
+    def _mark_truncated():
+        nonlocal truncated, truncated_stop_index
+        truncated = True
+        if truncated_stop_index is None:
+            truncated_stop_index = seg_index
+
+    def _mark_budget_exhausted(kind: str, current_segment_affected: bool = True):
+        # `current_segment_affected=False` (issue #28 P6 follow-up) is
+        # used at the two call sites INSIDE the rule_files loop where the
+        # deadline is discovered only AFTER the current (segment,
+        # rule_file) pairing's own work already completed (a successful
+        # match() call whose results are about to be processed regardless,
+        # or a failed call already reflected via match_failed/timed_out) --
+        # at those sites the CURRENT segment has nothing left unexamined
+        # unless a LATER rule_file for it was also skipped, so naming it
+        # here too would be a false positive (see those call sites' own
+        # comments for the exact reasoning).
+        nonlocal budget_exhausted, budget_exhausted_stop_index, budget_exhausted_kind
+        budget_exhausted = True
+        if budget_exhausted_stop_index is None:
+            budget_exhausted_stop_index = seg_index if current_segment_affected else seg_index + 1
+            budget_exhausted_kind = kind
+
     total_bytes_scanned = 0
     scan_deadline = monotonic() + config.scan_deadline_seconds
     suppressed_module_pe = 0   # PE_In_Private_Memory hits suppressed because
@@ -70,14 +124,16 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
                                 # classified hit — drives score/DETECTED
     unverified_rules = set()   # rule names whose hits were ALL context_unverified
 
-    for seg in segs:
+    for seg_index, seg in enumerate(segs):
         if truncated:
             break
-        if (monotonic() > scan_deadline
-                or total_bytes_scanned > config.max_total_bytes_scanned):
+        if monotonic() > scan_deadline:
             # Remaining segments are an explicit coverage gap, not silently
             # dropped -- see the "budget_exhausted" coverage key below.
-            budget_exhausted = True
+            _mark_budget_exhausted("scan_deadline_seconds")
+            break
+        if total_bytes_scanned > config.max_total_bytes_scanned:
+            _mark_budget_exhausted("max_total_bytes_scanned")
             break
         if seg.size > config.max_seg_scan:
             skipped_targets.append(segment_scan_target(seg, config.max_seg_scan))
@@ -88,21 +144,24 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             # noticed after the fact. Checking only after the read (below)
             # would still let one full max_seg_scan-sized segment (up to
             # 50 MB) be read past the cap before it's detected.
-            budget_exhausted = True
+            _mark_budget_exhausted("max_total_bytes_scanned")
             break
         try:
             data = reader.read(seg.start_virtual_address, seg.size)
         except Exception:
             # A segment that fails to read was never actually scanned — it
             # must not be silently indistinguishable from "scanned, clean".
+            # The segment's own identity is retained (issue #28), the same
+            # way an oversized-skip target already is above.
             read_failed += 1
+            read_failed_targets.append(segment_scan_target(seg))
             continue
         total_bytes_scanned += len(data)
         if total_bytes_scanned > config.max_total_bytes_scanned:
             # Defensive backstop for the (normally impossible) case of a
             # reader returning more than the segment's declared size -- the
             # real enforcement is the predictive check above.
-            budget_exhausted = True
+            _mark_budget_exhausted("max_total_bytes_scanned")
         if len(data) < seg.size:
             # A short read is NOT "read fine, no hit" -- whatever wasn't
             # returned was never actually examined for a signature. Still
@@ -110,11 +169,12 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             # hit), but this segment must not silently count toward a
             # "complete" scan.
             short_reads += 1
+            short_read_targets.append(segment_scan_target(seg))
             if not data:
                 continue
         scanned += 1
 
-        for fname, compiled in rule_files:
+        for rule_index, (fname, compiled) in enumerate(rule_files):
             remaining = scan_deadline - monotonic()
             if remaining <= 0:
                 # Checked HERE, not just between segments -- a single
@@ -122,8 +182,11 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
                 # inside config.match_timeout) could otherwise blow past the
                 # whole-scan deadline without it ever being noticed, since
                 # there might be no further segment iteration left to catch
-                # it either.
-                budget_exhausted = True
+                # it either. This rule_index's own file (and everything
+                # after it) is unconditionally unexamined here -- unlike
+                # the two sites below, there is no "already handled, so
+                # maybe nothing is really missing" case to consider.
+                _mark_budget_exhausted("scan_deadline_seconds")
                 break
             try:
                 # Bounded by whichever is smaller: the per-call timeout, or
@@ -152,10 +215,25 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
                 # even though this pair was never actually evaluated.
                 if "timeout" in type(e).__name__.lower():
                     timed_out += 1
+                    timed_out_targets.append(segment_scan_target(seg))
                 else:
                     match_failed += 1
+                    match_failed_targets.append(segment_scan_target(seg))
                 if monotonic() > scan_deadline:
-                    budget_exhausted = True
+                    # This (segment, rule_file) pair's own outcome is
+                    # ALREADY fully accounted for above (timed_out/
+                    # match_failed) -- issue #28 P6 follow-up: the CURRENT
+                    # segment is only genuinely still "affected" (worth
+                    # naming as a budget_exhausted target) if a LATER
+                    # rule_file for it never ran; when this was that
+                    # segment's own last rule_file, only later segments
+                    # (if any) belong in `targets`. `budget_exhausted`
+                    # itself still becomes True either way -- the
+                    # wall-clock deadline genuinely was exceeded, and that
+                    # remains worth recording even on a scan's very last
+                    # pairing, where `targets` naturally comes out empty
+                    # (`segs[len(segs):]`) rather than a manufactured one.
+                    _mark_budget_exhausted("scan_deadline_seconds", current_segment_affected=rule_index < len(rule_files) - 1)
                     break
                 continue
 
@@ -166,11 +244,21 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
                 # be the one that pushes elapsed time past scan_deadline,
                 # and this may be the last rule file / last segment with no
                 # further iteration left to notice it otherwise.
-                budget_exhausted = True
+                #
+                # This call's OWN matches are still processed below
+                # regardless (nothing from this pairing is lost) -- issue
+                # #28 P6 follow-up: the CURRENT segment is only genuinely
+                # still "affected" if a LATER rule_file for it never runs;
+                # `budget_exhausted` itself still becomes True either way
+                # (the wall-clock deadline genuinely was exceeded), with
+                # `targets` naturally coming out empty on the scan's very
+                # last pairing rather than naming an already-fully-handled
+                # segment.
+                _mark_budget_exhausted("scan_deadline_seconds", current_segment_affected=rule_index < len(rule_files) - 1)
 
             for match in matches:
                 if len(all_hits) >= config.max_total_hits:
-                    truncated = True
+                    _mark_truncated()
                     break
 
                 hit_context_unverified = False
@@ -265,11 +353,46 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             if truncated or budget_exhausted:
                 break
 
+    # `segs[index:]` -- the segment mid-processing when the stop happened,
+    # plus every later segment never started at all -- issue #28 P5
+    # follow-up (see truncated_stop_index/budget_exhausted_stop_index's
+    # own comment above for why this is segment-granularity, not a byte
+    # remainder like injection's own PE_HEADER_SCAN_TRUNCATED target).
+    truncated_targets = ([segment_scan_target(s) for s in segs[truncated_stop_index:]]
+                          if truncated_stop_index is not None else [])
+    budget_exhausted_targets = (
+        [segment_scan_target(s) for s in segs[budget_exhausted_stop_index:]]
+        if budget_exhausted_stop_index is not None else [])
+    # issue #28 P6 follow-up: `truncated`'s own budget is always
+    # max_total_hits (no ambiguity); `budget_exhausted`'s own kind was
+    # already resolved at whichever `_mark_budget_exhausted()` call fired
+    # first -- consumed always equals the configured limit (a budget is
+    # only ever attributed once fully exhausted), so only the limit needs
+    # looking up here.
+    truncated_budget_limit = config.max_total_hits if truncated else None
+    # max(0, ...): scan_deadline_seconds can be configured NEGATIVE as a
+    # test-only "already expired before the scan even starts" technique
+    # (e.g. YaraConfig(scan_deadline_seconds=-1)) -- a real budget can
+    # never be negative, so a negative deadline is reported as the
+    # smallest real one, 0 seconds allowed, not the literal configured
+    # value.
+    _budget_limits_by_kind = {
+        "scan_deadline_seconds": max(0, int(config.scan_deadline_seconds)),
+        "max_total_bytes_scanned": config.max_total_bytes_scanned,
+    }
+    budget_exhausted_limit = (_budget_limits_by_kind[budget_exhausted_kind]
+                                if budget_exhausted_kind is not None else None)
+
     return ScanOutcome(
         all_hits=all_hits, scanned=scanned, skipped_targets=skipped_targets,
-        read_failed=read_failed,
-        short_reads=short_reads, timed_out=timed_out, match_failed=match_failed,
-        truncated=truncated, budget_exhausted=budget_exhausted,
+        read_failed=read_failed, read_failed_targets=read_failed_targets,
+        short_reads=short_reads, short_read_targets=short_read_targets,
+        timed_out=timed_out, timed_out_targets=timed_out_targets,
+        match_failed=match_failed, match_failed_targets=match_failed_targets,
+        truncated=truncated, truncated_targets=truncated_targets,
+        truncated_budget_limit=truncated_budget_limit,
+        budget_exhausted=budget_exhausted, budget_exhausted_targets=budget_exhausted_targets,
+        budget_exhausted_kind=budget_exhausted_kind, budget_exhausted_limit=budget_exhausted_limit,
         total_bytes_scanned=total_bytes_scanned, suppressed_module_pe=suppressed_module_pe,
         suppressed_scoped=suppressed_scoped,
         context_unverified=context_unverified, triggered_rules=triggered_rules,

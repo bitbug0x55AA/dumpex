@@ -102,7 +102,8 @@
   COVERAGE
 
   [~] PARTIAL
-      1 region(s) returned fewer bytes than declared (short read) — not fully scanned
+      1 region(s) returned fewer bytes than declared (short read) — not fully scanned:
+      0x0000000001230000 (4 KB)
       Impact: A pipe name or C2 artifact in memory that was never read cannot be ruled out —
       targeted follow-up needed on the region(s) above: --extract / --strings that VA, or re-scan it
       with an external scanner.

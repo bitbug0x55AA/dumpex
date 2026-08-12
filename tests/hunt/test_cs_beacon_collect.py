@@ -28,7 +28,7 @@ from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -204,7 +204,7 @@ def test_current_schema_id_title_and_version_const_all_agree():
 
 
 def _fields_validator():
-    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/csBeaconDetails", "$defs": schema["$defs"]}
     return jsonschema.Draft202012Validator(wrapper)
@@ -363,6 +363,111 @@ def test_oversized_segment_skip_identifies_the_segment(monkeypatch, hunter_recor
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
+def test_budget_exhausted_identifies_the_unstarted_segments(monkeypatch, hunter_record_validator):
+    """issue #28 P5 follow-up: a scan deadline discovered before segment 0
+    even starts must name BOTH segment 0 (mid-processing/never started)
+    and segment 1 (never started at all) as targets, not just report a
+    bare count."""
+    n_segs = 2
+    seg_size = 0x1000
+    segs = []
+    read_map = {}
+    for i in range(n_segs):
+        va = 0x73000000 + i * 0x100000
+        segs.append(Segment(va, va, seg_size))
+        read_map[va] = b'\x00' * seg_size
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream(segs, "memory_segments")
+        memory_info          = FakeStream([], "infos")
+        _reader                = FakeReader(read_map)
+
+    calls = {"n": 0}
+
+    def fake_monotonic():
+        calls["n"] += 1
+        return calls["n"] * (cs_beacon.CS_SCAN_DEADLINE_SECONDS * 2)
+
+    monkeypatch.setattr(cs_beacon.time, "monotonic", fake_monotonic)
+
+    console_dict = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    rec = collect_cs_beacon_record(MF())
+    _assert_matches_console_dict(rec, console_dict)
+
+    lim = next(l for l in rec.coverage.limitations
+               if l.code.value == "CS_BEACON_SCAN_BUDGET_EXHAUSTED")
+    assert lim.affected_count == 2 == len(lim.targets)
+    assert {t.base_address for t in lim.targets} == {segs[0].start_virtual_address,
+                                                        segs[1].start_virtual_address}
+    assert all(t.kind.value == "memory_segment" for t in lim.targets)
+    # issue #28 P6 follow-up: the structured budget fact too.
+    assert lim.scope == "scan_deadline_seconds"
+    assert lim.budget_limit == lim.budget_consumed == cs_beacon.CS_SCAN_DEADLINE_SECONDS
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_max_candidates_budget_reports_its_own_kind(monkeypatch, hunter_record_validator):
+    # issue #28 P6 follow-up: CS_BEACON_SCAN_BUDGET_EXHAUSTED can stop on
+    # any of FIVE independent resources -- max_candidates is a different
+    # one from the deadline the test above exercises.
+    monkeypatch.setattr(cs_beacon, "CS_MAX_CANDIDATES", 5)
+    seg_va, seg_fo = 0xd0000, 0xd000
+    data = cs_beacon.CS_SIG_XOR69 * 50   # far more than the 5-candidate budget
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([Segment(seg_va, seg_fo, len(data))], "memory_segments")
+        memory_info          = FakeStream([], "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    console_dict = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    rec = collect_cs_beacon_record(MF())
+    _assert_matches_console_dict(rec, console_dict)
+
+    lim = next(l for l in rec.coverage.limitations
+               if l.code.value == "CS_BEACON_SCAN_BUDGET_EXHAUSTED")
+    assert lim.scope == "max_candidates"
+    assert lim.budget_limit == lim.budget_consumed == 5
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_budget_exhausted_on_last_segment_after_it_finished_has_no_targets(
+        monkeypatch, hunter_record_validator):
+    """issue #28 P5 follow-up: when the deadline is only discovered AFTER
+    the one (and only, and therefore last) segment has already finished
+    its own candidate scan cleanly, there is genuinely nothing left to
+    name -- affected_count/targets must stay unset together, not claim a
+    target that doesn't exist."""
+    seg_size = 0x100
+    va = 0x74000000
+    seg = Segment(va, va, seg_size)
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream([], "infos")
+        _reader                = FakeReader({va: b'\x00' * seg_size})
+
+    # scan_deadline=10; top-of-loop ok; post-segment recheck fails -- a
+    # fresh sequence per call, since _hunt_cs_beacon and
+    # collect_cs_beacon_record each independently re-run the whole scan.
+    def _install_fake_clock():
+        times = iter([0, 1, 1000])
+        monkeypatch.setattr(cs_beacon.time, "monotonic", lambda: next(times))
+
+    monkeypatch.setattr(cs_beacon, "CS_SCAN_DEADLINE_SECONDS", 10)
+
+    _install_fake_clock()
+    console_dict = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    _install_fake_clock()
+    rec = collect_cs_beacon_record(MF())
+    _assert_matches_console_dict(rec, console_dict)
+
+    lim = next(l for l in rec.coverage.limitations
+               if l.code.value == "CS_BEACON_SCAN_BUDGET_EXHAUSTED")
+    assert lim.affected_count is None
+    assert lim.targets == ()
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
 def test_multiple_oversized_segments_preview_truncates_but_json_stays_complete(
         monkeypatch, hunter_record_validator):
     """Four segments over the cap: the rendered console/coverage_reasons
@@ -392,4 +497,61 @@ def test_multiple_oversized_segments_preview_truncates_but_json_stays_complete(
     assert "4 oversized segment(s) skipped" in reason
     assert "+1 more (see coverage.limitations[].targets in --json output)" in reason
     assert reason in console_dict["coverage_reasons"]
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+class _RaisingReader:
+    """A `reader.read(addr, size)` stand-in that always raises -- unlike
+    `FakeReader`, which returns `b''` for an unmapped address (a SHORT
+    read, not a genuine failure)."""
+    def read(self, addr, size):
+        raise OSError("simulated read failure")
+
+
+def test_segment_read_failure_identifies_the_segment(hunter_record_validator):
+    """issue #28: SCAN_REGION_READ_FAILED retains the failed segment's own
+    identity, the same way SCAN_REGION_OVERSIZED_SKIPPED already does."""
+    seg_va, seg_fo, seg_size = 0x50000, 0x5000, 0x8000
+    seg = Segment(seg_va, seg_fo, seg_size)
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream([], "infos")
+        _reader                = _RaisingReader()
+
+    console_dict = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    rec = collect_cs_beacon_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    lim = next(l for l in rec.coverage.limitations if l.code.value == "SCAN_REGION_READ_FAILED")
+    assert lim.affected_count == 1 == len(lim.targets)
+    target = lim.targets[0]
+    assert target.kind.value == "memory_segment"
+    assert (target.base_address, target.size) == (seg_va, seg_size)
+    assert target.file_offset == seg_fo
+    assert target.size_limit is None
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_segment_short_read_identifies_the_segment(hunter_record_validator):
+    seg_va, seg_fo, seg_size = 0x60000, 0x6000, 0x8000
+    seg = Segment(seg_va, seg_fo, seg_size)
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream([], "infos")
+        # Fewer bytes mapped than the segment's own declared size -> short read.
+        _reader                = FakeReader({seg_va: b"\x00" * 0x100})
+
+    console_dict = cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    rec = collect_cs_beacon_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    lim = next(l for l in rec.coverage.limitations if l.code.value == "SCAN_REGION_SHORT_READ")
+    assert lim.affected_count == 1 == len(lim.targets)
+    target = lim.targets[0]
+    assert (target.base_address, target.size) == (seg_va, seg_size)
+    assert target.size_limit is None
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []

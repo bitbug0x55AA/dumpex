@@ -332,11 +332,11 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     if coverage.ioc_read_failed:
         ioc_limitations.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="ioc_string_scan",
-            affected_count=coverage.ioc_read_failed))
+            affected_count=coverage.ioc_read_failed, targets=coverage.ioc_read_failed_targets))
     if coverage.ioc_short_reads:
         ioc_limitations.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="ioc_string_scan",
-            affected_count=coverage.ioc_short_reads))
+            affected_count=coverage.ioc_short_reads, targets=coverage.ioc_short_read_targets))
     if not ioc_limitations:
         return report
 

@@ -24,11 +24,12 @@ promise. Automation must use `--json`, never scrape `--txt`.
 
 Every command now shares a single JSON contract. `--hunt` was the last
 holdout on the older v1.1 contract; it has since migrated onto v2, and
-the whole v2 envelope has since moved onto v2.11:
+the whole v2 envelope has since moved onto v2.12:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.11 (current) | [`dumpex-output-v2.11.schema.json`](../dumpex/schemas/dumpex-output-v2.11.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.12 (current) | [`dumpex-output-v2.12.schema.json`](../dumpex/schemas/dumpex-output-v2.12.schema.json) |
+| — (historical) | v2.11 | [`dumpex-output-v2.11.schema.json`](../dumpex/schemas/dumpex-output-v2.11.schema.json) — frozen, kept only to validate output produced before `schema_version 2.12`; no command emits this anymore |
 | — (historical) | v2.10 | [`dumpex-output-v2.10.schema.json`](../dumpex/schemas/dumpex-output-v2.10.schema.json) — frozen, kept only to validate output produced before `schema_version 2.11`; no command emits this anymore |
 | — (historical) | v2.9 | [`dumpex-output-v2.9.schema.json`](../dumpex/schemas/dumpex-output-v2.9.schema.json) — frozen, kept only to validate output produced before `schema_version 2.10`; no command emits this anymore |
 | — (historical) | v2.8 | [`dumpex-output-v2.8.schema.json`](../dumpex/schemas/dumpex-output-v2.8.schema.json) — frozen, kept only to validate output produced before `schema_version 2.9`; no command emits this anymore |
@@ -98,7 +99,40 @@ hit's containing region no longer says where the PE actually is, and a
 consumer needs the candidate's own address to carve or correlate it
 (`huntPeHeaderHit` is `additionalProperties: false` with a closed
 `required` list, the same reason every prior closed-object addition on
-this list forced a bump)
+this list forced a bump), then from `"2.11"` to `"2.12"`
+([issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28)) when
+`coverageLimitation.targets` stopped being exclusive to
+`SCAN_REGION_OVERSIZED_SKIPPED` — `PE_HEADER_READ_FAILED`/
+`PE_HEADER_SHORT_READ`/`PE_HEADER_SCAN_TRUNCATED`/
+`PE_HEADER_SCAN_NOT_STARTED` (injection's hidden-PE scan) and
+`SCAN_REGION_READ_FAILED`/`SCAN_REGION_SHORT_READ` (pipe, cs-beacon,
+yara, obfuscation, and stomping's region/segment scans) may now also
+carry `targets`, identifying the exact region a read failed/read short/
+was truncated/was never started on instead of only counting it;
+`PE_HEADER_SCAN_NOT_STARTED` is a new code distinguishing a LATER region
+the whole-hunt scan budget was already exhausted before its own search
+ever started from `PE_HEADER_SCAN_TRUNCATED`'s own "started this region,
+ran out partway through" claim (whose own target now names only the
+UNEXAMINED REMAINDER of the region, not the whole thing); a target's own
+`size_limit` became nullable (`null` for a target that was never actually
+oversized, cross-validated against the owning limitation's own code both
+in Python and in the schema); `scanTarget` gained `captured_size`/
+`capture_state`, a STRUCTURAL fact from the dump's own segment table
+(independent of whether a hunt's own read attempt succeeded) that
+`investigationAction.evidence_availability` now also exposes via a new
+`"partial"` value (with `recommended_actions` offering both
+`extract_captured_range` and `recollect_dump` for it); obfuscation's
+three scan layers gained the same per-layer scoped-limitation shape for
+read-failed/short-read that `SCAN_REGION_OVERSIZED_SKIPPED` already had;
+and `skipRelationship` (inside each `investigation_actions[]` entry)
+gained a required `cause` field so `hunter`/`source`/`scope` alone no
+longer have to stand in for WHY a target was skipped (see "Coverage
+limitations and skipped scan targets" and "Hunt investigation actions"
+below —
+`scanTarget`/`skipRelationship`
+are both `additionalProperties: false` with closed `required` lists, the
+same reason every prior closed-object addition on this list forced a
+bump)
 (see "v2 structured output" below) — a
 new value on an existing closed enum, a new field on an already-closed
 (`additionalProperties: false`) object, or the removal of a field a
@@ -108,23 +142,24 @@ document's own versioning policy, even though an already-migrated
 command's own output is otherwise unaffected (the `"report"`/`"hunt"`/
 `finding`-extension/cs-beacon-`raw`-removal/cs-beacon-field-rekey/
 coverage-`targets`/hunt-`investigation_actions`/triage-`content_reason_codes`/
-hidden-PE-candidate-location changes
+hidden-PE-candidate-location/read-failed-short-read-target-identity changes
 specifically must NOT be folded into `dumpex-output-v2.2.schema.json`/
 `v2.3.schema.json`/`v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/
-`v2.7.schema.json`/`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`
+`v2.7.schema.json`/`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`/
+`v2.11.schema.json`
 in place: those files were already shipped/used by earlier-migrated
 commands' output before each change existed, so they stay byte-frozen —
 each change gets its own new schema_version instead). `dumpex-output-
 v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`/
 `v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/`v2.7.schema.json`/
-`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`
+`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`/`v2.11.schema.json`
 stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`/`v2.9`/`v2.10`) for validating output captured
+`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`/`v2.9`/`v2.10`/`v2.11`) for validating output captured
 before each respective
 change; none is deleted or overwritten, following the same precedent
 v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
-v2.11 contract.
+v2.12 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -262,7 +297,7 @@ basenames.
 ## Hunt result semantics (v1.1 field names — historical)
 
 Each hunter reported its findings and decision fields inside the v1.1
-`hunt` object using the field names below. Under the current v2.11
+`hunt` object using the field names below. Under the current v2.12
 contract these same concepts live on `HunterRecord` — see "Hunt records"
 below for the `status`/`coverage.status`/`verdict_level`/`confidence`
 mapping `--hunt` now uses. The important decision fields were:
@@ -299,7 +334,7 @@ still validates each hunter's internal result dict (all seven hunters, both
 typical and edge-case verdicts) against this file on every test run,
 including the negative cases it must reject — this is legacy-compatibility
 coverage for the v1.1 shape itself, independent of the CLI's own
-`--hunt --json` output, which is now v2.11 (see "Hunt records" below).
+`--hunt --json` output, which is now v2.12 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -324,14 +359,14 @@ tool validates its own output — only the test suite and external `--json`
 consumers do), so none of them are collected into the frozen executable.
 They are instead uploaded as separate `dumpex-output-v*.schema.json`
 files alongside `dumpex.exe` in the release ZIP — every version currently
-packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`, `v2.10`, `v2.11`), the same
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`, `v2.10`, `v2.11`, `v2.12`), the same
 set `pip install dumpex` already ships (see "Reproducing a run" below for
 how an installed package reaches these via `importlib.resources`) — so an
 EXE-only install (no `pip install dumpex`, no source checkout) still has
 a way to get the schema for whatever output it's holding. Current CLI
 output (from any command, including `--hunt`) always validates against
-`dumpex-output-v2.11.schema.json`, the current contract — this section's
-own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.10` are
+`dumpex-output-v2.12.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.11` are
 shipped only to validate output produced by an older dumpex version, not
 anything a current install can produce.
 
@@ -392,7 +427,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.11",
+    "schema_version": "2.12",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -1041,14 +1076,103 @@ Console output shows a bounded preview (the first few targets, then
 `+N more (see coverage.limitations[].targets in --json output)`); the
 JSON list is never truncated.
 
-`scope`, on this code, names the **scan layer** whose own cap did the
-skipping. `--hunt obfuscation` runs three region scans with three
-different caps (sleep-mask 10 MB, entropy 10 MB, decode 2 MB) over
-overlapping candidate sets, and previously summed their three counters
-into one `N oversized region(s) skipped`. A single 12 MB private region
-exceeds all three caps, so that sum reported **three regions** where
-there was one — sending an analyst looking for two allocations that never
-existed. It now emits one limitation per layer:
+`schema_version 2.12` ([issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28))
+widens `targets` beyond `SCAN_REGION_OVERSIZED_SKIPPED`: a scan that
+*attempted* a region and failed to read it, read it short, ran out of
+scan budget before finishing it, or never started it at all also loses
+the region's identity if only a bare count survives. Six more codes may
+now carry `targets` too —
+`PE_HEADER_READ_FAILED`/`PE_HEADER_SHORT_READ`/`PE_HEADER_SCAN_TRUNCATED`/
+`PE_HEADER_SCAN_NOT_STARTED` (`--hunt injection`'s hidden-PE scan) and
+`SCAN_REGION_READ_FAILED`/`SCAN_REGION_SHORT_READ` (`--hunt pipe`/
+`cs-beacon`/`yara`/`obfuscation`/`stomping`'s region and segment scans,
+and any hunter sharing `dumpex.hunt._coverage.CoverageTracker`):
+
+```json
+{
+  "code": "PE_HEADER_READ_FAILED",
+  "source": "hidden_pe_scan",
+  "scope": null,
+  "affected_count": 1,
+  "targets": [
+    {
+      "kind": "memory_region",
+      "base_address": "0x00007ff000001000",
+      "size": 4096,
+      "size_limit": null,
+      "file_offset": 4096,
+      "allocation_base": "0x00007ff000000000",
+      "state": "MEM_COMMIT",
+      "type": "MEM_PRIVATE",
+      "protection": "PAGE_EXECUTE_READWRITE"
+    }
+  ]
+}
+```
+
+Two differences from an oversized-skip target:
+
+- `targets` is **optional** on these six codes, unlike
+  `SCAN_REGION_OVERSIZED_SKIPPED`'s own always-non-empty rule — every
+  producing hunter today (injection, pipe, cs-beacon, yara, obfuscation,
+  stomping) always supplies it (the region/segment is trivially in scope
+  at the failure site), but a future producer that genuinely cannot
+  resolve a target's identity may still emit a bare `affected_count` with
+  `targets: []`, exactly as before this change. When `targets` IS
+  non-empty, though, its length must still equal `affected_count`
+  exactly, the same invariant `SCAN_REGION_OVERSIZED_SKIPPED` already
+  enforces.
+- `size_limit` is `null`. A read-failed/short-read/scan-truncated/
+  not-started region was never skipped for *being* oversized — the gap is
+  an I/O failure or a scan-budget exhaustion, not a size cap the region
+  exceeded — so there is no cap to record. `size_limit` stays non-null
+  only for an actual oversized-skip target. This is now cross-validated
+  against the owning limitation's own `code`, in both the Python model
+  and the schema (see the `coverageLimitation` `$def`'s own `allOf`
+  branches): `SCAN_REGION_OVERSIZED_SKIPPED` targets must all have
+  `size_limit` set, and every one of the six read-failed/short-read/
+  scan-truncated/not-started codes' targets must all have it `null`.
+
+`PE_HEADER_SCAN_NOT_STARTED` is a companion to `PE_HEADER_SCAN_TRUNCATED`
+for a different fact about the same whole-hunt scan budget: injection's
+byte/validation budget carries over between regions, so a LATER region
+can begin its own search already out of budget and never issue a single
+read. `PE_HEADER_SCAN_TRUNCATED` still means "this region's own search
+got PART of it before running out" (an unfinished remainder);
+`PE_HEADER_SCAN_NOT_STARTED` means the region was never examined at all
+— a rescan of it has to start from scratch, not resume a partial one.
+Correspondingly, a `PE_HEADER_SCAN_TRUNCATED` target's own
+`base_address`/`size` name only the **unexamined remainder** of the
+region (`[bytes already read, region end)`), not the whole region — part
+of it genuinely came up clean before the budget stop, and reporting the
+whole region as the gap would send a targeted rescan back over bytes
+that don't need it. `PE_HEADER_SCAN_NOT_STARTED` targets are unaffected
+(nothing was examined, so the whole region is already the right answer).
+
+Every `scanTarget` also carries `captured_size`/`capture_state`
+(`null`/`"none"`/`"partial"`/`"complete"`) — a STRUCTURAL fact from the
+dump's own segment table (how many of `size` bytes, from `base_address`,
+are actually present in the `.dmp`), independent of whether the failing
+hunter's own read attempt succeeded. `file_offset` alone only proves the
+START address resolves to a file offset; for a short-read target
+specifically that is not the same claim as "the whole requested size is
+captured" — a short read typically means the dump's own capture stops
+partway through the region, so only a PREFIX is actually extractable.
+This feeds `investigationAction.evidence_availability`'s own `"partial"`
+value below.
+
+`scope`, on `SCAN_REGION_OVERSIZED_SKIPPED` and (as of schema_version
+2.12) also on `SCAN_REGION_READ_FAILED`/`SCAN_REGION_SHORT_READ`, names
+the **scan layer** whose own cap did the skipping/failing. `--hunt
+obfuscation` runs three region scans with three different caps
+(sleep-mask 10 MB, entropy 10 MB, decode 2 MB) over overlapping candidate
+sets, and previously summed their three layers' counters into one `N
+oversized region(s) skipped` (and, before this change, one merged,
+unscoped read-failed/short-read target list too). A single 12 MB private
+region exceeds all three layers' caps, so that sum reported **three
+regions** where there was one — sending an analyst looking for two
+allocations that never existed. It now emits one limitation per layer for
+all three of these codes:
 
 ```json
 [
@@ -1074,8 +1198,97 @@ is `"partial"`, and a score-0 run is `INCONCLUSIVE` rather than
 `NOT_DETECTED_IN_SCANNED_SCOPE`. It never changes `score`, and a real
 detection stays `DETECTED` with `coverage.status: "partial"`.
 
+`PE_HEADER_SCAN_TRUNCATED`/`PE_HEADER_SCAN_NOT_STARTED` may additionally
+carry `scope`/`budget_limit`/`budget_consumed` naming WHICH of the
+hidden-PE scan's four independent budgets (`reads_per_region`/
+`total_bytes`/`validations_per_region`/`validations_total`) stopped the
+affected region(s), and that budget's own configured limit/consumed —
+an analyst can now tell "raise `PE_SCAN_MAX_VALIDATIONS_TOTAL` and
+rescan" apart from "raise `PE_SCAN_TOTAL_BYTES_MAX` and rescan" instead
+of only knowing that *something* stopped the scan. All three stay `null`
+together when no region in the run actually stopped on a budget. This is
+a distinct axis from `size_limit`, which stays `null` throughout — a
+budget stop is never an oversized-skip. (`budget_limit`/`budget_consumed`
+are their own dedicated `coverageLimitation` fields, not packed into
+`detail` — an earlier version of this feature parsed "limit=<int>
+consumed=<int>" text out of `detail` instead, which broke the moment a
+code that ALSO uses `detail` for its own free-text reason (CS Beacon's
+own `CS_BEACON_SCAN_BUDGET_EXHAUSTED`, below) needed both facts at once.
+`detail` itself is unused by `PE_HEADER_SCAN_TRUNCATED`/
+`_SCAN_NOT_STARTED`.)
+
+Regions are grouped by their OWN budget kind, one `CoverageLimitation`
+per distinct kind that stopped at least one region — a fix landed in the
+same schema_version 2.12 line for an earlier version of this feature,
+which recorded only the FIRST region's own attribution for the WHOLE
+scan: a later region stopped by a *different* budget within the same run
+had its target silently misattributed to the first budget too (e.g.
+region 1 truncated by `validations_per_region`, region 2 truncated later
+by `validations_total`, both reported under one
+`scope=validations_per_region` limitation). A single hunt run can
+therefore now emit more than one `PE_HEADER_SCAN_TRUNCATED` limitation
+(or `PE_HEADER_SCAN_NOT_STARTED`), each correctly scoped to its own
+budget — the same "one limitation per distinct grouping key" pattern
+obfuscation's own per-layer split already established.
+
+Also new in the same schema_version 2.12 line: `PE_HEADER_SCAN_TRUNCATED`'s
+own target names precisely the region byte range that was actually still
+unvalidated when a validation-budget stop happened, not the whole read
+window it was found inside — a discovery window can be up to
+`PE_SCAN_WINDOW` (1 MiB by default) wide, and a validation-budget
+exhaustion on the very first candidate found inside that window used to
+still claim the WHOLE window was examined, silently excluding up to
+~1 MiB of genuinely-unvalidated memory from the target.
+
+`YARA_MATCH_FAILED`/`YARA_MATCH_TIMED_OUT` may also optionally carry
+`targets` now — the segment a `compiled_rules.match()` call raised or
+timed out against, same shape every other target-bearing code uses.
+Because these two codes' `affected_count` counts match() *calls*, not
+segments (a segment failing against two different rule files counts as
+2), a segment affected by more than one failing call contributes its
+target more than once in `targets` — `len(targets) == affected_count`
+still holds exactly, whenever `targets` is non-empty.
+
+`YARA_HIT_CAP_REACHED`/`YARA_SCAN_BUDGET_EXHAUSTED`/
+`CS_BEACON_SCAN_BUDGET_EXHAUSTED` — previously fully count-only (YARA) or
+reason-text-only (CS Beacon) — may now ALSO optionally carry
+`affected_count`/`targets`: the segment mid-processing when the
+whole-scan stop happened, plus every later segment in that scan's own
+segment table that never started at all (segment granularity, since
+both hunters examine a segment as one atomic unit against every rule/
+candidate check, unlike injection's own byte-wise PE scan). CS Beacon's
+own targets can legitimately be empty even though the limitation itself
+still fires — a deadline discovered only after the very last segment
+already finished scanning cleanly has nothing left to name, so
+`affected_count`/`targets` stay unset together in that one case; YARA's
+own targets are always non-empty in practice, so `affected_count` is
+effectively always present there. **Fixed in the same schema_version
+2.12 line:** YARA used to be able to name a segment as unexamined even
+when that segment's own last rule-file `match()` call had already
+returned and was about to be fully processed — including on the very
+last (segment, rule_file) pairing of the whole scan, where nothing was
+genuinely left unexamined at all. `budget_exhausted` (the plain boolean)
+still becomes `True` in that case (a real wall-clock overrun is still
+worth recording), but `targets` is now correctly empty rather than
+naming a segment that was, in fact, fully examined. All three codes now
+also carry `scope`/`budget_limit`/`budget_consumed`, naming WHICH of the
+owning scanner's own independent resource budgets stopped it
+(YARA: `max_total_hits`/`scan_deadline_seconds`/`max_total_bytes_scanned`;
+CS Beacon: `scan_deadline_seconds`/`max_total_scanned_bytes`/
+`max_candidates`/`max_decoded_bytes`/`max_hits`) and that budget's own
+configured limit/consumed — CS Beacon's own pre-existing free-text
+`detail` (its human-readable budget_reason) is a SEPARATE fact from
+these, untouched by this addition. Both codes feed the investigation
+queue via two new `SkipRelationship.cause` values, `"hit_cap_reached"`
+and `"scan_budget_exhausted"` (the latter shared by YARA and CS
+Beacon — the same underlying fact for both), which now also carry
+`SkipRelationship`'s own `budget_kind`/`budget_limit`/`budget_consumed`.
+
 `dumpex-output-v2.7.schema.json` stays byte-frozen and remains
-shipped/installable for validating output produced before this change.
+shipped/installable for validating output produced before the v2.8
+`targets` change; `dumpex-output-v2.11.schema.json` stays byte-frozen and
+remains shipped/installable for validating output produced before the
+v2.12 widening described above.
 
 ### Hunt investigation actions
 
@@ -1100,7 +1313,23 @@ or by several scan layers of the same hunter (obfuscation's own
 sleep_mask/entropy/decode — see above), each contributing its own
 `CoverageLimitation`/`targets` entry. Previously there was no single
 place that merged these into one actionable item; `investigation_actions`
-deduplicates on the physical target's own `(kind, base_address, size)`:
+deduplicates on the physical target's own `(base_address, size)` —
+deliberately **not** including `ScanTarget.kind` (fixed in the same
+schema_version 2.12 line, [issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28)
+P4 follow-up): the same VA range can surface as a `memory_region` target
+(MemoryInfo-sourced — pipe/injection/encoding/stomping) under one hunter
+and as a `memory_segment` target (Memory64List/MemoryList-sourced —
+cs-beacon/yara) under another, and keying on `kind` too used to produce
+TWO separate, lower-priority entries for what is really one physical
+range instead of ever crossing the `MULTIPLE_SCOPES_SKIPPED` threshold.
+When a group mixes kinds, a `memory_region` target is preferred as the
+representative (it already carries real MemoryInfo facts); a
+segment-only group is enriched with those same facts from `memory_regions`
+(already read to resolve `CORRELATED_REGION_EVIDENCE`, see below) when a
+covering MemoryInfo region exists there, keeping the segment's own
+`file_offset`/`captured_size` (a segment is definitionally backed by the
+file, so its own capture facts are at least as trustworthy as anything
+re-derived from MemoryInfo):
 
 ```json
 {
@@ -1113,8 +1342,8 @@ deduplicates on the physical target's own `(kind, base_address, size)`:
         "type": "MEM_PRIVATE", "protection": "PAGE_EXECUTE_READWRITE"
       },
       "skipped_by": [
-        { "hunter": "pipe", "source": "pipe_name_scan", "scope": null, "size_limit": 8388608 },
-        { "hunter": "obfuscation", "source": "encoding_scan", "scope": "entropy", "size_limit": 10485760 }
+        { "hunter": "pipe", "source": "pipe_name_scan", "cause": "oversized_skipped", "scope": null, "size_limit": 8388608 },
+        { "hunter": "obfuscation", "source": "encoding_scan", "cause": "oversized_skipped", "scope": "entropy", "size_limit": 10485760 }
       ],
       "priority": "high",
       "priority_reason_codes": ["PRIVATE_EXECUTABLE_MEMORY", "RWX_PROTECTION", "MULTIPLE_SCOPES_SKIPPED"],
@@ -1161,25 +1390,74 @@ With `--triage-skipped` (schema_version 2.10 or later), the same entry's
 
 - `target` is the same `scanTarget` `$def` `coverageLimitation.targets[]`
   items already use (one representative instance out of the deduplicated
-  group). `skipped_by` lists every distinct `(hunter, source, scope)`
-  that skipped this exact physical target, each with that relationship's
-  own `size_limit` (the same target can legitimately exceed different
-  caps under different hunters/scopes).
+  group). `skipped_by` lists every distinct `(hunter, source, scope,
+  cause)` that skipped this exact physical target, each with that
+  relationship's own `size_limit` (the same target can legitimately
+  exceed different caps under different hunters/scopes). `cause`
+  (schema_version 2.12, [issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28))
+  is `"oversized_skipped"`, `"read_failed"`, `"short_read"`,
+  `"scan_truncated"`, `"scan_not_started"`, `"match_failed"`,
+  `"match_timed_out"` (P4 follow-up — YARA's own `compiled_rules.match()`
+  failure/timeout causes), or `"hit_cap_reached"`/`"scan_budget_exhausted"`
+  (P5 follow-up — YARA's own hit-cap/whole-scan-budget stops, the second
+  shared with CS Beacon's own whole-scan budget stop, since it is the
+  same underlying fact for both) — `hunter`/`source`/`scope`
+  alone cannot distinguish an oversized region a scan never attempted
+  from one it attempted and failed to read, read short, ran out of scan
+  budget on, or (injection's whole-hunt budget specifically) never even
+  started, so `cause` is part of a relationship's own identity: the
+  *same* `(hunter, source, scope)` can legitimately skip different
+  targets for different reasons (e.g. `pipe`'s `pipe_name_scan` both
+  skips one oversized region and fails to read a different,
+  ordinarily-sized one) — or, for injection's hidden-PE scan
+  specifically, the SAME physical region for two different reasons
+  across different reads within its own search (a read failure AND a
+  short read on the same region are not mutually exclusive there). Either
+  way, deduplication keys on all four together. `size_limit` is non-null
+  only when `cause` is `"oversized_skipped"`; every other cause leaves it
+  `null` (there is no cap being exceeded for an I/O failure or a
+  scan-budget exhaustion). `budget_kind`/`budget_limit`/`budget_consumed`
+  (P5/P6 follow-up) are the STRUCTURED counterpart of the owning
+  limitation's own `scope`/`budget_limit`/`budget_consumed` fields above
+  — `budget_kind` mirrors `scope`, `budget_limit`/`budget_consumed` are
+  copied straight through (no text parsing involved; an earlier version
+  of this feature parsed them out of `detail` text, since abandoned —
+  see the `coverageLimitation` section above) — non-null only when
+  `cause` is `"scan_truncated"`/`"scan_not_started"`/`"hit_cap_reached"`/
+  `"scan_budget_exhausted"` AND the owning limitation actually carried a
+  budget attribution; `null`/`null`/`null` together otherwise.
+  Non-negative, not strictly positive — a configured budget of exactly
+  `0` is legal (fixed in the same schema_version 2.12 line: an earlier
+  version of this feature required a positive int here and crashed
+  `build_investigation_queue()` on a real `0`-configured budget).
 - `priority` (`"low"`/`"medium"`/`"high"`) and `priority_reason_codes`
   are two deterministic, centrally-derived facts, never a single
   combined score: `PRIVATE_EXECUTABLE_MEMORY`/`RWX_PROTECTION` come
   straight from the target's own MemoryInfo facts; `MULTIPLE_SCOPES_
-  SKIPPED` (more than one `skipped_by` entry) and `CORRELATED_REGION_
-  EVIDENCE` (this target's region coincides with an existing multi-hunter
-  `CORRELATED REGIONS` entry) are cross-hunter correlation facts. Neither
-  reason present → `"low"`; exactly one → `"medium"`; both → `"high"`.
-- `evidence_availability` (`"captured"`/`"not_captured"`) is a
-  **separate** axis from `priority`, derived only from `target.
-  file_offset`: whether the bytes are already in this dump file. A
-  `not_captured` target is not thereby more suspicious — it means
-  extraction won't work and recollection is the next step, never that the
-  target is more malicious (an explicit design goal: this queue must
-  never conflate "we don't have the bytes" with "this looks worse").
+  SKIPPED` (`skipped_by` holds more than one *distinct* `(hunter, source,
+  scope)` — NOT simply `len(skipped_by) > 1`, since `cause` alone
+  differing does not count: see the immediately preceding bullet) and
+  `CORRELATED_REGION_EVIDENCE` (this target's region coincides with an
+  existing multi-hunter `CORRELATED REGIONS` entry) are cross-hunter
+  correlation facts. Neither reason present → `"low"`; exactly one →
+  `"medium"`; both → `"high"`.
+- `evidence_availability` (`"captured"`/`"partial"`/`"not_captured"`,
+  `"partial"` new in schema_version 2.12) is a **separate** axis from
+  `priority`, derived from `target.capture_state` (falling back to the
+  older `target.file_offset is not None` check for a target predating
+  `capture_state`, e.g. a hand-built one in a test): whether the bytes
+  are already in this dump file, and how completely. `"partial"` is the
+  short-read case specifically — `target.capture_state == "partial"`,
+  meaning only a PREFIX of the target is actually captured — and its
+  `recommended_actions` offers BOTH `extract_captured_range` (the real
+  prefix already in hand is worth extracting now) and `recollect_dump`
+  (the rest genuinely isn't captured, so recollection is still the only
+  way to see the whole target), never just one of the two. Neither a
+  `partial` nor a `not_captured` target is thereby more suspicious — it
+  means extraction won't get everything (or anything) and recollection is
+  a next step, never that the target is more malicious (an explicit
+  design goal: this queue must never conflate "we don't have the bytes"
+  with "this looks worse").
 - `triage` records what analysis actually produced this entry.
   **Without `--triage-skipped`**, `--hunt all` always emits `{"mode":
   "metadata", "status": "completed", "bytes_examined": 0,
@@ -1308,7 +1586,10 @@ for the precedent this follows).
 `dumpex-output-v2.8.schema.json` and `dumpex-output-v2.9.schema.json`
 stay byte-frozen and remain shipped/installable for validating output
 produced before, respectively, the `investigation_actions` and
-`content_reason_codes` additions.
+`content_reason_codes` additions; `dumpex-output-v2.11.schema.json` stays
+byte-frozen and remains shipped/installable for validating output
+produced before `skipRelationship.cause` was added (schema_version
+2.12).
 
 ## Reproducing a run
 

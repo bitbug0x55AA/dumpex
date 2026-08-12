@@ -183,7 +183,7 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            coverage.note_read_failed()
+            coverage.note_read_failed(region_scan_target(mf, r))
             continue
         if len(data) < r.RegionSize:
             # Fewer bytes came back than the region's own declared size --
@@ -192,7 +192,7 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
             # distinction). Still scan whatever WAS returned -- a real IOC
             # hit in the readable prefix is still a real hit -- but this
             # region must not silently count toward a "complete" IOC scan.
-            coverage.note_short_read()
+            coverage.note_short_read(region_scan_target(mf, r))
             if not data:
                 continue
 

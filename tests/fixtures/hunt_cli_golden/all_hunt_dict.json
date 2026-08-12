@@ -6,6 +6,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "SOURCE_GROUP_ABSENT",
           "counterpart_source": null,
           "detail": null,
@@ -108,6 +110,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "PEB_UNAVAILABLE",
           "counterpart_source": null,
           "detail": null,
@@ -157,6 +161,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "SOURCE_ABSENT",
           "counterpart_source": null,
           "detail": null,
@@ -171,6 +177,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "SOURCE_ABSENT",
           "counterpart_source": null,
           "detail": null,
@@ -241,6 +249,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "SOURCE_GROUP_ABSENT",
           "counterpart_source": null,
           "detail": null,
@@ -301,6 +311,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "SOURCE_ABSENT",
           "counterpart_source": null,
           "detail": null,
@@ -345,6 +357,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "SOURCE_ABSENT",
           "counterpart_source": null,
           "detail": null,
@@ -389,6 +403,8 @@
         {
           "affected_count": null,
           "available_fields": [],
+          "budget_consumed": null,
+          "budget_limit": null,
           "code": "SOURCE_ABSENT",
           "counterpart_source": null,
           "detail": null,

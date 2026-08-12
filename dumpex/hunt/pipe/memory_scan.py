@@ -178,7 +178,11 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
         try:
             data = read_region(mf, r.BaseAddress, r.RegionSize)
         except Exception:
-            coverage_counts.note_read_failed()
+            # The MemoryInfo region that failed is still in scope right
+            # here -- retained as a ScanTarget (issue #28) so the failure
+            # is more than a count: an investigator can go extract,
+            # rescan, or recollect this exact region.
+            coverage_counts.note_read_failed(region_scan_target(mf, r))
             continue
         if len(data) < r.RegionSize:
             # Fewer bytes came back than the region's own declared size —
@@ -186,7 +190,7 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # WAS returned (a real pipe name/C2 string can still be found
             # in the readable portion), but this region must not silently
             # count toward a "complete" scan.
-            coverage_counts.note_short_read()
+            coverage_counts.note_short_read(region_scan_target(mf, r))
             if not data:
                 continue
 

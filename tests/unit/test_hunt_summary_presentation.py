@@ -516,6 +516,37 @@ def test_skipped_target_actions_shows_address_priority_and_skipped_by():
     assert "obfuscation/encoding_scan:entropy" in block
 
 
+def test_skipped_target_actions_shows_the_skip_cause_per_relationship():
+    # issue #28: hunter/source/scope alone can't say WHY a target was
+    # skipped -- the console now shows the cause alongside each entry.
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action(skipped_by=(
+        SkipRelationship(hunter="pipe", source="pipe_name_scan", cause="read_failed"),
+        SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="scan_truncated"),
+    ))
+    out = _capture(records, summary, investigation_actions=[action])
+    block = out.split("SKIPPED TARGET ACTIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    assert "pipe/pipe_name_scan (read failed)" in block
+    assert "injection/hidden_pe_scan (scan truncated)" in block
+
+
+def test_skipped_target_actions_why_fallback_no_longer_says_oversized_unconditionally():
+    # With no priority_reason_codes (a LOW-priority, single-relationship
+    # target), the "Why:" fallback used to hardcode "oversized target
+    # skipped" -- wrong once a read-failed/short-read/scan-truncated
+    # target can land here too (issue #28).
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action(priority="low", reason_codes=(), high_action=False,
+                      skipped_by=(SkipRelationship(hunter="pipe", source="pipe_name_scan",
+                                                    cause="read_failed"),))
+    out = _capture(records, summary, investigation_actions=[action])
+    block = out.split("SKIPPED TARGET ACTIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+    assert "Why: target not fully examined -- see Skipped by" in block
+    assert "oversized target skipped" not in block
+
+
 def test_skipped_target_actions_non_verbose_caps_entries_with_omission_notice():
     records = _all_clean_records()
     summary = build_hunt_summary(records, selected="all")

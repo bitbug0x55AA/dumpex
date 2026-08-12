@@ -1,4 +1,4 @@
-"""`InjectionReport` -> current-schema (v2.11) `HunterRecord` pure
+"""`InjectionReport` -> current-schema (v2.12) `HunterRecord` pure
 projector. Since the Injection 2C cutover, `dumpex.hunt.injection.collect.
 _record_from_injection_report` is simply this module's own
 `project_hunter_record`, re-exported under that name.

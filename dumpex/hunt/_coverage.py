@@ -36,29 +36,37 @@ from dataclasses import dataclass, field
 from dumpex.hunt._ui import (
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE,
 )
-from dumpex.core.memory import prot_str, va_to_file_offset
+from dumpex.core.memory import prot_str, va_to_file_offset, va_range_captured_bytes
 from dumpex.output.coverage import (
     ScanTarget, ScanTargetKind, format_scan_target_preview,
 )
 
 
-def region_scan_target(mf, region, size_limit: int) -> ScanTarget:
-    """A ScanTarget for one MemoryInfoListStream region a scan skipped for
-    exceeding `size_limit`. The ONE place a raw minidump region becomes a
-    skipped-target reference -- pipe's memory scan, stomping's unscored
-    IOC-string scan, and all three of obfuscation's layer scans go through
-    this rather than each re-deriving the same seven fields (and each
-    getting a slightly different answer for, say, whether
-    `AllocationBase` is present).
+def region_scan_target(mf, region, size_limit: "int | None" = None) -> ScanTarget:
+    """A ScanTarget for one MemoryInfoListStream region. The ONE place a
+    raw minidump region becomes a target reference -- pipe's memory scan,
+    stomping's unscored IOC-string scan, all three of obfuscation's layer
+    scans, and (issue #28) any hunter's own read-failed/short-read/scan-
+    truncated gap all go through this rather than each re-deriving the
+    same seven fields (and each getting a slightly different answer for,
+    say, whether `AllocationBase` is present).
 
-    `file_offset` is looked up per skipped region rather than for every
-    region walked: this only runs on the skip path, which is rare by
-    construction (a region has to be over the layer's cap to get here)."""
+    `size_limit` is the cap `region` exceeded when it was skipped for
+    being oversized -- pass it explicitly for that case (see ScanTarget's
+    own docstring). Leave it at its default `None` for a region a scan
+    actually attempted and failed to read, read short, or ran out of scan
+    budget on: there is no cap being exceeded there, just an I/O failure
+    or a budget exhaustion.
+
+    `file_offset` is looked up per target rather than for every region
+    walked: this only runs on the skip/failure path, which is rare by
+    construction."""
     base = region.BaseAddress
+    size = region.RegionSize
     return ScanTarget(
         kind=ScanTargetKind.MEMORY_REGION,
         base_address=base,
-        size=region.RegionSize,
+        size=size,
         size_limit=size_limit,
         # None when the region's bytes were never written to the .dmp at
         # all -- an important distinction for an investigator deciding
@@ -68,21 +76,43 @@ def region_scan_target(mf, region, size_limit: int) -> ScanTarget:
         state=prot_str(region.State),
         type=prot_str(region.Type),
         protection=prot_str(region.Protect),
+        # How much of `size` the dump's own segment table actually backs
+        # (issue #28 P1 follow-up) -- a STRUCTURAL fact, independent of
+        # whether this call is on the oversized-skip path (never read at
+        # all) or a read-failed/short-read one (partially read); either
+        # way it answers "how much of this region can actually be
+        # extracted from the dump already in hand".
+        captured_size=va_range_captured_bytes(mf, base, size),
     )
 
 
-def segment_scan_target(segment, size_limit: int) -> ScanTarget:
+def segment_scan_target(segment, size_limit: "int | None" = None) -> ScanTarget:
     """A ScanTarget for one memory-segment-table entry (CS Beacon/YARA
-    scan over Memory64List/MemoryList) skipped for exceeding
-    `size_limit`. A segment carries no MemoryInfo, so state/type/
-    protection stay unset -- but its own `start_file_address` IS the file
-    offset, no VA translation needed."""
+    scan over Memory64List/MemoryList). A segment carries no MemoryInfo,
+    so state/type/protection stay unset -- but its own
+    `start_file_address` IS the file offset, no VA translation needed.
+    `size_limit` follows region_scan_target()'s own convention: pass it
+    explicitly for an oversized-skip target, leave it `None` for a read-
+    failed/short-read/scan-truncated one.
+
+    `captured_size` is always the segment's own full `size` (issue #28 P1
+    follow-up) -- unlike a MemoryInfo region (which can span more address
+    space than any Memory64List/MemoryList segment actually backs), a
+    segment-table entry IS, by definition, a claim from the dump's own
+    segment table that exactly this many bytes are captured at this file
+    offset. A live read attempt failing or coming back short for a
+    segment target is a fact about THIS scan's own read, not about
+    whether the bytes exist in the file -- `va_range_captured_bytes()`
+    would trivially confirm the same "fully captured" answer by re-
+    walking the very table this segment came from, so it is set directly
+    here instead."""
     return ScanTarget(
         kind=ScanTargetKind.MEMORY_SEGMENT,
         base_address=segment.start_virtual_address,
         size=segment.size,
         size_limit=size_limit,
         file_offset=segment.start_file_address,
+        captured_size=segment.size,
     )
 
 
@@ -161,6 +191,17 @@ class CoverageTracker:
     # investigator can see WHICH virtual addresses to go extract, rescan,
     # or recollect (see dumpex.output.coverage.ScanTarget).
     skipped_oversize_targets: list = field(default_factory=list)
+    # Companions to skipped_oversize_targets (issue #28): a ScanTarget per
+    # item that was actually ATTEMPTED but failed to read / read short --
+    # OPTIONAL, unlike skipped_oversize_targets, since note_read_failed()/
+    # note_short_read() may legitimately be called with no target (a
+    # caller that cannot resolve the item's own identity at the failure
+    # site keeps working exactly as before this field existed). When a
+    # caller DOES supply targets consistently, len() equals the matching
+    # counter; a caller must not supply a target on some calls and not
+    # others for the same reason, or the two numbers drift apart.
+    read_failed_targets: list = field(default_factory=list)
+    short_read_targets: list = field(default_factory=list)
 
     @property
     def skipped_oversize(self) -> int:
@@ -177,11 +218,22 @@ class CoverageTracker:
                 f"region/segment, got {type(target).__name__}")
         self.skipped_oversize_targets.append(target)
 
-    def note_read_failed(self):
-        self.read_failed += 1
+    def _note_target(self, target: "ScanTarget | None", targets: list, caller: str):
+        if target is None:
+            return
+        if type(target) is not ScanTarget:
+            raise TypeError(
+                f"{caller}() target, when given, must be a ScanTarget identifying the "
+                f"region/segment, got {type(target).__name__}")
+        targets.append(target)
 
-    def note_short_read(self):
+    def note_read_failed(self, target: "ScanTarget | None" = None):
+        self.read_failed += 1
+        self._note_target(target, self.read_failed_targets, "note_read_failed")
+
+    def note_short_read(self, target: "ScanTarget | None" = None):
         self.short_reads += 1
+        self._note_target(target, self.short_read_targets, "note_short_read")
 
     def note_timed_out(self):
         self.timed_out += 1
@@ -214,9 +266,17 @@ class CoverageTracker:
             out.append(f"{self.skipped_oversize} {oversize_label}: "
                         f"{format_scan_target_preview(self.skipped_oversize_targets)}")
         if self.read_failed:
-            out.append(f"{self.read_failed} {read_failed_label}")
+            # Preview appended only when the caller supplied targets (see
+            # read_failed_targets' own docstring) -- a caller that never
+            # calls note_read_failed(target=...) sees the exact same bare
+            # count text as before this field existed.
+            preview = (f": {format_scan_target_preview(self.read_failed_targets)}"
+                       if self.read_failed_targets else "")
+            out.append(f"{self.read_failed} {read_failed_label}{preview}")
         if self.short_reads:
-            out.append(f"{self.short_reads} {short_read_label}")
+            preview = (f": {format_scan_target_preview(self.short_read_targets)}"
+                       if self.short_read_targets else "")
+            out.append(f"{self.short_reads} {short_read_label}{preview}")
         if self.timed_out:
             out.append(f"{self.timed_out} {timed_out_label}")
         if self.budget_exhausted:

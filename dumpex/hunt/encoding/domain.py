@@ -136,6 +136,20 @@ class CoverageSnapshot:
     calling the result a region count is a correctness bug (the same
     physical region can exceed several layers' independent size caps),
     not a rounding of one.
+
+    `*_read_failed`/`*_short_read` (issue #28) follow the exact same
+    per-layer-tuple shape, for the exact same reason: a region can fail to
+    read (or read short) under more than one layer's own independent scan
+    loop, and folding all three layers' failures into one flat count/
+    target list (the pre-fix shape) meant `--hunt all`'s investigation
+    queue could only ever attribute the gap to `encoding_scan` as a
+    whole, with no way to tell an investigator WHICH layer(s) still need a
+    targeted rescan of that region. Counts are derived (`len(...)`), not
+    stored separately, the same way `any_oversized` already derives from
+    the oversized tuples above -- every encoding scan layer always
+    supplies a target at its own read_failed/short_read call site (see
+    entropy.py/decoding.py/sleep_mask.py), so there is nothing for a
+    stored count to disagree with.
     """
     memory_info_stream: bool
     region_count: "int | None" = None
@@ -143,41 +157,75 @@ class CoverageSnapshot:
     sleep_mask_oversized: tuple = field(default_factory=tuple)
     entropy_oversized:    tuple = field(default_factory=tuple)
     decode_oversized:     tuple = field(default_factory=tuple)
-    read_failed:  int = 0
-    short_reads:  int = 0
+    sleep_mask_read_failed: tuple = field(default_factory=tuple)   # issue #28
+    entropy_read_failed:    tuple = field(default_factory=tuple)
+    decode_read_failed:     tuple = field(default_factory=tuple)
+    sleep_mask_short_read:  tuple = field(default_factory=tuple)
+    entropy_short_read:     tuple = field(default_factory=tuple)
+    decode_short_read:      tuple = field(default_factory=tuple)
     budget_exhausted: bool = False
     exhausted_reason: str = ""
+
+    _TARGET_TUPLE_FIELDS = (
+        "sleep_mask_oversized", "entropy_oversized", "decode_oversized",
+        "sleep_mask_read_failed", "entropy_read_failed", "decode_read_failed",
+        "sleep_mask_short_read", "entropy_short_read", "decode_short_read",
+    )
 
     def __post_init__(self):
         _require_bool(self.memory_info_stream, "CoverageSnapshot.memory_info_stream")
         _require_optional_count(self.region_count, "CoverageSnapshot.region_count")
         _require_bool(self.any_region_scanned, "CoverageSnapshot.any_region_scanned")
-        for name in ("sleep_mask_oversized", "entropy_oversized", "decode_oversized"):
+        for name in self._TARGET_TUPLE_FIELDS:
             object.__setattr__(self, name, _require_scan_targets(
                 getattr(self, name), f"CoverageSnapshot.{name}"))
-        for name in ("read_failed", "short_reads"):
-            _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         _require_bool(self.budget_exhausted, "CoverageSnapshot.budget_exhausted")
         if not isinstance(self.exhausted_reason, str):
             raise TypeError(
                 f"CoverageSnapshot.exhausted_reason must be a str, got "
                 f"{self.exhausted_reason!r}")
 
+    def _by_layer(self, sleep_mask, entropy, decode) -> tuple:
+        by_layer = {"sleep_mask": sleep_mask, "entropy": entropy, "decode": decode}
+        return tuple((layer, by_layer[layer]) for layer in OVERSIZE_SCAN_LAYERS
+                     if by_layer[layer])
+
     def oversized_targets_by_layer(self) -> tuple:
         """`((layer_name, targets), ...)` for every layer with at least
         one oversized skip, in OVERSIZE_SCAN_LAYERS' fixed order --
         replaces the old `oversized_by_layer.items()` dict iteration."""
-        by_layer = {
-            "sleep_mask": self.sleep_mask_oversized,
-            "entropy":    self.entropy_oversized,
-            "decode":     self.decode_oversized,
-        }
-        return tuple((layer, by_layer[layer]) for layer in OVERSIZE_SCAN_LAYERS
-                     if by_layer[layer])
+        return self._by_layer(self.sleep_mask_oversized, self.entropy_oversized,
+                               self.decode_oversized)
+
+    def read_failed_targets_by_layer(self) -> tuple:
+        """`((layer_name, targets), ...)` for every layer with at least
+        one read failure, same shape as `oversized_targets_by_layer()`."""
+        return self._by_layer(self.sleep_mask_read_failed, self.entropy_read_failed,
+                               self.decode_read_failed)
+
+    def short_read_targets_by_layer(self) -> tuple:
+        """`((layer_name, targets), ...)` for every layer with at least
+        one short read, same shape as `oversized_targets_by_layer()`."""
+        return self._by_layer(self.sleep_mask_short_read, self.entropy_short_read,
+                               self.decode_short_read)
 
     @property
     def any_oversized(self) -> bool:
         return bool(self.sleep_mask_oversized or self.entropy_oversized or self.decode_oversized)
+
+    @property
+    def read_failed(self) -> int:
+        """Total across all three layers -- a region failing under two
+        layers' own independent scans counts twice here (it IS two
+        separate gaps, one per layer, even though it's one physical
+        region), matching `complete`'s own "any gap at all" semantics."""
+        return (len(self.sleep_mask_read_failed) + len(self.entropy_read_failed)
+                + len(self.decode_read_failed))
+
+    @property
+    def short_reads(self) -> int:
+        return (len(self.sleep_mask_short_read) + len(self.entropy_short_read)
+                + len(self.decode_short_read))
 
     @property
     def fully_skipped(self) -> bool:

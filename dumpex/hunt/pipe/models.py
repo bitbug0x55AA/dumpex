@@ -655,7 +655,9 @@ class PipeScanCoverage:
     occupies)."""
     skipped_oversize_targets:   tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     read_failed:                int = 0
+    read_failed_targets:        tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     short_reads:                int = 0
+    short_read_targets:         tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     c2_budget_exhausted:        bool = False
     c2_budget_reason:           str = ""
     pipe_name_budget_exhausted: bool = False
@@ -667,6 +669,10 @@ class PipeScanCoverage:
         object.__setattr__(self, "skipped_oversize_targets", _require_typed_tuple(
             self.skipped_oversize_targets, ScanTarget,
             "PipeScanCoverage.skipped_oversize_targets"))
+        object.__setattr__(self, "read_failed_targets", _require_typed_tuple(
+            self.read_failed_targets, ScanTarget, "PipeScanCoverage.read_failed_targets"))
+        object.__setattr__(self, "short_read_targets", _require_typed_tuple(
+            self.short_read_targets, ScanTarget, "PipeScanCoverage.short_read_targets"))
         for name in ("read_failed", "short_reads", "image_pipe_refs"):
             _require_count(getattr(self, name), f"PipeScanCoverage.{name}")
         for name in ("c2_budget_exhausted", "pipe_name_budget_exhausted"):
@@ -685,7 +691,10 @@ class PipeScanCoverage:
         notices an expired DEADLINE when asked -- see
         `dumpex.hunt._budget.ScanBudget.exhausted`."""
         return cls(skipped_oversize_targets=tuple(tracker.skipped_oversize_targets),
-                   read_failed=tracker.read_failed, short_reads=tracker.short_reads,
+                   read_failed=tracker.read_failed,
+                   read_failed_targets=tuple(tracker.read_failed_targets),
+                   short_reads=tracker.short_reads,
+                   short_read_targets=tuple(tracker.short_read_targets),
                    c2_budget_exhausted=c2_budget.exhausted(),
                    c2_budget_reason=c2_budget.exhausted_reason or "",
                    pipe_name_budget_exhausted=pipe_name_budget.exhausted(),

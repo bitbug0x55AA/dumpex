@@ -78,6 +78,11 @@ _INJECTION_KEYS = {
     # stopped on its own per-region read budget has an unsearched
     # remainder, which is neither a failed nor a short read.
     "pe_scan_truncated",
+    # ^ ...and the fourth counter of that same family (issue #28): a LATER
+    # region the whole-hunt scan budget was already exhausted before its
+    # own search ever started -- distinct from pe_scan_truncated's own
+    # "started this region, ran out partway through" claim.
+    "pe_scan_not_started",
     "review_priority",
     "rip_full_correlation", "rip_hits", "rwx", "rwx_and_pe_alloc_bases", "score",
     "start_hits", "status", "suspicious_validated_pe_hits", "thread_contexts", "threads",

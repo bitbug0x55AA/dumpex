@@ -113,3 +113,59 @@ def test_coverage_tracker_no_gaps_builds_no_reasons():
     t = CoverageTracker(total=5, scanned=5)
     assert t.build_reasons() == []
     assert t.complete is True
+
+
+# ── target-carrying note_read_failed/note_short_read (issue #28) ──────────
+
+def _failure_target(base=0x2000, size=4096):
+    return ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=base,
+                       size=size, size_limit=None)
+
+
+def test_note_read_failed_without_a_target_still_works_unchanged():
+    t = CoverageTracker()
+    t.note_read_failed()
+    assert t.read_failed == 1
+    assert t.read_failed_targets == []
+
+
+def test_note_read_failed_with_a_target_retains_it():
+    t = CoverageTracker()
+    target = _failure_target()
+    t.note_read_failed(target)
+    assert t.read_failed == 1
+    assert t.read_failed_targets == [target]
+
+
+def test_note_short_read_with_a_target_retains_it():
+    t = CoverageTracker()
+    target = _failure_target(base=0x3000)
+    t.note_short_read(target)
+    assert t.short_reads == 1
+    assert t.short_read_targets == [target]
+
+
+def test_note_read_failed_rejects_a_non_scan_target():
+    t = CoverageTracker()
+    with pytest.raises(TypeError):
+        t.note_read_failed("0x2000")
+
+
+def test_note_short_read_rejects_a_non_scan_target():
+    t = CoverageTracker()
+    with pytest.raises(TypeError):
+        t.note_short_read("0x3000")
+
+
+def test_build_reasons_appends_target_preview_only_when_targets_supplied():
+    # Without a target, the reason text is unchanged from before #28.
+    bare = CoverageTracker()
+    bare.note_read_failed()
+    assert bare.build_reasons() == ["1 item(s) failed to read"]
+
+    # With one, the same bounded preview format oversized-skip already
+    # uses is appended.
+    with_target = CoverageTracker()
+    with_target.note_read_failed(_failure_target(base=0x2000, size=4096))
+    reason = with_target.build_reasons()[0]
+    assert reason == "1 item(s) failed to read: 0x0000000000002000 (4 KB)"

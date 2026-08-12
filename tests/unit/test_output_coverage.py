@@ -289,6 +289,7 @@ def test_coverage_limitation_to_dict_minimal_emits_every_field():
         "affected_count": None, "unavailable_fields": [], "available_fields": [],
         "counterpart_source": None, "related_sources": [], "related_tids": [],
         "thread_id": None, "detail": None, "targets": [],
+        "budget_limit": None, "budget_consumed": None,
     }
 
 
@@ -1850,6 +1851,8 @@ def test_scan_target_to_dict_uses_fixed_width_hex_and_byte_offsets():
         "state": "MEM_COMMIT",
         "type": "MEM_PRIVATE",
         "protection": "PAGE_EXECUTE_READWRITE",
+        "captured_size": None,
+        "capture_state": None,
     }
 
 
@@ -1903,6 +1906,63 @@ def test_scan_target_requires_size_to_exceed_its_own_limit():
         _region_target(size=512, limit=1024)
 
 
+def test_scan_target_size_limit_none_skips_the_oversize_check(): # issue #28
+    # A read-failed/short-read/scan-truncated target was never skipped for
+    # being oversized -- no cap to compare `size` against, so any size,
+    # including one smaller than an ordinary oversize cap, is legal.
+    target = _region_target(size=64, limit=None)
+    assert target.size_limit is None
+    assert target.to_dict()["size_limit"] is None
+
+
+def test_scan_target_describe_omits_the_limit_clause_when_size_limit_is_none():
+    target = _region_target(base=0x1000, size=4096, limit=None)
+    described = target.describe()
+    assert described == "0x0000000000001000 (4 KB)"
+    assert ">" not in described
+
+
+def test_scan_target_capture_state_none_when_captured_size_not_set():
+    target = _region_target()
+    assert target.captured_size is None
+    assert target.capture_state is None
+
+
+def test_scan_target_capture_state_none_when_captured_size_is_zero():
+    target = _region_target(captured_size=0)
+    assert target.capture_state == "none"
+
+
+def test_scan_target_capture_state_complete_when_captured_size_equals_size():
+    target = _region_target(size=4096, limit=None, file_offset=100, captured_size=4096)
+    assert target.capture_state == "complete"
+
+
+def test_scan_target_capture_state_partial_when_captured_size_between_zero_and_size():
+    target = _region_target(size=4096, limit=None, file_offset=100, captured_size=1024)
+    assert target.capture_state == "partial"
+
+
+def test_scan_target_rejects_captured_size_larger_than_size():
+    with pytest.raises(ValueError, match="must not exceed size"):
+        _region_target(size=4096, limit=None, captured_size=4097)
+
+
+def test_scan_target_rejects_positive_captured_size_with_no_file_offset():
+    # captured_size > 0 claims SOME bytes are in the .dmp -- that can only
+    # be true if the start address itself resolves to a file offset.
+    with pytest.raises(ValueError, match="requires file_offset"):
+        ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=0x1000, size=4096,
+                    captured_size=1024, file_offset=None)
+
+
+def test_scan_target_to_dict_includes_captured_size_and_capture_state():
+    target = _region_target(size=4096, limit=None, file_offset=100, captured_size=2048)
+    d = target.to_dict()
+    assert d["captured_size"] == 2048
+    assert d["capture_state"] == "partial"
+
+
 def test_memory_segment_target_rejects_memory_info_fields():
     with pytest.raises(ValueError, match="carries no MemoryInfo"):
         ScanTarget(kind=ScanTargetKind.MEMORY_SEGMENT, base_address=0x1000,
@@ -1923,11 +1983,78 @@ def test_oversized_skipped_limitation_requires_targets_that_agree_with_the_count
                             targets=[_region_target()])
 
 
+def test_oversized_skipped_limitation_rejects_a_target_with_no_size_limit():
+    # A target attached to an oversized-skip limitation but carrying
+    # size_limit=None would claim "skipped for being too big" without
+    # recording the cap that made it too big -- caught here, at
+    # construction, not only later when SkipRelationship rejects it.
+    with pytest.raises(ValueError, match="size_limit set"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
+                            source="pipe_name_scan", affected_count=1,
+                            targets=[_region_target(limit=None)])
+
+
+@pytest.mark.parametrize("code,source", [
+    (LimitationCode.SCAN_REGION_READ_FAILED, "pipe_name_scan"),
+    (LimitationCode.SCAN_REGION_SHORT_READ, "pipe_name_scan"),
+    (LimitationCode.PE_HEADER_READ_FAILED, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SHORT_READ, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SCAN_TRUNCATED, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SCAN_NOT_STARTED, "hidden_pe_scan"),
+])
+def test_read_failed_family_rejects_a_target_carrying_size_limit(code, source):
+    # The inverse of the oversized-skip check above: none of these six
+    # causes involves a size cap, so a target claiming one is wrong.
+    # `limit` must stay below the target's own default size (32 KB) --
+    # ScanTarget itself requires size > size_limit whenever size_limit is
+    # set, regardless of which code will end up attached to it.
+    with pytest.raises(ValueError, match="size_limit=None"):
+        CoverageLimitation(code=code, source=source, affected_count=1,
+                            targets=[_region_target(limit=1024)])
+
+
 def test_targets_are_rejected_on_codes_that_do_not_use_them():
     with pytest.raises(ValueError, match="does not use targets"):
-        CoverageLimitation(code=LimitationCode.SCAN_REGION_READ_FAILED,
-                            source="pipe_name_scan", affected_count=1,
+        CoverageLimitation(code=LimitationCode.MODULE_HEADER_READ_FAILED,
+                            source="module_headers", affected_count=1,
                             targets=[_region_target()])
+
+
+# ── targets on the read-failed/short-read/scan-truncated codes (issue #28) ─
+# Unlike SCAN_REGION_OVERSIZED_SKIPPED, targets is OPTIONAL on these five --
+# a bare affected_count (the pre-#28 shape) stays legal -- but when supplied
+# it must still account for every affected item exactly.
+
+@pytest.mark.parametrize("code,source", [
+    (LimitationCode.SCAN_REGION_READ_FAILED, "pipe_name_scan"),
+    (LimitationCode.SCAN_REGION_SHORT_READ, "pipe_name_scan"),
+    (LimitationCode.PE_HEADER_READ_FAILED, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SHORT_READ, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SCAN_TRUNCATED, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SCAN_NOT_STARTED, "hidden_pe_scan"),
+])
+def test_read_failed_short_read_scan_truncated_targets_are_optional(code, source):
+    # Bare count, no targets -- the pre-#28 shape, still legal.
+    bare = CoverageLimitation(code=code, source=source, affected_count=2)
+    assert bare.targets == ()
+
+    # A read-failed/short-read/scan-truncated target was never oversized --
+    # size_limit stays None, unlike an oversized-skip target's own.
+    target = _region_target(limit=None)
+    with_targets = CoverageLimitation(code=code, source=source, affected_count=1,
+                                       targets=[target])
+    assert with_targets.targets == (target,)
+    assert with_targets.targets[0].size_limit is None
+
+
+@pytest.mark.parametrize("code,source", [
+    (LimitationCode.SCAN_REGION_READ_FAILED, "pipe_name_scan"),
+    (LimitationCode.PE_HEADER_READ_FAILED, "hidden_pe_scan"),
+])
+def test_read_failed_targets_must_match_affected_count_when_non_empty(code, source):
+    with pytest.raises(ValueError, match=r"must equal len\(targets\)"):
+        CoverageLimitation(code=code, source=source, affected_count=2,
+                            targets=[_region_target(limit=None)])
 
 
 def test_targets_must_be_scan_target_instances_exactly():

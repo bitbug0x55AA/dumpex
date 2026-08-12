@@ -136,7 +136,7 @@ def test_extract_compat_freeze(monkeypatch, tmp_path, capsys, name, extract_addr
     assert actual_exit == exit_code, f"{name}: exit code drifted"
     assert body == expected_body, f"{name}: console drifted"
 
-    assert doc["meta"]["schema_version"] == "2.11"
+    assert doc["meta"]["schema_version"] == "2.12"
     assert doc["result"]["kind"] == "extract"
     assert doc["result"]["coverage"]["status"] == "complete"
     rec = doc["result"]["data"]["records"][0]
@@ -296,7 +296,7 @@ def test_strings_compat_freeze(monkeypatch, tmp_path, capsys, name, addr, size_h
     assert exit_code == 0, f"{name}: exit code drifted"
     assert body == expected_header + expected_body, f"{name}: console drifted"
 
-    assert doc["meta"]["schema_version"] == "2.11"
+    assert doc["meta"]["schema_version"] == "2.12"
     assert doc["result"]["kind"] == "strings"
     assert doc["result"]["coverage"]["status"] == "complete"
 

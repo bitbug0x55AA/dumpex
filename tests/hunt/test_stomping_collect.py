@@ -26,7 +26,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -172,10 +172,10 @@ def test_oversized_ioc_region_is_identified_in_the_typed_record(hunter_record_va
 
 
 def test_ioc_region_read_failure_is_identified_in_the_typed_record(hunter_record_validator):
-    """Read-failure companion to the oversized case above: counted (there is
-    no region identity to keep -- the read is what failed), attached to the
-    same `ioc_string_scan` source, and equally unable to leave coverage
-    reading "complete"."""
+    """Read-failure companion to the oversized case above: attached to the
+    same `ioc_string_scan` source, equally unable to leave coverage reading
+    "complete", and (issue #28) the failed region's own identity is
+    retained, not just counted."""
     module_base = 0x7ff600000000
     header, mem_text, ref_file, section = matching_module_and_ref(module_base)
     mods = [Module(module_base, 0x5000, r"C:\Windows\System32\legit.dll")]
@@ -208,7 +208,10 @@ def test_ioc_region_read_failure_is_identified_in_the_typed_record(hunter_record
     lim = next(l for l in rec.coverage.limitations
                if l.code.value == "SCAN_REGION_READ_FAILED")
     assert lim.source == "ioc_string_scan"
-    assert lim.affected_count == 1
+    assert lim.affected_count == 1 == len(lim.targets)
+    target = lim.targets[0]
+    assert target.base_address == unreadable_base
+    assert target.size_limit is None
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
@@ -261,7 +264,11 @@ def test_ioc_region_short_read_is_identified_in_the_typed_record(hunter_record_v
     lim = next(l for l in rec.coverage.limitations
                if l.code.value == "SCAN_REGION_SHORT_READ")
     assert lim.source == "ioc_string_scan"
-    assert lim.affected_count == 1
+    assert lim.affected_count == 1 == len(lim.targets)
+    # issue #28: the short-read region's own identity is retained.
+    target = lim.targets[0]
+    assert target.base_address == short_read_base
+    assert target.size_limit is None
 
     # The hit in the readable prefix survives the truncation.
     ioc_findings = [x for x in rec.findings if x["check"] == "stomping.ioc_string_lead"]
