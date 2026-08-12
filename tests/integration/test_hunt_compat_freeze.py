@@ -71,7 +71,14 @@ from dumpex.ui.structured import _json_safe
 _INJECTION_KEYS = {
     "confidence", "coverage", "coverage_reasons", "coverage_status", "findings",
     "hidden_pe_unvalidated", "hidden_pe_validated", "informational_validated_pe_hits",
-    "lead_count", "max_score", "pe_read_failed", "pe_short_reads", "review_priority",
+    "lead_count", "max_score", "pe_read_failed", "pe_short_reads",
+    # ^ ...and the third counter of that same family, added when the
+    # hidden-PE scan started searching whole regions for candidates rather
+    # than only their base addresses (issue #26): a region whose search
+    # stopped on its own per-region read budget has an unsearched
+    # remainder, which is neither a failed nor a short read.
+    "pe_scan_truncated",
+    "review_priority",
     "rip_full_correlation", "rip_hits", "rwx", "rwx_and_pe_alloc_bases", "score",
     "start_hits", "status", "suspicious_validated_pe_hits", "thread_contexts", "threads",
     "verdict_level",

@@ -15,7 +15,7 @@ from importlib import resources
 # version string; schema_path()'s own default stays pinned to v1.1 for
 # backward compatibility with existing callers (see its own docstring) --
 # it is NOT updated in lockstep with this constant.
-CURRENT_SCHEMA = "dumpex-output-v2.10.schema.json"
+CURRENT_SCHEMA = "dumpex-output-v2.11.schema.json"
 
 
 def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
@@ -27,18 +27,23 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
     StructuredOutput -- the legacy v1.1-shaped writer -- against it) --
     this default is deliberately NOT changed to track the current schema;
     use CURRENT_SCHEMA/current_schema_path() for that instead. Pass
-    "dumpex-output-v2.10.schema.json" (or CURRENT_SCHEMA) for the current
+    "dumpex-output-v2.11.schema.json" (or CURRENT_SCHEMA) for the current
     v2 contract every command, including --hunt, now produces, or
+    "dumpex-output-v2.10.schema.json"/
     "dumpex-output-v2.9.schema.json"/"dumpex-output-v2.8.schema.json"/
     "dumpex-output-v2.7.schema.json"/"dumpex-output-v2.6.schema.json"/
     "dumpex-output-v2.5.schema.json"/
     "dumpex-output-v2.4.schema.json"/"dumpex-output-v2.3.schema.json"/
     "dumpex-output-v2.2.schema.json"/"dumpex-output-v2.1.schema.json"/
     "dumpex-output-v2.0.schema.json" for the frozen historical
-    v2.9/v2.8/v2.7/v2.6/v2.5/v2.4/v2.3/v2.2/v2.1/v2.0 schemas (still valid
-    for validating output produced before schema_version
-    2.10/2.9/2.8/2.7/2.6/2.5/2.4/2.3/2.2/2.1
-    respectively -- v2.9's own `triageInfo` is closed
+    v2.10/v2.9/v2.8/v2.7/v2.6/v2.5/v2.4/v2.3/v2.2/v2.1/v2.0 schemas (still
+    valid for validating output produced before schema_version
+    2.11/2.10/2.9/2.8/2.7/2.6/2.5/2.4/2.3/2.2/2.1
+    respectively -- v2.10's own `huntPeHeaderHit` is closed
+    (`additionalProperties: false`) around a field set that does NOT
+    include the `va`/`region_offset`/`file_offset` candidate location
+    v2.11 adds (the whole-region hidden-PE candidate search, issue #26),
+    so v2.11 output fails against it; v2.9's own `triageInfo` is closed
     (`additionalProperties: false`) around a field set that does NOT
     include the `content_reason_codes` array v2.10 adds (issue #19 Phase
     2's opt-in `--triage-skipped` deep-content triage), so v2.10 output
@@ -63,7 +68,7 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
 
 
 def current_schema_path():
-    """Path to CURRENT_SCHEMA (the v2.10 contract every command, including
+    """Path to CURRENT_SCHEMA (the v2.11 contract every command, including
     --hunt, now produces) -- usable as a context manager, same as
     schema_path(). Prefer this over schema_path() with no arguments, whose
     default stays pinned to v1.1 for backward compatibility (see its own

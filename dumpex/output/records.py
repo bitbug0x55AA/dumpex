@@ -1400,15 +1400,32 @@ class HuntThreadRegionHit:
 
 @dataclass
 class HuntPeHeaderHit:
-    """One MZ-prefixed region examined for a hidden PE header (injection's
-    hidden_pe_validated/hidden_pe_unvalidated) -- the region plus the
-    structural-validation outcome. `entry_point_rva` stays a plain int
-    (an RVA is relative to a not-yet-established image base, not itself a
-    memory address -- see this module's own top-of-file type rule);
-    `image_base` (the PE header's OWN declared base) is a real address,
-    hex-formatted."""
+    """One MZ candidate examined for a hidden PE header (injection's
+    hidden_pe_validated/hidden_pe_unvalidated) -- where the candidate is,
+    the CONTAINING region, and the structural-validation outcome.
+    `entry_point_rva` stays a plain int (an RVA is relative to a
+    not-yet-established image base, not itself a memory address -- see
+    this module's own top-of-file type rule); `image_base` (the PE
+    header's OWN declared base) is a real address, hex-formatted.
+
+    `va`/`region_offset`/`file_offset` (schema_version 2.11) are the
+    candidate's OWN location: the process address its 'MZ' was found at,
+    how far into `region` that is, and where those bytes sit in the .dmp
+    (`null` when the VA is not covered by any captured segment -- NOT the
+    same claim as offset zero). They exist because `region` alone stopped
+    being able to answer "where is the PE" once the hidden-PE scan started
+    searching whole regions instead of only their base addresses (issue
+    #26): a PE mapped partway into an allocation shares its region with
+    everything else in that allocation, so a consumer given only the
+    region cannot carve it, correlate it, or tell two hits in one region
+    apart. `region` still describes where the candidate LIVES -- it is
+    what allocation correlation is keyed on -- and for a PE at a region's
+    base `va` equals `region.base_address`."""
     region:              HuntRegionRef
     valid:               bool
+    va:                  "str | None" = None
+    region_offset:       int = 0
+    file_offset:         "str | None" = None
     machine_name:        "str | None" = None
     is_pe32_plus:        "bool | None" = None
     number_of_sections:  "int | None" = None
@@ -1420,6 +1437,9 @@ class HuntPeHeaderHit:
         if not isinstance(self.region, HuntRegionRef):
             raise TypeError("HuntPeHeaderHit.region must be a HuntRegionRef")
         _require_bool(self.valid, "HuntPeHeaderHit.valid")
+        _require_optional_hex_address(self.va, "HuntPeHeaderHit.va")
+        _require_optional_hex_address(self.file_offset, "HuntPeHeaderHit.file_offset")
+        _require_nonneg_int(self.region_offset, "HuntPeHeaderHit.region_offset")
         _require_optional_hex_address(self.image_base, "HuntPeHeaderHit.image_base")
         if self.number_of_sections is not None:
             _require_nonneg_int(self.number_of_sections, "HuntPeHeaderHit.number_of_sections")
@@ -1452,6 +1472,9 @@ class HuntPeHeaderHit:
         return {
             "region":             self.region.to_dict(),
             "valid":              self.valid,
+            "va":                 self.va,
+            "region_offset":      self.region_offset,
+            "file_offset":        self.file_offset,
             "machine_name":       self.machine_name,
             "is_pe32_plus":       self.is_pe32_plus,
             "number_of_sections": self.number_of_sections,

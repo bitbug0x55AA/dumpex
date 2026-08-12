@@ -2,7 +2,7 @@
 encoding/report_facts.py, report_legacy.py, report_record.py,
 report_console.py) -- everything that turns a hand-built `EncodingReport`
 (dumpex.hunt.encoding.domain's canonical domain model) into the legacy
-v1.1 dict, the current-schema (v2.10) `HunterRecord`, and the
+v1.1 dict, the current-schema (v2.11) `HunterRecord`, and the
 verdict-first console. Mirrors tests/hunt/test_injection_projectors.py
 (the completed reference pilot's own test suite) -- see that module's
 own docstring for the general split between this file and its

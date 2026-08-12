@@ -129,7 +129,7 @@ def test_modules_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert isinstance(doc["meta"]["evidence"], list)
         assert doc["result"]["kind"] == "modules"
         assert doc["result"]["data"]["records"][0]["name"] == "ntdll.dll"
@@ -161,7 +161,7 @@ def test_extract_json_produces_v2_shaped_document_with_artifact(monkeypatch, tmp
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert doc["result"]["kind"] == "extract"
         assert doc["result"]["coverage"]["status"] == "complete"
         assert doc["result"]["data"]["records"][0]["mz_header_detected"] is True
@@ -191,7 +191,7 @@ def test_strings_json_produces_v2_shaped_document(monkeypatch, tmp_path):
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert doc["result"]["kind"] == "strings"
         assert doc["result"]["coverage"]["status"] == "complete"
         records = doc["result"]["data"]["records"]
@@ -231,7 +231,7 @@ def test_report_json_produces_v2_shaped_document_with_triage_card(monkeypatch, t
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert doc["result"]["kind"] == "report"
         assert doc["result"]["coverage"]["status"] == "complete"
         records = doc["result"]["data"]["records"]
@@ -431,7 +431,7 @@ def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(mon
         assert exc.value.code == cli.EXIT_PARTIAL == 3   # degraded: no thread_info stream
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert doc["result"]["kind"] == "threads"
         assert doc["result"]["execution_status"] == "completed"
         assert doc["result"]["coverage"]["status"] == "partial"
@@ -464,7 +464,7 @@ def test_peb_missing_json_produces_v2_shaped_document_via_command_result_adapter
         assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert doc["result"]["kind"] == "peb"
         assert doc["result"]["execution_status"] == "completed"
         assert doc["result"]["coverage"]["status"] == "not_evaluated"
@@ -634,7 +634,7 @@ def test_diff_json_produces_comparison_document_with_two_evidence_entries(monkey
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
         assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
         assert [e["file_name"] for e in doc["meta"]["evidence"]] == [
@@ -710,7 +710,7 @@ def test_hunt_json_now_produces_v2_4_shaped_document(monkeypatch, tmp_path):
         assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == "2.10"
+        assert doc["meta"]["schema_version"] == "2.11"
         assert "hunt" not in doc
         assert doc["result"]["kind"] == "hunt"
         assert [r["hunter"] for r in doc["result"]["data"]["records"]] == ["injection"]

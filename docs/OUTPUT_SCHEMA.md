@@ -24,11 +24,12 @@ promise. Automation must use `--json`, never scrape `--txt`.
 
 Every command now shares a single JSON contract. `--hunt` was the last
 holdout on the older v1.1 contract; it has since migrated onto v2, and
-the whole v2 envelope has since moved onto v2.10:
+the whole v2 envelope has since moved onto v2.11:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.10 (current) | [`dumpex-output-v2.10.schema.json`](../dumpex/schemas/dumpex-output-v2.10.schema.json) |
+| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.11 (current) | [`dumpex-output-v2.11.schema.json`](../dumpex/schemas/dumpex-output-v2.11.schema.json) |
+| — (historical) | v2.10 | [`dumpex-output-v2.10.schema.json`](../dumpex/schemas/dumpex-output-v2.10.schema.json) — frozen, kept only to validate output produced before `schema_version 2.11`; no command emits this anymore |
 | — (historical) | v2.9 | [`dumpex-output-v2.9.schema.json`](../dumpex/schemas/dumpex-output-v2.9.schema.json) — frozen, kept only to validate output produced before `schema_version 2.10`; no command emits this anymore |
 | — (historical) | v2.8 | [`dumpex-output-v2.8.schema.json`](../dumpex/schemas/dumpex-output-v2.8.schema.json) — frozen, kept only to validate output produced before `schema_version 2.9`; no command emits this anymore |
 | — (historical) | v2.7 | [`dumpex-output-v2.7.schema.json`](../dumpex/schemas/dumpex-output-v2.7.schema.json) — frozen, kept only to validate output produced before `schema_version 2.8`; no command emits this anymore |
@@ -85,7 +86,19 @@ IOC-pattern string match, a network-pattern string match, or an
 injected-PE MZ header — see "Hunt investigation actions" below;
 `triageInfo` is `additionalProperties: false` with a closed `required`
 list, the same reason every prior closed-object addition on this list
-forced a bump)
+forced a bump), then from `"2.10"` to `"2.11"` when `huntPeHeaderHit`
+(each entry of `--hunt injection`'s `hidden_pe_validated`/
+`hidden_pe_unvalidated`/`suspicious_validated_pe_hits`/
+`informational_validated_pe_hits`) gained the required `va`/
+`region_offset`/`file_offset` candidate location — the hidden-PE scan now
+searches each eligible region for `MZ` candidates at every byte offset
+instead of only probing the region base
+([issue #26](https://github.com/bitbug0x55AA/dumpex/issues/26)), so a
+hit's containing region no longer says where the PE actually is, and a
+consumer needs the candidate's own address to carve or correlate it
+(`huntPeHeaderHit` is `additionalProperties: false` with a closed
+`required` list, the same reason every prior closed-object addition on
+this list forced a bump)
 (see "v2 structured output" below) — a
 new value on an existing closed enum, a new field on an already-closed
 (`additionalProperties: false`) object, or the removal of a field a
@@ -94,24 +107,24 @@ enforced that field's presence), always bumps the version per this
 document's own versioning policy, even though an already-migrated
 command's own output is otherwise unaffected (the `"report"`/`"hunt"`/
 `finding`-extension/cs-beacon-`raw`-removal/cs-beacon-field-rekey/
-coverage-`targets`/hunt-`investigation_actions`/triage-`content_reason_codes`
-changes
+coverage-`targets`/hunt-`investigation_actions`/triage-`content_reason_codes`/
+hidden-PE-candidate-location changes
 specifically must NOT be folded into `dumpex-output-v2.2.schema.json`/
 `v2.3.schema.json`/`v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/
-`v2.7.schema.json`/`v2.8.schema.json`/`v2.9.schema.json`
+`v2.7.schema.json`/`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`
 in place: those files were already shipped/used by earlier-migrated
 commands' output before each change existed, so they stay byte-frozen —
 each change gets its own new schema_version instead). `dumpex-output-
 v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`/
 `v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/`v2.7.schema.json`/
-`v2.8.schema.json`/`v2.9.schema.json`
+`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`
 stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`/`v2.9`) for validating output captured
+`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`/`v2.9`/`v2.10`) for validating output captured
 before each respective
 change; none is deleted or overwritten, following the same precedent
 v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
-v2.10 contract.
+v2.11 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -249,7 +262,7 @@ basenames.
 ## Hunt result semantics (v1.1 field names — historical)
 
 Each hunter reported its findings and decision fields inside the v1.1
-`hunt` object using the field names below. Under the current v2.10
+`hunt` object using the field names below. Under the current v2.11
 contract these same concepts live on `HunterRecord` — see "Hunt records"
 below for the `status`/`coverage.status`/`verdict_level`/`confidence`
 mapping `--hunt` now uses. The important decision fields were:
@@ -286,7 +299,7 @@ still validates each hunter's internal result dict (all seven hunters, both
 typical and edge-case verdicts) against this file on every test run,
 including the negative cases it must reject — this is legacy-compatibility
 coverage for the v1.1 shape itself, independent of the CLI's own
-`--hunt --json` output, which is now v2.10 (see "Hunt records" below).
+`--hunt --json` output, which is now v2.11 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -311,14 +324,14 @@ tool validates its own output — only the test suite and external `--json`
 consumers do), so none of them are collected into the frozen executable.
 They are instead uploaded as separate `dumpex-output-v*.schema.json`
 files alongside `dumpex.exe` in the release ZIP — every version currently
-packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`, `v2.10`), the same
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`, `v2.10`, `v2.11`), the same
 set `pip install dumpex` already ships (see "Reproducing a run" below for
 how an installed package reaches these via `importlib.resources`) — so an
 EXE-only install (no `pip install dumpex`, no source checkout) still has
 a way to get the schema for whatever output it's holding. Current CLI
 output (from any command, including `--hunt`) always validates against
-`dumpex-output-v2.10.schema.json`, the current contract — this section's
-own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.9` are
+`dumpex-output-v2.11.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.10` are
 shipped only to validate output produced by an older dumpex version, not
 anything a current install can produce.
 
@@ -379,7 +392,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.10",
+    "schema_version": "2.11",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -928,6 +941,41 @@ presentation-only and carries no schema impact of its own.
 `dumpex-output-v2.6.schema.json` stays byte-frozen and remains
 shipped/installable for validating output produced before this change,
 the same precedent every earlier frozen schema file follows.
+
+`schema_version 2.11` adds the candidate's own location to
+`huntPeHeaderHit` — every entry of `--hunt injection`'s
+`hidden_pe_validated`, `hidden_pe_unvalidated`,
+`suspicious_validated_pe_hits`, and `informational_validated_pe_hits`:
+
+| Field | Type | Notes |
+|---|---|---|
+| `va` | hexAddress | The process address the candidate's `MZ` header was actually found at. Equals `region.base_address` for a PE at its region's base, and does not otherwise. |
+| `region_offset` | integer ≥ 0 | How far into `region` that address is. `0` for a PE at the region base. |
+| `file_offset` | hexAddress or null | Where those bytes sit in the `.dmp`, for carving. `null` means the VA is not covered by any captured memory segment — **not** the same claim as offset zero. |
+
+The hidden-PE scan previously read two bytes at each region's own base
+address and stopped there, so a structurally valid PE mapped at a nonzero
+offset inside a private or unbacked allocation was invisible to it
+([issue #26](https://github.com/bitbug0x55AA/dumpex/issues/26)). It now
+searches each eligible region end to end for `MZ` candidates at every
+byte offset, which means `region` alone no longer answers "where is the
+PE": one region can host several candidates, and a consumer needs the
+candidate's own address to carve it, correlate it, or tell two hits
+apart. `region` still describes the CONTAINING region and is still what
+allocation correlation (`rwx_and_pe_alloc_bases`, `rip_hits`,
+`rip_full_correlation`) is keyed on.
+
+That search reads far more of the dump than the old base-address probe,
+and a dump is untrusted input, so it runs under explicit budgets (bytes
+read, structural validations, retained evidence — see
+[`dumpex/hunt/injection/config.py`](../dumpex/hunt/injection/config.py)).
+Anything a budget cut short is reported rather than silently dropped: a
+region whose search stopped early raises the `PE_HEADER_SCAN_TRUNCATED`
+coverage limitation, and validated hits found but not retained raise
+`PE_HEADER_EVIDENCE_CAPPED` (see "Coverage limitations and skipped scan
+targets" below). `dumpex-output-v2.10.schema.json` stays byte-frozen (its
+own `huntPeHeaderHit` rejects these three properties) and remains
+shipped/installable for validating output produced before this change.
 
 ### Coverage limitations and skipped scan targets
 

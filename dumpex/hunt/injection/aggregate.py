@@ -19,7 +19,9 @@ built the Evidence it reads.
 from dumpex.hunt._domain import CheckResult
 from dumpex.hunt._finding import (CONFIDENCE_LOW, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH,
     TAG_OBSERVATION, TAG_LEAD, TAG_DETECTION)
-from dumpex.hunt.injection.config import PE_VALIDATE_READ_MAX
+from dumpex.hunt.injection.config import (
+    PE_SCAN_MAX_UNVALIDATED_EVIDENCE, PE_SCAN_MAX_VALIDATED_EVIDENCE, PE_VALIDATE_READ_MAX,
+)
 from dumpex.hunt.injection.correlation import correlated_allocations as _correlated_allocations
 from dumpex.hunt.injection.domain import (
     CoverageSnapshot, InjectionEvidence, InjectionReport,
@@ -32,6 +34,24 @@ from dumpex.hunt.injection.memory_scan import pe_hit_is_context_scoreable
 # (dumpex.hunt.injection.domain) and imported here rather than restated:
 # the score this module computes and the verdict_level that model derives
 # from a score must never be able to disagree about the same table.
+
+
+def _evidence_cap_limitation(dropped: int, kind: str, cap: int) -> list:
+    """The one sentence a check owes an analyst when the scan found more
+    than it kept (memory_scan._ScanBudget's evidence cap): how many, and
+    that the list is therefore not exhaustive. Empty list when nothing was
+    dropped, so it can be concatenated unconditionally into a check's own
+    limitations without an `if` at every call site.
+
+    This is deliberately NOT phrased as a coverage gap -- the memory was
+    searched and these candidates WERE examined. Dropped VALIDATED hits do
+    additionally count against coverage (see CoverageSnapshot.
+    pe_evidence_capped); dropped unvalidated 'MZ' prefixes do not, and
+    this sentence is the whole of what is said about them."""
+    if not dropped:
+        return []
+    return [f"{dropped} further {kind} candidate(s) were found but not retained "
+            f"(evidence cap: {cap}); the list above is not exhaustive."]
 
 
 def _split_scoreable_pe_hits(validated_pe_hits: tuple, rwx_and_pe_alloc_bases: set,
@@ -103,6 +123,8 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         module_list_stream=module_list_stream, thread_list_stream=thread_list_stream,
         threads_total=threads_total, contexts_parsed=contexts_parsed,
         pe_read_failed=hidden_pe_scan.read_failed, pe_short_reads=hidden_pe_scan.short_reads,
+        pe_scan_truncated=hidden_pe_scan.scan_truncated,
+        pe_evidence_capped=hidden_pe_scan.validated_dropped,
         region_count=region_count, thread_info_count=thread_info_count,
         module_count=module_count,
     )
@@ -180,7 +202,7 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         results.append(CheckResult(
             check="injection.hidden_pe_validated",
             evidence=evidence.suspicious_pe_hits, evidence_limit=20,
-            inference=f"{len(evidence.suspicious_pe_hits)} region(s) contain a structurally-valid "
+            inference=f"{len(evidence.suspicious_pe_hits)} address(es) contain a structurally-valid "
                        f"PE header (DOS+COFF+optional header+full section table all "
                        f"parsed successfully) at an address absent from the module list, "
                        f"in MEM_PRIVATE memory, an executable unbacked mapping, or "
@@ -195,7 +217,10 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
                        "RIP/EIP actually executes inside the same allocation.",
             limitations=[f"Header validation read is capped at {PE_VALIDATE_READ_MAX} bytes; "
                          "a section table extending past that reports as invalid rather "
-                         "than being partially trusted."],
+                         "than being partially trusted."]
+                         + _evidence_cap_limitation(hidden_pe_scan.validated_dropped,
+                                                     "validated hidden-PE",
+                                                     PE_SCAN_MAX_VALIDATED_EVIDENCE),
             tag=TAG_LEAD,
         ))
 
@@ -203,8 +228,8 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         results.append(CheckResult(
             check="injection.hidden_pe_validated_context_only",
             evidence=evidence.informational_pe_hits, evidence_limit=20,
-            inference=f"{len(evidence.informational_pe_hits)} region(s) contain a structurally-valid "
-                       f"PE header at an address absent from the module list, but are "
+            inference=f"{len(evidence.informational_pe_hits)} address(es) contain a structurally-valid "
+                       f"PE header at an address absent from the module list, but sit in "
                        f"read-only/non-executable mappings (e.g. MEM_MAPPED, or a "
                        f"MEM_IMAGE view with no execute permission) with no correlated "
                        f"RWX allocation or live thread execution.",
@@ -218,7 +243,10 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
                        "above, when present).",
             limitations=["Memory-context classification only (page type + protection); "
                          "does not by itself rule out a hidden module that is simply not "
-                         "currently executing."],
+                         "currently executing."]
+                         + _evidence_cap_limitation(hidden_pe_scan.validated_dropped,
+                                                     "validated hidden-PE",
+                                                     PE_SCAN_MAX_VALIDATED_EVIDENCE),
             tag=TAG_OBSERVATION,
         ))
 
@@ -226,7 +254,7 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         results.append(CheckResult(
             check="injection.mz_prefix_unvalidated",
             evidence=evidence.mz_only_hits, evidence_limit=10,
-            inference=f"{len(evidence.mz_only_hits)} region(s) begin with the 2-byte 'MZ' prefix "
+            inference=f"{len(evidence.mz_only_hits)} address(es) carry the 2-byte 'MZ' prefix "
                        f"but fail structural PE header validation.",
             confidence=CONFIDENCE_LOW,
             rationale="Two matching bytes is extremely weak evidence on its own — this "
@@ -235,7 +263,10 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
                        "'MZ' are all more likely explanations than a hidden module) and "
                        "is NOT counted toward the injection score.",
             limitations=["Not corroborated by section-table/entry-point validation; "
-                         "treat as informational only."],
+                         "treat as informational only."]
+                         + _evidence_cap_limitation(hidden_pe_scan.unvalidated_dropped,
+                                                     "unvalidated 'MZ'",
+                                                     PE_SCAN_MAX_UNVALIDATED_EVIDENCE),
             tag=TAG_OBSERVATION,
         ))
 

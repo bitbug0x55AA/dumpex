@@ -66,9 +66,22 @@ class RwxRegionEvidence:
 
 @dataclass(frozen=True)
 class HiddenPeEvidence:
-    """One MZ-prefixed candidate region from memory_scan._hunt_hidden_pe(),
-    with its structural PE validation result and file offset already
-    resolved."""
+    """One MZ candidate found by memory_scan._hunt_hidden_pe(), with its
+    structural PE validation result and file offset already resolved.
+
+    `region` is the containing MemoryInfo region -- region identity (and
+    with it `allocation_base`, which allocation correlation is keyed on)
+    describes where the candidate LIVES, never where it starts.
+
+    `location` is the candidate's OWN address: `location.va` is the
+    address the 'MZ' was actually found at, `location.region_offset` how
+    far into `region` that is, and `location.file_offset` where those
+    bytes sit in the .dmp. The two are equal for a PE at a region's base
+    and deliberately not equal otherwise -- a PE mapped partway into an
+    allocation is exactly the case the region-base-only scan could not see
+    at all (issue #26), so collapsing its address back onto
+    `region.base_address` would report evidence at an address where there
+    is no PE header."""
     region: RegionRef
     pe: PeHeaderInfo
     in_module_list: bool
@@ -184,16 +197,54 @@ class CorrelatedAllocationEvidence:
 
 @dataclass(frozen=True)
 class HiddenPeScan:
-    """Result of memory_scan._hunt_hidden_pe(): every MZ-prefixed
-    candidate region as a HiddenPeEvidence, plus how many regions could
-    not be fully examined. `hits` is normalized to a tuple in
-    __post_init__ (accepts list OR tuple on construction, same defensive-
-    copy reasoning as dumpex.hunt._finding.Finding's own list fields) so a
-    caller can never mutate this Report-bound scan result in place after
-    construction by holding onto the list it passed in."""
+    """Result of memory_scan._hunt_hidden_pe(): every MZ candidate found
+    anywhere in an eligible region as a HiddenPeEvidence, plus how many
+    regions could not be fully examined, by reason -- `read_failed` (a
+    read raised), `short_reads` (a read came back with fewer bytes than
+    requested, leaving candidate offsets or a candidate's own header
+    unexamined), `scan_truncated` (the region's read budget ran out before
+    its search reached the end). Each counts REGIONS, never reads: one
+    region whose search needed many reads contributes at most 1 to each.
+
+    All three exist so a negative result can state what it actually
+    covered: "no hidden PE found in the parts of memory that were
+    searched" is a different claim from "no hidden PE in this process",
+    and only the counters make the difference visible (see
+    dumpex.hunt.injection.domain.CoverageSnapshot.complete).
+
+    `validated_dropped`/`unvalidated_dropped` are a DIFFERENT kind of
+    fact: those candidates WERE read, found, and structurally validated --
+    they simply exceeded the scan's evidence cap (see
+    memory_scan._ScanBudget) and are therefore not listed. Both are stated
+    as an explicit count on the check they belong to (aggregate.py), and
+    the two are treated differently beyond that, because they are not
+    equally consequential:
+
+      validated_dropped   -- a validated hidden PE header that is not in
+                             the report is detection-relevant, so it also
+                             counts against coverage completeness
+                             (CoverageSnapshot.pe_evidence_capped). It
+                             takes hundreds of structurally-valid PE
+                             headers in unbacked memory to reach the cap
+                             at all, which is not something a benign dump
+                             does, so this cannot become routine noise.
+      unvalidated_dropped -- an 'MZ' that failed validation is
+                             informational only and occurs ~16 times per
+                             MB in ordinary memory, so counting it against
+                             coverage would mark essentially every dump
+                             partial and tell an analyst nothing.
+
+    `hits` is normalized to a tuple in __post_init__ (accepts list OR
+    tuple on construction, same defensive-copy reasoning as
+    dumpex.hunt._finding.Finding's own list fields) so a caller can never
+    mutate this Report-bound scan result in place after construction by
+    holding onto the list it passed in."""
     hits: tuple              # tuple[HiddenPeEvidence, ...] once constructed
     read_failed: int = 0
     short_reads: int = 0
+    scan_truncated: int = 0
+    validated_dropped: int = 0
+    unvalidated_dropped: int = 0
 
     def __post_init__(self):
         object.__setattr__(self, "hits", tuple(self.hits))

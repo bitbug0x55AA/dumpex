@@ -45,6 +45,18 @@ def _region_facts(r: RegionRef) -> str:
             f"size=0x{r.size:x} type={r.type} protect={r.protect}")
 
 
+def _pe_candidate_facts(location) -> str:
+    """Where inside its region a hidden-PE candidate actually starts --
+    rendered ONLY when that is not the region base, so a PE at a region's
+    own base reads exactly as it always has (the region facts already say
+    that address once) while a PE found partway into an allocation, which
+    the region-base-only scan could not report at all (issue #26), never
+    hides behind its region's address."""
+    if location.region_offset == 0:
+        return ""
+    return f" PE_VA=0x{location.va:x} region_offset=0x{location.region_offset:x}"
+
+
 def _pe_facts(pe: PeHeaderInfo) -> str:
     if pe.valid:
         return (f"PE header VALID: machine={pe.machine_name} "
@@ -66,7 +78,8 @@ def _rwx_item_fact(ev, report: InjectionReport) -> str:
 
 
 def _pe_item_fact(hit, report: InjectionReport) -> str:
-    return _region_facts(hit.region) + "  |  " + _pe_facts(hit.pe)
+    return (_region_facts(hit.region) + _pe_candidate_facts(hit.location)
+            + "  |  " + _pe_facts(hit.pe))
 
 
 def _thread_item_fact(ev, report: InjectionReport) -> str:
@@ -180,6 +193,14 @@ def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
         reasons.append(f"{coverage.pe_short_reads} region(s) returned fewer bytes than "
                         f"requested while checking for hidden PE headers "
                         f"(short read) — not fully examined")
+    if coverage.pe_scan_truncated:
+        reasons.append(f"{coverage.pe_scan_truncated} region(s) hit a hidden-PE scan budget "
+                        f"before the candidate search reached the end of the region — the "
+                        f"remainder was not searched")
+    if coverage.pe_evidence_capped:
+        reasons.append(f"{coverage.pe_evidence_capped} validated hidden PE header(s) were "
+                        f"found but not retained (evidence cap) — the reported list is not "
+                        f"exhaustive")
     if not coverage.thread_context:
         reasons.append("No per-thread CONTEXT (RIP/EIP) available — live-execution "
                         "correlation could not run")
@@ -245,6 +266,14 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.PE_HEADER_SHORT_READ, source="hidden_pe_scan",
             affected_count=coverage.pe_short_reads))
+    if coverage.pe_scan_truncated:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.PE_HEADER_SCAN_TRUNCATED, source="hidden_pe_scan",
+            affected_count=coverage.pe_scan_truncated))
+    if coverage.pe_evidence_capped:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.PE_HEADER_EVIDENCE_CAPPED, source="hidden_pe_scan",
+            affected_count=coverage.pe_evidence_capped))
     completeness_checks.append(
         SourceRequirement(source="thread_context",
                            absent_code=LimitationCode.THREAD_CONTEXT_UNAVAILABLE))

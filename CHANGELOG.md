@@ -5,6 +5,53 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Injection: hidden PE headers are searched for throughout memory (schema v2.11)
+
+`--hunt injection`'s hidden-PE check used to read two bytes at each
+memory region's own base address and stop there. A structurally valid PE
+mapped at a nonzero offset inside a private or unbacked allocation --
+loader metadata or padding ahead of the image, several objects in one
+allocation, a manual map aligned to nothing in particular -- produced no
+finding at all, could not correlate with RWX or live execution in its own
+allocation, and left a clean verdict when nothing else fired
+([issue #26](https://github.com/bitbug0x55AA/dumpex/issues/26)).
+
+Every eligible region is now searched end to end for candidate `MZ`
+headers at every byte offset, and each candidate is structurally
+validated where it was actually found.
+
+- **Evidence carries the candidate's own location.** New in
+  `schema_version 2.11`: each `huntPeHeaderHit` (the entries of
+  `hidden_pe_validated`, `hidden_pe_unvalidated`,
+  `suspicious_validated_pe_hits`, `informational_validated_pe_hits`)
+  gains a required `va`, `region_offset`, and `file_offset` -- the
+  address the header was found at, how far into its region that is, and
+  where those bytes sit in the `.dmp` (`null` when the VA is not covered
+  by a captured segment). `region` still describes the CONTAINING region,
+  and allocation correlation is still keyed on it, so a PE found partway
+  into an allocation correlates with RWX and live RIP/EIP in that same
+  allocation exactly as a base-address one always did. Console output
+  shows the PE's own VA, adding its region base and offset when the two
+  differ.
+- **Bounded, because a dump is untrusted input.** A region crafted to
+  carry `MZ` every other byte cannot dictate how much dumpex reads,
+  parses, or reports: the search runs under a whole-run byte budget,
+  per-region and whole-run structural-validation budgets, a per-region
+  read budget, and separate caps on retained validated and unvalidated
+  evidence (validated hits are kept in preference to unvalidated `MZ`
+  prefixes, which occur incidentally in ordinary memory).
+- **What a budget cut short is never silent.** A region whose search
+  stopped early is reported as partial coverage
+  (`PE_HEADER_SCAN_TRUNCATED`), alongside the existing failed-read and
+  short-read limitations. Validated headers that were found but not
+  retained are reported too (`PE_HEADER_EVIDENCE_CAPPED`); dropped
+  unvalidated `MZ` candidates are stated with their count on the
+  informational check that would have listed them, without marking
+  coverage partial.
+
+`dumpex-output-v2.10.schema.json` stays packaged and frozen for
+validating output captured before this change.
+
 ## `--triage-skipped`: opt-in budgeted deep-content triage (schema v2.10)
 
 Issue #19 Phase 1 (previous entry below) gave `--hunt all` a default,

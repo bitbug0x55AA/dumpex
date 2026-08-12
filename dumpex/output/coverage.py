@@ -408,6 +408,32 @@ class LimitationCode(str, Enum):
     # read at all" and "read, but short" are different facts an analyst
     # needs to tell apart. source fixed to "hidden_pe_scan";
     # caller_buildable; affected_count alone carries the fact.
+    PE_HEADER_SCAN_TRUNCATED = "PE_HEADER_SCAN_TRUNCATED"
+    # ^ --hunt injection: same scan again, but this time nothing failed --
+    # one of the scan's own bounds (dumpex.hunt.injection.config's
+    # PE_SCAN_MAX_READS_PER_REGION / PE_SCAN_TOTAL_BYTES_MAX /
+    # PE_SCAN_MAX_VALIDATIONS_*) was reached before the candidate search
+    # reached the end of the region (HiddenPeScan.scan_truncated), so its
+    # remainder was never searched for a hidden PE header. Distinct from
+    # both codes above because the cause is this tool's own bound, not the
+    # dump's contents: an analyst who sees it can re-run with a larger
+    # budget, which is not true of a failed or short read. source fixed to
+    # "hidden_pe_scan"; caller_buildable; affected_count alone carries the
+    # fact.
+    PE_HEADER_EVIDENCE_CAPPED = "PE_HEADER_EVIDENCE_CAPPED"
+    # ^ --hunt injection: the search DID examine this memory and found a
+    # structurally-valid hidden PE header there, but the scan's retained-
+    # evidence cap (PE_SCAN_MAX_VALIDATED_EVIDENCE) was already full, so
+    # the hit is not in the reported list (HiddenPeScan.validated_dropped).
+    # Not a scan gap -- nothing went unexamined -- but still incomplete
+    # coverage of the RESULT: an analyst reading the finding list is not
+    # seeing every validated hidden PE this run found. Only VALIDATED hits
+    # count here; an unvalidated 'MZ' prefix that is dropped by the
+    # separate, much smaller unvalidated cap is informational (incidental
+    # 'MZ' bytes occur ~16 times per MB of ordinary memory) and is stated
+    # on that check instead, so that ordinary dumps are not all marked
+    # partial. source fixed to "hidden_pe_scan"; caller_buildable;
+    # affected_count alone carries the fact.
     THREAD_CONTEXT_UNAVAILABLE = "THREAD_CONTEXT_UNAVAILABLE"
     # ^ --hunt injection (and, once migrated, stomping/pipe): no per-thread
     # CONTEXT (RIP/EIP) could be read from this dump at all -- live-
@@ -1001,6 +1027,17 @@ def _render_pe_header_short_read(limitation: "CoverageLimitation") -> str:
             f"while checking for hidden PE headers (short read) -- not fully examined")
 
 
+def _render_pe_header_scan_truncated(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} region(s) hit a hidden-PE scan budget before the "
+            f"candidate search reached the end of the region -- the remainder was not "
+            f"searched")
+
+
+def _render_pe_header_evidence_capped(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} validated hidden PE header(s) were found but not "
+            f"retained (evidence cap) -- the reported list is not exhaustive")
+
+
 def _render_thread_context_partial(limitation: "CoverageLimitation") -> str:
     return (f"{limitation.affected_count} thread(s) had no parsed CONTEXT -- live-execution "
             f"correlation ran, but not for every thread")
@@ -1502,6 +1539,16 @@ _CODE_SPECS = {
         render=_render_pe_header_short_read, fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("PE_HEADER_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.PE_HEADER_SCAN_TRUNCATED: _CodeSpec(
+        render=_render_pe_header_scan_truncated, fixed_source="hidden_pe_scan",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("PE_HEADER_SCAN_TRUNCATED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.PE_HEADER_EVIDENCE_CAPPED: _CodeSpec(
+        render=_render_pe_header_evidence_capped, fixed_source="hidden_pe_scan",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("PE_HEADER_EVIDENCE_CAPPED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.THREAD_CONTEXT_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text(

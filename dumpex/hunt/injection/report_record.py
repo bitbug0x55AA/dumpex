@@ -1,4 +1,4 @@
-"""`InjectionReport` -> current-schema (v2.10) `HunterRecord` pure
+"""`InjectionReport` -> current-schema (v2.11) `HunterRecord` pure
 projector. Since the Injection 2C cutover, `dumpex.hunt.injection.collect.
 _record_from_injection_report` is simply this module's own
 `project_hunter_record`, re-exported under that name.
@@ -31,14 +31,26 @@ def _region_ref(region_ref) -> HuntRegionRef:
 
 
 def _pe_hit_ref(hit) -> HuntPeHeaderHit:
+    # The candidate's own location travels with it (schema_version 2.11):
+    # `hit.location` is the address the 'MZ' was actually found at, which
+    # since the whole-region candidate search (issue #26) is not
+    # necessarily the containing region's base -- a consumer given only
+    # `region` could not carve the image or tell two hits inside one
+    # region apart. `file_offset` stays None when the VA is not covered by
+    # a captured segment; `hex_address` preserves that None rather than
+    # inventing a zero.
     region = _region_ref(hit.region)
+    location = hit.location
+    where = dict(va=hex_address(location.va), region_offset=location.region_offset,
+                  file_offset=hex_address(location.file_offset))
     pe = hit.pe
     if pe.valid:
         return HuntPeHeaderHit(
             region=region, valid=True, machine_name=pe.machine_name,
             is_pe32_plus=pe.is_pe32_plus, number_of_sections=pe.number_of_sections,
-            entry_point_rva=pe.address_of_entry_point, image_base=hex_address(pe.image_base))
-    return HuntPeHeaderHit(region=region, valid=False, reason=pe.reason)
+            entry_point_rva=pe.address_of_entry_point, image_base=hex_address(pe.image_base),
+            **where)
+    return HuntPeHeaderHit(region=region, valid=False, reason=pe.reason, **where)
 
 
 def _thread_ref_from_evidence(ev) -> HuntThreadRef:

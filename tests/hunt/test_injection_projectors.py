@@ -2,7 +2,7 @@
 report_facts.py, report_legacy.py, report_record.py, report_console.py) --
 everything that turns a hand-built `InjectionReport` (2A's canonical
 domain model, dumpex.hunt.injection.domain) into the legacy v1.1 dict, the
-current-schema (v2.10) `HunterRecord`, and the verdict-first console.
+current-schema (v2.11) `HunterRecord`, and the verdict-first console.
 
 Distinct from its neighbours: tests/hunt/test_injection_domain.py covers
 the domain model's OWN construction-time contracts (immutability, poison-
@@ -467,7 +467,7 @@ def _golden_scenario_report() -> InjectionReport:
                             "self-modifying-code use cases."]),
         _check(check="injection.hidden_pe_validated", tag=TAG_LEAD, confidence=CONFIDENCE_MEDIUM,
                evidence=evidence.suspicious_pe_hits, evidence_limit=20,
-               inference="1 region(s) contain a structurally-valid PE header (DOS+COFF+"
+               inference="1 address(es) contain a structurally-valid PE header (DOS+COFF+"
                           "optional header+full section table all parsed successfully) at "
                           "an address absent from the module list, in MEM_PRIVATE memory, "
                           "an executable unbacked mapping, or otherwise correlated with an "
@@ -639,3 +639,98 @@ def test_injection_report_status_has_no_error_representation():
     for report_fn in (_full_report, _coverage_gap_report, _clean_report,
                        _inconclusive_report, _not_evaluated_report):
         assert report_fn().status in known_statuses
+
+
+# ── issue #26 / schema 2.11: the candidate's own location reaches the ─────
+# structured record, not just the console. A consumer handed only the
+# containing region cannot carve a PE found partway into an allocation,
+# correlate it, or tell two hits in one region apart.
+
+def _nonbase_pe_report() -> InjectionReport:
+    """One validated hidden PE found 0x2000 into its region, with a real
+    file offset -- the arrangement the region-base-only scan could not
+    produce at all."""
+    region_base = _ALLOC + 0x50000
+    pe_va = region_base + 0x2000
+    hit = HiddenPeEvidence(
+        region=_region(region_base, "PAGE_READWRITE", alloc=_ALLOC),
+        pe=PeHeaderInfo(valid=True, machine_name="AMD64", is_pe32_plus=True,
+                        number_of_sections=1, address_of_entry_point=0x1000,
+                        image_base=0x140000000, reason=""),
+        in_module_list=False,
+        location=Location(va=pe_va, region_base=region_base, file_offset=0x8400))
+    evidence = InjectionEvidence(validated_pe_hits=[hit], suspicious_pe_hits=[hit],
+                                  correlation=_correlation_for(validated_pe_hits=[hit]))
+    results = (_check(check="injection.hidden_pe_validated", tag=TAG_LEAD,
+                       confidence=CONFIDENCE_MEDIUM, evidence=evidence.suspicious_pe_hits,
+                       evidence_limit=20),)
+    return InjectionReport(score=1, coverage=_coverage(), results=results, evidence=evidence)
+
+
+def test_hunter_record_pe_hit_carries_the_candidate_location():
+    record = project_hunter_record(_nonbase_pe_report())
+    hit = record.details.hidden_pe_validated[0]
+    assert hit.va == "0x00007ffe30052000"
+    assert hit.region_offset == 0x2000
+    assert hit.file_offset == "0x0000000000008400"
+    # The containing region is unchanged -- it is what allocation
+    # correlation is keyed on, and it is NOT where the PE starts.
+    assert hit.region.base_address == "0x00007ffe30050000"
+
+
+def test_hunter_record_pe_hit_location_survives_the_json_projection():
+    d = project_hunter_record(_nonbase_pe_report()).to_dict()
+    hit = d["details"]["hidden_pe_validated"][0]
+    assert hit["va"] == "0x00007ffe30052000"
+    assert hit["region_offset"] == 0x2000
+    assert hit["file_offset"] == "0x0000000000008400"
+
+
+def test_hunter_record_pe_hit_file_offset_none_is_not_offset_zero():
+    # "not captured" and "byte zero of the .dmp" are different claims --
+    # see Location.file_offset's own docstring.
+    region_base = _ALLOC + 0x50000
+    hit = HiddenPeEvidence(
+        region=_region(region_base, "PAGE_READWRITE", alloc=_ALLOC),
+        pe=PeHeaderInfo(valid=False, machine_name=None, is_pe32_plus=None,
+                        number_of_sections=None, address_of_entry_point=None,
+                        image_base=None, reason="truncated header"),
+        in_module_list=False,
+        location=Location(va=region_base + 0x10, region_base=region_base, file_offset=None))
+    evidence = InjectionEvidence(mz_only_hits=[hit], correlation=Correlation())
+    results = (_check(check="injection.mz_prefix_unvalidated", tag=TAG_OBSERVATION,
+                       confidence=CONFIDENCE_LOW, evidence=evidence.mz_only_hits,
+                       evidence_limit=10),)
+    report = InjectionReport(score=0, coverage=_coverage(), results=results, evidence=evidence)
+
+    hit_dict = project_hunter_record(report).to_dict()["details"]["hidden_pe_unvalidated"][0]
+    assert hit_dict["file_offset"] is None
+    assert hit_dict["va"] == "0x00007ffe30050010"
+    assert hit_dict["region_offset"] == 0x10
+
+
+def test_hunter_record_with_candidate_location_validates_against_the_current_schema():
+    jsonschema = pytest.importorskip("jsonschema")
+    import json
+    from dumpex.schemas import CURRENT_SCHEMA, schema_path
+
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord",
+                "$defs": schema["$defs"]}
+    validator = jsonschema.Draft202012Validator(wrapper)
+    assert list(validator.iter_errors(project_hunter_record(_nonbase_pe_report()).to_dict())) == []
+
+
+def test_facts_name_the_pe_address_only_when_it_is_not_the_region_base():
+    # A hit at the region base reads exactly as it always has (the region
+    # facts already say that address once); a hit found partway in names
+    # its own VA and offset, so the fact line cannot be misread as
+    # pointing at the region's first byte.
+    nonbase = finding_from_check_result(_nonbase_pe_report().results[0], _nonbase_pe_report())
+    assert "PE_VA=0x7ffe30052000 region_offset=0x2000" in nonbase.facts[0]
+
+    base_report = _full_report()
+    pe_check = next(r for r in base_report.results if r.check == "injection.hidden_pe_validated")
+    at_base = finding_from_check_result(pe_check, base_report)
+    assert "PE_VA=" not in at_base.facts[0]

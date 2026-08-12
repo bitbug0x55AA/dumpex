@@ -59,6 +59,7 @@
     "hidden_pe_validated": [
       {
         "entry_point_rva": 4096,
+        "file_offset": null,
         "image_base": "0x0000000140000000",
         "is_pe32_plus": true,
         "machine_name": "AMD64",
@@ -71,6 +72,8 @@
           "size": 4096,
           "type": "MEM_PRIVATE"
         },
+        "region_offset": 0,
+        "va": "0x00007ff700002000",
         "valid": true
       }
     ],
@@ -141,6 +144,7 @@
     "suspicious_validated_pe_hits": [
       {
         "entry_point_rva": 4096,
+        "file_offset": null,
         "image_base": "0x0000000140000000",
         "is_pe32_plus": true,
         "machine_name": "AMD64",
@@ -153,6 +157,8 @@
           "size": 4096,
           "type": "MEM_PRIVATE"
         },
+        "region_offset": 0,
+        "va": "0x00007ff700002000",
         "valid": true
       }
     ],
@@ -202,7 +208,7 @@
         "VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  |  PE header VALID: machine=AMD64 pe32plus=True sections=1 entrypoint_rva=0x1000 declared_image_base=0x140000000"
       ],
       "id": "finding-aae112b40521d5d1a2b5b85a2c5b2b20",
-      "inference": "1 region(s) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.",
+      "inference": "1 address(es) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.",
       "iocs": [],
       "limitations": [
         "Header validation read is capped at 4096 bytes; a section table extending past that reports as invalid rather than being partially trusted."

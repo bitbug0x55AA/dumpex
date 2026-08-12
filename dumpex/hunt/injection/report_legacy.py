@@ -90,6 +90,12 @@ def project_legacy_dict(report: InjectionReport) -> dict:
         "verdict_level":                     report.verdict_level,
         "pe_read_failed":                    report.coverage.pe_read_failed,
         "pe_short_reads":                    report.coverage.pe_short_reads,
+        # Third counter of the same family (see models.HiddenPeScan): the
+        # candidate search stopped on its own per-region read budget, so
+        # part of that region was never searched. Emitted alongside the
+        # other two rather than folded into either -- "we stopped early"
+        # is a different fact from "the dump would not give us the bytes".
+        "pe_scan_truncated":                 report.coverage.pe_scan_truncated,
         "findings":                          [finding_from_check_result(r, report).to_dict()
                                                 for r in report.results],
         "lead_count":                        report.lead_count,

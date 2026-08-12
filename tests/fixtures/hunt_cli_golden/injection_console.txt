@@ -21,7 +21,7 @@
       allocation(s).
 
   [~] LEAD       Hidden PE header
-      1 region(s) contain a structurally-valid PE header (DOS+COFF+optional header+full section
+      1 address(es) contain a structurally-valid PE header (DOS+COFF+optional header+full section
       table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE
       memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live
       thread execution.

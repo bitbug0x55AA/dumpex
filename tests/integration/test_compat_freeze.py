@@ -988,7 +988,7 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
 
 def _expected_meta(argv0: str) -> dict:
     return {
-        "schema_version": "2.10",
+        "schema_version": "2.11",
         "tool": {"name": "dumpex", "version": "<VERSION>"},
         "execution": {
             "started_at": "2024-01-01T00:00:00Z",

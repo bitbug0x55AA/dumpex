@@ -39,10 +39,10 @@
       - Does not by itself distinguish injection from JIT/legitimate self-modifying-code use cases.
 
   Hidden PE header  [MEDIUM]  LEAD  (injection.hidden_pe_validated)
-    Inference   : 1 region(s) contain a structurally-valid PE header (DOS+COFF+optional header+full
-                  section table all parsed successfully) at an address absent from the module list,
-                  in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated
-                  with an RWX allocation or live thread execution.
+    Inference   : 1 address(es) contain a structurally-valid PE header (DOS+COFF+optional
+                  header+full section table all parsed successfully) at an address absent from the
+                  module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise
+                  correlated with an RWX allocation or live thread execution.
     Confidence  : medium — Passing full structural PE validation (not just an 'MZ' prefix) rules out
                   coincidental bytes and most decoys, but a valid header outside the module list can
                   also occur from a manually-mapped but otherwise benign in-process library (e.g.

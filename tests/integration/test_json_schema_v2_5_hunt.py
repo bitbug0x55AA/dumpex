@@ -1,6 +1,6 @@
 """
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
-v2 envelopes built around them) against dumpex-output-v2.10.schema.json
+v2 envelopes built around them) against dumpex-output-v2.11.schema.json
 (the current schema) -- originally the PR3 "Schema v2.4" hunt migration
 step (see docs/hunt_migration_field_matrix.md and the migration plan's own
 PR3 description), carried forward onto v2.5's extended `finding` $def
@@ -64,7 +64,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.10.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -117,12 +117,21 @@ def test_v2_4_finding_shape_is_rejected_by_the_frozen_v2_4_schema(hunter_record_
 def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schema(
         hunter_record_validator_v2_4):
     # The frozen historical schema must keep validating a real v2.4-era
-    # finding dict -- i.e. the old shape minus the seven v2.5 additions.
+    # record -- i.e. the current shape minus everything added after v2.4:
+    # the seven v2.5 finding fields, and the three v2.11 hidden-PE hit
+    # location fields (`va`/`region_offset`/`file_offset`, added with the
+    # whole-region candidate search, issue #26). Stripped rather than
+    # hand-written so this stays a test of the REAL record's shape.
     d = injection_detected().to_dict()
     for f in d["findings"]:
         for key in ("id", "severity", "technique_ids", "evidence_refs", "iocs",
                     "rule_id", "rule_version"):
             del f[key]
+    for pe_list in ("hidden_pe_validated", "hidden_pe_unvalidated",
+                     "suspicious_validated_pe_hits", "informational_validated_pe_hits"):
+        for hit in d["details"][pe_list]:
+            for key in ("va", "region_offset", "file_offset"):
+                del hit[key]
     errors = list(hunter_record_validator_v2_4.iter_errors(d))
     assert errors == []
 
@@ -130,7 +139,7 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):
     return {
         "meta": {
-            "schema_version": "2.10",
+            "schema_version": "2.11",
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "2026-01-01T00:00:00Z", "finished_at": "2026-01-01T00:00:01Z",
                           "duration_seconds": 1.0, "command": command, "options": options or {}},

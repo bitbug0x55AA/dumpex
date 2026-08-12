@@ -23,8 +23,28 @@ still reported (StartAddress correlation is kept as a secondary,
 lower-confidence signal), but only a live RIP/EIP landing inside a
 suspicious allocation can reach HIGH confidence.
 
-A "hidden PE" is no longer just a region beginning with the two bytes
-'MZ'. dumpex.core.pe_utils.parse_pe_header() structurally validates the
+A "hidden PE" is not just a region beginning with the two bytes 'MZ' --
+and it is no longer only looked for AT each region's base address either.
+Every eligible (committed, not-inside-a-known-module) region is searched
+for candidate 'MZ' headers at EVERY byte offset, so an image mapped
+partway into a private or unbacked allocation -- behind loader metadata,
+as one of several objects in the same allocation, or aligned to nothing in
+particular -- is examined instead of being invisible because the region's
+first two bytes were clean (issue #26). Each candidate keeps its OWN
+address and file offset (see models.HiddenPeEvidence), which the current
+schema's `huntPeHeaderHit` carries too, while correlation stays keyed on
+the containing allocation's identity.
+
+Searching everything makes the dump's own contents decide how much work
+this hunter does, so that search runs under explicit budgets -- bytes
+read, structural validations performed, evidence retained (see
+config.py's PE_SCAN_* family and memory_scan._ScanBudget). What a budget
+cut short is never silent: a region whose search stopped early is counted
+in coverage (alongside failed and short reads) rather than reported as
+clean, and candidates that were examined but not retained are stated,
+with their count, on the check that would have listed them.
+
+dumpex.core.pe_utils.parse_pe_header() structurally validates the
 DOS header, PE signature, COFF file header (Machine/NumberOfSections),
 optional header (PE32/PE32+ Magic), and the full section table before a
 region counts as a validated hidden PE. A region with an 'MZ' prefix that

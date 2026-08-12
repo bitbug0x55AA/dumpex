@@ -35,15 +35,24 @@ def thread_ref(tid=1, start_address=None, ip=None, ip_reg=None):
 
 
 def valid_pe_hit(r=None):
+    # A candidate found PART WAY into its region (region_offset != 0) --
+    # the case the hidden-PE scan could not see at all before the
+    # whole-region candidate search (issue #26), and the reason
+    # va/region_offset/file_offset exist on this record at all: a fixture
+    # pinned at the region base would exercise the one arrangement where
+    # `region.base_address` happens to answer "where is the PE".
     r = r or region()
-    return HuntPeHeaderHit(region=r, valid=True, machine_name="AMD64", is_pe32_plus=True,
+    return HuntPeHeaderHit(region=r, valid=True, va="0x0000000000001001",
+                            region_offset=0x1000, file_offset="0x0000000000000401",
+                            machine_name="AMD64", is_pe32_plus=True,
                             number_of_sections=1, entry_point_rva=0x1000,
                             image_base="0x0000000000000002")
 
 
 def invalid_pe_hit(r=None):
     r = r or region()
-    return HuntPeHeaderHit(region=r, valid=False, reason="no MZ prefix")
+    return HuntPeHeaderHit(region=r, valid=False, va="0x0000000000000001",
+                            region_offset=0, file_offset=None, reason="no MZ prefix")
 
 
 def a_finding(check="injection.rwx_regions"):

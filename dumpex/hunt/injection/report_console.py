@@ -54,10 +54,19 @@ def _rwx_verbose_fact(ev) -> str:
 
 
 def _hidden_pe_verbose_fact(ev) -> str:
+    # `location` is the CANDIDATE's own address, not its region's base --
+    # the two differ exactly when the PE sits partway into its region (see
+    # models.HiddenPeEvidence), and it is the PE's address, not the
+    # region's, that an analyst carves at. The containing region's base is
+    # then printed alongside it, so the extra pair only appears for a hit
+    # the region-base-only scan could never have produced (issue #26).
     r, pe, location = ev.region, ev.pe, ev.location
     fo_str = f"0x{location.file_offset:x}" if location.file_offset is not None else "(not captured)"
-    return (f"VA (process)=0x{r.base_address:016x} AllocationBase=0x{r.allocation_base:016x} "
-            f"File_offset={fo_str} Page_type={r.type} {r.protect} "
+    inside_region = ("" if location.region_offset == 0 else
+                      f"Region_base=0x{r.base_address:016x} "
+                      f"Region_offset=0x{location.region_offset:x} ")
+    return (f"VA (process)=0x{location.va:016x} AllocationBase=0x{r.allocation_base:016x} "
+            f"File_offset={fo_str} {inside_region}Page_type={r.type} {r.protect} "
             f"PE_machine={pe.machine_name} PE_sections={pe.number_of_sections} "
             f"Entry_point_RVA=0x{pe.address_of_entry_point:x} "
             f"Declared_ImageBase=0x{pe.image_base:x}")

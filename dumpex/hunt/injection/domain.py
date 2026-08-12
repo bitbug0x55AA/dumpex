@@ -453,6 +453,8 @@ class CoverageSnapshot:
     contexts_parsed: int = 0
     pe_read_failed:  int = 0
     pe_short_reads:  int = 0
+    pe_scan_truncated: int = 0
+    pe_evidence_capped: int = 0
     region_count:      "int | None" = None
     thread_info_count: "int | None" = None
     module_count:      "int | None" = None
@@ -461,7 +463,8 @@ class CoverageSnapshot:
         for name in ("memory_info_stream", "thread_info_stream",
                      "module_list_stream", "thread_list_stream"):
             _require_bool(getattr(self, name), f"CoverageSnapshot.{name}")
-        for name in ("threads_total", "contexts_parsed", "pe_read_failed", "pe_short_reads"):
+        for name in ("threads_total", "contexts_parsed", "pe_read_failed", "pe_short_reads",
+                     "pe_scan_truncated", "pe_evidence_capped"):
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in ("region_count", "thread_info_count", "module_count"):
             _require_optional_count(getattr(self, name), f"CoverageSnapshot.{name}")
@@ -495,10 +498,18 @@ class CoverageSnapshot:
         missing stream does: RIP/EIP correlation is the ONLY path to this
         hunter's HIGH tier, so a thread whose context was never parsed is
         a live-execution correlation that could not be ruled out, not one
-        that was checked and came back negative."""
+        that was checked and came back negative. `pe_scan_truncated` joins
+        the two hidden-PE read counters for the same reason: a region
+        whose candidate search stopped on one of its budgets has an
+        unsearched remainder, and a hidden PE there is not ruled out
+        either. `pe_evidence_capped` counts VALIDATED hidden PE headers
+        the scan found but did not retain (evidence cap) -- the memory was
+        searched, but the report does not list everything that search
+        found, which is not a complete result either."""
         return (self.memory_info_stream and self.thread_info_stream
                 and self.module_list_stream
                 and self.pe_read_failed == 0 and self.pe_short_reads == 0
+                and self.pe_scan_truncated == 0 and self.pe_evidence_capped == 0
                 and self.thread_context and self.contexts_missing == 0)
 
     @property

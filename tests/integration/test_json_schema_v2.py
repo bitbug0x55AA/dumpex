@@ -1,7 +1,7 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.10.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.10") for each of the six
+dumpex/schemas/dumpex-output-v2.11.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.11") for each of the six
 recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
 in normal, empty, and partial-coverage shapes -- built through the
 actual collect_*() functions against synthetic fixtures, not
@@ -98,7 +98,7 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.10.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -448,7 +448,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.10",
+            "schema_version": "2.11",
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
