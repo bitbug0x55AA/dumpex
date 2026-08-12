@@ -858,7 +858,8 @@ def _src(state, count=None, detail=None):
 def _lim(code, source, **kw):
     d = {"scope": None, "affected_count": None, "unavailable_fields": [],
          "available_fields": [], "counterpart_source": None, "related_sources": [],
-         "related_tids": [], "thread_id": None, "detail": None, "targets": []}
+         "related_tids": [], "thread_id": None, "detail": None, "targets": [],
+         "budget_limit": None, "budget_consumed": None}
     d.update(kw)
     d["code"] = code
     d["source"] = source
@@ -988,7 +989,7 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
 
 def _expected_meta(argv0: str) -> dict:
     return {
-        "schema_version": "2.11",
+        "schema_version": "2.12",
         "tool": {"name": "dumpex", "version": "<VERSION>"},
         "execution": {
             "started_at": "2024-01-01T00:00:00Z",

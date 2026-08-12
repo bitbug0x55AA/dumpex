@@ -128,15 +128,23 @@ def _cs_beacon_coverage_report(scan_outcome, mem_info_available, thread_list_str
     if cc.read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="segment_scan",
-            affected_count=cc.read_failed))
+            affected_count=cc.read_failed, targets=cc.read_failed_targets))
     if cc.short_reads:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="segment_scan",
-            affected_count=cc.short_reads))
+            affected_count=cc.short_reads, targets=cc.short_read_targets))
     if scan_outcome.budget_exhausted:
+        targets = scan_outcome.budget_exhausted_targets
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED, source="segment_scan",
-            detail=scan_outcome.budget_reason))
+            detail=scan_outcome.budget_reason,
+            affected_count=(len(targets) or None), targets=targets,
+            # issue #28 P6 follow-up: `detail` above keeps its own
+            # pre-existing free-text reason; scope/budget_limit/
+            # budget_consumed are the SEPARATE structured fact.
+            scope=scan_outcome.budget_exhausted_kind,
+            budget_limit=scan_outcome.budget_exhausted_limit,
+            budget_consumed=scan_outcome.budget_exhausted_limit))
     # top_tier_uncertain (see aggregate.build_report): only matters once
     # hits exist and none is already corroborated -- an uncorroborated
     # hit's RIP/EIP-based top-tier corroboration couldn't fully run.

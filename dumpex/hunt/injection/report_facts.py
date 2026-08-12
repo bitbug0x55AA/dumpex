@@ -163,6 +163,25 @@ def finding_from_check_result(result, report: InjectionReport) -> Finding:
 
 # ── Coverage projections ──────────────────────────────────────────────────
 
+def _budget_detail(limit: int, consumed: int) -> str:
+    """`CoverageLimitation.detail`'s own "limit=N consumed=M" text for
+    ONE `BudgetTargetGroup` (issue #28 P4/P5 follow-up)."""
+    return f"limit={limit} consumed={consumed}"
+
+
+def _budget_reason_clause(groups: tuple) -> str:
+    """The free-text v1.1 `coverage_reasons` counterpart of
+    `_budget_detail` -- one "kind: limit=N consumed=M" clause per group
+    (issue #28 P5 follow-up: a scan whose regions stopped on more than
+    one distinct budget lists every one, not just the first), omitted
+    (empty string) entirely when there are no groups at all."""
+    if not groups:
+        return ""
+    clauses = "; ".join(f"{g.budget_kind}: {_budget_detail(g.budget_limit, g.budget_consumed)}"
+                          for g in groups)
+    return f" ({clauses})"
+
+
 def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
     """`(coverage_dict, coverage_status, coverage_reasons)` -- the v1.1
     shape `aggregate.build_report` assembles (its own `coverage` dict plus
@@ -196,7 +215,13 @@ def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
     if coverage.pe_scan_truncated:
         reasons.append(f"{coverage.pe_scan_truncated} region(s) hit a hidden-PE scan budget "
                         f"before the candidate search reached the end of the region — the "
-                        f"remainder was not searched")
+                        f"remainder was not searched"
+                        + _budget_reason_clause(coverage.pe_scan_truncated_groups))
+    if coverage.pe_scan_not_started:
+        reasons.append(f"{coverage.pe_scan_not_started} region(s) were never searched for a "
+                        f"hidden PE header at all — the hidden-PE scan budget was already "
+                        f"exhausted before reaching them"
+                        + _budget_reason_clause(coverage.pe_scan_not_started_groups))
     if coverage.pe_evidence_capped:
         reasons.append(f"{coverage.pe_evidence_capped} validated hidden PE header(s) were "
                         f"found but not retained (evidence cap) — the reported list is not "
@@ -261,15 +286,28 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     if coverage.pe_read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.PE_HEADER_READ_FAILED, source="hidden_pe_scan",
-            affected_count=coverage.pe_read_failed))
+            affected_count=coverage.pe_read_failed, targets=coverage.pe_read_failed_targets))
     if coverage.pe_short_reads:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.PE_HEADER_SHORT_READ, source="hidden_pe_scan",
-            affected_count=coverage.pe_short_reads))
-    if coverage.pe_scan_truncated:
+            affected_count=coverage.pe_short_reads, targets=coverage.pe_short_reads_targets))
+    # One CoverageLimitation PER DISTINCT budget group (issue #28 P5
+    # follow-up), not one summed limitation for the whole scan -- a run
+    # whose regions stop on more than one distinct budget must not have
+    # every target's own attribution collapsed onto whichever budget
+    # happened to exhaust first (see BudgetTargetGroup's own docstring).
+    for group in coverage.pe_scan_truncated_groups:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.PE_HEADER_SCAN_TRUNCATED, source="hidden_pe_scan",
-            affected_count=coverage.pe_scan_truncated))
+            affected_count=len(group.targets), targets=group.targets,
+            scope=group.budget_kind,
+            budget_limit=group.budget_limit, budget_consumed=group.budget_consumed))
+    for group in coverage.pe_scan_not_started_groups:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.PE_HEADER_SCAN_NOT_STARTED, source="hidden_pe_scan",
+            affected_count=len(group.targets), targets=group.targets,
+            scope=group.budget_kind,
+            budget_limit=group.budget_limit, budget_consumed=group.budget_consumed))
     if coverage.pe_evidence_capped:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.PE_HEADER_EVIDENCE_CAPPED, source="hidden_pe_scan",

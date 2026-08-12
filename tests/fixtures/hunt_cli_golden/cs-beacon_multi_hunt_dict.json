@@ -5,6 +5,8 @@
       {
         "affected_count": null,
         "available_fields": [],
+        "budget_consumed": null,
+        "budget_limit": null,
         "code": "THREAD_CONTEXT_UNAVAILABLE",
         "counterpart_source": null,
         "detail": null,

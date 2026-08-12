@@ -808,6 +808,84 @@ def test_scan_truncated_by_read_budget_is_reported_not_treated_as_clean(monkeypa
     assert any("not searched" in reason for reason in f["coverage_reasons"])
 
 
+def test_later_region_never_started_when_whole_hunt_byte_budget_is_already_spent(monkeypatch):
+    # issue #28: distinct from the per-region-truncation case above -- the
+    # WHOLE-HUNT byte budget (which carries over between regions, unlike
+    # the per-region read budget) is sized to exactly cover region 1's own
+    # read and nothing else, so region 2's search never issues a single
+    # read at all. That is a materially different fact from "we started
+    # this region and ran out partway through" and must be counted/
+    # reported separately (pe_scan_not_started, not pe_scan_truncated).
+    from dumpex.hunt.injection import memory_scan
+    region1_base, region_size = 0x71000000, 0x2000
+    region2_base = 0x72000000
+    monkeypatch.setattr(memory_scan, "PE_SCAN_WINDOW", region_size)
+    # +1: the sliding-window search always issues one extra, tiny
+    # overlap-tail read at the end of a region (see _scan_span's own
+    # `pos += max(1, size - _MZ_OVERLAP)` advance) even when the window
+    # covers the whole region in one go -- region 1's own search must have
+    # exactly enough whole-hunt byte budget to complete BOTH reads
+    # cleanly, or it would itself pick up a spurious pe_scan_truncated
+    # from that trailing read rather than leaving pe_scan_not_started as
+    # the only gap this scenario is meant to exercise.
+    monkeypatch.setattr(memory_scan, "PE_SCAN_TOTAL_BYTES_MAX", region_size + 1)
+    regions = [Region(region1_base, region1_base, region_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE"),
+               Region(region2_base, region2_base, region_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+    mods = [Module(0x20000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream(mods, "modules")
+        thread_info   = FakeStream([], "infos")
+    injection.read_region = mem_reader({region1_base: b"\x00" * region_size,
+                                         region2_base: b"\x00" * region_size})
+
+    f = injection._hunt_injection(MF(), verbose=False)
+    assert f["pe_scan_not_started"] == 1
+    assert f["pe_scan_truncated"] == 0
+    assert f["pe_read_failed"] == 0 and f["pe_short_reads"] == 0
+    assert f["coverage_status"] == "partial"
+    assert f["status"] == "INCONCLUSIVE"
+    assert any("never searched" in reason for reason in f["coverage_reasons"])
+
+
+def test_remainder_scan_target_names_only_the_unexamined_suffix():
+    """Direct unit test of _remainder_scan_target() itself (issue #28 P2
+    follow-up) -- the higher-level scenario above already proves it end
+    to end via a real truncated scan; this pins the function's own
+    base/size arithmetic and its MemoryInfo-facts passthrough."""
+    from dumpex.hunt.injection.memory_scan import _remainder_scan_target
+    region = Region(0x80000000, 0x80000000, 0x4000, "MEM_COMMIT",
+                     "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")
+    injection.read_region = mem_reader({})   # nothing captured -- va_to_file_offset -> None
+    target = _remainder_scan_target(FakeMF(), region, examined_until=0x1000)
+    assert target.base_address == 0x80001000
+    assert target.size == 0x3000
+    assert target.base_address + target.size == region.BaseAddress + region.RegionSize
+    # MemoryInfo facts describe the SAME underlying allocation regardless
+    # of which sub-range within it this target names.
+    assert target.allocation_base == region.AllocationBase
+    assert target.state == "MEM_COMMIT"
+    assert target.protection == "PAGE_EXECUTE_READWRITE"
+    assert target.size_limit is None
+
+
+def test_remainder_scan_target_falls_back_to_whole_region_when_nothing_remains():
+    # Defensive-only branch (see the function's own docstring): every real
+    # PE_HEADER_SCAN_TRUNCATED call site stops strictly before the
+    # region's own end, so examined_until never actually reaches
+    # RegionSize in practice -- this just proves the fallback doesn't
+    # construct an invalid (zero/negative-size) ScanTarget if it ever did.
+    from dumpex.hunt.injection.memory_scan import _remainder_scan_target
+    region = Region(0x80000000, 0x80000000, 0x4000, "MEM_COMMIT",
+                     "PAGE_READWRITE", "MEM_PRIVATE")
+    target = _remainder_scan_target(FakeMF(), region, examined_until=0x4000)
+    assert target.base_address == region.BaseAddress
+    assert target.size == region.RegionSize
+
+
 def test_fully_read_region_with_no_mz_is_still_a_complete_clean_scan():
     # The counterpart of the test above: a region the search covered end
     # to end must NOT acquire a coverage caveat merely because it is now
@@ -872,6 +950,86 @@ def test_validation_budget_stops_the_search_and_reports_partial_coverage(monkeyp
     assert f["coverage_status"] == "partial"
     assert f["status"] == "INCONCLUSIVE"
     assert any("not searched" in reason for reason in f["coverage_reasons"])
+
+
+def test_examined_until_stops_at_unvalidated_candidate_not_window_end():
+    # issue #28 P3 follow-up: `_on_bytes` used to advance `examined_until`
+    # to the end of the whole read window BEFORE the candidates inside it
+    # were validated, so a validation-budget exhaustion on the very FIRST
+    # candidate in a window still claimed the entire window -- up to
+    # PE_SCAN_WINDOW bytes -- was examined. It must stop exactly at that
+    # candidate's own offset instead.
+    from dumpex.hunt.injection import memory_scan
+    region_base, region_size = 0xB0000000, 0x200000   # 2 MiB, > one window
+    window = 0x100000                                  # 1 MiB
+    mz_offset = 0x14
+    content = bytearray(b"\x00" * region_size)
+    content[mz_offset:mz_offset + 2] = b"MZ"
+
+    def reader(mf, addr, size):
+        off = addr - region_base
+        return bytes(content[off:off + size])
+
+    budget = memory_scan._ScanBudget(validations_total=0)
+    budgeted_reader = memory_scan._BudgetedReader(reader, None, budget)
+    gaps = memory_scan._scan_region_for_pe(
+        budgeted_reader, budget, region_base, region_size,
+        lambda offset, data: None, window=window, degraded_read=0x1000)
+
+    assert gaps.truncated
+    assert gaps.examined_until == mz_offset, (
+        f"budget died validating the candidate at {mz_offset:#x}; nothing "
+        f"past it was examined, but examined_until reports "
+        f"{gaps.examined_until:#x}")
+
+
+def test_examined_until_advances_past_a_clean_window_with_no_candidates():
+    # Counterpart of the test above: a window with NO 'MZ' candidates at
+    # all must still advance examined_until to its own end -- the whole
+    # window genuinely was byte-searched, just found nothing.
+    from dumpex.hunt.injection import memory_scan
+    region_base, region_size = 0xB0100000, 0x1000
+
+    def reader(mf, addr, size):
+        return b"\x00" * size
+
+    budget = memory_scan._ScanBudget()
+    budgeted_reader = memory_scan._BudgetedReader(reader, None, budget)
+    gaps = memory_scan._scan_region_for_pe(
+        budgeted_reader, budget, region_base, region_size,
+        lambda offset, data: None, window=region_size, degraded_read=0x1000)
+
+    assert not gaps.truncated
+    assert gaps.examined_until == region_size
+
+
+def test_scan_budget_exhausted_info_attributes_each_of_the_four_budgets():
+    # issue #28 P4 follow-up: _ScanBudget must be able to say WHICH of
+    # its four independent resources stopped a take_read()/
+    # take_validation() call, and that resource's own configured limit.
+    from dumpex.hunt.injection import memory_scan
+
+    b = memory_scan._ScanBudget(reads_per_region=2, total_bytes=1000,
+                                  validations_per_region=1000, validations_total=1000)
+    assert b.exhausted_budget_info() is None   # nothing has failed yet
+    assert b.take_read() and b.take_read()
+    assert not b.take_read()   # reads_per_region (2) just ran out
+    assert b.exhausted_budget_info() == ("reads_per_region", 2, 2)
+
+    b = memory_scan._ScanBudget(reads_per_region=1000, total_bytes=5)
+    b.spend_bytes(5)
+    assert not b.take_read()   # total_bytes (5) already spent
+    assert b.exhausted_budget_info() == ("total_bytes", 5, 5)
+
+    b = memory_scan._ScanBudget(validations_total=3, validations_per_region=1000)
+    assert b.take_validation() and b.take_validation() and b.take_validation()
+    assert not b.take_validation()   # validations_total (3) just ran out
+    assert b.exhausted_budget_info() == ("validations_total", 3, 3)
+
+    b = memory_scan._ScanBudget(validations_total=1000, validations_per_region=2)
+    assert b.take_validation() and b.take_validation()
+    assert not b.take_validation()   # validations_per_region (2) just ran out
+    assert b.exhausted_budget_info() == ("validations_per_region", 2, 2)
 
 
 def test_whole_hunt_validation_budget_is_shared_across_regions(monkeypatch):

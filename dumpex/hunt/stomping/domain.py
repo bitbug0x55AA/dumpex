@@ -213,7 +213,9 @@ class CoverageSnapshot:
     # are counts, matching every other hunter's own generic gap reporting.
     ioc_oversized:   tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     ioc_read_failed: int = 0
+    ioc_read_failed_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget] -- issue #28
     ioc_short_reads: int = 0
+    ioc_short_read_targets: tuple = field(default_factory=tuple)    # tuple[ScanTarget] -- issue #28
     # Whitelisted network DLLs whose regions WERE scanned, just without the
     # network-IOC pattern set (network strings are expected there) -- not a
     # gap, a scan-detail fact report_console.py surfaces under --verbose.
@@ -227,6 +229,10 @@ class CoverageSnapshot:
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         object.__setattr__(self, "ioc_oversized", _require_scan_targets(
             self.ioc_oversized, "CoverageSnapshot.ioc_oversized"))
+        object.__setattr__(self, "ioc_read_failed_targets", _require_scan_targets(
+            self.ioc_read_failed_targets, "CoverageSnapshot.ioc_read_failed_targets"))
+        object.__setattr__(self, "ioc_short_read_targets", _require_scan_targets(
+            self.ioc_short_read_targets, "CoverageSnapshot.ioc_short_read_targets"))
         object.__setattr__(self, "ioc_whitelisted_modules", _require_str_items(
             self.ioc_whitelisted_modules, "CoverageSnapshot.ioc_whitelisted_modules"))
 
@@ -322,9 +328,13 @@ class CoverageSnapshot:
             reasons.append(f"{len(self.ioc_oversized)} {IOC_OVERSIZE_LABEL}: "
                             f"{format_scan_target_preview(self.ioc_oversized)}")
         if self.ioc_read_failed:
-            reasons.append(f"{self.ioc_read_failed} {IOC_READ_FAILED_LABEL}")
+            preview = (f": {format_scan_target_preview(self.ioc_read_failed_targets)}"
+                       if self.ioc_read_failed_targets else "")
+            reasons.append(f"{self.ioc_read_failed} {IOC_READ_FAILED_LABEL}{preview}")
         if self.ioc_short_reads:
-            reasons.append(f"{self.ioc_short_reads} {IOC_SHORT_READ_LABEL}")
+            preview = (f": {format_scan_target_preview(self.ioc_short_read_targets)}"
+                       if self.ioc_short_read_targets else "")
+            reasons.append(f"{self.ioc_short_reads} {IOC_SHORT_READ_LABEL}{preview}")
         return tuple(reasons)
 
     def coverage_counts(self) -> dict:

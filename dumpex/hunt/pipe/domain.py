@@ -186,7 +186,9 @@ class CoverageSnapshot:
     # every other hunter's own generic gap reporting.
     skipped_oversize: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     read_failed:      int = 0
+    read_failed_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     short_reads:      int = 0
+    short_read_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
 
     # The two INDEPENDENT whole-hunt budgets, each with the reason it ran
     # out ("deadline"/"max_hits"/... -- see dumpex.hunt._budget.ScanBudget).
@@ -212,6 +214,10 @@ class CoverageSnapshot:
             _require_str(getattr(self, name), f"CoverageSnapshot.{name}")
         object.__setattr__(self, "skipped_oversize", _require_scan_targets(
             self.skipped_oversize, "CoverageSnapshot.skipped_oversize"))
+        object.__setattr__(self, "read_failed_targets", _require_scan_targets(
+            self.read_failed_targets, "CoverageSnapshot.read_failed_targets"))
+        object.__setattr__(self, "short_read_targets", _require_scan_targets(
+            self.short_read_targets, "CoverageSnapshot.short_read_targets"))
         object.__setattr__(self, "image_pipe_modules", _require_str_items(
             self.image_pipe_modules, "CoverageSnapshot.image_pipe_modules"))
 
@@ -285,9 +291,13 @@ class CoverageSnapshot:
             reasons.append(f"{len(self.skipped_oversize)} {OVERSIZE_LABEL}: "
                             f"{format_scan_target_preview(self.skipped_oversize)}")
         if self.read_failed:
-            reasons.append(f"{self.read_failed} {READ_FAILED_LABEL}")
+            preview = (f": {format_scan_target_preview(self.read_failed_targets)}"
+                       if self.read_failed_targets else "")
+            reasons.append(f"{self.read_failed} {READ_FAILED_LABEL}{preview}")
         if self.short_reads:
-            reasons.append(f"{self.short_reads} {SHORT_READ_LABEL}")
+            preview = (f": {format_scan_target_preview(self.short_read_targets)}"
+                       if self.short_read_targets else "")
+            reasons.append(f"{self.short_reads} {SHORT_READ_LABEL}{preview}")
         if self.c2_budget_exhausted:
             reasons.append(f"C2-context scan budget exhausted ({self.c2_budget_reason})")
         if self.pipe_name_budget_exhausted:

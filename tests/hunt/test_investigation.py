@@ -25,18 +25,17 @@ from tests.fixtures.fakes import Region
 
 def target(base=0x1000, size=20 * 1024 * 1024, size_limit=8 * 1024 * 1024,
            file_offset=999, type_="MEM_PRIVATE", protection="PAGE_READWRITE",
-           kind=ScanTargetKind.MEMORY_REGION):
+           kind=ScanTargetKind.MEMORY_REGION, captured_size=None):
     kwargs = dict(kind=kind, base_address=base, size=size, size_limit=size_limit,
-                  file_offset=file_offset)
+                  file_offset=file_offset, captured_size=captured_size)
     if kind == ScanTargetKind.MEMORY_REGION:
         kwargs.update(allocation_base=base, state="MEM_COMMIT", type=type_, protection=protection)
     return ScanTarget(**kwargs)
 
 
-def limitation(source, targets, scope=None):
-    return CoverageLimitation(code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED,
-                               source=source, scope=scope, affected_count=len(targets),
-                               targets=tuple(targets))
+def limitation(source, targets, scope=None, code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED):
+    return CoverageLimitation(code=code, source=source, scope=scope,
+                               affected_count=len(targets), targets=tuple(targets))
 
 
 def pipe_record(limitations=(), status="NOT_DETECTED_IN_SCANNED_SCOPE"):
@@ -149,6 +148,233 @@ def test_different_size_same_base_are_not_deduped():
     assert len(actions) == 2
 
 
+# ── target-bearing codes beyond SCAN_REGION_OVERSIZED_SKIPPED (issue #28) ──
+
+_EXPECTED_CAUSE_BY_CODE = {
+    LimitationCode.SCAN_REGION_READ_FAILED:    "read_failed",
+    LimitationCode.SCAN_REGION_SHORT_READ:     "short_read",
+    LimitationCode.PE_HEADER_READ_FAILED:      "read_failed",
+    LimitationCode.PE_HEADER_SHORT_READ:       "short_read",
+    LimitationCode.PE_HEADER_SCAN_TRUNCATED:   "scan_truncated",
+    LimitationCode.PE_HEADER_SCAN_NOT_STARTED: "scan_not_started",
+}
+
+
+@pytest.mark.parametrize("code,source", [
+    (LimitationCode.SCAN_REGION_READ_FAILED, "pipe_name_scan"),
+    (LimitationCode.SCAN_REGION_SHORT_READ, "pipe_name_scan"),
+    (LimitationCode.PE_HEADER_READ_FAILED, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SHORT_READ, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SCAN_TRUNCATED, "hidden_pe_scan"),
+    (LimitationCode.PE_HEADER_SCAN_NOT_STARTED, "hidden_pe_scan"),
+])
+def test_queue_consumes_every_target_bearing_code_not_only_oversized(code, source):
+    t = target(base=0x7000, size_limit=None)
+    if source == "hidden_pe_scan":
+        # injection_record() takes no limitations param -- build one with
+        # the injection HunterRecord's own coverage.limitations directly.
+        details = InjectionDetails(
+            rwx=[], hidden_pe_validated=[], hidden_pe_unvalidated=[],
+            suspicious_validated_pe_hits=[], informational_validated_pe_hits=[],
+            threads=[], thread_contexts=[], rwx_and_pe_alloc_bases=[],
+            rip_hits=[], rip_full_correlation=[], start_hits=[])
+        record = HunterRecord(
+            hunter="injection", status="INCONCLUSIVE", score=0, max_score=3,
+            verdict_level="inconclusive", confidence="none", lead_count=0,
+            review_priority="none",
+            coverage=CoverageReport(status=CoverageStatus.PARTIAL,
+                                     limitations=[limitation(source, [t], code=code)]),
+            findings=[], details=details)
+    else:
+        record = pipe_record([limitation(source, [t], code=code)])
+    actions = build_investigation_queue([record], [])
+    assert len(actions) == 1
+    assert actions[0].target.base_address == 0x7000
+    assert actions[0].target.size_limit is None
+    assert actions[0].skipped_by[0].cause == _EXPECTED_CAUSE_BY_CODE[code]
+
+
+def test_pe_scan_truncated_budget_kind_flows_into_skip_relationship_scope():
+    # issue #28 P4/P6 follow-up: the injection hunter's own scan-budget
+    # attribution (scope=budget_kind, budget_limit/budget_consumed -- see
+    # dumpex.output.coverage's PE_HEADER_SCAN_TRUNCATED wiring) reaches
+    # the investigation queue for free through the SAME fields the queue
+    # already threads onto SkipRelationship for every other code.
+    t = target(base=0x19000, size_limit=None)
+    lim = CoverageLimitation(code=LimitationCode.PE_HEADER_SCAN_TRUNCATED, source="hidden_pe_scan",
+                              affected_count=1, targets=(t,), scope="validations_total",
+                              budget_limit=200000, budget_consumed=200000)
+    details = InjectionDetails(
+        rwx=[], hidden_pe_validated=[], hidden_pe_unvalidated=[],
+        suspicious_validated_pe_hits=[], informational_validated_pe_hits=[],
+        threads=[], thread_contexts=[], rwx_and_pe_alloc_bases=[],
+        rip_hits=[], rip_full_correlation=[], start_hits=[])
+    record = HunterRecord(
+        hunter="injection", status="INCONCLUSIVE", score=0, max_score=3,
+        verdict_level="inconclusive", confidence="none", lead_count=0,
+        review_priority="none",
+        coverage=CoverageReport(status=CoverageStatus.PARTIAL, limitations=[lim]),
+        findings=[], details=details)
+    actions = build_investigation_queue([record], [])
+    assert actions[0].skipped_by[0].scope == "validations_total"
+    assert actions[0].skipped_by[0].cause == "scan_truncated"
+    # issue #28 P5 follow-up: the same scope/detail also reaches the
+    # relationship's own STRUCTURED budget fields -- not just scope
+    # (the kind) with the numeric limit/consumed left stuck in the
+    # owning CoverageLimitation.detail's free text.
+    rel = actions[0].skipped_by[0]
+    assert rel.budget_kind == "validations_total"
+    assert rel.budget_limit == 200000
+    assert rel.budget_consumed == 200000
+
+
+def test_non_budget_cause_leaves_structured_budget_fields_unset():
+    # A read-failed target (or any cause other than scan_truncated/
+    # scan_not_started) never has a budget to attribute -- scope may
+    # still be set for OTHER reasons (e.g. obfuscation's own scan-layer
+    # name), but budget_kind/_limit/_consumed must stay None regardless.
+    t = target(base=0x1A000, size_limit=None)
+    lim = CoverageLimitation(code=LimitationCode.SCAN_REGION_READ_FAILED, source="encoding_scan",
+                              affected_count=1, targets=(t,), scope="entropy")
+    actions = build_investigation_queue([obfuscation_record([lim])], [])
+    rel = actions[0].skipped_by[0]
+    assert rel.scope == "entropy"
+    assert (rel.budget_kind, rel.budget_limit, rel.budget_consumed) == (None, None, None)
+
+
+def test_zero_budget_limit_does_not_crash_the_investigation_queue():
+    # issue #28 P6 follow-up: a configured budget of exactly 0 (e.g.
+    # PE_SCAN_MAX_VALIDATIONS_TOTAL=0, "no validations at all") is
+    # legitimate -- SkipRelationship's own budget_limit/budget_consumed
+    # must accept 0, not require a POSITIVE int, or building the queue
+    # from a real zero-budget scan run raises instead of producing an
+    # action.
+    t = target(base=0x1B000, size_limit=None)
+    lim = CoverageLimitation(code=LimitationCode.PE_HEADER_SCAN_TRUNCATED, source="hidden_pe_scan",
+                              affected_count=1, targets=(t,), scope="validations_total",
+                              budget_limit=0, budget_consumed=0)
+    details = InjectionDetails(
+        rwx=[], hidden_pe_validated=[], hidden_pe_unvalidated=[],
+        suspicious_validated_pe_hits=[], informational_validated_pe_hits=[],
+        threads=[], thread_contexts=[], rwx_and_pe_alloc_bases=[],
+        rip_hits=[], rip_full_correlation=[], start_hits=[])
+    record = HunterRecord(
+        hunter="injection", status="INCONCLUSIVE", score=0, max_score=3,
+        verdict_level="inconclusive", confidence="none", lead_count=0,
+        review_priority="none",
+        coverage=CoverageReport(status=CoverageStatus.PARTIAL, limitations=[lim]),
+        findings=[], details=details)
+    actions = build_investigation_queue([record], [])   # must not raise
+    rel = actions[0].skipped_by[0]
+    assert (rel.budget_kind, rel.budget_limit, rel.budget_consumed) == ("validations_total", 0, 0)
+
+
+def test_pe_header_evidence_capped_never_produces_a_queue_entry():
+    # PE_HEADER_EVIDENCE_CAPPED (a validated hidden PE that WAS found and
+    # read, just not retained past the evidence cap) is not target-bearing
+    # at all -- that memory was examined, unlike a skipped/failed/
+    # truncated target, and must never surface as an actionable gap here.
+    lim = CoverageLimitation(code=LimitationCode.PE_HEADER_EVIDENCE_CAPPED,
+                              source="hidden_pe_scan", affected_count=3)
+    details = InjectionDetails(
+        rwx=[], hidden_pe_validated=[], hidden_pe_unvalidated=[],
+        suspicious_validated_pe_hits=[], informational_validated_pe_hits=[],
+        threads=[], thread_contexts=[], rwx_and_pe_alloc_bases=[],
+        rip_hits=[], rip_full_correlation=[], start_hits=[])
+    record = HunterRecord(
+        hunter="injection", status="DETECTED", score=1, max_score=3,
+        verdict_level="high", confidence="high", lead_count=1, review_priority="high",
+        coverage=CoverageReport(status=CoverageStatus.PARTIAL, limitations=[lim]),
+        findings=[], details=details)
+    assert build_investigation_queue([record], []) == []
+
+
+def test_same_physical_target_skipped_by_two_hunters_for_two_different_causes():
+    """The explicit issue #28 acceptance criterion: the same physical
+    region skipped by injection (a read failure) and pipe (an oversized
+    skip) becomes ONE queue entry with BOTH relationships and BOTH causes
+    retained -- not collapsed into a single relationship that loses one
+    cause, and not two separate entries."""
+    t_pipe = target(base=0x9000, size_limit=8 * 1024 * 1024)
+    t_injection = target(base=0x9000, size_limit=None)
+    details = InjectionDetails(
+        rwx=[], hidden_pe_validated=[], hidden_pe_unvalidated=[],
+        suspicious_validated_pe_hits=[], informational_validated_pe_hits=[],
+        threads=[], thread_contexts=[], rwx_and_pe_alloc_bases=[],
+        rip_hits=[], rip_full_correlation=[], start_hits=[])
+    injection_rec = HunterRecord(
+        hunter="injection", status="INCONCLUSIVE", score=0, max_score=3,
+        verdict_level="inconclusive", confidence="none", lead_count=0, review_priority="none",
+        coverage=CoverageReport(status=CoverageStatus.PARTIAL, limitations=[
+            limitation("hidden_pe_scan", [t_injection], code=LimitationCode.PE_HEADER_READ_FAILED)]),
+        findings=[], details=details)
+    records = [
+        pipe_record([limitation("pipe_name_scan", [t_pipe])]),   # oversized_skipped
+        injection_rec,                                            # read_failed
+    ]
+    actions = build_investigation_queue(records, [])
+    assert len(actions) == 1
+    action = actions[0]
+    assert len(action.skipped_by) == 2
+    by_hunter = {s.hunter: s for s in action.skipped_by}
+    assert by_hunter["pipe"].cause == "oversized_skipped"
+    assert by_hunter["pipe"].size_limit == 8 * 1024 * 1024
+    assert by_hunter["injection"].cause == "read_failed"
+    assert by_hunter["injection"].size_limit is None
+    assert "MULTIPLE_SCOPES_SKIPPED" in action.priority_reason_codes
+
+
+def test_same_hunter_source_scope_two_different_causes_kept_as_two_relationships():
+    # A dedup key of (hunter, source, scope) alone would collide here --
+    # cause must be part of the key too (issue #28's own explicit
+    # requirement), or one of the two causes below would silently vanish.
+    t1 = target(base=0xA000, size_limit=8 * 1024 * 1024)
+    t2 = target(base=0xA000, size_limit=None)
+    record = pipe_record([
+        limitation("pipe_name_scan", [t1]),
+        limitation("pipe_name_scan", [t2], code=LimitationCode.SCAN_REGION_READ_FAILED),
+    ])
+    actions = build_investigation_queue([record], [])
+    assert len(actions) == 1
+    action = actions[0]
+    causes = {s.cause for s in action.skipped_by}
+    assert causes == {"oversized_skipped", "read_failed"}
+    # Regression: two causes from the SAME (hunter, source, scope) is not
+    # a cross-hunter/cross-scope correlation signal -- MULTIPLE_SCOPES_
+    # SKIPPED must not fire just because skipped_by has 2 entries.
+    assert "MULTIPLE_SCOPES_SKIPPED" not in action.priority_reason_codes
+
+
+def test_multiple_causes_same_scope_vs_genuinely_distinct_scopes():
+    # Companion to the regression above: TWO physical targets, one skipped
+    # twice by the SAME (hunter, source, scope) for different causes (no
+    # correlation signal), the other skipped once each by two DIFFERENT
+    # hunters (a real correlation signal) -- the priority/reason-code
+    # split between them must reflect that difference correctly.
+    same_scope_t1 = target(base=0xB000, size_limit=8 * 1024 * 1024,
+                            type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    same_scope_t2 = target(base=0xB000, size_limit=None,
+                            type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    cross_hunter_t1 = target(base=0xC000, size_limit=8 * 1024 * 1024,
+                              type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    cross_hunter_t2 = target(base=0xC000, size_limit=10 * 1024 * 1024,
+                              type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    records = [
+        pipe_record([
+            limitation("pipe_name_scan", [same_scope_t1]),
+            limitation("pipe_name_scan", [same_scope_t2], code=LimitationCode.SCAN_REGION_READ_FAILED),
+            limitation("pipe_name_scan", [cross_hunter_t1]),
+        ]),
+        obfuscation_record([limitation("encoding_scan", [cross_hunter_t2], scope="entropy")]),
+    ]
+    actions = build_investigation_queue(records, [])
+    by_base = {a.target.base_address: a for a in actions}
+    assert "MULTIPLE_SCOPES_SKIPPED" not in by_base[0xB000].priority_reason_codes
+    assert by_base[0xB000].priority == "low"
+    assert "MULTIPLE_SCOPES_SKIPPED" in by_base[0xC000].priority_reason_codes
+    assert by_base[0xC000].priority == "medium"
+
+
 # ── priority truth table ─────────────────────────────────────────────────
 
 def test_priority_truth_table():
@@ -228,6 +454,61 @@ def test_memory_segment_target_never_gets_exec_signal():
     assert actions[0].priority == "low"
 
 
+# ── cross-kind dedup (issue #28 P4 follow-up): the same physical range ────
+# reported as a memory_region target by one hunter and a memory_segment
+# target by another must merge into ONE action, not two.
+
+def test_region_and_segment_targets_for_same_range_merge_into_one_action():
+    base, size = 0x17000, 4096
+    region_t = target(base=base, size=size, size_limit=None, kind=ScanTargetKind.MEMORY_REGION,
+                       type_="MEM_PRIVATE", protection="PAGE_EXECUTE_READWRITE")
+    seg_t = target(base=base, size=size, size_limit=None, kind=ScanTargetKind.MEMORY_SEGMENT)
+    records = [
+        pipe_record([limitation("pipe_name_scan", [region_t],
+                                 code=LimitationCode.SCAN_REGION_SHORT_READ)]),
+        obfuscation_record([limitation("segment_scan", [seg_t],
+                                        code=LimitationCode.SCAN_REGION_SHORT_READ, scope="entropy")]),
+    ]
+    actions = build_investigation_queue(records, [])
+    assert len(actions) == 1, \
+        "same (base_address, size) must dedup to one action regardless of target.kind"
+    action = actions[0]
+    hunters = {s.hunter for s in action.skipped_by}
+    assert hunters == {"pipe", "obfuscation"}
+    assert "MULTIPLE_SCOPES_SKIPPED" in action.priority_reason_codes
+    # The memory_region target is preferred as the representative -- it
+    # carries the real MemoryInfo facts the bare segment target cannot.
+    assert action.target.kind == ScanTargetKind.MEMORY_REGION
+    assert "PRIVATE_EXECUTABLE_MEMORY" in action.priority_reason_codes
+    assert "RWX_PROTECTION" in action.priority_reason_codes
+    # Both signals present (exec + cross-hunter correlation) -> high.
+    assert action.priority == "high"
+
+
+def test_segment_only_group_enriched_from_memory_regions_gets_exec_signal():
+    # A segment-only group carries no MemoryInfo facts of its own -- but
+    # `memory_regions` (already read to resolve CORRELATED_REGION_EVIDENCE)
+    # is searched for a covering MemoryInfo region, and when one exists the
+    # merged representative picks up its type/protection, while keeping
+    # the segment's own (more authoritative) file_offset/captured_size.
+    base, size = 0x18000, 4096
+    seg_t = target(base=base, size=size, size_limit=None, kind=ScanTargetKind.MEMORY_SEGMENT,
+                   file_offset=500, captured_size=size)
+    records = [pipe_record([limitation("segment_scan", [seg_t],
+                                        code=LimitationCode.SCAN_REGION_SHORT_READ)])]
+    memory_regions = [Region(base, base, size, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")]
+    actions = build_investigation_queue(records, memory_regions)
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.target.kind == ScanTargetKind.MEMORY_REGION
+    assert action.target.type == "MEM_PRIVATE"
+    assert action.target.protection == "PAGE_EXECUTE_READWRITE"
+    assert action.target.file_offset == 500
+    assert action.target.captured_size == size
+    assert "PRIVATE_EXECUTABLE_MEMORY" in action.priority_reason_codes
+    assert "RWX_PROTECTION" in action.priority_reason_codes
+
+
 def test_correlated_region_evidence_bumps_priority():
     from tests.fixtures.hunt_records import region as region_ref
 
@@ -296,6 +577,69 @@ def test_recommended_actions_high_priority_adds_preserve_artifact():
     assert "preserve_artifact" in types
 
 
+# ── partial capture (issue #28 P1 follow-up: a short-read target isn't ────
+# fully "captured" just because its START address resolves to a file
+# offset -- only capture_state actually says how much of it is present.
+
+def test_evidence_availability_partial_when_capture_state_is_partial():
+    partial = target(base=0x12000, size=4096, size_limit=None, file_offset=100, captured_size=1024)
+    records = [pipe_record([limitation("pipe_name_scan", [partial],
+                                        code=LimitationCode.SCAN_REGION_SHORT_READ)])]
+    actions = build_investigation_queue(records, [])
+    assert actions[0].evidence_availability == "partial"
+
+
+def test_recommended_actions_partial_capture_recommends_both_extract_and_recollect():
+    # The explicit issue #28 acceptance point: a real prefix IS already in
+    # hand (worth extracting now) AND the rest genuinely isn't captured
+    # (recollection is still the only way to see the whole target) -- both
+    # options must be offered, not just one.
+    t = target(base=0x13000, size=4096, size_limit=None, file_offset=100, captured_size=1024,
+               type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    records = [pipe_record([limitation("pipe_name_scan", [t],
+                                        code=LimitationCode.SCAN_REGION_SHORT_READ)])]
+    actions = build_investigation_queue(records, [])
+    types = [a.type for a in actions[0].recommended_actions]
+    assert "extract_captured_range" in types
+    assert "recollect_dump" in types
+
+
+def test_region_short_read_target_reports_structural_partial_capture():
+    """End-to-end: a REGION target (issue #28's own explicit ask) whose
+    short read left only a prefix captured in the dump's own segment
+    table reports partial, not captured -- distinct from a region that
+    genuinely has nothing captured at all (a read failure with no
+    segment backing it whatsoever)."""
+    partial_region = target(base=0x14000, size=4096, size_limit=None, kind=ScanTargetKind.MEMORY_REGION,
+                             file_offset=200, captured_size=2048)
+    none_region = target(base=0x15000, size=4096, size_limit=None, kind=ScanTargetKind.MEMORY_REGION,
+                          file_offset=None, captured_size=None)
+    records = [pipe_record([
+        limitation("pipe_name_scan", [partial_region], code=LimitationCode.SCAN_REGION_SHORT_READ),
+        limitation("pipe_name_scan", [none_region], code=LimitationCode.SCAN_REGION_READ_FAILED),
+    ])]
+    actions = {a.target.base_address: a for a in build_investigation_queue(records, [])}
+    assert actions[0x14000].evidence_availability == "partial"
+    assert actions[0x15000].evidence_availability == "not_captured"
+
+
+def test_segment_short_read_target_is_always_fully_captured():
+    """Companion to the region test above: a memory_segment target (cs-
+    beacon/yara) IS, by definition, a claim from the dump's own segment
+    table that the whole declared size is captured -- captured_size is
+    always the segment's own full size (see
+    dumpex.hunt._coverage.segment_scan_target's own docstring), so a
+    short-read SEGMENT target still reports "captured", never "partial":
+    the live read attempt failing is a fact about that read, not about
+    whether the bytes exist in the file."""
+    seg_target = target(base=0x16000, size=4096, size_limit=None, kind=ScanTargetKind.MEMORY_SEGMENT,
+                         file_offset=300, captured_size=4096)
+    records = [pipe_record([limitation("segment_scan", [seg_target],
+                                        code=LimitationCode.SCAN_REGION_SHORT_READ)])]
+    actions = build_investigation_queue(records, [])
+    assert actions[0].evidence_availability == "captured"
+
+
 def test_targeted_hunter_rescan_names_all_skipping_hunters_in_fixed_order():
     base = 0x12000
     t1 = target(base=base, size_limit=8 * 1024 * 1024)
@@ -342,6 +686,64 @@ def test_result_is_deterministic_across_calls():
 def test_skip_relationship_rejects_unknown_hunter():
     with pytest.raises(ValueError):
         SkipRelationship(hunter="not-a-hunter", source="x", size_limit=1)
+
+
+def test_skip_relationship_default_cause_is_oversized_skipped():
+    rel = SkipRelationship(hunter="pipe", source="pipe_name_scan", size_limit=1024)
+    assert rel.cause == "oversized_skipped"
+
+
+def test_skip_relationship_rejects_unknown_cause():
+    with pytest.raises(ValueError):
+        SkipRelationship(hunter="pipe", source="pipe_name_scan", cause="not-a-cause")
+
+
+def test_skip_relationship_oversized_skipped_requires_size_limit():
+    with pytest.raises(ValueError, match="requires size_limit"):
+        SkipRelationship(hunter="pipe", source="pipe_name_scan", cause="oversized_skipped")
+
+
+def test_skip_relationship_non_oversized_cause_rejects_size_limit():
+    with pytest.raises(ValueError, match="must leave size_limit unset"):
+        SkipRelationship(hunter="pipe", source="pipe_name_scan",
+                          cause="read_failed", size_limit=1024)
+
+
+def test_skip_relationship_rejects_partial_budget_triple():
+    with pytest.raises(ValueError):
+        SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="scan_truncated",
+                          scope="validations_total", budget_kind="validations_total",
+                          budget_limit=10)   # budget_consumed missing
+
+
+def test_skip_relationship_rejects_budget_fields_on_non_budget_cause():
+    with pytest.raises(ValueError):
+        SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="read_failed",
+                          budget_kind="validations_total", budget_limit=10, budget_consumed=10)
+
+
+def test_skip_relationship_rejects_consumed_not_equal_to_limit():
+    with pytest.raises(ValueError):
+        SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="scan_truncated",
+                          scope="validations_total", budget_kind="validations_total",
+                          budget_limit=10, budget_consumed=5)
+
+
+def test_skip_relationship_rejects_unknown_budget_kind():
+    with pytest.raises(ValueError):
+        SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="scan_truncated",
+                          scope="not_a_real_budget", budget_kind="not_a_real_budget",
+                          budget_limit=10, budget_consumed=10)
+
+
+def test_skip_relationship_read_failed_with_no_size_limit_round_trips():
+    rel = SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="read_failed")
+    assert rel.size_limit is None
+    assert rel.to_dict() == {
+        "hunter": "injection", "source": "hidden_pe_scan", "cause": "read_failed",
+        "scope": None, "size_limit": None,
+        "budget_kind": None, "budget_limit": None, "budget_consumed": None,
+    }
 
 
 def test_triage_info_metadata_mode_rejects_nondefault_fields():

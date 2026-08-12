@@ -26,7 +26,7 @@ stomping" result actually checked anything.
 
 ## The four fields that matter
 
-`--json` wraps every hunter's result in dumpex's shared v2.11
+`--json` wraps every hunter's result in dumpex's shared v2.12
 envelope: `result.kind` is `"hunt"`, and each hunter you selected gets
 its own entry in `result.data.records[]` (`hunter` names which TTP —
 `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, or
@@ -104,7 +104,7 @@ investigation_actions` is a deduplicated, priority-ordered list built
 from the coverage metadata every hunter already collected — **no
 additional bytes are read from the dump to build it.** One physical
 region/segment skipped by several hunters or scan layers is one entry,
-with every `(hunter, source, scope)` that skipped it listed under
+with every `(hunter, source, scope, cause)` that skipped it listed under
 `skipped_by`. It is only ever populated for `--hunt all`; a single-hunter
 run (`--hunt pipe`, `--hunt stomping`, ...) always shows `[]` here — see
 the two single-hunter examples below.
@@ -335,7 +335,7 @@ first:
 - `severity` — `info` / `low` / `medium` / `high` / `critical`, always
   derived from `tag` + `confidence` — a producer cannot set it
   independently, and the schema itself pins the exact mapping (see
-  `dumpex-output-v2.11.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
+  `dumpex-output-v2.12.schema.json`'s own `finding.allOf`, unchanged since v2.5): every
   `observation` is `info`; every `lead` tops out at `medium`; only a
   `detection` at `confidence: high` reaches `critical`.
 - `technique_ids` — MITRE ATT&CK technique/sub-technique IDs (e.g.
@@ -525,8 +525,8 @@ string in its own place instead.
 
 ### Sanitized `--json` examples
 
-Both examples below are complete, valid v2.11 documents — each validates
-as-is against `dumpex-output-v2.11.schema.json` (see
+Both examples below are complete, valid v2.12 documents — each validates
+as-is against `dumpex-output-v2.12.schema.json` (see
 `tests/integration/test_soc_quickstart_json_examples.py`, which extracts
 these exact fenced blocks and validates them in CI, so this doc can't
 silently drift out of sync with the schema again). A real `--hunt all`
@@ -549,7 +549,7 @@ examples below correctly show it as `[]`.
 ```json
 {
   "meta": {
-    "schema_version": "2.11",
+    "schema_version": "2.12",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:12:01Z",
@@ -648,7 +648,7 @@ hunter's own `coverage.status`) is what makes this run exit `0` — see
 ```json
 {
   "meta": {
-    "schema_version": "2.11",
+    "schema_version": "2.12",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:14:01Z",

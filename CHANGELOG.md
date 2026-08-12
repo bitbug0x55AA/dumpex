@@ -5,6 +5,249 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Cross-hunter coverage gaps keep target identity (schema v2.12)
+
+Every hunter's region/segment scan could report *how many* things failed
+to read, read short, or (injection only) hit a scan budget before
+finishing -- but not *which* ones. The region/segment's own identity
+(base address, size, allocation base, state/type/protection, `.dmp` file
+offset) was known at the failure site and then reduced to a count before
+it ever reached `coverage.limitations`, so `--hunt all`'s automatic
+investigation queue ([schema v2.9](#--hunt-all-automatically-triages-skipped-targets-schema-v29))
+only ever picked up oversized-skip targets -- a known unread region could
+sit right next to an oversized one without ever becoming an actionable
+entry ([issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28)).
+
+```jsonc
+// before -- a bare count, nothing to extract/rescan/recollect
+{ "code": "PE_HEADER_READ_FAILED", "source": "hidden_pe_scan", "affected_count": 1 }
+
+// after -- the exact region, same shape SCAN_REGION_OVERSIZED_SKIPPED already used
+{
+  "code": "PE_HEADER_READ_FAILED", "source": "hidden_pe_scan", "affected_count": 1,
+  "targets": [{ "kind": "memory_region", "base_address": "0x00007ff000001000",
+                "size": 4096, "size_limit": null, "file_offset": 4096,
+                "allocation_base": "0x00007ff000000000", "state": "MEM_COMMIT",
+                "type": "MEM_PRIVATE", "protection": "PAGE_EXECUTE_READWRITE" }]
+}
+```
+
+- **`coverageLimitation.targets` is no longer exclusive to
+  `SCAN_REGION_OVERSIZED_SKIPPED`.** `PE_HEADER_READ_FAILED`/
+  `PE_HEADER_SHORT_READ`/`PE_HEADER_SCAN_TRUNCATED`/
+  `PE_HEADER_SCAN_NOT_STARTED` (injection) and `SCAN_REGION_READ_FAILED`/
+  `SCAN_REGION_SHORT_READ` (pipe, cs-beacon, yara, obfuscation, and
+  stomping's unscored IOC-string scan -- every hunter sharing
+  `dumpex.hunt._coverage.CoverageTracker`, plus yara's own equivalent
+  target-carrying plumbing) may now carry it too. `targets` stays
+  OPTIONAL on these six codes -- a producer that cannot resolve a
+  target's identity still emits a bare `affected_count`, exactly as
+  before -- but when non-empty, its length must equal `affected_count`
+  exactly, same rule `SCAN_REGION_OVERSIZED_SKIPPED` already enforced.
+- **New: `PE_HEADER_SCAN_NOT_STARTED`, distinct from
+  `PE_HEADER_SCAN_TRUNCATED`.** The whole-hunt hidden-PE scan budget
+  (bytes/validations) carries over between regions, so a LATER region can
+  start already out of budget -- its search never issues a single read.
+  That is a different fact from a region whose OWN search got partway
+  through before running out (an unfinished remainder, still
+  `PE_HEADER_SCAN_TRUNCATED`): a rescan of a not-started region has to
+  start from scratch, not resume a partial one.
+- **`scanTarget.size_limit` is now nullable.** A read-failed/short-read/
+  scan-truncated/not-started region was never skipped for *being*
+  oversized -- the gap is an I/O failure or a scan-budget exhaustion, not
+  a size cap it exceeded -- so `size_limit` is `null` for one of these;
+  it stays non-null only for an actual oversized-skip target.
+- **`--hunt all`'s investigation queue now consumes all six codes**,
+  not only `SCAN_REGION_OVERSIZED_SKIPPED`: a region injection failed to
+  read and a region pipe skipped for being oversized both surface in
+  `result.summary.investigation_actions` and the console's `SKIPPED
+  TARGET ACTIONS` on equal footing.
+- **`skipRelationship` gains a required `cause`** (`oversized_skipped`/
+  `read_failed`/`short_read`/`scan_truncated`/`scan_not_started`).
+  `hunter`/`source`/`scope` alone cannot tell these apart -- the same
+  scan source can skip different targets for different reasons, and (for
+  injection specifically) can even skip the SAME physical region for two
+  different reasons across different reads within its own search -- so
+  deduplication in the investigation queue now keys on all four
+  together, and the same physical region skipped by two hunters for two
+  different reasons becomes one queue entry with both relationships and
+  both causes retained. `skipRelationship.size_limit` is correspondingly
+  nullable, non-null only when `cause` is `oversized_skipped`. Console
+  output shows the cause alongside each `Skipped by:` entry.
+- **Fixed: a target skipped twice under the same scope no longer looks
+  like cross-hunter correlation.** `MULTIPLE_SCOPES_SKIPPED` (one of the
+  two priority-boosting signals) is now derived from the count of
+  *distinct* `(hunter, source, scope)` triples in `skipped_by`, not from
+  `skipped_by`'s own length -- the fix for exactly the case `cause`
+  introduces: injection's hidden-PE scan can legitimately report both a
+  read failure AND a short read for the SAME region (different reads
+  within its own search), which must not be mistaken for two different
+  hunters/scopes correlating on that region.
+- **Evidence caps are unaffected.** `PE_HEADER_EVIDENCE_CAPPED` (a
+  validated hidden PE that WAS found and read, just not retained past
+  the evidence cap) still never contributes a queue entry -- that memory
+  was examined, unlike a skipped/failed/truncated/not-started target, and
+  remains out of scope for this queue by design.
+- **`scanTarget` gains `captured_size`/`capture_state`.** `file_offset`
+  alone only proves a target's START address is in the dump -- for a
+  short-read target specifically, that is not the same claim as "the
+  whole requested size is captured". `captured_size` is a STRUCTURAL fact
+  from the dump's own segment table (`captured_size` bytes of `size`,
+  counting from `base_address`, are actually present), independent of
+  whether the failing hunter's own read attempt succeeded; `capture_state`
+  (`"none"`/`"partial"`/`"complete"`) is derived from it.
+  `evidence_availability` on an `investigation_actions[]` entry gains a
+  matching `"partial"` value, and its `recommended_actions` now offers
+  BOTH `extract_captured_range` (the real prefix already in hand) AND
+  `recollect_dump` (the rest genuinely isn't captured) rather than only
+  one of the two.
+- **Obfuscation's three scan layers keep separate scoped limitations for
+  read-failed/short-read too**, mirroring the per-layer shape
+  `SCAN_REGION_OVERSIZED_SKIPPED` already had -- a region all three
+  layers (sleep_mask/entropy/decode) fail to read now surfaces as three
+  `scope`-tagged limitations, not one that silently merges all three
+  layers' attempts into an unscoped target list (the same double-counting
+  class of bug the oversized-skip code was fixed against previously).
+- **`PE_HEADER_SCAN_TRUNCATED`'s target now names the unexamined
+  remainder, not the whole region.** A truncated region's own search may
+  already have fully read a real PREFIX of it before the scan budget ran
+  out -- reporting the whole region as the gap was inaccurate (part of it
+  genuinely came up clean) and would send a targeted rescan back over
+  bytes that don't need it; the target's `base_address`/`size` now name
+  only `[examined so far, region end)`. `PE_HEADER_SCAN_NOT_STARTED`
+  targets are unaffected (nothing was examined, so the whole region is
+  already the correct answer).
+- **`size_limit` is now cross-validated against the limitation code it's
+  attached to**, both in the Python model and the JSON Schema: every
+  target on `SCAN_REGION_OVERSIZED_SKIPPED` must have `size_limit` set (an
+  oversized skip always has the cap it exceeded), and every target on the
+  six read-failed/short-read/scan-truncated/not-started codes must have
+  `size_limit: null` (none of those causes involves a cap). Previously
+  only `SkipRelationship`'s own separate construction caught a mismatch,
+  which meant an invalid `CoverageLimitation` a hunter built directly
+  could exist for a while before `--hunt all`'s investigation queue ever
+  tried to fold its target into a relationship.
+- **Fixed: a validation-budget stop mid-window used to over-claim how much
+  of a region was examined.** The hidden-PE scan's candidate search
+  advanced `examined_until` to the end of the whole read window (up to
+  `PE_SCAN_WINDOW`, 1 MiB by default) *before* validating the candidates
+  found inside it -- if the validation budget ran out on the very FIRST
+  candidate, the truncated target still reported starting a full window
+  past it, silently excluding up to ~1 MiB of genuinely-unvalidated
+  memory from the investigation queue. It now advances only as far as the
+  last candidate actually finished (validated or confirmed absent), never
+  past an unvalidated one.
+- **Fixed: the same physical range reported by two different hunters
+  under two different `ScanTarget.kind`s used to produce two separate,
+  lower-priority investigation actions instead of one.** A
+  `memory_region` target (pipe/injection/encoding/stomping) and a
+  `memory_segment` target (cs-beacon/yara) naming the identical
+  `(base_address, size)` now dedup into ONE `investigation_actions[]`
+  entry, correctly triggering `MULTIPLE_SCOPES_SKIPPED`/priority
+  escalation. A segment-only group with no matching region-kind target is
+  now also enriched with this dump's own MemoryInfo facts
+  (type/protection/allocation_base) when a covering region exists in the
+  already-passed `memory_regions` list -- previously a bare segment
+  target could never carry the exec-signal priority check at all.
+- **The hidden-PE scan's own budget attribution is now visible on the
+  wire, correctly split per budget.** `PE_HEADER_SCAN_TRUNCATED`/
+  `PE_HEADER_SCAN_NOT_STARTED` may optionally set `scope` to WHICH of the
+  scan's four independent budgets (`reads_per_region`/`total_bytes`/
+  `validations_per_region`/`validations_total`) stopped the affected
+  region(s), with `detail` (`"limit=<int> consumed=<int>"`) carrying that
+  budget's own configured limit and how much was consumed -- an analyst
+  can now tell "raise `PE_SCAN_MAX_VALIDATIONS_TOTAL` and rescan" apart
+  from "raise `PE_SCAN_TOTAL_BYTES_MAX` and rescan" instead of only
+  knowing *that* something stopped the scan. **Fixed same round:** an
+  initial version of this recorded only the FIRST region's own
+  attribution for the WHOLE scan, so a later region stopped by a
+  DIFFERENT budget within the same run had its target silently
+  misattributed to the first budget too (e.g. region 1 truncated by
+  `validations_per_region`, region 2 truncated later by
+  `validations_total`, both reported under one
+  `scope=validations_per_region` limitation). Truncated/not-started
+  targets are now grouped by their OWN budget kind, each producing its
+  own correctly-scoped `CoverageLimitation`. `size_limit` stays `null`
+  throughout, unchanged -- this is a separate axis from "was this target
+  oversized."
+- **`investigation_actions[].skipped_by[]` now carries the budget's
+  numeric limit/consumed as structured fields, not just free text.**
+  `SkipRelationship` gains `budget_kind`/`budget_limit`/`budget_consumed`
+  -- a JSON consumer previously had to parse `detail`'s "limit=N
+  consumed=M" text itself to get a number a targeted-rescan tool could
+  act on; it can now read `budget_limit` directly. All three stay `null`
+  together for every cause except `scan_truncated`/`scan_not_started`/
+  `hit_cap_reached`/`scan_budget_exhausted`.
+- **YARA's `YARA_MATCH_FAILED`/`YARA_MATCH_TIMED_OUT` now optionally carry
+  `targets` too**, the same segment-identity shape every other
+  read-failed/short-read/scan-gap code already has -- a segment a
+  `match()` call raised or timed out against is no longer only a bare
+  count. Because these two counters count CALLS, not segments (a segment
+  failing against two different rule files still counts as 2), a segment
+  affected by more than one failing call contributes its target more than
+  once, keeping `len(targets) == affected_count` exactly rather than
+  silently switching to per-segment counting.
+- **YARA's `YARA_HIT_CAP_REACHED`/`YARA_SCAN_BUDGET_EXHAUSTED` and CS
+  Beacon's `CS_BEACON_SCAN_BUDGET_EXHAUSTED` now name the segments they
+  stopped on too** -- previously fully count-only (or, for CS Beacon,
+  reason-text-only), these three codes now optionally carry
+  `affected_count`/`targets`: the segment mid-processing when the
+  stop happened, plus every later segment in the scan's own segment table
+  that never started at all. Segment granularity, not a byte remainder
+  (both hunters examine a segment as one atomic unit, unlike injection's
+  own byte-wise PE scan). CS Beacon's own targets can legitimately stay
+  empty even when the limitation itself fires -- a deadline discovered
+  only after the very last segment already finished scanning cleanly has
+  nothing left to name; YARA's own targets are always non-empty in
+  practice. New `SkipCause` values `hit_cap_reached`/
+  `scan_budget_exhausted` (the latter shared by YARA and CS Beacon, since
+  it is the same underlying fact for both) let these two now flow into
+  `--hunt all`'s investigation queue for the first time.
+- **Fixed: a configured scan budget of exactly `0` crashed `--hunt all`'s
+  investigation queue.** `SkipRelationship.budget_limit`/
+  `budget_consumed` required a POSITIVE int, but a scan budget can
+  legitimately be configured as `0` (e.g. "no validations at all") --
+  reproducible with `PE_SCAN_MAX_VALIDATIONS_TOTAL=0`. Now validated as
+  non-negative, matching every other budget-bearing field in this
+  feature.
+- **Fixed: YARA could name a segment as an unexamined
+  `YARA_SCAN_BUDGET_EXHAUSTED` target even when that segment's own last
+  rule-file `match()` call had already returned successfully and was
+  about to be fully processed.** A deadline noticed only AFTER the
+  current (segment, rule_file) pairing's own work genuinely finished --
+  including on the scan's very last pairing, where nothing at all was
+  actually left unexamined -- used to still attribute the CURRENT
+  segment as a coverage gap. `budget_exhausted` (the plain boolean) still
+  becomes `True` in this case, since the wall-clock deadline genuinely
+  was exceeded and that remains worth recording, but `targets` is now
+  correctly empty rather than naming a segment that was, in fact, fully
+  examined.
+- **`CoverageLimitation`/`SkipRelationship` gain dedicated
+  `budget_limit`/`budget_consumed` fields, and structured budget
+  attribution now extends to YARA's `YARA_HIT_CAP_REACHED`/
+  `YARA_SCAN_BUDGET_EXHAUSTED` and CS Beacon's own
+  `CS_BEACON_SCAN_BUDGET_EXHAUSTED`.** Both scanners now track WHICH of
+  their own independent resource budgets stopped the scan (YARA:
+  `max_total_hits`/`scan_deadline_seconds`/`max_total_bytes_scanned`; CS
+  Beacon: `scan_deadline_seconds`/`max_total_scanned_bytes`/
+  `max_candidates`/`max_decoded_bytes`/`max_hits`) via `scope`, with that
+  budget's own configured limit/consumed via the two new fields -- CS
+  Beacon's own pre-existing free-text `detail` (its human-readable
+  budget_reason) is untouched, since it is a genuinely separate fact
+  from the structured kind/limit/consumed. An earlier version of this
+  session's own work packed "limit=N consumed=M" text into `detail`
+  instead; that broke the moment a code (CS_BEACON_SCAN_BUDGET_EXHAUSTED)
+  that ALSO uses `detail` for its own free-text reason needed both at
+  once, so injection's own `PE_HEADER_SCAN_TRUNCATED`/
+  `PE_HEADER_SCAN_NOT_STARTED` were migrated onto the same two dedicated
+  fields for consistency.
+- **Finding IDs, scores, and verdicts are unchanged.** This is a
+  coverage-actionability change only; a hunter's own detection result is
+  identical before and after.
+
+`dumpex-output-v2.11.schema.json` stays packaged and frozen for
+validating output captured before this change.
+
 ## Injection: hidden PE headers are searched for throughout memory (schema v2.11)
 
 `--hunt injection`'s hidden-PE check used to read two bytes at each

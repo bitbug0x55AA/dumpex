@@ -182,8 +182,17 @@ def _build_encoding_report(mf: MinidumpFile):
         sleep_mask_oversized=tuple(sm_cov.skipped_oversize_targets),
         entropy_oversized=tuple(ent_cov.skipped_oversize_targets),
         decode_oversized=tuple(dec_cov.skipped_oversize_targets),
-        read_failed=sm_cov.read_failed + ent_cov.read_failed + dec_cov.read_failed,
-        short_reads=sm_cov.short_reads + ent_cov.short_reads + dec_cov.short_reads,
+        # issue #28: each layer's own read-failed/short-read targets stay
+        # attributed to that layer -- summing them (the pre-fix shape)
+        # loses which layer(s) actually need a targeted rescan of a given
+        # region, the same reason the three *_oversized tuples above are
+        # never summed either.
+        sleep_mask_read_failed=tuple(sm_cov.read_failed_targets),
+        entropy_read_failed=tuple(ent_cov.read_failed_targets),
+        decode_read_failed=tuple(dec_cov.read_failed_targets),
+        sleep_mask_short_read=tuple(sm_cov.short_read_targets),
+        entropy_short_read=tuple(ent_cov.short_read_targets),
+        decode_short_read=tuple(dec_cov.short_read_targets),
         budget_exhausted=decode_budget.exhausted(), exhausted_reason=decode_budget.exhausted_reason,
     )
     return report

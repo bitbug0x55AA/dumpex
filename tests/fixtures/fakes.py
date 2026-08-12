@@ -89,11 +89,14 @@ class FakeStream:
 
 
 class Segment:
-    """Stand-in for a Memory64ListStream entry (dumpex.hunt.cs_beacon walks these)."""
+    """Stand-in for a Memory64ListStream entry (dumpex.hunt.cs_beacon walks
+    these; dumpex.core.memory.va_to_file_offset()/va_range_captured_bytes()
+    read the real minidump library's own segment objects the same way)."""
     def __init__(self, start_virtual_address, start_file_address, size):
         self.start_virtual_address = start_virtual_address
         self.start_file_address    = start_file_address
         self.size                  = size
+        self.end_virtual_address   = start_virtual_address + size
 
 
 class FakeReader:

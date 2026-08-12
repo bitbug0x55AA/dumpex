@@ -76,6 +76,13 @@ def _coverage(**overrides):
     return CoverageSnapshot(**kwargs)
 
 
+def _read_failed_target(base=0x500000, size=0x2000):
+    # read_failed/short_read targets never carry size_limit -- these
+    # causes are never a size cap the target exceeded (see
+    # dumpex.output.coverage.ScanTarget's own docstring).
+    return ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=base, size=size)
+
+
 def _check(check="obfuscation.base64_observation", tag=TAG_OBSERVATION,
            confidence=CONFIDENCE_LOW, evidence=(), **overrides):
     kwargs = dict(check=check, inference="something was observed",
@@ -463,7 +470,9 @@ def test_report_rejects_a_result_citing_a_merely_nested_object():
 def test_status_is_derived_from_score_and_coverage():
     assert _report(score=0).status == "NOT_DETECTED_IN_SCANNED_SCOPE"
     assert _report(score=1).status == "DETECTED"
-    assert _report(score=0, coverage=_coverage(read_failed=1)).status == "INCONCLUSIVE"
+    assert _report(score=0,
+                    coverage=_coverage(entropy_read_failed=(_read_failed_target(),))
+                    ).status == "INCONCLUSIVE"
     not_evaluated = _coverage(memory_info_stream=False)
     assert _report(score=0, coverage=not_evaluated).status == "NOT_EVALUATED"
 
@@ -508,10 +517,23 @@ def test_report_holds_no_dump_resolver_or_projection_field():
 
 def test_coverage_snapshot_status_matches_the_shared_reducer():
     assert _coverage().status == "complete"
-    assert _coverage(read_failed=1).status == "partial"
-    assert _coverage(short_reads=1).status == "partial"
+    assert _coverage(sleep_mask_read_failed=(_read_failed_target(),)).status == "partial"
+    assert _coverage(entropy_short_read=(_read_failed_target(),)).status == "partial"
     assert _coverage(budget_exhausted=True).status == "partial"
     assert _coverage(memory_info_stream=False).status == "not_evaluated"
+
+
+def test_coverage_snapshot_read_failed_and_short_reads_sum_across_layers():
+    # read_failed/short_reads (issue #28 P2 follow-up) are derived totals
+    # across all three layers, NOT stored counts -- a region failing under
+    # two layers' own independent scans counts as two gaps, one per layer.
+    coverage = _coverage(sleep_mask_read_failed=(_read_failed_target(base=0x1000),),
+                          decode_read_failed=(_read_failed_target(base=0x1000),),
+                          entropy_short_read=(_read_failed_target(base=0x2000),))
+    assert coverage.read_failed == 2
+    assert coverage.short_reads == 1
+    layers = {layer for layer, _ in coverage.read_failed_targets_by_layer()}
+    assert layers == {"sleep_mask", "decode"}
 
 
 def test_coverage_snapshot_keeps_unsupplied_record_counts_distinct_from_empty():
@@ -534,18 +556,24 @@ def test_coverage_snapshot_oversized_targets_by_layer_preserves_fixed_order():
     assert layers == ["sleep_mask", "decode"]
 
 
-def test_coverage_snapshot_rejects_non_boolean_stream_flag_and_bad_counts():
+def test_coverage_snapshot_rejects_non_boolean_stream_flag():
     with pytest.raises(TypeError):
         _coverage(memory_info_stream=1)
-    with pytest.raises(TypeError):
-        _coverage(read_failed=True)
-    with pytest.raises(ValueError):
-        _coverage(read_failed=-1)
 
 
 def test_coverage_snapshot_oversized_buckets_reject_non_scan_target_items():
     with pytest.raises(TypeError):
         _coverage(decode_oversized=({"base_address": 0x1000},))
+
+
+def test_coverage_snapshot_read_failed_short_read_buckets_reject_non_scan_target_items():
+    # Companion to the oversized-bucket check above -- the per-layer
+    # read-failed/short-read tuples (issue #28 P2 follow-up) go through
+    # the exact same _require_scan_targets() validation.
+    with pytest.raises(TypeError):
+        _coverage(sleep_mask_read_failed=({"base_address": 0x1000},))
+    with pytest.raises(TypeError):
+        _coverage(entropy_short_read=({"base_address": 0x1000},))
 
 
 # ── Scan-layer transport types (LayerResult/DecodeResult/LayerCoverage) ───

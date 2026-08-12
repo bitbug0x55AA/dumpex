@@ -24,7 +24,7 @@ from dumpex.schemas import schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -116,7 +116,54 @@ def test_sleep_mask_layer_short_read_makes_result_inconclusive(hunter_record_val
     assert rec.score == 0
     assert rec.status == "INCONCLUSIVE"
     assert rec.coverage.status.value == "partial"
-    assert any(lim.code.value == "SCAN_REGION_SHORT_READ" for lim in rec.coverage.limitations)
+    # issue #28: the short-read region's own identity is retained -- and
+    # (P2 follow-up review) each of the three layers (sleep_mask/entropy/
+    # decode) that all attempt this same region gets its OWN scoped
+    # limitation, mirroring SCAN_REGION_OVERSIZED_SKIPPED's own per-layer
+    # shape, rather than one limitation whose targets silently merge all
+    # three layers' attempts into an unscoped list.
+    short_read_lims = [l for l in rec.coverage.limitations
+                        if l.code.value == "SCAN_REGION_SHORT_READ"]
+    assert len(short_read_lims) == 3
+    assert {l.scope for l in short_read_lims} == {"sleep_mask", "entropy", "decode"}
+    for lim in short_read_lims:
+        assert lim.affected_count == len(lim.targets) == 1
+        assert lim.targets[0].base_address == region_base
+        assert lim.targets[0].size_limit is None
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_decode_layer_read_failure_identifies_the_region(hunter_record_validator):
+    region_base = 0x600000
+    region_size = 0x2000
+    regions = [Region(region_base, region_base, region_size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+
+    def failing_reader(mf, addr, size):
+        raise OSError("simulated read failure")
+    encoding.read_region = failing_reader
+
+    console_dict = encoding._hunt_encoding(MF(), verbose=False)
+    rec = collect_obfuscation_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    # All three layers (sleep_mask/entropy/decode) attempt this SAME
+    # region and all three fail to read it -- each gets its own scoped
+    # SCAN_REGION_READ_FAILED limitation (issue #28 P2 follow-up), never
+    # one limitation whose targets merge all three layers together.
+    read_failed_lims = [l for l in rec.coverage.limitations
+                         if l.code.value == "SCAN_REGION_READ_FAILED"]
+    assert len(read_failed_lims) == 3
+    assert {l.scope for l in read_failed_lims} == {"sleep_mask", "entropy", "decode"}
+    for lim in read_failed_lims:
+        assert lim.affected_count == len(lim.targets) == 1
+        assert lim.targets[0].base_address == region_base
+        assert lim.targets[0].size_limit is None
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 

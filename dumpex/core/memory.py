@@ -190,6 +190,19 @@ def addr_to_module(addr: int, modules: list):
     return None
 
 
+def _memory_segments(mf: MinidumpFile) -> list:
+    """The dump's own memory segment table (Memory64List preferred, falling
+    back to the older MemoryList) -- the ONE place that preference order is
+    decided, shared by va_to_file_offset() and va_range_captured_bytes()
+    below so the two can never resolve a VA against two different segment
+    lists."""
+    if mf.memory_segments_64 and mf.memory_segments_64.memory_segments:
+        return mf.memory_segments_64.memory_segments
+    if mf.memory_segments and mf.memory_segments.memory_segments:
+        return mf.memory_segments.memory_segments
+    return []
+
+
 def va_to_file_offset(mf: MinidumpFile, va: int):
     """
     Translate a Virtual Address (in the target process) to its byte offset
@@ -216,15 +229,54 @@ def va_to_file_offset(mf: MinidumpFile, va: int):
     """
     if not va:
         return None
-    segs = []
-    if mf.memory_segments_64 and mf.memory_segments_64.memory_segments:
-        segs = mf.memory_segments_64.memory_segments
-    elif mf.memory_segments and mf.memory_segments.memory_segments:
-        segs = mf.memory_segments.memory_segments
-    for seg in segs:
+    for seg in _memory_segments(mf):
         if seg.start_virtual_address <= va < seg.end_virtual_address:
             return seg.start_file_address + (va - seg.start_virtual_address)
     return None
+
+
+def va_range_captured_bytes(mf: MinidumpFile, va: int, size: int) -> int:
+    """How many of the `size` bytes starting at `va` are actually present
+    in the .dmp file, per the dump's own segment table -- a STRUCTURAL
+    fact about what the dump captured, independent of whether any hunt's
+    own live-memory read attempt at that address succeeded or failed.
+
+    Returns a value in `[0, size]`: `0` if `va` itself isn't covered by any
+    segment at all, `size` if the whole range is captured by one or more
+    CONTIGUOUS segments, and something in between for a range whose
+    capture stops partway through (the common case behind a short read --
+    the dump's own segment table simply doesn't extend as far as the
+    region's declared size claims).
+
+    This exists because `va_to_file_offset()` alone only proves the START
+    of a range is captured -- for a short-read target specifically (see
+    dumpex.output.coverage.ScanTarget.capture_state), "the start resolves"
+    and "the whole requested size is present" are different claims, and an
+    investigation-action consumer deciding between "extract what's here"
+    and "recollect a fuller dump" needs to know which one is true.
+
+    Walks segments in ascending virtual-address order and accumulates a
+    CONTIGUOUS run starting at `va`; a gap (the next segment in address
+    order starts past where the run currently ends) stops the walk at
+    whatever contiguous prefix was already found -- a segment further
+    along in the address space that happens to cover the range's TAIL,
+    with a gap in between, does not count as "captured" for this purpose,
+    since the missing middle still can't be extracted as one contiguous
+    read.
+    """
+    if size <= 0 or not va:
+        return 0
+    end = va + size
+    cursor = va
+    for seg in sorted(_memory_segments(mf), key=lambda s: s.start_virtual_address):
+        if seg.end_virtual_address <= cursor:
+            continue   # entirely before the still-uncovered start of the run
+        if seg.start_virtual_address > cursor:
+            break      # gap right where the contiguous run needs to continue
+        cursor = min(seg.end_virtual_address, end)
+        if cursor >= end:
+            break
+    return cursor - va
 
 
 def addr_label(mf: MinidumpFile, va: int, region_base=None, indent: int = 2) -> str:

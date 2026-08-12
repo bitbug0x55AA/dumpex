@@ -2,8 +2,12 @@
 never scores, never prints.
 """
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import get_modules, get_memory_regions, addr_to_module, prot_str
+from dumpex.core.memory import (
+    get_modules, get_memory_regions, addr_to_module, prot_str,
+    va_to_file_offset, va_range_captured_bytes,
+)
 from dumpex.core.pe_utils import parse_pe_header
+from dumpex.hunt._coverage import region_scan_target
 from dumpex.hunt._location import resolve_location
 from dumpex.hunt.injection.config import (
     PE_SCAN_DEGRADED_READ, PE_SCAN_MAX_READS_PER_REGION, PE_SCAN_MAX_UNVALIDATED_EVIDENCE,
@@ -12,8 +16,9 @@ from dumpex.hunt.injection.config import (
     PE_VALIDATE_READ_MAX,
 )
 from dumpex.hunt.injection.models import (
-    HiddenPeScan, RegionRef, PeHeaderInfo, RwxRegionEvidence, HiddenPeEvidence,
+    HiddenPeScan, RegionRef, PeHeaderInfo, RwxRegionEvidence, HiddenPeEvidence, BudgetTargetGroup,
 )
+from dumpex.output.coverage import ScanTarget, ScanTargetKind
 
 # Read outcomes shared by every read the candidate search makes (discovery
 # read, degraded re-read, last-resort marker probe, validation read) -- the
@@ -154,6 +159,21 @@ class _ScanBudget:
         self.region_validations_left = self._validations_per_region
         self.validated_dropped = 0
         self.unvalidated_dropped = 0
+        # The ORIGINAL whole-hunt limits, kept alongside the two "_left"
+        # counters that count down from them -- needed so a later
+        # `exhausted_budget_info()` call can report "limit=N" after
+        # `bytes_left`/`validations_left` have already been spent down
+        # past it (issue #28 P4 follow-up).
+        self._total_bytes_limit = self.bytes_left
+        self._validations_total_limit = self.validations_left
+        # Which of the four independent budgets (see this class's own
+        # docstring) most recently stopped a `take_read()`/
+        # `take_validation()` call, and that budget's own limit -- set
+        # only on a failing call, read by the caller immediately after
+        # (see `_stop_on_budget`/`_scan_region_for_pe`'s own `_on_bytes`),
+        # so it always reflects the SPECIFIC exhaustion that just
+        # happened, never a stale one from an earlier, different stop.
+        self.last_exhausted_kind = None
 
     def start_region(self) -> None:
         """Reset the per-region allowances. The whole-hunt ones (bytes,
@@ -165,8 +185,22 @@ class _ScanBudget:
         self.region_validations_left = self._validations_per_region
 
     def take_read(self) -> bool:
+        """Checked in the same order the returned bool always implied
+        (issue #28 P4 follow-up makes it explicit): the per-region read
+        allowance first, then the whole-hunt byte budget -- `reads_left`
+        is checked, and always decremented, before `bytes_left` is even
+        looked at, so a call that fails BOTH is attributed to
+        `reads_per_region`, matching this method's own prior (implicit,
+        via Python's `and` short-circuit over the same two comparisons in
+        the same order) behavior exactly."""
         self.reads_left -= 1
-        return self.reads_left >= 0 and self.bytes_left > 0
+        if self.reads_left < 0:
+            self.last_exhausted_kind = "reads_per_region"
+            return False
+        if self.bytes_left <= 0:
+            self.last_exhausted_kind = "total_bytes"
+            return False
+        return True
 
     def cap_to_remaining_bytes(self, want: int) -> int:
         """Clamp a requested read size to what remains of the whole-hunt
@@ -184,9 +218,53 @@ class _ScanBudget:
         self.bytes_left -= count
 
     def take_validation(self) -> bool:
+        """Same "checked (and attributed) in the same order the return
+        value always implied" rule as `take_read()`: the whole-hunt
+        validation budget first, then the per-region one."""
         self.validations_left -= 1
         self.region_validations_left -= 1
-        return self.validations_left >= 0 and self.region_validations_left >= 0
+        if self.validations_left < 0:
+            self.last_exhausted_kind = "validations_total"
+            return False
+        if self.region_validations_left < 0:
+            self.last_exhausted_kind = "validations_per_region"
+            return False
+        return True
+
+    def limit_for_kind(self, kind: str) -> int:
+        """The configured limit for one of the four budget-kind strings
+        (issue #28 P5 follow-up) -- fixed for this `_ScanBudget`'s whole
+        lifetime, so every region attributed to the same `kind` within one
+        `_hunt_hidden_pe` call shares the identical limit value. Used both
+        by `exhausted_budget_info()` (below) and, directly, by
+        `_hunt_hidden_pe`'s own per-kind `BudgetTargetGroup` construction,
+        which already has the kind (from `gaps.budget_kind`) but not a
+        fresh `exhausted_budget_info()` call reflecting it (that reflects
+        only the MOST RECENT stop, which may be a different region's)."""
+        return {
+            "reads_per_region":        self._reads_per_region,
+            "total_bytes":             self._total_bytes_limit,
+            "validations_per_region":  self._validations_per_region,
+            "validations_total":       self._validations_total_limit,
+        }[kind]
+
+    def exhausted_budget_info(self) -> "tuple | None":
+        """(kind, limit, consumed) for whichever budget `last_exhausted_
+        kind` names, or `None` before any `take_read()`/`take_validation()`
+        call has ever failed. `consumed` always equals `limit` here: by
+        definition, a budget is only ever attributed as the exhaustion
+        reason once its own configured allowance has been fully used --
+        this is not a running/partial consumption figure, just the
+        confirmation of how much WAS available before the scan stopped
+        (issue #28 P4 follow-up: "which budget, and its own limit/
+        consumed" -- see dumpex.output.coverage's PE_HEADER_SCAN_TRUNCATED/
+        _SCAN_NOT_STARTED `scope`/`detail` wiring for where this surfaces
+        on the wire)."""
+        kind = self.last_exhausted_kind
+        if kind is None:
+            return None
+        limit = self.limit_for_kind(kind)
+        return kind, limit, limit
 
     def take_evidence_slot(self, valid: bool) -> bool:
         """Reserve a slot for one hit, counting the drop when there is
@@ -256,12 +334,50 @@ class _ScanGaps:
     unexamined, each recorded as a fact about the REGION (not about the
     individual read that hit it) -- `_hunt_hidden_pe` counts regions, so a
     single region whose search needed many reads contributes at most one
-    to each count."""
+    to each count.
+
+    `not_started` (issue #28) further distinguishes truncated's two very
+    different cases: a region whose search read SOME of it before running
+    out of budget (an unfinished remainder -- the ordinary `truncated`
+    case) versus a LATER region the whole-hunt budget was already
+    exhausted before this region's own scan ever issued a single read for
+    (nothing here was examined at all). Set only by `_stop_on_budget`,
+    only when its own `pos == 0` and it obtained zero bytes -- see that
+    function's own docstring for why that combination is the reliable
+    signal.
+
+    `examined_until` (issue #28 P2/P3 follow-up) is how far into the
+    region (byte offset from its own base) the search actually finished
+    examining before stopping -- advanced only past a byte once the
+    search for (and, for anything found, validation of) 'MZ' candidates
+    in it is actually done (see `_scan_region_for_pe`'s own `_on_bytes`),
+    regardless of which gap eventually ends the region's scan. A window
+    handed to `_on_bytes` whose validation budget runs out partway
+    through only advances this as far as the still-unvalidated
+    candidate's own offset -- NOT to the end of that window -- since
+    everything from there on genuinely was never checked. For a
+    `truncated` (not `not_started`) region this is what turns the
+    reported target from "the whole region, vaguely partial" into
+    "specifically the UNEXAMINED remainder starting here" -- see
+    `_hunt_hidden_pe`'s own `_remainder_scan_target()`.
+
+    `budget_kind`/`budget_limit`/`budget_consumed` (issue #28 P4
+    follow-up) are set alongside `truncated`/`not_started` -- never on
+    their own -- from `_ScanBudget.exhausted_budget_info()`, naming
+    WHICH of the scan's four independent budgets stopped THIS region's
+    own search and that budget's own configured limit. `None` for a
+    region whose gap was a plain read failure/short read, or that never
+    stopped on a budget at all."""
 
     def __init__(self):
         self.read_failed = False
         self.short_read = False
         self.truncated = False
+        self.not_started = False
+        self.examined_until = 0
+        self.budget_kind = None
+        self.budget_limit = None
+        self.budget_consumed = None
 
     def note(self, status: str) -> None:
         """Record one non-OK read status. `_READ_OK` is deliberately
@@ -273,6 +389,17 @@ class _ScanGaps:
             self.short_read = True
         elif status == _READ_BUDGET:
             self.truncated = True
+
+    def set_budget_info(self, budget: "_ScanBudget") -> None:
+        """Attribute the CURRENT budget stop to this region -- called
+        exactly once per region, at the single point (`_stop_on_budget`,
+        or `_on_bytes`'s own validation-budget branch) that actually
+        stops that region's scan on a budget, so `budget.
+        exhausted_budget_info()` still reflects the failure that just
+        happened."""
+        info = budget.exhausted_budget_info()
+        if info is not None:
+            self.budget_kind, self.budget_limit, self.budget_consumed = info
 
 
 def _mz_offsets(data: bytes):
@@ -311,7 +438,7 @@ def _pe_validation_bytes(reader: _BudgetedReader, region_base: int, region_size:
     return (data if len(data) > len(have) else have), status
 
 
-def _stop_on_budget(pos: int, data: bytes, gaps: _ScanGaps, on_bytes) -> bool:
+def _stop_on_budget(budget: _ScanBudget, pos: int, data: bytes, gaps: _ScanGaps, on_bytes) -> bool:
     """The one place a `_READ_BUDGET` status is turned into "stop
     scanning". `data` may be non-empty -- the byte budget caps how many
     bytes are ASKED for (see `_BudgetedReader.read`), so a capped read
@@ -320,14 +447,33 @@ def _stop_on_budget(pos: int, data: bytes, gaps: _ScanGaps, on_bytes) -> bool:
     examined -- scanning them first, and marking the gap only after,
     is what keeps a budget cap from silently discarding data it already
     paid for. Always returns False: a budget stop is never something the
-    caller can continue past."""
+    caller can continue past.
+
+    `not_started` (issue #28) fires only when `pos == 0` and `data` is
+    empty: the FIRST read this region's own search ever attempted was
+    itself refused by an already-exhausted whole-hunt budget (bytes/
+    validations carry over between regions -- see `_ScanBudget.
+    start_region()` -- so a LATER region can start already out of
+    budget), meaning nothing about this region was examined at all. Any
+    other stop -- `pos > 0` (this region's own search already read some
+    of it before running out), or `data` non-empty at `pos == 0` (a
+    capped-but-nonempty first read) -- is a genuine unfinished remainder,
+    not an unstarted region, and stays plain `truncated`.
+
+    `gaps.set_budget_info(budget)` (issue #28 P4 follow-up) is called
+    right here, at the exact point `take_read()` (the only way this
+    status is ever reached) just failed -- `budget.last_exhausted_kind`
+    still names THAT failure, not a later or earlier one."""
     if data:
         on_bytes(pos, data)
     gaps.truncated = True
+    gaps.set_budget_info(budget)
+    if pos == 0 and not data:
+        gaps.not_started = True
     return False
 
 
-def _scan_span(reader: _BudgetedReader, region_base: int, region_size: int,
+def _scan_span(reader: _BudgetedReader, budget: _ScanBudget, region_base: int, region_size: int,
                 start: int, span: int, read_sizes: tuple, gaps: _ScanGaps, on_bytes) -> bool:
     """
     Read [start, start+span) of a region and hand every piece that comes
@@ -372,18 +518,18 @@ def _scan_span(reader: _BudgetedReader, region_base: int, region_size: int,
         data, status = reader.read(region_base + pos, want)
 
         if status == _READ_BUDGET:
-            return _stop_on_budget(pos, data, gaps, on_bytes)
+            return _stop_on_budget(budget, pos, data, gaps, on_bytes)
 
         if status == _READ_FAILED:
             if len(read_sizes) > 1:
-                if not _scan_span(reader, region_base, region_size, pos,
+                if not _scan_span(reader, budget, region_base, region_size, pos,
                                    min(size, end - pos), read_sizes[1:], gaps, on_bytes):
                     return False
                 pos += max(1, size - _MZ_OVERLAP)
                 continue
             marker, marker_status = reader.read(region_base + pos, min(len(_MZ), region_size - pos))
             if marker_status == _READ_BUDGET:
-                return _stop_on_budget(pos, marker, gaps, on_bytes)
+                return _stop_on_budget(budget, pos, marker, gaps, on_bytes)
             if marker_status == _READ_OK:
                 if not on_bytes(pos, marker):
                     return False
@@ -433,27 +579,97 @@ def _scan_region_for_pe(reader: _BudgetedReader, budget: _ScanBudget, region_bas
     held in memory -- only what is actually retained as evidence.
     """
     def _on_bytes(offset: int, data: bytes) -> bool:
+        # `examined_until` only advances past a byte once this window's
+        # search of it is actually DONE (issue #28 P3 follow-up). Reads
+        # being real is not the same as those bytes being examined: the
+        # for-loop below can still stop partway through `data` (a
+        # validation-budget exhaustion), and everything from that
+        # candidate's own offset onward was never checked, whether or not
+        # the bytes happened to already be sitting in `data`. Advancing to
+        # `offset + len(data)` unconditionally here (a prior version of
+        # this function did exactly that) claimed the WHOLE window --
+        # up to PE_SCAN_WINDOW bytes -- was examined even when the budget
+        # died on the very first candidate, silently excluding most of an
+        # unfinished window from the reported truncated target.
         for hit in _mz_offsets(data):
             if not budget.take_validation():
+                gaps.examined_until = max(gaps.examined_until, offset + hit)
                 gaps.truncated = True
+                gaps.set_budget_info(budget)
                 return False
             candidate = offset + hit
             deep, status = _pe_validation_bytes(
                 reader, region_base, region_size, candidate,
                 data[hit:hit + validate_max], validate_max)
             gaps.note(status)
+            if status == _READ_BUDGET:
+                # A candidate's OWN validation read (not the discovery
+                # window read `_stop_on_budget` handles) can hit the
+                # read/byte budget too -- `note()` above already marks
+                # `gaps.truncated`, so attribute it right here rather
+                # than leaving `budget_kind` unset until (if ever) a
+                # LATER top-level read also hits `_stop_on_budget`.
+                gaps.set_budget_info(budget)
             on_candidate(candidate, deep)
+        # Every candidate in this window was processed (the loop above
+        # never returned early), so the whole window was genuinely
+        # byte-searched for 'MZ' -- NOW it is safe to advance past it.
+        gaps.examined_until = max(gaps.examined_until, offset + len(data))
         return True
 
     gaps = _ScanGaps()
-    _scan_span(reader, region_base, region_size, 0, region_size,
+    _scan_span(reader, budget, region_base, region_size, 0, region_size,
                 (window, degraded_read), gaps, _on_bytes)
     return gaps
+
+
+def _remainder_scan_target(mf: MinidumpFile, region, examined_until: int) -> ScanTarget:
+    """A ScanTarget for the UNEXAMINED remainder of one region (issue #28
+    P2 follow-up) -- `[region.BaseAddress + examined_until,
+    region.BaseAddress + region.RegionSize)`, not the whole region.
+
+    A `PE_HEADER_SCAN_TRUNCATED` region's own search may already have
+    fully examined a real PREFIX of it before a scan-budget stop (see
+    `_ScanGaps.examined_until`'s own docstring) -- reporting the WHOLE
+    region as the gap would be inaccurate (part of it genuinely was
+    searched and came up clean) and would send a targeted rescan back
+    over bytes that don't need it. This is a DIFFERENT target from what
+    `region_scan_target(mf, region)` would build for the same region: the
+    address, size, file offset, and captured-bytes count all describe
+    only the remaining, still-unsearched sub-range, even though
+    `allocation_base`/`state`/`type`/`protection` still describe the
+    SAME underlying allocation (those MemoryInfo facts are properties of
+    the allocation as a whole, not of any particular byte sub-range
+    within it).
+
+    Falls back to the WHOLE region (mirroring `region_scan_target(mf,
+    region)`) if `examined_until` somehow covers the entire region --
+    defensive only: every real `PE_HEADER_SCAN_TRUNCATED` call site stops
+    strictly before the region's own end (see `_stop_on_budget`'s own
+    docstring), so there is always a genuine, positive-size remainder in
+    practice."""
+    remainder_base = region.BaseAddress + examined_until
+    remainder_size = region.RegionSize - examined_until
+    if remainder_size <= 0:
+        remainder_base, remainder_size = region.BaseAddress, region.RegionSize
+    return ScanTarget(
+        kind=ScanTargetKind.MEMORY_REGION,
+        base_address=remainder_base,
+        size=remainder_size,
+        file_offset=va_to_file_offset(mf, remainder_base),
+        allocation_base=getattr(region, "AllocationBase", None),
+        state=prot_str(region.State),
+        type=prot_str(region.Type),
+        protection=prot_str(region.Protect),
+        captured_size=va_range_captured_bytes(mf, remainder_base, remainder_size),
+    )
+
 
 def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool = True,
                      budget: "_ScanBudget | None" = None) -> HiddenPeScan:
     """
-    Return a HiddenPeScan(hits, read_failed, short_reads, scan_truncated).
+    Return a HiddenPeScan(hits, read_failed, short_reads, scan_truncated,
+    scan_not_started).
 
     If ModuleListStream isn't present, module_list_available is False and
     this returns an empty scan rather than flagging every MZ header as
@@ -482,6 +698,13 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
     (short_reads), distinct from an exception. A region whose search stops
     on one of the `_ScanBudget` bounds — reads, bytes, or validations — is
     tracked as scan_truncated: the remainder is unsearched, not clean.
+    scan_truncated further splits into two facts (issue #28): a region
+    this call's own search got PART of before running out of budget keeps
+    the plain scan_truncated name (an unfinished remainder); a LATER
+    region the whole-hunt budget was already exhausted before this call's
+    own search even issued its first read for is scan_not_started instead
+    (nothing here was examined at all) — see `_stop_on_budget`'s own
+    docstring for exactly how that distinction is detected.
 
     `budget` is that `_ScanBudget`, ONE instance for the whole call rather
     than one per region, so a dump cannot multiply its total cost by
@@ -515,8 +738,13 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
     reader = _BudgetedReader(read_region, mf, budget)
     hits = []
     read_failed = 0
+    read_failed_targets = []
     short_reads = 0
+    short_read_targets = []
     scan_truncated = 0
+    scan_truncated_by_kind = {}    # budget_kind -> list[ScanTarget] -- issue #28 P5 follow-up
+    scan_not_started = 0
+    scan_not_started_by_kind = {}  # budget_kind -> list[ScanTarget] -- issue #28 P5 follow-up
     for r in get_memory_regions(mf):
         if prot_str(r.State) != "MEM_COMMIT":
             continue
@@ -569,12 +797,60 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
         # same "N region(s) could not be fully examined" coverage counts
         # this scan has always reported (see report_facts.project_coverage_v1
         # / LimitationCode.PE_HEADER_READ_FAILED), and a single region whose
-        # search needed many reads must not inflate them into N.
-        read_failed    += 1 if gaps.read_failed else 0
-        short_reads    += 1 if gaps.short_read else 0
-        scan_truncated += 1 if gaps.truncated else 0
-    return HiddenPeScan(hits=tuple(hits), read_failed=read_failed, short_reads=short_reads,
+        # search needed many reads must not inflate them into N. `r` is
+        # still the raw MemoryInfo region right here, so a ScanTarget for
+        # each affected gap is built now (issue #28) rather than reduced to
+        # a bare count before it ever reaches HiddenPeScan/CoverageLimitation.
+        if gaps.read_failed:
+            read_failed += 1
+            read_failed_targets.append(region_scan_target(mf, r))
+        if gaps.short_read:
+            short_reads += 1
+            short_read_targets.append(region_scan_target(mf, r))
+        # `not_started` further splits `truncated` into two distinct
+        # facts an investigator needs to tell apart (issue #28): a region
+        # this search got PART of before running out of budget (an
+        # unfinished remainder, still `scan_truncated`) versus a LATER
+        # region the whole-hunt budget was already exhausted before its
+        # own scan ever read a single byte of (`scan_not_started` --
+        # nothing here was examined at all).
+        if gaps.truncated:
+            # `gaps.budget_kind` is always set here (see `_stop_on_budget`/
+            # `_on_bytes`'s own `set_budget_info` calls -- every path that
+            # sets `gaps.truncated` also attributes a budget), so grouping
+            # by it never needs a "no kind" bucket.
+            if gaps.not_started:
+                scan_not_started += 1
+                scan_not_started_by_kind.setdefault(gaps.budget_kind, []).append(
+                    region_scan_target(mf, r))
+            else:
+                scan_truncated += 1
+                # The UNEXAMINED REMAINDER, not the whole region (issue
+                # #28 P2 follow-up) -- see _remainder_scan_target's own
+                # docstring for why that is a different, more precise
+                # target than region_scan_target(mf, r) would build here.
+                scan_truncated_by_kind.setdefault(gaps.budget_kind, []).append(
+                    _remainder_scan_target(mf, r, gaps.examined_until))
+
+    def _groups(by_kind: dict) -> tuple:
+        # One BudgetTargetGroup per DISTINCT budget kind that stopped at
+        # least one region (issue #28 P5 follow-up) -- see that class's
+        # own docstring for why a single first-occurrence attribution for
+        # the whole scan was wrong once different regions can stop on
+        # different budgets within the same call.
+        return tuple(
+            BudgetTargetGroup(budget_kind=kind, budget_limit=budget.limit_for_kind(kind),
+                               budget_consumed=budget.limit_for_kind(kind), targets=tuple(targets))
+            for kind, targets in by_kind.items())
+
+    return HiddenPeScan(hits=tuple(hits), read_failed=read_failed,
+                         read_failed_targets=tuple(read_failed_targets),
+                         short_reads=short_reads,
+                         short_read_targets=tuple(short_read_targets),
                          scan_truncated=scan_truncated,
+                         scan_truncated_groups=_groups(scan_truncated_by_kind),
+                         scan_not_started=scan_not_started,
+                         scan_not_started_groups=_groups(scan_not_started_by_kind),
                          validated_dropped=budget.validated_dropped,
                          unvalidated_dropped=budget.unvalidated_dropped)
 

@@ -31,11 +31,53 @@ class ScanOutcome:
     # on hunters whose gap reasons don't fit that generic shape).
     skipped_targets: list = field(default_factory=list)
     read_failed: int = 0
+    # One ScanTarget per segment that failed/short-read, same reasoning as
+    # skipped_targets above (issue #28) -- unlike skipped_targets, these
+    # counts stay meaningful even if a caller never appends a target (kept
+    # as separate scalar counters, not derived, since CoverageLimitation's
+    # own targets support on these two codes is OPTIONAL -- see
+    # dumpex.output.coverage._require_optional_targets_matching_count).
+    read_failed_targets: list = field(default_factory=list)
     short_reads: int = 0
+    short_read_targets: list = field(default_factory=list)
     timed_out: int = 0
+    # ScanTarget per TIMED-OUT/FAILED CALL, not deduplicated per segment
+    # (issue #28 P4 follow-up) -- `timed_out`/`match_failed` themselves
+    # count CALLS (see scanner.py's own comment on why that stays true),
+    # so a segment failing against two different rule files contributes
+    # its target twice, keeping len(...) == the corresponding count
+    # exactly when non-empty (CoverageLimitation's own optional-targets
+    # rule).
+    timed_out_targets: list = field(default_factory=list)
     match_failed: int = 0
+    match_failed_targets: list = field(default_factory=list)
     truncated: bool = False
+    # ScanTarget per segment mid-processing or never started when the hit
+    # cap was reached (issue #28 P5 follow-up) -- segment granularity,
+    # not a byte remainder (yara examines a segment as one atomic unit
+    # against each rule file, unlike injection's own byte-wise scan).
+    truncated_targets: list = field(default_factory=list)
+    # `truncated`'s own single, unambiguous budget (issue #28 P6
+    # follow-up) -- always "max_total_hits" when truncated is True, never
+    # any other resource, so this is set directly rather than tracked via
+    # a _mark_*() call site the way budget_exhausted's own (ambiguous
+    # between two resources) kind needs to be.
+    truncated_budget_limit: "int | None" = None
     budget_exhausted: bool = False
+    # Unlike truncated_targets above, can legitimately be EMPTY even when
+    # budget_exhausted is True (issue #28 P6 follow-up): the deadline can
+    # be discovered only after the scan's very last (segment, rule_file)
+    # pairing already finished being fully examined -- a genuine
+    # wall-clock overrun, but not a coverage gap, since nothing was
+    # actually left unexamined. Mirrors CS Beacon's own
+    # budget_exhausted_targets, which already had this shape.
+    budget_exhausted_targets: list = field(default_factory=list)
+    # WHICH of the two independent whole-scan budgets
+    # ("scan_deadline_seconds"/"max_total_bytes_scanned") stopped the
+    # scan, and that budget's own configured limit (issue #28 P6
+    # follow-up) -- both None together when budget_exhausted is False.
+    budget_exhausted_kind: "str | None" = None
+    budget_exhausted_limit: "int | None" = None
     total_bytes_scanned: int = 0
     suppressed_module_pe: int = 0
     suppressed_scoped: int = 0

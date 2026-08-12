@@ -243,11 +243,11 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     if coverage.read_failed:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_READ_FAILED, source="pipe_name_scan",
-            affected_count=coverage.read_failed))
+            affected_count=coverage.read_failed, targets=coverage.read_failed_targets))
     if coverage.short_reads:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="pipe_name_scan",
-            affected_count=coverage.short_reads))
+            affected_count=coverage.short_reads, targets=coverage.short_read_targets))
     # Two SEPARATE limitations, distinguished by `scope`, never one merged
     # "budget exhausted" entry -- which signal's collection stopped early
     # is exactly what an analyst needs to know (see

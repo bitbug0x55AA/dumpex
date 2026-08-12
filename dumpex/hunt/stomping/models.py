@@ -483,7 +483,9 @@ class IocCoverage:
     "what did this pass actually do" record."""
     skipped_oversize_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     read_failed:              int = 0
+    read_failed_targets:      tuple = field(default_factory=tuple)   # tuple[ScanTarget] -- issue #28
     short_reads:              int = 0
+    short_read_targets:       tuple = field(default_factory=tuple)   # tuple[ScanTarget] -- issue #28
     whitelisted_skipped:      tuple = field(default_factory=tuple)   # tuple[str]
 
     def __post_init__(self):
@@ -491,6 +493,10 @@ class IocCoverage:
             self.skipped_oversize_targets, ScanTarget, "IocCoverage.skipped_oversize_targets"))
         _require_count(self.read_failed, "IocCoverage.read_failed")
         _require_count(self.short_reads, "IocCoverage.short_reads")
+        object.__setattr__(self, "read_failed_targets", _require_typed_tuple(
+            self.read_failed_targets, ScanTarget, "IocCoverage.read_failed_targets"))
+        object.__setattr__(self, "short_read_targets", _require_typed_tuple(
+            self.short_read_targets, ScanTarget, "IocCoverage.short_read_targets"))
         object.__setattr__(self, "whitelisted_skipped", _require_typed_tuple(
             self.whitelisted_skipped, str, "IocCoverage.whitelisted_skipped"))
         require_recursively_immutable(self, "IocCoverage")
@@ -498,7 +504,10 @@ class IocCoverage:
     @classmethod
     def from_tracker(cls, tracker, whitelisted_skipped=()) -> "IocCoverage":
         return cls(skipped_oversize_targets=tuple(tracker.skipped_oversize_targets),
-                   read_failed=tracker.read_failed, short_reads=tracker.short_reads,
+                   read_failed=tracker.read_failed,
+                   read_failed_targets=tuple(tracker.read_failed_targets),
+                   short_reads=tracker.short_reads,
+                   short_read_targets=tuple(tracker.short_read_targets),
                    whitelisted_skipped=tuple(whitelisted_skipped))
 
     @property

@@ -2,7 +2,7 @@
 encoding/report_facts.py, report_legacy.py, report_record.py,
 report_console.py) -- everything that turns a hand-built `EncodingReport`
 (dumpex.hunt.encoding.domain's canonical domain model) into the legacy
-v1.1 dict, the current-schema (v2.11) `HunterRecord`, and the
+v1.1 dict, the current-schema (v2.12) `HunterRecord`, and the
 verdict-first console. Mirrors tests/hunt/test_injection_projectors.py
 (the completed reference pilot's own test suite) -- see that module's
 own docstring for the general split between this file and its
@@ -34,7 +34,9 @@ from dumpex.hunt.encoding.report_facts import finding_from_check_result
 from dumpex.hunt.encoding.report_legacy import project_legacy_dict
 from dumpex.hunt.encoding.report_record import project_hunter_record
 from dumpex.hunt.encoding.report_console import render_console_lines
-from dumpex.output.coverage import EXIT_NOT_EVALUATED, EXIT_OK, EXIT_PARTIAL, exit_code_for
+from dumpex.output.coverage import (
+    EXIT_NOT_EVALUATED, EXIT_OK, EXIT_PARTIAL, exit_code_for, ScanTarget, ScanTargetKind,
+)
 
 
 # ── Report builders ────────────────────────────────────────────────────────
@@ -89,8 +91,8 @@ def _clean_report() -> EncodingReport:
 
 
 def _inconclusive_report() -> EncodingReport:
-    coverage = CoverageSnapshot(memory_info_stream=True, region_count=1,
-                                 any_region_scanned=True, read_failed=1)
+    target = ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=0x1000, size=0x2000)
+    coverage = _coverage(entropy_read_failed=(target,))
     return EncodingReport(score=0, coverage=coverage, results=(), evidence=EncodingEvidence())
 
 

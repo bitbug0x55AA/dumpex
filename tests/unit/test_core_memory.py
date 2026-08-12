@@ -2,8 +2,9 @@
 from dumpex.core.memory import (
     module_name_only, verdict_for, _verdict, _search_string_in_memory, StringSearchStats,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS, VERDICT_HIGH_CONFIDENCE_MALICIOUS,
+    va_range_captured_bytes,
 )
-from tests.fixtures.fakes import FakeMF, FakeStream, Region, mem_reader
+from tests.fixtures.fakes import FakeMF, FakeStream, Region, Segment, mem_reader
 
 
 def test_module_name_only_extracts_windows_backslash_path_basename():
@@ -173,3 +174,57 @@ def test_search_string_in_memory_needle_past_truncation_is_a_miss_but_counted():
     hits, stats = _search_string_in_memory(mf, "NEEDLE1234")
     assert hits == []
     assert stats.truncated == 1
+
+
+# ── va_range_captured_bytes() (issue #28 P1 follow-up) ────────────────────
+# The structural "how much of this VA range does the dump's own segment
+# table actually back" fact ScanTarget.captured_size/capture_state are
+# built from -- independent of any hunt's own live-read outcome.
+
+def _mf_with_segments(segments):
+    mf = FakeMF()
+    mf.memory_segments_64 = FakeStream(segments, "memory_segments")
+    return mf
+
+
+def test_va_range_captured_bytes_zero_when_va_not_covered_at_all():
+    mf = _mf_with_segments([Segment(0x2000, 0x2000, 0x1000)])
+    assert va_range_captured_bytes(mf, 0x1000, 0x1000) == 0
+
+
+def test_va_range_captured_bytes_full_when_one_segment_covers_the_whole_range():
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x2000)])
+    assert va_range_captured_bytes(mf, 0x1000, 0x1000) == 0x1000
+
+
+def test_va_range_captured_bytes_partial_when_segment_covers_only_a_prefix():
+    # The exact short-read shape: the requested range starts inside a
+    # segment but the segment ends before the range does -- only the
+    # PREFIX up to the segment's own end is actually captured.
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x800)])
+    assert va_range_captured_bytes(mf, 0x1000, 0x1000) == 0x800
+
+
+def test_va_range_captured_bytes_stops_at_a_gap_between_segments():
+    # A LATER segment covering the range's tail, with a gap in between,
+    # must not count -- the missing middle still can't be extracted as one
+    # contiguous read, so only the contiguous run starting at `va` counts.
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x400),
+                             Segment(0x1800, 0x1800, 0x400)])
+    assert va_range_captured_bytes(mf, 0x1000, 0x1000) == 0x400
+
+
+def test_va_range_captured_bytes_spans_contiguous_segments():
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x800),
+                             Segment(0x1800, 0x1800, 0x800)])
+    assert va_range_captured_bytes(mf, 0x1000, 0x1000) == 0x1000
+
+
+def test_va_range_captured_bytes_zero_for_no_segment_table_at_all():
+    assert va_range_captured_bytes(FakeMF(), 0x1000, 0x1000) == 0
+
+
+def test_va_range_captured_bytes_zero_for_zero_or_negative_size():
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x2000)])
+    assert va_range_captured_bytes(mf, 0x1000, 0) == 0
+    assert va_range_captured_bytes(mf, 0x1000, -1) == 0

@@ -43,12 +43,13 @@ from dataclasses import dataclass, field
 
 from dumpex.hunt._coverage import derive_status, derive_coverage_status
 from dumpex.hunt._domain import CheckResult, require_recursively_immutable, as_tuple
+from dumpex.output.coverage import ScanTarget
 from dumpex.hunt._finding import (
     overall_confidence, verdict_level, lead_count, review_priority,
 )
 from dumpex.hunt.injection.models import (
     Correlation, CorrelatedAllocationEvidence, HiddenPeEvidence, RwxRegionEvidence,
-    ThreadContext, UnbackedThreadEvidence,
+    ThreadContext, UnbackedThreadEvidence, BudgetTargetGroup,
 )
 
 # This hunter's own score -> verdict_level table. The canonical home for
@@ -81,6 +82,63 @@ def _require_count(value, field_name: str) -> None:
 def _require_optional_count(value, field_name: str) -> None:
     if value is not None:
         _require_count(value, field_name)
+
+
+def _require_scan_targets(value, field_name: str) -> tuple:
+    items = as_tuple(value, field_name)
+    for index, item in enumerate(items):
+        if type(item) is not ScanTarget:
+            raise TypeError(
+                f"{field_name}[{index}] must be a ScanTarget, got "
+                f"{type(item).__name__}: {item!r}")
+    require_recursively_immutable(items, field_name)
+    return items
+
+
+# The same four `memory_scan._ScanBudget` resource names that class's own
+# `exhausted_budget_info()` can return -- duplicated here as CoverageSnapshot's
+# own wire-facing contract (issue #28 P4 follow-up), same "closed vocabulary
+# duplicated at the domain-model boundary" reasoning dumpex.output.coverage's
+# own copy of this set follows (that module cannot import memory_scan --
+# hunt-package internals must not leak into the output adapter).
+_BUDGET_KINDS = frozenset(
+    {"reads_per_region", "total_bytes", "validations_per_region", "validations_total"})
+
+
+def _require_budget_groups(value, field_name: str) -> tuple:
+    """Normalize/validate a `tuple[BudgetTargetGroup, ...]` (issue #28 P5
+    follow-up, replacing the prior single-attribution kind/limit/consumed
+    triple) -- each group's own `budget_kind` must be one of the four
+    known budgets, `budget_consumed` must equal `budget_limit` (see
+    `memory_scan._ScanBudget.exhausted_budget_info()`'s own docstring for
+    why: a budget is only ever attributed once fully consumed), it must
+    carry at least one target (an empty group is not a fact worth
+    stating), and no two groups in the same tuple may share a
+    `budget_kind` (that would just be the SAME fact split in two, which
+    should have been one group with more targets instead)."""
+    items = as_tuple(value, field_name)
+    for index, item in enumerate(items):
+        if type(item) is not BudgetTargetGroup:
+            raise TypeError(
+                f"{field_name}[{index}] must be a BudgetTargetGroup, got "
+                f"{type(item).__name__}: {item!r}")
+        if item.budget_kind not in _BUDGET_KINDS:
+            raise ValueError(f"{field_name}[{index}].budget_kind must be one of "
+                              f"{sorted(_BUDGET_KINDS)}, got {item.budget_kind!r}")
+        _require_count(item.budget_limit, f"{field_name}[{index}].budget_limit")
+        _require_count(item.budget_consumed, f"{field_name}[{index}].budget_consumed")
+        if item.budget_consumed != item.budget_limit:
+            raise ValueError(
+                f"{field_name}[{index}].budget_consumed ({item.budget_consumed}) must equal "
+                f"budget_limit ({item.budget_limit}) -- a budget is only ever attributed as "
+                f"an exhaustion reason once fully consumed")
+        if not item.targets:
+            raise ValueError(f"{field_name}[{index}] must carry at least one target")
+    kinds = [g.budget_kind for g in items]
+    if len(kinds) != len(set(kinds)):
+        raise ValueError(f"{field_name} must not repeat a budget_kind across groups, got {kinds!r}")
+    require_recursively_immutable(items, field_name)
+    return items
 
 
 def _require_address_inside_region(addr: int, region, hit, hits_name: str) -> None:
@@ -452,8 +510,13 @@ class CoverageSnapshot:
     threads_total:   int = 0
     contexts_parsed: int = 0
     pe_read_failed:  int = 0
+    pe_read_failed_targets: tuple = field(default_factory=tuple)    # tuple[ScanTarget] -- issue #28
     pe_short_reads:  int = 0
+    pe_short_reads_targets: tuple = field(default_factory=tuple)    # tuple[ScanTarget] -- issue #28
     pe_scan_truncated: int = 0
+    pe_scan_truncated_groups: tuple = field(default_factory=tuple)  # tuple[BudgetTargetGroup] -- issue #28 P5
+    pe_scan_not_started: int = 0
+    pe_scan_not_started_groups: tuple = field(default_factory=tuple)  # tuple[BudgetTargetGroup] -- issue #28 P5
     pe_evidence_capped: int = 0
     region_count:      "int | None" = None
     thread_info_count: "int | None" = None
@@ -464,10 +527,16 @@ class CoverageSnapshot:
                      "module_list_stream", "thread_list_stream"):
             _require_bool(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in ("threads_total", "contexts_parsed", "pe_read_failed", "pe_short_reads",
-                     "pe_scan_truncated", "pe_evidence_capped"):
+                     "pe_scan_truncated", "pe_scan_not_started", "pe_evidence_capped"):
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in ("region_count", "thread_info_count", "module_count"):
             _require_optional_count(getattr(self, name), f"CoverageSnapshot.{name}")
+        for name in ("pe_read_failed_targets", "pe_short_reads_targets"):
+            object.__setattr__(self, name, _require_scan_targets(
+                getattr(self, name), f"CoverageSnapshot.{name}"))
+        for name in ("pe_scan_truncated_groups", "pe_scan_not_started_groups"):
+            object.__setattr__(self, name, _require_budget_groups(
+                getattr(self, name), f"CoverageSnapshot.{name}"))
 
     @property
     def thread_context(self) -> bool:
@@ -498,18 +567,20 @@ class CoverageSnapshot:
         missing stream does: RIP/EIP correlation is the ONLY path to this
         hunter's HIGH tier, so a thread whose context was never parsed is
         a live-execution correlation that could not be ruled out, not one
-        that was checked and came back negative. `pe_scan_truncated` joins
-        the two hidden-PE read counters for the same reason: a region
-        whose candidate search stopped on one of its budgets has an
-        unsearched remainder, and a hidden PE there is not ruled out
-        either. `pe_evidence_capped` counts VALIDATED hidden PE headers
-        the scan found but did not retain (evidence cap) -- the memory was
-        searched, but the report does not list everything that search
-        found, which is not a complete result either."""
+        that was checked and came back negative. `pe_scan_truncated`/
+        `pe_scan_not_started` join the two hidden-PE read counters for the
+        same reason: a region whose candidate search stopped on one of its
+        budgets has an unsearched remainder (truncated) or was never
+        examined at all (not_started), and a hidden PE there is not ruled
+        out either way. `pe_evidence_capped` counts VALIDATED hidden PE
+        headers the scan found but did not retain (evidence cap) -- the
+        memory was searched, but the report does not list everything that
+        search found, which is not a complete result either."""
         return (self.memory_info_stream and self.thread_info_stream
                 and self.module_list_stream
                 and self.pe_read_failed == 0 and self.pe_short_reads == 0
-                and self.pe_scan_truncated == 0 and self.pe_evidence_capped == 0
+                and self.pe_scan_truncated == 0 and self.pe_scan_not_started == 0
+                and self.pe_evidence_capped == 0
                 and self.thread_context and self.contexts_missing == 0)
 
     @property

@@ -449,8 +449,27 @@ def _content_finding_text(finding) -> str:
     return f"MZ header at {finding.address} (module context: {finding.module_context})"
 
 
+_CAUSE_LABEL = {
+    "oversized_skipped": "oversized, never read",
+    "read_failed":       "read failed",
+    "short_read":        "short read",
+    "scan_truncated":    "scan truncated",
+    "scan_not_started":  "scan not started (budget exhausted)",
+    "match_failed":      "YARA match() failed",
+    "match_timed_out":   "YARA match() timed out",
+    "hit_cap_reached":       "scan hit cap reached",
+    "scan_budget_exhausted": "scan budget exhausted",
+}
+
+
 def _skip_relationship_text(rel) -> str:
-    return f"{rel.hunter}/{rel.source}" if rel.scope is None else f"{rel.hunter}/{rel.source}:{rel.scope}"
+    base = f"{rel.hunter}/{rel.source}" if rel.scope is None else f"{rel.hunter}/{rel.source}:{rel.scope}"
+    cause_text = _CAUSE_LABEL.get(rel.cause, rel.cause)
+    # issue #28 P5 follow-up: the budget's own limit is worth showing
+    # right alongside the cause -- "raise THIS knob and rescan" is the
+    # whole point of naming budget_kind at all.
+    budget = f", limit={rel.budget_limit}" if rel.budget_kind is not None else ""
+    return f"{base} ({cause_text}{budget})"
 
 
 def _bounded_join(items: list, cap: "int | None") -> str:
@@ -474,7 +493,14 @@ def _render_investigation_action_entry(action: InvestigationAction, width: int, 
     lines.extend(_wrap_block(f"Skipped by: {_bounded_join(skip_texts, skip_cap)}", width, 7))
 
     reason_texts = [_REASON_CODE_LABEL.get(c, c) for c in action.priority_reason_codes]
-    why = "; ".join(reason_texts) if reason_texts else "oversized target skipped"
+    # The fallback (no priority-reason-code fired -- LOW priority, one
+    # relationship) names the cause itself rather than a fixed "oversized"
+    # word: this target may equally have been skipped for a read failure,
+    # short read, or scan-truncation (issue #28), and "Skipped by" above
+    # already carries the per-relationship cause, so this stays a short,
+    # generic pointer back to it rather than repeating one cause verbatim
+    # when skipped_by could hold several different causes.
+    why = "; ".join(reason_texts) if reason_texts else "target not fully examined -- see Skipped by"
     lines.extend(_wrap_block(f"Why: {why}", width, 7))
 
     action_cap = None if verbose else _MAX_SKIPPED_ACTIONS_LIST

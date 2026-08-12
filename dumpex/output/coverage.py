@@ -419,7 +419,22 @@ class LimitationCode(str, Enum):
     # dump's contents: an analyst who sees it can re-run with a larger
     # budget, which is not true of a failed or short read. source fixed to
     # "hidden_pe_scan"; caller_buildable; affected_count alone carries the
-    # fact.
+    # fact. As of issue #28, targets is also optionally populated (see
+    # PE_HEADER_READ_FAILED's own comment on the general shape).
+    PE_HEADER_SCAN_NOT_STARTED = "PE_HEADER_SCAN_NOT_STARTED"
+    # ^ --hunt injection (issue #28): companion to PE_HEADER_SCAN_TRUNCATED
+    # for a DIFFERENT fact about the same whole-hunt scan budget -- a LATER
+    # region (HiddenPeScan.scan_not_started) whose own candidate search
+    # never issued a single read at all, because the whole-hunt byte/
+    # validation budget (which carries over between regions -- see
+    # memory_scan._ScanBudget.start_region()) was already exhausted before
+    # this region's turn came up. A region reported here is not merely
+    # "partially unsearched" (PE_HEADER_SCAN_TRUNCATED's own claim) -- it
+    # is entirely unexamined, a distinction issue #28 asks for explicitly
+    # (a rescan with a larger budget must start these regions from
+    # scratch, not resume a partial one). source fixed to "hidden_pe_scan";
+    # caller_buildable; affected_count alone carries the fact; targets is
+    # optionally populated the same way PE_HEADER_SCAN_TRUNCATED's is.
     PE_HEADER_EVIDENCE_CAPPED = "PE_HEADER_EVIDENCE_CAPPED"
     # ^ --hunt injection: the search DID examine this memory and found a
     # structurally-valid hidden PE header there, but the scan's retained-
@@ -560,24 +575,35 @@ class LimitationCode(str, Enum):
     # distinct from YARA_MATCH_TIMED_OUT (a different, specific failure
     # mode an analyst needs to tell apart, same reasoning
     # PE_HEADER_READ_FAILED/_SHORT_READ split on). source fixed to
-    # "segment_scan"; caller_buildable; affected_count.
+    # "segment_scan"; caller_buildable; affected_count. As of issue #28
+    # P4 follow-up, targets is also optionally populated -- one
+    # ScanTarget per SEGMENT a match() call failed against (a segment
+    # can appear at most once even if several of its rule-file pairings
+    # each failed, same "count regions, not reads" rule PE_HEADER_
+    # READ_FAILED already follows).
     YARA_MATCH_TIMED_OUT = "YARA_MATCH_TIMED_OUT"
     # ^ Companion to YARA_MATCH_FAILED: N match() call(s) exceeded the
     # per-call match timeout. source fixed to "segment_scan";
-    # caller_buildable; affected_count.
+    # caller_buildable; affected_count. As of issue #28 P4 follow-up,
+    # targets is also optionally populated the same way YARA_MATCH_
+    # FAILED's is.
     YARA_HIT_CAP_REACHED = "YARA_HIT_CAP_REACHED"
     # ^ The scan's own total-hit cap (YaraConfig.max_total_hits) was
-    # reached before every segment/rule pairing was examined -- fully
-    # fixed sentence, no fields, source fixed to "segment_scan"
-    # (mirrors PID_NO_USABLE_FALLBACK's own "fully fixed, no fields"
-    # shape).
+    # reached before every segment/rule pairing was examined. source
+    # fixed to "segment_scan"; caller_buildable. As of issue #28 P5
+    # follow-up, affected_count/targets are populated too -- the segment
+    # mid-processing when the cap was hit, plus every later segment in
+    # the scan's own segment table that never started at all (segment
+    # granularity, not a byte remainder -- yara examines a segment as one
+    # atomic unit against each rule file).
     YARA_SCAN_BUDGET_EXHAUSTED = "YARA_SCAN_BUDGET_EXHAUSTED"
     # ^ This hunter's own whole-scan time/byte budget was exhausted
     # before every segment was examined -- unlike CS_BEACON_SCAN_BUDGET_
     # EXHAUSTED/SCAN_BUDGET_EXHAUSTED, yara_hunt's own ScanOutcome.
-    # budget_exhausted carries no reason string at all (a plain bool),
-    # so this is a fully fixed sentence, no fields, source fixed to
-    # "segment_scan".
+    # budget_exhausted carries no reason string at all (a plain bool).
+    # source fixed to "segment_scan"; caller_buildable. As of issue #28
+    # P5 follow-up, affected_count/targets are populated the same way
+    # YARA_HIT_CAP_REACHED's is.
     ENCODING_ALL_REGIONS_FILTERED = "ENCODING_ALL_REGIONS_FILTERED"
     # ^ --hunt obfuscation: every candidate region was excluded by one of
     # the seven decode layers' own size/type eligibility filters before
@@ -605,7 +631,12 @@ class LimitationCode(str, Enum):
     # SOURCE_FAILED's own `detail` (an arbitrary exception message) already
     # sets, NOT the generic caller-composed-prose case that precedent
     # otherwise warns against. source fixed to "segment_scan";
-    # caller_buildable.
+    # caller_buildable. As of issue #28 P5 follow-up, affected_count/
+    # targets are ALSO optionally populated -- the segment mid-processing
+    # when the budget was exhausted, plus every later segment never
+    # started -- but unlike every other target-bearing code, BOTH may
+    # legitimately stay unset together: a deadline discovered only after
+    # the very last segment already finished has nothing left to name.
 
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
@@ -679,16 +710,43 @@ class ScanTarget:
     `allocation_base`/`state`/`type`/`protection` are the MemoryInfo facts
     that let a reader decide whether the gap covers executable private
     memory or an ordinary large heap/mapping; they stay None for a
-    segment-table target, which carries no MemoryInfo at all."""
+    segment-table target, which carries no MemoryInfo at all.
+
+    `size_limit` is `None` for a target that was never actually oversized
+    -- a region/segment a scan attempted but could not read at all, read
+    short, or ran out of scan budget before finishing (PE_HEADER_READ_
+    FAILED/_SHORT_READ/_SCAN_TRUNCATED, SCAN_REGION_READ_FAILED/_SHORT_
+    READ, ...). There is no "cap it exceeded" for those gaps -- the cause
+    is an I/O failure or a scan-budget exhaustion, not the target's own
+    size, so `size > size_limit` is enforced only when `size_limit` is
+    supplied (see __post_init__); the oversized-skip codes (today only
+    SCAN_REGION_OVERSIZED_SKIPPED) are the ones that always supply it.
+
+    `captured_size` (issue #28 P1 follow-up) is how many of `size` bytes,
+    counting from `base_address`, are actually present in the .dmp file --
+    a STRUCTURAL fact from the dump's own segment table (see
+    dumpex.core.memory.va_range_captured_bytes), independent of whether
+    any hunt's own read attempt at this address succeeded. `file_offset`
+    alone only proves the START is captured; for a short-read target
+    specifically that is not the same claim as "the whole requested range
+    is captured" -- a short read typically means the dump's own capture
+    stops partway through the region, so only a PREFIX is actually
+    extractable. `None` means "not computed" (e.g. a target built by a
+    caller that bypassed region_scan_target()/segment_scan_target(), the
+    two places this is filled in automatically) -- callers reading this
+    field must treat `None` distinctly from `0` (computed, and nothing at
+    all is captured). `capture_state` (below) is the derived three-way
+    summary a consumer actually acts on."""
     kind: ScanTargetKind
     base_address: int
     size: int
-    size_limit: int
+    size_limit: "int | None" = None
     file_offset: "int | None" = None       # byte offset into the .dmp, not an address
     allocation_base: "int | None" = None
     state: "str | None" = None             # e.g. "MEM_COMMIT"
     type: "str | None" = None              # e.g. "MEM_PRIVATE"
     protection: "str | None" = None        # e.g. "PAGE_READWRITE"
+    captured_size: "int | None" = None     # bytes of `size` actually present in the .dmp
 
     def __post_init__(self):
         object.__setattr__(self, "kind", ScanTargetKind(self.kind))
@@ -701,13 +759,16 @@ class ScanTarget:
         # was actually made.
         _require_uint64(self.base_address, "ScanTarget.base_address")
         _require_positive_int(self.size, "ScanTarget.size")
-        _require_positive_int(self.size_limit, "ScanTarget.size_limit")
+        _require_optional_positive_int(self.size_limit, "ScanTarget.size_limit")
         # A target only belongs on an oversized-skip limitation if it
         # genuinely exceeded the cap -- a target whose size fits inside
         # size_limit would be evidence AGAINST the very claim the
         # limitation makes, and is far more likely a caller passing the
-        # wrong region than a real gap.
-        if self.size <= self.size_limit:
+        # wrong region than a real gap. Not checked at all when size_limit
+        # is None -- a read-failed/short-read/scan-truncated target was
+        # never skipped for being oversized, so there is no cap to compare
+        # against (see this field's own docstring above).
+        if self.size_limit is not None and self.size <= self.size_limit:
             raise ValueError(
                 f"ScanTarget.size ({self.size}) must exceed size_limit ({self.size_limit}) "
                 f"-- a target that fits inside the cap was not skipped for being oversized")
@@ -716,6 +777,15 @@ class ScanTarget:
         _require_optional_str(self.state, "ScanTarget.state")
         _require_optional_str(self.type, "ScanTarget.type")
         _require_optional_str(self.protection, "ScanTarget.protection")
+        _require_optional_nonnegative_int(self.captured_size, "ScanTarget.captured_size")
+        if self.captured_size is not None and self.captured_size > self.size:
+            raise ValueError(
+                f"ScanTarget.captured_size ({self.captured_size}) must not exceed size "
+                f"({self.size}) -- at most the whole target can be captured")
+        if self.captured_size is not None and self.captured_size > 0 and self.file_offset is None:
+            raise ValueError(
+                "ScanTarget.captured_size > 0 requires file_offset to be set -- some bytes "
+                "captured means the start address must itself resolve to a file offset")
         if self.kind == ScanTargetKind.MEMORY_SEGMENT and any(
                 v is not None for v in (self.allocation_base, self.state,
                                          self.type, self.protection)):
@@ -723,6 +793,20 @@ class ScanTarget:
                 "ScanTarget(kind=memory_segment) carries no MemoryInfo -- allocation_base/"
                 "state/type/protection must stay None; use kind=memory_region for a "
                 "MemoryInfoListStream region")
+
+    @property
+    def capture_state(self) -> "str | None":
+        """Derived, never stored separately, so it can never disagree with
+        `captured_size` -- `None` (unknown, `captured_size` was never
+        computed), `"none"` (0 bytes captured), `"partial"` (some but not
+        all of `size`), or `"complete"` (all of `size`)."""
+        if self.captured_size is None:
+            return None
+        if self.captured_size == 0:
+            return "none"
+        if self.captured_size >= self.size:
+            return "complete"
+        return "partial"
 
     def to_dict(self) -> dict:
         """Addresses follow dumpex's fixed-width hex convention;
@@ -738,12 +822,20 @@ class ScanTarget:
             "state":           self.state,
             "type":            self.type,
             "protection":      self.protection,
+            "captured_size":   self.captured_size,
+            "capture_state":   self.capture_state,
         }
 
     def describe(self) -> str:
         """The one-target fragment the console preview is built from --
         VA first (what an analyst pastes into --extract/--strings), then
-        the size and the cap it blew past."""
+        the size and, when this target was skipped for being oversized,
+        the cap it blew past. A read-failed/short-read/scan-truncated
+        target (size_limit is None -- see this field's own docstring)
+        never blew past a cap at all, so its own fragment names only the
+        size, not a comparison against a limit that doesn't apply."""
+        if self.size_limit is None:
+            return f"{_hex_address(self.base_address)} ({_format_bytes(self.size)})"
         return (f"{_hex_address(self.base_address)} "
                 f"({_format_bytes(self.size)} > {_format_bytes(self.size_limit)} limit)")
 
@@ -1017,20 +1109,55 @@ def _render_report_string_scan_truncated(limitation: "CoverageLimitation") -> st
             f"region(s) -- a needle past that point would not be found")
 
 
+def _with_optional_target_preview(text: str, targets: tuple) -> str:
+    """Appends the same bounded ": <preview>" clause format_scan_target_
+    preview() already gives SCAN_REGION_OVERSIZED_SKIPPED, whenever
+    `targets` is non-empty -- omitted entirely (bare count text) when a
+    producer emitted no targets (see _require_optional_targets_matching_
+    count's own docstring for why that stays legal)."""
+    if not targets:
+        return text
+    return f"{text}: {format_scan_target_preview(targets)}"
+
+
 def _render_pe_header_read_failed(limitation: "CoverageLimitation") -> str:
-    return (f"{limitation.affected_count} region(s) failed to read while checking for "
-            f"hidden PE headers")
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} region(s) failed to read while checking for "
+        f"hidden PE headers", limitation.targets)
 
 
 def _render_pe_header_short_read(limitation: "CoverageLimitation") -> str:
-    return (f"{limitation.affected_count} region(s) returned fewer bytes than requested "
-            f"while checking for hidden PE headers (short read) -- not fully examined")
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} region(s) returned fewer bytes than requested "
+        f"while checking for hidden PE headers (short read) -- not fully examined",
+        limitation.targets)
+
+
+def _render_budget_clause(limitation: "CoverageLimitation") -> str:
+    """The optional "(budget: reads_per_region, limit=N consumed=M)"
+    clause shared by every scan-budget-attributing code (issue #28 P4/P6
+    follow-up: originally PE_HEADER_SCAN_TRUNCATED/_SCAN_NOT_STARTED only,
+    now also YARA_HIT_CAP_REACHED/_SCAN_BUDGET_EXHAUSTED/CS_BEACON_SCAN_
+    BUDGET_EXHAUSTED) -- empty when this limitation carries no budget
+    attribution at all (see `_validate_optional_budget_fields`'s own
+    docstring for when that happens)."""
+    if limitation.scope is None:
+        return ""
+    return f" (budget: {limitation.scope}, limit={limitation.budget_limit} consumed={limitation.budget_consumed})"
 
 
 def _render_pe_header_scan_truncated(limitation: "CoverageLimitation") -> str:
-    return (f"{limitation.affected_count} region(s) hit a hidden-PE scan budget before the "
-            f"candidate search reached the end of the region -- the remainder was not "
-            f"searched")
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} region(s) hit a hidden-PE scan budget before the "
+        f"candidate search reached the end of the region -- the remainder was not "
+        f"searched{_render_budget_clause(limitation)}", limitation.targets)
+
+
+def _render_pe_header_scan_not_started(limitation: "CoverageLimitation") -> str:
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} region(s) were never searched for a hidden PE "
+        f"header at all -- the hidden-PE scan budget was already exhausted before "
+        f"reaching them{_render_budget_clause(limitation)}", limitation.targets)
 
 
 def _render_pe_header_evidence_capped(limitation: "CoverageLimitation") -> str:
@@ -1098,12 +1225,20 @@ def _render_scan_region_oversized_skipped(limitation: "CoverageLimitation") -> s
 
 
 def _render_scan_region_read_failed(limitation: "CoverageLimitation") -> str:
-    return f"{limitation.affected_count} region(s) failed to read"
+    # `scope` (issue #28): same "name the scan LAYER" role
+    # _render_scan_region_oversized_skipped's own `scope` already plays --
+    # obfuscation attaches this per layer, so text with no layer named
+    # would be ambiguous there in exactly the same way.
+    layer = f" under the {limitation.scope} scan" if limitation.scope else ""
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} region(s) failed to read{layer}", limitation.targets)
 
 
 def _render_scan_region_short_read(limitation: "CoverageLimitation") -> str:
-    return (f"{limitation.affected_count} region(s) returned fewer bytes than declared "
-            f"(short read) -- not fully scanned")
+    layer = f" under the {limitation.scope} scan" if limitation.scope else ""
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} region(s) returned fewer bytes than declared "
+        f"(short read){layer} -- not fully scanned", limitation.targets)
 
 
 _SCAN_BUDGET_EXHAUSTED_REASONS = frozenset(
@@ -1123,12 +1258,53 @@ def _validate_scan_budget_exhausted_fields(limitation: "CoverageLimitation") -> 
 
 
 def _render_cs_beacon_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
-    return (f"scan resource budget exhausted ({limitation.detail}) -- stopped before "
-            f"every segment/candidate was examined")
+    base = (f"scan resource budget exhausted ({limitation.detail}) -- stopped before "
+            f"every segment/candidate was examined{_render_budget_clause(limitation)}")
+    return _with_optional_target_preview(base, limitation.targets)
+
+
+def _require_optional_affected_count_and_targets(code_label: str) -> Callable[["CoverageLimitation"], None]:
+    """Like `_require_optional_targets_matching_count`, but `affected_count`
+    is ALSO optional (issue #28 P5 follow-up) -- unlike every OTHER
+    target-bearing code, whose producer always names at least one target
+    once the gap itself is real, `CS_BEACON_SCAN_BUDGET_EXHAUSTED` has a
+    genuine "nothing left to name" case: a deadline discovered only AFTER
+    the very last segment already finished scanning cleanly has no
+    unstarted segment to point at, even though the budget fact itself
+    (and its own required `detail` reason string) is still real. `targets`
+    without `affected_count`, or an `affected_count` that disagrees with
+    a non-empty `targets`, is still rejected -- only the "both entirely
+    absent" case is the new legal shape this adds."""
+    def _validate(limitation: "CoverageLimitation") -> None:
+        if limitation.affected_count is not None:
+            _require_positive_affected_count(code_label)(limitation)
+            if limitation.targets and limitation.affected_count != len(limitation.targets):
+                raise ValueError(
+                    f"CoverageLimitation(code={code_label}).affected_count="
+                    f"{limitation.affected_count!r} must equal len(targets)="
+                    f"{len(limitation.targets)} when targets is non-empty")
+        elif limitation.targets:
+            raise ValueError(
+                f"CoverageLimitation(code={code_label}) targets requires affected_count "
+                f"to be set")
+        has_limit = [t.base_address for t in limitation.targets if t.size_limit is not None]
+        if has_limit:
+            raise ValueError(
+                f"CoverageLimitation(code={code_label}) targets must all have "
+                f"size_limit=None -- this cause never involved a size cap the target "
+                f"exceeded, got size_limit set on target(s) at "
+                f"{[f'0x{a:x}' for a in has_limit]!r}")
+    return _validate
 
 
 def _validate_cs_beacon_scan_budget_exhausted_fields(limitation: "CoverageLimitation") -> None:
     _require_non_empty_str(limitation.detail, "CoverageLimitation.detail")
+    _require_optional_affected_count_and_targets("CS_BEACON_SCAN_BUDGET_EXHAUSTED")(limitation)
+    # issue #28 P6 follow-up: `detail` keeps its own pre-existing free-text
+    # meaning here (the scanner's own human-readable budget_reason) -- the
+    # structured "which budget, what limit" fact lives on scope/
+    # budget_limit/budget_consumed instead, never packed into detail too.
+    _validate_optional_budget_fields(_CS_BEACON_BUDGET_KINDS)(limitation)
 
 
 def _render_yara_rule_compile_failed(limitation: "CoverageLimitation") -> str:
@@ -1136,11 +1312,37 @@ def _render_yara_rule_compile_failed(limitation: "CoverageLimitation") -> str:
 
 
 def _render_yara_match_failed(limitation: "CoverageLimitation") -> str:
-    return f"{limitation.affected_count} match() call(s) failed"
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} match() call(s) failed", limitation.targets)
 
 
 def _render_yara_match_timed_out(limitation: "CoverageLimitation") -> str:
-    return f"{limitation.affected_count} match() call(s) timed out"
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} match() call(s) timed out", limitation.targets)
+
+
+def _render_yara_hit_cap_reached(limitation: "CoverageLimitation") -> str:
+    return _with_optional_target_preview(
+        f"scan hit cap reached before every segment/rule pairing was examined -- "
+        f"{limitation.affected_count} segment(s) never finished being checked"
+        f"{_render_budget_clause(limitation)}",
+        limitation.targets)
+
+
+def _render_yara_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
+    base = "scan resource budget exhausted"
+    # affected_count/targets can BOTH be absent (issue #28 P6 follow-up)
+    # -- the deadline discovered only after the scan's very last pairing
+    # already finished examining everything, a genuine wall-clock
+    # overrun but not a coverage gap.
+    if not limitation.affected_count:
+        return (f"{base} right as the scan finished -- every segment was still examined"
+                f"{_render_budget_clause(limitation)}")
+    return _with_optional_target_preview(
+        f"{base} before every segment was examined -- "
+        f"{limitation.affected_count} segment(s) never finished being checked"
+        f"{_render_budget_clause(limitation)}",
+        limitation.targets)
 
 
 def _render_yara_match_context_unverified(limitation: "CoverageLimitation") -> str:
@@ -1151,6 +1353,19 @@ def _render_yara_match_context_unverified(limitation: "CoverageLimitation") -> s
 def _render_encoding_all_regions_filtered(limitation: "CoverageLimitation") -> str:
     return (f"all {limitation.affected_count} region(s) filtered out by every layer's "
             f"size/type limits -- nothing was actually scanned")
+
+
+def _compose(*validators: Callable[["CoverageLimitation"], None]) -> Callable[["CoverageLimitation"], None]:
+    """Chain several independent per-code field validators into one
+    `_CodeSpec.validate_fields` callable, run in order (issue #28 P6
+    follow-up: a code needing both an existing shape check -- e.g.
+    targets/affected_count -- and the budget-attribution check now needs
+    two factories composed rather than one hand-written function
+    re-deriving both)."""
+    def _validate(limitation: "CoverageLimitation") -> None:
+        for validator in validators:
+            validator(limitation)
+    return _validate
 
 
 def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimitation"], None]:
@@ -1167,6 +1382,114 @@ def _require_positive_affected_count(code_label: str) -> Callable[["CoverageLimi
             raise ValueError(
                 f"CoverageLimitation(code={code_label}) requires affected_count to be a "
                 f"positive integer, got {limitation.affected_count!r}")
+    return _validate
+
+
+# The independent budgets each hunter's own scan can stop on -- duplicated
+# here, rather than imported, since the dependency direction is domain
+# model -> output adapter, never backwards (this module cannot import
+# from dumpex.hunt.*); the same "closed vocabulary duplicated as the wire
+# contract" precedent _SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS's
+# own comment already explains for encoding's scan-layer names. Kept as
+# separate per-hunter sets (not one merged pool) since `scope`'s legal
+# values are a property of the CODE they're attached to, same as every
+# other per-code contract in this file.
+_PE_SCAN_BUDGET_KINDS = frozenset(   # dumpex.hunt.injection.memory_scan._ScanBudget (issue #28 P4)
+    {"reads_per_region", "total_bytes", "validations_per_region", "validations_total"})
+_YARA_BUDGET_KINDS = frozenset(      # yara_hunt.scanner (issue #28 P6)
+    {"max_total_hits", "scan_deadline_seconds", "max_total_bytes_scanned"})
+_CS_BEACON_BUDGET_KINDS = frozenset(   # cs_beacon.scanner (issue #28 P6)
+    {"scan_deadline_seconds", "max_total_scanned_bytes", "max_candidates",
+     "max_decoded_bytes", "max_hits"})
+
+
+def _validate_optional_budget_fields(kinds: frozenset) -> Callable[["CoverageLimitation"], None]:
+    """Factory (issue #28 P4/P6 follow-up): `scope` -- when set -- must
+    name WHICH of the owning hunter's own independent resource budgets
+    stopped the item(s) this limitation reports, and `budget_limit`/
+    `budget_consumed` (NOT `detail` -- see `CoverageLimitation.
+    budget_limit`'s own docstring for why a prior version of this
+    feature that parsed them out of `detail` had to be abandoned) must
+    carry that budget's own configured limit and how much was consumed.
+    Never one without the other: a bare budget kind with no limit/
+    consumed, or vice versa, would be a half-told fact. All three stay
+    `None`/`None`/`None` together whenever this limitation's own gap
+    never actually stopped on a resource budget at all (e.g. YARA's own
+    match_failed/timed_out targets, which have no budget to attribute)."""
+    def _validate(limitation: "CoverageLimitation") -> None:
+        if limitation.scope is None and limitation.budget_limit is None:
+            return
+        if limitation.scope is None:
+            raise ValueError(
+                f"CoverageLimitation(code={limitation.code.value}) has budget_limit/"
+                f"budget_consumed set but scope is None -- scope must name WHICH budget "
+                f"they describe")
+        if limitation.scope not in kinds:
+            raise ValueError(
+                f"CoverageLimitation(code={limitation.code.value}).scope must be one of "
+                f"{sorted(kinds)!r} or None, got {limitation.scope!r}")
+        if limitation.budget_limit is None:
+            raise ValueError(
+                f"CoverageLimitation(code={limitation.code.value}) has scope={limitation.scope!r} "
+                f"set but no budget_limit/budget_consumed -- a bare budget kind with no "
+                f"limit/consumed is a half-told fact")
+    return _validate
+
+
+def _require_optional_targets_matching_count(code_label: str) -> Callable[["CoverageLimitation"], None]:
+    """Factory shared by the read-failed/short-read/scan-truncated codes
+    that identify a target's own MemoryInfo region/segment (issue #28) --
+    unlike SCAN_REGION_OVERSIZED_SKIPPED's own targets (always non-empty,
+    see _validate_scan_region_oversized_skipped_fields), `targets` here is
+    OPTIONAL: the region/segment is trivially in scope at every producing
+    hunter's own failure site today (injection's hidden-PE scan, pipe's
+    region scan), but a future producer of this code that genuinely
+    cannot resolve target identity must still be able to emit a bare
+    count, exactly as every hunter already does. When `targets` IS
+    supplied, though, it must account for every affected item exactly --
+    a partial list would silently misrepresent "N affected" as "here are
+    all N identified", which is worse than emitting no targets at all."""
+    def _validate(limitation: "CoverageLimitation") -> None:
+        _require_positive_affected_count(code_label)(limitation)
+        if limitation.targets and limitation.affected_count != len(limitation.targets):
+            raise ValueError(
+                f"CoverageLimitation(code={code_label}).affected_count="
+                f"{limitation.affected_count!r} must equal len(targets)="
+                f"{len(limitation.targets)} when targets is non-empty -- a partial targets "
+                f"list must not silently misrepresent how many affected items are identified")
+        # None of these codes is an oversized-skip: the gap is an I/O
+        # failure, a scan-budget stop, or (not-started) no attempt at all
+        # -- never a size cap the target exceeded. A target carrying a
+        # non-null size_limit here would claim a cap that doesn't apply to
+        # this cause, and (see build_investigation_queue()) SkipRelationship
+        # itself would only catch this contradiction later, when this
+        # limitation's target is folded into the cross-hunter investigation
+        # queue -- too late to say which producer actually got it wrong.
+        has_limit = [t.base_address for t in limitation.targets if t.size_limit is not None]
+        if has_limit:
+            raise ValueError(
+                f"CoverageLimitation(code={code_label}) targets must all have "
+                f"size_limit=None -- this cause never involved a size cap the target "
+                f"exceeded, got size_limit set on target(s) at "
+                f"{[f'0x{a:x}' for a in has_limit]!r}")
+    return _validate
+
+
+def _validate_pe_scan_gap_fields(code_label: str) -> Callable[["CoverageLimitation"], None]:
+    """PE_HEADER_SCAN_TRUNCATED/_SCAN_NOT_STARTED's own combined
+    validator (issue #28 P4 follow-up): everything
+    `_require_optional_targets_matching_count` already checks, plus the
+    optional `scope`/`detail` budget attribution (see
+    `_validate_optional_budget_fields`) neither of the OTHER
+    target-bearing codes (PE_HEADER_READ_FAILED/_SHORT_READ,
+    SCAN_REGION_READ_FAILED/_SHORT_READ) carries -- only a scan-budget
+    stop, not a read failure, has a "which budget, what limit" fact to
+    attach."""
+    targets_validator = _require_optional_targets_matching_count(code_label)
+    budget_validator = _validate_optional_budget_fields(_PE_SCAN_BUDGET_KINDS)
+    def _validate(limitation: "CoverageLimitation") -> None:
+        targets_validator(limitation)
+        budget_validator(limitation)
     return _validate
 
 
@@ -1231,6 +1554,18 @@ def _validate_scan_region_oversized_skipped_fields(limitation: "CoverageLimitati
             f"CoverageLimitation(code=SCAN_REGION_OVERSIZED_SKIPPED).affected_count="
             f"{limitation.affected_count!r} must equal len(targets)="
             f"{len(limitation.targets)} -- the count and the emitted targets must agree")
+    # Every target here was skipped FOR being oversized -- size_limit is
+    # the cap it exceeded, and ScanTarget.__post_init__ already enforces
+    # size > size_limit whenever size_limit is set, but it does NOT (and
+    # cannot, without knowing which code owns it) require size_limit to be
+    # set at all. A None here would mean "we skipped this for being too
+    # big" without ever recording the cap that made it too big.
+    missing_limit = [t.base_address for t in limitation.targets if t.size_limit is None]
+    if missing_limit:
+        raise ValueError(
+            "CoverageLimitation(code=SCAN_REGION_OVERSIZED_SKIPPED) targets must all have "
+            f"size_limit set -- an oversized skip always has the cap it exceeded, got "
+            f"size_limit=None on target(s) at {[f'0x{a:x}' for a in missing_limit]!r}")
 
     contract = _SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS.get(limitation.source)
     if contract is None:
@@ -1533,18 +1868,25 @@ _CODE_SPECS = {
     LimitationCode.PE_HEADER_READ_FAILED: _CodeSpec(
         render=_render_pe_header_read_failed, fixed_source="hidden_pe_scan",
         caller_buildable=True,
-        validate_fields=_require_positive_affected_count("PE_HEADER_READ_FAILED"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_require_optional_targets_matching_count("PE_HEADER_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.PE_HEADER_SHORT_READ: _CodeSpec(
         render=_render_pe_header_short_read, fixed_source="hidden_pe_scan",
         caller_buildable=True,
-        validate_fields=_require_positive_affected_count("PE_HEADER_SHORT_READ"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_require_optional_targets_matching_count("PE_HEADER_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.PE_HEADER_SCAN_TRUNCATED: _CodeSpec(
         render=_render_pe_header_scan_truncated, fixed_source="hidden_pe_scan",
         caller_buildable=True,
-        validate_fields=_require_positive_affected_count("PE_HEADER_SCAN_TRUNCATED"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_validate_pe_scan_gap_fields("PE_HEADER_SCAN_TRUNCATED"),
+        allowed_fields=frozenset({"affected_count", "targets", "scope",
+                                   "budget_limit", "budget_consumed"})),
+    LimitationCode.PE_HEADER_SCAN_NOT_STARTED: _CodeSpec(
+        render=_render_pe_header_scan_not_started, fixed_source="hidden_pe_scan",
+        caller_buildable=True,
+        validate_fields=_validate_pe_scan_gap_fields("PE_HEADER_SCAN_NOT_STARTED"),
+        allowed_fields=frozenset({"affected_count", "targets", "scope",
+                                   "budget_limit", "budget_consumed"})),
     LimitationCode.PE_HEADER_EVIDENCE_CAPPED: _CodeSpec(
         render=_render_pe_header_evidence_capped, fixed_source="hidden_pe_scan",
         caller_buildable=True,
@@ -1611,12 +1953,17 @@ _CODE_SPECS = {
         allowed_fields=frozenset({"scope", "affected_count", "targets"})),
     LimitationCode.SCAN_REGION_READ_FAILED: _CodeSpec(
         render=_render_scan_region_read_failed, caller_buildable=True,
-        validate_fields=_require_positive_affected_count("SCAN_REGION_READ_FAILED"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_require_optional_targets_matching_count("SCAN_REGION_READ_FAILED"),
+        # "scope" (issue #28): obfuscation attaches this per SCAN LAYER
+        # (sleep_mask/entropy/decode), the same reason
+        # SCAN_REGION_OVERSIZED_SKIPPED already needs it -- every other
+        # source using this code (pipe/cs-beacon/yara/stomping) simply
+        # never sets it, same as before.
+        allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_REGION_SHORT_READ: _CodeSpec(
         render=_render_scan_region_short_read, caller_buildable=True,
-        validate_fields=_require_positive_affected_count("SCAN_REGION_SHORT_READ"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_require_optional_targets_matching_count("SCAN_REGION_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_BUDGET_EXHAUSTED: _CodeSpec(
         render=_render_scan_budget_exhausted, caller_buildable=True,
         validate_fields=_validate_scan_budget_exhausted_fields,
@@ -1624,7 +1971,8 @@ _CODE_SPECS = {
     LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
         render=_render_cs_beacon_scan_budget_exhausted, fixed_source="segment_scan",
         caller_buildable=True, validate_fields=_validate_cs_beacon_scan_budget_exhausted_fields,
-        allowed_fields=frozenset({"detail"})),
+        allowed_fields=frozenset({"detail", "affected_count", "targets", "scope",
+                                   "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_RULE_COMPILE_FAILED: _CodeSpec(
         render=_render_yara_rule_compile_failed, fixed_source="yara_rules",
         caller_buildable=True,
@@ -1633,21 +1981,35 @@ _CODE_SPECS = {
     LimitationCode.YARA_MATCH_FAILED: _CodeSpec(
         render=_render_yara_match_failed, fixed_source="segment_scan",
         caller_buildable=True,
-        validate_fields=_require_positive_affected_count("YARA_MATCH_FAILED"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_require_optional_targets_matching_count("YARA_MATCH_FAILED"),
+        allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.YARA_MATCH_TIMED_OUT: _CodeSpec(
         render=_render_yara_match_timed_out, fixed_source="segment_scan",
         caller_buildable=True,
-        validate_fields=_require_positive_affected_count("YARA_MATCH_TIMED_OUT"),
-        allowed_fields=frozenset({"affected_count"})),
+        validate_fields=_require_optional_targets_matching_count("YARA_MATCH_TIMED_OUT"),
+        allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.YARA_HIT_CAP_REACHED: _CodeSpec(
-        render=_render_fixed_text("scan hit cap reached before every segment/rule pairing "
-                                   "was examined"),
-        fixed_source="segment_scan", caller_buildable=True),
+        render=_render_yara_hit_cap_reached,
+        fixed_source="segment_scan", caller_buildable=True,
+        validate_fields=_compose(
+            _require_optional_targets_matching_count("YARA_HIT_CAP_REACHED"),
+            _validate_optional_budget_fields(_YARA_BUDGET_KINDS)),
+        allowed_fields=frozenset({"affected_count", "targets", "scope",
+                                   "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
-        render=_render_fixed_text("scan resource budget exhausted before every segment "
-                                   "was examined"),
-        fixed_source="segment_scan", caller_buildable=True),
+        render=_render_yara_scan_budget_exhausted,
+        fixed_source="segment_scan", caller_buildable=True,
+        # Unlike YARA_HIT_CAP_REACHED/MATCH_FAILED/MATCH_TIMED_OUT (whose
+        # targets are always non-empty in practice, so affected_count
+        # stays mandatory), YARA_SCAN_BUDGET_EXHAUSTED can genuinely have
+        # BOTH unset (issue #28 P6 follow-up) -- same shape as
+        # CS_BEACON_SCAN_BUDGET_EXHAUSTED, see that validator's own
+        # docstring.
+        validate_fields=_compose(
+            _require_optional_affected_count_and_targets("YARA_SCAN_BUDGET_EXHAUSTED"),
+            _validate_optional_budget_fields(_YARA_BUDGET_KINDS)),
+        allowed_fields=frozenset({"affected_count", "targets", "scope",
+                                   "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED: _CodeSpec(
         render=_render_yara_match_context_unverified, fixed_source="yara_context",
         caller_buildable=True,
@@ -1696,6 +2058,8 @@ _STRUCTURED_FIELD_DEFAULTS = {
     "thread_id": None,
     "detail": None,
     "targets": (),
+    "budget_limit": None,
+    "budget_consumed": None,
 }
 
 
@@ -1733,6 +2097,18 @@ class CoverageLimitation:
     thread_id: "int | None" = None
     detail: "str | None" = None   # SOURCE_FAILED only: the underlying error text
     targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
+    # `budget_limit`/`budget_consumed` (issue #28 P6 follow-up) are the
+    # structured counterpart of `scope` naming WHICH resource budget a
+    # scan-budget-exhaustion code stopped on -- `scope` carries the
+    # (closed-vocabulary, per-code) KIND, these two carry that budget's
+    # own configured limit and how much was consumed. Kept as their own
+    # dedicated fields rather than packed into `detail` (a prior version
+    # of this feature parsed "limit=<int> consumed=<int>" text out of
+    # `detail`, which broke the moment a code that ALSO uses `detail` for
+    # its own free-text reason -- e.g. CS_BEACON_SCAN_BUDGET_EXHAUSTED's
+    # human-readable budget_reason -- needed both at once).
+    budget_limit: "int | None" = None
+    budget_consumed: "int | None" = None
 
     def __post_init__(self):
         object.__setattr__(self, "code", LimitationCode(self.code))
@@ -1744,6 +2120,18 @@ class CoverageLimitation:
         _require_optional_str(self.scope, "CoverageLimitation.scope")
         _require_optional_str(self.counterpart_source, "CoverageLimitation.counterpart_source")
         _require_optional_str(self.detail, "CoverageLimitation.detail")
+        _require_optional_nonnegative_int(self.budget_limit, "CoverageLimitation.budget_limit")
+        _require_optional_nonnegative_int(self.budget_consumed, "CoverageLimitation.budget_consumed")
+        if (self.budget_limit is None) != (self.budget_consumed is None):
+            raise ValueError(
+                "CoverageLimitation.budget_limit/budget_consumed must be both None or both "
+                f"set together, got budget_limit={self.budget_limit!r} "
+                f"budget_consumed={self.budget_consumed!r}")
+        if self.budget_limit is not None and self.budget_consumed != self.budget_limit:
+            raise ValueError(
+                f"CoverageLimitation.budget_consumed ({self.budget_consumed}) must equal "
+                f"budget_limit ({self.budget_limit}) -- a budget is only ever attributed as "
+                f"an exhaustion reason once fully consumed")
         object.__setattr__(self, "unavailable_fields", _normalize_non_empty_str_tuple(
             self.unavailable_fields, "CoverageLimitation.unavailable_fields"))
         object.__setattr__(self, "available_fields", _normalize_non_empty_str_tuple(
@@ -1806,6 +2194,8 @@ class CoverageLimitation:
             "thread_id": self.thread_id,
             "detail": self.detail,
             "targets": [t.to_dict() for t in self.targets],
+            "budget_limit": self.budget_limit,
+            "budget_consumed": self.budget_consumed,
         }
 
 

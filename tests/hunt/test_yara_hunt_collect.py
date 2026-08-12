@@ -33,7 +33,7 @@ def _write_rule(d, name, body):
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.11.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -146,7 +146,39 @@ def test_segment_read_failure_makes_result_inconclusive(hunter_record_validator)
     _assert_matches_console_dict(rec, console_dict)
     assert rec.status == "INCONCLUSIVE"
     assert rec.coverage.status.value == "partial"
-    assert any(lim.code.value == "SCAN_REGION_READ_FAILED" for lim in rec.coverage.limitations)
+    lim = next(l for l in rec.coverage.limitations if l.code.value == "SCAN_REGION_READ_FAILED")
+    # issue #28: the failed segment's own identity is retained, not just
+    # counted -- and it is the BAD segment specifically, not the good one.
+    assert lim.affected_count == 1 == len(lim.targets)
+    target = lim.targets[0]
+    assert target.kind.value == "memory_segment"
+    assert (target.base_address, target.size) == (bad_va, 0x1000)
+    assert target.file_offset == bad_fo
+    assert target.size_limit is None
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_segment_short_read_identifies_the_segment(hunter_record_validator):
+    seg_va, seg_fo, seg_size = 0x40000, 0x4000, 0x2000
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "good.yar", 'rule Good { strings: $a = "nomatch_marker" condition: $a }')
+        seg = Segment(seg_va, seg_fo, seg_size)
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            # Fewer bytes mapped than the segment's own declared size.
+            _reader                = FakeReader({seg_va: b'\x00' * 0x100})
+
+        console_dict = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+        rec = collect_yara_record(MF(), rules_dir=d)
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == "partial"
+    lim = next(l for l in rec.coverage.limitations if l.code.value == "SCAN_REGION_SHORT_READ")
+    assert lim.affected_count == 1 == len(lim.targets)
+    target = lim.targets[0]
+    assert (target.base_address, target.size) == (seg_va, seg_size)
+    assert target.size_limit is None
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
