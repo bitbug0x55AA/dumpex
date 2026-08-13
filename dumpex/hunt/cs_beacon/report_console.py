@@ -117,18 +117,57 @@ def _hit_for(result) -> "ConfigEvidence | None":
 
 
 def _display_value(f) -> str:
-    """One TLV field's value for console display -- the ONE place both
-    the Process Injection section and the Full Config Field Table decide
-    how to show a type-3 (bytes) field, mirroring the pre-migration
-    `_field_display_value()` exactly (see that function's own docstring
-    for the printable/binary rule this reproduces)."""
+    """One TLV field's value for console display when it fits inline as
+    a single wrapped run of text -- `str(value)` for a non-bytes field,
+    `repr(value)` for a printable type-3 field. A BINARY type-3 field's
+    value never reaches this function: `_value_lines()` routes it
+    straight to `_wrap_hex_value()` with the field's FULL raw bytes as
+    hex instead, so the complete value can be wrapped across lines
+    without ever being sliced short (issue #46: a fixed 64-hex-char slice
+    here used to silently discard the tail of any field over 32 bytes,
+    even under --verbose's own "complete field table")."""
     if f.type != 3:
         return str(f.value)
-    _, is_text = _cs_decode_type3_value(f.raw)
-    if is_text:
-        return repr(f.value)
-    hexs = f.raw.hex()
-    return f"{hexs[:64]}{'...' if len(hexs) > 64 else ''}"
+    return repr(f.value)
+
+
+def _wrap_hex_value(hexs: str, prefix: str, w: int) -> list:
+    """`hexs` (a complete, never-truncated hex encoding of a binary TLV
+    field) as one or more lines: `prefix` (the field's name/type columns,
+    already padded) on the first line, continuation lines indented to
+    align under where the hex itself started. Splits only on whole-byte
+    (even hex-digit) boundaries -- a byte is never torn across a line
+    break -- and always shows every hex digit somewhere, so a value too
+    long for one line is wrapped, never shortened."""
+    hang = len(prefix)
+    avail = max(2, ((w - hang) // 2) * 2)
+    if len(hexs) <= avail:
+        return [prefix + hexs]
+    pad = " " * hang
+    chunks = [hexs[i:i + avail] for i in range(0, len(hexs), avail)]
+    return [prefix + chunks[0]] + [pad + chunk for chunk in chunks[1:]]
+
+
+def _is_binary_bytes(f) -> bool:
+    """True only for a type-3 field whose raw payload is NOT printable
+    text -- the one condition that routes a field's value through
+    `_wrap_hex_value()` instead of being shown as-is."""
+    return f.type == 3 and not _cs_decode_type3_value(f.raw)[1]
+
+
+def _value_lines(f, prefix: str, w: int) -> list:
+    """`prefix` (a field's already-formatted name/type columns) plus that
+    field's display value: a binary field's full hex always wraps with a
+    hanging indent (`_wrap_hex_value()`) instead of ever being sliced
+    short. A printable/non-bytes value renders on exactly ONE line,
+    UNCHANGED from `_display_value()` -- deliberately never passed
+    through `wrap_text()`, which re-joins on `text.split()` and would
+    silently collapse any run of repeated whitespace already present in
+    the field's own text (a lossy transform distinct from, and not
+    excused by, the binary-truncation bug this function exists to fix)."""
+    if _is_binary_bytes(f):
+        return _wrap_hex_value(f.raw.hex(), prefix, w)
+    return [prefix + _display_value(f)]
 
 
 # ── KEY SIGNALS ────────────────────────────────────────────────────────
@@ -228,7 +267,8 @@ def _field_table_lines(hit: ConfigEvidence, w: int) -> list:
              f"        {'Field':<{name_w}}  {'Type':<{type_w}}  Value"]
     for f in sorted(hit.fields, key=lambda item: item.field_id):
         type_name = CS_FIELD_TYPE_NAMES.get(f.type, str(f.type))
-        lines.append(f"        {f.name:<{name_w}}  {type_name:<{type_w}}  {_display_value(f)}")
+        prefix = f"        {f.name:<{name_w}}  {type_name:<{type_w}}  "
+        lines.extend(_value_lines(f, prefix, w))
     lines.append("")
     return lines
 
@@ -264,9 +304,14 @@ def _process_injection_lines(hit: ConfigEvidence, w: int) -> list:
     name_w = max(len(f.name) for f in present)
     lines = [f"      {BOLD('Process Injection')}", ""]
     for f in sorted(present, key=lambda item: item.field_id):
-        value = (CS_INJECT_PERMS.get(f.value, str(f.value)) if f.field_id in (0x002b, 0x002c)
-                 else _display_value(f))
-        lines.extend(wrap_block(f"{f.name:<{name_w}}  {value}", w, 8))
+        if f.field_id in (0x002b, 0x002c):
+            # A synthetic, dumpex-generated enum label (never raw evidence
+            # bytes) -- ordinary word-wrap is fine here.
+            value = CS_INJECT_PERMS.get(f.value, str(f.value))
+            lines.extend(wrap_block(f"{f.name:<{name_w}}  {value}", w, 8))
+        else:
+            prefix = " " * 8 + f"{f.name:<{name_w}}  "
+            lines.extend(_value_lines(f, prefix, w))
     lines.append("")
     return lines
 
