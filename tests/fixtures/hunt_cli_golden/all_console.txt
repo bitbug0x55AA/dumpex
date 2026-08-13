@@ -100,9 +100,11 @@
   HUNT: YARA Memory Scan
 ══════════════════════════════════════════
 
-  [~] No .yar / .yara files found in <RULES_DIR>
-
-  [ VERDICT ]  NOT EVALUATED — no .yar/.yara files in <RULES_DIR>
+  VERDICT     NOT EVALUATED — no usable .yar/.yara files in <RULES_DIR>
+  Confidence  —
+  Score       0/—
+  Coverage    NOT EVALUATED
+  Review      —
 
 
 ══════════════════════════════════════════

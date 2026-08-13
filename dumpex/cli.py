@@ -402,9 +402,15 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
         # --triage-skipped's own budgeted content reads, exactly once
         # internally) -- never recomputed here, which would silently
         # double the deep-triage read budget for one invocation.
-        _, hunt_records, investigation_actions, deep_diagnostics = cmd_hunt(
+        _, hunt_records, investigation_actions, deep_diagnostics, yara_provenance = cmd_hunt(
             mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
             ref_dir=args.ref_dir, collect_records=True, triage_skipped=args.triage_skipped)
+        # Threaded straight from THIS call's own YaraReport (see cmd_hunt()'s
+        # own docstring) -- never dumpex.hunt.yara_hunt.get_yara_provenance()'s
+        # process-wide global, which could otherwise attribute a later run's
+        # rule provenance to this command's own meta.yara_rules.
+        if out:
+            out.set_yara_provenance(yara_provenance)
         hunt_summary = build_hunt_summary(hunt_records, selected=args.hunt)
         hunt_summary["investigation_actions"] = [a.to_dict() for a in investigation_actions]
         exit_code = _apply_command_result(

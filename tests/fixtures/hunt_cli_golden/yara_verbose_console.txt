@@ -3,17 +3,16 @@
   HUNT: YARA Memory Scan
 ══════════════════════════════════════════
 
-  [*] Loaded 1 rule file(s) from <RULES_DIR>
-  [*] Scanning 1 segment(s) …
+  VERDICT     MEDIUM — 1 distinct rule(s) matched
+  Confidence  —
+  Score       1/—
+  Coverage    COMPLETE
+  Review      —
 
-  [*] Scan complete — 1 segment(s) scanned.
-  [!] Rule: HitRule  (hit.yar)
-      Status : SUSPICIOUS
-      Detail : 1 region(s), 1 string hit(s)
-          hit.yar
+  KEY SIGNALS
 
-          Region  VA 0x0000000000050000  size 0x20d  ← (private/unbacked)
-            $a                  VA 0x0000000000050100  DMP 0x5100  FINDME_MARKER
+  [!] DETECTION  Rule: HitRule  (hit.yar)
 
-  [ VERDICT ]  MEDIUM — 1 distinct rule(s) matched  (1 rule(s))
+      Region VA 0x0000000000050000 size 0x20d ← (private/unbacked)
+        $a VA 0x0000000000050100 DMP 0x5100 FINDME_MARKER
 

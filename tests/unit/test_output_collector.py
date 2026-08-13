@@ -60,6 +60,64 @@ def test_set_command_result_forwards_artifacts(tmp_path):
                                   "size_bytes": None, "sha256": None, "description": None}]
 
 
+def test_set_yara_provenance_reaches_meta_yara_rules(tmp_path):
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="hunt_yara", options={})
+    provenance = {"rules_dir": "/case/rules/yara", "files": [], "aggregate_sha256": "a" * 64,
+                  "compiled_ok": 0, "compile_failed": 0}
+
+    out.set_yara_provenance(provenance)
+    out.set_command_result(CommandResult(
+        kind="hunt", records=_fake_records(), coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+    doc = json.loads(out.to_json())
+
+    assert doc["meta"]["yara_rules"] == provenance
+
+
+def test_yara_provenance_defaults_to_omitted_when_never_set(tmp_path):
+    """A command that never calls `set_yara_provenance()` (every command
+    except `--hunt yara`/`--hunt all`) must not have `meta.yara_rules`
+    fabricated from some other, unrelated run's global state -- see
+    `V2Output.set_yara_provenance()`'s own docstring."""
+    dump_path = tmp_path / "sample.dmp"
+    dump_path.write_bytes(b"fake")
+    out = V2Output(str(dump_path), command="modules", options={})
+    out.set_command_result(CommandResult(
+        kind="modules", records=_fake_records(), coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+    doc = json.loads(out.to_json())
+
+    assert "yara_rules" not in doc["meta"]
+
+
+def test_two_v2outputs_with_different_yara_provenance_never_cross_contaminate():
+    """The core P1 review regression: two INDEPENDENT V2Output instances
+    (standing in for two separate `--hunt yara` invocations, or a batch
+    caller building more than one in the same process) must each keep
+    their OWN `set_yara_provenance()` value -- one instance's metadata
+    must never reflect the other's, the way a shared global could."""
+    out_a = V2Output("/tmp/a.dmp", command="hunt_yara", options={})
+    out_b = V2Output("/tmp/b.dmp", command="hunt_yara", options={})
+    provenance_a = {"rules_dir": "/case/a/rules", "files": [], "aggregate_sha256": "a" * 64,
+                     "compiled_ok": 1, "compile_failed": 0}
+    provenance_b = {"rules_dir": "/case/b/rules", "files": [], "aggregate_sha256": "b" * 64,
+                     "compiled_ok": 2, "compile_failed": 1}
+
+    # B's provenance is set FIRST, and A's build only completes afterward
+    # -- interleaved order, the exact shape a shared "last write wins"
+    # global would get wrong.
+    out_b.set_yara_provenance(provenance_b)
+    out_a.set_yara_provenance(provenance_a)
+    for out in (out_a, out_b):
+        out.set_command_result(CommandResult(
+            kind="hunt", records=_fake_records(), coverage=CoverageReport(status=COVERAGE_COMPLETE)))
+
+    doc_a = json.loads(out_a.to_json())
+    doc_b = json.loads(out_b.to_json())
+    assert doc_a["meta"]["yara_rules"] == provenance_a
+    assert doc_b["meta"]["yara_rules"] == provenance_b
+
+
 def test_set_command_result_protects_artifact_path_from_later_writes(tmp_path, capsys):
     # P1-1 remediation, second line of defense: an artifact this run
     # already wrote (e.g. --extract's own --output file) must become a

@@ -23,56 +23,62 @@ succeeds now that YARA rules are bundled in the wheel — making it dead
 code that could never actually run. --yara-dir is the explicit,
 auditable way to point at a different rules directory.
 
-This is a package, not a single file: rules.py resolves the packaged
-rules directory and compiles rule files into a RuleBundle (rule_files +
-compile_failed + reproducible provenance), never importing this facade;
-context.py owns the PE_In_Private_Memory suppression/classification
-policy; scanner.py runs the segment × rule-file match loop and applies
-every whole-scan budget, collecting facts only — it never scores or
-prints; aggregate.py is the ONE place score/status/coverage_status/
-verdict_level get computed (yara_hunt deliberately still uses its own
-"matches"/"rules_hit" shape, not the Finding model other phase-two/three
-hunters use — this split does not change that); presentation.py is the
-ONE place FINAL-RESULT console output gets rendered. This __init__.py is
-the thin entry point: it resolves prerequisites (yara-python import,
-rules directory, rule compilation, memory segments), prints the header
-and in-progress scan announcements, and orchestrates scanner -> aggregate
--> presentation.
+This is a package, not a single file: `models.py` holds the frozen leaf
+evidence types (rule-file diagnostics, matched strings, one rule's match
+against one segment); `domain.py` holds the canonical, recursively
+immutable `YaraReport` and its nested coverage/rules/scan snapshots --
+score/status/coverage_status/verdict_level are all DERIVED properties on
+that Report (see domain.py's own docstring for what replaced the
+pre-migration mutable `RuleBundle`/`ScanOutcome`/`RuleGroup`, and for why
+YARA deliberately does not build on `dumpex.hunt._domain.CheckResult`/
+`dumpex.hunt._finding.Finding`). `rules.py` resolves the packaged rules
+directory and compiles rule files SILENTLY into a `models.RulesProvenance`
+(never importing this facade); `context.py` owns the
+PE_In_Private_Memory suppression/classification policy; `scanner.py` runs
+the segment × rule-file match loop, applies every whole-scan budget, and
+resolves each hit's module/region context ONCE -- it never scores or
+prints. `aggregate.py` is the ONE place a `domain.YaraReport` gets
+constructed from that scan output. `report_facts.py`/`report_console.py`/
+`report_record.py`/`report_legacy.py` are the three pure projectors (plus
+their shared helpers) turning an already-built Report into console lines,
+a `HunterRecord`, or the v1.1 legacy dict, respectively. This `__init__.py`
+is the thin entry point: it resolves prerequisites (yara-python import,
+rules directory, rule compilation, memory segments) and orchestrates
+scanner -> aggregate -> the projectors. It prints nothing itself --
+`report_console.print_console()` owns the header too.
 
 The stable contract is `_hunt_yara` and `get_yara_provenance` themselves
 (both imported by dumpex/hunt/__init__.py and dumpex/ui/structured.py
 respectively): same signatures, same fields, same score/status/coverage/
-JSON shape as before this package split — this refactor only changes
-internal structure. Tunable constants (YARA_MATCH_TIMEOUT, YARA_MAX_*,
-YARA_SCAN_DEADLINE_SECONDS, YARA_MAX_TOTAL_BYTES_SCANNED) and `time` are
-re-exported here and remain monkeypatchable (`yara_hunt.YARA_SCAN_DEADLINE_SECONDS
-= -1` before calling `_hunt_yara()` still changes its behavior) because
-they are threaded explicitly/looked up fresh at call time rather than
-scanner.py importing its own separate copy — see
-dumpex/hunt/yara_hunt/config.py and dumpex/hunt/_runtime.py.
+JSON shape as before this migration. Tunable constants (YARA_MATCH_TIMEOUT,
+YARA_MAX_*, YARA_SCAN_DEADLINE_SECONDS, YARA_MAX_TOTAL_BYTES_SCANNED) and
+`time` are re-exported here and remain monkeypatchable (`yara_hunt.
+YARA_SCAN_DEADLINE_SECONDS = -1` before calling `_hunt_yara()` still
+changes its behavior) because they are threaded explicitly/looked up
+fresh at call time rather than scanner.py importing its own separate copy
+— see dumpex/hunt/yara_hunt/config.py and dumpex/hunt/_runtime.py.
 
 `_load_yara_rules` is ALSO kept here (not just re-exported from rules.py)
-as a thin wrapper: it calls rules.load_and_compile(), syncs the
-compatibility `_LAST_YARA_PROVENANCE` global (read by get_yara_provenance()
-— see its own docstring), and returns the same (rule_files, compile_failed)
-2-tuple the single-file hunter always did, so `yara_hunt._load_yara_rules
-= fake` (replacing the whole wrapper) remains exactly as monkeypatch-safe
-as it always was. YARA_MAX_SEG_SCAN is this hunter's OWN segment-size
-constant — it no longer imports CS Beacon's CS_MAX_SEG_SCAN (see
-dumpex/hunt/yara_hunt/config.py). Private per-step helper functions
-(`_context_unverified_reason`... now `context.context_unverified_reason`,
-etc.) are NOT re-exported here and make no compatibility promise at all —
-import them from their actual module (dumpex.hunt.yara_hunt.context/
-.scanner/.rules/...) if you need them directly.
+as a thin, still-monkeypatchable wrapper around `rules.load_and_compile()`
+— `yara_hunt._load_yara_rules = fake` (replacing the whole wrapper) still
+works. It does NOT touch the compatibility `_LAST_YARA_PROVENANCE` global
+at all: that global is written exactly once per `_build_yara_report()`
+call, AFTER the whole `domain.YaraReport` is built, as a snapshot copy of
+THAT Report's own `coverage.rules.provenance` -- never read back into a
+Report by anything (see `_build_yara_report()`'s own `_finish()` helper).
+YARA_MAX_SEG_SCAN is this hunter's OWN segment-size constant. Private
+per-step helper functions are NOT re-exported here and make no
+compatibility promise at all -- import them from their actual module
+(dumpex.hunt.yara_hunt.context/.scanner/.rules/...) if you need them
+directly.
 """
 import os
+import copy
 import sys
 import time
 from pathlib import Path
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import DIM, YELLOW
 from dumpex.core.memory import get_modules, get_memory_regions
-from dumpex.hunt._ui import _print_hunt_header, NOT_EVALUATED
 from dumpex.hunt._runtime import HunterRuntime
 
 from dumpex.hunt.yara_hunt.config import (YaraConfig,
@@ -81,19 +87,38 @@ from dumpex.hunt.yara_hunt.config import (YaraConfig,
 from dumpex.hunt.yara_hunt import rules
 from dumpex.hunt.yara_hunt import scanner
 from dumpex.hunt.yara_hunt import aggregate
-from dumpex.hunt.yara_hunt import presentation
+from dumpex.hunt.yara_hunt import report_console
+from dumpex.hunt.yara_hunt import report_legacy
+from dumpex.hunt.yara_hunt.domain import RulesDiagnostics
 
-_LAST_YARA_PROVENANCE = None   # set by _load_yara_rules(); see get_yara_provenance()
+_LAST_YARA_PROVENANCE = None   # set by _build_yara_report()'s own _finish(); see get_yara_provenance()
 
 
 def get_yara_provenance() -> "dict | None":
     """
     Reproducible content provenance for the YARA rule files actually used
-    by the most recent _load_yara_rules() call: {"rules_dir": str,
-    "files": [{"name", "sha256", "compiled", "error"}, ...] sorted by
+    by the most recently COMPLETED `_build_yara_report()` call: {"rules_dir":
+    str, "files": [{"name", "sha256", "compiled", "error"}, ...] sorted by
     name, "aggregate_sha256": str, "compiled_ok": int, "compile_failed":
     int}. None if YARA scanning was never invoked this process (e.g.
-    --hunt injection alone, which never calls _load_yara_rules).
+    --hunt injection alone, which never builds a YaraReport).
+
+    This is a COMPATIBILITY ADAPTER, not the canonical provenance source --
+    it is a process-wide "last completed build" cache (issue #11's own
+    "keep get_yara_provenance() only as a compatibility adapter... must not
+    be the canonical source" requirement), correct for this codebase's
+    actual usage (one Report built, then its metadata read, per `--hunt`
+    invocation), but it necessarily reflects only the SINGLE most recent
+    `_build_yara_report()` call in this process. A caller that builds more
+    than one `domain.YaraReport` before consuming provenance (e.g. scanning
+    two separate dumps in one long-lived process) MUST read
+    `report.coverage.rules.provenance` directly off its own Report instead
+    of relying on this global to still describe the right one.
+
+    Returns a FRESH dict on every call (never the same object twice, and
+    never a view into `_LAST_YARA_PROVENANCE`'s own nested structures) --
+    a caller mutating what it gets back can never corrupt this module's own
+    state or a later, unrelated caller's read of it.
 
     A --yara-dir path or directory name alone doesn't tell an analyst
     reviewing a report months later WHICH rules actually produced a
@@ -102,71 +127,65 @@ def get_yara_provenance() -> "dict | None":
     generated it, the same way meta.rules already does for rules.yaml
     (see dumpex.rules_pkg.loader.get_rules_source_info).
     """
-    return _LAST_YARA_PROVENANCE
+    if _LAST_YARA_PROVENANCE is None:
+        return None
+    return copy.deepcopy(_LAST_YARA_PROVENANCE)
 
 
 def _load_yara_rules(rules_dir: str) -> tuple:
     """
-    Compile every .yar/.yara file in rules_dir (via rules.load_and_compile,
-    which never imports this facade) and sync the compatibility
-    _LAST_YARA_PROVENANCE global from the result. Returns (loaded,
-    compile_failed) — the same 2-tuple shape the single-file hunter always
-    returned, so a test replacing this whole wrapper
-    (`yara_hunt._load_yara_rules = lambda rules_dir: (...)`) needs no
-    further changes downstream.
+    Compile every .yar/.yara file in rules_dir via `rules.load_and_compile`
+    (which never imports this facade). Returns `(loaded, provenance)` --
+    the compiled rule_files list and the frozen `models.RulesProvenance`
+    describing every candidate file considered. Kept as its own thin,
+    still-monkeypatchable module-level function (rather than inlined into
+    `_build_yara_report()`) purely so a test can replace the whole loading
+    step: `yara_hunt._load_yara_rules = lambda rules_dir: (fake_rule_files,
+    fake_provenance)`.
+
+    Deliberately does NOT touch `_LAST_YARA_PROVENANCE` -- see
+    `_build_yara_report()`'s own `_finish()` helper for where and why that
+    compatibility global is written.
     """
-    global _LAST_YARA_PROVENANCE
-    bundle = rules.load_and_compile(rules_dir)
-    _LAST_YARA_PROVENANCE = bundle.provenance
-    return bundle.rule_files, bundle.compile_failed
+    return rules.load_and_compile(rules_dir)
 
 
 def _build_yara_report(mf: MinidumpFile, rules_dir: str = None):
     """Run the prerequisite checks / scan / aggregate pipeline and return
-    the aggregate.Report -- the ONE place this pipeline is assembled,
+    the domain.YaraReport -- the ONE place this pipeline is assembled,
     shared by `_hunt_yara()` (console path, below) and
-    `collect_yara_record()` (the v2.4 migration's HunterRecord-producing
-    path). Prints nothing at all: unlike every other phase-two/three
-    hunter's own builder (which only has ONE result path once it starts
-    scanning), this one has FIVE -- four "prerequisite missing" early
-    returns plus the main scan path -- so which `presentation.render_*`
-    function fires, and which header/progress lines led up to it, can't
-    be decided until the Report exists. `report.render_kind` records
-    which of the five branches fired, and `report.rules_dir`/
-    `rule_file_count`/`segment_count`/`scan_note`/`modules` carry every
-    value `_hunt_yara()` needs to reproduce the exact same console text
-    as before, AFTER this call returns, without recomputing any of it
-    (see aggregate.Report's own docstring). PR4 of the `--hunt` v2.4
-    migration unified every hunter onto this build-once, multiple-
-    consumers shape.
+    `collect_yara_record()` (the HunterRecord-producing path). Prints
+    nothing at all -- which of the four "prerequisite missing" cases
+    applies (if any) is fully recoverable from the returned Report's own
+    `coverage.rules` (see domain.RulesDiagnostics), so nothing here needs
+    to remember or signal which branch fired.
 
     Scan all captured memory segments against every YARA rule in
-    rules_dir.
-
-    For each match reports:
-      - Rule name, file, tags, description, MITRE ATT&CK ID
-      - Every matched string: VA (process), file offset in .dmp, hex preview
-      - Per-region context (protection, memory type, backing module)
-
-    See package docstring for the rules-directory resolution order and
-    the score/coverage model.
+    rules_dir. See package docstring for the rules-directory resolution
+    order and the score/coverage model.
     """
-    # get_yara_provenance() is a module-level global, only ever SET by
-    # _load_yara_rules() — never cleared. Without resetting it here, a
-    # run that returns NOT_EVALUATED before ever reaching
-    # _load_yara_rules() (no rules directory found, yara-python missing,
-    # ...) would leave meta.yara_rules reporting a PRIOR successful
-    # scan's rule file hashes from earlier in the same process, silently
-    # implying rules were used for this run when they weren't.
-    global _LAST_YARA_PROVENANCE
-    _LAST_YARA_PROVENANCE = None
+    def _finish(report):
+        """The ONE place `_LAST_YARA_PROVENANCE` is written -- always a
+        snapshot COPY of the just-built, already-immutable `report`'s own
+        `coverage.rules.provenance` (itself `None` for every branch that
+        returns before a rules directory was ever loaded/compiled), never
+        the other way around. Nothing anywhere in this pipeline reads the
+        global back INTO a Report -- a Report's own provenance comes
+        exclusively from the `RulesDiagnostics` built from THIS call's own
+        `_load_yara_rules()` return value, so an interleaved/concurrent
+        scan touching this same global in another thread/re-entrant call
+        can never leak into a different run's result (issue #11's own
+        "must not... leak stale state across runs" requirement)."""
+        global _LAST_YARA_PROVENANCE
+        provenance = report.coverage.rules.provenance
+        _LAST_YARA_PROVENANCE = provenance.to_dict() if provenance is not None else None
+        return report
 
     # ── Locate and import yara-python ─────────────────────────────────
     try:
         import yara
     except ImportError:
-        return aggregate.build_not_evaluated_report(
-            "yara-python not installed", render_kind="not_installed")
+        return _finish(aggregate.build_not_evaluated_report(RulesDiagnostics(yara_available=False)))
 
     # ── Resolve rules directory ───────────────────────────────────────
     if rules_dir is None:
@@ -182,26 +201,24 @@ def _build_yara_report(mf: MinidumpFile, rules_dir: str = None):
             rules_dir = rules.packaged_yara_rules_dir()
 
     if rules_dir is None or not os.path.isdir(rules_dir):
-        return aggregate.build_not_evaluated_report(
-            "no YARA rules directory found", render_kind="no_rules_dir")
+        return _finish(aggregate.build_not_evaluated_report(RulesDiagnostics(yara_available=True)))
 
     # ── Load rule files ───────────────────────────────────────────────
     # Looked up HERE by its bare name (this module's own re-exported,
     # still-monkeypatchable global) so a test replacing the whole
-    # `_load_yara_rules` wrapper is honored exactly as it was pre-split.
-    rule_files, compile_failed = _load_yara_rules(rules_dir)
+    # `_load_yara_rules` wrapper is honored exactly as it was before.
+    rule_files, provenance = _load_yara_rules(rules_dir)
+    rules_diag = RulesDiagnostics(
+        yara_available=True, rules_dir=rules_dir, attempted=True,
+        compiled_ok=provenance.compiled_ok, compile_failed=provenance.compile_failed,
+        provenance=provenance)
     if not rule_files:
-        reason = (f"all {compile_failed} rule file(s) in {rules_dir} failed to compile"
-                   if compile_failed else f"no .yar/.yara files in {rules_dir}")
-        return aggregate.build_not_evaluated_report(
-            reason, render_kind="no_rule_files", rules_dir=rules_dir, compile_failed=compile_failed)
+        return _finish(aggregate.build_not_evaluated_report(rules_diag))
 
     # ── Collect memory segments ───────────────────────────────────────
     segs = scanner.select_segments(mf)
     if not segs:
-        return aggregate.build_not_evaluated_report(
-            "Memory64ListStream missing from this dump", render_kind="no_segments",
-            rules_dir=rules_dir, rule_file_count=len(rule_files), compile_failed=compile_failed)
+        return _finish(aggregate.build_not_evaluated_report(rules_diag))
 
     # Two independent context sources used to judge whether a
     # PE_In_Private_Memory hit is really in private memory or just a
@@ -228,15 +245,11 @@ def _build_yara_report(mf: MinidumpFile, rules_dir: str = None):
     # see dumpex/hunt/_runtime.py.
     runtime = HunterRuntime(monotonic=time.monotonic)
 
-    outcome = scanner.scan_segments(mf, segs, rule_files, modules, regions,
-                                     modules_available, mem_info_available,
-                                     config, runtime.monotonic)
+    scan_result = scanner.scan_segments(mf, segs, rule_files, modules, regions,
+                                         modules_available, mem_info_available,
+                                         config, runtime.monotonic)
 
-    scan_note = scanner.format_scan_note(outcome, config)
-
-    return aggregate.build_report(outcome, compile_failed, rules_dir=rules_dir,
-                                   rule_file_count=len(rule_files), segment_count=len(segs),
-                                   scan_note=scan_note, modules=modules)
+    return _finish(aggregate.build_report(scan_result, rules_diag))
 
 
 def _hunt_yara(mf: MinidumpFile, rules_dir: str = None, verbose: bool = False) -> dict:
@@ -244,67 +257,19 @@ def _hunt_yara(mf: MinidumpFile, rules_dir: str = None, verbose: bool = False) -
     rules_dir -- see `_build_yara_report()`'s own docstring for the
     algorithm and rules-directory resolution order.
 
-    All console output (header, in-progress announcements, and the
-    final render_* call) happens here, AFTER the now fully silent
-    `_build_yara_report()` returns, reading whatever it needs from
-    `report.render_kind`/`rules_dir`/`rule_file_count`/`segment_count`/
-    `scan_note`/`modules`/`outcome` rather than recomputing any of it
-    (see aggregate.Report's own docstring). Nothing prints DURING the
-    builder call in either the old or new code -- scanner.py never
-    prints (see this package's own docstring) -- and none of the four
-    early-return branches print anything past the point they returned,
-    so reproducing each branch's prints as one contiguous block right
-    after the builder call, instead of interleaved with the pipeline
-    steps that used to produce them, is byte-identical to any consumer
-    that only ever observes a fully-captured block of console text
-    (including tests/integration/test_hunt_cli_compat_freeze.py's own
-    byte-exact fixtures)."""
-    _print_hunt_header("YARA Memory Scan")
+    All console output happens via `_render_yara_console()`, AFTER the
+    fully silent `_build_yara_report()` returns."""
     report = _build_yara_report(mf, rules_dir=rules_dir)
     return _render_yara_console(report, verbose)
 
 
 def _render_yara_console(report, verbose: bool = False) -> dict:
-    """Print the console report for an ALREADY-BUILT yara `Report`
-    (picking the right `presentation.render_*` branch from
-    `report.render_kind`, and printing the progress lines that lead up
-    to it) and return the same v1.1-shaped findings dict `_hunt_yara()`
-    always has -- extracted so `dumpex.hunt.collect_hunt()`'s console+
-    JSON orchestrator (see that function's own docstring) can call
-    `_build_yara_report()` once and feed the SAME Report to this
-    function AND `_record_from_yara_report()`, instead of calling
-    `_hunt_yara()` (which would build its own second Report and scan
-    again). Does NOT print the header -- that happens before the
-    builder call (see `_hunt_yara()` above), since it doesn't depend on
-    the Report at all."""
-    if report.render_kind == "not_installed":
-        presentation.render_yara_not_installed(report)
-        return report.findings
-    if report.render_kind == "no_rules_dir":
-        presentation.render_no_rules_dir(report)
-        return report.findings
-    if report.render_kind == "no_rule_files":
-        presentation.render_no_rule_files(report, report.rules_dir, report.compile_failed)
-        return report.findings
-
-    print(DIM(f"  [*] Loaded {report.rule_file_count} rule file(s) from {report.rules_dir}"))
-    if report.compile_failed:
-        print(YELLOW(f"  [~] {report.compile_failed} rule file(s) failed to compile — "
-                      f"scan coverage is reduced, not just a warning\n"))
-
-    if report.render_kind == "no_segments":
-        presentation.render_no_segments(report)
-        return report.findings
-
-    print(DIM(f"  [*] Scanning {report.segment_count} segment(s) …\n"))
-    outcome = report.outcome
-    print(DIM(f"  [*] Scan complete — {outcome.scanned} segment(s) scanned{report.scan_note}."))
-    if outcome.suppressed_module_pe:
-        print(DIM(f"  [·] {outcome.suppressed_module_pe} PE_In_Private_Memory match(es) suppressed — "
-                  f"MZ/PE header belonged to a known, legitimately loaded module.\n"))
-    if outcome.suppressed_scoped:
-        print(DIM(f"  [·] {outcome.suppressed_scoped} scoped rule match(es) suppressed — "
-                  f"resolved to a known module or a MEM_IMAGE region.\n"))
-
-    presentation.render_result(report, report.modules, verbose)
-    return report.findings
+    """Print the console report for an ALREADY-BUILT `domain.YaraReport`
+    and return the same v1.1-shaped findings dict `_hunt_yara()` always
+    has -- extracted so `dumpex.hunt.collect_hunt()`'s console+JSON
+    orchestrator can call `_build_yara_report()` once and feed the SAME
+    Report to this function AND `report_record.project_hunter_record()`,
+    instead of calling `_hunt_yara()` (which would build its own second
+    Report and scan again)."""
+    report_console.print_console(report, verbose)
+    return report_legacy.project_legacy_dict(report)

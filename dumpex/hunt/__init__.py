@@ -4,7 +4,7 @@ import sys
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED
 from dumpex.core.memory import va_to_file_offset, prot_str, get_memory_regions
-from dumpex.hunt._ui import _print_hunt_header, NOT_EVALUATED
+from dumpex.hunt._ui import NOT_EVALUATED
 
 from dumpex.hunt.injection  import _build_injection_report, _render_injection_console
 from dumpex.hunt.hollowing  import _build_hollowing_report, _render_hollowing_console
@@ -144,23 +144,33 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     `collect_records=True` (used by cli.py's `--hunt` branch, PR4) makes
     this function ALSO build the v2.4 `HunterRecord` for every selected
     hunter and return `(results, records, investigation_actions,
-    diagnostics)` -- a 4-tuple, always, since issue #19 Phase 2's
-    `--triage-skipped` -- instead of the bare `results` dict every
-    existing caller already gets back unchanged. `investigation_actions`
-    is `list[InvestigationAction]` and `diagnostics` is `list[Diagnostic]`
-    (both `[]` for a single-hunter `ttp`, and `diagnostics` is also `[]`
-    whenever `triage_skipped` is False). Each selected hunter's own
-    `_build_*_report()` is still called EXACTLY ONCE either way -- this
-    function has always called it directly (never through the
-    `_hunt_*()`/`collect_*_record()` compat wrappers, which would each
-    build their own separate Report), feeding that one Report to both
-    this hunter's console-render function and, when `collect_records` is
-    set, `_record_from_*_report()` too. See `collect_hunt()` above for
-    the equivalent silent, JSON-only path used by any caller that
-    doesn't want console output at all (that path stays metadata-only --
-    it has no `triage_skipped` parameter, since nothing in the CLI wires
-    it to `--triage-skipped`; only THIS function, the real `--hunt` CLI
-    entry point, needs that capability).
+    diagnostics, yara_provenance)` -- a 5-tuple, always, since issue #11's
+    own P1 review fix added `yara_provenance` alongside issue #19 Phase
+    2's earlier `--triage-skipped` addition -- instead of the bare
+    `results` dict every existing caller already gets back unchanged.
+    `investigation_actions` is `list[InvestigationAction]` and
+    `diagnostics` is `list[Diagnostic]` (both `[]` for a single-hunter
+    `ttp`, and `diagnostics` is also `[]` whenever `triage_skipped` is
+    False). `yara_provenance` is THIS call's own
+    `domain.RulesProvenance.to_dict()` (or `None` when `ttp` never
+    selects "yara"/"all", or the yara-python/rules-directory/rule-
+    compilation prerequisites weren't met) -- cli.py threads it straight
+    into `V2Output.set_yara_provenance()` so `meta.yara_rules` reflects
+    THIS run's own YARA scan, never `dumpex.hunt.yara_hunt.
+    get_yara_provenance()`'s process-wide "last build" global (which
+    remains available only as a compatibility adapter for
+    `dumpex.ui.structured.StructuredOutput`, the legacy v1.1 output
+    path). Each selected hunter's own `_build_*_report()` is still called
+    EXACTLY ONCE either way -- this function has always called it
+    directly (never through the `_hunt_*()`/`collect_*_record()` compat
+    wrappers, which would each build their own separate Report), feeding
+    that one Report to both this hunter's console-render function and,
+    when `collect_records` is set, `_record_from_*_report()` too. See
+    `collect_hunt()` above for the equivalent silent, JSON-only path used
+    by any caller that doesn't want console output at all (that path
+    stays metadata-only -- it has no `triage_skipped` parameter, since
+    nothing in the CLI wires it to `--triage-skipped`; only THIS
+    function, the real `--hunt` CLI entry point, needs that capability).
 
     `triage_skipped=True` (only meaningful when `ttp == "all"` -- a
     single-hunter run never has an investigation queue to begin with)
@@ -207,6 +217,10 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # even for a caller that ignores the second return value costs
     # nothing worth gating.
     records = []
+    yara_provenance = None   # this call's own YARA rule provenance, if run_yara fires --
+                              # see this function's own docstring on why this is threaded
+                              # through explicitly rather than read back from
+                              # dumpex.hunt.yara_hunt.get_yara_provenance()'s global
 
     if run_injection:
         report = _build_injection_report(mf)
@@ -234,10 +248,11 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         results["cs-beacon"] = _render_cs_beacon_console(report, verbose)
         records.append(_record_from_cs_beacon_report(report))
     if run_yara:
-        _print_hunt_header("YARA Memory Scan")
         report = _build_yara_report(mf, rules_dir=yara_dir)
         results["yara"] = _render_yara_console(report, verbose)
         records.append(_record_from_yara_report(report))
+        provenance = report.coverage.rules.provenance
+        yara_provenance = provenance.to_dict() if provenance is not None else None
     if run_obfuscation:
         report = _build_encoding_report(mf)
         results["obfuscation"] = _render_encoding_console(report, verbose)
@@ -262,14 +277,11 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # returned by `report_legacy.project_legacy_dict()` (str keys, raw/
     # value already hex-encoded when they're bytes) -- the byte-sanitization
     # pass that used to run here, AFTER rendering, is redundant now that the
-    # legacy-dict projector produces that shape directly (issue #9).
-
-    # YARA: bytes → hex in matched string data
-    if "yara" in results:
-        for match in results["yara"].get("matches", []):
-            for sv in match.get("strings", []):
-                if isinstance(sv.get("data"), bytes):
-                    sv["data"] = sv["data"].hex()
+    # legacy-dict projector produces that shape directly (issue #9). YARA's
+    # own `report_legacy.project_legacy_dict()` (dumpex/hunt/yara_hunt/
+    # report_legacy.py) now hex-encodes `matches[*].strings[*].data` itself
+    # for the same reason (issue #11), making the equivalent bytes->hex pass
+    # that used to run here redundant too.
 
     # Summary card for --hunt all
     if ttp == "all" and "yara" not in results:
@@ -318,6 +330,6 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
             deep_triage_diagnostics=deep_diagnostics, verbose=verbose)
 
     if collect_records:
-        return results, records, investigation_actions, deep_diagnostics
+        return results, records, investigation_actions, deep_diagnostics, yara_provenance
     return results
 

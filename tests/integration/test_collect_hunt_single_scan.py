@@ -98,7 +98,7 @@ def test_cmd_hunt_collect_records_all_calls_each_builder_exactly_once(monkeypatc
     `cmd_hunt()` (console) and `collect_hunt()` (JSON) separately for one
     `--hunt` invocation would double every selected hunter's scan."""
     counts = _patch_counters(monkeypatch)
-    results, records, _actions, _diagnostics = hunt_pkg.cmd_hunt(
+    results, records, _actions, _diagnostics, _yara_provenance = hunt_pkg.cmd_hunt(
         _empty_mf(), "all", verbose=False, collect_records=True)
 
     assert sorted(results.keys()) == sorted(HUNTERS)
@@ -114,7 +114,7 @@ def test_cmd_hunt_collect_records_all_calls_each_builder_exactly_once(monkeypatc
 def test_cmd_hunt_collect_records_single_hunter_calls_only_that_builder_once(
         monkeypatch, capsys, selected):
     counts = _patch_counters(monkeypatch)
-    results, records, _actions, _diagnostics = hunt_pkg.cmd_hunt(
+    results, records, _actions, _diagnostics, _yara_provenance = hunt_pkg.cmd_hunt(
         _empty_mf(), selected, verbose=False, collect_records=True)
 
     assert tuple(results.keys()) == (selected,)

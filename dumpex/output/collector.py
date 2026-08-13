@@ -64,6 +64,8 @@ class V2Output:
         self._diagnostics_warnings = []
         self._diagnostics_errors   = []
         self._artifacts            = []
+        self._yara_provenance     = None   # see set_yara_provenance() -- this command's OWN
+                                             # YaraReport provenance, never a shared global
 
     @classmethod
     def from_evidence(cls, evidence: "list[EvidenceInput]", *, command: str = None,
@@ -129,6 +131,20 @@ class V2Output:
             self._protected_paths.append(
                 (a.path, f"the '{a.kind}' artifact this run already wrote"))
 
+    def set_yara_provenance(self, provenance: "dict | None") -> None:
+        """Attach THIS command's own YARA rule provenance (a plain dict,
+        e.g. `domain.RulesProvenance.to_dict()` off the exact `YaraReport`
+        `dumpex.hunt.cmd_hunt()` built for this invocation) so
+        `meta.yara_rules` reflects it explicitly -- `build_meta_v2()`
+        never reads `dumpex.hunt.yara_hunt.get_yara_provenance()`'s own
+        process-wide "last build" global itself (see that function's own
+        docstring on why: a caller building more than one `YaraReport` in
+        one process could otherwise have a LATER build's provenance
+        silently attributed to an EARLIER command's own JSON output).
+        `None` (the default if this is never called) omits meta.yara_rules
+        entirely, same as "YARA scanning was never invoked this run"."""
+        self._yara_provenance = provenance
+
     def add_diagnostic(self, severity: str, message: str, code: str = None) -> None:
         d = Diagnostic(severity=severity, message=message, code=code).to_dict()
         if severity == SEVERITY_ERROR:
@@ -152,6 +168,7 @@ class V2Output:
                 command=self._command, options=self._options, case_id=self._case_id,
                 analyst=self._analyst, redact_paths=self._redact_paths,
                 started_at=self._started_at, finished_at=finished_at,
+                yara_provenance=self._yara_provenance,
             )
         else:
             meta = build_meta_v2(
@@ -159,6 +176,7 @@ class V2Output:
                 command=self._command, options=self._options, case_id=self._case_id,
                 analyst=self._analyst, redact_paths=self._redact_paths,
                 started_at=self._started_at, finished_at=finished_at,
+                yara_provenance=self._yara_provenance,
             )
         artifacts = _redact_artifacts(self._artifacts) if self._redact_paths else list(self._artifacts)
         return Envelope(meta=meta, result=self._result, artifacts=artifacts,

@@ -20,6 +20,19 @@ pytest.importorskip("yara")
 from tests.fixtures.fakes import Region, Segment, FakeReader, FakeStream, FakeMF
 
 import dumpex.hunt.yara_hunt as yara_hunt
+from dumpex.hunt.yara_hunt.models import RuleFileDiagnostic, RulesProvenance
+
+
+def _fake_provenance(rules_dir, rule_file_names, compile_failed=0):
+    """A minimal, structurally-valid `RulesProvenance` for tests that
+    monkeypatch `_load_yara_rules` wholesale -- `_load_yara_rules()` now
+    returns `(rule_files, RulesProvenance)`, not `(rule_files,
+    compile_failed_int)` (see dumpex/hunt/yara_hunt/__init__.py's own
+    docstring)."""
+    files = tuple(RuleFileDiagnostic(name=name, sha256=None, compiled=True, error=None)
+                   for name in sorted(rule_file_names))
+    return RulesProvenance(rules_dir=rules_dir, files=files, aggregate_sha256="fake",
+                            compiled_ok=len(files), compile_failed=compile_failed)
 
 
 def _write_rule(d, name, body):
@@ -388,7 +401,8 @@ def test_match_failure_makes_result_inconclusive(monkeypatch):
                 raise RuntimeError("simulated internal YARA error")
 
         monkeypatch.setattr(yara_hunt, "_load_yara_rules",
-                             lambda rules_dir: ([("good.yar", BoomCompiled())], 0))
+                             lambda rules_dir: ([("good.yar", BoomCompiled())],
+                                                 _fake_provenance(rules_dir, ["good.yar"])))
         f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
 
     assert f["status"] == "INCONCLUSIVE"
@@ -414,8 +428,8 @@ def test_oversized_segment_note_reflects_monkeypatched_threshold(monkeypatch, ca
         yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
 
     out = capsys.readouterr().out
-    assert "1 MB skipped" in out
-    assert "50 MB skipped" not in out
+    assert "> 1 MB limit" in out
+    assert "> 50 MB limit" not in out
 
 
 # ── a cap that ISN'T a whole number of MB must never be reported by ──────
@@ -437,8 +451,8 @@ def test_oversized_segment_note_exact_for_sub_megabyte_threshold(monkeypatch, ca
         yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
 
     out = capsys.readouterr().out
-    assert "512 KB skipped" in out
-    assert "0 MB skipped" not in out
+    assert "> 512 KB limit" in out
+    assert "> 0 MB limit" not in out
 
 
 def test_oversized_segment_note_exact_for_one_and_a_half_mb_threshold(monkeypatch, capsys):
@@ -455,5 +469,5 @@ def test_oversized_segment_note_exact_for_one_and_a_half_mb_threshold(monkeypatc
         yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
 
     out = capsys.readouterr().out
-    assert "1536 KB skipped" in out
+    assert "> 1536 KB limit" in out
     assert "1 MB skipped" not in out
