@@ -42,9 +42,8 @@ COVERAGE_ICON = {"complete": GREEN("[✓]"), "partial": YELLOW("[~]"), "not_eval
 
 
 def header_lines(title: str) -> list:
-    """The exact lines `dumpex.hunt._ui._print_hunt_header` prints, as data
-    instead of a side effect -- that helper only knows how to `print()`,
-    and a pure projector must not."""
+    """The hunt-section header banner, as data instead of a `print()` side
+    effect -- a pure projector must not print directly."""
     bar = BOLD("══════════════════════════════════════════")
     return ["", bar, BOLD(f"  HUNT: {title}"), bar, ""]
 

@@ -18,12 +18,12 @@ from dumpex.hunt.hollowing.collect import collect_hollowing_record
 from dumpex.output.records import HunterRecord, HollowingDetails
 
 jsonschema = pytest.importorskip("jsonschema")
-from dumpex.schemas import schema_path
+from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)

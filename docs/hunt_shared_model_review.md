@@ -1,6 +1,18 @@
 # Hunt shared-model review (issue #6)
 
-**Status: decisions recorded, follow-up extraction landed in this change.**
+**Status: superseded.** The migration sequence this review's §5 planned
+(#8 → #7 → #10 → #9 → #11 → #12) is complete — Stomping, Pipe, Hollowing,
+CS Beacon, and YARA have all since migrated, and #12 (the cleanup issue
+this document told each of them to re-read before starting) is the one
+closing it out. `CURRENT_SCHEMA` has since moved past the v2.10 this
+review was planned against (now v2.12; see `dumpex/schemas/__init__.py`).
+This document is kept as a **historical audit trail** of the pilot review
+that shaped every later hunter's migration, not a live reference or
+roadmap — §1–§4's architectural record (shared presentation primitives,
+Report/CheckResult boundary decisions) remains accurate; §5 and
+"Follow-up changes" below describe a roadmap that has since fully played
+out.
+
 Planning baseline: `d9a3605` (v3.2.1), schema v2.10, after the completed
 Injection (#2/#3/#4) and Encoding (#5) pilots. This is the mandatory
 post-pilot review issue #1 required before migrating Stomping/Pipe/

@@ -19,12 +19,14 @@ GROUP entries that share a rule name for display purposes -- that is a
 `report_console.py` concern, not a fact this module is allowed to discard.
 `diagnostics` is a frozen `domain.ScanDiagnostics`.
 """
+import dataclasses
 import math
 import os
 import time
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import addr_to_module
 from dumpex.hunt._coverage import segment_scan_target
+from dumpex.hunt._domain import as_tuple, require_recursively_immutable
 from dumpex.hunt.yara_hunt.config import YaraConfig, SCOPE_PRIVATE_OR_UNBACKED
 from dumpex.hunt.yara_hunt.domain import ScanDiagnostics
 from dumpex.hunt.yara_hunt.models import RuleMatchEvidence, StringEvidence
@@ -40,16 +42,44 @@ def select_segments(mf) -> list:
     return []
 
 
+@dataclasses.dataclass(frozen=True, slots=True)
 class ScanResult:
-    """Plain (not part of the frozen domain graph -- transient scan output)
-    holder for what `scan_segments()` produced: `matches` -- a tuple of
-    `models.RuleMatchEvidence`, one per individual match, in scan order --
-    and `diagnostics`, a `domain.ScanDiagnostics`."""
-    __slots__ = ("matches", "diagnostics")
+    """Not part of the frozen domain graph itself (transient scan output,
+    consumed once by `aggregate.build_report()` and discarded) but frozen
+    all the same -- aggregate's input boundary admits typed evidence and
+    scalars only, never a mutable scanner DTO, so this can't be a plain
+    reassignable holder for `matches`/`diagnostics` even though nothing
+    downstream keeps a reference to it. Holds what `scan_segments()`
+    produced: `matches` -- a tuple of `models.RuleMatchEvidence`, one per
+    individual match, in scan order -- and `diagnostics`, a frozen
+    `domain.ScanDiagnostics`.
 
-    def __init__(self, matches: tuple, diagnostics: ScanDiagnostics):
-        self.matches = matches
-        self.diagnostics = diagnostics
+    `frozen=True` alone only blocks reassigning `result.matches`/
+    `result.diagnostics` -- it does nothing to stop a caller mutating a
+    mutable object (a `list`) it passed in AFTER construction, which would
+    silently change what this "immutable" instance reports. `__post_init__`
+    closes that: `matches` is copied into a fresh tuple (never the caller's
+    own list), every item is checked to actually be a `RuleMatchEvidence`
+    and recursively immutable, and `diagnostics` is checked to actually be
+    a `ScanDiagnostics` -- constructor-input isolation, not just
+    post-construction reassignment resistance."""
+    matches: tuple
+    diagnostics: ScanDiagnostics
+
+    def __post_init__(self):
+        matches = as_tuple(self.matches, "ScanResult.matches")
+        for index, item in enumerate(matches):
+            where = f"ScanResult.matches[{index}]"
+            if type(item) is not RuleMatchEvidence:
+                raise TypeError(
+                    f"{where} must be a RuleMatchEvidence, got "
+                    f"{type(item).__name__}: {item!r}")
+            require_recursively_immutable(item, where)
+        object.__setattr__(self, "matches", matches)
+        if type(self.diagnostics) is not ScanDiagnostics:
+            raise TypeError(
+                f"ScanResult.diagnostics must be a ScanDiagnostics, got "
+                f"{type(self.diagnostics).__name__}: {self.diagnostics!r}")
 
 
 def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list, regions: list,

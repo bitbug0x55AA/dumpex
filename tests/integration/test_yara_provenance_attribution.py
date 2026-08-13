@@ -24,6 +24,7 @@ pytest.importorskip("yara")
 from tests.fixtures.fakes import Segment, FakeReader, FakeStream, FakeMF
 
 import dumpex.hunt as hunt_pkg
+from dumpex.hunt import yara_hunt
 from dumpex.output.collector import V2Output
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport, COVERAGE_COMPLETE
@@ -87,3 +88,33 @@ def test_interleaved_yara_hunt_runs_each_serialize_their_own_provenance(capsys):
     assert meta_b["rules_dir"] == d_b
     assert [f["name"] for f in meta_b["files"]] == ["b.yar"]
     capsys.readouterr()   # drain the console output cmd_hunt() also printed
+
+
+def test_get_yara_provenance_global_is_overwritten_not_merged_across_builds():
+    """`get_yara_provenance()` -- the legacy v1.1 `StructuredOutput`
+    compatibility adapter backed by `dumpex.hunt.yara_hunt.
+    _LAST_YARA_PROVENANCE` -- is a process-wide "last completed build"
+    cache by design (see its own docstring). Issue #12's "no stale
+    per-run global metadata can leak into a later command" invariant means
+    each `_build_yara_report()` call must fully OVERWRITE it, never merge
+    or append: a second build using a different rules directory must leave
+    no trace of the first build's rule files in what this function returns.
+    """
+    seg_va, seg_fo = 0x81000, 0x8100
+    data = b'\x00' * 0x100
+    mf = _mf_with_segment(seg_va, seg_fo, data)
+
+    with tempfile.TemporaryDirectory() as d_a, tempfile.TemporaryDirectory() as d_b:
+        _write_rule(d_a, "a.yar", "RuleA")
+        _write_rule(d_b, "b.yar", "RuleB")
+
+        yara_hunt._build_yara_report(mf, d_a)
+        prov_a = yara_hunt.get_yara_provenance()
+        assert prov_a["rules_dir"] == d_a
+        assert [f["name"] for f in prov_a["files"]] == ["a.yar"]
+
+        yara_hunt._build_yara_report(mf, d_b)
+        prov_b = yara_hunt.get_yara_provenance()
+        assert prov_b["rules_dir"] == d_b
+        assert [f["name"] for f in prov_b["files"]] == ["b.yar"]
+        assert "a.yar" not in [f["name"] for f in prov_b["files"]]

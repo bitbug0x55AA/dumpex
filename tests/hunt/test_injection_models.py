@@ -2,8 +2,8 @@
 Contract tests for the injection Evidence migration (dumpex.hunt.injection.
 models) -- distinct from tests/hunt/test_injection.py (end-to-end hunter
 behavior) and tests/hunt/test_output_source_architecture.py (the
-cross-hunter Report-level contract, still xfail for injection's own Report
-until the next commit). Covers the acceptance criteria for this commit:
+cross-hunter Report-level contract). Covers the acceptance criteria for
+this commit:
 
   1. Every Evidence type is a frozen dataclass.
   2. Evidence fields hold only scalars/tuples/frozensets/nested immutable

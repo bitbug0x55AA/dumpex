@@ -31,6 +31,7 @@ import dumpex.cli as cli
 import dumpex.output.collector as collector_mod
 import dumpex.commands.report as report_mod
 import dumpex.core.memory as core_memory_mod
+from dumpex.output.envelope import SCHEMA_VERSION
 from dumpex.rules_pkg.loader import configure_rules_source
 from tests.fixtures.fakes import FakeMF, FakeStream, Module, Region, ThreadInfo, mem_reader
 
@@ -112,7 +113,7 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
         "  CLEAN — no suspicious indicators found\n\n\n"
     )
     assert exit_code == 0
-    assert doc["meta"]["schema_version"] == "2.12"
+    assert doc["meta"]["schema_version"] == SCHEMA_VERSION
     assert doc["result"]["kind"] == "report"
     assert doc["result"]["coverage"]["status"] == "complete"
     assert len(doc["result"]["data"]["records"]) == 1

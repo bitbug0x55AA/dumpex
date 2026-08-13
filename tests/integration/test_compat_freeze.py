@@ -49,6 +49,7 @@ import pytest
 
 import dumpex.cli as cli
 import dumpex.output.collector as collector_mod
+from dumpex.output.envelope import SCHEMA_VERSION
 from tests.fixtures.fakes import (
     FakeMF, Region, Module, Thread, ThreadInfo, Ctx, FakeStream, Peb, MiscInfo,
     SysInfo, ExceptionStream,
@@ -989,7 +990,7 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
 
 def _expected_meta(argv0: str) -> dict:
     return {
-        "schema_version": "2.12",
+        "schema_version": SCHEMA_VERSION,
         "tool": {"name": "dumpex", "version": "<VERSION>"},
         "execution": {
             "started_at": "2024-01-01T00:00:00Z",

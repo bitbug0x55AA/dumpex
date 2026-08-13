@@ -1,11 +1,10 @@
-"""Unit tests for dumpex.hunt._console -- the shared width/wrap/icon
-primitives every hunter's console rendering (via _ui.py's _print_check()
-and, for injection, its own Finding-tag-keyed KEY SIGNALS section) reads
-from. Pure functions, no hunt-package/FakeMF dependency."""
+"""Unit tests for dumpex.hunt._console -- the shared width/wrap primitives
+every hunter's console rendering reads from. Pure functions, no
+hunt-package/FakeMF dependency."""
 import re
 
 from dumpex.hunt import _console
-from dumpex.ui.colors import RED, YELLOW, DIM, GREEN
+from dumpex.ui.colors import RED
 
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -155,97 +154,3 @@ def test_render_kv_block_uses_indent():
 def test_render_kv_block_explicit_label_width_overrides_longest():
     lines = _console.render_kv_block([("A", "1")], indent=0, label_width=10)
     assert lines[0].startswith("A" + " " * 9 + "  1")
-
-
-# ── classify_status_icon ──────────────────────────────────────────────────
-
-def test_lead_is_never_green():
-    icon = _plain(_console.classify_status_icon("LEAD"))
-    assert icon != "[✓]"
-    assert icon == "[~]"
-
-
-def test_observation_and_clean_and_not_evaluated_are_visually_distinct():
-    obs = _plain(_console.classify_status_icon("OBSERVATION — not scored"))
-    clean = _plain(_console.classify_status_icon("CLEAN — nothing found"))
-    not_eval = _plain(_console.classify_status_icon("NOT EVALUATED — no stream"))
-    assert len({obs, clean, not_eval}) == 3
-
-
-def test_detection_is_red():
-    assert _plain(_console.classify_status_icon("DETECTION — payload found")) == "[!]"
-
-
-def test_suspicious_and_anomal_are_red():
-    assert _plain(_console.classify_status_icon("SUSPICIOUS")) == "[!]"
-    assert _plain(_console.classify_status_icon("ANOMALOUS PROTECTION")) == "[!]"
-
-
-def test_incomplete_and_context_unverified_are_yellow():
-    assert _plain(_console.classify_status_icon("INCOMPLETE — some regions could not be read")) == "[~]"
-    assert _plain(_console.classify_status_icon("CONTEXT UNVERIFIED — reason")) == "[~]"
-
-
-def test_inconclusive_and_notable_are_yellow():
-    assert _plain(_console.classify_status_icon("INCONCLUSIVE — reason")) == "[~]"
-    assert _plain(_console.classify_status_icon("NOTABLE — region not found")) == "[~]"
-
-
-def test_not_available_is_dim_dash():
-    assert _plain(_console.classify_status_icon("NOT AVAILABLE — no handle data")) == "[-]"
-
-
-def test_clean_is_green():
-    assert _plain(_console.classify_status_icon("CLEAN — none found")) == "[✓]"
-
-
-def test_unrecognized_status_is_neutral_not_green():
-    icon = _plain(_console.classify_status_icon("SOME BRAND NEW STATUS WORD"))
-    assert icon == "[?]"
-    assert icon != "[✓]"
-
-
-def test_clean_status_containing_the_word_leads_is_not_misclassified_as_lead():
-    # Regression: "LEAD" as a bare substring also matches inside "leads"
-    # (the plural noun) -- the pipe hunter's own pre-verdict-first CLEAN
-    # status text ("no known framework patterns among string leads") must
-    # classify as green, not yellow, despite containing that substring.
-    # That exact line no longer reaches the console (the pipe hunter now
-    # renders a verdict-first report -- see dumpex/hunt/pipe/
-    # report_console.py), but it stays here as the regression case for
-    # `classify_status_icon` itself, which every remaining `_print_check`
-    # caller still routes through.
-    icon = _plain(_console.classify_status_icon(
-        "CLEAN — no known framework patterns among string leads"))
-    assert icon == "[✓]"
-
-
-def test_clean_status_containing_lowercase_anomalous_prose_is_not_misclassified_as_red():
-    # Regression: obfuscation/presentation.py's own CLEAN status text says
-    # "no anomalous entropy in private regions" -- case-INSENSITIVE
-    # matching would fold "anomalous" up to match the "ANOMAL" stem
-    # (itself a deliberate match for the ALL-CAPS "ANOMALOUS"/"ANOMALY"
-    # status words `_RED_WORDS` exists to catch), wrongly turning a clean
-    # result red. The hollowing hunter this comment used to name no longer
-    # routes anything through `classify_status_icon` at all (it renders a
-    # verdict-first report -- see dumpex/hunt/hollowing/report_console.py),
-    # but the regression case itself is about that function, which every
-    # remaining `_print_check` caller still uses.
-    # Matching stays case-sensitive specifically so lowercase prose never
-    # collides with an ALL-CAPS status keyword.
-    icon = _plain(_console.classify_status_icon(
-        "CLEAN — no anomalous entropy in private regions"))
-    assert icon == "[✓]"
-
-
-def test_word_boundary_matching_does_not_false_positive_on_substrings():
-    assert _plain(_console.classify_status_icon("CLEAN — misleading text is fine")) == "[✓]"
-    assert _plain(_console.classify_status_icon("CLEAN — the leader module")) == "[✓]"
-
-
-def test_classification_ignores_pre_applied_ansi_color():
-    # A caller typically passes an already-colored string (e.g. YELLOW("LEAD"))
-    # -- classification must still match on the plain text underneath.
-    assert _plain(_console.classify_status_icon(YELLOW("LEAD"))) == "[~]"
-    assert _plain(_console.classify_status_icon(GREEN("CLEAN — ok"))) == "[✓]"
-    assert _plain(_console.classify_status_icon(DIM("NOT EVALUATED"))) == "[-]"
