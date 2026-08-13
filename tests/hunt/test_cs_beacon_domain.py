@@ -20,7 +20,9 @@ from dumpex.hunt._finding import CONFIDENCE_HIGH, TAG_DETECTION
 from dumpex.hunt.cs_beacon.domain import (
     CoverageSnapshot, CSBeaconEvidence, CSBeaconReport, ScanDiagnostics,
 )
-from dumpex.hunt.cs_beacon.models import ConfigEvidence, ConfigField, CorroborationEvidence
+from dumpex.hunt.cs_beacon.models import (
+    ConfigEvidence, ConfigField, CorroborationEvidence, RegionRef, region_ref,
+)
 from dumpex.hunt.cs_beacon.report_console import render_console_lines
 from dumpex.hunt.cs_beacon.report_legacy import project_legacy_dict
 from dumpex.hunt.cs_beacon.report_record import project_hunter_record
@@ -114,6 +116,55 @@ def test_evidence_bucket_rejects_a_non_dataclass_item():
 def test_corroboration_evidence_requires_at_least_one_reason():
     with pytest.raises(ValueError):
         CorroborationEvidence(hit=_hit(), reasons=())
+
+
+# ── Field validators (models.py's own two-layer defense: exact TYPE check
+# + require_recursively_immutable) ──────────────────────────────────────
+
+@pytest.mark.parametrize("factory, kwargs, exc", [
+    pytest.param(RegionRef, dict(base_address=True, allocation_base=None, size=0,
+                                  state="MEM_COMMIT", protect="PAGE_READWRITE", type="MEM_PRIVATE"),
+                 TypeError, id="region-bool-base-address"),
+    pytest.param(RegionRef, dict(base_address=0, allocation_base=None, size=-1,
+                                  state="MEM_COMMIT", protect="PAGE_READWRITE", type="MEM_PRIVATE"),
+                 ValueError, id="region-negative-size"),
+    pytest.param(RegionRef, dict(base_address=0, allocation_base=None, size=0,
+                                  state=123, protect="PAGE_READWRITE", type="MEM_PRIVATE"),
+                 TypeError, id="region-non-str-state"),
+    pytest.param(ConfigField, dict(field_id=1, name="BeaconType", type=99, value=0, raw=b""),
+                 ValueError, id="config-field-unknown-type"),
+    pytest.param(ConfigField, dict(field_id=1, name="BeaconType", type=1, value=True, raw=b""),
+                 TypeError, id="config-field-bool-value"),
+    pytest.param(CorroborationEvidence, dict(hit=object(), reasons=("x",)),
+                 TypeError, id="corroboration-non-config-evidence-hit"),
+])
+def test_models_field_validators_reject_bad_values(factory, kwargs, exc):
+    with pytest.raises(exc):
+        factory(**kwargs)
+
+
+def test_config_evidence_rejects_duplicate_field_ids():
+    """parser.py's own duplicate-field-id check should already reject this
+    before a `ConfigEvidence` is ever built -- this is the domain model's
+    own belt-and-suspenders re-check of that invariant."""
+    fields = (
+        ConfigField(field_id=1, name="BeaconType", type=1, value=0, raw=b""),
+        ConfigField(field_id=1, name="BeaconType", type=1, value=1, raw=b""),
+    )
+    with pytest.raises(ValueError, match="duplicates field_id"):
+        ConfigEvidence(xor_key=0x69, hit_va=1, hit_fo=1, cs_version="3.x", fields=fields)
+
+
+def test_region_ref_of_an_uncovered_hit_is_none():
+    """The hit VA is not covered by MemoryInfoListStream at all -- `region`
+    is `None`, not a poisoned/placeholder `RegionRef`."""
+    assert region_ref(None) is None
+
+
+def test_region_ref_allows_a_missing_allocation_base():
+    ref = RegionRef(base_address=0x1000, allocation_base=None, size=0x1000,
+                     state="MEM_COMMIT", protect="PAGE_READWRITE", type="MEM_PRIVATE")
+    assert ref.allocation_base is None
 
 
 def test_report_rejects_a_hit_poisoned_before_construction():
