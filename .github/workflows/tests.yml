@@ -153,6 +153,7 @@ jobs:
           coverage report --include="dumpex/hunt/cs_beacon/report_facts.py"   --fail-under=90
           coverage report --include="dumpex/hunt/cs_beacon/report_legacy.py"  --fail-under=95
           coverage report --include="dumpex/hunt/cs_beacon/report_record.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/cs_beacon/collect.py"        --fail-under=95
           # dumpex/hunt/injection/*: same reasoning -- injection.py is a
           # package now, not a single file.
           coverage report --include="dumpex/hunt/injection/__init__.py"     --fail-under=95
