@@ -23,17 +23,18 @@ from dumpex.hunt.pipe.collect import collect_pipe_record
 from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record
 from dumpex.hunt.yara_hunt.collect import collect_yara_record
 from dumpex.hunt.encoding.collect import collect_obfuscation_record
+from dumpex.output.envelope import SCHEMA_VERSION
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import _investigation_actions_json
 from dumpex.output.records import HUNTERS, HunterRecord
 
 jsonschema = pytest.importorskip("jsonschema")
-from dumpex.schemas import schema_path
+from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
 
 @pytest.fixture(scope="module")
 def validator():
-    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema)
@@ -81,7 +82,7 @@ def test_all_seven_collectors_feed_the_real_summary_reducer_and_validate(validat
 
     doc = {
         "meta": {
-            "schema_version": "2.12",
+            "schema_version": SCHEMA_VERSION,
             "tool": {"name": "dumpex", "version": None},
             "execution": {"started_at": "x", "finished_at": "y", "duration_seconds": 1,
                           "command": "hunt_all", "options": {"hunt": "all"}},

@@ -28,11 +28,14 @@ must never re-enter the canonical model as evidence, which is the one
 mistake that would silently reintroduce the parallel-representation drift
 this whole migration exists to remove.
 
-Additive as of this change: nothing in production constructs a
-`CheckResult` yet (see the Injection 2A issue's own "no aggregate or
-caller cutover" non-goal). It is defined, validated, and tested first so
-the shape is fixed once rather than re-derived per hunter as each one
-migrates.
+Introduced by the Injection 2A issue as the fixed target shape, ahead of
+any hunter's own cutover, so it was defined, validated, and tested once
+rather than re-derived per hunter as each one migrated. Six of the seven
+hunters' `aggregate.py` (injection, encoding, stomping, pipe, hollowing,
+cs-beacon) now construct it as their sole result representation. YARA is
+the deliberate exception: it never builds on `CheckResult`/`Finding` at
+all -- see `dumpex.hunt.yara_hunt.domain`'s own docstring for why its
+`YaraEvidence`/`YaraReport` shape stays off the shared model.
 """
 import dataclasses
 import enum

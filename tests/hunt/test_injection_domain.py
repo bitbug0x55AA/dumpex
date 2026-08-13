@@ -5,10 +5,9 @@ CoverageSnapshot/InjectionEvidence/InjectionReport).
 Distinct from its neighbours: tests/hunt/test_injection_models.py covers
 the SCAN-layer Evidence value objects and how memory_scan/thread_scan/
 correlation build them; tests/hunt/test_output_source_architecture.py
-covers the cross-hunter Report boundary and stays xfail for injection's
-still-in-production `aggregate.Report` until the cutover issue removes it.
-This module covers the model that replaces that Report, which nothing
-constructs in production yet.
+covers the cross-hunter Report boundary. This module covers
+`InjectionReport`, the model production now builds -- the old mutable
+`dumpex.hunt.injection.aggregate.Report` no longer exists.
 
 Acceptance criteria exercised here:
 

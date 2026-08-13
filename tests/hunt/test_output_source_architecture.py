@@ -1,6 +1,10 @@
 """Architecture contract for the hunt output-source migration.
 
-These tests describe the target boundary for the ongoing migration:
+Every hunter in this migration series (injection, encoding, stomping,
+pipe, hollowing, cs-beacon, yara) now satisfies every contract below; no
+`xfail`/`_PENDING` marker remains anywhere in this file. This is a plain
+assertion suite, exercised directly against each hunter's real
+`aggregate.build_report()`/domain `Report` type/console renderer:
 
 * aggregate returns a frozen, deeply immutable domain Report;
 * a Report stores Findings once, rather than keeping parallel console and
@@ -9,54 +13,26 @@ These tests describe the target boundary for the ongoing migration:
   projection flag; and
 * presentation consumes only the Report plus its projection choice.
 
-Known gaps are marked ``xfail`` (strict) so this test-only commit does not
-make the existing CI permanently red while the larger refactor is in
-progress -- as soon as an implementation change satisfies one contract,
-pytest reports XPASS as a failure until that case's marker is removed. Once
-a boundary is actually satisfied, its marker is deleted in the SAME commit
-that satisfies it (not left around as a permanently-skipped assertion) --
-Finding.print()'s `level` contract and injection's aggregate/renderer
-boundaries were the first three to convert; obfuscation's renderer boundary
-converted incidentally when its unused `mf`/`susp_prots`/`modules`
-parameters were dropped; injection's Report/parallel-findings/mutable-
-collection boundaries converted with the Injection 2C cutover (production
-now builds `dumpex.hunt.injection.domain.InjectionReport`, and the old
-dict-`Report` module `dumpex.hunt.injection.aggregate.Report` no longer
-exists); obfuscation's Report/parallel-findings/mutable-collection/
-aggregate boundaries converted with the Encoding pilot (issue #5) --
-production now builds `dumpex.hunt.encoding.domain.EncodingReport`, and
-the old dict-`EncodingReport` in `dumpex.hunt.encoding.aggregate` and
-`dumpex.hunt.encoding.presentation` no longer exist; stomping's
+Historical note, kept for provenance: while this migration was in
+progress, unconverted contracts were marked `xfail(strict)` so the
+in-progress suite didn't turn CI permanently red, and each marker was
+deleted in the same commit that satisfied its contract (Finding.print()'s
+`level` contract and injection's aggregate/renderer boundaries were the
+first three to convert; obfuscation's renderer boundary converted
+incidentally when its unused `mf`/`susp_prots`/`modules` parameters were
+dropped; injection's Report/parallel-findings/mutable-collection
+boundaries converted with the Injection 2C cutover; obfuscation's
 Report/parallel-findings/mutable-collection/aggregate boundaries converted
-with the Stomping migration (issue #8) -- production now builds
-`dumpex.hunt.stomping.domain.StompingReport`, and the old mutable
-`dumpex.hunt.stomping.aggregate.Report` and
-`dumpex.hunt.stomping.presentation` no longer exist; pipe's
-Report/parallel-findings/mutable-collection/aggregate boundaries converted
-with the Pipe migration (issue #7) -- production now builds
-`dumpex.hunt.pipe.domain.PipeReport`, and the old mutable
-`dumpex.hunt.pipe.aggregate.Report` and `dumpex.hunt.pipe.presentation` no
-longer exist; hollowing's Report/parallel-findings/mutable-collection/
-aggregate/renderer boundaries converted with the Hollowing migration
-(issue #10) -- production now builds
-`dumpex.hunt.hollowing.domain.HollowingReport`, the old mutable
-`dumpex.hunt.hollowing.Report` (and the single-file module that held it) no
-longer exists, and `_render_hollowing_console` no longer takes `mf`;
-cs-beacon's Report/parallel-findings/mutable-collection/aggregate/renderer
-boundaries converted with the CS Beacon migration (issue #9) -- production
-now builds `dumpex.hunt.cs_beacon.domain.CSBeaconReport`, and the old
-mutable `dumpex.hunt.cs_beacon.aggregate.Report` and
-`dumpex.hunt.cs_beacon.presentation` no longer exist; yara's Report/
-aggregate/renderer boundaries converted with the YARA migration (issue
-#11) -- production now builds `dumpex.hunt.yara_hunt.domain.YaraReport`,
-the old mutable `dumpex.hunt.yara_hunt.aggregate.Report` and
-`dumpex.hunt.yara_hunt.presentation` no longer exist, and every `_PENDING`
-xfail this file ever carried is gone -- yara deliberately does not build a
+with the Encoding pilot (issue #5); stomping's with the Stomping migration
+(issue #8); pipe's with the Pipe migration (issue #7); hollowing's
+Report/parallel-findings/mutable-collection/aggregate/renderer boundaries
+with the Hollowing migration (issue #10), which also dropped `mf` from
+`_render_hollowing_console`; cs-beacon's with the CS Beacon migration
+(issue #9); and yara's Report/aggregate/renderer boundaries with the YARA
+migration (issue #11) -- yara deliberately does not build a
 `findings`/`findings_list` pair at all (see domain.py's own docstring on
 why it stays off the shared Finding model), so it was never added to
-`PARALLEL_FINDING_REPORT_TYPES`. This file's xfail markers are now fully
-retired; every hunter in this migration series satisfies every contract
-below.
+`PARALLEL_FINDING_REPORT_TYPES` in the first place.
 """
 import dataclasses
 import enum
@@ -77,6 +53,7 @@ from dumpex.hunt.hollowing import _render_hollowing_console as hollowing_render
 from dumpex.hunt.injection import aggregate as injection_aggregate
 from dumpex.hunt.injection import _render_injection_console as injection_render
 from dumpex.hunt.injection import domain as injection_domain
+from dumpex.hunt.injection import models as injection_models
 from dumpex.hunt.pipe import aggregate as pipe_aggregate
 from dumpex.hunt.pipe import domain as pipe_domain
 from dumpex.hunt.pipe import _render_pipe_console as pipe_render
@@ -86,6 +63,7 @@ from dumpex.hunt.stomping import _render_stomping_console as stomping_render
 from dumpex.hunt.yara_hunt import aggregate as yara_aggregate
 from dumpex.hunt.yara_hunt import domain as yara_domain
 from dumpex.hunt.yara_hunt import report_console as yara_render
+from dumpex.hunt.yara_hunt import scanner as yara_scanner
 
 
 REPORT_TYPES = [
@@ -126,80 +104,80 @@ def test_report_does_not_store_parallel_findings_representations(report_type):
     )
 
 
-MUTABLE_COLLECTION_REPORT_TYPES = [
-    pytest.param(injection_domain.InjectionReport, id="injection"),
-    pytest.param(hollowing_domain.HollowingReport, id="hollowing"),
-    pytest.param(stomping_domain.StompingReport, id="stomping"),
-    pytest.param(pipe_domain.PipeReport, id="pipe"),
-    pytest.param(cs_beacon_domain.CSBeaconReport, id="cs-beacon"),
-    pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
-    # YaraReport needs no entry in _REQUIRED_FIELD_OVERRIDES below: both of
-    # its fields (coverage/evidence) default to their own empty snapshot,
-    # so YaraReport() alone already builds the not-evaluated shape this
-    # test's generic {}/[]/None-guessing loop would otherwise need help
-    # constructing.
-    pytest.param(yara_domain.YaraReport, id="yara"),
+# One explicit "nothing observed" builder per hunter, each calling that
+# hunter's own real `aggregate.build_report()` -- the same production entry
+# point `_hunt_<name>()` calls -- rather than guessing a Report's required
+# fields generically from `dataclasses.fields()`. This makes each hunter's
+# minimal shape self-documenting instead of relying on a shared guesser
+# patched with per-field overrides.
+
+def _minimal_injection_report():
+    return injection_aggregate.build_report(
+        rwx=(), hidden_pe_scan=injection_models.HiddenPeScan(
+            hits=(), read_failed=0, short_reads=0, scan_truncated=0),
+        validated_pe_hits=(), mz_only_hits=(),
+        start_threads=(), thread_contexts=(),
+        correlation=injection_models.Correlation(),
+        memory_info_stream=False, thread_info_stream=False,
+        module_list_stream=False, thread_list_stream=False,
+        threads_total=0, contexts_parsed=0,
+    )
+
+
+def _minimal_hollowing_report():
+    return hollowing_aggregate.build_report()
+
+
+def _minimal_stomping_report():
+    return stomping_aggregate.build_report()
+
+
+def _minimal_pipe_report():
+    return pipe_aggregate.build_report()
+
+
+def _minimal_cs_beacon_report():
+    return cs_beacon_aggregate.build_report(
+        scan=cs_beacon_domain.ScanDiagnostics(segment_count=0))
+
+
+def _minimal_encoding_report():
+    return encoding_aggregate.build_report(
+        (), (), (), (), (),
+        memory_info_stream=False, region_count=0, any_region_scanned=False,
+    )
+
+
+def _minimal_yara_report():
+    return yara_aggregate.build_report(
+        scan_result=yara_scanner.ScanResult(
+            matches=(), diagnostics=yara_domain.ScanDiagnostics()),
+        rules=yara_domain.RulesDiagnostics(),
+    )
+
+
+MINIMAL_REPORT_BUILDERS = [
+    pytest.param(_minimal_injection_report, id="injection"),
+    pytest.param(_minimal_hollowing_report, id="hollowing"),
+    pytest.param(_minimal_stomping_report, id="stomping"),
+    pytest.param(_minimal_pipe_report, id="pipe"),
+    pytest.param(_minimal_cs_beacon_report, id="cs-beacon"),
+    pytest.param(_minimal_encoding_report, id="obfuscation"),
+    pytest.param(_minimal_yara_report, id="yara"),
 ]
 
-# Per-(report_type, required-field-name) construction overrides, consulted
-# before the generic {}/[]/None guesses below -- needed for a Report type
-# whose required fields are ordinary validated scalars/value-objects (not
-# the old dict-`Report`'s own `findings`/`findings_list` collections),
-# which legitimately reject `None` at construction. `InjectionReport`/
-# `EncodingReport`/`StompingReport`/`PipeReport`/`HollowingReport` all need
-# one: their required fields are `score` (an int) and `coverage` (a
-# `CoverageSnapshot`), both of which validate their input.
-_REQUIRED_FIELD_OVERRIDES = {
-    (injection_domain.InjectionReport, "score"): 0,
-    (injection_domain.InjectionReport, "coverage"): injection_domain.CoverageSnapshot(
-        memory_info_stream=False, thread_info_stream=False,
-        module_list_stream=False, thread_list_stream=False),
-    (encoding_domain.EncodingReport, "score"): 0,
-    (encoding_domain.EncodingReport, "coverage"): encoding_domain.CoverageSnapshot(
-        memory_info_stream=False),
-    (stomping_domain.StompingReport, "score"): 0,
-    (stomping_domain.StompingReport, "coverage"): stomping_domain.CoverageSnapshot(
-        memory_info_stream=False, module_list_stream=False),
-    (pipe_domain.PipeReport, "score"): 0,
-    (pipe_domain.PipeReport, "coverage"): pipe_domain.CoverageSnapshot(
-        memory_info_stream=False, handle_data_stream=False),
-    (hollowing_domain.HollowingReport, "score"): 0,
-    # peb_present=False is also what pins `context` to its own None default:
-    # HollowingReport refuses a Report that claims the run evaluated while
-    # carrying no resolved image base (see its own __post_init__).
-    (hollowing_domain.HollowingReport, "coverage"): hollowing_domain.CoverageSnapshot(
-        peb_present=False),
-    (cs_beacon_domain.CSBeaconReport, "score"): 0,
-    (cs_beacon_domain.CSBeaconReport, "coverage"): cs_beacon_domain.CoverageSnapshot(
-        scan=cs_beacon_domain.ScanDiagnostics(segment_count=0)),
-}
 
-
-@pytest.mark.parametrize("report_type", MUTABLE_COLLECTION_REPORT_TYPES)
-def test_report_does_not_retain_mutable_collection_state(report_type):
+@pytest.mark.parametrize("build_minimal_report", MINIMAL_REPORT_BUILDERS)
+def test_report_does_not_retain_mutable_collection_state(build_minimal_report):
     """Frozen must be deep: lists/dicts/sets cannot remain mutable inside."""
-    required_values = {}
-    for field in dataclasses.fields(report_type):
-        if (
-            field.default is dataclasses.MISSING
-            and field.default_factory is dataclasses.MISSING
-        ):
-            override_key = (report_type, field.name)
-            required_values[field.name] = (
-                _REQUIRED_FIELD_OVERRIDES[override_key] if override_key in _REQUIRED_FIELD_OVERRIDES
-                else {} if field.name == "findings"
-                else [] if field.name == "findings_list"
-                else None
-            )
-
-    report = report_type(**required_values)
+    report = build_minimal_report()
     mutable_fields = {
         field.name
         for field in dataclasses.fields(report)
         if isinstance(getattr(report, field.name), (dict, list, set))
     }
     assert not mutable_fields, (
-        f"{report_type.__module__}.{report_type.__name__} retains mutable "
+        f"{type(report).__module__}.{type(report).__name__} retains mutable "
         f"collection field(s): {sorted(mutable_fields)}"
     )
 
@@ -215,39 +193,23 @@ def test_finding_detail_level_replaces_string_projection_modes():
     assert not parameter_names & {"facts_mode", "verbose"}
 
 
-AGGREGATORS_WITH_PENDING_BOUNDARY_FIXES = [
+# Every hunter's `aggregate.build_report()` signature, checked below against
+# the blacklist of non-evidence concerns (`mf`/`verbose`/`detail_level`/
+# `level`) that dump access and verbosity/projection state would otherwise
+# leak across. See the narrower per-hunter whitelist tests further down for
+# hunters where the full allowed-parameter set is pinned explicitly.
+AGGREGATOR_BUILD_REPORT_SIGNATURES = [
     pytest.param(injection_aggregate.build_report, id="injection"),
-    # Converted (marker removed) with the Pipe migration: its new
-    # signature takes typed evidence tuples plus int/bool/str scalars only
-    # -- no `mf`, no `verbose`, and no live CoverageTracker/ScanBudget
-    # (only the scalars those resolved to).
     pytest.param(pipe_aggregate.build_report, id="pipe"),
     pytest.param(encoding_aggregate.build_report, id="obfuscation"),
-    # Added (never _PENDING) with the Stomping migration: its new
-    # signature takes typed evidence tuples plus int/bool scalars only --
-    # no `mf`, no `verbose`, and no `ref_dir` PATH (only a
-    # `ref_dir_supplied` bool), so it satisfies this contract on arrival.
     pytest.param(stomping_aggregate.build_report, id="stomping"),
-    # Added (never _PENDING) with the Hollowing migration: its new
-    # signature takes typed evidence tuples plus an already-resolved
-    # `ImageBaseContext` and bool scalars only -- no `mf`, no `verbose`, no
-    # raw regions/modules lists, and no `peb` object.
     pytest.param(hollowing_aggregate.build_report, id="hollowing"),
-    # Added (never _PENDING) with the CS Beacon migration: its new
-    # signature takes typed evidence tuples (hits/corroborations) plus an
-    # already-resolved `ScanDiagnostics` and bool/int scalars only -- no
-    # `mf`, no `verbose`, and no live `CoverageTracker`/`ScanOutcome`.
     pytest.param(cs_beacon_aggregate.build_report, id="cs-beacon"),
-    # Converted with the YARA migration (issue #11): its new signature
-    # takes a `scanner.ScanResult` (typed evidence tuple + a frozen
-    # `ScanDiagnostics`) and a `RulesDiagnostics` only -- no `mf`, no
-    # `verbose`, no raw `modules`/`regions` lists, and no mutable
-    # `ScanOutcome`.
     pytest.param(yara_aggregate.build_report, id="yara"),
 ]
 
 
-@pytest.mark.parametrize("build_report", AGGREGATORS_WITH_PENDING_BOUNDARY_FIXES)
+@pytest.mark.parametrize("build_report", AGGREGATOR_BUILD_REPORT_SIGNATURES)
 def test_aggregate_accepts_evidence_not_dump_or_projection_state(build_report):
     """Dump access belongs to scan/enrichment; verbosity belongs to render."""
     parameter_names = set(inspect.signature(build_report).parameters)
@@ -317,6 +279,101 @@ def test_yara_aggregate_receives_only_typed_evidence_and_scalars():
     unexpected = parameter_names - allowed
     assert not unexpected, (
         f"dumpex.hunt.yara_hunt.aggregate.build_report accepts unexpected "
+        f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
+        f"typed evidence or a scalar count, never a raw dump-derived list"
+    )
+
+
+def test_pipe_aggregate_receives_only_typed_evidence_and_scalars():
+    """Narrower than the name-blacklist check above -- see
+    `test_injection_aggregate_receives_only_typed_evidence_and_scalars`'s
+    own docstring for why a whitelist is needed at all. Every parameter
+    `build_report()` accepts must be one of the typed evidence
+    tuples/objects it's built from, or a plain bool/int/str scalar."""
+    allowed = {
+        "handle_pipes", "string_leads", "corroborated_handles",
+        "start_address_leads", "c2_context", "framework_string_hits",
+        "unbacked_threads", "memory_info_stream", "handle_data_stream",
+        "skipped_oversize", "read_failed", "read_failed_targets",
+        "short_reads", "short_read_targets", "c2_budget_exhausted",
+        "c2_budget_reason", "pipe_name_budget_exhausted",
+        "pipe_name_budget_reason", "image_pipe_refs", "image_pipe_modules",
+        "rule_version",
+    }
+    parameter_names = set(inspect.signature(pipe_aggregate.build_report).parameters)
+    unexpected = parameter_names - allowed
+    assert not unexpected, (
+        f"dumpex.hunt.pipe.aggregate.build_report accepts unexpected "
+        f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
+        f"typed evidence or a scalar count, never a raw dump-derived list"
+    )
+
+
+def test_encoding_aggregate_receives_only_typed_evidence_and_scalars():
+    """Narrower than the name-blacklist check above -- see
+    `test_injection_aggregate_receives_only_typed_evidence_and_scalars`'s
+    own docstring for why a whitelist is needed at all. Every parameter
+    `build_report()` accepts must be one of the typed evidence
+    tuples it's built from, or a plain bool/int scalar."""
+    allowed = {
+        "sleep_mask_hits", "entropy_hits", "base64_hits", "xor_hits",
+        "compressed_hits", "memory_info_stream", "region_count",
+        "any_region_scanned", "sleep_mask_oversized", "entropy_oversized",
+        "decode_oversized", "sleep_mask_read_failed", "entropy_read_failed",
+        "decode_read_failed", "sleep_mask_short_read", "entropy_short_read",
+        "decode_short_read", "budget_exhausted", "exhausted_reason",
+    }
+    parameter_names = set(inspect.signature(encoding_aggregate.build_report).parameters)
+    unexpected = parameter_names - allowed
+    assert not unexpected, (
+        f"dumpex.hunt.encoding.aggregate.build_report accepts unexpected "
+        f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
+        f"typed evidence or a scalar count, never a raw dump-derived list"
+    )
+
+
+def test_stomping_aggregate_receives_only_typed_evidence_and_scalars():
+    """Narrower than the name-blacklist check above -- see
+    `test_injection_aggregate_receives_only_typed_evidence_and_scalars`'s
+    own docstring for why a whitelist is needed at all. Every parameter
+    `build_report()` accepts must be one of the typed evidence
+    tuples it's built from, or a plain bool/int scalar."""
+    allowed = {
+        "protection_leads", "rip_correlated_leads", "verified_changes",
+        "identity_mismatches", "parse_failures", "ioc_hits",
+        "memory_info_stream", "module_list_stream", "ref_dir_supplied",
+        "modules_total", "headers_parsed", "sections_total",
+        "sections_compared", "reference_missing", "reference_mismatch",
+        "reference_read_failed", "memory_read_failed", "short_reads",
+        "relocation_failed", "header_read_failed", "header_parse_failed",
+        "ioc_oversized", "ioc_read_failed", "ioc_read_failed_targets",
+        "ioc_short_reads", "ioc_short_read_targets",
+        "ioc_whitelisted_modules",
+    }
+    parameter_names = set(inspect.signature(stomping_aggregate.build_report).parameters)
+    unexpected = parameter_names - allowed
+    assert not unexpected, (
+        f"dumpex.hunt.stomping.aggregate.build_report accepts unexpected "
+        f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
+        f"typed evidence or a scalar count, never a raw dump-derived list"
+    )
+
+
+def test_hollowing_aggregate_receives_only_typed_evidence_and_scalars():
+    """Narrower than the name-blacklist check above -- see
+    `test_injection_aggregate_receives_only_typed_evidence_and_scalars`'s
+    own docstring for why a whitelist is needed at all. Every parameter
+    `build_report()` accepts must be one of the typed evidence tuples/
+    context object it's built from, or a plain bool scalar."""
+    allowed = {
+        "mem_private", "wiped_headers", "rwx", "name_mismatches",
+        "correlations", "context", "peb_present", "image_base_region_found",
+        "mz_read_failed", "modules_available",
+    }
+    parameter_names = set(inspect.signature(hollowing_aggregate.build_report).parameters)
+    unexpected = parameter_names - allowed
+    assert not unexpected, (
+        f"dumpex.hunt.hollowing.aggregate.build_report accepts unexpected "
         f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
         f"typed evidence or a scalar count, never a raw dump-derived list"
     )

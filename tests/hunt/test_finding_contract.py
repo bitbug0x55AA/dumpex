@@ -26,12 +26,12 @@ from dumpex.hunt._finding import (
 )
 
 jsonschema = pytest.importorskip("jsonschema")
-from dumpex.schemas import schema_path
+from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
 
 @pytest.fixture(scope="module")
 def finding_validator():
-    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/finding", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)

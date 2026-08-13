@@ -1,21 +1,5 @@
-"""Shared print helpers for hunt modules."""
-from dumpex.ui.colors import BOLD, RED, GREEN, YELLOW, DIM
-from dumpex.hunt._console import classify_status_icon
-
-def _print_hunt_header(title: str):
-    print(f"\n{BOLD('══════════════════════════════════════════')}")
-    print(f"{BOLD(f'  HUNT: {title}')}")
-    print(f"{BOLD('══════════════════════════════════════════')}\n")
-
-
-def _print_check(label: str, status: str, detail: str = ""):
-    icon = classify_status_icon(status)
-    print(f"  {icon} {BOLD(label)}")
-    print(f"      Status : {status}")
-    if detail:
-        print(f"      Detail : {detail}")
-    print()
-
+"""Shared status vocabulary for hunt modules."""
+from dumpex.ui.colors import RED, GREEN, YELLOW, DIM
 
 # ── Scan status model ────────────────────────────────────────────────────
 # A hunt module must not collapse "I looked and found nothing" and "I never
@@ -60,6 +44,6 @@ def _status_text(status: str, reason: str = "") -> str:
 # The (evaluated, detected, complete) -> status reduction itself now lives
 # in dumpex.hunt._coverage (derive_status/derive_coverage_status) — every
 # phase-two hunter shares that single implementation rather than each
-# re-deriving the same rule locally. This module stays focused on print
-# helpers and the status/coverage string constants those functions return.
+# re-deriving the same rule locally. This module stays focused on the
+# status/coverage string constants and their console text rendering.
 

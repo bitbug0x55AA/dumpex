@@ -13,13 +13,17 @@ no real YARA engine involved anywhere, so these tests run identically
 whether or not yara-python (an optional "full" dependency) happens to be
 installed.
 """
+import dataclasses
 import sys
+
+import pytest
 
 from tests.fixtures.fakes import Segment, FakeReader, FakeMF
 
-from dumpex.hunt.yara_hunt.scanner import scan_segments
+from dumpex.hunt.yara_hunt.scanner import scan_segments, ScanResult
 from dumpex.hunt.yara_hunt.config import YaraConfig
-from dumpex.hunt.yara_hunt.domain import RulesDiagnostics
+from dumpex.hunt.yara_hunt.domain import RulesDiagnostics, ScanDiagnostics
+from dumpex.hunt.yara_hunt.models import RuleMatchEvidence
 from dumpex.hunt.yara_hunt import aggregate
 from dumpex.hunt.yara_hunt.report_facts import legacy_coverage_dict, project_coverage_reasons, \
     project_coverage_report
@@ -93,6 +97,42 @@ def _build_report(result, rule_files, compile_failed=0):
     rules_diag = RulesDiagnostics(yara_available=True, rules_dir="fake", attempted=True,
                                    compiled_ok=len(rule_files), compile_failed=compile_failed)
     return aggregate.build_report(result, rules_diag)
+
+
+# ── ScanResult must be frozen: aggregate's input boundary admits typed
+# evidence and scalars only, never a mutable scanner DTO ─────────────────
+
+def test_scan_result_is_a_frozen_dataclass():
+    assert dataclasses.is_dataclass(ScanResult)
+    assert ScanResult.__dataclass_params__.frozen is True
+
+
+def test_scan_result_rejects_reassignment_after_construction():
+    result = ScanResult(matches=(), diagnostics=ScanDiagnostics())
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.matches = ("poisoned",)
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        result.diagnostics = ScanDiagnostics(segment_count=99)
+
+
+def test_scan_result_copies_matches_so_caller_list_mutation_cannot_reach_it():
+    # frozen=True alone only blocks reassigning result.matches -- it does
+    # nothing about the caller mutating the ORIGINAL list after
+    # construction. __post_init__ must defensively copy into a fresh tuple.
+    matches = []
+    result = ScanResult(matches=matches, diagnostics=ScanDiagnostics())
+    matches.append(RuleMatchEvidence(rule="Poison", file="poison.yar"))
+    assert result.matches == ()
+
+
+def test_scan_result_rejects_non_rule_match_evidence_items():
+    with pytest.raises(TypeError, match="RuleMatchEvidence"):
+        ScanResult(matches=["not a RuleMatchEvidence"], diagnostics=ScanDiagnostics())
+
+
+def test_scan_result_rejects_wrong_diagnostics_type():
+    with pytest.raises(TypeError, match="ScanDiagnostics"):
+        ScanResult(matches=(), diagnostics="not a ScanDiagnostics")
 
 
 # ── match() timeout: a coverage gap, not a silent "ran, no match" ────────

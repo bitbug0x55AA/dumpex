@@ -30,7 +30,7 @@ from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
 @pytest.fixture(scope="module")
 def hunter_record_validator():
-    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/hunterRecord", "$defs": schema["$defs"]}
     jsonschema.Draft202012Validator.check_schema(wrapper)
@@ -206,7 +206,7 @@ def test_current_schema_id_title_and_version_const_all_agree():
 
 
 def _fields_validator():
-    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     wrapper = {"$schema": schema["$schema"], "$ref": "#/$defs/csBeaconDetails", "$defs": schema["$defs"]}
     return jsonschema.Draft202012Validator(wrapper)

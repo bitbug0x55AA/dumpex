@@ -39,6 +39,7 @@ import pytest
 
 import dumpex.cli as cli
 import dumpex.output.collector as collector_mod
+from dumpex.output.envelope import SCHEMA_VERSION
 from tests.fixtures.fakes import FakeMF, Module, ThreadInfo, Region, FakeStream
 
 
@@ -543,7 +544,7 @@ def test_diff_compat_freeze(monkeypatch, tmp_path, capsys, name, diff_args, mf_b
     assert actual_exit == exit_code, f"{name}: exit code drifted"
     assert actual_body == _wrap(label_a, label_b, console_body), f"{name}: console drifted"
 
-    assert doc["meta"]["schema_version"] == "2.12"
+    assert doc["meta"]["schema_version"] == SCHEMA_VERSION
     assert [e["id"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
     assert [e["role"] for e in doc["meta"]["evidence"]] == ["baseline", "target"]
     assert [e["file_name"] for e in doc["meta"]["evidence"]] == [label_b, label_a]
@@ -558,7 +559,7 @@ def test_diff_compat_freeze(monkeypatch, tmp_path, capsys, name, diff_args, mf_b
 def test_diff_mode_all_combines_three_entities_and_validates_against_schema(
         monkeypatch, tmp_path, capsys):
     jsonschema = pytest.importorskip("jsonschema")
-    from dumpex.schemas import schema_path
+    from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
     mf_baseline = _mf_modules([Module(0x1000, 0x1000, r"C:\a.dll")])
     mf_baseline.thread_info = FakeStream([ThreadInfo(1, 0x1000)], "infos")
@@ -584,7 +585,7 @@ def test_diff_mode_all_combines_three_entities_and_validates_against_schema(
     assert "═══ THREAD DIFF ═══" in console
     assert "═══ MEMORY REGION DIFF ═══" in console
 
-    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         schema = json.load(fh)
     jsonschema.Draft202012Validator.check_schema(schema)
     jsonschema.Draft202012Validator(schema).validate(doc)

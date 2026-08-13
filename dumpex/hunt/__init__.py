@@ -272,16 +272,9 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # (dumpex.ui.structured.StructuredOutput._rules_meta()) — not
     # duplicated here inside the hunt results themselves.
 
-    # ── Sanitize for JSON serialization ───────────────────────────────────
-    # CS beacon's own `configs[*]["fields"]` is already JSON-safe as
-    # returned by `report_legacy.project_legacy_dict()` (str keys, raw/
-    # value already hex-encoded when they're bytes) -- the byte-sanitization
-    # pass that used to run here, AFTER rendering, is redundant now that the
-    # legacy-dict projector produces that shape directly (issue #9). YARA's
-    # own `report_legacy.project_legacy_dict()` (dumpex/hunt/yara_hunt/
-    # report_legacy.py) now hex-encodes `matches[*].strings[*].data` itself
-    # for the same reason (issue #11), making the equivalent bytes->hex pass
-    # that used to run here redundant too.
+    # Both cs-beacon's and YARA's `report_legacy.project_legacy_dict()`
+    # already return JSON-safe dicts (bytes fields hex-encoded in the
+    # projector itself), so `results` needs no post-render sanitization pass.
 
     # Summary card for --hunt all
     if ttp == "all" and "yara" not in results:
@@ -295,10 +288,9 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         # The single cross-hunter renderer (Step 1.5, console presentation
         # patch) -- reads ONLY `records`/`summary`/the document-level
         # coverage status, never `results` (this function's own legacy
-        # per-hunter console dicts, still used above for the function's
-        # return value and cs-beacon/yara byte-sanitization only). See
-        # dumpex.hunt.summary_presentation's own module docstring for the
-        # REVIEW FIRST/NEEDS ATTENTION/OTHER HUNTERS/NEXT INVESTIGATION
+        # per-hunter console dicts, used above only for the function's
+        # return value). See dumpex.hunt.summary_presentation's own module
+        # docstring for the REVIEW FIRST/NEEDS ATTENTION/OTHER HUNTERS/NEXT INVESTIGATION
         # section breakdown this replaces the old flat per-hunter list
         # with, and tests/integration/test_hunt_all_summary_source.py for
         # the proof that a poisoned `results` value cannot leak into it.

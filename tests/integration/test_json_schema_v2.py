@@ -83,7 +83,8 @@ from tests.fixtures.fakes import (
 )
 
 from dumpex.output import V2Output
-from dumpex.schemas import schema_path
+from dumpex.output.envelope import SCHEMA_VERSION
+from dumpex.schemas import CURRENT_SCHEMA, schema_path
 from dumpex.commands.list_cmd import collect_regions
 from dumpex.commands.modules import collect_modules
 from dumpex.commands.threads import collect_threads
@@ -98,7 +99,7 @@ from dumpex.output.records import Artifact, Diagnostic, SEVERITY_WARNING, SEVERI
 
 @pytest.fixture(scope="module")
 def schema():
-    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+    with schema_path(CURRENT_SCHEMA) as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -448,7 +449,7 @@ def test_peb_missing_is_not_evaluated_and_validates(validator):
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
-            "schema_version": "2.12",
+            "schema_version": SCHEMA_VERSION,
             "tool": {"name": "dumpex", "version": dumpex.__version__},
             "execution": {"started_at": "x", "finished_at": "x", "duration_seconds": 0.1,
                           "command": kind, "options": {}},
