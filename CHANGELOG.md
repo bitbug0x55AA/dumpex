@@ -5,6 +5,64 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Fixed: Process Injection finding facts now zero-pad virtual addresses
+
+`--hunt injection`'s normal (non-`--verbose`) finding facts rendered
+virtual addresses with variable-width hex (`VA=0x270000`), while the same
+addresses were already fixed-width, 16-hex-digit values in this same
+hunter's own verbose console renderer and structured `HunterRecord`/
+`--json` `details` (`HuntPeHeaderHit.va`/`.image_base`,
+`HuntRegionRef.base_address`, etc. are all validated as hex-address
+strings there). A low address like `0x270000` read as though it might be
+truncated next to a `0x00007ff700000000`-shaped address from the same
+run, and made cross-referencing a console finding against its own
+`--json` record or verbose output unnecessarily error-prone
+([issue #31](https://github.com/bitbug0x55AA/dumpex/issues/31)). Some
+other hunters' facts (encoding, stomping) still render addresses with
+this same variable-width `:x` form -- unaffected by this fix, which is
+scoped to `injection.*` findings only.
+
+```
+# before
+VA=0x270000 AllocationBase=0x270000 size=0xbe000 ... PE_VA=0x278dd0 region_offset=0x8dd0
+... declared_image_base=0x140000000
+
+# after
+VA=0x0000000000270000 AllocationBase=0x0000000000270000 size=0xbe000 ... PE_VA=0x0000000000278dd0 region_offset=0x8dd0
+... declared_image_base=0x0000000140000000
+```
+
+Every address-like field in `injection.*` finding facts now goes through
+the same `hex_address()` helper the rest of dumpex already used: `VA`,
+`AllocationBase`, `PE_VA`, `declared_image_base` (the PE header's own
+declared base -- a real address, per `HuntPeHeaderHit.image_base`'s own
+docstring, not itself an RVA), thread `StartAddress`, current `RIP`/
+`EIP`, and correlated allocation/region addresses. Non-address numeric
+fields -- `size`, `TID`, `entrypoint_rva` (an RVA is relative to a
+not-yet-established image base, not itself a memory address),
+`region_offset` -- are unaffected and keep their existing compact form.
+
+**This is a one-time, expected `Finding.id` change for every
+`injection.*` finding whose facts contain an address shorter than 16 hex
+digits** (roughly, any process/allocation address below `0x1000000000000000`
+under a full 64-bit address space, which in practice is most of them).
+`Finding.id` is a hash of the Finding's own content, including `facts`
+(see `Finding.id`'s own docstring in `dumpex/hunt/_finding.py`), so this
+fix changes those ids even against an unchanged dump. A downstream
+consumer that treats Finding IDs as a re-scan dedup/idempotency key will
+see affected `--hunt injection` findings as "new" once on upgrade, for a
+previously-seen dump; this is expected, not a regression, and does not
+indicate a change in what was detected -- re-running affected pipelines'
+dedup baselines is the only action needed. No other hunter's Finding IDs
+are affected, and `Finding.id`'s hash basis, computation, and format
+(`finding-<32 hex chars>`) are unchanged.
+
+**Schema is unaffected** -- this is a text-formatting fix to `facts`
+(a free-text string array, not a distinct schema field), not a field
+addition, removal, or shape change. The structured, already-fixed-width
+address fields (`details.*.region.base_address`, `details.*.va`, etc.)
+were correct before this fix and are unchanged by it.
+
 ## Cross-hunter coverage gaps keep target identity (schema v2.12)
 
 Every hunter's region/segment scan could report *how many* things failed

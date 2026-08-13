@@ -201,9 +201,9 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "VA=0x7ff700000000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
+        "VA=0x00007ff700000000 AllocationBase=0x00007ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
       ],
-      "id": "finding-437fdd86044e5e1370ff119b69e0bda9",
+      "id": "finding-2f1a5566ce4e5343e45a82598b84c438",
       "inference": "1 memory region(s) carry PAGE_EXECUTE_READWRITE/WRITECOPY protection, spanning 1 distinct allocation(s).",
       "iocs": [],
       "limitations": [
@@ -221,9 +221,9 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  |  PE header VALID: machine=AMD64 pe32plus=True sections=1 entrypoint_rva=0x1000 declared_image_base=0x140000000"
+        "VA=0x00007ff700002000 AllocationBase=0x00007ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  |  PE header VALID: machine=AMD64 pe32plus=True sections=1 entrypoint_rva=0x1000 declared_image_base=0x0000000140000000"
       ],
-      "id": "finding-aae112b40521d5d1a2b5b85a2c5b2b20",
+      "id": "finding-0268be198e458dfbe0ed3135c961438c",
       "inference": "1 address(es) contain a structurally-valid PE header (DOS+COFF+optional header+full section table all parsed successfully) at an address absent from the module list, in MEM_PRIVATE memory, an executable unbacked mapping, or otherwise correlated with an RWX allocation or live thread execution.",
       "iocs": [],
       "limitations": [
@@ -241,9 +241,9 @@
       "confidence": "low",
       "evidence_refs": [],
       "facts": [
-        "TID=0x1 StartAddress=0x7ff700002000"
+        "TID=0x1 StartAddress=0x00007ff700002000"
       ],
-      "id": "finding-5a9d7929555fed553dcfbd655e770436",
+      "id": "finding-865748a357bed2cbe159f41e075ed6a7",
       "inference": "1 thread(s) began execution at an address not covered by any known module.",
       "iocs": [],
       "limitations": [],
@@ -259,9 +259,9 @@
       "confidence": "high",
       "evidence_refs": [],
       "facts": [
-        "TID=0x1 RIP=0x7ff700002000 -> VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  [FULL: RWX+validated-PE]"
+        "TID=0x1 RIP=0x00007ff700002000 -> VA=0x00007ff700002000 AllocationBase=0x00007ff700000000 size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE  [FULL: RWX+validated-PE]"
       ],
-      "id": "finding-7d5a0612cbfc8286e35b5ad89bc4156f",
+      "id": "finding-cbda63978b1edec28c089433bad8fd1b",
       "inference": "1 thread(s) currently execute inside an allocation that is simultaneously RWX and hosts a validated hidden PE \u2014 page type, structural PE validation, and live RIP/EIP all converge on the same AllocationBase.",
       "iocs": [],
       "limitations": [

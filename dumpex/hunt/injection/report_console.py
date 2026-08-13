@@ -69,7 +69,7 @@ def _hidden_pe_verbose_fact(ev) -> str:
             f"File_offset={fo_str} {inside_region}Page_type={r.type} {r.protect} "
             f"PE_machine={pe.machine_name} PE_sections={pe.number_of_sections} "
             f"Entry_point_RVA=0x{pe.address_of_entry_point:x} "
-            f"Declared_ImageBase=0x{pe.image_base:x}")
+            f"Declared_ImageBase=0x{pe.image_base:016x}")
 
 
 def _unbacked_thread_verbose_fact(ev) -> str:
