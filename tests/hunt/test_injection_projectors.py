@@ -26,7 +26,7 @@ from tests.hunt.test_injection_domain import (
 
 from dumpex.hunt._finding import (
     CONFIDENCE_HIGH, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
-    TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION,
+    TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION, Finding,
 )
 from dumpex.hunt._location import Location
 from dumpex.hunt.injection.domain import CoverageSnapshot, InjectionEvidence, InjectionReport
@@ -529,10 +529,10 @@ def test_golden_scenario_finding_ids_match_production():
     report = _golden_scenario_report()
     d = project_legacy_dict(report)
     ids = {f["check"]: f["id"] for f in d["findings"]}
-    assert ids["injection.rwx_regions"] == "finding-437fdd86044e5e1370ff119b69e0bda9"
-    assert ids["injection.hidden_pe_validated"] == "finding-aae112b40521d5d1a2b5b85a2c5b2b20"
-    assert ids["injection.unbacked_thread_startaddress"] == "finding-5a9d7929555fed553dcfbd655e770436"
-    assert ids["injection.allocation_correlation"] == "finding-7d5a0612cbfc8286e35b5ad89bc4156f"
+    assert ids["injection.rwx_regions"] == "finding-2f1a5566ce4e5343e45a82598b84c438"
+    assert ids["injection.hidden_pe_validated"] == "finding-0268be198e458dfbe0ed3135c961438c"
+    assert ids["injection.unbacked_thread_startaddress"] == "finding-865748a357bed2cbe159f41e075ed6a7"
+    assert ids["injection.allocation_correlation"] == "finding-cbda63978b1edec28c089433bad8fd1b"
 
 
 def test_golden_scenario_hunter_record_matches_production():
@@ -726,11 +726,96 @@ def test_facts_name_the_pe_address_only_when_it_is_not_the_region_base():
     # A hit at the region base reads exactly as it always has (the region
     # facts already say that address once); a hit found partway in names
     # its own VA and offset, so the fact line cannot be misread as
-    # pointing at the region's first byte.
+    # pointing at the region's first byte. PE_VA renders through the same
+    # fixed-width convention as every other address-like fact (issue #31)
+    # -- region_offset is not itself a virtual address and keeps its
+    # existing compact form.
     nonbase = finding_from_check_result(_nonbase_pe_report().results[0], _nonbase_pe_report())
-    assert "PE_VA=0x7ffe30052000 region_offset=0x2000" in nonbase.facts[0]
+    assert "PE_VA=0x00007ffe30052000 region_offset=0x2000" in nonbase.facts[0]
 
     base_report = _full_report()
     pe_check = next(r for r in base_report.results if r.check == "injection.hidden_pe_validated")
     at_base = finding_from_check_result(pe_check, base_report)
     assert "PE_VA=" not in at_base.facts[0]
+
+
+def test_declared_image_base_is_padded_in_facts_verbose_and_structured_record():
+    """`declared_image_base`/`Declared_ImageBase` is the PE header's OWN
+    declared base -- a real address (see `HuntPeHeaderHit.image_base`'s
+    own docstring, validated as a hex address by
+    `dumpex.output.records._require_optional_hex_address`), not an RVA --
+    so it renders through the same fixed-width convention as every other
+    address-like field, consistently across normal facts, verbose facts,
+    and the structured `HunterRecord` (issue #31 follow-up)."""
+    from dumpex.hunt.injection.report_console import _console_finding
+
+    pe_hit = _pe_hit(_ALLOC + 0x1000, alloc=_ALLOC)
+    result = _check(check="injection.hidden_pe_validated", tag=TAG_LEAD,
+                     confidence=CONFIDENCE_MEDIUM, evidence=(pe_hit,), evidence_limit=20)
+    evidence = InjectionEvidence(suspicious_pe_hits=[pe_hit], validated_pe_hits=[pe_hit],
+                                  correlation=_correlation_for(validated_pe_hits=[pe_hit]))
+    report = InjectionReport(score=1, coverage=_coverage(), results=(result,), evidence=evidence)
+
+    fact = finding_from_check_result(result, report).facts[0]
+    assert "declared_image_base=0x0000000140000000" in fact
+
+    console_finding = _console_finding(result, report)
+    assert "Declared_ImageBase=0x0000000140000000" in console_finding.verbose_facts[0]
+
+    record = project_hunter_record(report)
+    assert record.details.hidden_pe_validated[0].image_base == "0x0000000140000000"
+
+
+def _low_address_mz_report():
+    """dumpex issue #31's own repro: a memory region at 0x270000 with an
+    unvalidated-MZ candidate 0x8dd0 into it -- the exact case the issue
+    filed against `injection.mz_prefix_unvalidated`."""
+    region_base = 0x270000
+    pe_va = region_base + 0x8dd0
+    hit = HiddenPeEvidence(
+        region=_region(region_base, "PAGE_READONLY", alloc=region_base),
+        pe=PeHeaderInfo(valid=False, machine_name=None, is_pe32_plus=None,
+                        number_of_sections=None, address_of_entry_point=None,
+                        image_base=None, reason="no PE\\0\\0 signature at e_lfanew"),
+        in_module_list=False,
+        location=Location(va=pe_va, region_base=region_base, file_offset=None))
+    evidence = InjectionEvidence(mz_only_hits=[hit], correlation=Correlation())
+    result = _check(check="injection.mz_prefix_unvalidated", tag=TAG_OBSERVATION,
+                     confidence=CONFIDENCE_LOW, evidence=(hit,), evidence_limit=10)
+    report = InjectionReport(score=0, coverage=_coverage(), results=(result,), evidence=evidence)
+    return result, report
+
+
+def test_facts_pad_a_low_address_pe_candidate_reproducing_issue_31():
+    """Under the old variable-width `:x` formatting, PE_VA for this
+    scenario read as the truncated-looking `0x278dd0`; it must now match
+    the same fixed-width (16 hex digit) convention the verbose console/
+    HunterRecord already use for every other address."""
+    result, report = _low_address_mz_report()
+
+    fact = finding_from_check_result(result, report).facts[0]
+    assert "VA=0x0000000000270000 AllocationBase=0x0000000000270000" in fact
+    assert "PE_VA=0x0000000000278dd0 region_offset=0x8dd0" in fact
+
+
+def test_finding_id_changes_deterministically_for_a_low_address_pe_candidate():
+    """`facts` feeds `Finding.id`'s hash basis (dumpex.hunt._finding.
+    Finding), so the fixed-width facts contract deliberately, and
+    deterministically, changes the id this low-address finding produces
+    versus the old variable-width text for the identical evidence --
+    pinned here so a regression back to variable-width silently
+    reproducing the OLD id would be caught."""
+    result, report = _low_address_mz_report()
+    finding = finding_from_check_result(result, report)
+    assert finding.id == "finding-98588ce6ea6b0547b4ca229842f48858"
+
+    old_style_text = ("VA=0x270000 AllocationBase=0x270000 size=0x1000 type=MEM_PRIVATE "
+                       "protect=PAGE_READONLY PE_VA=0x278dd0 region_offset=0x8dd0  |  "
+                       "PE header INVALID (no PE\\0\\0 signature at e_lfanew)")
+    old_style = Finding(check=result.check, facts=[old_style_text], inference=result.inference,
+                         confidence=result.confidence, rationale=result.rationale,
+                         limitations=list(result.limitations), tag=result.tag,
+                         technique_ids=list(result.technique_ids),
+                         evidence_refs=list(result.evidence_refs), iocs=list(result.iocs),
+                         rule_id=result.rule_id, rule_version=result.rule_version)
+    assert old_style.id != finding.id

@@ -36,12 +36,25 @@ from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, LimitationCode, SourceObservation, SourceRequirement,
     SourceState, observe_source, build_coverage_report,
 )
+from dumpex.output.records import hex_address
 
 
 # ── Fact-string builders -- byte-identical to aggregate.py's own ─────────
+# Address-like fields (VA, AllocationBase, PE_VA, declared_image_base,
+# thread start addresses, current RIP/EIP, correlated allocation/region
+# addresses) go through the shared `hex_address()` helper -- dumpex's
+# fixed-width (16 hex digit, zero-padded) convention, matching the
+# verbose renderer (report_console.py) and structured records
+# (report_record.py's `HuntPeHeaderHit.image_base`, itself validated as a
+# hex address by `dumpex.output.records._require_optional_hex_address`)
+# instead of the variable-width `:x` this module used to render them with
+# (see issue #31). `entrypoint_rva` is deliberately excluded -- an RVA is
+# relative to a not-yet-established image base, not itself a memory
+# address (see `HuntPeHeaderHit`'s own docstring) -- and, along with
+# `size`/`TID`/`region_offset`, keeps its existing compact `:x` form.
 
 def _region_facts(r: RegionRef) -> str:
-    return (f"VA=0x{r.base_address:x} AllocationBase=0x{r.allocation_base:x} "
+    return (f"VA={hex_address(r.base_address)} AllocationBase={hex_address(r.allocation_base)} "
             f"size=0x{r.size:x} type={r.type} protect={r.protect}")
 
 
@@ -54,7 +67,7 @@ def _pe_candidate_facts(location) -> str:
     hides behind its region's address."""
     if location.region_offset == 0:
         return ""
-    return f" PE_VA=0x{location.va:x} region_offset=0x{location.region_offset:x}"
+    return f" PE_VA={hex_address(location.va)} region_offset=0x{location.region_offset:x}"
 
 
 def _pe_facts(pe: PeHeaderInfo) -> str:
@@ -62,7 +75,7 @@ def _pe_facts(pe: PeHeaderInfo) -> str:
         return (f"PE header VALID: machine={pe.machine_name} "
                 f"pe32plus={pe.is_pe32_plus} sections={pe.number_of_sections} "
                 f"entrypoint_rva=0x{pe.address_of_entry_point:x} "
-                f"declared_image_base=0x{pe.image_base:x}")
+                f"declared_image_base={hex_address(pe.image_base)}")
     return f"PE header INVALID ({pe.reason})"
 
 
@@ -83,18 +96,18 @@ def _pe_item_fact(hit, report: InjectionReport) -> str:
 
 
 def _thread_item_fact(ev, report: InjectionReport) -> str:
-    return f"TID=0x{ev.thread_id:x} StartAddress=0x{(ev.start_address or 0):x}"
+    return f"TID=0x{ev.thread_id:x} StartAddress={hex_address(ev.start_address or 0)}"
 
 
 def _rip_item_fact(hit, report: InjectionReport) -> str:
     full = hit.region.allocation_base in report.evidence.correlation.rwx_and_pe_alloc_bases
-    return (f"TID=0x{hit.thread_id:x} {hit.ip_reg}=0x{hit.ip:x} "
+    return (f"TID=0x{hit.thread_id:x} {hit.ip_reg}={hex_address(hit.ip)} "
             f"-> {_region_facts(hit.region)}  {'[FULL: RWX+validated-PE]' if full else ''}")
 
 
 def _correlated_alloc_item_fact(item, report: InjectionReport) -> str:
-    return (f"AllocationBase=0x{item.allocation_base:x}  regions="
-            f"{', '.join(f'0x{r.base_address:x}({r.type}/{r.protect})' for r in item.regions)}")
+    return (f"AllocationBase={hex_address(item.allocation_base)}  regions="
+            f"{', '.join(f'{hex_address(r.base_address)}({r.type}/{r.protect})' for r in item.regions)}")
 
 
 _FACT_ITEM_RENDERERS = {

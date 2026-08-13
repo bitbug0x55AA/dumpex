@@ -19,8 +19,8 @@
                   the moment of the dump, actively running code from an allocation with no
                   legitimate module backing and a concealed PE image.
     Facts:
-      - TID=0x1 RIP=0x7ff700002000 -> VA=0x7ff700002000 AllocationBase=0x7ff700000000 size=0x1000
-        type=MEM_PRIVATE protect=PAGE_READWRITE [FULL: RWX+validated-PE]
+      - TID=0x1 RIP=0x00007ff700002000 -> VA=0x00007ff700002000 AllocationBase=0x00007ff700000000
+        size=0x1000 type=MEM_PRIVATE protect=PAGE_READWRITE [FULL: RWX+validated-PE]
     Limitations:
       - RIP is a single-point-in-time snapshot; a thread that executed there moments before or after
         the dump was captured would not appear here.
@@ -51,7 +51,7 @@
     Facts:
       - VA (process)=0x00007ff700002000 AllocationBase=0x00007ff700000000 File_offset=(not captured)
         Page_type=MEM_PRIVATE PAGE_READWRITE PE_machine=AMD64 PE_sections=1 Entry_point_RVA=0x1000
-        Declared_ImageBase=0x140000000
+        Declared_ImageBase=0x0000000140000000
     Limitations:
       - Header validation read is capped at 4096 bytes; a section table extending past that reports
         as invalid rather than being partially trusted.
