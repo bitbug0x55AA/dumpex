@@ -250,8 +250,15 @@ def test_deadline_exhausted_marks_budget_exhausted_with_every_unstarted_segment(
     compiled = FakeCompiled(results=[])
     config = YaraConfig(scan_deadline_seconds=-1)
 
+    # A fixed (not the real wall clock) monotonic: `scan_start` and the
+    # top-of-loop deadline check both see 0, so the REAL elapsed time
+    # (issue #28 review follow-up: budget_consumed is now measured, not
+    # assumed equal to the limit) comes out deterministically 0 too,
+    # rather than depending on however many real microseconds elapsed
+    # between two consecutive time.monotonic() calls on this machine.
     outcome = scan_segments(mf, [seg1, seg2], [("x.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config)
+                             modules_available=False, mem_info_available=False, config=config,
+                             monotonic=_clamped_clock([0, 0]))
 
     assert outcome.budget_exhausted is True
     assert outcome.scanned == 0
@@ -304,8 +311,13 @@ def _clamped_clock(vals):
 def test_deadline_after_last_pairing_completes_reports_no_false_target():
     # The reviewer's exact repro: 1 segment, 1 rule file, both fully
     # examined -- the deadline is discovered only once there is genuinely
-    # nothing left. budget_exhausted still becomes True (a real wall-clock
-    # overrun worth recording), but no segment is falsely named.
+    # nothing left. budget_exhausted still becomes True at the ScanOutcome
+    # level (a real wall-clock overrun worth recording), but no segment is
+    # falsely named, AND (issue #28 review follow-up) this must not be
+    # constructed as a CoverageLimitation at all -- a targetless
+    # YARA_SCAN_BUDGET_EXHAUSTED used to still flip the whole result to
+    # INCONCLUSIVE/partial even though nothing was actually left
+    # unexamined.
     data = b'\x00' * 0x100
     mf, seg = _mf_with_segment(0xD000, 0xD00, data)
     compiled = FakeCompiled(results=[])
@@ -323,10 +335,11 @@ def test_deadline_after_last_pairing_completes_reports_no_false_target():
     assert outcome.budget_exhausted_targets == []
 
     report = aggregate.build_report(outcome, compile_failed=0)
-    budget_lim = next(l for l in report.coverage_report.limitations
-                       if l.code.value == "YARA_SCAN_BUDGET_EXHAUSTED")
-    assert budget_lim.affected_count is None
-    assert budget_lim.targets == ()
+    assert not any(l.code.value == "YARA_SCAN_BUDGET_EXHAUSTED"
+                   for l in report.coverage_report.limitations)
+    assert report.coverage_report.status.value == "complete"
+    assert report.findings["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
+    assert report.findings["coverage"]["scan_budget_ok"] is True
 
 
 def test_deadline_mid_rule_files_still_includes_current_segment():

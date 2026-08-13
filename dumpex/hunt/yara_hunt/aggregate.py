@@ -64,19 +64,23 @@ def _yara_coverage_report(outcome, compile_failed: int, unverified_count: int = 
             # resolve, unlike YARA_SCAN_BUDGET_EXHAUSTED below.
             scope="max_total_hits", budget_limit=outcome.truncated_budget_limit,
             budget_consumed=outcome.truncated_budget_limit))
-    if outcome.budget_exhausted:
-        # issue #28 P6 follow-up: unlike every other target-bearing code
-        # here, budget_exhausted_targets can legitimately be empty (the
-        # deadline discovered only after the scan's very last pairing
-        # already finished) -- affected_count/targets stay unset TOGETHER
-        # in that case (mirrors CS Beacon's own CS_BEACON_SCAN_BUDGET_
-        # EXHAUSTED, which already allows this), not affected_count=0.
+    if outcome.budget_exhausted and outcome.budget_exhausted_targets:
+        # issue #28 review follow-up: a deadline discovered only after the
+        # scan's very last (segment, rule_file) pairing already finished
+        # being fully examined is wall-clock telemetry, not a coverage
+        # gap -- `targets` comes out empty in exactly that case (see
+        # ScanOutcome.budget_exhausted_targets' own docstring), and this
+        # limitation must not be constructed at all then: any
+        # CoverageLimitation present here makes build_coverage_report()
+        # mark the WHOLE report partial, regardless of affected_count, so
+        # a targetless entry would still falsely downgrade a clean,
+        # fully-examined run to INCONCLUSIVE.
         targets = outcome.budget_exhausted_targets
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED, source="segment_scan",
-            affected_count=(len(targets) or None), targets=targets,
+            affected_count=len(targets), targets=targets,
             scope=outcome.budget_exhausted_kind, budget_limit=outcome.budget_exhausted_limit,
-            budget_consumed=outcome.budget_exhausted_limit))
+            budget_consumed=outcome.budget_exhausted_consumed))
     if unverified_count:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED, source="yara_context",
@@ -149,7 +153,13 @@ def build_coverage(outcome, compile_failed: int) -> dict:
         "segments_size_ok":    outcome.skipped == 0,
         "matches_completed":   outcome.match_failed == 0 and outcome.timed_out == 0,
         "hit_cap_not_reached": not outcome.truncated,
-        "scan_budget_ok":      not outcome.budget_exhausted,
+        # issue #28 review follow-up: `outcome.budget_exhausted` alone is
+        # NOT a coverage gap -- it can be True with an empty
+        # `budget_exhausted_targets` when the wall-clock deadline is only
+        # discovered after the scan's very last pairing already finished
+        # cleanly (pure telemetry, nothing left unexamined). Only a
+        # non-empty target list means genuinely unresolved scope.
+        "scan_budget_ok":      not (outcome.budget_exhausted and outcome.budget_exhausted_targets),
     }
 
 
@@ -183,7 +193,8 @@ def build_report(outcome, compile_failed: int, *, rules_dir: str = None,
                 f"{outcome.timed_out} match() call(s) timed out" if outcome.timed_out else "",
                 f"{outcome.match_failed} match() call(s) failed" if outcome.match_failed else "",
                 f"hit cap reached" if outcome.truncated else "",
-                f"scan budget exhausted" if outcome.budget_exhausted else "",
+                (f"scan budget exhausted" if outcome.budget_exhausted
+                 and outcome.budget_exhausted_targets else ""),
             ]))
             findings["status"] = INCONCLUSIVE
             findings["scan_complete"] = False

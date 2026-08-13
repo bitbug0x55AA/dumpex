@@ -722,11 +722,17 @@ def test_skip_relationship_rejects_budget_fields_on_non_budget_cause():
                           budget_kind="validations_total", budget_limit=10, budget_consumed=10)
 
 
-def test_skip_relationship_rejects_consumed_not_equal_to_limit():
-    with pytest.raises(ValueError):
-        SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="scan_truncated",
-                          scope="validations_total", budget_kind="validations_total",
-                          budget_limit=10, budget_consumed=5)
+def test_skip_relationship_accepts_consumed_exceeding_limit():
+    # issue #28 review follow-up: budget_consumed is the REAL measured
+    # consumption, not assumed equal to budget_limit -- a resource
+    # counter incremented (or elapsed time measured) only AFTER the check
+    # that stops the scan can genuinely exceed the configured limit, and
+    # that must be representable rather than rejected.
+    rel = SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="scan_truncated",
+                            scope="validations_total", budget_kind="validations_total",
+                            budget_limit=10, budget_consumed=11)
+    assert rel.budget_limit == 10
+    assert rel.budget_consumed == 11
 
 
 def test_skip_relationship_rejects_unknown_budget_kind():

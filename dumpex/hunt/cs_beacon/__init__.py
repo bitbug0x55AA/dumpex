@@ -133,18 +133,25 @@ def _cs_beacon_coverage_report(scan_outcome, mem_info_available, thread_list_str
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="segment_scan",
             affected_count=cc.short_reads, targets=cc.short_read_targets))
-    if scan_outcome.budget_exhausted:
+    if scan_outcome.budget_exhausted and scan_outcome.budget_exhausted_targets:
+        # issue #28 review follow-up: an empty `budget_exhausted_targets`
+        # means the whole-scan budget was only discovered exhausted after
+        # the very last segment already finished cleanly -- pure
+        # telemetry, not a coverage gap. Constructing this limitation
+        # anyway would make build_coverage_report() mark the WHOLE report
+        # partial regardless of affected_count, falsely downgrading a
+        # clean, fully-examined run to INCONCLUSIVE.
         targets = scan_outcome.budget_exhausted_targets
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED, source="segment_scan",
             detail=scan_outcome.budget_reason,
-            affected_count=(len(targets) or None), targets=targets,
+            affected_count=len(targets), targets=targets,
             # issue #28 P6 follow-up: `detail` above keeps its own
             # pre-existing free-text reason; scope/budget_limit/
             # budget_consumed are the SEPARATE structured fact.
             scope=scan_outcome.budget_exhausted_kind,
             budget_limit=scan_outcome.budget_exhausted_limit,
-            budget_consumed=scan_outcome.budget_exhausted_limit))
+            budget_consumed=scan_outcome.budget_exhausted_consumed))
     # top_tier_uncertain (see aggregate.build_report): only matters once
     # hits exist and none is already corroborated -- an uncorroborated
     # hit's RIP/EIP-based top-tier corroboration couldn't fully run.

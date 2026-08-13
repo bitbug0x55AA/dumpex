@@ -195,11 +195,7 @@ entry ([issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28)).
   stop happened, plus every later segment in the scan's own segment table
   that never started at all. Segment granularity, not a byte remainder
   (both hunters examine a segment as one atomic unit, unlike injection's
-  own byte-wise PE scan). CS Beacon's own targets can legitimately stay
-  empty even when the limitation itself fires -- a deadline discovered
-  only after the very last segment already finished scanning cleanly has
-  nothing left to name; YARA's own targets are always non-empty in
-  practice. New `SkipCause` values `hit_cap_reached`/
+  own byte-wise PE scan). New `SkipCause` values `hit_cap_reached`/
   `scan_budget_exhausted` (the latter shared by YARA and CS Beacon, since
   it is the same underlying fact for both) let these two now flow into
   `--hunt all`'s investigation queue for the first time.
@@ -210,18 +206,40 @@ entry ([issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28)).
   reproducible with `PE_SCAN_MAX_VALIDATIONS_TOTAL=0`. Now validated as
   non-negative, matching every other budget-bearing field in this
   feature.
-- **Fixed: YARA could name a segment as an unexamined
-  `YARA_SCAN_BUDGET_EXHAUSTED` target even when that segment's own last
-  rule-file `match()` call had already returned successfully and was
-  about to be fully processed.** A deadline noticed only AFTER the
-  current (segment, rule_file) pairing's own work genuinely finished --
-  including on the scan's very last pairing, where nothing at all was
-  actually left unexamined -- used to still attribute the CURRENT
-  segment as a coverage gap. `budget_exhausted` (the plain boolean) still
-  becomes `True` in this case, since the wall-clock deadline genuinely
-  was exceeded and that remains worth recording, but `targets` is now
-  correctly empty rather than naming a segment that was, in fact, fully
-  examined.
+- **Fixed: a whole-scan deadline noticed only after YARA's very last
+  (segment, rule_file) pairing, or CS Beacon's very last segment, had
+  already finished cleanly used to still downgrade a fully-examined run
+  to `INCONCLUSIVE`/`"partial"`.** YARA could name the CURRENT segment as
+  an unexamined `YARA_SCAN_BUDGET_EXHAUSTED` target even when that
+  segment's own last rule-file `match()` call had already returned
+  successfully and was about to be fully processed; CS Beacon's
+  `CS_BEACON_SCAN_BUDGET_EXHAUSTED` could fire with an empty `targets`
+  list purely because the post-segment deadline recheck happened to land
+  after the scan's last segment. Both scanners' `budget_exhausted` (the
+  plain boolean) still become `True` in this case, since the wall-clock
+  deadline genuinely was exceeded and that remains worth recording at the
+  `ScanOutcome` level -- but a `CoverageLimitation` with an empty
+  `targets` list is no longer constructed at all, since its mere presence
+  (regardless of `affected_count`) was enough to make `coverage.status`,
+  the hunter's own `status`, and `verdict_level` report a coverage gap
+  that did not exist. A clean run in this exact situation now correctly
+  reports `coverage.status: "complete"` and a clean
+  `NOT_DETECTED_IN_SCANNED_SCOPE`/no-hit `status`, and the console's own
+  "Scan complete" note and `--verbose` reason text no longer claim
+  segments were left unscanned. A genuine mid-scan deadline/hit-cap stop
+  (a non-empty `targets` list) is unaffected and still correctly reports
+  `"partial"`/`INCONCLUSIVE`.
+- **Fixed: `budget_consumed` was always populated with the configured
+  `budget_limit`, not the real measured consumption.** YARA and CS Beacon
+  both increment/accumulate a resource counter (`total_candidates`,
+  `total_decoded_bytes`, bytes scanned) *before* checking it against the
+  configured cap, so actual consumption at the moment a budget is
+  attributed can exceed the limit (e.g. `total_candidates` reaching
+  `max_candidates + 1`); wall-clock elapsed time is now measured directly
+  rather than assumed to equal the configured `scan_deadline_seconds`.
+  `budget_consumed` on `CoverageLimitation`/`SkipRelationship` now
+  carries that real value, which may land on either side of
+  `budget_limit` -- the two are no longer required to be equal.
 - **`CoverageLimitation`/`SkipRelationship` gain dedicated
   `budget_limit`/`budget_consumed` fields, and structured budget
   attribution now extends to YARA's `YARA_HIT_CAP_REACHED`/
@@ -241,9 +259,14 @@ entry ([issue #28](https://github.com/bitbug0x55AA/dumpex/issues/28)).
   once, so injection's own `PE_HEADER_SCAN_TRUNCATED`/
   `PE_HEADER_SCAN_NOT_STARTED` were migrated onto the same two dedicated
   fields for consistency.
-- **Finding IDs, scores, and verdicts are unchanged.** This is a
-  coverage-actionability change only; a hunter's own detection result is
-  identical before and after.
+- **Finding IDs and scores are unchanged; `status`/`coverage_status`/
+  `verdict_level` are corrected, not merely re-labeled.** This is a
+  coverage-actionability change: a hunter's own detection EVIDENCE
+  (`score`, `matches`/`configs`, Finding IDs) is identical before and
+  after. `status`/`coverage_status`/`verdict_level` DO change for the two
+  false-`INCONCLUSIVE`/`"partial"` cases fixed above (YARA's last
+  pairing, CS Beacon's last segment) -- those were incorrect before this
+  fix, not a stable baseline this change preserves.
 
 `dumpex-output-v2.11.schema.json` stays packaged and frozen for
 validating output captured before this change.

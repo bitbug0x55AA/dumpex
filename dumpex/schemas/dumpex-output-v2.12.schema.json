@@ -4368,7 +4368,7 @@
           "minimum": 0
         },
         "budget_consumed": {
-          "description": "Always equal to budget_limit when set (a budget is only ever attributed once fully consumed) -- kept as its own field, not derived, so a consumer never has to assume the two always agree. Minimum 0, same reasoning as budget_limit.",
+          "description": "The REAL amount of the resource actually consumed at the moment the budget was attributed, when set -- NOT assumed to equal budget_limit: it can exceed the limit (a counter incremented, or elapsed time measured, only after the check that stops the scan) or sit under it (a predictive check that stops the scan just before an action that would exceed the limit). Minimum 0, same reasoning as budget_limit.",
           "type": [
             "integer",
             "null"
@@ -7419,7 +7419,7 @@
           "minimum": 1
         },
         "budget_kind": {
-          "description": "New in schema_version 2.12 (issue #28 P5 follow-up). WHICH of injection's four independent hidden-PE scan budgets (reads_per_region/total_bytes/validations_per_region/validations_total) this relationship's own scan_truncated/scan_not_started stopped on -- the structured counterpart of what previously only reached `scope` (see coverageLimitation's own PE_HEADER_SCAN_TRUNCATED/_SCAN_NOT_STARTED scope/detail wiring). `null` for every other cause.",
+          "description": "New in schema_version 2.12 (issue #28 P5 follow-up). WHICH of the owning hunter's own independent scan budgets this relationship's own scan_truncated/scan_not_started/hit_cap_reached/scan_budget_exhausted stopped on -- injection's four (reads_per_region/total_bytes/validations_per_region/validations_total), yara_hunt's three (max_total_hits/scan_deadline_seconds/max_total_bytes_scanned), or cs_beacon's five (scan_deadline_seconds/max_total_scanned_bytes/max_candidates/max_decoded_bytes/max_hits) -- the structured counterpart of what previously only reached `scope` (see coverageLimitation's own PE_HEADER_SCAN_TRUNCATED/_SCAN_NOT_STARTED/YARA_HIT_CAP_REACHED/YARA_SCAN_BUDGET_EXHAUSTED/CS_BEACON_SCAN_BUDGET_EXHAUSTED scope/detail wiring). `null` for every other cause.",
           "type": [
             "string",
             "null"
@@ -7429,7 +7429,14 @@
             "reads_per_region",
             "total_bytes",
             "validations_per_region",
-            "validations_total"
+            "validations_total",
+            "max_total_hits",
+            "scan_deadline_seconds",
+            "max_total_bytes_scanned",
+            "max_total_scanned_bytes",
+            "max_candidates",
+            "max_decoded_bytes",
+            "max_hits"
           ]
         },
         "budget_limit": {
@@ -7441,7 +7448,7 @@
           "minimum": 0
         },
         "budget_consumed": {
-          "description": "Always equal to budget_limit when set (a budget is only ever attributed once fully consumed) -- kept as its own field, not derived, so a consumer never has to assume the two always agree. Minimum 0, same reasoning as budget_limit.",
+          "description": "The REAL amount of the resource actually consumed at the moment the budget was attributed, when set -- NOT assumed to equal budget_limit: it can exceed the limit (a counter incremented, or elapsed time measured, only after the check that stops the scan) or sit under it (a predictive check that stops the scan just before an action that would exceed the limit). Minimum 0, same reasoning as budget_limit.",
           "type": [
             "integer",
             "null"
@@ -7475,11 +7482,11 @@
           }
         },
         {
-          "description": "New in schema_version 2.12 (issue #28 P5 follow-up): budget_kind/budget_limit/budget_consumed are only ever set together for cause scan_truncated/scan_not_started; every other cause leaves all three null. (The Python-side rule that budget_consumed always equals budget_limit is a cross-field VALUE comparison and is not expressible here -- see coverageLimitation's own $def description for this schema's general stance on that class of rule.)",
+          "description": "New in schema_version 2.12 (issue #28 P5/P6 follow-up): budget_kind/budget_limit/budget_consumed are only ever set together for cause scan_truncated/scan_not_started (injection) or hit_cap_reached/scan_budget_exhausted (yara_hunt/cs_beacon); every other cause leaves all three null.",
           "if": {
             "properties": {
               "cause": {
-                "enum": ["scan_truncated", "scan_not_started"]
+                "enum": ["scan_truncated", "scan_not_started", "hit_cap_reached", "scan_budget_exhausted"]
               }
             }
           },

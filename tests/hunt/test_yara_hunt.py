@@ -226,15 +226,20 @@ def test_scan_deadline_exceeded_mid_segment_across_many_rule_files_is_caught(mon
     assert f["status"] == "INCONCLUSIVE"
 
 
-def test_deadline_crossed_during_the_only_match_call_is_still_caught(monkeypatch):
-    # The exact gap this closes: a match() call that starts BEFORE the
-    # global deadline expires, but the deadline is crossed DURING that
-    # call (or is discovered to be crossed as soon as it returns) -- if
-    # this is the last (or only) rule file for the last (or only) segment,
-    # there is no subsequent check-before-a-next-call to catch it. The
-    # post-call recheck (added alongside tightening call_timeout to
-    # whatever's left of the global budget) must catch this even when
-    # nothing else runs afterward.
+def test_deadline_crossed_during_the_only_match_call_is_not_a_coverage_gap(monkeypatch):
+    # The exact case issue #28's review flagged: a match() call that
+    # starts BEFORE the global deadline expires, but the deadline is
+    # crossed DURING that call (or is discovered to be crossed as soon as
+    # it returns) -- when this is the last (or only) rule file for the
+    # last (or only) segment, nothing was actually left unexamined, so
+    # this must NOT be reported as a coverage gap (previously it was --
+    # `budget_exhausted` alone, with an empty `budget_exhausted_targets`,
+    # used to be enough to flip the whole result to INCONCLUSIVE/partial).
+    # The post-call deadline recheck (added alongside tightening
+    # call_timeout to whatever's left of the global budget) still exists
+    # to catch a genuine mid-scan overrun -- see
+    # test_scan_deadline_exhaustion_makes_result_inconclusive below for
+    # that case, where segments genuinely remain unexamined.
     calls = {"n": 0}
     def fake_monotonic():
         calls["n"] += 1
@@ -257,10 +262,11 @@ def test_deadline_crossed_during_the_only_match_call_is_still_caught(monkeypatch
             _reader                = FakeReader({seg_va: data})
         f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
 
-    assert f["coverage"]["scan_budget_ok"] is False
-    assert f["coverage_status"] == "partial"
-    assert f["status"] == "INCONCLUSIVE"
-    assert f["status"] != "NOT_DETECTED_IN_SCANNED_SCOPE"
+    # Nothing genuinely went unexamined -- the deadline overrun is pure
+    # wall-clock telemetry, not a coverage gap.
+    assert f["coverage"]["scan_budget_ok"] is True
+    assert f["coverage_status"] == "complete"
+    assert f["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
 
 
 def test_scan_deadline_exhaustion_makes_result_inconclusive(monkeypatch):
