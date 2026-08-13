@@ -1,0 +1,88 @@
+name: Sync main to all branches
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-main-to-all-branches
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge main into every branch
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out main with full history
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Preflight every merge, then push atomically
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$DEFAULT_BRANCH" != "main" ]]; then
+            echo "This workflow expects the repository default branch to be 'main', but it is '$DEFAULT_BRANCH'." >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
+
+          mapfile -t branches < <(
+            git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin |
+              grep -v -E '^(HEAD|main)$' |
+              sort
+          )
+
+          if (( ${#branches[@]} == 0 )); then
+            echo "No branches other than main were found."
+            echo "## Sync result" >> "$GITHUB_STEP_SUMMARY"
+            echo "No branches other than \`main\` were found." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          updates=()
+          synced=()
+
+          # Build every merge locally first. Nothing is pushed unless all
+          # branches merge cleanly, so a conflict cannot leave a partial sync.
+          for index in "${!branches[@]}"; do
+            branch="${branches[$index]}"
+            local_ref="refs/heads/sync-main-$index"
+
+            echo "Preflighting main -> $branch"
+            git switch --detach "refs/remotes/origin/$branch"
+
+            if ! git merge --no-edit refs/remotes/origin/main; then
+              git merge --abort || true
+              echo "main could not be merged cleanly into '$branch'. Nothing was pushed." >&2
+              exit 1
+            fi
+
+            git update-ref "$local_ref" HEAD
+            updates+=("$local_ref:refs/heads/$branch")
+            synced+=("$branch")
+          done
+
+          # GitHub supports atomic pushes: if any branch rejects its update
+          # (for example due to protection or a concurrent push), none change.
+          git push --atomic origin "${updates[@]}"
+
+          {
+            echo "## Sync result"
+            echo
+            echo "Merged \`main\` into ${#synced[@]} branch(es):"
+            for branch in "${synced[@]}"; do
+              echo "- \`$branch\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
