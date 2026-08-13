@@ -5,6 +5,34 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Fixed: `--hunt cs-beacon --verbose` no longer truncates binary TLV field values
+
+The console renderer silently cut off any non-text type-3 TLV field value
+after 64 hex characters (32 bytes) and appended `...`, in both the
+**Full Config Field Table** and **Process Injection** sections
+([issue #46](https://github.com/bitbug0x55AA/dumpex/issues/46), the same
+fixed-slice pattern as [issue #30](https://github.com/bitbug0x55AA/dumpex/issues/30)).
+The cut was silent and deterministic — unaffected by terminal width,
+redirected output, or `--verbose` itself — even though normal-mode output
+tells the analyst to pass `--verbose` for "the complete field table".
+
+```
+# before (40-byte ProcInject_Transform_x64, 80 hex chars total)
+ProcInject_Transform_x64  0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20...
+
+# after
+ProcInject_Transform_x64  0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2021
+                           22232425262728
+```
+
+A binary field's complete hex now always renders, wrapped across as many
+lines as needed with a hanging indent aligned under the value column, and
+never split mid-byte (`dumpex/hunt/cs_beacon/report_console.py`'s new
+`_wrap_hex_value()`/`_value_lines()`, shared by both sections). Terminal
+width changes only how the value wraps, never how much of it is shown.
+Detection, scoring, coverage, and every structured (`--json`) field are
+unaffected — this was a console-rendering-only bug.
+
 ## Fixed: Process Injection finding facts now zero-pad virtual addresses
 
 `--hunt injection`'s normal (non-`--verbose`) finding facts rendered

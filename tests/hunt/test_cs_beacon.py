@@ -9,6 +9,7 @@ from tests.fixtures.fakes import (Region, Segment, FakeReader, FakeStream, FakeM
 import dumpex.hunt.cs_beacon as cs_beacon
 import dumpex.hunt.cs_beacon.parser as parser
 import dumpex.hunt.cs_beacon.der as cs_der
+import dumpex.hunt.cs_beacon.report_console as report_console
 
 
 def _mk_segment_data(config_bytes: bytes, pad_before: int = 0x100, pad_after: int = 0x100) -> bytes:
@@ -323,6 +324,31 @@ def test_full_field_table_has_no_hex_id_column_and_has_type_column(capsys):
         "no separate bracketed raw-hex preview alongside value")
 
 
+def test_full_field_table_printable_field_preserves_repeated_whitespace(capsys):
+    # Same whitespace-preservation guarantee as the Process Injection test
+    # of the same name -- a printable type-3 field's value must render
+    # VERBATIM in the field table too, not re-wrapped/re-joined in a way
+    # that would collapse repeated spaces already present in the bytes.
+    seg_va, seg_fo = 0x91000, 0x9100
+    printable = b"alpha  beta   gamma"   # 2 and 3 consecutive spaces
+    config = _config_with_extra_field(0x002e, 3, printable)   # ProcInject_Transform_x86
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
+    out = capsys.readouterr().out
+
+    table = out.split("Full Config Field Table", 1)[1].split("Process Injection", 1)[0]
+    field_line = next(l for l in table.splitlines() if "ProcInject_Transform_x86" in l)
+    assert repr(printable.decode("ascii")) in field_line
+
+
 def _config_with_extra_field(fid: int, ftype: int, value: bytes, xor_key: int = 0x69) -> bytes:
     """Splice one extra TLV field into an otherwise-valid (BeaconType +
     validated PublicKey + terminator) config -- a synthetic blob missing
@@ -372,6 +398,32 @@ def test_process_injection_printable_transform_shows_repr_text(capsys):
     assert transform_line.replace(text_repr, "", 1).count("svchost.exe") == 0
 
 
+def test_process_injection_printable_transform_preserves_repeated_whitespace(capsys):
+    # A printable type-3 field's value must render VERBATIM -- the
+    # binary-hex wrapping this issue (#46) adds must never be reached for
+    # text, and no other rewrap should collapse whitespace that was
+    # actually present in the field's own bytes (`wrap_text()`'s
+    # `text.split()`/`" ".join()` would silently turn "a  b" into "a b").
+    seg_va, seg_fo = 0xd1000, 0xd100
+    printable = b"alpha  beta   gamma"   # 2 and 3 consecutive spaces
+    config = _config_with_extra_field(0x002e, 3, printable)   # ProcInject_Transform_x86
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
+    out = capsys.readouterr().out
+
+    section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
+    transform_line = next(l for l in section.splitlines() if "ProcInject_Transform_x86" in l)
+    assert repr(printable.decode("ascii")) in transform_line
+
+
 def test_process_injection_binary_transform_shows_full_raw_hex_once_with_trailing_nul(capsys):
     seg_va, seg_fo = 0xe0000, 0xe000
     # Non-printable payload with trailing NUL padding -- the old
@@ -401,12 +453,13 @@ def test_process_injection_binary_transform_shows_full_raw_hex_once_with_trailin
     assert transform_line.count(full_hex) == 1   # shown exactly once, no duplicate raw preview
 
 
-def test_process_injection_long_binary_transform_truncates_at_64_hex_chars_with_ellipsis(capsys):
-    # The short (5-byte, 10-hex-char) payload in the test above never
-    # exercises truncation at all -- it only proves the shown hex is
-    # untruncated/unstripped, not where truncation actually kicks in or
-    # that it's marked with "...". Use a payload whose hex is well over
-    # 64 chars (40 bytes -> 80 hex chars) so both are pinned precisely.
+def test_process_injection_long_binary_transform_wraps_without_truncating(capsys):
+    # issue #46: this field used to be hard-truncated at 64 hex chars with
+    # a trailing "..." -- even under --verbose, whose own hint text
+    # promises "the complete field table". Use the same 40-byte
+    # (80-hex-char) payload the old truncating behavior was pinned on, and
+    # assert the COMPLETE value now survives -- wrapped across lines
+    # (never split mid-byte), never shortened, no "..." marker anywhere.
     seg_va, seg_fo = 0xf0000, 0xf000
     binary = bytes(range(1, 41))   # 40 bytes, includes non-printable control
                                     # chars (0x01-0x08 etc.) -- guaranteed binary
@@ -427,11 +480,58 @@ def test_process_injection_long_binary_transform_truncates_at_64_hex_chars_with_
     out = capsys.readouterr().out
 
     section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
-    transform_line = next(l for l in section.splitlines() if "ProcInject_Transform_x64" in l)
     full_hex = binary.hex()
-    expected = full_hex[:64] + "..."
-    assert transform_line.rstrip().endswith(expected)
-    assert full_hex not in transform_line   # the untruncated 80-char hex must not appear
+    # Continuation lines carry a hanging indent, not the original spacing,
+    # so reconstruct by dropping all whitespace/newlines rather than
+    # matching one literal line -- a wrapped value's hex digits are still
+    # exactly adjacent once the line breaks/indent are stripped back out.
+    squashed = "".join(section.split())
+    assert full_hex in squashed
+    assert "..." not in section
+
+
+def test_full_field_table_long_binary_field_wraps_without_truncating(capsys):
+    # Same issue #46 regression as the Process Injection test above, but
+    # for the OTHER call site the bug report names -- _field_table_lines().
+    seg_va, seg_fo = 0xa0000, 0xa000
+    binary = bytes(range(1, 41))   # 40 bytes -> 80 hex chars, over the old 64-char cutoff
+    config = _config_with_extra_field(0x002f, 3, binary)   # ProcInject_Transform_x64
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
+    out = capsys.readouterr().out
+
+    table = out.split("Full Config Field Table", 1)[1].split("Process Injection", 1)[0]
+    full_hex = binary.hex()
+    squashed = "".join(table.split())
+    assert full_hex in squashed
+    assert "..." not in table
+
+
+def test_wrap_hex_value_never_drops_content_regardless_of_width():
+    # issue #46's own regression demand: "Confirm terminal width changes
+    # wrapping only, never evidence content." Exercise the wrapper
+    # directly across the full clamped width range (dumpex.hunt._console's
+    # MIN_WIDTH/MAX_WIDTH) plus a pathological near-zero width, for a
+    # value much longer than any of them.
+    hexs = (bytes(range(0, 200)) * 2).hex()   # 800 hex chars, well past every width below
+    prefix = "        ProcInject_Transform_x64  "
+    hang = len(prefix)
+    for width in (1, 2, 40, 80, 100, 120, 500):
+        lines = report_console._wrap_hex_value(hexs, prefix, width)
+        assert lines[0].startswith(prefix)
+        assert all(line.startswith(" " * hang) for line in lines[1:])
+        chunks = [lines[0][hang:]] + [line[hang:] for line in lines[1:]]
+        assert "".join(chunks) == hexs   # every hex digit present, in order, nothing dropped
+        for chunk in chunks:
+            assert len(chunk) % 2 == 0   # never split a byte across a line break
 
 
 # ── a segment read failure must be counted as a coverage gap, not ─────────
