@@ -18,7 +18,14 @@ import os
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.core.memory import addr_to_module
 from dumpex.hunt._ui import _print_check, _status_text, DETECTED, NOT_EVALUATED, INCONCLUSIVE
+from dumpex.hunt._console import wrap_text, resolve_width
 from dumpex.hunt.yara_hunt.context import context_unverified_reason
+
+# Hanging indent used for every continuation line under a rule's compact
+# detail block (rule-file line, wrapped description, ref line) -- matches
+# the literal "\n          " (10 spaces) already used throughout this
+# module so all of them line up in one column.
+_DETAIL_INDENT = 10
 
 
 def _print_not_evaluated_verdict(report) -> dict:
@@ -84,10 +91,19 @@ def render_result(report, modules: list, verbose: bool = False) -> dict:
         # ── Compact detail (always shown) ────────────────────────────
         tag_part   = f"  [{', '.join(tags)}]" if tags else ""
         mitre_part = f"  {mitre}"             if mitre else ""
-        desc_part  = f"  {desc[:72]}{'…' if len(desc) > 72 else ''}" if desc else ""
         detail     = (f"{n_segs} region(s), {n_strings} string hit(s)"
                       f"{mitre_part}{tag_part}"
-                      f"\n          {DIM(rfile)}{desc_part}")
+                      f"\n          {DIM(rfile)}")
+        if desc:
+            # Full description, word-wrapped (never truncated) -- a fixed
+            # desc[:72] cutoff used to silently drop rule context for any
+            # rule whose meta.description ran past 72 characters, which
+            # several packaged rules do (see issue #30). wrap_text() already
+            # prefixes every continuation line with hang_indent spaces, so
+            # only the first wrapped line needs the indent added here.
+            wrapped_desc = wrap_text(desc, resolve_width(), hang_indent=_DETAIL_INDENT)
+            wrapped_desc[0] = " " * _DETAIL_INDENT + wrapped_desc[0]
+            detail += "\n" + "\n".join(wrapped_desc)
         if ref:
             detail += f"\n          ref: {ref}"
 
