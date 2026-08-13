@@ -2,18 +2,27 @@
 
 Only collects facts — never scores, never prints. `scan_segments` walks
 every captured memory segment, finds structurally-valid (sanity-checked)
-beacon configs, and returns a ScanOutcome for context.py/aggregate.py to
-interpret. Every resource-budget/coverage-gap rule that existed in the
-single-file hunter is preserved here unchanged (see the inline comments
-below for why each check is placed where it is).
+beacon configs, resolves each hit's enclosing MemoryInfo region ONCE (see
+models.region_ref), and returns `(hits, diagnostics)` -- a tuple of frozen
+`models.ConfigEvidence` plus a frozen `domain.ScanDiagnostics` -- for
+context.py/aggregate.py to interpret. Every resource-budget/coverage-gap
+rule that existed before this hunter's output-source migration is preserved
+here unchanged (see the inline comments below for why each check is placed
+where it is); only the RETURN shape changed, from a mutable `ScanOutcome`
+dataclass to this frozen pair. `CoverageTracker` and every other mutable
+accumulator below are local bookkeeping only -- none of them, nor the raw
+`region` objects `_get_region_at` returns, ever leave this function; only
+the frozen `hits`/`diagnostics` do.
 """
 import math
 import time
 
+from dumpex.core.memory import _get_region_at
 from dumpex.hunt._coverage import CoverageTracker, segment_scan_target
 from dumpex.hunt.cs_beacon.config import CSBeaconConfig
-from dumpex.hunt.cs_beacon.models import Candidate, ScanOutcome
-from dumpex.hunt.cs_beacon.parser import _cs_decode_and_parse_tlv, _cs_sanity_check
+from dumpex.hunt.cs_beacon.domain import ScanDiagnostics
+from dumpex.hunt.cs_beacon.models import ConfigEvidence, config_field_from_parsed, region_ref
+from dumpex.hunt.cs_beacon.parser import _cs_decode_and_parse_tlv, _cs_guess_version, _cs_sanity_check
 from dumpex.hunt.cs_beacon.config import CS_SIG_XOR69, CS_SIG_XOR2E
 
 
@@ -58,14 +67,25 @@ def _cs_scan_segment(data: bytes, seg_va: int, seg_fo: int):
             start = idx + 1
 
 
-def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monotonic) -> ScanOutcome:
+def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
+                   monotonic=time.monotonic) -> "tuple[tuple, ScanDiagnostics]":
     """
     Walk every segment in `segs`, applying every whole-scan resource
     budget (deadline, candidate count, decoded bytes, total scanned
-    bytes, hit count) exactly as the single-file hunter did. `monotonic`
-    is threaded explicitly (not imported directly from `time` in this
-    module) so a caller/test can substitute a fake clock without needing
-    the global `time.monotonic` to be patched — see dumpex/hunt/_runtime.py.
+    bytes, hit count) exactly as before this hunter's output-source
+    migration. `monotonic` is threaded explicitly (not imported directly
+    from `time` in this module) so a caller/test can substitute a fake
+    clock without needing the global `time.monotonic` to be patched — see
+    dumpex/hunt/_runtime.py.
+
+    `regions` (MemoryInfoListStream, already parsed by the caller) is used
+    to resolve each accepted hit's enclosing region ONCE, at scan time
+    (`models.region_ref`) -- the same "resolve identity once" rule
+    `dumpex.hunt.hollowing.memory_scan` applies to its own `ImageBaseContext`.
+
+    Returns `(hits, diagnostics)`: `hits` is a tuple of
+    `models.ConfigEvidence` in scan order; `diagnostics` is a frozen
+    `domain.ScanDiagnostics`.
     """
     coverage_counts = CoverageTracker()
     hits = []
@@ -230,7 +250,13 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
             if parsed['complete'] and _cs_sanity_check(parsed['fields']):
                 if hit_va not in seen_hit_vas:
                     seen_hit_vas.add(hit_va)
-                    hits.append(Candidate(xor_key, hit_va, hit_fo, parsed['fields']))
+                    fields = tuple(config_field_from_parsed(fid, rec)
+                                   for fid, rec in parsed['fields'].items())
+                    region = _get_region_at(hit_va, regions)
+                    hits.append(ConfigEvidence(
+                        xor_key=xor_key, hit_va=hit_va, hit_fo=hit_fo, fields=fields,
+                        cs_version=_cs_guess_version(parsed['fields']),
+                        region=region_ref(region)))
                     if len(hits) >= config.max_hits:
                         _mark_budget_exhausted(
                             f"{total_candidates} candidate(s) examined, "
@@ -296,39 +322,19 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
     budget_exhausted_limit = (_budget_limits_by_kind[budget_exhausted_kind]
                                 if budget_exhausted_kind is not None else None)
 
-    return ScanOutcome(
+    diagnostics = ScanDiagnostics(
         segment_count=len(segs),
-        hits=hits,
-        coverage=coverage_counts,
-        budget_exhausted=budget_exhausted,
-        budget_reason=budget_reason,
-        budget_exhausted_targets=budget_exhausted_targets,
-        budget_exhausted_kind=budget_exhausted_kind, budget_exhausted_limit=budget_exhausted_limit,
-        budget_exhausted_consumed=budget_exhausted_consumed,
         total_candidates=total_candidates,
         total_decoded_bytes=total_decoded_bytes,
         total_scanned_bytes=total_scanned_bytes,
+        skipped_oversize_targets=tuple(coverage_counts.skipped_oversize_targets),
+        read_failed_targets=tuple(coverage_counts.read_failed_targets),
+        short_read_targets=tuple(coverage_counts.short_read_targets),
+        budget_exhausted=budget_exhausted,
+        budget_reason=budget_reason,
+        budget_exhausted_targets=tuple(budget_exhausted_targets),
+        budget_exhausted_kind=budget_exhausted_kind,
+        budget_exhausted_limit=budget_exhausted_limit,
+        budget_exhausted_consumed=budget_exhausted_consumed,
     )
-
-
-def format_scan_note(outcome: ScanOutcome) -> str:
-    """Build the "Scan complete<note>." progress-line suffix from a
-    finished ScanOutcome — pure text formatting of already-known facts,
-    not a scoring decision, so this stays in scanner.py rather than
-    presentation.py (which only renders an already-built aggregate.Report)."""
-    note = (f" ({outcome.coverage.skipped_oversize} segment(s) >50 MB skipped)"
-            if outcome.coverage.skipped_oversize else "")
-    if outcome.coverage.read_failed:
-        note += f" ({outcome.coverage.read_failed} segment(s) failed to read)"
-    if outcome.coverage.short_reads:
-        note += f" ({outcome.coverage.short_reads} segment(s) short-read)"
-    if outcome.budget_exhausted and outcome.budget_exhausted_targets:
-        note += f" (scan budget exhausted: {outcome.budget_reason})"
-    elif outcome.budget_exhausted:
-        # issue #28 review follow-up: the budget was only noticed
-        # exhausted after the last segment's own candidate scan already
-        # finished cleanly -- every segment WAS examined, so this must not
-        # reuse budget_reason's own "before all segments were examined"
-        # wording, which would be false here.
-        note += " (scan resource budget exceeded only after the last segment finished; no segments left unscanned)"
-    return note
+    return tuple(hits), diagnostics

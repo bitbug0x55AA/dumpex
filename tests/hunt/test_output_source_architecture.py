@@ -41,8 +41,12 @@ aggregate/renderer boundaries converted with the Hollowing migration
 (issue #10) -- production now builds
 `dumpex.hunt.hollowing.domain.HollowingReport`, the old mutable
 `dumpex.hunt.hollowing.Report` (and the single-file module that held it) no
-longer exists, and `_render_hollowing_console` no longer takes `mf`. To use
-the file as a
+longer exists, and `_render_hollowing_console` no longer takes `mf`;
+cs-beacon's Report/parallel-findings/mutable-collection/aggregate/renderer
+boundaries converted with the CS Beacon migration (issue #9) -- production
+now builds `dumpex.hunt.cs_beacon.domain.CSBeaconReport`, and the old
+mutable `dumpex.hunt.cs_beacon.aggregate.Report` and
+`dumpex.hunt.cs_beacon.presentation` no longer exist. To use the file as a
 red/green implementation checklist, run it with
 ``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
 """
@@ -54,7 +58,8 @@ import pytest
 
 from dumpex.hunt import _finding
 from dumpex.hunt.cs_beacon import aggregate as cs_beacon_aggregate
-from dumpex.hunt.cs_beacon import presentation as cs_beacon_presentation
+from dumpex.hunt.cs_beacon import domain as cs_beacon_domain
+from dumpex.hunt.cs_beacon import report_console as cs_beacon_render
 from dumpex.hunt.encoding import aggregate as encoding_aggregate
 from dumpex.hunt.encoding import domain as encoding_domain
 from dumpex.hunt.encoding import _render_encoding_console as encoding_render
@@ -85,7 +90,7 @@ REPORT_TYPES = [
     pytest.param(hollowing_domain.HollowingReport, id="hollowing"),
     pytest.param(stomping_domain.StompingReport, id="stomping"),
     pytest.param(pipe_domain.PipeReport, id="pipe"),
-    pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
+    pytest.param(cs_beacon_domain.CSBeaconReport, id="cs-beacon"),
     pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
     pytest.param(yara_aggregate.Report, id="yara", marks=_PENDING),
 ]
@@ -103,7 +108,7 @@ PARALLEL_FINDING_REPORT_TYPES = [
     pytest.param(hollowing_domain.HollowingReport, id="hollowing"),
     pytest.param(stomping_domain.StompingReport, id="stomping"),
     pytest.param(pipe_domain.PipeReport, id="pipe"),
-    pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
+    pytest.param(cs_beacon_domain.CSBeaconReport, id="cs-beacon"),
     pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
 ]
 
@@ -123,7 +128,7 @@ MUTABLE_COLLECTION_REPORT_TYPES = [
     pytest.param(hollowing_domain.HollowingReport, id="hollowing"),
     pytest.param(stomping_domain.StompingReport, id="stomping"),
     pytest.param(pipe_domain.PipeReport, id="pipe"),
-    pytest.param(cs_beacon_aggregate.Report, id="cs-beacon", marks=_PENDING),
+    pytest.param(cs_beacon_domain.CSBeaconReport, id="cs-beacon"),
     pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
 ]
 
@@ -155,6 +160,9 @@ _REQUIRED_FIELD_OVERRIDES = {
     # carrying no resolved image base (see its own __post_init__).
     (hollowing_domain.HollowingReport, "coverage"): hollowing_domain.CoverageSnapshot(
         peb_present=False),
+    (cs_beacon_domain.CSBeaconReport, "score"): 0,
+    (cs_beacon_domain.CSBeaconReport, "coverage"): cs_beacon_domain.CoverageSnapshot(
+        scan=cs_beacon_domain.ScanDiagnostics(segment_count=0)),
 }
 
 
@@ -216,6 +224,11 @@ AGGREGATORS_WITH_PENDING_BOUNDARY_FIXES = [
     # `ImageBaseContext` and bool scalars only -- no `mf`, no `verbose`, no
     # raw regions/modules lists, and no `peb` object.
     pytest.param(hollowing_aggregate.build_report, id="hollowing"),
+    # Added (never _PENDING) with the CS Beacon migration: its new
+    # signature takes typed evidence tuples (hits/corroborations) plus an
+    # already-resolved `ScanDiagnostics` and bool/int scalars only -- no
+    # `mf`, no `verbose`, and no live `CoverageTracker`/`ScanOutcome`.
+    pytest.param(cs_beacon_aggregate.build_report, id="cs-beacon"),
 ]
 
 
@@ -258,12 +271,31 @@ def test_injection_aggregate_receives_only_typed_evidence_and_scalars():
     )
 
 
+def test_cs_beacon_aggregate_receives_only_typed_evidence_and_scalars():
+    """Narrower than the name-blacklist check above -- see
+    `test_injection_aggregate_receives_only_typed_evidence_and_scalars`'s
+    own docstring for why a whitelist is needed at all. Every parameter
+    `build_report()` accepts must be one of the typed evidence
+    tuples/objects it's built from, or a plain bool/int scalar."""
+    allowed = {
+        "hits", "corroborations", "scan", "mem_info_available",
+        "thread_list_stream_available", "threads_total", "contexts_parsed",
+    }
+    parameter_names = set(inspect.signature(cs_beacon_aggregate.build_report).parameters)
+    unexpected = parameter_names - allowed
+    assert not unexpected, (
+        f"dumpex.hunt.cs_beacon.aggregate.build_report accepts unexpected "
+        f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
+        f"typed evidence or a scalar count, never a raw dump-derived list"
+    )
+
+
 RENDERERS = [
     pytest.param(injection_render, id="injection"),
     pytest.param(hollowing_render, id="hollowing"),
     pytest.param(stomping_render, id="stomping"),
     pytest.param(pipe_render, id="pipe"),
-    pytest.param(cs_beacon_presentation.render, id="cs-beacon"),
+    pytest.param(cs_beacon_render.print_console, id="cs-beacon"),
     pytest.param(encoding_render, id="obfuscation"),
     pytest.param(yara_presentation.render_result, id="yara", marks=_PENDING),
 ]

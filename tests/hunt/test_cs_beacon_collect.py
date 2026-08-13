@@ -12,8 +12,10 @@ import pytest
 from tests.fixtures.fakes import Region, Segment, FakeStream, FakeMF, FakeReader, cs_beacon_config_bytes
 
 import dumpex.hunt.cs_beacon as cs_beacon
-from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record, _config_dict, _field_dict
+from dumpex.hunt.cs_beacon.collect import collect_cs_beacon_record
+from dumpex.hunt.cs_beacon.models import ConfigField, ConfigEvidence
 from dumpex.hunt.cs_beacon.parser import _cs_decode_and_parse_tlv
+from dumpex.hunt.cs_beacon.report_facts import field_dict as _field_dict, name_keyed_fields
 from dumpex.output.records import HunterRecord, CsBeaconDetails
 
 
@@ -264,26 +266,24 @@ def test_unknown_field_id_produces_field_0xnnnn_key_and_validates(hunter_record_
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
-def test_config_dict_raises_on_field_name_collision():
+def test_name_keyed_fields_raises_on_field_name_collision():
     # CS_FIELD_NAMES has no real collision today (verified separately),
     # so this forces one synthetically: two different field IDs whose
-    # parser-resolved `name` happens to be identical.
-    cfg = {
-        "va": 0x1000, "file_offset": 0, "region_base": None, "region_size": None,
-        "region_protect": None, "xor_key": 0x69, "cs_version": "3.x",
-        "cs_version_note": "", "context_corroborated": False,
-        "fields": {
-            0x0001: {"name": "SameName", "type": 1, "value": 0},
-            0x0002: {"name": "SameName", "type": 1, "value": 1},
-        },
-    }
+    # resolved `name` happens to be identical.
+    hit = ConfigEvidence(
+        xor_key=0x69, hit_va=0x1000, hit_fo=0, cs_version="3.x",
+        fields=(
+            ConfigField(field_id=0x0001, name="SameName", type=1, value=0, raw=b""),
+            ConfigField(field_id=0x0002, name="SameName", type=1, value=1, raw=b""),
+        ),
+    )
     with pytest.raises(ValueError, match="collision"):
-        _config_dict(cfg)
+        name_keyed_fields(hit)
 
 
 def test_field_dict_never_includes_name():
-    field_dict = _field_dict({"name": "BeaconType", "type": 1, "value": 0, "raw": b"\x00\x00"})
-    assert set(field_dict) == {"type", "value"}
+    f = ConfigField(field_id=0x0001, name="BeaconType", type=1, value=0, raw=b"\x00\x00")
+    assert set(_field_dict(f)) == {"type", "value"}
 
 
 def test_no_is_text_or_similar_leaks_into_legacy_dict_or_hunter_record():

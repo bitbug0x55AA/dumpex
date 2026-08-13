@@ -10,8 +10,7 @@ from dumpex.hunt.injection  import _build_injection_report, _render_injection_co
 from dumpex.hunt.hollowing  import _build_hollowing_report, _render_hollowing_console
 from dumpex.hunt.stomping   import _build_stomping_report, _render_stomping_console
 from dumpex.hunt.pipe       import _build_pipe_report, _render_pipe_console
-from dumpex.hunt.cs_beacon  import (_build_cs_beacon_report, _print_cs_beacon_pre_build_console,
-    _render_cs_beacon_post_build_console)
+from dumpex.hunt.cs_beacon  import _build_cs_beacon_report, _render_cs_beacon_console
 from dumpex.hunt.yara_hunt  import _build_yara_report, _render_yara_console
 from dumpex.hunt.encoding   import _build_encoding_report, _render_encoding_console
 
@@ -231,9 +230,8 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         # no injection/hollowing/stomping/pipe indicators (e.g. a beacon
         # sitting in ordinary-looking memory) and --hunt all would still
         # report "No TTP indicators found" without ever having looked.
-        segs = _print_cs_beacon_pre_build_console(mf)
         report = _build_cs_beacon_report(mf)
-        results["cs-beacon"] = _render_cs_beacon_post_build_console(report, segs, verbose)
+        results["cs-beacon"] = _render_cs_beacon_console(report, verbose)
         records.append(_record_from_cs_beacon_report(report))
     if run_yara:
         _print_hunt_header("YARA Memory Scan")
@@ -260,28 +258,11 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # duplicated here inside the hunt results themselves.
 
     # ── Sanitize for JSON serialization ───────────────────────────────────
-    # CS beacon: convert int-keyed field dicts + bytes. Every OTHER key in
-    # cfg (context_corroborated, cs_version_note, and anything added to
-    # _hunt_cs_beacon's findings["configs"] entries in the future) is
-    # passed through unchanged via `{**cfg, ...}` rather than hand-picked
-    # field-by-field — a hand-reconstructed dict silently drops any field
-    # this dispatcher doesn't already know about.
-    if "cs-beacon" in results:
-        safe_cfgs = []
-        for cfg in results["cs-beacon"].get("configs", []):
-            safe_fields = {}
-            for fid, rec in cfg.get("fields", {}).items():
-                raw = rec.get("raw", b"")
-                safe_fields[str(fid)] = {
-                    "name":  rec.get("name", ""),
-                    "type":  rec.get("type", ""),
-                    "raw":   raw.hex() if isinstance(raw, bytes) else str(raw),
-                    "value": (rec["value"].hex()
-                              if isinstance(rec.get("value"), bytes)
-                              else rec.get("value")),
-                }
-            safe_cfgs.append({**cfg, "fields": safe_fields})
-        results["cs-beacon"]["configs"] = safe_cfgs
+    # CS beacon's own `configs[*]["fields"]` is already JSON-safe as
+    # returned by `report_legacy.project_legacy_dict()` (str keys, raw/
+    # value already hex-encoded when they're bytes) -- the byte-sanitization
+    # pass that used to run here, AFTER rendering, is redundant now that the
+    # legacy-dict projector produces that shape directly (issue #9).
 
     # YARA: bytes → hex in matched string data
     if "yara" in results:
