@@ -320,6 +320,50 @@ def test_matching_rule_is_detected():
     assert len(f["matches"]) == 1
 
 
+# ── console rendering must never truncate meta.description (issue #30): a ──
+# fixed desc[:72] cutoff used to silently drop rule context for any rule
+# whose description ran past 72 characters, ending the line in "…" as if
+# output had been unexpectedly cut off -- this is presentation-only (score,
+# verdict, and matches above are unaffected either way), so it's checked
+# purely against the printed console text.
+
+_LONG_DESC = ("Cobalt Strike beacon configuration block encoded with XOR "
+              "key 0x2E (CS4-era)")
+assert len(_LONG_DESC) > 72   # the test is only meaningful past the old cutoff
+
+
+def _run_long_description_rule(verbose, capsys):
+    seg_va, seg_fo = 0x51000, 0x5100
+    data = b'A' * 0x100 + b'FINDME_MARKER' + b'B' * 0x100
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "hit.yar",
+                    'rule HitRule { meta: description = '
+                    f'"{_LONG_DESC}" '
+                    'strings: $a = "FINDME_MARKER" condition: $a }')
+        seg = Segment(seg_va, seg_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            _reader                = FakeReader({seg_va: data})
+        yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=verbose)
+
+    return capsys.readouterr().out
+
+
+def test_long_description_is_rendered_in_full_normal_mode(capsys):
+    out = _run_long_description_rule(verbose=False, capsys=capsys)
+    assert _LONG_DESC in out
+    assert "0x2E (CS4-era)" in out   # the exact tail the old 72-char cutoff dropped
+    assert _LONG_DESC[:72] + "…" not in out   # the old truncated-with-ellipsis form
+
+
+def test_long_description_is_rendered_in_full_verbose_mode(capsys):
+    out = _run_long_description_rule(verbose=True, capsys=capsys)
+    assert _LONG_DESC in out
+    assert "0x2E (CS4-era)" in out
+    assert _LONG_DESC[:72] + "…" not in out
+
+
 # ── a match() call that raises something OTHER than a timeout must be ──
 # counted as a coverage gap, not silently treated as "ran, no match" ────
 
