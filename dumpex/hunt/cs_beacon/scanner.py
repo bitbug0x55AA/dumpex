@@ -7,6 +7,7 @@ interpret. Every resource-budget/coverage-gap rule that existed in the
 single-file hunter is preserved here unchanged (see the inline comments
 below for why each check is placed where it is).
 """
+import math
 import time
 
 from dumpex.hunt._coverage import CoverageTracker, segment_scan_target
@@ -90,20 +91,55 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
     # whichever call site fires first (mirrors dumpex.hunt.injection.
     # memory_scan._ScanBudget.last_exhausted_kind).
     budget_exhausted_kind = None
-    scan_deadline = monotonic() + config.scan_deadline_seconds
+    # The ACTUAL amount of the winning resource consumed at the moment it
+    # was attributed (issue #28 review follow-up) -- distinct from the
+    # resource's own configured limit, which is all `budget_exhausted_
+    # limit` below ever carries. `total_candidates`/`total_decoded_bytes`
+    # are both incremented/accumulated BEFORE their own `> config.max_*`
+    # check runs, so real consumption at that instant can exceed the
+    # configured cap (e.g. `limit + 1` candidates); wall-clock elapsed
+    # time is measured directly rather than assumed to equal the
+    # configured deadline.
+    budget_exhausted_consumed = None
+    scan_start = monotonic()
+    scan_deadline = scan_start + config.scan_deadline_seconds
 
-    def _mark_budget_exhausted(reason: str, kind: str, stop_index: "int | None" = None):
+    def _mark_budget_exhausted(reason: str, kind: str, consumed: int, stop_index: "int | None" = None):
         # `stop_index` defaults to the CURRENT segment (still mid-
         # processing, or not started yet) -- overridden to `seg_index + 1`
         # at the one call site where `seg` has already been fully
         # candidate-scanned by the time its own deadline recheck fires
         # (only LATER segments are actually unstarted there).
-        nonlocal budget_exhausted, budget_reason, budget_exhausted_stop_index, budget_exhausted_kind
+        nonlocal budget_exhausted, budget_reason, budget_exhausted_stop_index, budget_exhausted_kind, \
+            budget_exhausted_consumed
         budget_exhausted = True
         budget_reason = reason
         if budget_exhausted_stop_index is None:
             budget_exhausted_stop_index = seg_index if stop_index is None else stop_index
             budget_exhausted_kind = kind
+            budget_exhausted_consumed = consumed
+
+    def _elapsed_seconds(now: float) -> int:
+        # Ceiling, and floored at 0 -- mirrors budget_exhausted_limit's own
+        # max(0, int(config.scan_deadline_seconds)) floor for a test-only
+        # negative deadline (an "already expired before the scan even
+        # starts" technique); a real elapsed duration can never be
+        # negative either way.
+        return max(0, math.ceil(now - scan_start))
+
+    def _resource_kind_and_consumed():
+        """Which of the three per-candidate resources (max_candidates/
+        max_decoded_bytes/scan_deadline_seconds) is exhausted RIGHT NOW,
+        and the real amount of it consumed -- shared by both per-candidate
+        recheck sites below so the elapsed-time calc isn't duplicated."""
+        if total_candidates > config.max_candidates:
+            return "max_candidates", total_candidates
+        if total_decoded_bytes > config.max_decoded_bytes:
+            return "max_decoded_bytes", total_decoded_bytes
+        now = monotonic()
+        if now > scan_deadline:
+            return "scan_deadline_seconds", _elapsed_seconds(now)
+        return None, None
 
     for seg_index, seg in enumerate(segs):
         if budget_exhausted:
@@ -118,13 +154,14 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
         # independent cap for the same gap on a machine fast enough to
         # stay under the time budget while still reading an unbounded
         # amount of data.
-        if monotonic() > scan_deadline:
+        _now = monotonic()
+        if _now > scan_deadline:
             _mark_budget_exhausted(
                 f"{total_candidates} candidate(s) examined, "
                 f"{total_scanned_bytes} byte(s) scanned, "
                 f"{len(hits)} hit(s) found — scan deadline reached "
                 f"before all segments were examined",
-                "scan_deadline_seconds")
+                "scan_deadline_seconds", _elapsed_seconds(_now))
             break
         # Checked against the PLANNED read size (total_scanned_bytes +
         # seg.size), not just the already-accumulated total — a pure
@@ -138,7 +175,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
                 f"{total_scanned_bytes} byte(s) scanned across "
                 f"{total_candidates} candidate(s), {len(hits)} hit(s) "
                 f"found — total scanned-bytes budget exhausted",
-                "max_total_scanned_bytes")
+                "max_total_scanned_bytes", total_scanned_bytes)
             break
         if seg.size > config.max_seg_scan:
             coverage_counts.note_skipped_oversize(
@@ -179,21 +216,14 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
             # did (elif only evaluates monotonic() when both earlier
             # conditions are False, same as `A or B or C`'s own
             # short-circuit).
-            if total_candidates > config.max_candidates:
-                exhausted_kind = "max_candidates"
-            elif total_decoded_bytes > config.max_decoded_bytes:
-                exhausted_kind = "max_decoded_bytes"
-            elif monotonic() > scan_deadline:
-                exhausted_kind = "scan_deadline_seconds"
-            else:
-                exhausted_kind = None
+            exhausted_kind, exhausted_consumed = _resource_kind_and_consumed()
             if exhausted_kind is not None:
                 _mark_budget_exhausted(
                     f"{total_candidates} candidate(s) examined, "
                     f"{total_decoded_bytes} byte(s) decoded, "
                     f"{len(hits)} hit(s) found before the scan "
                     f"budget was exhausted",
-                    exhausted_kind)
+                    exhausted_kind, exhausted_consumed)
                 break
             parsed = _cs_decode_and_parse_tlv(data, idx, xor_key, config.config_decode_max)
             total_decoded_bytes += parsed['consumed']
@@ -206,7 +236,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
                             f"{total_candidates} candidate(s) examined, "
                             f"{total_decoded_bytes} byte(s) decoded, "
                             f"{len(hits)} hit(s) found — hit cap reached",
-                            "max_hits")
+                            "max_hits", len(hits))
                         break
             # Re-checked immediately after THIS candidate's decode work,
             # not only at the top of the next loop iteration — if this
@@ -214,21 +244,14 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
             # iteration ever runs, so a budget crossed only by decoding
             # this candidate would otherwise never be noticed and the
             # scan would silently report "complete".
-            if total_candidates > config.max_candidates:
-                exhausted_kind = "max_candidates"
-            elif total_decoded_bytes > config.max_decoded_bytes:
-                exhausted_kind = "max_decoded_bytes"
-            elif monotonic() > scan_deadline:
-                exhausted_kind = "scan_deadline_seconds"
-            else:
-                exhausted_kind = None
+            exhausted_kind, exhausted_consumed = _resource_kind_and_consumed()
             if exhausted_kind is not None:
                 _mark_budget_exhausted(
                     f"{total_candidates} candidate(s) examined, "
                     f"{total_decoded_bytes} byte(s) decoded, "
                     f"{len(hits)} hit(s) found before the scan "
                     f"budget was exhausted",
-                    exhausted_kind)
+                    exhausted_kind, exhausted_consumed)
                 break
         if budget_exhausted:
             break
@@ -237,13 +260,14 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
         # whose read+scan alone crosses the deadline (few or zero
         # candidates, just a slow/large read) would otherwise only be
         # caught if there is a NEXT segment to re-enter the loop for.
-        if monotonic() > scan_deadline:
+        _now = monotonic()
+        if _now > scan_deadline:
             _mark_budget_exhausted(
                 f"{total_candidates} candidate(s) examined, "
                 f"{total_scanned_bytes} byte(s) scanned, "
                 f"{len(hits)} hit(s) found — scan deadline reached "
                 f"before all segments were examined",
-                "scan_deadline_seconds", stop_index=seg_index + 1)
+                "scan_deadline_seconds", _elapsed_seconds(_now), stop_index=seg_index + 1)
             break
 
     # `segs[index:]` -- the segment mid-processing (or, at the one
@@ -255,11 +279,13 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
     budget_exhausted_targets = (
         [segment_scan_target(s) for s in segs[budget_exhausted_stop_index:]]
         if budget_exhausted_stop_index is not None else [])
-    # issue #28 P6 follow-up: consumed always equals the configured limit
-    # (a budget is only ever attributed once fully exhausted). max(0, ...)
-    # on scan_deadline_seconds: it can be configured NEGATIVE as a
-    # test-only "already expired" technique, and a real budget can never
-    # be negative.
+    # max(0, ...) on scan_deadline_seconds: it can be configured NEGATIVE
+    # as a test-only "already expired" technique, and a real budget can
+    # never be negative. `budget_exhausted_consumed` (issue #28 review
+    # follow-up) is the REAL measured consumption at the moment this
+    # budget was attributed -- see `_mark_budget_exhausted`'s own
+    # docstring; it is set together with `budget_exhausted_kind`, so no
+    # by-kind lookup is needed for it the way there is for the limit.
     _budget_limits_by_kind = {
         "scan_deadline_seconds": max(0, int(config.scan_deadline_seconds)),
         "max_total_scanned_bytes": config.max_total_scanned_bytes,
@@ -278,6 +304,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, monotonic=time.monoton
         budget_reason=budget_reason,
         budget_exhausted_targets=budget_exhausted_targets,
         budget_exhausted_kind=budget_exhausted_kind, budget_exhausted_limit=budget_exhausted_limit,
+        budget_exhausted_consumed=budget_exhausted_consumed,
         total_candidates=total_candidates,
         total_decoded_bytes=total_decoded_bytes,
         total_scanned_bytes=total_scanned_bytes,
@@ -295,6 +322,13 @@ def format_scan_note(outcome: ScanOutcome) -> str:
         note += f" ({outcome.coverage.read_failed} segment(s) failed to read)"
     if outcome.coverage.short_reads:
         note += f" ({outcome.coverage.short_reads} segment(s) short-read)"
-    if outcome.budget_exhausted:
+    if outcome.budget_exhausted and outcome.budget_exhausted_targets:
         note += f" (scan budget exhausted: {outcome.budget_reason})"
+    elif outcome.budget_exhausted:
+        # issue #28 review follow-up: the budget was only noticed
+        # exhausted after the last segment's own candidate scan already
+        # finished cleanly -- every segment WAS examined, so this must not
+        # reuse budget_reason's own "before all segments were examined"
+        # wording, which would be false here.
+        note += " (scan resource budget exceeded only after the last segment finished; no segments left unscanned)"
     return note

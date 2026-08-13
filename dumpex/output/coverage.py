@@ -2107,6 +2107,16 @@ class CoverageLimitation:
     # `detail`, which broke the moment a code that ALSO uses `detail` for
     # its own free-text reason -- e.g. CS_BEACON_SCAN_BUDGET_EXHAUSTED's
     # human-readable budget_reason -- needed both at once).
+    #
+    # `budget_consumed` is the REAL amount of the resource consumed at the
+    # moment it was attributed, not merely assumed to equal `budget_limit`
+    # (issue #28 review follow-up) -- it can exceed the limit (a resource
+    # counter incremented, or elapsed wall-clock time measured, only AFTER
+    # the check that stops the scan), or sit under it (a predictive check
+    # that stops the scan just BEFORE an action that would exceed the
+    # limit, so the limit itself was never actually reached). A producer
+    # must report the real measured value either way, never the
+    # configured limit as a stand-in for it.
     budget_limit: "int | None" = None
     budget_consumed: "int | None" = None
 
@@ -2127,11 +2137,6 @@ class CoverageLimitation:
                 "CoverageLimitation.budget_limit/budget_consumed must be both None or both "
                 f"set together, got budget_limit={self.budget_limit!r} "
                 f"budget_consumed={self.budget_consumed!r}")
-        if self.budget_limit is not None and self.budget_consumed != self.budget_limit:
-            raise ValueError(
-                f"CoverageLimitation.budget_consumed ({self.budget_consumed}) must equal "
-                f"budget_limit ({self.budget_limit}) -- a budget is only ever attributed as "
-                f"an exhaustion reason once fully consumed")
         object.__setattr__(self, "unavailable_fields", _normalize_non_empty_str_tuple(
             self.unavailable_fields, "CoverageLimitation.unavailable_fields"))
         object.__setattr__(self, "available_fields", _normalize_non_empty_str_tuple(

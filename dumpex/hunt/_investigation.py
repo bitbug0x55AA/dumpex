@@ -445,11 +445,10 @@ class SkipRelationship:
                                   f"{sorted(_BUDGET_KINDS)}, got {self.budget_kind!r}")
             _require_nonnegative_int(self.budget_limit, "SkipRelationship.budget_limit")
             _require_nonnegative_int(self.budget_consumed, "SkipRelationship.budget_consumed")
-            if self.budget_consumed != self.budget_limit:
-                raise ValueError(
-                    f"SkipRelationship.budget_consumed ({self.budget_consumed}) must equal "
-                    f"budget_limit ({self.budget_limit}) -- a budget is only ever attributed "
-                    f"as an exhaustion reason once fully consumed")
+            # issue #28 review follow-up: budget_consumed is the REAL
+            # measured consumption, not assumed equal to budget_limit --
+            # see CoverageLimitation.budget_consumed's own docstring for
+            # why it can land on either side of the limit.
             # issue #28 P6 follow-up: originally injection-only
             # (scan_truncated/scan_not_started); now also YARA's own
             # hit_cap_reached/scan_budget_exhausted and CS Beacon's own

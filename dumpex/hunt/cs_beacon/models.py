@@ -41,6 +41,15 @@ class ScanOutcome:
     # both None together when budget_exhausted is False.
     budget_exhausted_kind: "str | None" = None
     budget_exhausted_limit: "int | None" = None
+    # The REAL amount of `budget_exhausted_kind`'s own resource actually
+    # consumed at the moment it was attributed (issue #28 review
+    # follow-up) -- NOT assumed to equal `budget_exhausted_limit`:
+    # `total_candidates`/`total_decoded_bytes` are both incremented BEFORE
+    # their own `> config.max_*` check runs, so this can exceed the
+    # configured limit (e.g. limit + 1 candidates); wall-clock elapsed
+    # time is measured directly rather than assumed to equal the
+    # configured deadline. None exactly when budget_exhausted is False.
+    budget_exhausted_consumed: "int | None" = None
 
 
 @dataclass

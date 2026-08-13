@@ -402,7 +402,12 @@ def test_budget_exhausted_identifies_the_unstarted_segments(monkeypatch, hunter_
     assert all(t.kind.value == "memory_segment" for t in lim.targets)
     # issue #28 P6 follow-up: the structured budget fact too.
     assert lim.scope == "scan_deadline_seconds"
-    assert lim.budget_limit == lim.budget_consumed == cs_beacon.CS_SCAN_DEADLINE_SECONDS
+    assert lim.budget_limit == cs_beacon.CS_SCAN_DEADLINE_SECONDS
+    # issue #28 review follow-up: budget_consumed is the REAL elapsed
+    # wall-clock time (measured via the fake clock above), not assumed
+    # equal to the configured limit -- this fake clock's own stride
+    # overshoots the deadline by exactly one more full "tick" of it.
+    assert lim.budget_consumed == 2 * cs_beacon.CS_SCAN_DEADLINE_SECONDS
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
@@ -426,24 +431,38 @@ def test_max_candidates_budget_reports_its_own_kind(monkeypatch, hunter_record_v
     lim = next(l for l in rec.coverage.limitations
                if l.code.value == "CS_BEACON_SCAN_BUDGET_EXHAUSTED")
     assert lim.scope == "max_candidates"
-    assert lim.budget_limit == lim.budget_consumed == 5
+    assert lim.budget_limit == 5
+    # issue #28 review follow-up: total_candidates is incremented BEFORE
+    # the `> config.max_candidates` check runs, so the real consumption
+    # at the moment the budget is attributed is limit + 1, not the limit
+    # itself.
+    assert lim.budget_consumed == 6
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 
 def test_budget_exhausted_on_last_segment_after_it_finished_has_no_targets(
         monkeypatch, hunter_record_validator):
-    """issue #28 P5 follow-up: when the deadline is only discovered AFTER
-    the one (and only, and therefore last) segment has already finished
-    its own candidate scan cleanly, there is genuinely nothing left to
-    name -- affected_count/targets must stay unset together, not claim a
-    target that doesn't exist."""
+    """issue #28 P5 follow-up (targets): when the deadline is only
+    discovered AFTER the one (and only, and therefore last) segment has
+    already finished its own candidate scan cleanly, there is genuinely
+    nothing left to name -- the underlying ScanOutcome's own
+    budget_exhausted_targets stays empty, not claiming a target that
+    doesn't exist.
+
+    issue #28 review follow-up (coverage semantics): an empty target list
+    here means there is no real coverage gap at all -- a deadline noticed
+    only after full, clean coverage is wall-clock telemetry, not a
+    partial result. No CS_BEACON_SCAN_BUDGET_EXHAUSTED limitation must be
+    constructed, and the result must come back exactly as clean/complete
+    as it would have if the deadline check had never fired."""
     seg_size = 0x100
     va = 0x74000000
     seg = Segment(va, va, seg_size)
+    regions = [Region(va, va, seg_size, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
 
     class MF(FakeMF):
         memory_segments_64 = FakeStream([seg], "memory_segments")
-        memory_info          = FakeStream([], "infos")
+        memory_info          = FakeStream(regions, "infos")
         _reader                = FakeReader({va: b'\x00' * seg_size})
 
     # scan_deadline=10; top-of-loop ok; post-segment recheck fails -- a
@@ -461,10 +480,12 @@ def test_budget_exhausted_on_last_segment_after_it_finished_has_no_targets(
     rec = collect_cs_beacon_record(MF())
     _assert_matches_console_dict(rec, console_dict)
 
-    lim = next(l for l in rec.coverage.limitations
-               if l.code.value == "CS_BEACON_SCAN_BUDGET_EXHAUSTED")
-    assert lim.affected_count is None
-    assert lim.targets == ()
+    assert not any(l.code.value == "CS_BEACON_SCAN_BUDGET_EXHAUSTED"
+                   for l in rec.coverage.limitations)
+    assert rec.coverage.status.value == "complete"
+    assert rec.status == "NOT_DETECTED_IN_SCANNED_SCOPE"
+    assert console_dict["coverage_status"] == "complete"
+    assert console_dict["coverage_reasons"] == []
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 

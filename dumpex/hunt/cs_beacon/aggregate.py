@@ -81,7 +81,15 @@ def build_report(scan_outcome, hit_records: list, mem_info_available: bool,
     # absence always makes coverage partial, since it's the region-context
     # corroboration check's own data source, regardless of whether this
     # scan happens to end up finding a config or not.
-    complete = (scan_outcome.coverage.complete and not scan_outcome.budget_exhausted
+    # issue #28 review follow-up: `scan_outcome.budget_exhausted` alone is
+    # NOT a coverage gap -- it can be True with an empty
+    # `budget_exhausted_targets` when the whole-scan budget is only
+    # discovered exhausted after the very last segment already finished
+    # its own candidate scan cleanly (pure wall-clock/resource telemetry,
+    # nothing left unexamined). Only a non-empty target list means
+    # genuinely unresolved scope.
+    budget_gap = bool(scan_outcome.budget_exhausted and scan_outcome.budget_exhausted_targets)
+    complete = (scan_outcome.coverage.complete and not budget_gap
                 and mem_info_available)
     coverage_reasons = scan_outcome.coverage.build_reasons(
         oversize_label="oversized segment(s) skipped",
@@ -89,7 +97,7 @@ def build_report(scan_outcome, hit_records: list, mem_info_available: bool,
         short_read_label="segment(s) returned fewer bytes than declared (short read) — "
                           "not fully scanned",
     )
-    if scan_outcome.budget_exhausted:
+    if budget_gap:
         coverage_reasons.append(f"scan resource budget exhausted ({scan_outcome.budget_reason}) — "
                                  f"stopped before every segment/candidate was examined")
     if not mem_info_available:

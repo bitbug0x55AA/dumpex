@@ -1205,7 +1205,13 @@ hidden-PE scan's four independent budgets (`reads_per_region`/
 affected region(s), and that budget's own configured limit/consumed —
 an analyst can now tell "raise `PE_SCAN_MAX_VALIDATIONS_TOTAL` and
 rescan" apart from "raise `PE_SCAN_TOTAL_BYTES_MAX` and rescan" instead
-of only knowing that *something* stopped the scan. All three stay `null`
+of only knowing that *something* stopped the scan. `budget_consumed` is
+the REAL amount actually consumed when the budget was attributed, not
+assumed equal to `budget_limit` (fixed in the same schema_version 2.12
+line) — it can exceed the limit (a counter incremented, or elapsed time
+measured, only after the check that stops the scan) or sit under it (a
+predictive check that stops the scan just before an action that would
+exceed the limit). All three stay `null`
 together when no region in the run actually stopped on a budget. This is
 a distinct axis from `size_limit`, which stays `null` throughout — a
 budget stop is never an oversized-skip. (`budget_limit`/`budget_consumed`
@@ -1270,7 +1276,21 @@ last (segment, rule_file) pairing of the whole scan, where nothing was
 genuinely left unexamined at all. `budget_exhausted` (the plain boolean)
 still becomes `True` in that case (a real wall-clock overrun is still
 worth recording), but `targets` is now correctly empty rather than
-naming a segment that was, in fact, fully examined. All three codes now
+naming a segment that was, in fact, fully examined. **Also fixed in the
+same schema_version 2.12 line:** an empty `targets` list on
+`YARA_SCAN_BUDGET_EXHAUSTED`/`CS_BEACON_SCAN_BUDGET_EXHAUSTED` no longer
+constructs the `CoverageLimitation` at all (previously it was still
+constructed with `affected_count: null`/`targets: []`, and its mere
+presence made `coverage.status`/the hunter's own `status`/`verdict_level`
+report `"partial"`/`INCONCLUSIVE` even though nothing was actually left
+unexamined) — a deadline noticed only after the scan's very last
+pairing/segment already finished cleanly now correctly reports
+`coverage.status: "complete"`, a clean `NOT_DETECTED_IN_SCANNED_SCOPE`/
+no-hit status, and no budget limitation in `coverage.limitations` at all;
+the console's own "Scan complete" note and `--verbose` reason text no
+longer claim segments were left unscanned in that case either. A genuine
+mid-scan deadline/hit-cap stop (non-empty `targets`) is unaffected and
+still reports `"partial"`/`INCONCLUSIVE` exactly as before. All three codes now
 also carry `scope`/`budget_limit`/`budget_consumed`, naming WHICH of the
 owning scanner's own independent resource budgets stopped it
 (YARA: `max_total_hits`/`scan_deadline_seconds`/`max_total_bytes_scanned`;

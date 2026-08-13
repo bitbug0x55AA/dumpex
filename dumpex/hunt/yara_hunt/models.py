@@ -78,6 +78,14 @@ class ScanOutcome:
     # follow-up) -- both None together when budget_exhausted is False.
     budget_exhausted_kind: "str | None" = None
     budget_exhausted_limit: "int | None" = None
+    # The REAL amount of `budget_exhausted_kind`'s own resource actually
+    # consumed at the moment it was attributed (issue #28 review
+    # follow-up) -- NOT assumed to equal `budget_exhausted_limit`: the
+    # post-read defensive backstop on total bytes scanned can genuinely
+    # exceed the configured cap, and wall-clock elapsed time is measured
+    # directly rather than assumed to equal the configured deadline. None
+    # exactly when budget_exhausted is False.
+    budget_exhausted_consumed: "int | None" = None
     total_bytes_scanned: int = 0
     suppressed_module_pe: int = 0
     suppressed_scoped: int = 0
