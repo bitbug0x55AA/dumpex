@@ -238,21 +238,34 @@ jobs:
           # classification policy has dedicated coverage
           # (tests/hunt/test_yara_context.py) after a P2 review found it
           # essentially untested despite deciding DETECTED vs. INCONCLUSIVE
-          # vs. clean. scanner.py and rules.py gates were raised (from 65
-          # and 55) after tests/unit/test_yara_scanner.py added fake-
-          # compiled-rule coverage of match() timeout handling, the
-          # whole-scan hit cap, and the per-match string-instance cap
-          # (measured ~88% branch coverage for both with real yara-python
-          # installed) -- still a few points of headroom below that
-          # measured baseline, not a hard 100% requirement.
-          coverage report --include="dumpex/hunt/yara_hunt/__init__.py"      --fail-under=75
-          coverage report --include="dumpex/hunt/yara_hunt/config.py"       --fail-under=95
-          coverage report --include="dumpex/hunt/yara_hunt/models.py"       --fail-under=95
-          coverage report --include="dumpex/hunt/yara_hunt/aggregate.py"    --fail-under=82
-          coverage report --include="dumpex/hunt/yara_hunt/scanner.py"      --fail-under=80
-          coverage report --include="dumpex/hunt/yara_hunt/presentation.py" --fail-under=60
-          coverage report --include="dumpex/hunt/yara_hunt/rules.py"        --fail-under=80
-          coverage report --include="dumpex/hunt/yara_hunt/context.py"      --fail-under=90
+          # vs. clean. The canonical report cutover (issue #11) replaced the
+          # mutable RuleBundle/ScanOutcome/RuleGroup DTOs and presentation.py
+          # with the immutable YaraReport domain model plus independent
+          # console/facts/legacy/record projectors (dumpex/hunt/test_yara_
+          # domain.py exercises the domain model directly, mirroring
+          # test_cs_beacon_domain.py) -- presentation.py's own gate is gone
+          # with the file; every new boundary is gated so a stale path fails
+          # visibly and no output projection is left without coverage.
+          # models.py stopped being a handful of mutable DTOs and became this
+          # hunter's whole immutable Evidence vocabulary (identity snapshots
+          # + per-field validation, incl. an arbitrary-meta-block tuple) --
+          # its gate stays at 95 (its pre-migration threshold too;
+          # tests/hunt/test_yara_domain.py directly exercises the validator
+          # branches this new role added, same as every sibling hunter's own
+          # models.py gate).
+          coverage report --include="dumpex/hunt/yara_hunt/__init__.py"       --fail-under=90
+          coverage report --include="dumpex/hunt/yara_hunt/config.py"        --fail-under=95
+          coverage report --include="dumpex/hunt/yara_hunt/models.py"        --fail-under=95
+          coverage report --include="dumpex/hunt/yara_hunt/aggregate.py"     --fail-under=95
+          coverage report --include="dumpex/hunt/yara_hunt/scanner.py"       --fail-under=85
+          coverage report --include="dumpex/hunt/yara_hunt/rules.py"         --fail-under=80
+          coverage report --include="dumpex/hunt/yara_hunt/context.py"       --fail-under=90
+          coverage report --include="dumpex/hunt/yara_hunt/domain.py"         --fail-under=85
+          coverage report --include="dumpex/hunt/yara_hunt/report_console.py" --fail-under=88
+          coverage report --include="dumpex/hunt/yara_hunt/report_facts.py"   --fail-under=90
+          coverage report --include="dumpex/hunt/yara_hunt/report_legacy.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/yara_hunt/report_record.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/yara_hunt/collect.py"        --fail-under=95
           coverage report --include="dumpex/hunt/_context.py"               --fail-under=90
           # dumpex/output/*: the v2 structured-output contract (--list/
           # --modules/--threads/--pid/--sysinfo/--peb). New in this change,

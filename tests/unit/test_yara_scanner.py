@@ -19,7 +19,10 @@ from tests.fixtures.fakes import Segment, FakeReader, FakeMF
 
 from dumpex.hunt.yara_hunt.scanner import scan_segments
 from dumpex.hunt.yara_hunt.config import YaraConfig
+from dumpex.hunt.yara_hunt.domain import RulesDiagnostics
 from dumpex.hunt.yara_hunt import aggregate
+from dumpex.hunt.yara_hunt.report_facts import legacy_coverage_dict, project_coverage_reasons, \
+    project_coverage_report
 from dumpex.hunt._ui import DETECTED, INCONCLUSIVE
 import dumpex.hunt.yara_hunt as yara_hunt
 
@@ -83,6 +86,15 @@ def _mf_with_segment(seg_va, seg_fo, data):
     return mf, seg
 
 
+def _build_report(result, rule_files, compile_failed=0):
+    """`scan_segments()`'s own `ScanResult` -> `YaraReport`, using a
+    `RulesDiagnostics` that matches what `_build_yara_report()` would
+    have built for the same `(rule_files, compile_failed)` pair."""
+    rules_diag = RulesDiagnostics(yara_available=True, rules_dir="fake", attempted=True,
+                                   compiled_ok=len(rule_files), compile_failed=compile_failed)
+    return aggregate.build_report(result, rules_diag)
+
+
 # ── match() timeout: a coverage gap, not a silent "ran, no match" ────────
 
 def test_match_timeout_marks_partial_and_inconclusive():
@@ -90,29 +102,30 @@ def test_match_timeout_marks_partial_and_inconclusive():
     mf, seg = _mf_with_segment(0x1000, 0x100, data)
     compiled = FakeCompiled(exc=FakeTimeoutError("simulated yara timeout"))
     config = YaraConfig()
+    rule_files = [("good.yar", compiled)]
 
-    outcome = scan_segments(mf, [seg], [("good.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg], rule_files, modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config)
 
-    assert outcome.timed_out == 1
-    assert outcome.match_failed == 0
-    assert outcome.all_hits == []
+    assert result.diagnostics.timed_out == 1
+    assert result.diagnostics.match_failed == 0
+    assert result.matches == ()
     # issue #28 P4 follow-up: the segment's own identity is retained, not
     # just tallied -- the same "region/segment identity behind every scan
     # gap counter" issue #28 already gives read_failed/short_reads.
-    assert len(outcome.timed_out_targets) == 1
-    assert outcome.timed_out_targets[0].base_address == 0x1000
-    assert outcome.match_failed_targets == []
+    assert len(result.diagnostics.timed_out_targets) == 1
+    assert result.diagnostics.timed_out_targets[0].base_address == 0x1000
+    assert result.diagnostics.match_failed_targets == ()
 
-    coverage = aggregate.build_coverage(outcome, compile_failed=0)
+    report = _build_report(result, rule_files)
+    coverage = legacy_coverage_dict(report)
     assert coverage["matches_completed"] is False
+    assert report.status == INCONCLUSIVE
+    assert report.coverage_status == "partial"
+    _, reasons = project_coverage_reasons(report)
+    assert any("timed out" in r for r in reasons)
 
-    report = aggregate.build_report(outcome, compile_failed=0)
-    assert report.findings["status"] == INCONCLUSIVE
-    assert report.findings["coverage_status"] == "partial"
-    assert "timed out" in report.verdict_reason
-
-    timed_out_lim = next(l for l in report.coverage_report.limitations
+    timed_out_lim = next(l for l in project_coverage_report(report).limitations
                           if l.code.value == "YARA_MATCH_TIMED_OUT")
     assert len(timed_out_lim.targets) == 1
     assert timed_out_lim.targets[0].base_address == 0x1000
@@ -125,17 +138,18 @@ def test_match_failure_retains_segment_target():
     mf, seg = _mf_with_segment(0x5000, 0x500, data)
     compiled = FakeCompiled(exc=ValueError("simulated yara internal error"))
     config = YaraConfig()
+    rule_files = [("bad.yar", compiled)]
 
-    outcome = scan_segments(mf, [seg], [("bad.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg], rule_files, modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config)
 
-    assert outcome.match_failed == 1
-    assert len(outcome.match_failed_targets) == 1
-    assert outcome.match_failed_targets[0].base_address == 0x5000
-    assert outcome.timed_out_targets == []
+    assert result.diagnostics.match_failed == 1
+    assert len(result.diagnostics.match_failed_targets) == 1
+    assert result.diagnostics.match_failed_targets[0].base_address == 0x5000
+    assert result.diagnostics.timed_out_targets == ()
 
-    report = aggregate.build_report(outcome, compile_failed=0)
-    match_failed_lim = next(l for l in report.coverage_report.limitations
+    report = _build_report(result, rule_files)
+    match_failed_lim = next(l for l in project_coverage_report(report).limitations
                              if l.code.value == "YARA_MATCH_FAILED")
     assert len(match_failed_lim.targets) == 1
     assert match_failed_lim.targets[0].base_address == 0x5000
@@ -153,13 +167,13 @@ def test_same_segment_failing_two_rule_files_contributes_two_targets():
     fail_b = FakeCompiled(exc=ValueError("boom b"))
     config = YaraConfig()
 
-    outcome = scan_segments(mf, [seg], [("a.yar", fail_a), ("b.yar", fail_b)],
-                             modules=[], regions=[], modules_available=False,
-                             mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg], [("a.yar", fail_a), ("b.yar", fail_b)],
+                            modules=[], regions=[], modules_available=False,
+                            mem_info_available=False, config=config)
 
-    assert outcome.match_failed == 2
-    assert len(outcome.match_failed_targets) == 2
-    assert all(t.base_address == 0x6000 for t in outcome.match_failed_targets)
+    assert result.diagnostics.match_failed == 2
+    assert len(result.diagnostics.match_failed_targets) == 2
+    assert all(t.base_address == 0x6000 for t in result.diagnostics.match_failed_targets)
 
 
 # ── a confirmed hit must not be erased by a LATER rule file timing out ───
@@ -170,48 +184,54 @@ def test_detected_hit_survives_later_timeout():
     hit_compiled     = FakeCompiled(results=[FakeMatch("HitRule")])
     timeout_compiled = FakeCompiled(exc=FakeTimeoutError("simulated yara timeout"))
     config = YaraConfig()
+    rule_files = [("hit.yar", hit_compiled), ("slow.yar", timeout_compiled)]
 
-    outcome = scan_segments(mf, [seg],
-                             [("hit.yar", hit_compiled), ("slow.yar", timeout_compiled)],
-                             modules=[], regions=[], modules_available=False,
-                             mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg], rule_files, modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config)
 
-    assert outcome.timed_out == 1
-    assert "HitRule" in outcome.triggered_rules
-    assert len(outcome.all_hits) == 1
+    assert result.diagnostics.timed_out == 1
+    assert len(result.matches) == 1
+    assert result.matches[0].rule == "HitRule"
 
-    report = aggregate.build_report(outcome, compile_failed=0)
-    assert report.findings["status"] == DETECTED
-    assert report.findings["coverage_status"] == "partial"
-    assert "HitRule" in report.findings["rules_hit"]
+    report = _build_report(result, rule_files)
+    assert report.status == DETECTED
+    assert report.coverage_status == "partial"
+    assert "HitRule" in report.triggered_rules
 
 
 # ── whole-scan hit cap truncates collection rather than growing unbounded ─
 
 def test_total_hit_cap_marks_scan_truncated():
+    # Two DISTINCT rules sharing the one segment -- the cap must stop
+    # collection after `max_total_hits` raw matches regardless of rule
+    # identity; using two different rule names (rather than one repeated
+    # match, which the (rule, seg_va) dedup this module applies after the
+    # loop ends would collapse to a single entry either way) keeps the
+    # post-dedup evidence count meaningful too.
     data = b'\x00' * 0x100
     mf, seg = _mf_with_segment(0x3000, 0x300, data)
-    matches = [FakeMatch("CapRule") for _ in range(5)]
+    matches = [FakeMatch(f"CapRule{i}") for i in range(5)]
     compiled = FakeCompiled(results=matches)
     config = YaraConfig(max_total_hits=2)
+    rule_files = [("cap.yar", compiled)]
 
-    outcome = scan_segments(mf, [seg], [("cap.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg], rule_files, modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config)
 
-    assert outcome.truncated is True
-    assert len(outcome.all_hits) == 2   # never more than the configured cap
+    assert result.diagnostics.truncated is True
+    assert len(result.matches) == 2   # never more than the configured cap
     # issue #28 P5 follow-up: the segment the cap was hit inside is
     # retained, not just tallied.
-    assert len(outcome.truncated_targets) == 1
-    assert outcome.truncated_targets[0].base_address == 0x3000
+    assert len(result.diagnostics.truncated_targets) == 1
+    assert result.diagnostics.truncated_targets[0].base_address == 0x3000
 
-    coverage = aggregate.build_coverage(outcome, compile_failed=0)
+    coverage = legacy_coverage_dict(_build_report(result, rule_files))
     assert coverage["hit_cap_not_reached"] is False
 
-    report = aggregate.build_report(outcome, compile_failed=0)
-    assert report.findings["coverage_status"] == "partial"
+    report = _build_report(result, rule_files)
+    assert report.coverage_status == "partial"
 
-    hit_cap_lim = next(l for l in report.coverage_report.limitations
+    hit_cap_lim = next(l for l in project_coverage_report(report).limitations
                         if l.code.value == "YARA_HIT_CAP_REACHED")
     assert hit_cap_lim.affected_count == 1
     assert len(hit_cap_lim.targets) == 1
@@ -228,16 +248,16 @@ def test_total_hit_cap_retains_every_later_segment_as_a_target_too():
     data = b'\x00' * 0x100
     mf, seg1 = _mf_with_segment(0x9000, 0x900, data)
     seg2 = Segment(0xA000, 0xA00, len(data))
-    matches = [FakeMatch("CapRule") for _ in range(5)]
+    matches = [FakeMatch(f"CapRule{i}") for i in range(5)]
     compiled = FakeCompiled(results=matches)
     config = YaraConfig(max_total_hits=2)
 
-    outcome = scan_segments(mf, [seg1, seg2], [("cap.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg1, seg2], [("cap.yar", compiled)], modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config)
 
-    assert outcome.truncated is True
-    assert len(outcome.truncated_targets) == 2
-    assert {t.base_address for t in outcome.truncated_targets} == {0x9000, 0xA000}
+    assert result.diagnostics.truncated is True
+    assert len(result.diagnostics.truncated_targets) == 2
+    assert {t.base_address for t in result.diagnostics.truncated_targets} == {0x9000, 0xA000}
 
 
 def test_deadline_exhausted_marks_budget_exhausted_with_every_unstarted_segment():
@@ -249,6 +269,7 @@ def test_deadline_exhausted_marks_budget_exhausted_with_every_unstarted_segment(
     seg2 = Segment(0xC000, 0xC00, len(data))
     compiled = FakeCompiled(results=[])
     config = YaraConfig(scan_deadline_seconds=-1)
+    rule_files = [("x.yar", compiled)]
 
     # A fixed (not the real wall clock) monotonic: `scan_start` and the
     # top-of-loop deadline check both see 0, so the REAL elapsed time
@@ -256,21 +277,21 @@ def test_deadline_exhausted_marks_budget_exhausted_with_every_unstarted_segment(
     # assumed equal to the limit) comes out deterministically 0 too,
     # rather than depending on however many real microseconds elapsed
     # between two consecutive time.monotonic() calls on this machine.
-    outcome = scan_segments(mf, [seg1, seg2], [("x.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config,
-                             monotonic=_clamped_clock([0, 0]))
+    result = scan_segments(mf, [seg1, seg2], rule_files, modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config,
+                            monotonic=_clamped_clock([0, 0]))
 
-    assert outcome.budget_exhausted is True
-    assert outcome.scanned == 0
-    assert len(outcome.budget_exhausted_targets) == 2
-    assert {t.base_address for t in outcome.budget_exhausted_targets} == {0xB000, 0xC000}
+    assert result.diagnostics.budget_exhausted is True
+    assert result.diagnostics.scanned == 0
+    assert len(result.diagnostics.budget_exhausted_targets) == 2
+    assert {t.base_address for t in result.diagnostics.budget_exhausted_targets} == {0xB000, 0xC000}
     # issue #28 P6 follow-up: a negative configured deadline reports as
     # limit=0 (the smallest REAL budget), never the literal negative value.
-    assert outcome.budget_exhausted_kind == "scan_deadline_seconds"
-    assert outcome.budget_exhausted_limit == 0
+    assert result.diagnostics.budget_exhausted_kind == "scan_deadline_seconds"
+    assert result.diagnostics.budget_exhausted_limit == 0
 
-    report = aggregate.build_report(outcome, compile_failed=0)
-    budget_lim = next(l for l in report.coverage_report.limitations
+    report = _build_report(result, rule_files)
+    budget_lim = next(l for l in project_coverage_report(report).limitations
                        if l.code.value == "YARA_SCAN_BUDGET_EXHAUSTED")
     assert budget_lim.affected_count == 2
     assert budget_lim.scope == "scan_deadline_seconds"
@@ -285,14 +306,14 @@ def test_total_bytes_budget_exhausted_reports_its_own_kind():
     compiled = FakeCompiled(results=[])
     config = YaraConfig(max_total_bytes_scanned=0)   # already exhausted before any read
 
-    outcome = scan_segments(mf, [seg], [("x.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg], [("x.yar", compiled)], modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config)
 
-    assert outcome.budget_exhausted is True
-    assert outcome.budget_exhausted_kind == "max_total_bytes_scanned"
-    assert outcome.budget_exhausted_limit == 0
-    assert len(outcome.budget_exhausted_targets) == 1
-    assert outcome.budget_exhausted_targets[0].base_address == 0x12000
+    assert result.diagnostics.budget_exhausted is True
+    assert result.diagnostics.budget_exhausted_kind == "max_total_bytes_scanned"
+    assert result.diagnostics.budget_exhausted_limit == 0
+    assert len(result.diagnostics.budget_exhausted_targets) == 1
+    assert result.diagnostics.budget_exhausted_targets[0].base_address == 0x12000
 
 
 # ── issue #28 P6 follow-up: the deadline can be noticed only AFTER the ────
@@ -311,35 +332,36 @@ def _clamped_clock(vals):
 def test_deadline_after_last_pairing_completes_reports_no_false_target():
     # The reviewer's exact repro: 1 segment, 1 rule file, both fully
     # examined -- the deadline is discovered only once there is genuinely
-    # nothing left. budget_exhausted still becomes True at the ScanOutcome
-    # level (a real wall-clock overrun worth recording), but no segment is
-    # falsely named, AND (issue #28 review follow-up) this must not be
-    # constructed as a CoverageLimitation at all -- a targetless
-    # YARA_SCAN_BUDGET_EXHAUSTED used to still flip the whole result to
-    # INCONCLUSIVE/partial even though nothing was actually left
+    # nothing left. budget_exhausted still becomes True at the
+    # ScanDiagnostics level (a real wall-clock overrun worth recording),
+    # but no segment is falsely named, AND (issue #28 review follow-up)
+    # this must not be constructed as a CoverageLimitation at all -- a
+    # targetless YARA_SCAN_BUDGET_EXHAUSTED used to still flip the whole
+    # result to INCONCLUSIVE/partial even though nothing was actually left
     # unexamined.
     data = b'\x00' * 0x100
     mf, seg = _mf_with_segment(0xD000, 0xD00, data)
     compiled = FakeCompiled(results=[])
     config = YaraConfig()
+    rule_files = [("r.yar", compiled)]
     # call1: scan_deadline setup: 0 -> deadline=300. call2: top-of-outer-
     # loop check: 1 (ok). call3: rule_index 0's own "remaining" check: 2
     # (ok, match() proceeds). call4: the post-match recheck: 1000 (deadline
     # exceeded) -- and this was the only rule file for the only segment.
-    outcome = scan_segments(mf, [seg], [("r.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config,
-                             monotonic=_clamped_clock([0, 1, 2, 1000]))
+    result = scan_segments(mf, [seg], rule_files, modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config,
+                            monotonic=_clamped_clock([0, 1, 2, 1000]))
 
-    assert outcome.budget_exhausted is True
-    assert outcome.scanned == 1
-    assert outcome.budget_exhausted_targets == []
+    assert result.diagnostics.budget_exhausted is True
+    assert result.diagnostics.scanned == 1
+    assert result.diagnostics.budget_exhausted_targets == ()
 
-    report = aggregate.build_report(outcome, compile_failed=0)
+    report = _build_report(result, rule_files)
     assert not any(l.code.value == "YARA_SCAN_BUDGET_EXHAUSTED"
-                   for l in report.coverage_report.limitations)
-    assert report.coverage_report.status.value == "complete"
-    assert report.findings["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
-    assert report.findings["coverage"]["scan_budget_ok"] is True
+                   for l in project_coverage_report(report).limitations)
+    assert project_coverage_report(report).status.value == "complete"
+    assert report.status == "NOT_DETECTED_IN_SCANNED_SCOPE"
+    assert legacy_coverage_dict(report)["scan_budget_ok"] is True
 
 
 def test_deadline_mid_rule_files_still_includes_current_segment():
@@ -351,14 +373,14 @@ def test_deadline_mid_rule_files_still_includes_current_segment():
     compiled_b = FakeCompiled(results=[])
     config = YaraConfig()
 
-    outcome = scan_segments(mf, [seg], [("a.yar", compiled_a), ("b.yar", compiled_b)],
-                             modules=[], regions=[], modules_available=False,
-                             mem_info_available=False, config=config,
-                             monotonic=_clamped_clock([0, 1, 2, 1000]))
+    result = scan_segments(mf, [seg], [("a.yar", compiled_a), ("b.yar", compiled_b)],
+                            modules=[], regions=[], modules_available=False,
+                            mem_info_available=False, config=config,
+                            monotonic=_clamped_clock([0, 1, 2, 1000]))
 
-    assert outcome.budget_exhausted is True
-    assert len(outcome.budget_exhausted_targets) == 1
-    assert outcome.budget_exhausted_targets[0].base_address == 0xE000
+    assert result.diagnostics.budget_exhausted is True
+    assert len(result.diagnostics.budget_exhausted_targets) == 1
+    assert result.diagnostics.budget_exhausted_targets[0].base_address == 0xE000
     assert compiled_b.call_count == 0   # the second rule file genuinely never ran
 
 
@@ -375,14 +397,14 @@ def test_deadline_after_segment_zero_finishes_only_names_segment_one():
     compiled = FakeCompiled(results=[])
     config = YaraConfig()
 
-    outcome = scan_segments(mf, [seg0, seg1], [("r.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config,
-                             monotonic=_clamped_clock([0, 1, 2, 1000]))
+    result = scan_segments(mf, [seg0, seg1], [("r.yar", compiled)], modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config,
+                            monotonic=_clamped_clock([0, 1, 2, 1000]))
 
-    assert outcome.budget_exhausted is True
-    assert outcome.scanned == 1   # only segment 0 was actually read/matched
-    assert len(outcome.budget_exhausted_targets) == 1
-    assert outcome.budget_exhausted_targets[0].base_address == 0xF100
+    assert result.diagnostics.budget_exhausted is True
+    assert result.diagnostics.scanned == 1   # only segment 0 was actually read/matched
+    assert len(result.diagnostics.budget_exhausted_targets) == 1
+    assert result.diagnostics.budget_exhausted_targets[0].base_address == 0xF100
 
 
 def test_deadline_in_except_branch_after_last_pairing_reports_no_false_target():
@@ -396,13 +418,13 @@ def test_deadline_in_except_branch_after_last_pairing_reports_no_false_target():
     # call1: deadline setup: 0. call2: top-of-outer-loop: 1 (ok). call3:
     # rule_index 0's "remaining" check: 2 (ok, match() is attempted and
     # raises). call4: the except-branch deadline check: 1000 (exceeded).
-    outcome = scan_segments(mf, [seg], [("r.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config,
-                             monotonic=_clamped_clock([0, 1, 2, 1000]))
+    result = scan_segments(mf, [seg], [("r.yar", compiled)], modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config,
+                            monotonic=_clamped_clock([0, 1, 2, 1000]))
 
-    assert outcome.match_failed == 1   # the raising call is still counted
-    assert outcome.budget_exhausted is True
-    assert outcome.budget_exhausted_targets == []
+    assert result.diagnostics.match_failed == 1   # the raising call is still counted
+    assert result.diagnostics.budget_exhausted is True
+    assert result.diagnostics.budget_exhausted_targets == ()
 
 
 # ── per-match string-instance cap ─────────────────────────────────────────
@@ -415,17 +437,17 @@ def test_string_instance_cap():
     compiled = FakeCompiled(results=[match])
     config = YaraConfig(max_strings_per_match=3)
 
-    outcome = scan_segments(mf, [seg], [("stringy.yar", compiled)], modules=[], regions=[],
-                             modules_available=False, mem_info_available=False, config=config)
+    result = scan_segments(mf, [seg], [("stringy.yar", compiled)], modules=[], regions=[],
+                            modules_available=False, mem_info_available=False, config=config)
 
-    assert len(outcome.all_hits) == 1
-    annotated = outcome.all_hits[0]["strings"]
+    assert len(result.matches) == 1
+    annotated = result.matches[0].strings
     assert len(annotated) == 3   # capped, not all 10 instances
-    assert annotated[0]["offset"] == 0
-    assert annotated[0]["va"] == seg.start_virtual_address
-    assert annotated[0]["fo"] == seg.start_file_address
-    assert annotated[2]["offset"] == 8
-    assert annotated[2]["va"] == seg.start_virtual_address + 8
+    assert annotated[0].offset == 0
+    assert annotated[0].va == seg.start_virtual_address
+    assert annotated[0].fo == seg.start_file_address
+    assert annotated[2].offset == 8
+    assert annotated[2].va == seg.start_virtual_address + 8
 
 
 # ── yara-python missing: NOT_EVALUATED, prior provenance cleared ─────────

@@ -115,19 +115,32 @@ def _rules_meta(redact_paths: bool) -> "dict | None":
         return {"error": str(e)}
 
 
-def _yara_rules_meta(redact_paths: bool) -> "dict | None":
-    """v2 counterpart to dumpex.ui.structured.StructuredOutput._yara_meta
-    -- same provenance (sorted rule filenames, per-file sha256, aggregate
-    sha256, compile success/fail counts) for the rule files actually used
-    by the most recent --hunt yara/all run, same basename-only redaction
-    under --redact-paths, same "None if YARA scanning was never invoked
-    this run" contract."""
+def _yara_rules_meta(redact_paths: bool, yara_provenance: "dict | None") -> "dict | None":
+    """Same provenance shape dumpex.ui.structured.StructuredOutput._yara_meta
+    still builds (sorted rule filenames, per-file sha256, aggregate sha256,
+    compile success/fail counts), same basename-only redaction under
+    --redact-paths -- but sourced from `yara_provenance`, an ALREADY-BUILT
+    dict `build_meta_v2()`'s own caller supplies explicitly (the current
+    command's own `domain.YaraReport.coverage.rules.provenance.to_dict()`,
+    threaded through by `dumpex.hunt.cmd_hunt()` -> cli.py ->
+    `V2Output.set_yara_provenance()`), NEVER `dumpex.hunt.yara_hunt.
+    get_yara_provenance()`'s own process-wide "last build" global.
+
+    That global is a real hazard for exactly this call site: if a caller
+    built a SECOND `YaraReport` (e.g. a different dump, or a different
+    --yara-dir) anywhere in the same process between this command's own
+    YARA scan and this meta-construction call, reading the global here
+    would silently attribute THAT later run's rule provenance to THIS
+    command's output. Threading the value through explicitly makes that
+    impossible -- this function no longer reads any global at all. `None`
+    (the default whenever a command never built a `YaraReport`, e.g.
+    `--modules`, or `--hunt injection` alone) means "omit meta.yara_rules
+    entirely", same contract as before.
+    """
+    if yara_provenance is None:
+        return None
     try:
-        from dumpex.hunt.yara_hunt import get_yara_provenance
-        info = get_yara_provenance()
-        if info is None:
-            return None
-        info = dict(info)
+        info = dict(yara_provenance)
         if redact_paths and info.get("rules_dir"):
             info["rules_dir"] = os.path.basename(info["rules_dir"].rstrip("/\\"))
         return info
@@ -256,7 +269,8 @@ def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | 
                    command: "str | None",
                    options: dict, case_id: "str | None", analyst: "str | None",
                    redact_paths: bool, started_at: "datetime.datetime",
-                   finished_at: "datetime.datetime") -> dict:
+                   finished_at: "datetime.datetime",
+                   yara_provenance: "dict | None" = None) -> dict:
     """
     Each of tool/execution/evidence/runtime is isolated in its OWN
     try/except rather than one try wrapping the whole document: the v2
@@ -270,6 +284,15 @@ def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | 
     dumpex-output-v2.2.schema.json's $defs/meta requires, with an "error"
     key added alongside (additionalProperties is not restricted on these
     objects) so the failure is visible rather than merely papered over.
+
+    `yara_provenance` is the CURRENT command's own YARA rule provenance --
+    already a plain dict (`domain.RulesProvenance.to_dict()`), or `None`
+    when this command never built a `YaraReport` -- supplied explicitly by
+    the caller (`V2Output`, threaded from `dumpex.hunt.cmd_hunt()`'s own
+    5-tuple return under `collect_records=True`). This function never
+    reads `dumpex.hunt.yara_hunt.get_yara_provenance()` (a process-wide
+    "last build" global) itself -- see `_yara_rules_meta()`'s own
+    docstring for why that global is unsafe to read here.
     """
     if (dump_path_abs is None) == (evidence is None):
         # Both None -> nothing to build meta.evidence from. Both given ->
@@ -346,7 +369,7 @@ def build_meta_v2(*, dump_path_abs: "str | None" = None, dump_file_name: "str | 
     rules = _rules_meta(redact_paths)
     if rules is not None:
         meta["rules"] = rules
-    yara_rules = _yara_rules_meta(redact_paths)
+    yara_rules = _yara_rules_meta(redact_paths, yara_provenance)
     if yara_rules is not None:
         meta["yara_rules"] = yara_rules
 

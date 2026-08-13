@@ -46,9 +46,17 @@ cs-beacon's Report/parallel-findings/mutable-collection/aggregate/renderer
 boundaries converted with the CS Beacon migration (issue #9) -- production
 now builds `dumpex.hunt.cs_beacon.domain.CSBeaconReport`, and the old
 mutable `dumpex.hunt.cs_beacon.aggregate.Report` and
-`dumpex.hunt.cs_beacon.presentation` no longer exist. To use the file as a
-red/green implementation checklist, run it with
-``pytest --runxfail tests/hunt/test_output_source_architecture.py``.
+`dumpex.hunt.cs_beacon.presentation` no longer exist; yara's Report/
+aggregate/renderer boundaries converted with the YARA migration (issue
+#11) -- production now builds `dumpex.hunt.yara_hunt.domain.YaraReport`,
+the old mutable `dumpex.hunt.yara_hunt.aggregate.Report` and
+`dumpex.hunt.yara_hunt.presentation` no longer exist, and every `_PENDING`
+xfail this file ever carried is gone -- yara deliberately does not build a
+`findings`/`findings_list` pair at all (see domain.py's own docstring on
+why it stays off the shared Finding model), so it was never added to
+`PARALLEL_FINDING_REPORT_TYPES`. This file's xfail markers are now fully
+retired; every hunter in this migration series satisfies every contract
+below.
 """
 import dataclasses
 import enum
@@ -76,13 +84,8 @@ from dumpex.hunt.stomping import aggregate as stomping_aggregate
 from dumpex.hunt.stomping import domain as stomping_domain
 from dumpex.hunt.stomping import _render_stomping_console as stomping_render
 from dumpex.hunt.yara_hunt import aggregate as yara_aggregate
-from dumpex.hunt.yara_hunt import presentation as yara_presentation
-
-
-_PENDING = pytest.mark.xfail(
-    strict=True,
-    reason="output-source architecture migration not implemented yet",
-)
+from dumpex.hunt.yara_hunt import domain as yara_domain
+from dumpex.hunt.yara_hunt import report_console as yara_render
 
 
 REPORT_TYPES = [
@@ -92,7 +95,7 @@ REPORT_TYPES = [
     pytest.param(pipe_domain.PipeReport, id="pipe"),
     pytest.param(cs_beacon_domain.CSBeaconReport, id="cs-beacon"),
     pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
-    pytest.param(yara_aggregate.Report, id="yara", marks=_PENDING),
+    pytest.param(yara_domain.YaraReport, id="yara"),
 ]
 
 
@@ -130,6 +133,12 @@ MUTABLE_COLLECTION_REPORT_TYPES = [
     pytest.param(pipe_domain.PipeReport, id="pipe"),
     pytest.param(cs_beacon_domain.CSBeaconReport, id="cs-beacon"),
     pytest.param(encoding_domain.EncodingReport, id="obfuscation"),
+    # YaraReport needs no entry in _REQUIRED_FIELD_OVERRIDES below: both of
+    # its fields (coverage/evidence) default to their own empty snapshot,
+    # so YaraReport() alone already builds the not-evaluated shape this
+    # test's generic {}/[]/None-guessing loop would otherwise need help
+    # constructing.
+    pytest.param(yara_domain.YaraReport, id="yara"),
 ]
 
 # Per-(report_type, required-field-name) construction overrides, consulted
@@ -229,6 +238,12 @@ AGGREGATORS_WITH_PENDING_BOUNDARY_FIXES = [
     # already-resolved `ScanDiagnostics` and bool/int scalars only -- no
     # `mf`, no `verbose`, and no live `CoverageTracker`/`ScanOutcome`.
     pytest.param(cs_beacon_aggregate.build_report, id="cs-beacon"),
+    # Converted with the YARA migration (issue #11): its new signature
+    # takes a `scanner.ScanResult` (typed evidence tuple + a frozen
+    # `ScanDiagnostics`) and a `RulesDiagnostics` only -- no `mf`, no
+    # `verbose`, no raw `modules`/`regions` lists, and no mutable
+    # `ScanOutcome`.
+    pytest.param(yara_aggregate.build_report, id="yara"),
 ]
 
 
@@ -290,6 +305,23 @@ def test_cs_beacon_aggregate_receives_only_typed_evidence_and_scalars():
     )
 
 
+def test_yara_aggregate_receives_only_typed_evidence_and_scalars():
+    """Narrower than the name-blacklist check above -- see
+    `test_injection_aggregate_receives_only_typed_evidence_and_scalars`'s
+    own docstring for why a whitelist is needed at all. `build_report()`
+    accepts exactly the typed `scanner.ScanResult` (evidence tuple +
+    ScanDiagnostics) and `domain.RulesDiagnostics` it is built from --
+    never `mf`, raw `modules`/`regions`, or a mutable `ScanOutcome`."""
+    allowed = {"scan_result", "rules"}
+    parameter_names = set(inspect.signature(yara_aggregate.build_report).parameters)
+    unexpected = parameter_names - allowed
+    assert not unexpected, (
+        f"dumpex.hunt.yara_hunt.aggregate.build_report accepts unexpected "
+        f"parameter(s) {sorted(unexpected)} -- confirm any new parameter is "
+        f"typed evidence or a scalar count, never a raw dump-derived list"
+    )
+
+
 RENDERERS = [
     pytest.param(injection_render, id="injection"),
     pytest.param(hollowing_render, id="hollowing"),
@@ -297,7 +329,7 @@ RENDERERS = [
     pytest.param(pipe_render, id="pipe"),
     pytest.param(cs_beacon_render.print_console, id="cs-beacon"),
     pytest.param(encoding_render, id="obfuscation"),
-    pytest.param(yara_presentation.render_result, id="yara", marks=_PENDING),
+    pytest.param(yara_render.print_console, id="yara"),
 ]
 
 
