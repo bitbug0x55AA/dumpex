@@ -257,11 +257,10 @@ def _build_cs_beacon(monkeypatch, tmp_path) -> BuiltScenario:
 
 def _build_cs_beacon_multi(monkeypatch, tmp_path) -> BuiltScenario:
     """Two DISTINCT, uncorroborated beacon configs in one dump -- exercises
-    presentation.py's zip(hit_records, structural_config_findings,
-    strict=True) pairing (config #1's own printed block must show config
-    #1's VA, not config #2's -- see dumpex/hunt/cs_beacon/presentation.py's
-    own comment on why that's checked explicitly rather than trusted to
-    plain zip())."""
+    dumpex/hunt/cs_beacon/report_console.py's per-hit identity pairing
+    (config #1's own printed BEACON CONFIGS block must show config #1's VA,
+    not config #2's -- see tests/hunt/test_cs_beacon_domain.py's own
+    corroborated-sorts-first test for the same pairing guarantee)."""
     from tests.fixtures.fakes import FakeMF, FakeStream, Region, Segment, FakeReader, cs_beacon_config_bytes
     seg1_va, seg1_fo = 0x50000, 0x5000
     seg2_va, seg2_fo = 0x60000, 0x6000

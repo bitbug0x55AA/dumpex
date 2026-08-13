@@ -122,21 +122,38 @@ jobs:
           coverage report --include="dumpex/hunt/encoding/report_legacy.py"  --fail-under=90
           coverage report --include="dumpex/hunt/encoding/report_record.py"  --fail-under=95
           # dumpex/hunt/cs_beacon/*: same reasoning as encoding/* above --
-          # cs_beacon.py is a package now, not a single file. parser.py and
-          # presentation.py have low coverage because most Malleable C2/
-          # SSH/DNS transport display branches and the --verbose full field
-          # table only run against a fully-populated real config, which the
-          # unit fixtures deliberately keep minimal.
+          # cs_beacon.py is a package now, not a single file. parser.py has
+          # low coverage because most Malleable C2/SSH/DNS transport display
+          # branches and the --verbose full field table only run against a
+          # fully-populated real config, which the unit fixtures deliberately
+          # keep minimal.
           coverage report --include="dumpex/hunt/cs_beacon/__init__.py"     --fail-under=95
           coverage report --include="dumpex/hunt/cs_beacon/config.py"      --fail-under=95
           coverage report --include="dumpex/hunt/cs_beacon/schema.py"      --fail-under=95
+          # models.py stopped being a handful of mutable DTOs and became
+          # this hunter's whole immutable Evidence vocabulary (identity
+          # snapshots + per-field validation), so its gate moves up with
+          # its new role rather than staying at the old DTO threshold.
           coverage report --include="dumpex/hunt/cs_beacon/models.py"      --fail-under=95
           coverage report --include="dumpex/hunt/cs_beacon/der.py"         --fail-under=85
           coverage report --include="dumpex/hunt/cs_beacon/context.py"     --fail-under=85
           coverage report --include="dumpex/hunt/cs_beacon/scanner.py"     --fail-under=80
           coverage report --include="dumpex/hunt/cs_beacon/aggregate.py"   --fail-under=90
           coverage report --include="dumpex/hunt/cs_beacon/parser.py"      --fail-under=30
-          coverage report --include="dumpex/hunt/cs_beacon/presentation.py" --fail-under=40
+          # The canonical report cutover split the old presentation.py into
+          # the immutable domain model and independent console/facts/legacy/
+          # record projectors. Gate every new boundary so a stale path fails
+          # visibly and no output projection is left without coverage.
+          # domain.py/report_console.py sit a few points below their sibling
+          # hunters' usual 95 -- most Malleable C2/SSH/DNS transport display
+          # branches and the --verbose full field table only run against a
+          # fully-populated real config, same reasoning as parser.py above.
+          coverage report --include="dumpex/hunt/cs_beacon/domain.py"         --fail-under=85
+          coverage report --include="dumpex/hunt/cs_beacon/report_console.py" --fail-under=80
+          coverage report --include="dumpex/hunt/cs_beacon/report_facts.py"   --fail-under=90
+          coverage report --include="dumpex/hunt/cs_beacon/report_legacy.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/cs_beacon/report_record.py"  --fail-under=95
+          coverage report --include="dumpex/hunt/cs_beacon/collect.py"        --fail-under=95
           # dumpex/hunt/injection/*: same reasoning -- injection.py is a
           # package now, not a single file.
           coverage report --include="dumpex/hunt/injection/__init__.py"     --fail-under=95

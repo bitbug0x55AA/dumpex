@@ -82,9 +82,18 @@
   HUNT: Cobalt Strike Beacon Config
 ══════════════════════════════════════════
 
-  [~] No memory segments in dump — cannot scan for beacon config.
+  VERDICT     NOT EVALUATED — Memory64ListStream missing from this dump
+  Confidence  none
+  Score       0/2
+  Coverage    NOT EVALUATED
+  Review      none
 
-  [ VERDICT ]  NOT EVALUATED — Memory64ListStream missing from this dump
+  COVERAGE
+
+  [-] NOT EVALUATED
+      Memory64ListStream missing from this dump
+      Impact: No memory segments were captured in this dump at all — nothing was examined, so a
+      score of 0 here is not a clean result.
 
 
 ══════════════════════════════════════════

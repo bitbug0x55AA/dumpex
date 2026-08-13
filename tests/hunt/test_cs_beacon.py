@@ -9,9 +9,6 @@ from tests.fixtures.fakes import (Region, Segment, FakeReader, FakeStream, FakeM
 import dumpex.hunt.cs_beacon as cs_beacon
 import dumpex.hunt.cs_beacon.parser as parser
 import dumpex.hunt.cs_beacon.der as cs_der
-import dumpex.hunt.cs_beacon.presentation as presentation
-from dumpex.hunt.cs_beacon.aggregate import Report
-from dumpex.hunt._ui import DETECTED
 
 
 def _mk_segment_data(config_bytes: bytes, pad_before: int = 0x100, pad_after: int = 0x100) -> bytes:
@@ -359,7 +356,9 @@ def test_process_injection_printable_transform_shows_repr_text(capsys):
         memory_info          = FakeStream(regions, "infos")
         _reader                = FakeReader({seg_va: data})
 
-    cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    # Process Injection transforms are a --verbose-only expansion (issue #9
+    # console scope) -- this section no longer renders in normal mode.
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
     out = capsys.readouterr().out
 
     section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
@@ -390,7 +389,9 @@ def test_process_injection_binary_transform_shows_full_raw_hex_once_with_trailin
         memory_info          = FakeStream(regions, "infos")
         _reader                = FakeReader({seg_va: data})
 
-    cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    # Process Injection transforms are a --verbose-only expansion (issue #9
+    # console scope) -- this section no longer renders in normal mode.
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
     out = capsys.readouterr().out
 
     section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
@@ -420,7 +421,9 @@ def test_process_injection_long_binary_transform_truncates_at_64_hex_chars_with_
         memory_info          = FakeStream(regions, "infos")
         _reader                = FakeReader({seg_va: data})
 
-    cs_beacon._hunt_cs_beacon(MF(), verbose=False)
+    # Process Injection transforms are a --verbose-only expansion (issue #9
+    # console scope) -- this section no longer renders in normal mode.
+    cs_beacon._hunt_cs_beacon(MF(), verbose=True)
     out = capsys.readouterr().out
 
     section = out.split("Process Injection", 1)[1].split("Malleable C2", 1)[0]
@@ -548,6 +551,69 @@ def test_decode_and_parse_tlv_illegal_field_type_is_incomplete():
     parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
     assert parsed["complete"] is False
     assert "illegal field type" in parsed["reason"]
+
+
+# ── a type-1/type-2 field whose declared length doesn't match its own ─────
+# type (a type-1 "uint16" field claiming a length other than 2, or a
+# type-2 "uint32" field claiming a length other than 4) must be rejected
+# as incomplete, not silently accepted with `value=None` -- that used to
+# crash the whole scan the first time it reached models.ConfigField's own
+# type validation (int|str only), turning one malformed marker match
+# anywhere in a dump into a hard failure of the entire hunter.
+
+def test_decode_and_parse_tlv_wrong_length_uint16_field_is_incomplete():
+    plaintext = (_tlv(0x0001, 1, struct.pack('>H', 0))
+                 + struct.pack('>HHH', 0x0002, 1, 3) + b'\x00\x00\x00')   # type 1, length 3 (not 2)
+    encoded = bytes(b ^ 0x69 for b in plaintext)
+    parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    assert parsed["complete"] is False
+    assert "invalid length" in parsed["reason"]
+
+
+def test_decode_and_parse_tlv_wrong_length_uint32_field_is_incomplete():
+    plaintext = (_tlv(0x0001, 1, struct.pack('>H', 0))
+                 + struct.pack('>HHH', 0x0004, 2, 2) + b'\x00\x00')   # type 2, length 2 (not 4)
+    encoded = bytes(b ^ 0x69 for b in plaintext)
+    parsed = parser._cs_decode_and_parse_tlv(encoded, 0, 0x69, 8192)
+    assert parsed["complete"] is False
+    assert "invalid length" in parsed["reason"]
+
+
+def test_malformed_field_length_candidate_does_not_crash_the_whole_scan():
+    """Hunter-level regression: a candidate whose BeaconType/PublicKey are
+    otherwise genuinely valid (would pass `_cs_sanity_check` and become a
+    real hit) but carries one type-1 field with the wrong declared length
+    must not be counted as a hit -- and, critically, must not raise at all
+    (the whole `--hunt cs-beacon` scan must complete and report the rest
+    of the dump normally, not crash on one malformed candidate). Spliced
+    into the SAME base config `test_sanity_check_accepts_well_formed_
+    public_key` proves passes sanity checking, so this exercises the path
+    that used to reach `models.ConfigField`'s own construction (and crash
+    there) rather than being rejected earlier by an unrelated DER/
+    BeaconType failure."""
+    seg_va, seg_fo = 0x120000, 0x12000
+    xor_key = 0x69
+    base = cs_beacon_config_bytes(xor_key)
+    decoded = bytes(b ^ xor_key for b in base)
+    terminator = struct.pack('>H', 0)
+    assert decoded.endswith(terminator)
+    body = decoded[:-len(terminator)]
+    # type 1 (uint16) field declaring length 3 -- not the required 2.
+    malformed_field = struct.pack('>HHH', 0x0002, 1, 3) + b'\x00\x00\x00'
+    plaintext = body + malformed_field + terminator
+    config = bytes(b ^ xor_key for b in plaintext)
+    data = _mk_segment_data(config)
+    seg = Segment(seg_va, seg_fo, len(data))
+    regions = [Region(seg_va, seg_va, len(data), "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_segments_64 = FakeStream([seg], "memory_segments")
+        memory_info          = FakeStream(regions, "infos")
+        _reader                = FakeReader({seg_va: data})
+
+    f = cs_beacon._hunt_cs_beacon(MF(), verbose=False)   # must not raise
+    assert f["configs"] == []
+    assert f["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
 
 
 # ── _cs_decode_type3_value: the shared printable/binary decode helper ─────
@@ -1046,20 +1112,3 @@ def test_decoded_bytes_budget_marks_partial_on_final_candidate(monkeypatch):
     assert f["status"] == "DETECTED"
     assert f["coverage_status"] == "partial"
     assert any("scan resource budget exhausted" in r for r in f["coverage_reasons"])
-
-
-# ── console rendering: hit_records vs. cs_beacon.structural_config ────────
-# findings must never silently mismatch -- a hunter-side aggregate.py
-# regression that appends the wrong number of Findings must be caught
-# loudly (crash the render), not zip() a Beacon config's own console
-# detail out of existence with no trace anywhere (see
-# dumpex/hunt/cs_beacon/presentation.py's own comment on why this is
-# checked explicitly rather than trusted to plain zip()).
-
-def test_presentation_raises_on_hit_record_finding_count_mismatch():
-    report = Report(
-        findings={}, findings_list=[], hit_records=[object(), object()],
-        status=DETECTED,
-    )
-    with pytest.raises(ValueError, match="cs_beacon report invariant violated"):
-        presentation.render(report, verbose=False)

@@ -106,7 +106,6 @@ CS_INJECT_PERMS = {
     0x80: 'PAGE_EXECUTE_WRITECOPY',
 }
 
-# score -> verdict_level, owned by this hunter (see dumpex.hunt._finding.verdict_level).
-# A structurally-valid config (score 1) already reflects strong evidence —
-# see the package docstring — so it maps to "likely", not "possible".
-_VERDICT_LEVEL_BY_SCORE = {1: "likely", 2: "high"}
+# score -> verdict_level moved to dumpex.hunt.cs_beacon.domain.
+# VERDICT_LEVEL_BY_SCORE -- the canonical home for a score->verdict table is
+# the domain model that owns the score (see that module's own docstring).

@@ -3,62 +3,63 @@
   HUNT: Cobalt Strike Beacon Config
 ══════════════════════════════════════════
 
-  [*] Scanning 2 segment(s) for beacon signature …
-  [*] Scan complete.
+  VERDICT     COBALT STRIKE — 2 beacon config(s) found in memory (structural validity only)
+  Confidence  medium
+  Score       1/2
+  Coverage    PARTIAL
+  Review      high
 
-  [!] Beacon config #1  ──────────────────────────────────────────────
-  VA (process)               0x0000000000050100  ← virtual address in target process
-  File offset (.dmp)         0x0000000000005100  ← byte offset inside .dmp file
-  Region base (VA)           0x0000000000050000  ← for cross-referencing with --hunt injection
-  Region size                0x226
-  Region protect             PAGE_READWRITE
-  XOR key                    0x69 'i'  (CS3 encoding)
-  CS version (estimated)     3.x
-  Context corroboration      none  — structural validity only
+  KEY SIGNALS
 
-  cs_beacon.structural_config  [MEDIUM]  DETECTION
-    Inference   : Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed,
-                  known BeaconType, ASN.1-shaped public key) found at this address.
-    Confidence  : medium — The config's own structural validity — TLV wire format, known field
-                  types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is
-                  itself hard to produce by chance, but no independent memory-context corroboration
-                  (executable private region, or a thread executing within the same allocation) was
-                  found for this hit.
-    Facts: available — use --verbose to list
-    Limitations:
-      - RIP/EIP-based execution corroboration could not fully run — ThreadListStream missing from
-        this dump — a live-execution corroboration for this hit cannot be ruled out.
+  [!] DETECTION  Beacon config @ 0x50100
+      Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known
+      BeaconType, ASN.1-shaped public key) found at this address.
 
-  ── C2 / Identity / Transport ──────────────────────────────────────
-  BeaconType                 HTTP
+  [!] DETECTION  Beacon config @ 0x60100
+      Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known
+      BeaconType, ASN.1-shaped public key) found at this address.
 
-  [!] Beacon config #2  ──────────────────────────────────────────────
-  VA (process)               0x0000000000060100  ← virtual address in target process
-  File offset (.dmp)         0x0000000000006100  ← byte offset inside .dmp file
-  Region base (VA)           0x0000000000060000  ← for cross-referencing with --hunt injection
-  Region size                0x226
-  Region protect             PAGE_READWRITE
-  XOR key                    0x2E '.'  (CS4 encoding)
-  CS version (estimated)     3.x
-  Context corroboration      none  — structural validity only
+  WHY THIS VERDICT
 
-  cs_beacon.structural_config  [MEDIUM]  DETECTION
-    Inference   : Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed,
-                  known BeaconType, ASN.1-shaped public key) found at this address.
-    Confidence  : medium — The config's own structural validity — TLV wire format, known field
-                  types, a recognized BeaconType, and an ASN.1-shaped public key all lining up — is
-                  itself hard to produce by chance, but no independent memory-context corroboration
-                  (executable private region, or a thread executing within the same allocation) was
-                  found for this hit.
-    Facts: available — use --verbose to list
-    Limitations:
-      - RIP/EIP-based execution corroboration could not fully run — ThreadListStream missing from
-        this dump — a live-execution corroboration for this hit cannot be ruled out.
+  Inference
+    Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType,
+    ASN.1-shaped public key) found at this address.
 
-  ── C2 / Identity / Transport ──────────────────────────────────────
-  BeaconType                 HTTP
+  Confidence: MEDIUM
+    The config's own structural validity — TLV wire format, known field types, a recognized
+    BeaconType, and an ASN.1-shaped public key all lining up — is itself hard to produce by chance,
+    but no independent memory-context corroboration (executable private region, or a thread
+    executing within the same allocation) was found for this hit.
 
-  [ VERDICT ]  COBALT STRIKE — 2 beacon config(s) found in memory  (structural validity only — no independent memory-context corroboration)
+  Caveat
+    RIP/EIP-based execution corroboration could not fully run — ThreadListStream missing from this
+    dump — a live-execution corroboration for this hit cannot be ruled out.
 
-  Use --verbose to dump all config fields.
+  BEACON CONFIGS
+
+  Beacon config #1
+
+      VA 0x0000000000050100 File offset 0x5100
+      Region 0x0000000000050000 size 0x226 protect PAGE_READWRITE
+      Version: 3.x (estimated)
+      BeaconType: HTTP
+      Context corroboration: none — structural validity only
+
+  Beacon config #2
+
+      VA 0x0000000000060100 File offset 0x6100
+      Region 0x0000000000060000 size 0x226 protect PAGE_READWRITE
+      Version: 3.x (estimated)
+      BeaconType: HTTP
+      Context corroboration: none — structural validity only
+
+  COVERAGE
+
+  [~] PARTIAL
+      ThreadListStream missing from this dump — RIP/EIP-based context corroboration could not run
+      for any uncorroborated hit
+      Impact: Coverage incomplete despite a detection — the segment(s)/check(s) that could not fully
+      run may hold further corroboration.
+
+  Use --verbose for the complete field table, Malleable C2, and Process Injection transforms.
 

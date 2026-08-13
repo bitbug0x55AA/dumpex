@@ -115,6 +115,22 @@ def _cs_decode_and_parse_tlv(data: bytes, offset: int, key: int, max_len: int) -
             return {'fields': fields, 'complete': False,
                     'reason': f'illegal field type 0x{ftype:04x} for field 0x{fid:04x}',
                     'consumed': pos - offset}
+        # A type-1 (uint16) field must declare exactly 2 bytes and a
+        # type-2 (uint32) field exactly 4 -- anything else is not a
+        # legitimate config, however plausible the rest of the blob looks.
+        # Rejected HERE, at the header, rather than left to fall through
+        # the value-decode below: with neither branch of that decode
+        # matching, `value` stayed `None` and was still stored as a real
+        # field -- silently producing a NON-scalar value for a type the
+        # wire format promises is always an int, which crashed
+        # models.ConfigField's own type validation (int|str only) the
+        # first time this candidate reached the frozen evidence boundary
+        # instead of being rejected as the malformed blob it is.
+        if (ftype == 1 and flen != 2) or (ftype == 2 and flen != 4):
+            return {'fields': fields, 'complete': False,
+                    'reason': f'field 0x{fid:04x} declares type 0x{ftype:04x} with invalid '
+                              f'length {flen} (expected {2 if ftype == 1 else 4})',
+                    'consumed': pos - offset}
         if pos + 6 + flen > limit:
             return {'fields': fields, 'complete': False,
                     'reason': f'field 0x{fid:04x} declares length {flen} past '
