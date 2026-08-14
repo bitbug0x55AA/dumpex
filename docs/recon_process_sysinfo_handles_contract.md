@@ -626,8 +626,8 @@ field is `null`.
 {
   "process_name": "malware.exe",
   "pid": 4242,
-  "process_path": "C:\\Users\\x\\Desktop\\malware.exe",
-  "command_line": "\"C:\\Users\\x\\Desktop\\malware.exe\" -k",
+  "process_path": "C:\\Samples\\malware.exe",
+  "command_line": "\"C:\\Samples\\malware.exe\" -k",
   "process_start_utc": "2026-08-14 01:15:05 UTC",
   "image_base_address": "0x00007ff600010000",
   "iat": {
@@ -662,7 +662,7 @@ field is `null`.
     },
     "peb_claim": {
       "image_base_address": "0x00007ff600010000",
-      "image_path": "C:\\Users\\x\\Desktop\\malware.exe",
+      "image_path": "C:\\Samples\\malware.exe",
       "name": "malware.exe",
       "raw_image_base_address": null,
       "raw_image_path": null,
@@ -672,7 +672,7 @@ field is `null`.
       "match_state": "resolved",
       "base_address": "0x00007ff600010000",
       "name": "malware.exe",
-      "path": "C:\\Users\\x\\Desktop\\malware.exe",
+      "path": "C:\\Samples\\malware.exe",
       "name_matched_candidate": null,
       "name_matched_candidate_ambiguous": false
     },
@@ -1489,8 +1489,8 @@ Frozen semantics:
 
   Process Name           malware.exe
   PID                    4242 (0x1092)
-  Path                   C:\Users\x\Desktop\malware.exe
-  Command Line           "C:\Users\x\Desktop\malware.exe" -k
+  Path                   C:\Samples\malware.exe
+  Command Line           "C:\Samples\malware.exe" -k
   Start Time (UTC)       2026-08-14 01:15:05 UTC
   Image Base             0x00007ff600010000
 
@@ -1849,8 +1849,8 @@ IAT (§3.5.4). `scope` is required, one of:
 ### 4.4 Special `=`-prefixed entry reconstruction
 
 Windows records per-drive working directories as entries whose name
-begins with `=` (e.g. `=C:=C:\Users\x`). A naive `split("=", 1)` yields
-`name=""`, `value="C:=C:\Users\x"`, losing the real name. The walk
+begins with `=` (e.g. `=C:=C:\Work`). A naive `split("=", 1)` yields
+`name=""`, `value="C:=C:\Work"`, losing the real name. The walk
 therefore applies, to each raw entry:
 
 1. Split once on the first `=`.
