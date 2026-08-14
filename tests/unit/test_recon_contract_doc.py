@@ -369,13 +369,34 @@ def test_section_8_3_fixture_6b_pins_index1_rva_for_every_case(doc):
     only unique given index 1's exact (rva, size) pair -- the previous
     revision only described capture length, which is consistent with
     either outcome."""
-    section = doc.split("6b. **An uncaptured directory table", 1)[1]
+    section = doc.split("6b. **Truncated directory capture must preserve", 1)[1]
     section = section.split("6c. **A handle name", 1)[0]
     assert "nonzero_import_rva" in section, (
         "the true+null fixture must pin index 1 to a non-zero RVA")
     assert section.count("data_directories[1] = (0, 0)") >= 2, (
         "both false-outcome fixtures (false+null and false+false) must "
         "pin index 1 to an explicit (0, 0) pair")
+
+
+def test_section_8_3_item_6b_title_does_not_contradict_its_own_fixture(doc):
+    """A prior revision's item-6b title ("An uncaptured directory table
+    cannot be reported as \"no imports\"") directly contradicted the
+    false+null fixture two paragraphs below it, which requires exactly
+    that console text when index 1 (not index 12) is the captured,
+    determined-false one. The title must not survive as a blanket ban,
+    and the section must explicitly distinguish "index 1 uncaptured"
+    (forbidden) from "index 1 captured with a zero RVA" (required, even
+    with index 12 still uncaptured)."""
+    assert 'An uncaptured directory table cannot be reported as "no imports"' not in doc, (
+        "the old, over-broad item-6b title must not reappear -- it banned "
+        "the exact console text the false+null fixture requires")
+    section = doc.split("6b. **Truncated directory capture must preserve", 1)[1]
+    section = section.split("6c. **A handle name", 1)[0]
+    normalized = _normalize_ws(section)
+    assert "index 1 **uncaptured**" in normalized
+    assert "forbidden from claiming" in normalized
+    assert "index 1 **captured** with a zero RVA" in normalized
+    assert "even if** index 12 is uncaptured" in normalized
 
 
 # ── Issue #37 second follow-up: false/null console routing, RVA/Size ───

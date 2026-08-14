@@ -1459,6 +1459,28 @@ Frozen semantics:
   also undetermined or vice versa — the two are read from
   `import_directory_present` and `table_present` independently (§3.5.2).
 
+  Restated as a reference selector, evaluated in exactly this order:
+
+  ```python
+  def select_iat_source_state(image_available, import_present, entry_count):
+      if not image_available:
+          return "absent"
+      if import_present is None:
+          return "absent"
+      if import_present is False or entry_count == 0:
+          return "present_empty"
+      return "present"
+  ```
+
+  `image_available` is `True` exactly when there was a normalized image
+  base **and** a captured main image to walk; `import_present` is
+  §3.5.2's `import_directory_present`, unchanged. The critical, easy-to-
+  get-wrong case is `select_iat_source_state(True, False, 0) ==
+  "present_empty"` — `import_present is False` short-circuits the
+  function to `present_empty` on its own, so an accompanying
+  `table_present is null` (which never reaches this function at all)
+  cannot pull the result down to `absent`.
+
 ### 3.8 Console layout
 
 ```
@@ -2316,6 +2338,30 @@ frozen-text rule above, **no call site composes either string itself**.
 given `declared_directory_count`/`data_directories` pair; this row is
 the frozen rendering contract for both.
 
+Restated as a reference validator/renderer, evaluated in exactly this
+order:
+
+```python
+def render_iat_directory_table_incomplete(affected_count):
+    if affected_count is not None:
+        if isinstance(affected_count, bool) or not isinstance(affected_count, int) \
+                or affected_count <= 0:
+            raise ValueError("affected_count must be None or a positive integer")
+        return (f"{affected_count} declared data directory entr(y/ies) were not "
+                f"captured; import/IAT directory presence is undetermined")
+    return "the data directory table was not captured; import/IAT directory presence is undetermined"
+```
+
+`bool` is checked before the general `int` check because Python's `bool`
+is an `int` subclass — `isinstance(True, int)` is `True` — so an
+`isinstance(affected_count, int)` test alone would silently accept
+`True`/`False` as if they were `1`/`0`. The literal `"entr(y/ies)"` text
+is intentional, not a grammar bug: it matches this codebase's existing
+`_render_*` convention of writing out a fixed `(s)`-style suffix rather
+than computing real singular/plural agreement (e.g.
+`_render_module_header_read_failed()`'s `"module header read(s)
+failed"`).
+
 Capability flags:
 
 - `absent_capable` (usable as a `SourceRequirement.absent_code`, or as a
@@ -2614,7 +2660,26 @@ child cannot re-decide it.
    `slot_in_bounds: null` on every entry, one
    `IAT_BOUNDS_CHECK_UNAVAILABLE` diagnostic, and exit 0 with the
    entries still fully reported. *(#40.)*
-6b. **An uncaptured directory table cannot be reported as "no imports".**
+6b. **Truncated directory capture must preserve determined versus
+   undetermined presence.** An uncaptured index 1 (import presence
+   itself undetermined) must **never** be reported as "no imports" — but
+   a *captured* index 1 whose RVA is zero **is** a determined "no
+   imports" answer, and stays one even when a *different*, uncaptured
+   index (12) leaves an unrelated gap open. The two must not be
+   conflated:
+   - index 1 **uncaptured** → `import_directory_present` is `null` →
+     forbidden from claiming "no imports"; the console must print
+     `"(unavailable -- see coverage below)"`, never
+     `"(none -- this image declares no imports)"`.
+   - index 1 **captured** with a zero RVA → `import_directory_present`
+     is `false` → a determined answer; `"(none -- this image declares no
+     imports)"` is correct and required, **even if** index 12 is
+     uncaptured.
+   - index 12 uncaptured contributes only its own, independent
+     `IAT_DIRECTORY_TABLE_INCOMPLETE` limitation (driving
+     `coverage.status` to `partial`) — it never revokes an
+     already-determined import-absence conclusion from index 1.
+
    Five images, each with a distinct outcome and a fully-specified input
    (`declared_directory_count`, `len(data_directories)`, and — whenever
    index 1's presence needs to be determined rather than merely

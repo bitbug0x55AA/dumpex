@@ -70,14 +70,23 @@ def _extract_python_function(doc: str, def_name: str):
     This ties the tests below directly to the doc's OWN algorithm text:
     if the contract's pseudocode changes, these tests exercise the new
     version automatically rather than a stale copy pasted into the test
-    suite, which is exactly the drift #37's reviews kept catching."""
+    suite, which is exactly the drift #37's reviews kept catching.
+
+    Fences may be nested inside a markdown list item (indented) or sit
+    at the top level (not indented) -- the opening/closing fence's own
+    indentation is captured and stripped from every line so exec() sees
+    valid, unindented Python either way."""
     pattern = re.compile(
-        r"```python\n(def %s\(.*?\n)```" % re.escape(def_name), re.DOTALL)
-    m = pattern.search(doc)
-    assert m, f"contract has no ```python block defining {def_name}()"
-    ns = {}
-    exec(compile(m.group(1), f"<contract:{def_name}>", "exec"), ns)
-    return ns[def_name]
+        r"^([ \t]*)```python\n(.*?\n)\1```", re.DOTALL | re.MULTILINE)
+    for indent, body in pattern.findall(doc):
+        dedented = "\n".join(
+            line[len(indent):] if line.startswith(indent) else line
+            for line in body.splitlines())
+        if dedented.startswith(f"def {def_name}("):
+            ns = {}
+            exec(compile(dedented, f"<contract:{def_name}>", "exec"), ns)
+            return ns[def_name]
+    raise AssertionError(f"contract has no ```python block defining {def_name}()")
 
 
 @pytest.fixture(scope="module")
@@ -88,6 +97,16 @@ def resolve_present(doc):
 @pytest.fixture(scope="module")
 def select_console_branch(doc):
     return _extract_python_function(doc, "select_console_branch")
+
+
+@pytest.fixture(scope="module")
+def select_iat_source_state(doc):
+    return _extract_python_function(doc, "select_iat_source_state")
+
+
+@pytest.fixture(scope="module")
+def render_iat_directory_table_incomplete(doc):
+    return _extract_python_function(doc, "render_iat_directory_table_incomplete")
 
 
 # ── §3.5.2: presence resolver truth table ───────────────────────────────
@@ -185,14 +204,111 @@ def test_console_branch_selector_never_inspects_table_present(select_console_bra
         select_console_branch(False, False, False, table_present=None)
 
 
+# ── §3.7.4: iat coverage-source state selector truth table ─────────────
+#
+# (image_available, import_present, entry_count, expected)
+_IAT_SOURCE_CASES = [
+    ("no_image_base_or_main_image", False, None,  0, "absent"),
+    ("no_image_base_or_main_image_import_true", False, True, 3, "absent"),
+    ("import_null",                 True,  None,  0, "absent"),
+    ("import_false_table_null",     True,  False, 0, "present_empty"),
+    ("import_true_zero_entries",    True,  True,  0, "present_empty"),
+    ("import_true_has_entries",     True,  True,  3, "present"),
+]
+
+
+@pytest.mark.parametrize("case_id,image_available,import_present,entry_count,expected",
+                          _IAT_SOURCE_CASES, ids=[c[0] for c in _IAT_SOURCE_CASES])
+def test_iat_source_state_selector_truth_table(
+        select_iat_source_state, case_id, image_available, import_present, entry_count, expected):
+    assert select_iat_source_state(image_available, import_present, entry_count) == expected
+
+
+def test_iat_source_state_stays_present_empty_for_the_false_null_regression(
+        select_iat_source_state):
+    """The exact regression named in the review, made executable: when
+    import_directory_present is False, `iat` must be `present_empty` --
+    NEVER `absent` -- regardless of table_present (which this function
+    doesn't even take as a parameter, by construction) or entry_count.
+    A future doc/impl change that maps this combination to `absent`
+    fails this assertion even if every other truth-table row still
+    passes."""
+    assert select_iat_source_state(True, False, 0) == "present_empty"
+    for entry_count in (0, 1, 999):   # entry_count is irrelevant once import_present is False
+        assert select_iat_source_state(True, False, entry_count) == "present_empty"
+
+
+def test_iat_source_state_selector_never_inspects_table_present(select_iat_source_state):
+    """Mirrors the console-selector check above: `iat` source state must
+    depend only on image_available/import_present/entry_count, never
+    directly on table_present."""
+    with pytest.raises(TypeError):
+        select_iat_source_state(True, False, 0, table_present=None)
+
+
+# ── §6.1: IAT_DIRECTORY_TABLE_INCOMPLETE optional-count validator ──────
+
+@pytest.mark.parametrize("count", [1, 2, 10, 15, 999])
+def test_iat_directory_table_incomplete_renders_count_wording_for_positive_int(
+        render_iat_directory_table_incomplete, count):
+    text = render_iat_directory_table_incomplete(count)
+    assert text.startswith(f"{count} declared data directory entr(y/ies) were not captured")
+    assert "import/IAT directory presence is undetermined" in text
+
+
+def test_iat_directory_table_incomplete_renders_count_free_wording_for_none(
+        render_iat_directory_table_incomplete):
+    text = render_iat_directory_table_incomplete(None)
+    assert text == ("the data directory table was not captured; import/IAT directory "
+                     "presence is undetermined")
+
+
+@pytest.mark.parametrize("bad_count", [0, -1, -10])
+def test_iat_directory_table_incomplete_rejects_zero_and_negative_counts(
+        render_iat_directory_table_incomplete, bad_count):
+    with pytest.raises(ValueError):
+        render_iat_directory_table_incomplete(bad_count)
+
+
+@pytest.mark.parametrize("bad_count", [True, False])
+def test_iat_directory_table_incomplete_rejects_bool_despite_being_an_int_subclass(
+        render_iat_directory_table_incomplete, bad_count):
+    """Python's bool is an int subclass, so a naive `isinstance(x, int)`
+    validator would silently accept True/False as 1/0. The frozen
+    validator must reject both explicitly."""
+    with pytest.raises(ValueError):
+        render_iat_directory_table_incomplete(bad_count)
+
+
+@pytest.mark.parametrize("bad_count", [1.5, "3", [1]])
+def test_iat_directory_table_incomplete_rejects_non_integer_types(
+        render_iat_directory_table_incomplete, bad_count):
+    with pytest.raises(ValueError):
+        render_iat_directory_table_incomplete(bad_count)
+
+
 # ── Byte-level prototype: real PE bytes through the real parser ────────
 #
-# Field offsets for a minimal, well-formed PE32+ header, matching EXACTLY
-# what dumpex.core.pe_utils.parse_pe_header() computes for base_size==8
-# (PE32+). Building real bytes and running them through the real,
-# already-shipped parser -- rather than hand-typing (rva, size) lists --
-# means these fixtures can't silently drift from what parse_pe_header()
-# actually does with a truncated buffer.
+# Field offsets for a PARSER-VALID, CRAFTED PE32+ header, matching
+# EXACTLY what dumpex.core.pe_utils.parse_pe_header() computes for
+# base_size==8 (PE32+). "Parser-valid crafted", not "well-formed": these
+# buffers set SizeOfOptionalHeader=0, which is not how a real linker
+# emits a PE, but is deliberate here -- it places parse_pe_header()'s
+# section table at `sec_off = coff_off + 20 + 0`, i.e. immediately after
+# the COFF header and BEFORE the data directory table this file is
+# truncating. With exactly one section declared, that puts the full
+# 40-byte section entry parse_pe_header() needs for `valid: True` well
+# inside every truncation point used below (verified per-test), so these
+# fixtures can exercise "PE structurally valid, but its data directory
+# table was truncated" -- the exact crafted-header case §3.5.2 names as
+# the reason IAT_DIRECTORY_TABLE_INCOMPLETE exists (PROCESS_MAIN_IMAGE_
+# PE_INVALID, which suppresses that limitation, requires `valid: False`,
+# so proving `valid: True` here is what makes these fixtures reach the
+# code path under test at all, rather than a different, invalid-PE one).
+# Building real bytes and running them through the real, already-shipped
+# parser -- rather than hand-typing (rva, size) lists -- means these
+# fixtures can't silently drift from what parse_pe_header() actually
+# does with a truncated buffer.
 _E_LFANEW = 0x80
 _COFF_OFF = _E_LFANEW + 4
 _OPT_OFF = _COFF_OFF + 20
@@ -201,19 +317,25 @@ _BASE_OFF = _OPT_OFF + 24
 _SIZE_OFF = _OPT_OFF + 56
 _NUM_RVA_SIZES_OFF = _OPT_OFF + 108
 _DIR_OFF = _OPT_OFF + 112
+_SIZE_OF_OPTIONAL_HEADER = 0   # deliberate -- see module comment above
+_SECTION_TABLE_OFF = _COFF_OFF + 20 + _SIZE_OF_OPTIONAL_HEADER
+_SECTION_TABLE_END = _SECTION_TABLE_OFF + 40   # one section, 40 bytes
 
 
 def _build_pe_bytes(number_of_rva_and_sizes: int, directories: dict) -> bytes:
-    """A full-length PE32+ header buffer, data directories populated per
-    `directories` ({index: (rva, size)}, default (0, 0)). Callers slice
-    the result to simulate a partial capture -- parse_pe_header() already
-    implements the prefix-truncation behavior §3.5.2 describes, so
-    slicing this buffer exercises the REAL production code path."""
+    """A full-length, parser-valid CRAFTED PE32+ header buffer (see the
+    module comment above for why it is not a "well-formed" one), data
+    directories populated per `directories` ({index: (rva, size)},
+    default (0, 0)). Callers slice the result to simulate a partial
+    capture -- parse_pe_header() already implements the prefix-
+    truncation behavior §3.5.2 describes, so slicing this buffer
+    exercises the REAL production code path."""
     buf = bytearray(_DIR_OFF + 16 * 8)
     buf[0:2] = b'MZ'
     struct.pack_into('<I', buf, 0x3C, _E_LFANEW)
     buf[_E_LFANEW:_E_LFANEW + 4] = b'PE\x00\x00'
-    struct.pack_into('<HHIIIHH', buf, _COFF_OFF, 0x8664, 1, 0, 0, 0, 0, 0)
+    struct.pack_into('<HHIIIHH', buf, _COFF_OFF,
+                      0x8664, 1, 0, 0, 0, _SIZE_OF_OPTIONAL_HEADER, 0)
     struct.pack_into('<H', buf, _OPT_OFF, 0x20b)          # PE32+ magic
     struct.pack_into('<I', buf, _EP_OFF, 0x1000)
     struct.pack_into('<Q', buf, _BASE_OFF, 0x140000000)
@@ -222,6 +344,24 @@ def _build_pe_bytes(number_of_rva_and_sizes: int, directories: dict) -> bytes:
     for i, (rva, size) in directories.items():
         struct.pack_into('<II', buf, _DIR_OFF + i * 8, rva, size)
     return bytes(buf)
+
+
+def _assert_parser_valid(parsed: dict, data: bytes) -> None:
+    """Every byte-level fixture below must prove it reached a
+    structurally VALID PE before trusting its data_directories -- a
+    PROCESS_MAIN_IMAGE_PE_INVALID result (valid: False) would suppress
+    IAT_DIRECTORY_TABLE_INCOMPLETE entirely (§3.5.2), making the
+    three-state branch under test unreachable in the real command path.
+    Also confirms the section table actually fits inside this
+    particular truncation point, not just that it was declared to."""
+    assert _SECTION_TABLE_END <= len(data), (
+        f"this fixture's truncation point ({len(data)} bytes) cuts into "
+        f"the crafted section table (needs {_SECTION_TABLE_END}) -- fix "
+        f"the slice length, not this assertion")
+    assert parsed["valid"] is True, (
+        f"fixture must parse as a structurally valid PE, got reason "
+        f"{parsed['reason']!r}")
+    assert parsed["reason"] == ""
 
 
 def _declared_directory_count_from_bytes(data: bytes):
@@ -239,6 +379,7 @@ def test_byte_level_captured_through_index5_nonzero_rva_is_true_null(resolve_pre
     index 1 has a non-zero RVA -> import True, table null, 10 missing."""
     data = _build_pe_bytes(16, {1: (0x2000, 0x40)})[:_DIR_OFF + 6 * 8]
     parsed = parse_pe_header(data)
+    _assert_parser_valid(parsed, data)
     assert len(parsed["data_directories"]) == 6
     declared = _declared_directory_count_from_bytes(data)
     assert declared == 16
@@ -255,6 +396,7 @@ def test_byte_level_captured_through_index5_zero_rva_is_false_null(resolve_prese
     import claim is determined even though the table gap remains."""
     data = _build_pe_bytes(16, {1: (0, 0x40)})[:_DIR_OFF + 6 * 8]
     parsed = parse_pe_header(data)
+    _assert_parser_valid(parsed, data)
     assert len(parsed["data_directories"]) == 6
     declared = _declared_directory_count_from_bytes(data)
     assert declared == 16
@@ -268,6 +410,7 @@ def test_byte_level_captured_through_index0_only_is_null_null(resolve_present):
     0 -> both null, 15 missing."""
     data = _build_pe_bytes(16, {})[:_DIR_OFF + 1 * 8]
     parsed = parse_pe_header(data)
+    _assert_parser_valid(parsed, data)
     assert len(parsed["data_directories"]) == 1
     declared = _declared_directory_count_from_bytes(data)
     assert declared == 16
@@ -284,6 +427,7 @@ def test_byte_level_number_of_rva_and_sizes_uncaptured_is_null_null(resolve_pres
     data = full[:_SIZE_OFF + 4]
     assert _NUM_RVA_SIZES_OFF + 4 > len(data)
     parsed = parse_pe_header(data)
+    _assert_parser_valid(parsed, data)
     assert parsed["data_directories"] == []
     declared = _declared_directory_count_from_bytes(data)
     assert declared is None
