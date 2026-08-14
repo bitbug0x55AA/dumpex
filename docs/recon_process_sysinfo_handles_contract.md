@@ -75,7 +75,8 @@ behavior can be re-checked rather than taken on trust.
 #37 (this contract)
   └─ #38  shared layer: open_dump() isolation (§2), resolve_module_by_base()
   │        (§3.3), normalization helpers (§3.2), walk_environment_block() (§4.2),
-  │        parse_handle_stream() (§5.1)
+  │        parse_handle_stream() (§5.1), and build_coverage_report()'s
+  │        retain_completeness_checks_when_not_evaluated opt-in (§3.7.3)
   ├─ #39  bounded IAT parser (§3.5)
   ├─ #40  --process wiring (§3)
   ├─ #41  --sysinfo wiring (§4)
@@ -456,10 +457,10 @@ a reader can check it against the code rather than against intent.
 | `--sysinfo` | `sysinfo`, `misc_info`, `threads`, `modules` | completeness only | `partial` (3), each source's own `SYSINFO_*` code | **`partial` (3)**, `SOURCE_FAILED` |
 | `--sysinfo` | `peb` | completeness only | `partial` (3), `SYSINFO_PEB_UNAVAILABLE` | n/a — see below |
 | `--sysinfo` | `environment_block` | neither (§4.3.3) | — | — |
-| `--process` | `process_identity` | evaluation (derived, §3.7.3) | `not_evaluated` (4), `PROCESS_SOURCES_ABSENT` | n/a — derived |
+| `--process` | `process_identity` | evaluation (derived, §3.7.4) | `not_evaluated` (4), `PROCESS_SOURCES_ABSENT` | n/a — derived |
 | `--process` | `misc_info` | completeness only | `partial` (3), `PROCESS_MISC_INFO_UNAVAILABLE` | **`partial` (3)**, `SOURCE_FAILED` |
 | `--process` | `peb` | completeness only | `partial` (3), `PROCESS_PEB_UNAVAILABLE` | n/a — see below |
-| `--process` | `modules` | observed only (§3.7.3) | — | — |
+| `--process` | `modules` | observed only (§3.7.4) | — | — |
 | `--process` | `main_image`, `iat` | completeness only (derived) | see §3.7.2 | n/a — derived |
 | `--handles` | `handles` | completeness only (bare name; fires on `failed` alone) | see §5.5 case 1 | `SOURCE_FAILED` alongside §5.5 case 2's own code |
 | `--handles` | `handle_records` | evaluation (derived, §5.5) | `not_evaluated` (4), case-dependent code | n/a — derived |
@@ -516,10 +517,16 @@ Rules:
   own state vocabulary.
 - **Exit-code change, stated plainly**: a dump with one malformed stream
   and otherwise readable evidence previously exited **1** with no
-  structured output, for every command. It now exits **3** (`partial`)
-  — or **4** (`not_evaluated`) when the failed stream is that command's
-  only evidence and every other member of its evaluation group is
-  absent. This is a deliberate improvement, and it is the only
+  structured output, for every command. Every such case now exits **3**
+  (`partial`) — including when the failed stream is the command's only
+  source, as for `--list` and `--modules`. There is **no generalized
+  "sole evidence failed, therefore exit 4" rule**: a `failed` source is
+  never `absent`, so it can never satisfy an evaluation group's
+  all-absent condition, and only the two derived sources in the matrix
+  above (`process_identity`, `handle_records`) reach exit 4 by their own
+  per-command rules. **The matrix is the only normative statement of
+  per-source outcomes**; where prose elsewhere summarizes it, the matrix
+  wins. This is a deliberate improvement, and it is the only
   compatibility change §2 makes to existing commands. Commands' existing
   `SourceRequirement`/code declarations are otherwise untouched: only
   which `SourceState` is computed for them changes, and `failed` was
@@ -863,7 +870,8 @@ contained without dumpex certifying it. All four members are `null` when
   "image_path": "C:\\…\\malware.exe" | null,
   "name": "malware.exe" | null,
   "raw_image_base_address": null | "0x0000000000000abc",
-  "raw_image_path": null | "<raw string>"
+  "raw_image_path": null | "<raw string>",
+  "raw_command_line": null | "<raw string>"
 }
 ```
 
@@ -898,8 +906,11 @@ host). It is the PEB's own name claim, independent of whichever path
     `base_address`/`name`/`path` are `null`.
   - `"unavailable"` — `ModuleListStream` is absent/failed, or the image
     base did not normalize, so the question could not be asked at all.
-    All members `null`, `name_matched_candidate` `null`. This state is
-    **not** a conflict signal and emits no diagnostic.
+    `base_address`/`name`/`path`/`name_matched_candidate` are all
+    `null`; `name_matched_candidate_ambiguous` is `false`, not `null` —
+    it is a plain boolean in every state, and "no candidate was found"
+    is not ambiguity. This state is **not** a conflict signal and emits
+    no diagnostic.
 - `path` is the module's complete recorded path, kept alongside
   `base_address` and the derived `name`. It exists so the ModuleList
   claim is preserved in full and the selected fallback source is
@@ -1102,8 +1113,11 @@ so the diagnostic points at something concrete without carrying an
 unbounded list. `iat.diagnostics` is `[]` when nothing fired — never
 `null`.
 
-Every other `IAT_*` code **is** a `LimitationCode` and does drive
-`partial` (§6.1).
+Every `IAT_*` code **other than these two diagnostics** —
+`IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS` and `IAT_BOUNDS_CHECK_UNAVAILABLE`
+(§3.5.2) — **is** a `LimitationCode` and does drive `partial` (§6.1).
+The two diagnostics are mutually exclusive, and neither is ever a
+`LimitationCode`.
 
 ### 3.6 `peb_extended` (verbose only)
 
@@ -1171,7 +1185,7 @@ when `path_available` is true.
   empty string that `read_unicode_string_property()` returns as `""`,
   and a normalizer can reject every value it was given).
   The reducer only understands `SourceState`, so the field-level fact is
-  expressed as a **derived source**, `process_identity` (§3.7.3): its
+  expressed as a **derived source**, `process_identity` (§3.7.4): its
   observation is `ABSENT` when no flag is true and `PRESENT` (record
   count = number of true flags) otherwise, and `--process` passes
   `EvaluationRequirement(sources=("process_identity",),
@@ -1180,15 +1194,20 @@ when `path_available` is true.
   path, and it keeps the "objects present, nothing usable" case
   reachable at exit 4 — which a hand-built `caller_buildable`
   limitation could not do, since `completeness_checks` only ever
-  produces `partial`.
+  produces `partial`. The field-level limitations explaining **why**
+  nothing was usable survive alongside it, via the opt-in below.
 - **`partial`** (exit 3) when any of these fired:
-  - *Object-level*: `misc_info` absent/failed →
-    `PROCESS_MISC_INFO_UNAVAILABLE` (covers `pid` and
-    `process_start_utc` together); `peb` absent →
+  - *Object-level*, and `absent` is **not** the same as `failed` here
+    (§2.4): `misc_info` **absent** → `PROCESS_MISC_INFO_UNAVAILABLE`
+    (covers `pid` and `process_start_utc` together); `misc_info`
+    **failed** → `SOURCE_FAILED` with the parser detail, since
+    "MiscInfo stream not present in this dump" would be a false
+    statement about a stream that is present. `peb` **absent** →
     `PROCESS_PEB_UNAVAILABLE` (covers `process_path`, `command_line`,
-    `image_base_address` together). When the object-level code fires,
-    the corresponding field-level codes are **suppressed** — one absence
-    is reported once.
+    `image_base_address` together); `peb` has no `failed` state at all
+    (§2.4). Either way, when an object-level code fires, the
+    corresponding field-level codes are **suppressed** — one absence is
+    reported once.
   - *Field-level* (source object present, one field unusable):
     `PROCESS_PID_UNAVAILABLE`, `PROCESS_START_TIME_UNSET`,
     `PROCESS_START_TIME_INVALID`, `PROCESS_PATH_UNAVAILABLE`,
@@ -1212,7 +1231,46 @@ when `path_available` is true.
   `module_claim` state including `"unregistered"`, do **not** downgrade
   this.
 
-#### 3.7.3 Coverage sources
+#### 3.7.3 `not_evaluated` must not swallow the reasons
+
+`build_coverage_report()` today, once any evaluation group is all-absent,
+short-circuits: it emits the group's own limitation, re-surfaces any
+`FAILED` completeness **source**, and explicitly skips every pre-built
+`CoverageLimitation` ("a pre-built business fact never applies when
+nothing was evaluated"). That reasoning is right for a genuinely empty
+dump — but it is exactly wrong here. `PROCESS_SOURCES_ABSENT` says *that*
+no identity evidence was usable; `PROCESS_PID_UNAVAILABLE`,
+`PROCESS_START_TIME_INVALID`, and their siblings say *why*, per field,
+and they were computed from evidence that really was examined. Dropping
+them would leave an analyst with an exit code and a single sentence, and
+would contradict §8.3 item 5.
+
+#38 therefore adds one **opt-in** keyword to `build_coverage_report()`:
+
+```python
+build_coverage_report(sources, *, evaluation_sources=None,
+                      evaluation_groups=None, completeness_checks=None,
+                      retain_completeness_checks_when_not_evaluated=False)
+```
+
+Frozen semantics:
+
+- Default `False` — every existing command's output is byte-identical to
+  today. Only `--process` (§3.7.2) and `--handles` (§5.5) pass `True`.
+- When `True` and a group fires, `status` is still `not_evaluated` and
+  the exit code is still 4. The flag changes **which limitations are
+  reported**, never the status.
+- Limitation order is frozen as: the group's own limitation first, then
+  the retained `completeness_checks` in caller-declared order, then the
+  `FAILED`-source limitations the reducer already re-surfaces today.
+- Retained entries are only the pre-built `CoverageLimitation`s.
+  `SourceRequirement`/bare-name checks keep today's behavior exactly:
+  a `FAILED` source is re-surfaced, an `ABSENT` one is not (it would
+  merely repeat what the group limitation already said).
+- Every retained limitation still passes `_validate_limitation_against_
+  sources()`. The flag relaxes nothing about correctness.
+
+#### 3.7.4 Coverage sources
 
 `coverage.sources` for `--process` has exactly six keys:
 `process_identity`, `misc_info`, `peb`, `modules`, `main_image`, `iat`.
@@ -1506,7 +1564,7 @@ environment.
 |---|---|---|---|---|
 | `unsupported` | `null` | `absent` | **none** — suppressed (see below) | unchanged |
 | `architecture_unsupported` | `null` | `absent` | `ENVIRONMENT_ARCHITECTURE_UNSUPPORTED`, **never suppressed** | `partial` |
-| `pointer_unreadable` | `null` | `failed` (`detail` set) | `ENVIRONMENT_BLOCK_UNREADABLE`, **suppressed when `peb` is absent** | `partial` unless suppressed |
+| `pointer_unreadable` | `null` | `failed` (`detail` set) | `ENVIRONMENT_BLOCK_UNREADABLE`, **never suppressed** | `partial` |
 | `present_empty` | `[]` | `present_empty` | none | unchanged |
 | `present` | the walked list | `present` | none | unchanged |
 | `partial` | the entries found so far (never discarded) | `present` | `ENVIRONMENT_BLOCK_TRUNCATED` | `partial` |
@@ -1527,13 +1585,19 @@ rules above. Consequences:
   provably `None` whenever it fires and `SYSINFO_PEB_UNAVAILABLE`
   provably explains it. No other state can make that guarantee, which is
   why `architecture_unsupported` was split out of it.
-- `pointer_unreadable` emits `ENVIRONMENT_BLOCK_UNREADABLE` **only when
-  `peb` is present** — when the PEB is absent too, the PEB limitation
-  already covers it.
-- `unparseable` and `partial` always emit, regardless of the PEB's
-  state: they carry a specific fact ("there is an environment block and
-  it is malformed / it was cut short") that no PEB-level limitation
-  carries.
+- `pointer_unreadable`, `unparseable`, and `partial` **always** emit,
+  regardless of the PEB's state. Each is a fact dumpex's own independent
+  walk established — *this* pointer step failed, *this* block has no
+  terminator, *this* capture stopped early — and none of them is
+  implied by `SYSINFO_PEB_UNAVAILABLE`, which says only that the
+  library's PEB build did not produce an object.
+
+  Suppressing `pointer_unreadable` when the PEB happens to be absent
+  would recreate the exact failure this whole walk exists to remove: a
+  specific, independently-confirmed environment failure disappearing
+  behind a generic PEB absence. The two limitations are not duplicates
+  — one names the concrete step that failed, the other names the
+  overall consequence — so both are reported, in that order.
 
 `ENVIRONMENT_BLOCK_TRUNCATED` uses the same budget attribution as the
 IAT (§3.5.4). `scope` is required, one of:
@@ -1723,7 +1787,9 @@ One record per descriptor:
 {
   "handle": "0x0000000000000234",
   "type_name": "File",
+  "type_name_status": "ok",
   "object_name": "\\Device\\NamedPipe\\mypipe",
+  "object_name_status": "ok",
   "attributes": 0,
   "granted_access": 1179785,
   "handle_count": 1,
@@ -1734,9 +1800,10 @@ One record per descriptor:
 | field | type | rule |
 |---|---|---|
 | `handle` | fixed-width hex string | never `null` — see §5.2.2 |
-| `type_name` | `string \| null` | `null` for both "no name" and "name unreadable"; §5.2.1 says which |
-| `object_name` | `string \| null` | same |
-| `name_status` | `"ok" \| "unnamed" \| "unreadable"` | never `null`; see §5.2.1 |
+| `type_name` | `string \| null` | `null` for both "no name" and "name unreadable"; `type_name_status` says which |
+| `type_name_status` | `"ok" \| "unnamed" \| "unreadable"` | never `null`; see §5.2.1 |
+| `object_name` | `string \| null` | same rule, resolved independently |
+| `object_name_status` | `"ok" \| "unnamed" \| "unreadable"` | never `null`; see §5.2.1 |
 | `attributes` | `integer \| null` | raw `OBJ_*` bitmask, undecoded |
 | `granted_access` | `integer \| null` | **raw mask, undecoded in v2.13.** Type-specific permission decoding is a later feature; a wrong decode is worse than a raw number |
 | `handle_count` | `integer \| null` | raw |
@@ -1750,19 +1817,34 @@ reaches a record.
 `null` alone cannot carry both, and conflating them is a real loss: most
 `Key`/`File` handles have names, an unnamed one is unremarkable, but a
 name that *should* be there and could not be read is a coverage gap an
-analyst must know about. The record therefore carries a
-`name_status` discriminator, computed per descriptor:
+analyst must know about.
 
-| `name_status` | when | `type_name`/`object_name` | limitation |
+The two name fields fail **independently** — they are separate RVAs and
+separate bounded reads — so one shared discriminator cannot describe
+them. A handle with `TypeNameRva == 0` and a perfectly readable
+`ObjectName` is common, and a handle whose type name read while its
+object name did not is exactly the case an analyst needs spelled out.
+The record therefore carries **two** discriminators, each computed from
+its own RVA only:
+
+| status value | when, for that one field | that field's value | limitation |
 |---|---|---|---|
-| `"ok"` | both RVAs that were non-zero read and decoded | the decoded strings; a field whose RVA was `0` is `null` | none |
-| `"unnamed"` | `TypeNameRva == 0` **and** `ObjectNameRva == 0` | both `null` | none — the dump positively records that this handle has no name |
-| `"unreadable"` | at least one non-zero RVA failed to read, exceeded `MAX_HANDLE_STRING_BYTES`, or failed to decode | `null` for the failed field, the decoded value for the other | one `HANDLE_STRING_READ_FAILED` for the whole result, `affected_count` = number of descriptors in this state |
+| `"ok"` | its RVA is non-zero and the string read and decoded | the decoded string | none |
+| `"unnamed"` | its RVA is `0` | `null` | none — the dump positively records that this field has no name |
+| `"unreadable"` | its RVA is non-zero but the read failed, exceeded `MAX_HANDLE_STRING_BYTES`, or failed to decode | `null` | see below |
 
-An unnamed object is `"unnamed"`, is normal, and never drives `partial`.
-An unreadable name drives `partial` (exit 3) through a **field-level**
-limitation — the descriptor itself is fully reported, with every other
-field intact.
+`type_name_status` and `object_name_status` are set independently, so all
+nine combinations are representable and none is ambiguous — including
+`("unnamed", "unreadable")`, which the earlier single-field design
+rendered as if both names were unreadable.
+
+An `"unnamed"` field is normal and never drives `partial`. An
+`"unreadable"` field drives `partial` (exit 3) through one **field-level**
+`HANDLE_STRING_READ_FAILED` limitation for the whole result, whose
+`affected_count` is the number of **descriptors** with at least one
+`"unreadable"` field — descriptors, not fields, so a handle that lost
+both names counts once. The descriptor itself is fully reported either
+way, with every other field intact.
 
 #### 5.2.2 Descriptor normalization can only fail one way
 
@@ -1872,6 +1954,13 @@ where `<c>` is chosen by the command from the three cases that leave
 (3-all-invalid). All three are `absent_capable` with
 `fixed_source="handle_records"`.
 
+`--handles` passes
+`retain_completeness_checks_when_not_evaluated=True` (§3.7.3) for the
+same reason `--process` does: in case 3-all-invalid the exit-4 result
+must still carry `HANDLE_STREAM_TRUNCATED` and
+`HANDLE_STRING_READ_FAILED` if they fired, since those say what went
+wrong with the descriptors the aggregate code only counts.
+
 The derived source exists because the reducer's `not_evaluated` branch
 fires only when every group member is `ABSENT` — a `failed` stream (case
 2) or a present stream whose descriptors are all unusable
@@ -1903,16 +1992,18 @@ reduction path is introduced.
 
 - `Access` is rendered as `0x%08x` in the console while remaining a
   plain integer in JSON (§1.3).
-- A `null` name prints `(unnamed)` when `name_status == "unnamed"` and
-  `(unreadable)` when `name_status == "unreadable"` — the console keeps
-  the same distinction the record does (§5.2.1), so a reader scanning
-  the table is never told a handle is anonymous when its name was simply
-  lost.
+- Each `null` name prints `(unnamed)` or `(unreadable)` according to
+  **its own** status field — `type_name_status` for the Type column,
+  `object_name_status` for the Object column. The console keeps exactly
+  the distinction the record does (§5.2.1), so a reader scanning the
+  table is never told a handle is anonymous when its name was lost, and
+  a handle with one good name and one lost one shows both truthfully.
 - `summary = {"count": N, "by_type": {…}}`, with `by_type` keyed by
   `type_name`, ordered count-descending then name-ascending (§1.5).
   A `null` `type_name` is keyed `"(unnamed)"` or `"(unreadable)"`
-  following the same `name_status` rule, so the two never merge into one
-  bucket. `by_type` is `{}` when there are no records.
+  according to `type_name_status` alone — `object_name_status` never
+  affects bucketing — so the two never merge. `by_type` is `{}` when
+  there are no records.
 
 ### 5.7 Framing
 
@@ -2149,11 +2240,22 @@ own schema version.
 | FAILED-stream exit semantics contradicted `--threads`' own `modules` requirement | §2.4's per-command/per-source matrix; §2.5 item 11 now requires `--threads` exit **3**, and item 12 covers the early-return re-gating |
 | Invalid PID/start time had nowhere to be preserved | §3.2's raw-preservation table and §3.4.1's `misc_info_claim.raw_pid`/`raw_process_create_time` |
 | Unsupported architecture could exit 0 with a silently missing environment | §4.3.2's `architecture_unsupported` state and §6.1's `ENVIRONMENT_ARCHITECTURE_UNSUPPORTED`, which is never suppressed |
-| Handle string failure conflicted with one-record-per-descriptor, and `null` conflated unnamed with unreadable | §5.2.1's `name_status` discriminator + `HANDLE_STRING_READ_FAILED`; §5.2.2 limits record discard to an unusable `Handle` value |
+| Handle string failure conflicted with one-record-per-descriptor, and `null` conflated unnamed with unreadable | §5.2.1's per-field `type_name_status`/`object_name_status` discriminators + `HANDLE_STRING_READ_FAILED`; §5.2.2 limits record discard to an unusable `Handle` value |
 | `iat.present` could not express table presence, and `slot_in_bounds` had no value for a missing index 12 | §3.5.2's three booleans (`table_present`, `import_directory_present`, `has_entries`), `slot_in_bounds: null`, and `IAT_BOUNDS_CHECK_UNAVAILABLE` |
 | Environment termination confused a UTF-16 NUL code unit with the block terminator | §4.3.2's code-unit walk, zero-length-entry terminator, and four-captured-zero-bytes rule for `present_empty` |
 | `HandleDataStream` framing was not fully frozen | §5.1.1 (header size, descriptor offset, 32/40-byte descriptors only, `usable` formula, parse-failure vs truncation) |
 | `PROCESS_SOURCES_ABSENT` wording was inaccurate | §6.1 — now "no usable process identity evidence available …" |
+
+### 8.2.2 Third-pass review items → resolution
+
+| review item | resolution |
+|---|---|
+| `not_evaluated` short-circuit would swallow the field-level limitations that explain *why* | §3.7.3's opt-in `retain_completeness_checks_when_not_evaluated`, used by `--process` and `--handles` only; §8.3 item 5 now asserts both the aggregate code and the per-field codes |
+| One `name_status` could not describe two independently-failing name fields | §5.2.1's `type_name_status` + `object_name_status`, with all nine combinations representable; console and `by_type` rules updated |
+| Suppressing `ENVIRONMENT_BLOCK_UNREADABLE` re-created the generic-PEB-absence masking the walk exists to prevent | §4.3.3 — it is now **never** suppressed; only `unsupported` (where the walk never started) stays suppressed |
+| A generalized "sole failed evidence → exit 4" rule contradicted the matrix, and §3.7.2 conflated `absent` with `failed` | §2.4 — the generalized rule is deleted and the matrix declared normative; §3.7.2 now states `absent` → `PROCESS_MISC_INFO_UNAVAILABLE`, `failed` → `SOURCE_FAILED` |
+| JSON examples drifted from the field tables | §5.2 (`type_name_status`/`object_name_status`), §3.4.2 (`raw_command_line`), §3.4.3 (`name_matched_candidate_ambiguous` is `false`, never `null`) |
+| §3.5.5 still called every non-`IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS` `IAT_*` code a limitation | §3.5.5 — now excludes both IAT diagnostics |
 
 ### 8.3 Tests required before #37 closes
 
@@ -2199,14 +2301,23 @@ child cannot re-decide it.
    `peb_claim.raw_image_base_address`), and do **not** count toward the
    five availability flags. A dump where all five are invalid exits
    **4** with `PROCESS_SOURCES_ABSENT`, even though both source objects
-   exist. *(#38/#40.)*
+   exist — **and** `coverage.limitations` still contains the per-field
+   codes (`PROCESS_PID_UNAVAILABLE`, `PROCESS_START_TIME_INVALID`,
+   `PROCESS_IMAGE_BASE_INVALID`, …) in declaration order after the
+   aggregate one, per §3.7.3. An exit-4 result whose only limitation is
+   the aggregate code is a contract violation: the analyst is told
+   nothing was usable but never why. *(#38/#40.)*
 5b. **A handle whose name is unreadable is still reported.** A
    descriptor with a non-zero `ObjectNameRva` that fails to decode
-   yields a record with `object_name: null`, `name_status:
+   yields a record with `object_name: null`, `object_name_status:
    "unreadable"`, every other field intact, one
-   `HANDLE_STRING_READ_FAILED`, and exit 3 — distinguishable from a
-   descriptor with `TypeNameRva == ObjectNameRva == 0`, which yields
-   `name_status: "unnamed"` and exit 0. Neither is ever dropped.
+   `HANDLE_STRING_READ_FAILED`, and exit 3. Three further shapes must be
+   distinguishable in the same run: `TypeNameRva == ObjectNameRva == 0`
+   → both statuses `"unnamed"`, exit 0; `TypeNameRva == 0` with a
+   readable object name → `("unnamed", "ok")`, exit 0, and the console
+   Type column prints `(unnamed)`; a readable type name with an
+   unreadable object name → `("ok", "unreadable")`, counted **once** by
+   `affected_count`. No descriptor is ever dropped for a name failure.
    *(#38/#42.)*
 6. **Fallbacks never erase preferred-source claims, and diagnostic-only
    observations never downgrade coverage.** A dump whose PEB image base
@@ -2257,6 +2368,18 @@ excuses anything in §0–§8.
   `LimitationCode` into `iat.diagnostics[]`; gave both truncation codes
   budget attribution; replaced the library's handle parse with a bounded
   dumpex-owned one; and added the §8 acceptance gate.
+- **rev4, third review pass** — six further defects, all introduced or
+  left behind by the second pass and mapped in §8.2.2: the
+  `process_identity` short-circuit would have discarded the field-level
+  limitations that explain an exit-4 result; one `name_status` could not
+  describe two independently-failing handle name fields; suppressing
+  `ENVIRONMENT_BLOCK_UNREADABLE` behind a PEB absence re-created the
+  masking the independent walk exists to prevent; a generalized
+  failed-stream exit rule contradicted the per-command matrix, and
+  §3.7.2 still conflated `absent` with `failed`; three JSON examples had
+  drifted from their own field tables; and one sentence still classified
+  every non-`IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS` `IAT_*` code as a
+  limitation.
 - **rev4, second review pass** — eight defects found by review of the
   above and fixed in place (§8.2.1 maps each to its section): the
   FAILED-stream exit table contradicted `--threads`' own `modules`

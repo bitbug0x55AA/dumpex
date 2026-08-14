@@ -177,6 +177,32 @@ def test_iat_slot_out_of_directory_bounds_is_diagnostic_only(
     assert code not in LimitationCode.__members__
 
 
+# ── JSON examples must match their own field tables ────────────────────
+
+_JSON_KEY_RE = re.compile(r'^\s*"([a-z_]+)":')
+_FIELD_ROW_RE = re.compile(r"^\| `([a-z_]+)` \|")
+
+
+def test_handle_record_example_matches_its_field_table(doc):
+    """§5.2's example and its field table drifted apart twice while this
+    contract was being written (a field added to one, not the other).
+    Every field the table declares must appear in the example, so a
+    reader implementing from either one gets the same record."""
+    section = doc.split("### 5.2 Record shape", 1)[1].split("#### 5.2.1", 1)[0]
+    example = section.split("```json", 1)[1].split("```", 1)[0]
+
+    example_keys = {m.group(1) for line in example.splitlines()
+                    if (m := _JSON_KEY_RE.match(line))}
+    table_fields = {m.group(1) for line in section.splitlines()
+                    if (m := _FIELD_ROW_RE.match(line))}
+
+    assert table_fields, "§5.2's field table did not parse -- check the row format"
+    missing = sorted(table_fields - example_keys)
+    assert not missing, f"declared in §5.2's table but absent from its example: {missing}"
+    undeclared = sorted(example_keys - table_fields)
+    assert not undeclared, f"present in §5.2's example but not declared in its table: {undeclared}"
+
+
 # ── The group-derivation path cannot fill a placeholder ────────────────
 
 # §6.1: these are the codes reachable through build_coverage_report()'s
