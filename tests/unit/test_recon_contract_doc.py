@@ -164,7 +164,7 @@ def test_no_diagnostic_code_is_a_limitation_code(diagnostic_codes):
                     if c in LimitationCode.__members__)
     assert not leaked, (
         f"diagnostic-only codes leaked into LimitationCode: {leaked} -- see "
-        f"the contract's §1.6 and §3.5.4")
+        f"the contract's §1.6 and §3.5.5")
 
 
 def test_iat_slot_out_of_directory_bounds_is_diagnostic_only(
@@ -175,6 +175,41 @@ def test_iat_slot_out_of_directory_bounds_is_diagnostic_only(
     assert code in diagnostic_codes
     assert code not in limitation_codes
     assert code not in LimitationCode.__members__
+
+
+# ── The group-derivation path cannot fill a placeholder ────────────────
+
+# §6.1: these are the codes reachable through build_coverage_report()'s
+# all-absent branch (as a SourceRequirement.absent_code, or a
+# single-source EvaluationRequirement.all_absent_code). That branch
+# constructs CoverageLimitation(code, source, scope="dump",
+# related_sources=...) and sets NOTHING else -- no detail, no
+# affected_count -- so any {placeholder} in one of their templates would
+# render as "None" in real output.
+_ABSENT_CAPABLE = (
+    "PROCESS_SOURCES_ABSENT", "PROCESS_MISC_INFO_UNAVAILABLE",
+    "PROCESS_PEB_UNAVAILABLE", "HANDLES_UNAVAILABLE",
+    "HANDLES_PARSE_FAILED", "HANDLES_ALL_DESCRIPTORS_INVALID",
+)
+_TEMPLATE_RE = re.compile(r'"([^"]+)"')
+
+
+@pytest.mark.parametrize("code", _ABSENT_CAPABLE)
+def test_absent_capable_templates_have_no_placeholders(doc, code):
+    row = next((l for l in doc.splitlines() if l.startswith(f"| `{code}` |")), None)
+    assert row is not None, f"{code} has no §6.1 row"
+    template = _TEMPLATE_RE.search(row)
+    assert template is not None, f"{code}'s row has no quoted message template"
+    assert "{" not in template.group(1), (
+        f"{code} is absent_capable, so its limitation is built by "
+        f"build_coverage_report()'s all-absent branch, which sets no detail/"
+        f"affected_count -- its template must be fixed text, got "
+        f"{template.group(1)!r}")
+
+
+@pytest.mark.parametrize("code", _ABSENT_CAPABLE)
+def test_absent_capable_codes_are_declared_as_limitations(code, limitation_codes):
+    assert code in limitation_codes
 
 
 @pytest.mark.parametrize("code", _RETIRED_BUT_RETAINED)
