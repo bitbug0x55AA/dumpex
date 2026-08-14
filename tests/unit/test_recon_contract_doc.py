@@ -271,3 +271,69 @@ def test_retired_pid_peb_codes_keep_their_enum_membership(code):
     """§6.3: --pid/--peb go away, their codes do not -- historical
     documents containing them must stay renderable."""
     assert code in LimitationCode.__members__
+
+
+# ── Issue #37 follow-up: nullable-boolean/tri-state regressions ────────
+
+def test_console_iat_selection_never_uses_truthiness_on_a_nullable_bool(doc):
+    """`not iat.import_directory_present` is `True` for BOTH `false` and
+    `null`, which would make the console's "no imports" line fire on an
+    undetermined result -- exactly the false claim §3.5.2's three-state
+    presence exists to prevent. §3.8 must spell out its four branches
+    with explicit `is true`/`is false`/`is null` comparisons instead."""
+    assert "not iat.import_directory_present" not in doc
+    assert "if not iat.has_entries" not in doc
+
+
+def test_iat_outcome_matrix_covers_false_present_null_table(doc):
+    """§3.5.2's outcome table must freeze a result for
+    import_directory_present=false, table_present=null -- the reachable
+    combination the third review pass left out."""
+    row = next((l for l in doc.splitlines() if l.startswith("| `false` | `null` |")),
+               None)
+    assert row is not None, (
+        "§3.5.2's outcome table has no row for "
+        "import_directory_present=false, table_present=null")
+    assert "IAT_DIRECTORY_TABLE_INCOMPLETE" in row
+    assert "No `IAT_BOUNDS_CHECK_UNAVAILABLE`" in row
+
+
+def test_iat_source_state_is_defined_for_import_present_null(doc):
+    """§3.7.4 must give `coverage.sources["iat"]` a legal state in every
+    branch of §3.5.2's `import_directory_present`, including `null` --
+    previously only 'no image base'/'no main image' produced `absent`,
+    leaving the uncaptured-directory-count case with no defined state."""
+    section = doc.split("#### 3.7.4 Coverage sources", 1)[1]
+    section = section.split("### 3.8", 1)[0]
+    assert "import_directory_present is null` | `absent`" in section
+    assert "import_directory_present is false` | `present_empty`" in section
+    assert "import_directory_present is true` and `entry_count == 0` | `present_empty`" in section
+    assert "import_directory_present is true` and `entry_count > 0` | `present`" in section
+
+
+def test_iat_directory_table_incomplete_declares_optional_affected_count(doc):
+    """§6.1's registry row is the frozen contract an implementer's
+    `_CodeSpec` validator and renderer are built from. It must declare
+    `affected_count` optional and carry both frozen renderings, not just
+    the {count} template -- otherwise a validator that requires a
+    positive count would reject the legitimate `None` case."""
+    row = next((l for l in doc.splitlines()
+                if l.startswith("| `IAT_DIRECTORY_TABLE_INCOMPLETE` |")), None)
+    assert row is not None, "IAT_DIRECTORY_TABLE_INCOMPLETE has no §6.1 row"
+    assert "optional" in row
+    assert "declared data directory entr(y/ies) were not captured" in row
+    assert "the data directory table was not captured" in row
+
+
+def test_section_8_3_fixture_6b_pins_index1_rva_for_every_case(doc):
+    """§8.3 item 6b's expected results (true+null vs. false+null) are
+    only unique given index 1's exact (rva, size) pair -- the previous
+    revision only described capture length, which is consistent with
+    either outcome."""
+    section = doc.split("6b. **An uncaptured directory table", 1)[1]
+    section = section.split("6c. **A handle name", 1)[0]
+    assert "nonzero_import_rva" in section, (
+        "the true+null fixture must pin index 1 to a non-zero RVA")
+    assert section.count("data_directories[1] = (0, 0)") >= 2, (
+        "both false-outcome fixtures (false+null and false+false) must "
+        "pin index 1 to an explicit (0, 0) pair")
