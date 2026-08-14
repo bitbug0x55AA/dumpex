@@ -1039,9 +1039,32 @@ never two:
 |---|---|---|
 | `declared_directory_count is None` | **`null`** | the count itself was not captured — nothing can be said about any index |
 | `i >= declared_directory_count` | `false` | the image positively declares no such directory |
-| `i < len(data_directories)` and the pair is `(0, 0)` | `false` | declared, but a zero RVA means no directory |
-| `i < len(data_directories)` and the RVA is non-zero | `true` | present; `*_va`/`*_size` populated |
+| `i < len(data_directories)` and the captured entry's RVA is zero (regardless of `Size`) | `false` | declared, but a zero RVA means no directory — `Size` is **never** a second presence discriminator |
+| `i < len(data_directories)` and the captured entry's RVA is non-zero (regardless of `Size`) | `true` | present; `*_va`/`*_size` populated |
 | `i < declared_directory_count` but `i >= len(data_directories)` | **`null`** | declared, but its bytes were not captured — **undetermined** |
+
+Presence is a pure function of `rva == 0`. `data_directories[i]` is a
+`(rva, size)` pair, and the two fields vary independently — a captured
+`(0, 0x100)` (zero RVA, non-zero `Size`) and a captured `(0x2000, 0)`
+(non-zero RVA, zero `Size`) are both real, reachable inputs, not
+malformed evidence requiring a new limitation. `(0, 0x100)` resolves
+`false` exactly like `(0, 0)`; `(0x2000, 0)` resolves `true` exactly
+like a fully-populated pair. This matches the field table above (§3.5.1
+/ §3.5.2 opening): presence is defined as "index *i* is declared and has
+a non-zero RVA" — `Size` is not part of that definition in either
+direction.
+
+```python
+def resolve_present(index: int, declared_directory_count, data_directories):
+    if declared_directory_count is None:
+        return None
+    if index >= declared_directory_count:
+        return False
+    if index >= len(data_directories):
+        return None
+    rva, _size = data_directories[index]
+    return rva != 0
+```
 
 A `null` is never a claim. When either index resolves to `null`, one
 `IAT_DIRECTORY_TABLE_INCOMPLETE` limitation fires, coverage is
@@ -1066,17 +1089,33 @@ usually redundant: a directory array truncated *after* the point
 `parse_pe_header()` returning `valid=True`, which is exactly the
 crafted-header case this code exists for.
 
-`has_entries: false` on its own never means "this image imports
-nothing". That claim is supported only when
-`import_directory_present == false` **and** `coverage.status ==
-"complete"`.
+`has_entries: false` on its own never means "this image declares no
+imports" — `import_directory_present` is the field that answers that
+question, and `has_entries` reads `false` for the unrelated case where
+`import_directory_present is null` too (unknown and empty both walk to
+zero entries).
+
+The "this image declares no imports" claim is supported **exactly**
+when `import_directory_present is false`. It is **independent of
+unrelated process limitations** — a missing PID, an unset start time, or
+any other `--process` gap outside `iat` does not touch this claim — and
+it **remains valid when `table_present` is `null`**: in that case the
+separate `IAT_DIRECTORY_TABLE_INCOMPLETE` limitation records, on its
+own, that index 12's presence could not be determined; it does not
+retract the import claim, and `coverage.status` can be `partial` while
+the claim stays true. Overall process `coverage.status` is never a
+precondition for this claim — it is a global, whole-record rollup that
+can be dragged to `partial` by a completely unrelated source (`misc_info`,
+`peb`, `modules`), and gating a determined, source-local answer on it
+would make an unrelated gap silently retract a fact this section already
+established.
 
 Frozen consequences of each determined combination:
 
 | `import_directory_present` | `table_present` | outcome |
 |---|---|---|
 | `false` | `false` or `true` | no descriptors walked, `entries: []`, `has_entries: false`, `dll_count`/`entry_count` = `0`. **No `IAT_*` limitation** — a PE that imports nothing has no imports to miss, so this is `complete`. |
-| `false` | `null` | imports are **determined absent** — no descriptors walked, `entries: []`, `has_entries: false`, `dll_count`/`entry_count` = `0`, `table_va`/`table_size` = `null`. The IAT directory's own presence is still undetermined, so `IAT_DIRECTORY_TABLE_INCOMPLETE` fires → `partial`, exit 3. No `IAT_BOUNDS_CHECK_UNAVAILABLE` — that diagnostic asserts the IAT directory is determined absent, which `table_present: null` does not establish. |
+| `false` | `null` | imports are **determined absent** — no descriptors walked, `entries: []`, `has_entries: false`, `dll_count`/`entry_count` = `0`, `table_va`/`table_size` = `null`. The IAT directory's own presence is still undetermined, so `IAT_DIRECTORY_TABLE_INCOMPLETE` fires → `partial`, exit 3. No `IAT_BOUNDS_CHECK_UNAVAILABLE` — that diagnostic asserts the IAT directory is determined absent, which `table_present: null` does not establish. The console (§3.8) still prints `"(none -- this image declares no imports)"` — that text tracks `import_directory_present` alone, not `coverage.status` — while the `partial`/exit-3 result and the coverage `reasons` line report the unrelated, narrower index-12 gap. |
 | `true` | `true` | the normal case; `slot_in_bounds` is a real boolean on every entry. |
 | `true` | `false` | descriptors **are** walked and entries **are** reported — the imports themselves are fully recoverable from directory 1 alone. There is no range to check slots against, so `slot_in_bounds` is `null` on **every** entry, `table_va`/`table_size` are `null`, and one `info` diagnostic `IAT_BOUNDS_CHECK_UNAVAILABLE` is emitted (§6.2). **No limitation, coverage unaffected**: the requested claim — which symbols this image imports — was fully evaluated; only an optional corroborating check had no reference range (§1.6). |
 | `null` | anything | undetermined: no descriptors walked, `entries: []`, `has_entries: false`, and `IAT_DIRECTORY_TABLE_INCOMPLETE` → `partial`, exit 3. No diagnostic. |
@@ -1449,14 +1488,46 @@ The four branches, in evaluation order:
 1. `iat.has_entries is true` → `"42 import(s) across 3 DLL(s)"`.
 2. `iat.import_directory_present is false` → `"(none -- this image
    declares no imports)"`. This is a determined "no imports" claim
-   (§3.5.2); it must not fire when `import_directory_present is null`.
+   (§3.5.2) and it is **unconditional on `table_present`**: it fires the
+   same way whether `table_present` is `false`, `true`, or `null`. It
+   must not fire when `import_directory_present is null` — that case
+   falls through to branch 4.
 3. `iat.import_directory_present is true` AND `iat.has_entries is
    false` AND no partial-driving `IAT_*` limitation fired →
    `"(none -- import directory present, zero entries)"`.
-4. Otherwise (covers `import_directory_present is null`, and the
-   `false`/`table_present is null` case from §3.5.2 where imports are
-   determined absent but `IAT_DIRECTORY_TABLE_INCOMPLETE` still made the
-   result `partial`) → `"(unavailable -- see coverage below)"`.
+4. Otherwise → `"(unavailable -- see coverage below)"`.
+
+Restated as a reference selector, evaluated in exactly this order:
+
+```python
+def select_console_branch(has_entries, import_directory_present, partial_iat_limitation):
+    if has_entries is True:
+        return "count"
+    if import_directory_present is False:
+        return "no_imports"
+    if import_directory_present is True and has_entries is False and not partial_iat_limitation:
+        return "present_empty"
+    return "unavailable"
+```
+
+`partial_iat_limitation` is `True` exactly when a partial-driving `IAT_*`
+limitation fired for this record (e.g. `IAT_DIRECTORY_TABLE_INCOMPLETE`).
+`table_present` is deliberately not a parameter: branch selection never
+inspects it directly, only through whichever `IAT_*` limitation it may
+have triggered.
+
+**Branch 4 is never reached when `import_directory_present is false`.**
+Branch 2 is checked first and matches every `false` value of that field
+regardless of `table_present`, so the `false`/`table_present is null`
+case from §3.5.2's outcome table is handled **entirely by branch 2**:
+console prints `"(none -- this image declares no imports)"`, while
+`IAT_DIRECTORY_TABLE_INCOMPLETE` independently drives `coverage.status`
+to `partial` and exit to 3 for the unrelated, narrower index-12 gap.
+Branch 4 is structurally reachable only for `import_directory_present is
+null` (no determined import answer exists to print), or for
+`import_directory_present is true` with `has_entries is false` where a
+partial-driving `IAT_*` limitation blocks branch 3's "present, zero
+entries" claim.
 
 Every nullable boolean above is read with an explicit three-state
 comparison (`is true` / `is false` / `is null`, or equivalent). `not
@@ -1464,8 +1535,10 @@ iat.import_directory_present` is never used: it is `true` for both
 `false` and `null`, which would make branch 2 fire on an undetermined
 result and misreport it as a positive "no imports" claim. `coverage`'s
 own `reasons` line (rendered above this block, §3.7.x) still carries the
-gap text for branch 4 independently of which of these four lines is
-chosen.
+gap text whenever `IAT_DIRECTORY_TABLE_INCOMPLETE` fired, independently
+of which of these four IAT lines was chosen — including alongside
+branch 2's "declares no imports" text in the `false`/`table_present is
+null` case.
 
 Rules:
 
@@ -2566,7 +2639,11 @@ child cannot re-decide it.
      coverage source is `present_empty` (§3.7.4 — imports are a
      determined answer even though the table gap remains), plus
      `IAT_DIRECTORY_TABLE_INCOMPLETE` with `affected_count == 10`,
-     `coverage.status == "partial"`, exit **3**;
+     `coverage.status == "partial"`, exit **3**, **and the console (§3.8)
+     still prints `"(none -- this image declares no imports)"`** — branch
+     2 fires on `import_directory_present is false` alone, unconditional
+     on `table_present`, so this is not the `"(unavailable -- see
+     coverage below)"` text;
    - `declared_directory_count = 16`, `len(data_directories) = 1`
      (capture stops after index 0, so neither index 1 nor index 12 was
      captured): both `import_directory_present` and `table_present` are
@@ -2588,6 +2665,29 @@ child cannot re-decide it.
    the image declares no IAT directory, which none of the first four
    established (and the fifth found `table_present: false` without ever
    attempting a slot check, since no entries exist to check). *(#39/#40.)*
+6b2. **`Size` is never a second presence discriminator; presence is RVA
+   alone.** Four images, each capturing enough of the directory table to
+   reach the index under test, isolating `Size` from `RVA`:
+   - `declared_directory_count = 16`, `len(data_directories) = 6`,
+     `data_directories[1] = (0, 0x100)`: `import_directory_present` is
+     **determined `false`** — the RVA is zero; the non-zero `Size` does
+     not make it present. Same outcome as `(0, 0)`.
+   - `declared_directory_count = 16`, `len(data_directories) = 13`,
+     `data_directories[1] = (nonzero_rva, 0)`, `data_directories[12] =
+     (0, 0x40)`: `table_present` is **determined `false`** — the RVA is
+     zero even though `Size` is non-zero, same rule applied to index 12.
+   - `declared_directory_count = 16`, `len(data_directories) = 6`,
+     `data_directories[1] = (0x2000, 0)`: `import_directory_present` is
+     **determined `true`** — presence is defined by RVA alone (§3.5.1's
+     field table); a `Size` of `0` does not suppress it, and entries are
+     walked from that RVA.
+   - `declared_directory_count = 16`, `len(data_directories) = 13`,
+     `data_directories[1] = (nonzero_rva, nonzero_size)`,
+     `data_directories[12] = (0x3000, 0)`: `table_present` is
+     **determined `true`**, same rule applied to index 12; `slot_in_bounds`
+     is a real boolean on every entry despite `table_size == 0`.
+
+   *(#39/#40.)*
 6c. **A handle name that is present-but-empty is not a read failure.**
    A descriptor with `ObjectNameRva != 0` whose `MINIDUMP_STRING.Length`
    is `0` yields `object_name: null`, `object_name_status: "unnamed"`,

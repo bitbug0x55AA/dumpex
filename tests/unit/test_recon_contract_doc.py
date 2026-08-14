@@ -274,15 +274,54 @@ def test_retired_pid_peb_codes_keep_their_enum_membership(code):
 
 
 # ── Issue #37 follow-up: nullable-boolean/tri-state regressions ────────
+#
+# A second review pass found that the substring checks below can pass
+# for the wrong reason: markdown line-wrapping breaks a literal phrase
+# like "not iat.import_directory_present" across a newline, so a plain
+# `"..." not in doc` check silently stops covering the exact regression
+# it names the moment the paragraph reflows. Every check in this section
+# either normalizes whitespace first, or -- for the semantics that
+# actually matter -- is superseded by the EXECUTABLE truth tables in
+# tests/unit/test_recon_contract_semantics.py, which exec() the
+# contract's own embedded reference functions rather than pattern-match
+# its prose.
 
-def test_console_iat_selection_never_uses_truthiness_on_a_nullable_bool(doc):
-    """`not iat.import_directory_present` is `True` for BOTH `false` and
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_ws(text: str) -> str:
+    return _WS_RE.sub(" ", text)
+
+
+def test_console_branch_definitions_use_no_truthiness_on_a_nullable_bool(doc):
+    """The four branch DEFINITIONS in §3.8 (not the surrounding prose,
+    which is allowed to quote the anti-pattern by name when explaining
+    why it's forbidden) must never spell a condition as `not iat.<x>`.
+    `not iat.import_directory_present` is `True` for BOTH `false` and
     `null`, which would make the console's "no imports" line fire on an
-    undetermined result -- exactly the false claim §3.5.2's three-state
-    presence exists to prevent. §3.8 must spell out its four branches
-    with explicit `is true`/`is false`/`is null` comparisons instead."""
-    assert "not iat.import_directory_present" not in doc
-    assert "if not iat.has_entries" not in doc
+    undetermined result. Checked whitespace-normalized so a future
+    line-wrap can't silently defeat this."""
+    branches = doc.split("The four branches, in evaluation order:", 1)[1]
+    branches = branches.split("Restated as a reference selector", 1)[0]
+    normalized = _normalize_ws(branches)
+    assert not re.search(r"\bnot\s+iat\.\w", normalized), (
+        f"a §3.8 branch definition uses truthiness on a nullable `iat.*` "
+        f"field instead of an explicit is-comparison: {normalized!r}")
+
+
+def test_forbidden_truthiness_phrase_only_appears_as_a_named_anti_pattern(doc):
+    """`not iat.import_directory_present`/`not iat.has_entries` may only
+    appear in the doc as the explicit anti-pattern §3.8 calls out by name
+    ("... is never used: ...") -- never as an actual, live condition
+    written elsewhere. Whitespace-normalized so line-wrap can't hide a
+    real occurrence from a literal substring check."""
+    normalized = _normalize_ws(doc)
+    for phrase in ("not iat.import_directory_present", "not iat.has_entries"):
+        for m in re.finditer(re.escape(phrase), normalized):
+            window = normalized[m.start():m.start() + 200]
+            assert "is never used" in window, (
+                f"{phrase!r} appears outside the sentence that explicitly "
+                f"forbids it as a live condition -- context: {window!r}")
 
 
 def test_iat_outcome_matrix_covers_false_present_null_table(doc):
@@ -337,3 +376,81 @@ def test_section_8_3_fixture_6b_pins_index1_rva_for_every_case(doc):
     assert section.count("data_directories[1] = (0, 0)") >= 2, (
         "both false-outcome fixtures (false+null and false+false) must "
         "pin index 1 to an explicit (0, 0) pair")
+
+
+# ── Issue #37 second follow-up: false/null console routing, RVA/Size ───
+
+def test_import_claim_is_not_gated_on_global_process_coverage_status(doc):
+    """A prior revision required `coverage.status == "complete"` for the
+    "declares no imports" claim -- which an unrelated PID/start-time gap
+    would falsely retract. The claim must be gated on
+    `import_directory_present` alone."""
+    section = doc.split("Presence of one directory index", 1)[1]
+    section = section.split("Frozen consequences of each determined combination", 1)[0]
+    normalized = _normalize_ws(section)
+    assert 'coverage.status == "complete"' not in normalized, (
+        "the import-absence claim must not require global coverage.status "
+        "== complete -- an unrelated process limitation must not retract it")
+    assert 'supported **exactly** when `import_directory_present is false`' in normalized, (
+        "§3.5.2 must state the claim is gated on import_directory_present "
+        "alone")
+    assert "remains valid when `table_present` is `null`" in normalized, (
+        "§3.5.2 must state the claim survives an undetermined table_present")
+
+
+def test_console_branch_4_no_longer_claims_to_cover_the_false_null_case(doc):
+    """Branch 2 (`import_directory_present is false`) is checked before
+    branch 4 and matches unconditionally on `table_present`, so the
+    false/null combination can never structurally reach branch 4. A
+    prior revision's branch-4 prose claimed otherwise -- self-
+    contradictory, since branch 2 already consumed that case."""
+    section = doc.split("### 3.8 Console layout", 1)[1]
+    section = section.split("## §4", 1)[0]
+    normalized = _normalize_ws(section)
+    assert "never reached when `import_directory_present is false`" in normalized, (
+        "§3.8 must explicitly state branch 4 is unreachable for "
+        "import_directory_present=false")
+    # The old, contradictory claim must be gone: branch 4's own
+    # description no longer names table_present is null as one of ITS
+    # reachable cases.
+    branch4_desc = section.split("4. Otherwise", 1)[1].split("Restated as", 1)[0]
+    assert "table_present" not in _normalize_ws(branch4_desc), (
+        "branch 4's own bullet must not mention table_present at all -- "
+        "that combination is fully handled by branch 2")
+
+
+def test_presence_resolver_defines_rva_zero_regardless_of_size(doc):
+    """A captured `(RVA=0, Size>0)` pair was previously undefined: the
+    old row matched only the literal pair `(0, 0)`. Presence must be a
+    pure function of RVA; Size must never be a second discriminator in
+    either direction."""
+    section = doc.split("Presence of one directory index", 1)[1]
+    section = section.split("A `null` is never a claim", 1)[0]
+    normalized = _normalize_ws(section)
+    assert "the pair is `(0, 0)`" not in normalized, (
+        "the presence table must no longer gate falseness on the exact "
+        "pair (0, 0) -- RVA alone must decide it")
+    assert "RVA is zero (regardless of `Size`)" in normalized, (
+        "the presence table must explicitly state RVA-zero is false "
+        "regardless of Size")
+    assert "RVA is non-zero (regardless of `Size`)" in normalized, (
+        "the presence table must explicitly state RVA-non-zero is true "
+        "regardless of Size")
+    assert "second presence discriminator" in normalized
+
+
+def test_section_8_3_has_rva_size_independence_fixtures(doc):
+    """At least one §8.3 fixture must exercise a captured `(0,
+    nonzero_size)` pair and a captured `(nonzero_rva, 0)` pair for BOTH
+    index 1 and index 12, so the RVA/Size independence rule cannot
+    silently regress back to undefined behavior."""
+    section = doc.split("6b2. **`Size` is never a second presence", 1)[1]
+    section = section.split("6c. **A handle name", 1)[0]
+    assert "(0, 0x100)" in section, (
+        "missing an index-1 (zero RVA, non-zero Size) fixture")
+    assert "(0, 0x40)" in section, (
+        "missing an index-12 (zero RVA, non-zero Size) fixture")
+    assert "(0x2000, 0)" in section, (
+        "missing an index-1 (non-zero RVA, zero Size) fixture")
+    assert "(0x3000, 0)" in section, (
+        "missing an index-12 (non-zero RVA, zero Size) fixture")
