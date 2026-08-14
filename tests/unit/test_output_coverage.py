@@ -2288,3 +2288,156 @@ def test_oversized_skipped_unknown_source_is_not_kind_or_scope_constrained():
         code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="future_scan",
         scope="anything", affected_count=1, targets=[_segment_target()])
     assert render_limitation(limitation)
+
+
+# ── --process (issue #40 / docs/recon_process_sysinfo_handles_contract.md
+# §6.1) -- PROCESS_*/IAT_* limitation codes ──────────────────────────────
+
+def test_process_sources_absent_is_absent_capable_single_source():
+    req = EvaluationRequirement(sources=("process_identity",),
+                                 all_absent_code=LimitationCode.PROCESS_SOURCES_ABSENT)
+    sources = {"process_identity": SourceObservation(name="process_identity", state=SOURCE_ABSENT)}
+    coverage = build_coverage_report(sources, evaluation_sources=req)
+    assert coverage.status == CoverageStatus.NOT_EVALUATED
+    assert exit_code_for(coverage.status.value) == 4
+    assert len(coverage.limitations) == 1
+    limitation = coverage.limitations[0]
+    assert limitation.code == LimitationCode.PROCESS_SOURCES_ABSENT
+    assert limitation.source == "process_identity"
+    assert "no usable process identity evidence" in render_limitation(limitation)
+
+
+@pytest.mark.parametrize("code,source", [
+    (LimitationCode.PROCESS_MISC_INFO_UNAVAILABLE, "misc_info"),
+    (LimitationCode.PROCESS_PEB_UNAVAILABLE, "peb"),
+    (LimitationCode.PROCESS_MODULE_FALLBACK_UNAVAILABLE, "modules"),
+])
+def test_process_absent_capable_codes_via_source_requirement(code, source):
+    req = SourceRequirement(source=source, absent_code=code)
+    sources = {source: SourceObservation(name=source, state=SOURCE_ABSENT)}
+    coverage = build_coverage_report(sources, completeness_checks=[req])
+    assert coverage.status == CoverageStatus.PARTIAL
+    assert len(coverage.limitations) == 1
+    assert coverage.limitations[0].code == code
+    assert render_limitation(coverage.limitations[0])
+
+
+def test_process_absent_capable_codes_reject_wrong_fixed_source():
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=LimitationCode.PROCESS_PEB_UNAVAILABLE, source="misc_info")
+
+
+@pytest.mark.parametrize("code,expected_text", [
+    (LimitationCode.PROCESS_PID_UNAVAILABLE, "does not supply a usable ProcessId"),
+    (LimitationCode.PROCESS_START_TIME_UNSET, "is zero (not recorded)"),
+    (LimitationCode.PROCESS_START_TIME_INVALID, "not a valid 32-bit timestamp"),
+])
+def test_process_misc_info_field_level_codes(code, expected_text):
+    limitation = CoverageLimitation(code=code, source="misc_info")
+    assert expected_text in render_limitation(limitation)
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=code, source="peb")
+
+
+@pytest.mark.parametrize("code,expected_text", [
+    (LimitationCode.PROCESS_PATH_UNAVAILABLE, "no process path available"),
+    (LimitationCode.PROCESS_COMMAND_LINE_UNAVAILABLE, "CommandLine is empty"),
+    (LimitationCode.PROCESS_IMAGE_BASE_UNAVAILABLE, "ImageBaseAddress is not set"),
+    (LimitationCode.PROCESS_IMAGE_BASE_INVALID, "not a plausible mapped image base"),
+])
+def test_process_peb_field_level_codes(code, expected_text):
+    limitation = CoverageLimitation(code=code, source="peb")
+    assert expected_text in render_limitation(limitation)
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=code, source="misc_info")
+
+
+@pytest.mark.parametrize("code,expected_text", [
+    (LimitationCode.PROCESS_MAIN_IMAGE_READ_FAILED, "could not read the PE header"),
+    (LimitationCode.PROCESS_MAIN_IMAGE_SHORT_READ, "read fewer bytes than required"),
+    (LimitationCode.PROCESS_MAIN_IMAGE_PE_INVALID, "not structurally valid"),
+])
+def test_process_main_image_codes(code, expected_text):
+    limitation = CoverageLimitation(code=code, source="main_image")
+    assert expected_text in render_limitation(limitation)
+    assert limitation.affected_count is None
+
+
+def test_process_field_level_codes_reject_extra_fields():
+    with pytest.raises(ValueError, match="does not use"):
+        CoverageLimitation(code=LimitationCode.PROCESS_PID_UNAVAILABLE, source="misc_info",
+                            affected_count=1)
+
+
+def test_iat_directory_table_incomplete_with_known_count():
+    limitation = CoverageLimitation(code=LimitationCode.IAT_DIRECTORY_TABLE_INCOMPLETE,
+                                     source="iat", affected_count=10)
+    text = render_limitation(limitation)
+    assert "10 declared data directory entr(y/ies) were not captured" in text
+
+
+def test_iat_directory_table_incomplete_without_known_count():
+    limitation = CoverageLimitation(code=LimitationCode.IAT_DIRECTORY_TABLE_INCOMPLETE, source="iat")
+    text = render_limitation(limitation)
+    assert text == ("the data directory table was not captured; import/IAT directory "
+                     "presence is undetermined")
+
+
+def test_iat_directory_table_incomplete_rejects_zero_or_negative_count():
+    with pytest.raises(ValueError):
+        CoverageLimitation(code=LimitationCode.IAT_DIRECTORY_TABLE_INCOMPLETE,
+                            source="iat", affected_count=0)
+
+
+@pytest.mark.parametrize("code,expected_text", [
+    (LimitationCode.IAT_DIRECTORY_READ_FAILED, "could not read the IAT directory"),
+    (LimitationCode.IAT_UNTERMINATED_TABLE, "no null terminator found"),
+    (LimitationCode.IAT_CYCLE_DETECTED, "a repeated address was found"),
+    (LimitationCode.IAT_BOUNDS_EXCEEDED, "exceeds plausible bounds"),
+    (LimitationCode.IAT_DIRECTORY_SHORT_READ, "read fewer bytes than declared"),
+])
+def test_iat_fixed_text_codes(code, expected_text):
+    limitation = CoverageLimitation(code=code, source="iat")
+    assert expected_text in render_limitation(limitation)
+
+
+@pytest.mark.parametrize("code,expected_text", [
+    (LimitationCode.IAT_DESCRIPTOR_READ_FAILED, "import descriptor(s) could not be read"),
+    (LimitationCode.IAT_DESCRIPTOR_SHORT_READ, "import descriptor(s) read short"),
+    (LimitationCode.IAT_THUNK_READ_FAILED, "IAT/INT thunk slot(s) could not be read"),
+    (LimitationCode.IAT_THUNK_SHORT_READ, "IAT/INT thunk slot(s) read short"),
+    (LimitationCode.IAT_NAME_READ_FAILED, "DLL or import name string(s) could not be read"),
+])
+def test_iat_affected_count_codes(code, expected_text):
+    limitation = CoverageLimitation(code=code, source="iat", affected_count=3)
+    text = render_limitation(limitation)
+    assert "3" in text
+    assert expected_text in text
+    with pytest.raises(ValueError, match="positive integer"):
+        CoverageLimitation(code=code, source="iat")
+
+
+def test_iat_entries_truncated_requires_all_three_budget_fields():
+    limitation = CoverageLimitation(
+        code=LimitationCode.IAT_ENTRIES_TRUNCATED, source="iat",
+        scope="iat_bytes_read", budget_limit=16 * 1024 * 1024, budget_consumed=16 * 1024 * 1024)
+    text = render_limitation(limitation)
+    assert "budget: iat_bytes_read, limit=16777216 consumed=16777216" in text
+
+    with pytest.raises(ValueError, match="requires scope, budget_limit, and budget_consumed"):
+        CoverageLimitation(code=LimitationCode.IAT_ENTRIES_TRUNCATED, source="iat")
+    with pytest.raises(ValueError, match="requires scope, budget_limit, and budget_consumed"):
+        CoverageLimitation(code=LimitationCode.IAT_ENTRIES_TRUNCATED, source="iat", scope="iat_dlls")
+
+
+def test_iat_entries_truncated_rejects_unknown_scope():
+    with pytest.raises(ValueError, match="must be one of"):
+        CoverageLimitation(code=LimitationCode.IAT_ENTRIES_TRUNCATED, source="iat",
+                            scope="not_a_real_budget", budget_limit=1, budget_consumed=1)
+
+
+def test_process_and_iat_codes_are_all_registered_and_render():
+    process_and_iat_codes = [c for c in LimitationCode if c.value.startswith(("PROCESS_", "IAT_"))]
+    assert len(process_and_iat_codes) == 26
+    for code in process_and_iat_codes:
+        assert code in _CODE_SPECS

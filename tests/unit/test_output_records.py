@@ -13,6 +13,7 @@ from dumpex.output.records import (
     ThreadDiffRecord, THREAD_DIFF_ADDED, THREAD_DIFF_REMOVED,
     MemoryDiffRecord, MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED,
     ReportIocString, ReportThreadInfo, ReportRegionInfo,
+    ImportEntryRecord, ProcessDiagnosticRecord, IatRecord, ProcessRecord,
 )
 
 
@@ -976,3 +977,349 @@ def test_report_ioc_string_rejects_empty_context_hex_when_network_pattern():
 def test_report_ioc_string_rejects_non_hex_characters():
     with pytest.raises(ValueError, match="lowercase hex string"):
         ReportIocString(**_valid_ioc_kwargs(context_hex="zzzz"))
+
+
+# ── ImportEntryRecord (issue #40, §3.5.3) ─────────────────────────────────
+
+def _name_entry(**overrides):
+    kwargs = dict(dll="KERNEL32.dll", import_by="name", symbol="CreateFileW", ordinal=None,
+                  iat_slot_va=hex_address(0x1000), resolved_target_va=hex_address(0x2000),
+                  slot_in_bounds=True)
+    kwargs.update(overrides)
+    return ImportEntryRecord(**kwargs)
+
+
+def test_import_entry_record_name_shape():
+    entry = _name_entry()
+    assert entry.to_dict() == {
+        "dll": "KERNEL32.dll", "import_by": "name", "symbol": "CreateFileW", "ordinal": None,
+        "iat_slot_va": "0x0000000000001000", "resolved_target_va": "0x0000000000002000",
+        "slot_in_bounds": True,
+    }
+
+
+def test_import_entry_record_ordinal_shape():
+    entry = _name_entry(import_by="ordinal", symbol=None, ordinal=42)
+    assert entry.symbol is None
+    assert entry.ordinal == 42
+
+
+def test_import_entry_record_unavailable_import_by():
+    entry = _name_entry(import_by="unavailable", symbol=None, ordinal=None)
+    assert entry.to_dict()["import_by"] == "unavailable"
+
+
+def test_import_entry_record_rejects_unknown_import_by():
+    with pytest.raises(ValueError, match="import_by"):
+        _name_entry(import_by="bogus")
+
+
+def test_import_entry_record_rejects_symbol_outside_name_mode():
+    with pytest.raises(ValueError, match="symbol must be None"):
+        _name_entry(import_by="ordinal", symbol="CreateFileW", ordinal=1)
+
+
+def test_import_entry_record_rejects_ordinal_outside_ordinal_mode():
+    with pytest.raises(ValueError, match="ordinal must be None"):
+        _name_entry(import_by="name", ordinal=1)
+
+
+def test_import_entry_record_requires_ordinal_when_import_by_is_ordinal():
+    # Unlike symbol (a separate, fallible read that can legitimately come
+    # back null for a captured "name" entry), ordinal is decoded directly
+    # from the thunk value already in hand -- there is no "ordinal read
+    # failed" case import_by == "ordinal" can report null for.
+    with pytest.raises(ValueError, match="ordinal must be set"):
+        _name_entry(import_by="ordinal", symbol=None, ordinal=None)
+
+
+def test_import_entry_record_rejects_non_string_dll():
+    with pytest.raises(ValueError, match="dll"):
+        _name_entry(dll=123)
+
+
+def test_import_entry_record_rejects_non_string_symbol():
+    with pytest.raises(ValueError, match="symbol"):
+        _name_entry(symbol=123)
+
+
+def test_import_entry_record_rejects_non_hex_addresses():
+    with pytest.raises(ValueError):
+        _name_entry(iat_slot_va="not-hex")
+    with pytest.raises(ValueError):
+        _name_entry(resolved_target_va="not-hex")
+
+
+def test_import_entry_record_rejects_non_bool_slot_in_bounds():
+    with pytest.raises(ValueError, match="slot_in_bounds"):
+        _name_entry(slot_in_bounds="yes")
+
+
+def test_import_entry_record_slot_in_bounds_may_be_null():
+    entry = _name_entry(slot_in_bounds=None)
+    assert entry.slot_in_bounds is None
+
+
+# ── ProcessDiagnosticRecord (issue #40, §3.4.4/§6.2) ─────────────────────
+
+def _diagnostic(**overrides):
+    kwargs = dict(code="PROCESS_MODULE_BASE_UNMATCHED", severity="info",
+                  message="no module registered at the PEB-reported image base")
+    kwargs.update(overrides)
+    return ProcessDiagnosticRecord(**kwargs)
+
+
+def test_process_diagnostic_record_default_shape():
+    d = _diagnostic()
+    assert d.to_dict() == {
+        "code": "PROCESS_MODULE_BASE_UNMATCHED", "severity": "info",
+        "message": "no module registered at the PEB-reported image base",
+        "affected_count": None, "details": {},
+    }
+
+
+def test_process_diagnostic_record_with_details_and_count():
+    d = _diagnostic(code="IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS", severity="warning",
+                     message="1 IAT slot(s) fall outside the declared IAT directory range",
+                     affected_count=1, details={"table_va": "0x1000"})
+    assert d.to_dict()["details"] == {"table_va": "0x1000"}
+    assert d.to_dict()["affected_count"] == 1
+
+
+def test_process_diagnostic_record_rejects_empty_code():
+    with pytest.raises(ValueError, match="code"):
+        _diagnostic(code="")
+
+
+def test_process_diagnostic_record_rejects_unknown_severity():
+    with pytest.raises(ValueError, match="severity"):
+        _diagnostic(severity="critical")
+
+
+def test_process_diagnostic_record_rejects_empty_message():
+    with pytest.raises(ValueError, match="message"):
+        _diagnostic(message="")
+
+
+def test_process_diagnostic_record_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="affected_count"):
+        _diagnostic(affected_count=0)
+    with pytest.raises(ValueError, match="affected_count"):
+        _diagnostic(affected_count=True)
+
+
+def test_process_diagnostic_record_rejects_non_dict_details():
+    with pytest.raises(ValueError, match="details"):
+        _diagnostic(details=[("a", 1)])
+
+
+# ── IatRecord (issue #40, §3.5) ────────────────────────────────────────
+
+def _empty_iat(**overrides):
+    kwargs = dict(table_present=None, table_va=None, table_size=None,
+                  import_directory_present=None, import_directory_va=None,
+                  import_directory_size=None, has_entries=False, dll_count=0, entry_count=0,
+                  entries=(), diagnostics=())
+    kwargs.update(overrides)
+    return IatRecord(**kwargs)
+
+
+def test_iat_record_empty_shape():
+    iat = _empty_iat()
+    d = iat.to_dict()
+    assert d["table_present"] is None
+    assert d["entries"] == []
+    assert d["diagnostics"] == []
+
+
+def test_iat_record_with_one_entry():
+    entry = _name_entry()
+    iat = _empty_iat(import_directory_present=True, table_present=True,
+                      table_va=hex_address(0x3000), table_size=8,
+                      import_directory_va=hex_address(0x2000), import_directory_size=20,
+                      has_entries=True, dll_count=1, entry_count=1, entries=(entry,))
+    d = iat.to_dict()
+    assert d["entries"] == [entry.to_dict()]
+    assert d["has_entries"] is True
+
+
+def test_iat_record_rejects_non_bool_table_present():
+    with pytest.raises(ValueError, match="table_present"):
+        _empty_iat(table_present="yes")
+
+
+def test_iat_record_rejects_non_bool_import_directory_present():
+    with pytest.raises(ValueError, match="import_directory_present"):
+        _empty_iat(import_directory_present="yes")
+
+
+def test_iat_record_rejects_non_bool_has_entries():
+    with pytest.raises(ValueError, match="has_entries"):
+        IatRecord(table_present=None, table_va=None, table_size=None,
+                  import_directory_present=None, import_directory_va=None,
+                  import_directory_size=None, has_entries=None, dll_count=0, entry_count=0,
+                  entries=(), diagnostics=())
+
+
+def test_iat_record_rejects_non_import_entry_record_entries():
+    with pytest.raises(TypeError, match="ImportEntryRecord"):
+        _empty_iat(entries=({"dll": "x"},), entry_count=1, has_entries=True)
+
+
+def test_iat_record_rejects_non_process_diagnostic_record_diagnostics():
+    with pytest.raises(TypeError, match="ProcessDiagnosticRecord"):
+        _empty_iat(diagnostics=({"code": "X"},))
+
+
+def test_iat_record_rejects_negative_table_size():
+    with pytest.raises(ValueError, match="table_size"):
+        _empty_iat(table_present=True, table_va=hex_address(0x1000), table_size=-1)
+
+
+def test_iat_record_rejects_negative_import_directory_size():
+    with pytest.raises(ValueError, match="import_directory_size"):
+        _empty_iat(import_directory_present=True, import_directory_va=hex_address(0x1000),
+                    import_directory_size=-1)
+
+
+def test_iat_record_rejects_table_address_when_table_present_is_false():
+    with pytest.raises(ValueError, match="table_va and table_size must both be None"):
+        _empty_iat(table_present=False, table_va=hex_address(0x1000), table_size=8)
+
+
+def test_iat_record_rejects_table_address_when_table_present_is_null():
+    with pytest.raises(ValueError, match="table_va and table_size must both be None"):
+        _empty_iat(table_present=None, table_va=hex_address(0x1000), table_size=8)
+
+
+def test_iat_record_rejects_mismatched_table_va_and_size_pairing():
+    # table_va and table_size are always set or unset TOGETHER -- never
+    # one without the other, regardless of table_present.
+    with pytest.raises(ValueError, match="both be None or both set together"):
+        _empty_iat(table_present=True, table_va=hex_address(0x1000), table_size=None)
+    with pytest.raises(ValueError, match="both be None or both set together"):
+        _empty_iat(table_present=True, table_va=None, table_size=8)
+
+
+def test_iat_record_allows_table_present_true_with_both_null():
+    # dumpex.core.pe_utils.parse_iat() can legitimately report
+    # table_present=True with table_va/table_size BOTH still None when
+    # the range's own address arithmetic overflows a real 64-bit address
+    # (bounds_exceeded) -- "the directory is declared" and "its range is
+    # a usable address" are different facts. Must NOT raise.
+    iat = _empty_iat(table_present=True, table_va=None, table_size=None)
+    assert iat.table_va is None and iat.table_size is None
+
+
+def test_iat_record_rejects_import_directory_address_when_not_present():
+    with pytest.raises(ValueError, match="import_directory_va and import_directory_size must "
+                                          "both be None"):
+        _empty_iat(import_directory_present=False, import_directory_va=hex_address(0x1000),
+                    import_directory_size=20)
+    with pytest.raises(ValueError, match="import_directory_va and import_directory_size must "
+                                          "both be None"):
+        _empty_iat(import_directory_present=None, import_directory_va=hex_address(0x1000),
+                    import_directory_size=20)
+
+
+def test_iat_record_allows_import_directory_size_without_va():
+    # UNLIKE table_va/table_size, import_directory_va and
+    # import_directory_size are NOT required to be paired:
+    # parse_iat() records the declared Size unconditionally once
+    # import_directory_present is true, independent of whether the RVA's
+    # own address arithmetic overflowed -- so import_directory_size can
+    # legitimately be set while import_directory_va is None. Must NOT
+    # raise.
+    iat = _empty_iat(import_directory_present=True, import_directory_va=None,
+                      import_directory_size=20)
+    assert iat.import_directory_va is None
+    assert iat.import_directory_size == 20
+
+
+def test_iat_record_has_entries_must_match_entry_count():
+    with pytest.raises(ValueError, match="has_entries"):
+        _empty_iat(has_entries=True, entry_count=0)
+
+
+def test_iat_record_entries_length_must_match_entry_count():
+    with pytest.raises(ValueError, match="entry_count"):
+        _empty_iat(entries=(_name_entry(),), entry_count=0, has_entries=True)
+    with pytest.raises(ValueError, match="entry_count"):
+        _empty_iat(entries=(_name_entry(),), entry_count=2, has_entries=True)
+
+
+# ── ProcessRecord (issue #40, §3.1) ───────────────────────────────────────
+
+def _process_record(**overrides):
+    kwargs = dict(process_name="malware.exe", pid=4242, process_path=r"C:\Samples\malware.exe",
+                  command_line=r'"C:\Samples\malware.exe" -k',
+                  process_start_utc="2026-08-14 01:15:05 UTC",
+                  image_base_address=hex_address(0x00007ff600010000),
+                  iat=_empty_iat(), identity_evidence={"diagnostics": []})
+    kwargs.update(overrides)
+    return ProcessRecord(**kwargs)
+
+
+def test_process_record_default_shape_has_no_peb_extended_key():
+    record = _process_record()
+    d = record.to_dict()
+    assert "peb_extended" not in d
+    assert d["pid"] == 4242
+    assert d["iat"] == _empty_iat().to_dict()
+
+
+def test_process_record_peb_extended_key_present_only_when_set():
+    record = _process_record(peb_extended={"peb_address": None, "being_debugged": None,
+                                            "window_title": None, "dll_path": None,
+                                            "standard_input": None, "standard_output": None,
+                                            "standard_error": None})
+    d = record.to_dict()
+    assert "peb_extended" in d
+    assert d["peb_extended"]["being_debugged"] is None
+
+
+def test_process_record_rejects_non_string_process_name():
+    with pytest.raises(ValueError, match="process_name"):
+        _process_record(process_name=123)
+
+
+def test_process_record_rejects_non_int_pid():
+    with pytest.raises(ValueError, match="pid"):
+        _process_record(pid="4242")
+    with pytest.raises(ValueError, match="pid"):
+        _process_record(pid=True)
+
+
+def test_process_record_rejects_non_string_process_path():
+    with pytest.raises(ValueError, match="process_path"):
+        _process_record(process_path=123)
+
+
+def test_process_record_rejects_non_string_command_line():
+    with pytest.raises(ValueError, match="command_line"):
+        _process_record(command_line=123)
+
+
+def test_process_record_rejects_non_string_process_start_utc():
+    with pytest.raises(ValueError, match="process_start_utc"):
+        _process_record(process_start_utc=123)
+
+
+def test_process_record_rejects_bad_image_base_address():
+    with pytest.raises(ValueError):
+        _process_record(image_base_address="not-hex")
+
+
+def test_process_record_rejects_non_iat_record_iat():
+    with pytest.raises(TypeError, match="IatRecord"):
+        _process_record(iat={})
+
+
+def test_process_record_rejects_non_dict_identity_evidence():
+    with pytest.raises(TypeError, match="identity_evidence"):
+        _process_record(identity_evidence=[])
+
+
+def test_process_record_rejects_non_dict_peb_extended():
+    with pytest.raises(TypeError, match="peb_extended"):
+        _process_record(peb_extended="nope")
