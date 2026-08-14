@@ -1,4 +1,5 @@
 """Core memory helpers: address translation, region lookup, module lookup."""
+import io
 import os
 import ntpath
 import sys
@@ -12,7 +13,25 @@ except ImportError:
     print("[!] minidump not installed. Run: pip install minidump")
     sys.exit(1)
 
+from minidump.header import MinidumpHeader
+from minidump.directory import MINIDUMP_DIRECTORY
+from minidump.constants import MINIDUMP_STREAM_TYPE
+from minidump.streams import (
+    MinidumpThreadList, MinidumpModuleList, MinidumpMemoryList,
+    MinidumpSystemInfo, MinidumpThreadExList, MinidumpMemory64List,
+    CommentStreamA, CommentStreamW, ExceptionList,
+    MinidumpUnloadedModuleList, MinidumpMiscInfo,
+    MinidumpMemoryInfoList, MinidumpThreadInfoList,
+)
+from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
+from minidump.streams.ContextStream import CONTEXT, WOW64_CONTEXT
+from minidump.streams.HandleDataStream import (
+    MINIDUMP_HANDLE_DATA_STREAM, MINIDUMP_HANDLE_DESCRIPTOR, MINIDUMP_HANDLE_DESCRIPTOR_2,
+)
+from minidump.structures.peb import PEB
+
 from dumpex.ui.colors import RED, DIM, YELLOW, GREEN
+from dumpex.output.coverage import SourceObservation, SourceState
 
 SYSTEM_RANGE = 0x7FF000000000
 
@@ -25,25 +44,328 @@ def prot_str(protect) -> str:
     except: return str(protect)
 
 
+# ── Handle stream: a dumpex-owned bounded parse (issue #37 §5.1) ───────────
+# Registered in _STREAM_DISPATCH below IN PLACE OF the library's own
+# MinidumpHandleDataStream.parse, for three reasons, each grounded in the
+# installed library's code (.venv/Lib/site-packages/minidump/streams/
+# HandleDataStream.py):
+#   1. MinidumpHandleDescriptor.parse() walks a v2 descriptor's
+#      ObjectInfoRva -> NextInfoRva chain with NO cycle detection -- a
+#      self-referential chain from a crafted dump hangs forever, which no
+#      try/except can isolate. dumpex never needs that data (see §5.3 --
+#      ObjectInfos is out of scope for every dumpex mode), so it is never
+#      walked here: ObjectInfos always stays [].
+#   2. MINIDUMP_STRING.parse() reads a dump-controlled UINT32 Length and
+#      immediately does buff.read(ms.Length) -- an unbounded read of up to
+#      4 GiB. Every string read here is bounded at MAX_HANDLE_STRING_BYTES.
+#   3. MINIDUMP_STRING.get_from_rva() returns the literal placeholder
+#      '<STRING_DECODE_FAILED>' on a decode error. That string must never
+#      reach a record; a failed read/decode becomes None here instead.
+
+MAX_HANDLE_DESCRIPTORS   = 65536   # descriptors parsed from HandleDataStream
+MAX_HANDLE_STRING_BYTES  = 4096    # bytes read for one TypeName/ObjectName
+
+
+class HandleStreamFramingError(Exception):
+    """Raised by parse_handle_stream() when the stream's own framing
+    cannot be trusted at all (header short-read, SizeOfHeader out of
+    bounds, or an unrecognized SizeOfDescriptor) -- distinct from a
+    truncated-but-otherwise-usable stream (see HANDLE_STREAM_TRUNCATED
+    in the #37 contract), which is not an error at this layer: the
+    caller still gets every descriptor that fits. Caught by open_dump()'s
+    per-stream isolation like any other stream parser's exception."""
+
+
+class ParsedHandleDescriptor:
+    """One HandleDataStream descriptor, normalized just enough to be
+    safe to hold: bounded name reads, no ObjectInfos walk. Deliberately
+    exposes the SAME attribute set as the library's own
+    MinidumpHandleDescriptor (Handle, TypeName, ObjectName, Attributes,
+    GrantedAccess, HandleCount, PointerCount, ObjectInfos) so
+    dumpex.core.memory.get_handles() and its existing hunt consumers
+    (the pipe hunter reads TypeName/ObjectName) keep working unchanged.
+
+    TypeNameRva/ObjectNameRva are ALSO carried (beyond that compatibility
+    set) purely so a future --handles record builder (#42) can tell "no
+    name at all" (Rva == 0) apart from "a name that should be there but
+    could not be read" (Rva != 0, TypeName/ObjectName is None) -- both
+    collapse to the same None here, and only the raw Rva can still
+    distinguish them. Existing consumers reading only the documented
+    attributes are unaffected."""
+    __slots__ = ("Handle", "TypeName", "ObjectName", "Attributes", "GrantedAccess",
+                 "HandleCount", "PointerCount", "ObjectInfos",
+                 "TypeNameRva", "ObjectNameRva")
+
+    def __init__(self, *, handle, type_name, object_name, attributes, granted_access,
+                 handle_count, pointer_count, type_name_rva, object_name_rva):
+        self.Handle         = handle
+        self.TypeName       = type_name
+        self.ObjectName     = object_name
+        self.Attributes     = attributes
+        self.GrantedAccess  = granted_access
+        self.HandleCount    = handle_count
+        self.PointerCount   = pointer_count
+        self.ObjectInfos    = []   # never walked -- see module-level comment above
+        self.TypeNameRva    = type_name_rva
+        self.ObjectNameRva  = object_name_rva
+
+
+class ParsedHandleDataStream:
+    """Return value of parse_handle_stream(): `.header` (the raw
+    MINIDUMP_HANDLE_DATA_STREAM) and `.handles` (a list of
+    ParsedHandleDescriptor, at most min(header.NumberOfDescriptors,
+    MAX_HANDLE_DESCRIPTORS, however many whole descriptors actually fit
+    in the stream's own DataSize) long -- the caller can always recover
+    how many were truncated as header.NumberOfDescriptors -
+    len(handles))."""
+    __slots__ = ("header", "handles")
+
+    def __init__(self, header, handles):
+        self.header  = header
+        self.handles = handles
+
+
+def _read_handle_string(rva: int, file_handle, max_bytes: int = MAX_HANDLE_STRING_BYTES):
+    """MINIDUMP_STRING.get_from_rva(), but bounded and returning None
+    (never the library's own '<STRING_DECODE_FAILED>' placeholder, and
+    never an unbounded read of a dump-controlled Length) on any failure.
+    Returns "" -- not None -- for a non-zero RVA whose Length is
+    genuinely 0: that's a successful read of an empty name, a different
+    fact from "could not be read" (see the #37 contract's §5.2.1). The
+    caller must not call this for rva == 0 (that's "no name at all",
+    handled by the caller before ever reaching here)."""
+    pos = file_handle.tell()
+    try:
+        file_handle.seek(rva, 0)
+        length_bytes = file_handle.read(4)
+        if len(length_bytes) < 4:
+            return None
+        length = int.from_bytes(length_bytes, byteorder="little", signed=False)
+        if length == 0:
+            return ""
+        if length > max_bytes:
+            return None
+        raw = file_handle.read(length)
+        if len(raw) < length:
+            return None
+        return raw.decode("utf-16-le")
+    except Exception:
+        return None
+    finally:
+        file_handle.seek(pos, 0)
+
+
+def parse_handle_stream(directory, file_handle) -> ParsedHandleDataStream:
+    """dumpex's own bounded, validated HandleDataStream parser -- see the
+    module-level comment above for why the library's own
+    MinidumpHandleDataStream.parse is not used. `directory` is the
+    stream's own MINIDUMP_DIRECTORY entry (its `.Location` gives the
+    stream's Rva/DataSize within the file); `file_handle` is the dump's
+    raw file object (HandleDataStream Rva values are FILE offsets, not
+    virtual addresses -- there is no process-memory reader involved).
+
+    Raises HandleStreamFramingError when the stream's own framing cannot
+    be trusted (header short-read, an out-of-bounds SizeOfHeader, or an
+    unrecognized SizeOfDescriptor) -- nothing in the stream can be
+    located reliably in that case. A NumberOfDescriptors beyond what
+    MAX_HANDLE_DESCRIPTORS/the stream's own DataSize can support is NOT
+    an error here: it is silently capped, and the caller can recover the
+    truncated count as header.NumberOfDescriptors - len(result.handles)."""
+    location = directory.Location
+    if location.DataSize < 16:
+        raise HandleStreamFramingError(
+            f"HandleDataStream is {location.DataSize} byte(s), too small to "
+            f"contain its own 16-byte header")
+
+    file_handle.seek(location.Rva, 0)
+    header_bytes = file_handle.read(16)
+    if len(header_bytes) < 16:
+        raise HandleStreamFramingError("HandleDataStream header short read")
+    header = MINIDUMP_HANDLE_DATA_STREAM.parse(io.BytesIO(header_bytes))
+
+    # The library seeks to Location.Rva, reads the header, then reads
+    # descriptors from immediately after it -- ignoring SizeOfHeader
+    # entirely. A header the producer declared as larger than 16 bytes
+    # carries fields dumpex does not know; reading descriptors from a
+    # hardcoded +16 in that case would silently misread every one of
+    # them, so the descriptor array's start is computed from the
+    # declared SizeOfHeader instead, once it's been range-checked.
+    if not (16 <= header.SizeOfHeader <= location.DataSize):
+        raise HandleStreamFramingError(
+            f"HandleDataStream SizeOfHeader {header.SizeOfHeader} is out of bounds "
+            f"for a {location.DataSize}-byte stream")
+
+    if header.SizeOfDescriptor == MINIDUMP_HANDLE_DESCRIPTOR.size:      # 32
+        descriptor_cls = MINIDUMP_HANDLE_DESCRIPTOR
+    elif header.SizeOfDescriptor == 40:
+        descriptor_cls = MINIDUMP_HANDLE_DESCRIPTOR_2
+    else:
+        raise HandleStreamFramingError(
+            f"HandleDataStream SizeOfDescriptor {header.SizeOfDescriptor} is neither "
+            f"32 (MINIDUMP_HANDLE_DESCRIPTOR) nor 40 (MINIDUMP_HANDLE_DESCRIPTOR_2)")
+
+    available_bytes = location.DataSize - header.SizeOfHeader
+    fits = available_bytes // header.SizeOfDescriptor   # a trailing partial
+                                                          # descriptor is not parsed
+    declared = header.NumberOfDescriptors if header.NumberOfDescriptors is not None else 0
+    usable = max(0, min(declared, MAX_HANDLE_DESCRIPTORS, fits))
+
+    file_handle.seek(location.Rva + header.SizeOfHeader, 0)
+    raw_descriptors = file_handle.read(usable * header.SizeOfDescriptor)
+    chunk = io.BytesIO(raw_descriptors)
+
+    handles = []
+    for _ in range(usable):
+        raw = descriptor_cls.parse(chunk)
+        type_name = (_read_handle_string(raw.TypeNameRva, file_handle)
+                     if raw.TypeNameRva else None)
+        object_name = (_read_handle_string(raw.ObjectNameRva, file_handle)
+                       if raw.ObjectNameRva else None)
+        handles.append(ParsedHandleDescriptor(
+            handle=raw.Handle, type_name=type_name, object_name=object_name,
+            attributes=raw.Attributes, granted_access=raw.GrantedAccess,
+            handle_count=raw.HandleCount, pointer_count=raw.PointerCount,
+            type_name_rva=raw.TypeNameRva, object_name_rva=raw.ObjectNameRva,
+        ))
+
+    return ParsedHandleDataStream(header=header, handles=handles)
+
+
+# ── Loader: open_dump() with per-stream isolation (issue #37 §2) ──────────
+# Mirrors MinidumpFile._parse()'s three phases (.venv/Lib/site-packages/
+# minidump/minidumpfile.py) using the library's own PUBLIC parser classes,
+# with each stream individually guarded -- not a fork of the installed
+# package. Before this, a parse exception in ANY single stream propagated
+# out of the whole dump-open call: one malformed stream cost the analyst
+# every command, exit 1, no structured output. Per-stream isolation
+# changes observable behavior for commands that already ship -- see the
+# contract's §2.4 for the full, frozen per-command consequence matrix.
+
+_STREAM_DISPATCH = {
+    MINIDUMP_STREAM_TYPE.ThreadListStream:         ("threads", MinidumpThreadList.parse),
+    MINIDUMP_STREAM_TYPE.ModuleListStream:         ("modules", MinidumpModuleList.parse),
+    MINIDUMP_STREAM_TYPE.MemoryListStream:         ("memory_segments", MinidumpMemoryList.parse),
+    MINIDUMP_STREAM_TYPE.SystemInfoStream:         ("sysinfo", MinidumpSystemInfo.parse),
+    MINIDUMP_STREAM_TYPE.ThreadExListStream:       ("threads_ex", MinidumpThreadExList.parse),
+    MINIDUMP_STREAM_TYPE.Memory64ListStream:       ("memory_segments_64", MinidumpMemory64List.parse),
+    MINIDUMP_STREAM_TYPE.CommentStreamA:           ("comment_a", CommentStreamA.parse),
+    MINIDUMP_STREAM_TYPE.CommentStreamW:           ("comment_w", CommentStreamW.parse),
+    MINIDUMP_STREAM_TYPE.ExceptionStream:          ("exception", ExceptionList.parse),
+    MINIDUMP_STREAM_TYPE.HandleDataStream:         ("handles", parse_handle_stream),
+    MINIDUMP_STREAM_TYPE.UnloadedModuleListStream: ("unloaded_modules", MinidumpUnloadedModuleList.parse),
+    MINIDUMP_STREAM_TYPE.MiscInfoStream:           ("misc_info", MinidumpMiscInfo.parse),
+    MINIDUMP_STREAM_TYPE.MemoryInfoListStream:     ("memory_info", MinidumpMemoryInfoList.parse),
+    MINIDUMP_STREAM_TYPE.ThreadInfoListStream:     ("thread_info", MinidumpThreadInfoList.parse),
+}
+
+
 def open_dump(path: str) -> MinidumpFile:
+    # Phase 0 -- unchanged, existing behavior, still exit 1.
     if not os.path.exists(path):
         print(RED(f"[!] File not found: {path}"))
         sys.exit(1)
+
+    mf = MinidumpFile()
+    mf.filename = path
+
+    # Phase 1 -- header + directory table. Identical to
+    # MinidumpFile.__parse_header(): reads only each directory entry's
+    # StreamType/Rva/DataSize, so no per-stream parser runs here. A
+    # failure in this phase means the file is not a usable minidump AT
+    # ALL -- there is no per-stream evidence to salvage -- so it keeps
+    # today's exact message and exit code (tests/unit/test_open_dump.py
+    # asserts this unmodified).
     try:
-        return MinidumpFile.parse(path)
+        mf.file_handle = open(path, "rb")
+        mf.header = MinidumpHeader.parse(mf.file_handle)
+        for i in range(mf.header.NumberOfStreams):
+            mf.file_handle.seek(mf.header.StreamDirectoryRva + i * 12, 0)
+            d = MINIDUMP_DIRECTORY.parse(mf.file_handle)
+            if d:
+                mf.directories.append(d)
+            # A falsy directory entry is an unknown UserStream -- the
+            # library logs and skips it; so do we.
     except Exception as e:
-        # A corrupted, truncated, or non-minidump file previously propagated
-        # whatever internal exception the minidump library happened to
-        # raise (e.g. MinidumpHeaderSignatureMismatchException) as a raw,
-        # unhandled traceback all the way up through cli.main() — an
-        # analyst feeding dumpex bad evidence deserves the same clean,
-        # actionable refusal as the "File not found" case right above,
-        # not an implementation-detail stack trace.
         print(RED(f"[!] Could not parse {path} as a minidump file: "
                    f"{type(e).__name__}: {e}"))
         print(DIM(f"    The file may be corrupted, truncated, or not a Windows "
                    f"minidump (.dmp) at all."))
         sys.exit(1)
+
+    # Phase 2 -- the actual fix: each stream's own parse is individually
+    # guarded, so one stream raising no longer aborts every other
+    # stream's parse or the dump-open call as a whole.
+    stream_failures = {}   # {MINIDUMP_STREAM_TYPE: "ExcType: message"}
+    for d in mf.directories:
+        entry = _STREAM_DISPATCH.get(d.StreamType)
+        if entry is None:
+            continue   # unrecognized / not-yet-implemented stream type -- the
+                       # same silent skip __parse_directories()'s own unhandled
+                       # branches take, not a failure.
+        attr_name, parse = entry
+        try:
+            setattr(mf, attr_name, parse(d, mf.file_handle))
+        except Exception as e:
+            stream_failures[d.StreamType] = f"{type(e).__name__}: {e}"
+            # mf.<attr_name> stays at its MinidumpFile.__init__ default
+            # (None) -- isolated; every OTHER branch still runs.
+
+    # Phase 3a -- thread contexts. Reproduces
+    # MinidumpFile.__parse_thread_context() exactly, including its guard,
+    # so thread.ContextObject consumers (get_thread_contexts(), and
+    # through it the stomping/pipe/cs-beacon hunters) do not regress.
+    try:
+        if mf.sysinfo and mf.threads:
+            for thread in mf.threads.threads:
+                mf.file_handle.seek(thread.ThreadContext.Rva)
+                if mf.sysinfo.ProcessorArchitecture == PROCESSOR_ARCHITECTURE.AMD64:
+                    thread.ContextObject = CONTEXT.parse(mf.file_handle)
+                elif mf.sysinfo.ProcessorArchitecture == PROCESSOR_ARCHITECTURE.INTEL:
+                    thread.ContextObject = WOW64_CONTEXT.parse(mf.file_handle)
+    except Exception:
+        pass   # same swallow-and-continue as the library's own guard
+
+    # Phase 3b -- PEB. Same precondition and same swallow as
+    # __parse_peb()/_parse().
+    try:
+        if mf.sysinfo and mf.threads:
+            mf.peb = PEB.from_minidump(mf)
+    except Exception:
+        pass
+
+    mf._dumpex_stream_failures = stream_failures
+    return mf
+
+
+def stream_failure(mf: MinidumpFile, stream_type) -> "str | None":
+    """The failure detail for `stream_type` (an entry in
+    mf._dumpex_stream_failures), or None when that stream parsed (or was
+    never present). The single place any command asks "did this stream
+    fail to parse?" -- an `mf` built by a test/fixture that never went
+    through open_dump() has no `_dumpex_stream_failures` attribute at
+    all, so a missing attribute is treated as "no failures" rather than
+    raising."""
+    failures = getattr(mf, "_dumpex_stream_failures", None) or {}
+    return failures.get(stream_type)
+
+
+def observe_stream(mf: MinidumpFile, name: str, stream_type, obj, items: list) -> SourceObservation:
+    """The observe_source() every command currently hand-rolls via
+    `bool(mf.X)` plus `len(items)`, extended with SourceState.FAILED for
+    a stream-backed source: FAILED (with the parser's own detail) when
+    `stream_type` is in mf._dumpex_stream_failures, otherwise exactly
+    observe_source()'s existing absent/present_empty/present inference
+    over `obj`/`items`."""
+    detail = stream_failure(mf, stream_type)
+    if detail is not None:
+        return SourceObservation(name=name, state=SourceState.FAILED, record_count=None,
+                                  detail=detail)
+    if not obj:
+        return SourceObservation(name=name, state=SourceState.ABSENT, record_count=None)
+    items = items or []
+    if not items:
+        return SourceObservation(name=name, state=SourceState.PRESENT_EMPTY, record_count=0)
+    return SourceObservation(name=name, state=SourceState.PRESENT, record_count=len(items))
 
 
 class RegionReadError(RuntimeError):

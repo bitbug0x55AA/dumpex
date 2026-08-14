@@ -365,6 +365,79 @@ def test_source_failed_required_is_partial_not_not_evaluated_and_structured():
     assert report.reasons == ["ModuleListStream present but could not be read: boom"]
 
 
+# ── build_coverage_report: retain_completeness_checks_when_not_evaluated ─
+
+def test_not_evaluated_drops_prebuilt_limitations_by_default():
+    obs = SourceObservation(name="process_identity", state=SOURCE_ABSENT)
+    region_obs = SourceObservation(name="requested_region", state=SOURCE_PRESENT, record_count=1)
+    prebuilt = CoverageLimitation(code=LimitationCode.REGION_READ_TRUNCATED,
+                                   source="requested_region")
+    report = build_coverage_report(
+        {"process_identity": obs, "requested_region": region_obs},
+        evaluation_sources=("process_identity",),
+        completeness_checks=[prebuilt],
+    )
+    assert report.status == COVERAGE_NOT_EVALUATED
+    assert len(report.limitations) == 1
+    assert report.limitations[0].code == LimitationCode.SOURCE_ABSENT
+    assert prebuilt not in report.limitations
+
+
+def test_not_evaluated_retains_prebuilt_limitations_when_opted_in():
+    obs_identity = SourceObservation(name="process_identity", state=SOURCE_ABSENT)
+    obs_misc = SourceObservation(name="misc_info", state=SOURCE_FAILED, detail="boom")
+    region_obs = SourceObservation(name="requested_region", state=SOURCE_PRESENT, record_count=1)
+    prebuilt = CoverageLimitation(code=LimitationCode.REGION_READ_TRUNCATED,
+                                   source="requested_region")
+    report = build_coverage_report(
+        {"process_identity": obs_identity, "misc_info": obs_misc, "requested_region": region_obs},
+        evaluation_sources=("process_identity",),
+        completeness_checks=[prebuilt, "misc_info"],
+        retain_completeness_checks_when_not_evaluated=True,
+    )
+    assert report.status == COVERAGE_NOT_EVALUATED
+    # Order: the group's own limitation first, then the retained pre-built
+    # entries in caller-declared order, then the FAILED-source limitations
+    # the reducer already re-surfaces today.
+    assert len(report.limitations) == 3
+    assert report.limitations[0].code == LimitationCode.SOURCE_ABSENT
+    assert report.limitations[0].source == "process_identity"
+    assert report.limitations[1] is prebuilt
+    assert report.limitations[2].code == LimitationCode.SOURCE_FAILED
+    assert report.limitations[2].source == "misc_info"
+
+
+def test_not_evaluated_retain_flag_never_resurfaces_an_absent_bare_source():
+    # A FAILED source is re-surfaced either way (existing behavior); an
+    # ABSENT one outside the group is not -- the flag only changes what
+    # happens to pre-built CoverageLimitation entries.
+    obs_identity = SourceObservation(name="process_identity", state=SOURCE_ABSENT)
+    obs_peb = SourceObservation(name="peb", state=SOURCE_ABSENT)
+    report = build_coverage_report(
+        {"process_identity": obs_identity, "peb": obs_peb},
+        evaluation_sources=("process_identity",),
+        completeness_checks=["peb"],
+        retain_completeness_checks_when_not_evaluated=True,
+    )
+    assert report.status == COVERAGE_NOT_EVALUATED
+    assert len(report.limitations) == 1
+    assert report.limitations[0].source == "process_identity"
+
+
+def test_not_evaluated_retain_flag_is_noop_when_no_group_fires():
+    # The flag only changes anything on the not_evaluated short-circuit
+    # path -- an ordinary partial/complete result is unaffected.
+    obs = SourceObservation(name="modules", state=SOURCE_PRESENT, record_count=1)
+    report = build_coverage_report(
+        {"modules": obs},
+        evaluation_sources=("modules",),
+        completeness_checks=[],
+        retain_completeness_checks_when_not_evaluated=True,
+    )
+    assert report.status == COVERAGE_COMPLETE
+    assert report.limitations == []
+
+
 # ── build_coverage_report: multiple evaluation sources (threads shape) ──
 
 def test_all_evaluation_sources_absent_is_not_evaluated_with_structured_group_limitation():
