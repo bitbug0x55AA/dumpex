@@ -77,7 +77,8 @@ behavior can be re-checked rather than taken on trust.
   │        (§3.3), normalization helpers (§3.2), walk_environment_block() (§4.2),
   │        parse_handle_stream() (§5.1), and build_coverage_report()'s
   │        retain_completeness_checks_when_not_evaluated opt-in (§3.7.3)
-  ├─ #39  bounded IAT parser (§3.5)
+  ├─ #39  bounded IAT parser (§3.5), plus parse_pe_header()'s additive
+  │        declared_directory_count/directories_complete fields (§3.5.2)
   ├─ #40  --process wiring (§3)
   ├─ #41  --sysinfo wiring (§4)
   ├─ #42  --handles wiring (§5)
@@ -460,7 +461,7 @@ a reader can check it against the code rather than against intent.
 | `--process` | `process_identity` | evaluation (derived, §3.7.4) | `not_evaluated` (4), `PROCESS_SOURCES_ABSENT` | n/a — derived |
 | `--process` | `misc_info` | completeness only | `partial` (3), `PROCESS_MISC_INFO_UNAVAILABLE` | **`partial` (3)**, `SOURCE_FAILED` |
 | `--process` | `peb` | completeness only | `partial` (3), `PROCESS_PEB_UNAVAILABLE` | n/a — see below |
-| `--process` | `modules` | observed only (§3.7.4) | — | — |
+| `--process` | `modules` | observed always; completeness **only when the path fallback is needed** (§3.7.2) | `PROCESS_MODULE_FALLBACK_UNAVAILABLE` when needed, otherwise nothing | `SOURCE_FAILED` when needed, otherwise nothing |
 | `--process` | `main_image`, `iat` | completeness only (derived) | see §3.7.2 | n/a — derived |
 | `--handles` | `handles` | completeness only (bare name; fires on `failed` alone) | see §5.5 case 1 | `SOURCE_FAILED` alongside §5.5 case 2's own code |
 | `--handles` | `handle_records` | evaluation (derived, §5.5) | `not_evaluated` (4), case-dependent code | n/a — derived |
@@ -997,31 +998,81 @@ at all" are distinguishable evidence, and collapsing them would discard
 it. The record therefore carries three independent booleans, each with
 one meaning:
 
-| field | `true` when |
+| field | type | `true` when |
+|---|---|---|
+| `import_directory_present` | `true \| false \| null` | data directory index **1** is declared and has a non-zero RVA |
+| `table_present` | `true \| false \| null` | data directory index **12** is declared and has a non-zero RVA |
+| `has_entries` | `true \| false` | `entry_count > 0` |
+
+**"Not in the list" is not the same as "not declared".**
+`parse_pe_header()` builds `data_directories` by reading
+`NumberOfRvaAndSizes`, capping it at 16, and then appending `(rva, size)`
+pairs until either the count is reached or the next 8-byte entry would
+run past the end of the buffer — at which point it simply `break`s. A
+short list therefore has two completely different causes that the list
+alone cannot distinguish: the image declared few directories, or the
+image declared many and the bytes were not captured. Treating both as
+"the directory does not exist" would let a truncated header read be
+reported as **"this image imports nothing," complete, exit 0** — a false
+claim about the evidence, which is exactly what this contract exists to
+prevent.
+
+#39 therefore extends `parse_pe_header()`'s result with two additive
+fields (no existing key changes meaning, so the stomping hunter's own
+`data_directories[5]` use is unaffected):
+
+| new key | meaning |
 |---|---|
-| `import_directory_present` | data directory index **1** exists in the header and has a non-zero RVA |
-| `table_present` | data directory index **12** exists in the header and has a non-zero RVA |
-| `has_entries` | `entry_count > 0` |
+| `declared_directory_count` | `min(NumberOfRvaAndSizes, 16)` as actually read, or `0` when even that field's bytes were not captured |
+| `directories_complete` | `len(data_directories) == declared_directory_count` |
 
-`parse_pe_header()` returns `data_directories` as a list of
-`(rva, size)` pairs, capped at 16 and truncated on a short read, so
-index 1 or 12 may simply not be in the list; a `(0, 0)` pair counts as
-"not present" for the same reason (a PE that declares a zero RVA
-declares no directory). Each `*_present` flag is `false` in that case,
-and the matching `*_va`/`*_size` fields are `null`.
+Presence of one directory index `i` is then resolved in three states,
+never two:
 
-Frozen consequences of each combination:
+| condition | `*_present` | meaning |
+|---|---|---|
+| `i >= declared_directory_count` | `false` | the image positively declares no such directory |
+| `i < len(data_directories)` and the pair is `(0, 0)` | `false` | declared, but a zero RVA means no directory |
+| `i < len(data_directories)` and the RVA is non-zero | `true` | present; `*_va`/`*_size` populated |
+| `i < declared_directory_count` but `i >= len(data_directories)` | **`null`** | declared, but its bytes were not captured — **undetermined** |
+
+A `null` is never a claim. When either index resolves to `null`, one
+`IAT_DIRECTORY_TABLE_INCOMPLETE` limitation fires (`affected_count` =
+`declared_directory_count - len(data_directories)`), coverage is
+`partial`, and exit is 3. `IAT_BOUNDS_CHECK_UNAVAILABLE` (§6.2) does
+**not** fire in that case: that diagnostic asserts the image declares no
+IAT directory, which is precisely what is unknown here.
+
+`IAT_DIRECTORY_TABLE_INCOMPLETE` is suppressed when
+`PROCESS_MAIN_IMAGE_PE_INVALID` fired, since no walk was attempted at
+all and the invalid-PE code already accounts for it. The two are not
+usually redundant: a directory array truncated *after* the point
+`opt_hdr_size` places the section table still leaves
+`parse_pe_header()` returning `valid=True`, which is exactly the
+crafted-header case this code exists for.
+
+`has_entries: false` on its own never means "this image imports
+nothing". That claim is supported only when
+`import_directory_present == false` **and** `coverage.status ==
+"complete"`.
+
+Frozen consequences of each determined combination:
 
 | `import_directory_present` | `table_present` | outcome |
 |---|---|---|
-| `false` | either | no descriptors walked, `entries: []`, `has_entries: false`, `dll_count`/`entry_count` = `0`. **No `IAT_*` limitation** — a PE that imports nothing has no imports to miss, so this is `complete`. |
+| `false` | `false` or `true` | no descriptors walked, `entries: []`, `has_entries: false`, `dll_count`/`entry_count` = `0`. **No `IAT_*` limitation** — a PE that imports nothing has no imports to miss, so this is `complete`. |
 | `true` | `true` | the normal case; `slot_in_bounds` is a real boolean on every entry. |
 | `true` | `false` | descriptors **are** walked and entries **are** reported — the imports themselves are fully recoverable from directory 1 alone. There is no range to check slots against, so `slot_in_bounds` is `null` on **every** entry, `table_va`/`table_size` are `null`, and one `info` diagnostic `IAT_BOUNDS_CHECK_UNAVAILABLE` is emitted (§6.2). **No limitation, coverage unaffected**: the requested claim — which symbols this image imports — was fully evaluated; only an optional corroborating check had no reference range (§1.6). |
+| `null` | anything | undetermined: no descriptors walked, `entries: []`, `has_entries: false`, and `IAT_DIRECTORY_TABLE_INCOMPLETE` → `partial`, exit 3. No diagnostic. |
+| `true` | `null` | descriptors **are** walked and entries reported; `slot_in_bounds` is `null` on every entry, `table_va`/`table_size` are `null`, and `IAT_DIRECTORY_TABLE_INCOMPLETE` → `partial`, exit 3. No `IAT_BOUNDS_CHECK_UNAVAILABLE` — whether a range exists is unknown, not answered. |
 
-`slot_in_bounds` is therefore typed `true | false | null`, and `null`
-means exactly one thing: the check could not be performed because the
-image declares no IAT directory. It never means "unknown for some other
-reason".
+`slot_in_bounds` is therefore typed `true | false | null`. `null` means
+"the check could not be performed", and which of the two reasons applies
+is read off `table_present`: `false` → the image declares no IAT
+directory (a determined answer, reported as a diagnostic, coverage
+unaffected); `null` → the directory table itself was not fully captured
+(undetermined, reported as a limitation, `partial`). It never means
+anything else.
 
 #### 3.5.3 Entry shape and per-field nullability
 
@@ -1218,6 +1269,31 @@ when `path_available` is true.
     with an empty `ImagePathName` whose image base resolves to a
     registered module with a path is `complete` on the path claim, with
     `selected_path_source == "module"`.
+
+    Its wording is deliberately **neutral about why the fallback
+    failed**. The four ways it can fail are genuinely different — the
+    image base never normalized, `ModuleListStream` is absent, it failed
+    to parse, or it parsed and registered nothing at that base — and
+    only the last one licenses the statement "no module is registered at
+    the image base". Attribution is therefore carried by a **separate**
+    limitation, chosen from the fallback's own state, and emitted only
+    when the fallback was actually needed (i.e. the PEB path was
+    unavailable):
+
+    | fallback state when needed | attribution |
+    |---|---|
+    | image base did not normalize | `PROCESS_IMAGE_BASE_UNAVAILABLE`/`_INVALID`, already fired |
+    | `modules` absent | `PROCESS_MODULE_FALLBACK_UNAVAILABLE` |
+    | `modules` failed | `SOURCE_FAILED` for `modules`, with the parser detail |
+    | `modules` present, no exact base match | no extra limitation — `PROCESS_MODULE_BASE_UNMATCHED`/`_CONFLICT` (§6.2) already describes it, and the check did run |
+
+    Mechanically: `--process` appends `SourceRequirement("modules",
+    absent_code=PROCESS_MODULE_FALLBACK_UNAVAILABLE)` to
+    `completeness_checks` **conditionally** — only when the PEB path was
+    unavailable. When the PEB supplied a path, `modules` stays a pure
+    observer (§3.7.4) and its absence emits nothing, preserving the rule
+    that a missing optional corroborator never downgrades an already
+    complete preferred-source claim.
   - *Main image*: `PROCESS_MAIN_IMAGE_READ_FAILED`,
     `PROCESS_MAIN_IMAGE_SHORT_READ`, `PROCESS_MAIN_IMAGE_PE_INVALID`.
     These are genuine gaps — the IAT could not be evaluated from that
@@ -1279,10 +1355,11 @@ Frozen semantics:
   normalized identity fields resolved"). It is the command's only
   `evaluation_sources` member (§3.7.2) and is never a
   `SourceRequirement` — it would otherwise report the same fact twice.
-- `modules` is observed but is **not** a `SourceRequirement`: it is
-  optional corroboration. Its absence emits no limitation of its own —
-  its only effect on status is indirect, through
-  `PROCESS_PATH_UNAVAILABLE` when it was the last remaining path source.
+- `modules` is always observed, but is a `SourceRequirement` **only
+  conditionally** (§3.7.2 — when the PEB supplied no path, so the
+  fallback was actually needed). Outside that case it is pure optional
+  corroboration: absent or failed, it emits no limitation and cannot
+  affect status.
 - `main_image` is a derived source ("the PE header at the PEB-reported
   image base was read and structurally validated"), following the
   precedent `coverage.py` already documents for `thread_context`.
@@ -1597,7 +1674,8 @@ rules above. Consequences:
   specific, independently-confirmed environment failure disappearing
   behind a generic PEB absence. The two limitations are not duplicates
   — one names the concrete step that failed, the other names the
-  overall consequence — so both are reported, in that order.
+  overall consequence — so both are reported, environment first. §4.7
+  freezes the exact position that produces this order.
 
 `ENVIRONMENT_BLOCK_TRUNCATED` uses the same budget attribution as the
 IAT (§3.5.4). `scope` is required, one of:
@@ -1676,9 +1754,24 @@ before reading it.
 `completeness_checks` keeps the five existing `SourceRequirement`s
 unchanged — `SYSINFO_SYSTEM_INFO_UNAVAILABLE`,
 `SYSINFO_MISC_INFO_UNAVAILABLE`, `SYSINFO_PEB_UNAVAILABLE`,
-`SYSINFO_THREADS_UNAVAILABLE`, `SYSINFO_MODULES_UNAVAILABLE` — plus, at
-the end, any hand-built environment limitation from §4.3.3. There is no
-sixth `SourceRequirement` (§4.3.3).
+`SYSINFO_THREADS_UNAVAILABLE`, `SYSINFO_MODULES_UNAVAILABLE` — and there
+is no sixth `SourceRequirement` (§4.3.3).
+
+**Order, frozen as one rule.** Any hand-built environment limitation is
+inserted **immediately before** the `peb` requirement, giving exactly:
+
+```
+sysinfo, misc_info, <environment limitation, if any>, peb, threads, modules
+```
+
+`build_coverage_report()` preserves `completeness_checks` order verbatim,
+so this is the order of `coverage.limitations` and of the console's
+`[~]` lines. The specific environment failure is read before the general
+PEB consequence — an analyst should see "environment block pointers
+could not be read: X" and only then "PEB not available", not the other
+way round. The five existing checks keep their relative order among
+themselves, so no already-shipped `--sysinfo` reason sequence changes
+for a dump with no environment limitation.
 
 `--sysinfo` never reports `not_evaluated`: `dump_file` is derived from
 the dump path itself and is always available, so there is always
@@ -1829,9 +1922,15 @@ its own RVA only:
 
 | status value | when, for that one field | that field's value | limitation |
 |---|---|---|---|
-| `"ok"` | its RVA is non-zero and the string read and decoded | the decoded string | none |
-| `"unnamed"` | its RVA is `0` | `null` | none — the dump positively records that this field has no name |
+| `"ok"` | its RVA is non-zero and the string read and decoded to a **non-empty** value | the decoded string | none |
+| `"unnamed"` | its RVA is `0`, **or** its RVA is non-zero and the string read successfully with `Length == 0` (decoding to `""`) | `null` | none — either way the dump positively records no name, and nothing was lost |
 | `"unreadable"` | its RVA is non-zero but the read failed, exceeded `MAX_HANDLE_STRING_BYTES`, or failed to decode | `null` | see below |
+
+A non-zero RVA whose `MINIDUMP_STRING.Length` is `0` decodes to `""`,
+which §1.4 forbids on the wire. The value therefore becomes `null` — and
+the status must be `"unnamed"`, not `"ok"`, because `"ok"` promises a
+non-`null` value and nothing was actually lost here. Classifying it as
+`"unreadable"` would be equally wrong: the read succeeded.
 
 `type_name_status` and `object_name_status` are set independently, so all
 nine combinations are representable and none is ambiguous — including
@@ -2033,13 +2132,15 @@ call site composes it.
 | `PROCESS_PID_UNAVAILABLE` | `misc_info` | — | "MiscInfo present but does not supply a usable ProcessId" |
 | `PROCESS_START_TIME_UNSET` | `misc_info` | — | "MiscInfo's ProcessCreateTime is zero (not recorded)" |
 | `PROCESS_START_TIME_INVALID` | `misc_info` | — | "MiscInfo's ProcessCreateTime is not a valid 32-bit timestamp" |
-| `PROCESS_PATH_UNAVAILABLE` | `peb` | — | "no process path available (PEB ImagePathName empty and no module registered at the image base)" |
+| `PROCESS_PATH_UNAVAILABLE` | `peb` | — | "no process path available: the PEB supplied none and no usable ModuleList fallback was available" |
 | `PROCESS_COMMAND_LINE_UNAVAILABLE` | `peb` | — | "PEB present but CommandLine is empty" |
 | `PROCESS_IMAGE_BASE_UNAVAILABLE` | `peb` | — | "PEB present but ImageBaseAddress is not set" |
+| `PROCESS_MODULE_FALLBACK_UNAVAILABLE` | `modules` | `scope` | "ModuleListStream not present, so the approved process-path fallback could not run" |
 | `PROCESS_IMAGE_BASE_INVALID` | `peb` | — | "PEB's ImageBaseAddress is not a plausible mapped image base (raw value preserved in identity_evidence)" |
 | `PROCESS_MAIN_IMAGE_READ_FAILED` | `main_image` | — | "could not read the PE header at the PEB-reported image base" |
 | `PROCESS_MAIN_IMAGE_SHORT_READ` | `main_image` | — | "read fewer bytes than required for the PE header at the PEB-reported image base" |
 | `PROCESS_MAIN_IMAGE_PE_INVALID` | `main_image` | — | "the PE header at the PEB-reported image base is not structurally valid" |
+| `IAT_DIRECTORY_TABLE_INCOMPLETE` | `iat` | `affected_count` | "{count} declared data directory entr(y/ies) were not captured; import/IAT directory presence is undetermined" |
 | `IAT_DIRECTORY_READ_FAILED` | `iat` | — | "could not read the IAT directory" |
 | `IAT_DIRECTORY_SHORT_READ` | `iat` | — | "read fewer bytes than declared for the IAT directory" |
 | `IAT_DESCRIPTOR_READ_FAILED` | `iat` | `affected_count` | "{count} import descriptor(s) could not be read" |
@@ -2221,7 +2322,7 @@ own schema version.
 | Make the contract self-contained | This revision. No normative rule references an unpublished draft; Appendix A is explicitly non-normative. |
 | Freeze complete JSON and console shapes in one place | §3.1, §3.5.2–§3.5.3, §3.6, §3.8; §4.2, §4.6; §5.2, §5.6 |
 | Preserve thread-context parsing in the new loader | §2.2 phase 3a (required, with its guard and ordering) |
-| Parity/regression coverage for the loader change | §2.5 items 1–13 |
+| Parity/regression coverage for the loader change | §2.5 items 1–14 |
 | Freeze global FAILED-stream behavior | §2.4 (table, wording, exit-code change, compatibility tests) |
 | Retain the four handle states | §5.5 (five states; `HANDLES_PARSE_FAILED` explicitly never conflated with `HANDLES_UNAVAILABLE`) |
 | Coverage from normalized values, not raw truthiness | §3.2, §3.7.1 |
@@ -2257,6 +2358,16 @@ own schema version.
 | JSON examples drifted from the field tables | §5.2 (`type_name_status`/`object_name_status`), §3.4.2 (`raw_command_line`), §3.4.3 (`name_matched_candidate_ambiguous` is `false`, never `null`) |
 | §3.5.5 still called every non-`IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS` `IAT_*` code a limitation | §3.5.5 — now excludes both IAT diagnostics |
 
+### 8.2.3 Fourth-pass review items → resolution
+
+| review item | resolution |
+|---|---|
+| An undeclared data directory and an uncaptured one were both read as "no directory", so a truncated header could report "imports nothing", complete | §3.5.2 — `parse_pe_header()` gains `declared_directory_count`/`directories_complete`; `*_present` becomes three-state, and the undetermined state fires `IAT_DIRECTORY_TABLE_INCOMPLETE` (§6.1) |
+| `PROCESS_PATH_UNAVAILABLE` asserted "no module registered at the image base" in cases where that check never ran | §6.1 — neutral fixed wording; §3.7.2 adds a per-state attribution table and the conditional `SourceRequirement("modules", …)` with the new `PROCESS_MODULE_FALLBACK_UNAVAILABLE` |
+| A non-zero RVA with `Length == 0` decodes to `""`, which §1.4 forbids, leaving `"ok"` with a `null` value | §5.2.1 — a successful read of an empty string is `"unnamed"`, not `"ok"` and not `"unreadable"` |
+| §4.3.3 and §4.7 specified opposite orderings for the environment limitation | §4.7 — one frozen sequence, environment inserted immediately before the `peb` requirement |
+| Loader-test count references were stale | §8.2/§8.3 — both now say items 1–14 |
+
 ### 8.3 Tests required before #37 closes
 
 These are the completion-gate assertions. Items 1–2 are contract-document
@@ -2278,7 +2389,8 @@ child cannot re-decide it.
    — mechanically, against the live enum, so a later child that adds one
    there fails immediately. *(Lands with this revision.)*
 3. **Loader isolation preserves thread contexts and unaffected
-   streams.** §2.5 items 1–12. *(#38.)*
+   streams.** §2.5 items 1–14 (13–14 are the unchanged exit-1 paths).
+   *(#38.)*
 4. **Malformed environment evidence cannot become a false captured-empty
    result.** Four cases, each with a distinct outcome:
    `00 00 00 00` at the block start → `[]` + `complete`; only two
@@ -2332,6 +2444,19 @@ child cannot re-decide it.
    `slot_in_bounds: null` on every entry, one
    `IAT_BOUNDS_CHECK_UNAVAILABLE` diagnostic, and exit 0 with the
    entries still fully reported. *(#40.)*
+6b. **An uncaptured directory table cannot be reported as "no imports".**
+   A main image whose optional header declares 16 data directories but
+   whose captured bytes stop after index 5 yields
+   `import_directory_present: null` (not `false`),
+   `IAT_DIRECTORY_TABLE_INCOMPLETE`, exit **3**, and **no**
+   `IAT_BOUNDS_CHECK_UNAVAILABLE` diagnostic — distinguishable from an
+   image that declares 2 directories, which yields
+   `import_directory_present: false` and exit 0. *(#39/#40.)*
+6c. **A handle name that is present-but-empty is not a read failure.**
+   A descriptor with `ObjectNameRva != 0` whose `MINIDUMP_STRING.Length`
+   is `0` yields `object_name: null`, `object_name_status: "unnamed"`,
+   **no** `HANDLE_STRING_READ_FAILED`, and exit 0 — asserted for both
+   the type and object fields independently. *(#38/#42.)*
 
 ---
 
@@ -2368,6 +2493,14 @@ excuses anything in §0–§8.
   `LimitationCode` into `iat.diagnostics[]`; gave both truncation codes
   budget attribution; replaced the library's handle parse with a bounded
   dumpex-owned one; and added the §8 acceptance gate.
+- **rev4, fourth review pass** — four defects and one stale count,
+  mapped in §8.2.3: an undeclared data directory and an uncaptured one
+  were both read as "no directory", so a truncated PE header could be
+  reported as "this image imports nothing", complete;
+  `PROCESS_PATH_UNAVAILABLE` asserted a module check that had not run;
+  a non-zero name RVA with `Length == 0` had no legal status; §4.3.3 and
+  §4.7 specified opposite orderings for the same limitation; and the
+  loader-test count references were stale.
 - **rev4, third review pass** — six further defects, all introduced or
   left behind by the second pass and mapped in §8.2.2: the
   `process_identity` short-circuit would have discarded the field-level
