@@ -2552,6 +2552,7 @@ def build_coverage_report(
     evaluation_sources: "tuple | EvaluationRequirement | None" = None,
     evaluation_groups: "list[EvaluationRequirement] | None" = None,
     completeness_checks: "list | None" = None,
+    retain_completeness_checks_when_not_evaluated: bool = False,
 ) -> CoverageReport:
     """
     The single reduction rule every command's coverage status derives
@@ -2608,6 +2609,20 @@ def build_coverage_report(
             never actually checked against modules' real state).
         Final `limitations` preserves this exact order, so a command's
         existing reason ordering survives the migration unchanged.
+
+      - `retain_completeness_checks_when_not_evaluated`: opt-in, default
+        False -- every existing caller's output stays byte-identical.
+        When True and an evaluation group fires (status becomes
+        not_evaluated), the pre-built `CoverageLimitation` entries in
+        `completeness_checks` are no longer dropped: they are retained,
+        in their original relative order, between the group's own
+        limitation(s) and the FAILED-source limitations already
+        re-surfaced below. This never changes `status`/the exit code --
+        only which per-field reasons accompany a not_evaluated result. A
+        bare source name or SourceRequirement entry is unaffected either
+        way (an ABSENT one is still not re-surfaced -- it would only
+        repeat what the group limitation already said; a FAILED one is
+        still re-surfaced, exactly as today).
 
     Status: evaluation_sources/evaluation_groups (if any group is
     non-empty) all SOURCE_ABSENT -> not_evaluated. Else: any limitation ->
@@ -2671,11 +2686,26 @@ def build_coverage_report(
         # check source is either already covered by the group logic above,
         # or (if outside every group) would just repeat "not present",
         # adding no new fact worth surfacing under not_evaluated.
+        #
+        # retain_completeness_checks_when_not_evaluated is the one opt-in
+        # exception to "a pre-built business fact never applies when
+        # nothing was evaluated": a command whose evaluation group is
+        # DERIVED from several underlying fields (e.g. --process's
+        # process_identity) needs the field-level reasons WHY nothing was
+        # usable to survive alongside the group's own aggregate code, not
+        # just the aggregate code alone (see build_coverage_report's own
+        # docstring above). Default False keeps every existing caller
+        # byte-identical.
+        retained_prebuilt_limitations = []
+        if retain_completeness_checks_when_not_evaluated:
+            retained_prebuilt_limitations = [
+                check for check in completeness_checks if isinstance(check, CoverageLimitation)
+            ]
         extra_failed_limitations = []
         seen_failed_sources = set()
         for check in completeness_checks:
             if isinstance(check, CoverageLimitation):
-                continue   # a pre-built business fact never applies when nothing was evaluated
+                continue   # retained above (if opted in) instead of derived here
             name = _completeness_check_source_name(check)
             if name in seen_failed_sources or sources[name].state != SourceState.FAILED:
                 continue
@@ -2688,8 +2718,10 @@ def build_coverage_report(
             extra_failed_limitations.append(
                 _derive_required_source_limitation(sources[name], req, sources))
             seen_failed_sources.add(name)
-        return CoverageReport(status=CoverageStatus.NOT_EVALUATED, sources=sources,
-                               limitations=absent_group_limitations + extra_failed_limitations)
+        return CoverageReport(
+            status=CoverageStatus.NOT_EVALUATED, sources=sources,
+            limitations=absent_group_limitations + retained_prebuilt_limitations
+                        + extra_failed_limitations)
 
     limitations = []
     for check in completeness_checks:
