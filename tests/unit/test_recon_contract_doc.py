@@ -214,8 +214,9 @@ def test_handle_record_example_matches_its_field_table(doc):
 # render as "None" in real output.
 _ABSENT_CAPABLE = (
     "PROCESS_SOURCES_ABSENT", "PROCESS_MISC_INFO_UNAVAILABLE",
-    "PROCESS_PEB_UNAVAILABLE", "HANDLES_UNAVAILABLE",
-    "HANDLES_PARSE_FAILED", "HANDLES_ALL_DESCRIPTORS_INVALID",
+    "PROCESS_PEB_UNAVAILABLE", "PROCESS_MODULE_FALLBACK_UNAVAILABLE",
+    "HANDLES_UNAVAILABLE", "HANDLES_PARSE_FAILED",
+    "HANDLES_ALL_DESCRIPTORS_INVALID",
 )
 _TEMPLATE_RE = re.compile(r'"([^"]+)"')
 
@@ -236,6 +237,33 @@ def test_absent_capable_templates_have_no_placeholders(doc, code):
 @pytest.mark.parametrize("code", _ABSENT_CAPABLE)
 def test_absent_capable_codes_are_declared_as_limitations(code, limitation_codes):
     assert code in limitation_codes
+
+
+def _declared_absent_capable(doc: str) -> set:
+    """The codes §6.1's capability list actually declares absent_capable."""
+    section = doc.split("- `absent_capable`", 1)[1].split("- `caller_buildable`", 1)[0]
+    return {t for t in _CODE_TOKEN_RE.findall(section)
+            if not t.startswith(_NOT_A_CODE)}
+
+
+def test_absent_capable_list_matches_this_test(doc):
+    """Keeps _ABSENT_CAPABLE above from silently drifting away from the
+    contract's own capability list -- otherwise the placeholder check
+    below would quietly stop covering a newly-added code."""
+    assert _declared_absent_capable(doc) == set(_ABSENT_CAPABLE)
+
+
+def test_every_absent_code_used_is_declared_absent_capable(doc):
+    """SourceRequirement.__post_init__ and EvaluationRequirement reject
+    any code outside _ABSENT_CAPABLE_CODES, so a section that specifies
+    `absent_code=X` while §6.1 files X as caller-buildable-only
+    specifies a configuration that raises on the first call. This caught
+    exactly that for PROCESS_MODULE_FALLBACK_UNAVAILABLE."""
+    used = set(re.findall(r"absent_code=([A-Z][A-Z0-9_]+)", doc))
+    undeclared = sorted(used - _declared_absent_capable(doc))
+    assert not undeclared, (
+        f"used as an absent_code but not declared absent_capable in §6.1: "
+        f"{undeclared}")
 
 
 @pytest.mark.parametrize("code", _RETIRED_BUT_RETAINED)
