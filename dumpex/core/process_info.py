@@ -51,7 +51,7 @@ from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
 from minidump.structures.peb import PEB_OFFSETS
 
-from dumpex.core.memory import read_region, stream_failure, va_range_captured_bytes
+from dumpex.core.memory import read_region_spanning, stream_failure, va_range_captured_bytes
 from dumpex.core.pe_utils import parse_pe_header
 from dumpex.output.coverage import SourceState
 
@@ -341,6 +341,30 @@ class ModuleClaim:
 
 
 @dataclass(frozen=True)
+class MainImagePeFacts:
+    """The subset of dumpex.core.pe_utils.parse_pe_header()'s result that
+    a downstream IAT walk (--process, issue #40) actually consumes, kept
+    as its own small, frozen, fully-hashable type rather than exposing
+    parse_pe_header()'s own mutable dict (whose `sections` is a plain
+    list of plain dicts) through MainImagePeClaim -- this module's own
+    boundary rule (see its top-of-file docstring) is "typed immutable/
+    internal values or plain normalized scalars only", and a raw
+    pe_utils dict is neither. `data_directories` is a tuple of (rva,
+    size) int pairs -- parse_pe_header() itself returns a plain LIST
+    here, converted to a tuple by this claim's own builder so
+    MainImagePeFacts stays hashable; dumpex.core.pe_utils.parse_iat()'s
+    own `pe.get('data_directories')` read only ever indexes/iterates it,
+    so it works identically against either shape.
+    `insufficient_data` is parse_pe_header()'s own structural signal for
+    "this rejection is a capture-length gap, not a genuine defect" --
+    see that function's docstring for exactly what it means."""
+    data_directories: tuple
+    declared_directory_count: "int | None"
+    is_pe32_plus: "bool | None"
+    insufficient_data: bool
+
+
+@dataclass(frozen=True)
 class MainImagePeClaim:
     """§3.4.4's main_image_pe: whether the PE header at the PEB-reported
     (never the module-fallback) image base was read and structurally
@@ -348,10 +372,43 @@ class MainImagePeClaim:
     there was no normalized image base to check at all, or nothing could
     be read there -- a read failure is "never checked", not a failed
     check. `reason` is dumpex.core.pe_utils.parse_pe_header()'s own
-    `reason` string, copied verbatim, never composed here."""
+    `reason` string, copied verbatim, never composed here.
+
+    `pe_facts` (issue #40) is the parse this claim was already built
+    from, carried forward so --process's own IAT walk consumes it
+    directly (via `pe_facts.data_directories`/`declared_directory_count`/
+    `is_pe32_plus`) instead of re-reading or re-parsing the same bytes a
+    second time. `captured_bytes` is NOT read by that walk -- it exists
+    purely as provenance (how many bytes of the read budget this claim's
+    `valid`/`reason` verdict was actually reached from), for a future
+    consumer such as #51's extended integrity projection that needs to
+    know that. `checked` is the single source of truth for whether a
+    read/parse was attempted at all: `checked is False` if and only if
+    `captured_bytes == 0 and pe_facts is None`; `checked is True` if and
+    only if `captured_bytes > 0 and pe_facts is not None` -- enforced
+    below, not just documented, since a constructor that silently
+    accepted a self-contradictory combination (e.g. checked=True with
+    pe_facts=None) would hand dumpex.core.pe_utils.parse_iat() a None it
+    cannot `.get()` from."""
     checked: bool
     valid: "bool | None"
     reason: "str | None"
+    captured_bytes: int = 0
+    pe_facts: "MainImagePeFacts | None" = None
+
+    def __post_init__(self):
+        if self.checked:
+            if self.captured_bytes <= 0 or self.pe_facts is None:
+                raise ValueError(
+                    "MainImagePeClaim(checked=True) requires captured_bytes > 0 and "
+                    f"pe_facts set, got captured_bytes={self.captured_bytes!r} "
+                    f"pe_facts={self.pe_facts!r}")
+        else:
+            if self.captured_bytes != 0 or self.pe_facts is not None:
+                raise ValueError(
+                    "MainImagePeClaim(checked=False) requires captured_bytes == 0 and "
+                    f"pe_facts == None, got captured_bytes={self.captured_bytes!r} "
+                    f"pe_facts={self.pe_facts!r}")
 
 
 @dataclass(frozen=True)
@@ -561,22 +618,30 @@ def _build_main_image_pe_claim(mf, image_base: "int | None") -> MainImagePeClaim
     base). Uses va_range_captured_bytes() first, rather than requesting
     the full MAIN_IMAGE_PE_READ_MAX outright, so a main image whose
     capture is shorter than that (but still non-empty) is still checked
-    against however many bytes really are there, instead of failing the
-    read entirely over a boundary read_region() would otherwise raise
-    on."""
+    against however many bytes really are there. The actual read then
+    goes through read_region_spanning(), not the plain read_region() a
+    single MinidumpBufferedReader.read() call implies -- the header can
+    legitimately straddle two CONTIGUOUS segments (the same boundary
+    va_range_captured_bytes() already computes across, e.g. a
+    protection-attribute change partway through the header), and a
+    single-segment read_region() call would raise on that split and
+    report a fully-present header as unreadable."""
     if image_base is None:
         return MainImagePeClaim(checked=False, valid=None, reason=None)
     captured = va_range_captured_bytes(mf, image_base, MAIN_IMAGE_PE_READ_MAX)
     if not captured:
         return MainImagePeClaim(checked=False, valid=None, reason=None)
-    try:
-        data = read_region(mf, image_base, captured)
-    except Exception:
-        return MainImagePeClaim(checked=False, valid=None, reason=None)
+    data = read_region_spanning(mf, image_base, captured)
     if not data:
         return MainImagePeClaim(checked=False, valid=None, reason=None)
     result = parse_pe_header(data)
-    return MainImagePeClaim(checked=True, valid=result["valid"], reason=result["reason"] or None)
+    facts = MainImagePeFacts(
+        data_directories=tuple(result["data_directories"]),
+        declared_directory_count=result["declared_directory_count"],
+        is_pe32_plus=result["is_pe32_plus"],
+        insufficient_data=result["insufficient_data"])
+    return MainImagePeClaim(checked=True, valid=result["valid"], reason=result["reason"] or None,
+                             captured_bytes=len(data), pe_facts=facts)
 
 
 def build_process_identity_snapshot(mf) -> ProcessIdentitySnapshot:
@@ -617,7 +682,18 @@ def build_process_identity_snapshot(mf) -> ProcessIdentitySnapshot:
         selected_path_source = "peb"
         selected_process_path = peb_claim.image_path
         selected_process_name = peb_claim.name
-    elif module_claim.match_state == "resolved":
+    elif module_claim.match_state == "resolved" and module_claim.path is not None:
+        # match_state == "resolved" only asserts a module IS registered
+        # at the exact base -- it says nothing about whether THAT
+        # module's own recorded path survived normalization (its `.name`
+        # field, the source _module_reference() builds `path` from, can
+        # itself be empty/whitespace-only and normalize to None, same as
+        # any other Windows path field in this module -- §3.2). Without
+        # this second condition, a resolved-but-pathless module would
+        # still set selected_path_source = "module" while
+        # selected_process_path stayed None, contradicting §3.3.1's rule
+        # that selected_path_source is null whenever no source actually
+        # produced a path.
         selected_path_source = "module"
         selected_process_path = module_claim.path
         selected_process_name = module_claim.name

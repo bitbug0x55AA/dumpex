@@ -60,6 +60,23 @@ def parse_pe_header(data: bytes) -> dict:
                                         region VA at the call site)
       sections                 list[dict]  — see below
       reason                   str   — why valid is False (empty if valid)
+      insufficient_data        bool  — True iff `reason` is a genuine
+                                        capture-length gap (some
+                                        structurally-required offset ran
+                                        past `len(data)`) rather than a
+                                        deterministic structural rejection
+                                        reached from bytes that WERE all
+                                        present (bad signature/Machine/
+                                        NumberOfSections/Magic). False
+                                        whenever `valid` is True. A caller
+                                        deciding "is more data worth
+                                        fetching, or is this genuinely not
+                                        a PE" reads this instead of
+                                        pattern-matching `reason`'s
+                                        free-text, which is not a closed
+                                        vocabulary and (e.g. 'no MZ
+                                        signature') does not reliably
+                                        name a length-only cause.
 
     Each section dict: {name, virtual_address, virtual_size,
     pointer_to_raw_data, size_of_raw_data, characteristics,
@@ -76,9 +93,22 @@ def parse_pe_header(data: bytes) -> dict:
         'size_of_image': None, 'address_of_entry_point': None,
         'image_base': None, 'sections': [], 'data_directories': [], 'reason': '',
         'declared_directory_count': None, 'directories_complete': False,
+        'insufficient_data': False,
     }
-    if len(data) < 0x40 or data[:2] != b'MZ':
+    # Signature checked FIRST, independent of length: two present bytes
+    # that are simply not 'MZ' is a deterministic rejection regardless of
+    # how much data followed them -- checking length first would let a
+    # short, genuinely-non-PE capture masquerade as insufficient_data.
+    if len(data) >= 2 and data[:2] != b'MZ':
         result['reason'] = 'no MZ signature'
+        return result
+    if len(data) < 0x40:
+        # Either too short to even hold two signature bytes, or the
+        # signature matched but the rest of the fixed DOS header (up to
+        # and including e_lfanew at 0x3C) was not captured -- both are
+        # genuine capture-length gaps.
+        result['reason'] = 'truncated DOS header'
+        result['insufficient_data'] = True
         return result
     result['has_mz'] = True
 
@@ -86,13 +116,23 @@ def parse_pe_header(data: bytes) -> dict:
         e_lfanew = struct.unpack_from('<I', data, 0x3C)[0]
     except struct.error:
         result['reason'] = 'truncated DOS header (no e_lfanew)'
+        result['insufficient_data'] = True
         return result
     result['e_lfanew'] = e_lfanew
 
     # e_lfanew is attacker/loader controlled in principle; bound it to a
-    # plausible range before trusting it as an offset into `data`.
-    if e_lfanew < 4 or e_lfanew > 0x1000 or e_lfanew + 24 > len(data):
+    # plausible range before trusting it as an offset into `data`. The
+    # implausible-value case (< 4 or > 0x1000) is a deterministic
+    # rejection of the header's OWN declared offset, independent of how
+    # much of `data` was captured; only the "declared offset is plausible
+    # but its own 24-byte window runs past what was captured" case is a
+    # genuine capture-length gap.
+    if e_lfanew < 4 or e_lfanew > 0x1000:
         result['reason'] = f'e_lfanew out of plausible range (0x{e_lfanew:x})'
+        return result
+    if e_lfanew + 24 > len(data):
+        result['reason'] = f'e_lfanew out of plausible range (0x{e_lfanew:x})'
+        result['insufficient_data'] = True
         return result
     if data[e_lfanew:e_lfanew + 4] != b'PE\x00\x00':
         result['reason'] = 'no PE\\0\\0 signature at e_lfanew'
@@ -105,6 +145,7 @@ def parse_pe_header(data: bytes) -> dict:
             struct.unpack_from('<HHIIIHH', data, coff_off)
     except struct.error:
         result['reason'] = 'truncated COFF file header'
+        result['insufficient_data'] = True
         return result
     result['machine'] = machine
     result['machine_name'] = _KNOWN_MACHINES.get(machine)
@@ -121,6 +162,7 @@ def parse_pe_header(data: bytes) -> dict:
     opt_off = coff_off + 20
     if opt_off + 2 > len(data):
         result['reason'] = 'truncated optional header'
+        result['insufficient_data'] = True
         return result
     magic = struct.unpack_from('<H', data, opt_off)[0]
 
@@ -136,6 +178,7 @@ def parse_pe_header(data: bytes) -> dict:
 
     if ep_off + 4 > len(data) or base_off + base_size > len(data) or size_off + 4 > len(data):
         result['reason'] = 'truncated optional header (fixed fields)'
+        result['insufficient_data'] = True
         return result
 
     result['address_of_entry_point'] = struct.unpack_from('<I', data, ep_off)[0]
@@ -204,6 +247,7 @@ def parse_pe_header(data: bytes) -> dict:
         result['valid'] = True
     elif not result['reason']:
         result['reason'] = f'section table truncated ({len(sections)}/{num_sections} recovered)'
+        result['insufficient_data'] = True
 
     return result
 

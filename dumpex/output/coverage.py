@@ -638,6 +638,176 @@ class LimitationCode(str, Enum):
     # legitimately stay unset together: a deadline discovered only after
     # the very last segment already finished has nothing left to name.
 
+    # ── --process (issue #40 / docs/recon_process_sysinfo_handles_
+    # contract.md §6.1) ──────────────────────────────────────────────────
+    PROCESS_SOURCES_ABSENT = "PROCESS_SOURCES_ABSENT"
+    # ^ --process's derived "process_identity" evaluation group: none of
+    # the five normalized identity fields (pid/start time/path/command
+    # line/image base) resolved, even though misc_info/peb objects may
+    # both be real (each field independently gated by its own Flags1 bit,
+    # an empty string, or a normalizer rejection). source fixed to
+    # "process_identity"; absent_capable (single-source
+    # EvaluationRequirement.all_absent_code). Fully fixed sentence.
+    PROCESS_MISC_INFO_UNAVAILABLE = "PROCESS_MISC_INFO_UNAVAILABLE"
+    # ^ MiscInfoStream itself absent -- covers pid/process_start_utc
+    # together. source fixed to "misc_info"; absent_capable (a
+    # SourceRequirement.absent_code on --process's always-present
+    # completeness check for this source). A FAILED misc_info renders via
+    # the generic SOURCE_FAILED template instead (§2.4: object-level vs
+    # failed streams are always distinguished the same way).
+    PROCESS_PEB_UNAVAILABLE = "PROCESS_PEB_UNAVAILABLE"
+    # ^ PEB itself absent -- covers process_path/command_line/
+    # image_base_address together. source fixed to "peb"; absent_capable.
+    # The PEB source never reaches FAILED in v2.13 (see PebClaim's own
+    # docstring in dumpex.core.process_info), so there is no companion
+    # SOURCE_FAILED case for this one, unlike misc_info/modules.
+    PROCESS_PID_UNAVAILABLE = "PROCESS_PID_UNAVAILABLE"
+    # ^ Field-level: misc_info is present but normalize_pid() rejected
+    # ProcessId (0, negative, out of uint32 range, non-int, bool). Fires
+    # only when the object-level PROCESS_MISC_INFO_UNAVAILABLE/
+    # SOURCE_FAILED did NOT already fire for misc_info -- one absence is
+    # reported once (§3.7.2). source fixed to "misc_info";
+    # caller_buildable; fully fixed sentence, no fields.
+    PROCESS_START_TIME_UNSET = "PROCESS_START_TIME_UNSET"
+    # ^ Field-level: misc_info present, ProcessCreateTime is exactly 0
+    # (classify_process_create_time() == "unset"). source fixed to
+    # "misc_info"; caller_buildable; fully fixed sentence, no fields.
+    PROCESS_START_TIME_INVALID = "PROCESS_START_TIME_INVALID"
+    # ^ Field-level: misc_info present, ProcessCreateTime is a non-int or
+    # outside uint32 range (classify_process_create_time() == "invalid").
+    # Distinct code from PROCESS_START_TIME_UNSET for the same reason
+    # PE_HEADER_READ_FAILED/_SHORT_READ split on "failed at all" vs "came
+    # up short" -- "never recorded" and "recorded but unusable" are
+    # different facts. source fixed to "misc_info"; caller_buildable;
+    # fully fixed sentence, no fields.
+    PROCESS_PATH_UNAVAILABLE = "PROCESS_PATH_UNAVAILABLE"
+    # ^ Field-level: peb is present but supplied no usable ImagePathName,
+    # AND the approved ModuleList fallback (§3.3.3) also produced nothing
+    # -- deliberately neutral about WHICH of the fallback's four failure
+    # modes applies (see PROCESS_MODULE_FALLBACK_UNAVAILABLE, which
+    # carries the attribution when the fallback was actually needed).
+    # source fixed to "peb"; caller_buildable; fully fixed sentence, no
+    # fields.
+    PROCESS_COMMAND_LINE_UNAVAILABLE = "PROCESS_COMMAND_LINE_UNAVAILABLE"
+    # ^ Field-level: peb present but CommandLine normalized to nothing
+    # (empty/whitespace-only/NUL-only). source fixed to "peb";
+    # caller_buildable; fully fixed sentence, no fields.
+    PROCESS_IMAGE_BASE_UNAVAILABLE = "PROCESS_IMAGE_BASE_UNAVAILABLE"
+    # ^ Field-level: peb present but ImageBaseAddress itself was never
+    # populated (the raw attribute is None -- nothing was even seen to
+    # reject). Distinct from PROCESS_IMAGE_BASE_INVALID (a structurally
+    # present-but-rejected raw value) the same way PROCESS_START_TIME_
+    # UNSET/_INVALID split. source fixed to "peb"; caller_buildable;
+    # fully fixed sentence, no fields.
+    PROCESS_MODULE_FALLBACK_UNAVAILABLE = "PROCESS_MODULE_FALLBACK_UNAVAILABLE"
+    # ^ The PEB supplied no path AND the image base normalized (the
+    # fallback was actually attempted), but ModuleListStream itself is
+    # absent, so resolve_module_by_base() could never run. source fixed
+    # to "modules"; absent_capable (a SourceRequirement.absent_code on
+    # --process's CONDITIONAL "modules" completeness check -- only added
+    # when the fallback was actually needed, §3.7.2). A FAILED modules
+    # stream in that same situation renders via the generic SOURCE_FAILED
+    # template instead, from the same SourceRequirement.
+    PROCESS_IMAGE_BASE_INVALID = "PROCESS_IMAGE_BASE_INVALID"
+    # ^ Field-level: peb present, ImageBaseAddress WAS populated, but
+    # normalize_image_base() rejected it (zero, unaligned, out of uint64
+    # range, or a bool) -- the raw value is preserved verbatim in
+    # identity_evidence.peb_claim.raw_image_base_address, never discarded.
+    # source fixed to "peb"; caller_buildable; fully fixed sentence, no
+    # fields (the raw value lives on the record, not on this limitation).
+    PROCESS_MAIN_IMAGE_READ_FAILED = "PROCESS_MAIN_IMAGE_READ_FAILED"
+    # ^ A normalized image base exists, but nothing could be read there at
+    # all (not one byte of the dump's own segment table covers that VA, or
+    # the read itself raised/returned nothing). source fixed to
+    # "main_image" -- a derived source (the PE-header-validation attempt
+    # itself, never FAILED per §2.4's "a derived source never has a
+    # failed state" rule -- this caller_buildable code IS its own failure
+    # attribution instead); caller_buildable; fully fixed sentence, no
+    # fields.
+    PROCESS_MAIN_IMAGE_SHORT_READ = "PROCESS_MAIN_IMAGE_SHORT_READ"
+    # ^ Companion to PROCESS_MAIN_IMAGE_READ_FAILED: SOME bytes were read
+    # at the normalized image base, but fewer than the PE header
+    # validation needed to reach a definitive structural verdict (the
+    # dump's own capture ends partway through the header/section table).
+    # source fixed to "main_image"; caller_buildable; fully fixed
+    # sentence, no fields.
+    PROCESS_MAIN_IMAGE_PE_INVALID = "PROCESS_MAIN_IMAGE_PE_INVALID"
+    # ^ A full read was obtained, but dumpex.core.pe_utils.parse_pe_header()
+    # rejected it for a genuine structural reason (bad MZ/PE signature,
+    # unrecognized Machine, implausible NumberOfSections, ...), not merely
+    # a short/truncated read. When this fires, the IAT walk is never
+    # attempted at all (IAT_DIRECTORY_TABLE_INCOMPLETE is suppressed --
+    # see that code's own comment). source fixed to "main_image";
+    # caller_buildable; fully fixed sentence, no fields.
+    IAT_DIRECTORY_TABLE_INCOMPLETE = "IAT_DIRECTORY_TABLE_INCOMPLETE"
+    # ^ Either the Import Directory (index 1) or the IAT Directory
+    # (index 12)'s own presence could not be determined -- the data
+    # directory table itself was not fully captured. `affected_count` is
+    # OPTIONAL here (unlike every other affected_count-bearing code in
+    # this registry): a positive int when declared_directory_count is
+    # known and the captured list is short by that many entries, or None
+    # when even declared_directory_count itself was never captured (a
+    # fabricated count would be worse than none). Suppressed when
+    # PROCESS_MAIN_IMAGE_PE_INVALID already fired (no walk was attempted
+    # at all in that case). source fixed to "iat"; caller_buildable.
+    IAT_DIRECTORY_READ_FAILED = "IAT_DIRECTORY_READ_FAILED"
+    # ^ The Import Directory is declared present, but its very first
+    # descriptor could not be read at all -- nothing about the import
+    # table was recovered. source fixed to "iat"; caller_buildable; fully
+    # fixed sentence, no fields.
+    IAT_DIRECTORY_SHORT_READ = "IAT_DIRECTORY_SHORT_READ"
+    # ^ Companion to IAT_DIRECTORY_READ_FAILED: the first descriptor read
+    # came back with fewer bytes than its fixed 20-byte structure needs.
+    # source fixed to "iat"; caller_buildable; fully fixed sentence, no
+    # fields.
+    IAT_DESCRIPTOR_READ_FAILED = "IAT_DESCRIPTOR_READ_FAILED"
+    # ^ A LATER import descriptor (not the first -- see IAT_DIRECTORY_
+    # READ_FAILED) could not be read at all. source fixed to "iat";
+    # caller_buildable; affected_count (a positive int) alone carries the
+    # fact.
+    IAT_DESCRIPTOR_SHORT_READ = "IAT_DESCRIPTOR_SHORT_READ"
+    # ^ Companion to IAT_DESCRIPTOR_READ_FAILED: a later descriptor read
+    # came back short. source fixed to "iat"; caller_buildable;
+    # affected_count.
+    IAT_THUNK_READ_FAILED = "IAT_THUNK_READ_FAILED"
+    # ^ An IAT/INT thunk slot (the per-import resolved-address or
+    # name-pointer entry) could not be read at all. source fixed to
+    # "iat"; caller_buildable; affected_count.
+    IAT_THUNK_SHORT_READ = "IAT_THUNK_SHORT_READ"
+    # ^ Companion to IAT_THUNK_READ_FAILED: a thunk slot read came back
+    # short. source fixed to "iat"; caller_buildable; affected_count.
+    IAT_NAME_READ_FAILED = "IAT_NAME_READ_FAILED"
+    # ^ A DLL name or an imported symbol name string could not be read
+    # (failed read, or MAX_IAT_NAME_LENGTH reached with no terminator --
+    # a name that long is unavailable, not truncated-but-kept). One code
+    # regardless of which field's name failed -- the affected entry's own
+    # `dll`/`symbol` is null, never a placeholder string. source fixed to
+    # "iat"; caller_buildable; affected_count.
+    IAT_UNTERMINATED_TABLE = "IAT_UNTERMINATED_TABLE"
+    # ^ The descriptor or thunk array ended without a proper zero
+    # terminator being confirmed (a read failure, short read, or a
+    # dumpex-side cap was hit before one was found). source fixed to
+    # "iat"; caller_buildable; fully fixed sentence, no fields.
+    IAT_CYCLE_DETECTED = "IAT_CYCLE_DETECTED"
+    # ^ The same descriptor/thunk-slot address was computed twice while
+    # walking the table -- evidence the structure itself cannot be
+    # trusted; the walk stops entirely at that point. source fixed to
+    # "iat"; caller_buildable; fully fixed sentence, no fields.
+    IAT_BOUNDS_EXCEEDED = "IAT_BOUNDS_EXCEEDED"
+    # ^ An RVA/count/address computed while walking the import table
+    # exceeded plausible bounds (integer overflow past a real 64-bit
+    # address, or a real, non-terminator descriptor found past the
+    # header's own declared Import Directory size). source fixed to
+    # "iat"; caller_buildable; fully fixed sentence, no fields.
+    IAT_ENTRIES_TRUNCATED = "IAT_ENTRIES_TRUNCATED"
+    # ^ One of the six frozen IAT walk budgets (§1.8) was reached before
+    # the walk finished. `scope` names WHICH budget
+    # (iat_dlls/iat_entries_per_dll/iat_total_entries/iat_bytes_read/
+    # iat_read_operations), `budget_limit`/`budget_consumed` carry that
+    # budget's own configured limit and how much was consumed -- all
+    # three REQUIRED together, mirroring PE_HEADER_SCAN_TRUNCATED's own
+    # budget-attribution shape. source fixed to "iat"; caller_buildable.
+
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
@@ -913,6 +1083,7 @@ _SOURCE_DISPLAY_NAMES = {
     "exception":   "Exception stream",
     "peb":         "PEB",
     "target_regions": "Triage card target region(s)",
+    "main_image":  "PEB-reported main image",
 }
 
 
@@ -1606,6 +1777,53 @@ def _render_pid_no_usable_fallback(limitation: "CoverageLimitation") -> str:
             "was available from the thread list or exception stream")
 
 
+def _render_iat_directory_table_incomplete(limitation: "CoverageLimitation") -> str:
+    if limitation.affected_count is not None:
+        return (f"{limitation.affected_count} declared data directory entr(y/ies) were not "
+                f"captured; import/IAT directory presence is undetermined")
+    return "the data directory table was not captured; import/IAT directory presence is undetermined"
+
+
+def _render_iat_descriptor_read_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} import descriptor(s) could not be read"
+
+
+def _render_iat_descriptor_short_read(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} import descriptor(s) read short"
+
+
+def _render_iat_thunk_read_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} IAT/INT thunk slot(s) could not be read"
+
+
+def _render_iat_thunk_short_read(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} IAT/INT thunk slot(s) read short"
+
+
+def _render_iat_name_read_failed(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} DLL or import name string(s) could not be read"
+
+
+def _render_iat_entries_truncated(limitation: "CoverageLimitation") -> str:
+    return f"the import table walk stopped after reaching a read budget{_render_budget_clause(limitation)}"
+
+
+_IAT_TRUNCATION_SCOPES = frozenset(
+    {"iat_dlls", "iat_entries_per_dll", "iat_total_entries", "iat_bytes_read", "iat_read_operations"})
+
+
+def _validate_iat_entries_truncated_fields(limitation: "CoverageLimitation") -> None:
+    if limitation.scope is None or limitation.budget_limit is None or limitation.budget_consumed is None:
+        raise ValueError(
+            "CoverageLimitation(code=IAT_ENTRIES_TRUNCATED) requires scope, budget_limit, and "
+            f"budget_consumed all set together, got scope={limitation.scope!r} "
+            f"budget_limit={limitation.budget_limit!r} budget_consumed={limitation.budget_consumed!r}")
+    if limitation.scope not in _IAT_TRUNCATION_SCOPES:
+        raise ValueError(
+            f"CoverageLimitation(code=IAT_ENTRIES_TRUNCATED).scope must be one of "
+            f"{sorted(_IAT_TRUNCATION_SCOPES)!r}, got {limitation.scope!r}")
+
+
 def _render_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
     """Factory for the fully fixed-sentence codes (no field
     interpolation at all) -- avoids five near-identical one-line lambdas."""
@@ -2020,6 +2238,103 @@ _CODE_SPECS = {
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("ENCODING_ALL_REGIONS_FILTERED"),
         allowed_fields=frozenset({"affected_count"})),
+    # ── --process (issue #40) ────────────────────────────────────────────
+    LimitationCode.PROCESS_SOURCES_ABSENT: _CodeSpec(
+        render=_render_fixed_text(
+            "no usable process identity evidence available (MiscInfo and the PEB supplied "
+            "no usable PID, start time, path, command line, or image base)"),
+        fixed_source="process_identity", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.PROCESS_MISC_INFO_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("MiscInfo stream not present in this dump"),
+        fixed_source="misc_info", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.PROCESS_PEB_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("PEB not available (requires sysinfo + thread list)"),
+        fixed_source="peb", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.PROCESS_PID_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("MiscInfo present but does not supply a usable ProcessId"),
+        fixed_source="misc_info", caller_buildable=True),
+    LimitationCode.PROCESS_START_TIME_UNSET: _CodeSpec(
+        render=_render_fixed_text("MiscInfo's ProcessCreateTime is zero (not recorded)"),
+        fixed_source="misc_info", caller_buildable=True),
+    LimitationCode.PROCESS_START_TIME_INVALID: _CodeSpec(
+        render=_render_fixed_text("MiscInfo's ProcessCreateTime is not a valid 32-bit timestamp"),
+        fixed_source="misc_info", caller_buildable=True),
+    LimitationCode.PROCESS_PATH_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "no process path available: the PEB supplied none and no usable ModuleList "
+            "fallback was available"),
+        fixed_source="peb", caller_buildable=True),
+    LimitationCode.PROCESS_COMMAND_LINE_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("PEB present but CommandLine is empty"),
+        fixed_source="peb", caller_buildable=True),
+    LimitationCode.PROCESS_IMAGE_BASE_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text("PEB present but ImageBaseAddress is not set"),
+        fixed_source="peb", caller_buildable=True),
+    LimitationCode.PROCESS_MODULE_FALLBACK_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "ModuleListStream not present, so the approved process-path fallback could not run"),
+        fixed_source="modules", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.PROCESS_IMAGE_BASE_INVALID: _CodeSpec(
+        render=_render_fixed_text(
+            "PEB's ImageBaseAddress is not a plausible mapped image base (raw value preserved "
+            "in identity_evidence)"),
+        fixed_source="peb", caller_buildable=True),
+    LimitationCode.PROCESS_MAIN_IMAGE_READ_FAILED: _CodeSpec(
+        render=_render_fixed_text("could not read the PE header at the PEB-reported image base"),
+        fixed_source="main_image", caller_buildable=True),
+    LimitationCode.PROCESS_MAIN_IMAGE_SHORT_READ: _CodeSpec(
+        render=_render_fixed_text(
+            "read fewer bytes than required for the PE header at the PEB-reported image base"),
+        fixed_source="main_image", caller_buildable=True),
+    LimitationCode.PROCESS_MAIN_IMAGE_PE_INVALID: _CodeSpec(
+        render=_render_fixed_text(
+            "the PE header at the PEB-reported image base is not structurally valid"),
+        fixed_source="main_image", caller_buildable=True),
+    LimitationCode.IAT_DIRECTORY_TABLE_INCOMPLETE: _CodeSpec(
+        render=_render_iat_directory_table_incomplete, fixed_source="iat", caller_buildable=True,
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.IAT_DIRECTORY_READ_FAILED: _CodeSpec(
+        render=_render_fixed_text("could not read the IAT directory"),
+        fixed_source="iat", caller_buildable=True),
+    LimitationCode.IAT_DIRECTORY_SHORT_READ: _CodeSpec(
+        render=_render_fixed_text("read fewer bytes than declared for the IAT directory"),
+        fixed_source="iat", caller_buildable=True),
+    LimitationCode.IAT_DESCRIPTOR_READ_FAILED: _CodeSpec(
+        render=_render_iat_descriptor_read_failed, fixed_source="iat", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("IAT_DESCRIPTOR_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.IAT_DESCRIPTOR_SHORT_READ: _CodeSpec(
+        render=_render_iat_descriptor_short_read, fixed_source="iat", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("IAT_DESCRIPTOR_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.IAT_THUNK_READ_FAILED: _CodeSpec(
+        render=_render_iat_thunk_read_failed, fixed_source="iat", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("IAT_THUNK_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.IAT_THUNK_SHORT_READ: _CodeSpec(
+        render=_render_iat_thunk_short_read, fixed_source="iat", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("IAT_THUNK_SHORT_READ"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.IAT_NAME_READ_FAILED: _CodeSpec(
+        render=_render_iat_name_read_failed, fixed_source="iat", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("IAT_NAME_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.IAT_UNTERMINATED_TABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "no null terminator found before the descriptor/thunk cap; table treated as truncated"),
+        fixed_source="iat", caller_buildable=True),
+    LimitationCode.IAT_CYCLE_DETECTED: _CodeSpec(
+        render=_render_fixed_text(
+            "a repeated address was found while walking the import table; walk stopped"),
+        fixed_source="iat", caller_buildable=True),
+    LimitationCode.IAT_BOUNDS_EXCEEDED: _CodeSpec(
+        render=_render_fixed_text(
+            "an RVA or count in the import directory exceeds plausible bounds"),
+        fixed_source="iat", caller_buildable=True),
+    LimitationCode.IAT_ENTRIES_TRUNCATED: _CodeSpec(
+        render=_render_iat_entries_truncated, fixed_source="iat", caller_buildable=True,
+        validate_fields=_validate_iat_entries_truncated_fields,
+        allowed_fields=frozenset({"scope", "budget_limit", "budget_consumed"})),
 }
 
 # Derived collections -- every other call site (SourceRequirement,

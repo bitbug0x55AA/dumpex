@@ -26,7 +26,7 @@ from dumpex.core.process_info import (
     format_process_create_time_utc, build_process_identity_snapshot,
     parse_environment_entries, EnvironmentEntry,
     MiscInfoClaim, PebClaim, ModuleClaim, ModuleReference, ProcessDiagnostic,
-    ProcessIdentitySnapshot, MainImagePeClaim,
+    ProcessIdentitySnapshot, MainImagePeClaim, MainImagePeFacts,
 )
 
 
@@ -300,6 +300,27 @@ def test_selected_path_source_falls_back_to_module_when_peb_path_unavailable():
     assert snap.selected_process_name == "malware.exe"
     codes = [d.code for d in snap.diagnostics]
     assert "PROCESS_PATH_SOURCE_FALLBACK" in codes
+
+
+def test_selected_path_source_stays_null_when_resolved_module_has_no_path():
+    """match_state == "resolved" only asserts a module is registered at
+    the exact base -- it says nothing about whether THAT module's own
+    recorded path survived normalization. A module whose own path is
+    empty/whitespace-only (normalize_windows_path() -> None, §3.2) must
+    NOT be selected as the path source: selected_path_source/
+    selected_process_path/selected_process_name must all stay null, and
+    no PROCESS_PATH_SOURCE_FALLBACK diagnostic (which would falsely claim
+    a path was taken from ModuleListStream) may fire."""
+    peb = Peb(0x140000000, "")   # empty PEB path -> unavailable
+    modules = [Module(0x140000000, 0x2000, "   ")]   # resolved by base, but path is whitespace-only
+    snap = build_process_identity_snapshot(_MF(peb=peb, modules=modules))
+    assert snap.module_claim.match_state == "resolved"
+    assert snap.module_claim.path is None
+    assert snap.selected_path_source is None
+    assert snap.selected_process_path is None
+    assert snap.selected_process_name is None
+    codes = [d.code for d in snap.diagnostics]
+    assert "PROCESS_PATH_SOURCE_FALLBACK" not in codes
 
 
 def test_selected_path_source_none_when_neither_source_has_a_path():
@@ -708,6 +729,27 @@ def test_main_image_pe_valid_for_a_structurally_sound_header():
     assert snap.main_image_pe.reason is None
 
 
+def test_main_image_pe_valid_when_header_straddles_two_contiguous_segments():
+    """The dump's own segment table can split what is logically one
+    contiguous capture into two adjacent entries (e.g. a protection-
+    attribute change partway through the header) --
+    va_range_captured_bytes() reports the full contiguous span across
+    both, and the actual read must recover all of it: a naive single
+    reader.read() call (bounded to whichever ONE segment reader.move()
+    landed on) would raise on the split and misreport a fully-present
+    header as checked=False/unreadable."""
+    base = 0x140000000
+    header_bytes = build_pe_header([TEXT_SECTION_RX], image_base=base)
+    split = len(header_bytes) // 2
+    memory = {base: header_bytes[:split], base + split: header_bytes[split:]}
+    peb = Peb(base, r"C:\Samples\malware.exe")
+    snap = build_process_identity_snapshot(_MF(peb=peb, memory=memory))
+    assert snap.main_image_pe.checked is True
+    assert snap.main_image_pe.valid is True
+    assert snap.main_image_pe.reason is None
+    assert snap.main_image_pe.captured_bytes == len(header_bytes)
+
+
 def test_main_image_pe_invalid_for_garbage_bytes():
     base = 0x140000000
     peb = Peb(base, r"C:\Samples\malware.exe")
@@ -726,3 +768,45 @@ def test_main_image_pe_never_shares_reason_string_object_by_composition():
     assert snap.main_image_pe.checked is True
     assert snap.main_image_pe.valid is False
     assert "MZ" in snap.main_image_pe.reason
+
+
+# ── MainImagePeClaim's checked <-> (captured_bytes, pe_facts) invariant ──
+
+def test_main_image_pe_claim_checked_true_requires_captured_bytes_and_pe_facts():
+    with pytest.raises(ValueError, match="requires captured_bytes > 0 and pe_facts set"):
+        MainImagePeClaim(checked=True, valid=True, reason=None)
+
+
+def test_main_image_pe_claim_checked_false_forbids_captured_bytes_or_pe_facts():
+    facts = MainImagePeFacts(data_directories=(), declared_directory_count=None,
+                              is_pe32_plus=None, insufficient_data=False)
+    with pytest.raises(ValueError, match="requires captured_bytes == 0 and pe_facts == None"):
+        MainImagePeClaim(checked=False, valid=None, reason=None, captured_bytes=1)
+    with pytest.raises(ValueError, match="requires captured_bytes == 0 and pe_facts == None"):
+        MainImagePeClaim(checked=False, valid=None, reason=None, pe_facts=facts)
+
+
+def test_main_image_pe_claim_is_hashable():
+    # A raw pe_utils dict (mutable, with a nested list-of-dicts `sections`)
+    # would not be -- MainImagePeFacts exists specifically so this claim
+    # stays within this module's own "frozen scalars/nested frozen
+    # dataclasses only" boundary and remains hashable.
+    facts = MainImagePeFacts(data_directories=((0, 0),), declared_directory_count=1,
+                              is_pe32_plus=True, insufficient_data=False)
+    hash(MainImagePeClaim(checked=True, valid=True, reason=None, captured_bytes=928, pe_facts=facts))
+    hash(MainImagePeClaim(checked=False, valid=None, reason=None))
+
+
+def test_snapshot_with_no_diagnostics_is_hashable():
+    # A snapshot's own hashability depends on every nested claim being
+    # hashable -- asserted here for the common "clean, no conflicts" case
+    # now that MainImagePeClaim carries pe_facts instead of a raw dict.
+    # ProcessDiagnostic.details (a MappingProxyType) is a SEPARATE,
+    # pre-existing unhashability source for a snapshot that DOES carry
+    # diagnostics -- out of this issue's scope.
+    base = 0x140000000
+    header_bytes = build_pe_header([TEXT_SECTION_RX], image_base=base)
+    peb = Peb(base, r"C:\Samples\malware.exe")
+    snap = build_process_identity_snapshot(_MF(peb=peb, memory={base: header_bytes}))
+    assert snap.diagnostics == ()
+    hash(snap)

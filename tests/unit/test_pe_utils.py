@@ -324,3 +324,113 @@ def test_reloc_directory_multiple_blocks_fully_consumed_is_applied():
     result = apply_base_relocations(file_bytes, pe, delta=0x50000)
     assert result.status == "applied"
     assert result.applied_count == 2
+
+
+# ── parse_pe_header()'s `insufficient_data` flag ─────────────────────────
+# Distinguishes a genuine capture-length gap (some structurally-required
+# offset ran past len(data)) from a deterministic structural rejection
+# reached from bytes that were all present -- see that function's own
+# docstring. Every non-valid branch is exercised, split by which side of
+# the distinction it belongs on.
+
+def test_insufficient_data_true_when_shorter_than_dos_header():
+    result = parse_pe_header(b"MZ" + b"\x00" * 10)   # < 0x40 bytes total, real MZ prefix
+    assert result['valid'] is False
+    assert result['reason'] == 'truncated DOS header'
+    assert result['insufficient_data'] is True
+
+
+def test_insufficient_data_true_when_fewer_than_two_bytes_captured():
+    # Cannot even check the signature -- also a genuine capture gap, not
+    # a determined "not a PE" claim.
+    for data in (b"", b"M"):
+        result = parse_pe_header(data)
+        assert result['valid'] is False
+        assert result['reason'] == 'truncated DOS header'
+        assert result['insufficient_data'] is True
+
+
+def test_insufficient_data_false_for_genuinely_wrong_signature():
+    data = b"NOTMZDATA" + b"\x00" * 60   # >= 0x40 bytes, but data[:2] != b'MZ'
+    result = parse_pe_header(data)
+    assert result['valid'] is False
+    assert result['reason'] == 'no MZ signature'
+    assert result['insufficient_data'] is False
+
+
+def test_insufficient_data_false_for_short_wrong_signature():
+    # Signature is checked BEFORE length -- a short capture whose first
+    # two bytes are already conclusively wrong must not be reported as a
+    # capture-length gap just because it's also under 0x40 bytes.
+    data = b"XX" + b"\x00" * 5   # 7 bytes total, well under 0x40
+    result = parse_pe_header(data)
+    assert result['valid'] is False
+    assert result['reason'] == 'no MZ signature'
+    assert result['insufficient_data'] is False
+
+
+def test_insufficient_data_false_for_implausible_e_lfanew_value():
+    data = bytearray(0x40)
+    data[0:2] = b'MZ'
+    struct.pack_into('<I', data, 0x3C, 0x2000)   # > 0x1000, deterministically implausible
+    result = parse_pe_header(bytes(data))
+    assert result['valid'] is False
+    assert 'e_lfanew out of plausible range' in result['reason']
+    assert result['insufficient_data'] is False
+
+
+def test_insufficient_data_true_when_e_lfanew_window_exceeds_capture():
+    data = bytearray(0x44)
+    data[0:2] = b'MZ'
+    struct.pack_into('<I', data, 0x3C, 0x30)   # plausible (0x30 < 0x1000), but
+                                                 # 0x30 + 24 = 0x48 > len(data) = 0x44
+    result = parse_pe_header(bytes(data))
+    assert result['valid'] is False
+    assert 'e_lfanew out of plausible range' in result['reason']
+    assert result['insufficient_data'] is True
+
+
+def test_insufficient_data_false_for_genuinely_wrong_pe_signature():
+    data = bytearray(0x80)
+    data[0:2] = b'MZ'
+    struct.pack_into('<I', data, 0x3C, 0x40)   # plausible, fully within capture
+    data[0x40:0x44] = b'NOPE'                  # not the real PE\0\0 signature
+    result = parse_pe_header(bytes(data))
+    assert result['valid'] is False
+    assert result['reason'] == 'no PE\\0\\0 signature at e_lfanew'
+    assert result['insufficient_data'] is False
+
+
+def test_insufficient_data_false_for_unrecognized_machine():
+    header = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                "rawptr": 0x400, "rawsize": 0x1000,
+                                "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}],
+                              machine=0x9999)
+    result = parse_pe_header(header)
+    assert result['valid'] is False
+    assert 'unrecognized Machine field' in result['reason']
+    assert result['insufficient_data'] is False
+
+
+def test_insufficient_data_true_when_section_table_truncated():
+    header = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                "rawptr": 0x400, "rawsize": 0x1000,
+                                "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ},
+                               {"name": b".data", "vaddr": 0x2000, "vsize": 0x1000,
+                                "rawptr": 0x1400, "rawsize": 0x1000,
+                                "chars": IMAGE_SCN_MEM_READ}],
+                              trailing_padding=0)
+    truncated = header[:-20]   # cuts off the second section's own 40-byte entry midway
+    result = parse_pe_header(truncated)
+    assert result['valid'] is False
+    assert 'section table truncated' in result['reason']
+    assert result['insufficient_data'] is True
+
+
+def test_insufficient_data_is_false_when_valid():
+    header = build_pe_header([{"name": b".text", "vaddr": 0x1000, "vsize": 0x1000,
+                                "rawptr": 0x400, "rawsize": 0x1000,
+                                "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}])
+    result = parse_pe_header(header)
+    assert result['valid'] is True
+    assert result['insufficient_data'] is False

@@ -2,7 +2,7 @@
 from dumpex.core.memory import (
     module_name_only, verdict_for, _verdict, _search_string_in_memory, StringSearchStats,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS, VERDICT_HIGH_CONFIDENCE_MALICIOUS,
-    va_range_captured_bytes,
+    va_range_captured_bytes, clamped_reader, read_region_clamped, read_region_spanning,
 )
 from tests.fixtures.fakes import FakeMF, FakeStream, Region, Segment, mem_reader
 
@@ -228,3 +228,163 @@ def test_va_range_captured_bytes_zero_for_zero_or_negative_size():
     mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x2000)])
     assert va_range_captured_bytes(mf, 0x1000, 0) == 0
     assert va_range_captured_bytes(mf, 0x1000, -1) == 0
+
+
+# ── clamped_reader() / read_region_clamped() (issue #40) ─────────────────
+# A read(addr, size) primitive that never asks for more than the CURRENT
+# segment's own remaining bytes -- see clamped_reader()'s own docstring
+# for why this differs from va_range_captured_bytes() (which accumulates
+# across CONTIGUOUS segments, a boundary the underlying buffered reader
+# itself does not honor).
+
+class _FakeSegment:
+    def __init__(self, start, data):
+        self.start_address = start
+        self.data = data
+        self.end_address = start + len(data)
+
+    def remaining_len(self, position):
+        if not (self.start_address <= position < self.end_address):
+            return None
+        return self.end_address - position
+
+
+class _FakeBufferedReader:
+    def __init__(self, segments: dict):
+        self._segments = [_FakeSegment(start, data) for start, data in segments.items()]
+        self.current_segment = None
+        self.current_position = None
+
+    def move(self, address):
+        for seg in self._segments:
+            if seg.start_address <= address < seg.end_address:
+                self.current_segment = seg
+                self.current_position = address
+                return
+        raise Exception("not in process memory space")
+
+    def read(self, size):
+        end = self.current_position + size
+        if end > self.current_segment.end_address:
+            raise Exception("read over segment boundary")
+        off = self.current_position - self.current_segment.start_address
+        data = self.current_segment.data[off:off + size]
+        self.current_position = end
+        return data
+
+
+class _FakeReader:
+    def __init__(self, buffered):
+        self._buffered = buffered
+
+    def get_buffered_reader(self):
+        return self._buffered
+
+
+def _mf_with_memory(memory: dict):
+    mf = FakeMF()
+    mf._reader = _FakeReader(_FakeBufferedReader(memory))
+    mf.get_reader = lambda: mf._reader
+    return mf
+
+
+def test_clamped_reader_returns_exactly_what_is_captured():
+    mf = _mf_with_memory({0x1000: b"KERNEL32.dll\x00"})
+    read = clamped_reader(mf)
+    assert read(0x1000, 512) == b"KERNEL32.dll\x00"   # clamped to the 13 real bytes present
+
+
+def test_clamped_reader_returns_empty_bytes_when_nothing_captured():
+    mf = _mf_with_memory({0x1000: b"MZ"})
+    read = clamped_reader(mf)
+    assert read(0x9000, 512) == b""
+
+
+def test_clamped_reader_stays_within_current_segment_when_a_neighbour_follows():
+    # The layout that broke a prior version of this primitive: reading
+    # from the FIRST segment must never spill into the immediately
+    # adjacent second one just because the two are contiguous.
+    mf = _mf_with_memory({0x1000: b"AB", 0x1002: b"CD"})
+    read = clamped_reader(mf)
+    assert read(0x1000, 512) == b"AB"
+
+
+def test_clamped_reader_construction_failure_never_raises():
+    """clamped_reader(mf) itself must not propagate an exception even
+    when building the bound reader fails -- the whole point of this
+    primitive is "hand back bytes, never an exception", and that
+    guarantee has to cover construction, not just each individual read."""
+    mf = FakeMF()
+    mf.get_reader = lambda: (_ for _ in ()).throw(Exception("reader unavailable"))
+
+    read = clamped_reader(mf)   # must not raise
+    assert read(0x1000, 512) == b""
+    assert read(0x9999, 4) == b""
+
+
+def test_clamped_reader_reuses_one_buffered_reader_across_calls():
+    mf = _mf_with_memory({0x1000: b"AB", 0x2000: b"CD"})
+    get_reader_calls = []
+    real_get_reader = mf.get_reader
+    mf.get_reader = lambda: (get_reader_calls.append(1), real_get_reader())[1]
+
+    read = clamped_reader(mf)
+    read(0x1000, 2)
+    read(0x2000, 2)
+    read(0x1000, 2)
+    assert len(get_reader_calls) == 1
+
+
+def test_read_region_clamped_one_shot_matches_clamped_reader():
+    mf = _mf_with_memory({0x1000: b"KERNEL32.dll\x00"})
+    assert read_region_clamped(mf, 0x1000, 512) == b"KERNEL32.dll\x00"
+    assert read_region_clamped(mf, 0x9000, 512) == b""
+
+
+# ── read_region_spanning() (issue #40) ────────────────────────────────────
+# Walks across CONTIGUOUS segments -- the boundary va_range_captured_
+# bytes() computes -- unlike read_region()/clamped_reader(), which only
+# ever read through whichever ONE segment reader.move() first landed on.
+
+def test_read_region_spanning_reads_within_a_single_segment_like_read_region():
+    mf = _mf_with_memory({0x1000: b"KERNEL32.dll\x00"})
+    assert read_region_spanning(mf, 0x1000, 13) == b"KERNEL32.dll\x00"
+
+
+def test_read_region_spanning_recovers_a_read_split_across_two_contiguous_segments():
+    # The exact layout that broke a naive read_region(mf, addr,
+    # va_range_captured_bytes(mf, addr, size)) combination: two segments,
+    # back to back with no gap, each holding half of what is logically
+    # one contiguous structure.
+    mf = _mf_with_memory({0x1000: b"ABCD", 0x1004: b"EFGH"})
+    assert read_region_spanning(mf, 0x1000, 8) == b"ABCDEFGH"
+
+
+def test_read_region_spanning_recovers_a_read_split_across_three_segments():
+    mf = _mf_with_memory({0x1000: b"AB", 0x1002: b"CD", 0x1004: b"EF"})
+    assert read_region_spanning(mf, 0x1000, 6) == b"ABCDEF"
+
+
+def test_read_region_spanning_stops_at_a_genuine_gap_between_segments():
+    # 0x1002..0x1010 is NOT captured -- the second segment is not
+    # contiguous with the first, so the read must stop at the true end of
+    # what was actually captured, not silently skip the gap.
+    mf = _mf_with_memory({0x1000: b"AB", 0x1010: b"CD"})
+    assert read_region_spanning(mf, 0x1000, 8) == b"AB"
+
+
+def test_read_region_spanning_returns_empty_bytes_when_nothing_captured():
+    mf = _mf_with_memory({0x1000: b"AB"})
+    assert read_region_spanning(mf, 0x9000, 8) == b""
+
+
+def test_read_region_spanning_zero_for_zero_or_negative_size():
+    mf = _mf_with_memory({0x1000: b"AB"})
+    assert read_region_spanning(mf, 0x1000, 0) == b""
+    assert read_region_spanning(mf, 0x1000, -1) == b""
+
+
+def test_read_region_spanning_never_raises_when_get_reader_fails():
+    mf = FakeMF()
+    mf.get_reader = lambda: (_ for _ in ()).throw(Exception("reader unavailable"))
+    assert read_region_spanning(mf, 0x1000, 8) == b""

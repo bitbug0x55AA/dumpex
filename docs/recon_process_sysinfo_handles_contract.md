@@ -1141,7 +1141,7 @@ anything else.
 ```json
 {
   "dll": "KERNEL32.dll" | null,
-  "import_by": "name" | "ordinal",
+  "import_by": "name" | "ordinal" | "unavailable",
   "symbol": "CreateFileW" | null,
   "ordinal": 42 | null,
   "iat_slot_va": "0x…" | null,
@@ -1152,7 +1152,20 @@ anything else.
 
 - `import_by` is a tagged discriminator: `"name"` → `symbol` may be
   populated and `ordinal` is always `null`; `"ordinal"` → `ordinal` is
-  populated and `symbol` is always `null`.
+  populated and `symbol` is always `null`; `"unavailable"` → both
+  `symbol` and `ordinal` are `null`.
+- `"unavailable"` fires exactly when the descriptor's own
+  `OriginalFirstThunk` is `0`: by the time a live process is captured,
+  the loader has already overwritten the `FirstThunk` slot with the
+  resolved function address, so whether the original import was by name
+  or by ordinal is genuinely no longer recoverable from memory — this is
+  reported as unavailable evidence rather than guessed. The entry is
+  still reported (never dropped): `iat_slot_va` and `resolved_target_va`
+  are populated from `FirstThunk` exactly as for any other entry, only
+  the name-or-ordinal claim is unavailable. This is not a failed read
+  (no `IAT_NAME_READ_FAILED` occurrence, no `dll`-name lookup was even
+  attempted for it) — it is a structural fact about which evidence a
+  live capture can and cannot recover.
 - **Captured targets are preserved.** A failed read never deletes an
   entry, and never deletes the sibling fields that read independently.
   If a DLL name's bytes fail to read, the entry is still reported with
