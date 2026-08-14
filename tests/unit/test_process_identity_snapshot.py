@@ -273,7 +273,7 @@ def test_module_claim_ambiguous_when_multiple_candidates_keeps_first_in_source_o
     peb = Peb(0x140000000, r"C:\Samples\malware.exe")
     modules = [
         Module(0x999000000, 0x2000, r"C:\Windows\Temp\malware.exe"),
-        Module(0x888000000, 0x2000, r"C:\Users\Public\malware.exe"),
+        Module(0x888000000, 0x2000, r"C:\ProgramData\malware.exe"),
     ]
     snap = build_process_identity_snapshot(_MF(peb=peb, modules=modules))
     assert snap.module_claim.name_matched_candidate_ambiguous is True
@@ -362,7 +362,7 @@ def test_diagnostic_name_ambiguous_alongside_base_conflict_in_declared_order():
     peb = Peb(0x140000000, r"C:\Samples\malware.exe")
     modules = [
         Module(0x999000000, 0x2000, r"C:\Windows\Temp\malware.exe"),
-        Module(0x888000000, 0x2000, r"C:\Users\Public\malware.exe"),
+        Module(0x888000000, 0x2000, r"C:\ProgramData\malware.exe"),
     ]
     snap = build_process_identity_snapshot(_MF(peb=peb, modules=modules))
     codes = [d.code for d in snap.diagnostics]
