@@ -808,6 +808,65 @@ class LimitationCode(str, Enum):
     # three REQUIRED together, mirroring PE_HEADER_SCAN_TRUNCATED's own
     # budget-attribution shape. source fixed to "iat"; caller_buildable.
 
+    # ── --sysinfo (issue #41 / docs/recon_process_sysinfo_handles_
+    # contract.md §6.1) -- ENVIRONMENT_* limitation codes ─────────────────
+    ENVIRONMENT_ARCHITECTURE_UNSUPPORTED = "ENVIRONMENT_ARCHITECTURE_UNSUPPORTED"
+    # ^ walk_environment_block()'s own "architecture_unsupported" state:
+    # sysinfo is present but ProcessorArchitecture is neither AMD64 nor
+    # INTEL (e.g. ARM64) -- the library's own PEB build silently mis-
+    # offsets that case as x64 rather than refusing, so this fires
+    # unconditionally (never suppressed by SYSINFO_PEB_UNAVAILABLE, unlike
+    # "unsupported" -- see §4.3.3). source fixed to "environment_block";
+    # `detail` (a short free-text naming the unsupported architecture) is
+    # REQUIRED. `unavailable_fields` is OPTIONAL: collect_sysinfo() sets
+    # it to `("current_directory",)` whenever a peb object actually
+    # exists to read a (potentially wrong-offset) value from, so that
+    # field-level suppression is a visible coverage fact rather than a
+    # silent null; left empty when mf.peb is None, so as not to claim
+    # credit for a fact SYSINFO_PEB_UNAVAILABLE already owns. caller_
+    # buildable.
+    ENVIRONMENT_BLOCK_UNREADABLE = "ENVIRONMENT_BLOCK_UNREADABLE"
+    # ^ walk_environment_block()'s own "pointer_unreadable" state: one of
+    # the three TEB->PEB->ProcessParameters->Environment pointer reads
+    # failed, short-read, or was null. source fixed to "environment_block";
+    # `detail` (naming which step failed) is REQUIRED; caller_buildable.
+    # Always emitted regardless of the PEB's own state (§4.3.3) -- this is
+    # a fact dumpex's own independent walk established, never implied by
+    # SYSINFO_PEB_UNAVAILABLE.
+    ENVIRONMENT_BLOCK_UNPARSEABLE = "ENVIRONMENT_BLOCK_UNPARSEABLE"
+    # ^ walk_environment_block()'s own "unparseable" state: zero entries
+    # and no verified block terminator within the read budget -- a
+    # malformed or truncated-beyond-recovery block. source fixed to
+    # "environment_block"; caller_buildable; fully fixed sentence, no
+    # fields.
+    ENVIRONMENT_BLOCK_TRUNCATED = "ENVIRONMENT_BLOCK_TRUNCATED"
+    # ^ walk_environment_block()'s own "partial" state: >=1 entries were
+    # recovered but the block's own terminator was never confirmed (a
+    # budget, the captured segment's own end, or an undecodable entry
+    # stopped the walk first) -- the entries found so far are kept, never
+    # discarded. `affected_count` (entries kept) and `scope` (one of
+    # "environment_bytes"/"environment_entries"/"captured_segment"/
+    # "undecodable_entry") are REQUIRED; `budget_limit`/`budget_consumed`
+    # are REQUIRED together for the first two scopes (a real budget was
+    # actually reached) and both `None` for the other two (nothing
+    # numeric to attribute -- the capture just ended). source fixed to
+    # "environment_block"; caller_buildable.
+    ENVIRONMENT_PRECONDITION_INCONSISTENT = "ENVIRONMENT_PRECONDITION_INCONSISTENT"
+    # ^ walk_environment_block()'s own "unsupported" state (sysinfo or
+    # threads absent, so the walk never started at all -- no pointer was
+    # ever read) fires alongside a PEB source that is nonetheless present
+    # -- an internal-invariant contradiction, not a real dump's evidence
+    # gap: a genuine open_dump() output can never produce this
+    # combination (its own PEB-build precondition, dumpex/core/memory.py,
+    # is identical to the walk's own "unsupported" check), so this fires
+    # only when an `mf` was assembled directly with the two left out of
+    # sync. Deliberately its OWN code rather than reusing
+    # ENVIRONMENT_BLOCK_UNREADABLE: that code's fixed message ("...
+    # pointers could not be read") describes a pointer read that was
+    # attempted and failed, which is inaccurate here -- no pointer read
+    # was ever attempted. source fixed to "environment_block"; fully
+    # fixed sentence (no fields); caller_buildable.
+
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
@@ -1084,6 +1143,8 @@ _SOURCE_DISPLAY_NAMES = {
     "peb":         "PEB",
     "target_regions": "Triage card target region(s)",
     "main_image":  "PEB-reported main image",
+    "sysinfo":     "SystemInfoStream",
+    "environment_block": "Environment block",
 }
 
 
@@ -1824,6 +1885,70 @@ def _validate_iat_entries_truncated_fields(limitation: "CoverageLimitation") -> 
             f"{sorted(_IAT_TRUNCATION_SCOPES)!r}, got {limitation.scope!r}")
 
 
+def _render_environment_architecture_unsupported(limitation: "CoverageLimitation") -> str:
+    base = f"environment block not walked: unsupported processor architecture ({limitation.detail})"
+    # PEB.from_minidump() treats every non-INTEL architecture as x64 and
+    # reads ProcessParameters's OTHER scalar fields (current_directory
+    # among them) through that same untrustworthy offset table -- when
+    # collect_sysinfo() suppresses one of those fields as a consequence,
+    # `unavailable_fields` names it here so the suppression is a visible
+    # coverage fact, never a silent value drop a reader would have no way
+    # to notice from current_directory being null alone.
+    if limitation.unavailable_fields:
+        return f"{base}; {'/'.join(limitation.unavailable_fields)} unavailable"
+    return base
+
+
+def _render_environment_block_unreadable(limitation: "CoverageLimitation") -> str:
+    return f"environment block pointers could not be read: {limitation.detail}"
+
+
+_ENV_TRUNCATION_SCOPES = frozenset(
+    {"environment_bytes", "environment_entries", "captured_segment", "undecodable_entry"})
+_ENV_TRUNCATION_BUDGET_SCOPES = frozenset({"environment_bytes", "environment_entries"})
+
+
+def _render_environment_block_truncated(limitation: "CoverageLimitation") -> str:
+    base = (f"environment block capture ended before a terminator was found; "
+            f"{limitation.affected_count} entry(ies) kept")
+    if limitation.scope in _ENV_TRUNCATION_BUDGET_SCOPES:
+        base += (f" (budget: {limitation.scope}, limit={limitation.budget_limit} "
+                 f"consumed={limitation.budget_consumed})")
+    return base
+
+
+def _validate_environment_architecture_unsupported_fields(limitation: "CoverageLimitation") -> None:
+    _require_non_empty_str(limitation.detail, "CoverageLimitation.detail")
+
+
+def _validate_environment_block_unreadable_fields(limitation: "CoverageLimitation") -> None:
+    _require_non_empty_str(limitation.detail, "CoverageLimitation.detail")
+
+
+def _validate_environment_block_truncated_fields(limitation: "CoverageLimitation") -> None:
+    if (not isinstance(limitation.affected_count, int) or isinstance(limitation.affected_count, bool)
+            or limitation.affected_count <= 0):
+        raise ValueError(
+            "CoverageLimitation(code=ENVIRONMENT_BLOCK_TRUNCATED) requires affected_count to be "
+            f"a positive integer, got {limitation.affected_count!r}")
+    if limitation.scope not in _ENV_TRUNCATION_SCOPES:
+        raise ValueError(
+            f"CoverageLimitation(code=ENVIRONMENT_BLOCK_TRUNCATED).scope must be one of "
+            f"{sorted(_ENV_TRUNCATION_SCOPES)!r}, got {limitation.scope!r}")
+    if limitation.scope in _ENV_TRUNCATION_BUDGET_SCOPES:
+        if limitation.budget_limit is None or limitation.budget_consumed is None:
+            raise ValueError(
+                "CoverageLimitation(code=ENVIRONMENT_BLOCK_TRUNCATED) requires budget_limit and "
+                f"budget_consumed when scope={limitation.scope!r}, got "
+                f"budget_limit={limitation.budget_limit!r} budget_consumed={limitation.budget_consumed!r}")
+    else:
+        if limitation.budget_limit is not None or limitation.budget_consumed is not None:
+            raise ValueError(
+                "CoverageLimitation(code=ENVIRONMENT_BLOCK_TRUNCATED) requires budget_limit and "
+                f"budget_consumed to be None when scope={limitation.scope!r}, got "
+                f"budget_limit={limitation.budget_limit!r} budget_consumed={limitation.budget_consumed!r}")
+
+
 def _render_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
     """Factory for the fully fixed-sentence codes (no field
     interpolation at all) -- avoids five near-identical one-line lambdas."""
@@ -2335,6 +2460,28 @@ _CODE_SPECS = {
         render=_render_iat_entries_truncated, fixed_source="iat", caller_buildable=True,
         validate_fields=_validate_iat_entries_truncated_fields,
         allowed_fields=frozenset({"scope", "budget_limit", "budget_consumed"})),
+    LimitationCode.ENVIRONMENT_ARCHITECTURE_UNSUPPORTED: _CodeSpec(
+        render=_render_environment_architecture_unsupported, fixed_source="environment_block",
+        caller_buildable=True, validate_fields=_validate_environment_architecture_unsupported_fields,
+        allowed_fields=frozenset({"detail", "unavailable_fields"})),
+    LimitationCode.ENVIRONMENT_BLOCK_UNREADABLE: _CodeSpec(
+        render=_render_environment_block_unreadable, fixed_source="environment_block",
+        caller_buildable=True, validate_fields=_validate_environment_block_unreadable_fields,
+        allowed_fields=frozenset({"detail"})),
+    LimitationCode.ENVIRONMENT_BLOCK_UNPARSEABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "environment block present but no entries could be parsed (malformed, or no "
+            "terminator found)"),
+        fixed_source="environment_block", caller_buildable=True),
+    LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED: _CodeSpec(
+        render=_render_environment_block_truncated, fixed_source="environment_block",
+        caller_buildable=True, validate_fields=_validate_environment_block_truncated_fields,
+        allowed_fields=frozenset({"affected_count", "scope", "budget_limit", "budget_consumed"})),
+    LimitationCode.ENVIRONMENT_PRECONDITION_INCONSISTENT: _CodeSpec(
+        render=_render_fixed_text(
+            "a captured process environment block source exists without the system/thread "
+            "evidence needed to interpret it; the environment block was never walked"),
+        fixed_source="environment_block", caller_buildable=True),
 }
 
 # Derived collections -- every other call site (SourceRequirement,

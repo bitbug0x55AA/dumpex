@@ -105,7 +105,7 @@ def main():
     mode.add_argument("--strings",      metavar="ADDR",      help="Extract strings at address")
     mode.add_argument("--peb",          action="store_true", help="Show PEB info")
     mode.add_argument("--pid",          action="store_true", help="Show the Process ID recorded in the dump")
-    mode.add_argument("--sysinfo",      action="store_true", help="Show OS, host, process and CPU summary")
+    mode.add_argument("--sysinfo",      action="store_true", help="Show OS, host, environment and CPU summary")
     mode.add_argument("--diff",         metavar="REFERENCE", help="Compare the primary dump against a reference .DMP file")
     mode.add_argument("--report",        action="store_true", help="Generate triage report anchored to a TID, address, or string")
     mode.add_argument("--hunt",          metavar="TTP",       help="TTP detection: injection | hollowing | stomping | pipe | cs-beacon | yara | obfuscation | all")
@@ -145,7 +145,9 @@ def main():
 
     display_group = parser.add_argument_group("display options")
     display_group.add_argument('--verbose', action='store_true',
-                               help='Show additional detail for --diff or --hunt')
+                               help='Show additional detail for --sysinfo, --diff or --hunt '
+                                    '(--sysinfo: prints environment variable values, which may '
+                                    'contain secrets)')
 
     hunt_group = parser.add_argument_group("hunt options")
     hunt_group.add_argument('--yara-dir', metavar='DIR', default=None,
@@ -381,7 +383,7 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
     elif args.pid:
         exit_code = _apply_command_result(cmd_pid(mf))
     elif args.sysinfo:
-        exit_code = _apply_command_result(cmd_sysinfo(mf))
+        exit_code = _apply_command_result(cmd_sysinfo(mf, verbose=args.verbose))
     elif args.report:
         if not args.report_tid and not args.report_addr and not args.report_string:
             print(RED("[!] --report requires at least one of: --report-tid, --report-addr, --report-string"))
