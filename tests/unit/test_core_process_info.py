@@ -10,7 +10,9 @@ rejection is derived from the normalized result, not raw truthiness.
 """
 from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
 
-from tests.fixtures.fakes import Module
+from tests.fixtures.fakes import (
+    Module, FakeMF, SysInfo, Thread, Ctx, FakeStream, wire_environment_walk,
+)
 
 from dumpex.core.process_info import (
     normalize_pid, classify_process_create_time, normalize_windows_path,
@@ -229,6 +231,25 @@ class _FakeReader:
         return self._buffered
 
 
+class _ShortReadBufferedReader(_FakeBufferedReader):
+    """_FakeBufferedReader's own .read() -- like the real installed
+    minidump.minidumpreader.MinidumpBufferedReader.read(size) -- always
+    raises rather than returning fewer bytes than requested when a read
+    would run past the segment boundary, so read_pointer()'s own `len(raw)
+    < ptr_size` short-read branch (dumpex/core/process_info.py) is
+    unreachable through that fake. This subclass instead truncates and
+    returns whatever's left WITHOUT raising, purely to exercise dumpex's
+    own defensive handling of a reader that legitimately can short-read --
+    not a claim that today's installed library reader behaves this way."""
+    def read(self, size):
+        off = self.current_position - self.current_segment.start_address
+        available = self.current_segment.end_address - self.current_position
+        take = min(size, available)
+        data = self.current_segment.data[off:off + take]
+        self.current_position += take
+        return data
+
+
 class _Thread:
     def __init__(self, teb):
         self.Teb = teb
@@ -288,6 +309,29 @@ def _utf16(s: str) -> bytes:
     return s.encode("utf-16-le")
 
 
+_X86_OFFSETS = process_info.PEB_OFFSETS[0]
+
+# Separate, 32-bit-range VAs -- the x64 TEB_VA/PEB_VA/... constants above
+# don't fit in a 4-byte x86 pointer.
+TEB_VA_X86            = 0x00300000
+PEB_VA_X86            = 0x00301000
+PROCESS_PARAMS_VA_X86 = 0x00302000
+ENV_VA_X86            = 0x00303000
+
+
+def _intel_mf(env_segment_data: bytes, *, teb=TEB_VA_X86, peb=PEB_VA_X86,
+              process_params=PROCESS_PARAMS_VA_X86, env_va=ENV_VA_X86):
+    """x86 counterpart of _amd64_mf() -- 4-byte pointers, PEB_OFFSETS[0]."""
+    segments = {
+        teb + _X86_OFFSETS["peb"]: peb.to_bytes(4, "little"),
+        peb + _X86_OFFSETS["process_parameters"]: process_params.to_bytes(4, "little"),
+        process_params + _X86_OFFSETS["environment_variables"]: env_va.to_bytes(4, "little"),
+        env_va: env_segment_data,
+    }
+    return _MF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.INTEL), threads=_Threads(teb),
+               segments=segments)
+
+
 # ── walk_environment_block: preconditions ────────────────────────────────
 
 def test_walk_environment_block_unsupported_when_sysinfo_absent():
@@ -334,11 +378,32 @@ def test_walk_environment_block_pointer_unreadable_null_peb_pointer():
 
 
 def test_walk_environment_block_pointer_unreadable_short_read():
-    # Only 4 of the 8 bytes an x64 pointer read needs are captured.
+    # Only 4 of the 8 bytes an x64 pointer read needs are captured -- with
+    # the default _FakeBufferedReader (matching the real installed
+    # library's own MinidumpBufferedReader.read(), which always raises
+    # rather than short-reading for a fixed size), this exercises
+    # read_pointer()'s exception branch, not its `len(raw) < ptr_size`
+    # branch -- see test_walk_environment_block_pointer_unreadable_short_
+    # read_without_raising below for that one.
     segments = {TEB_VA + _X64_OFFSETS["peb"]: (0x1234).to_bytes(4, "little")}
     mf = _MF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.AMD64), threads=_Threads(TEB_VA), segments=segments)
     state, entries, detail = walk_environment_block(mf)
     assert state == "pointer_unreadable"
+
+
+def test_walk_environment_block_pointer_unreadable_short_read_without_raising():
+    # Exercises read_pointer()'s OWN `len(raw) < ptr_size` defensive
+    # branch specifically -- a reader whose .read() legitimately returns
+    # fewer bytes than requested instead of raising (dumpex/core/
+    # process_info.py's read_pointer() guards against this even though
+    # today's installed library reader never actually does it for a fixed
+    # size, per _ShortReadBufferedReader's own docstring).
+    segments = {TEB_VA + _X64_OFFSETS["peb"]: (0x1234).to_bytes(4, "little")}
+    mf = _MF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.AMD64), threads=_Threads(TEB_VA), segments=segments)
+    mf._reader = _FakeReader(_ShortReadBufferedReader(dict(segments.items())))
+    state, entries, detail = walk_environment_block(mf)
+    assert state == "pointer_unreadable"
+    assert detail.endswith("short read")
 
 
 def test_walk_environment_block_pointer_unreadable_process_parameters_step():
@@ -348,6 +413,91 @@ def test_walk_environment_block_pointer_unreadable_process_parameters_step():
     state, entries, detail = walk_environment_block(mf)
     assert state == "pointer_unreadable"
     assert "ProcessParameters" in detail
+
+
+class _RaisingGetReaderMF:
+    """A minimal MF whose get_reader() raises exactly the way the real
+    minidump.minidumpreader.MinidumpFileReader.__init__ does when
+    minidumpfile.modules (or memory_segments_64/memory_segments) is None
+    -- an unconditional `minidumpfile.modules.modules` attribute access,
+    with no guard of its own. open_dump()'s own per-stream isolation can
+    legitimately leave any of those None (an absent or FAILED stream),
+    so mf.get_reader() itself -- not just the pointer reads that follow
+    it -- is a real failure surface walk_environment_block() must
+    survive, matching its own "-> (state, entries, detail). Never
+    raises." docstring contract."""
+    def __init__(self, sysinfo, threads):
+        self.sysinfo = sysinfo
+        self.threads = threads
+
+    def get_reader(self):
+        raise AttributeError("'NoneType' object has no attribute 'modules'")
+
+
+def test_walk_environment_block_survives_reader_construction_failure():
+    mf = _RaisingGetReaderMF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.AMD64), threads=_Threads(TEB_VA))
+    state, entries, detail = walk_environment_block(mf)
+    assert state == "pointer_unreadable"
+    assert entries is None
+    assert "memory reader unavailable" in detail
+    assert "modules" in detail
+
+
+def test_walk_environment_block_null_environment_pointer():
+    segments = {
+        TEB_VA + _X64_OFFSETS["peb"]: PEB_VA.to_bytes(8, "little"),
+        PEB_VA + _X64_OFFSETS["process_parameters"]: PROCESS_PARAMS_VA.to_bytes(8, "little"),
+        PROCESS_PARAMS_VA + _X64_OFFSETS["environment_variables"]: (0).to_bytes(8, "little"),
+    }
+    mf = _MF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.AMD64), threads=_Threads(TEB_VA), segments=segments)
+    state, entries, detail = walk_environment_block(mf)
+    assert state == "pointer_unreadable"
+    assert "Environment" in detail
+    assert "null pointer" in detail
+
+
+def test_walk_environment_block_environment_base_unreadable():
+    # All three pointers resolve to real, non-null values, but nothing
+    # backs env_va itself -- reader.move(env_va) raises.
+    segments = {
+        TEB_VA + _X64_OFFSETS["peb"]: PEB_VA.to_bytes(8, "little"),
+        PEB_VA + _X64_OFFSETS["process_parameters"]: PROCESS_PARAMS_VA.to_bytes(8, "little"),
+        PROCESS_PARAMS_VA + _X64_OFFSETS["environment_variables"]: ENV_VA.to_bytes(8, "little"),
+    }
+    mf = _MF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.AMD64), threads=_Threads(TEB_VA), segments=segments)
+    state, entries, detail = walk_environment_block(mf)
+    assert state == "pointer_unreadable"
+    assert "Environment block base unreadable" in detail
+
+
+# ── walk_environment_block: x86/INTEL architecture ────────────────────────
+
+def test_walk_environment_block_intel_full_walk_succeeds():
+    mf = _intel_mf(_utf16("A=1") + b"\x00\x00" + b"\x00\x00")
+    state, entries, detail = walk_environment_block(mf)
+    assert state == "present"
+    assert entries == ["A=1"]
+
+
+def test_walk_environment_block_intel_pointer_short_read():
+    # Only 2 of the 4 bytes an x86 pointer read needs are captured -- see
+    # the x64 short-read test above for why this exercises read_pointer()'s
+    # exception branch, not its `len(raw) < ptr_size` branch.
+    segments = {TEB_VA_X86 + _X86_OFFSETS["peb"]: (0x1234).to_bytes(2, "little")}
+    mf = _MF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.INTEL), threads=_Threads(TEB_VA_X86), segments=segments)
+    state, entries, detail = walk_environment_block(mf)
+    assert state == "pointer_unreadable"
+    assert "TEB->PEB" in detail
+
+
+def test_walk_environment_block_intel_pointer_short_read_without_raising():
+    segments = {TEB_VA_X86 + _X86_OFFSETS["peb"]: (0x1234).to_bytes(2, "little")}
+    mf = _MF(sysinfo=_SysInfo(PROCESSOR_ARCHITECTURE.INTEL), threads=_Threads(TEB_VA_X86), segments=segments)
+    mf._reader = _FakeReader(_ShortReadBufferedReader(dict(segments.items())))
+    state, entries, detail = walk_environment_block(mf)
+    assert state == "pointer_unreadable"
+    assert "TEB->PEB" in detail
+    assert detail.endswith("short read")
 
 
 # ── walk_environment_block: present_empty vs unparseable ─────────────────
@@ -463,6 +613,59 @@ def test_walk_environment_block_unparseable_undecodable_entry_with_no_prior_entr
     assert state == "unparseable"
     assert entries is None
     assert detail == "undecodable_entry"
+
+
+# ── walk_environment_block: _env_read_capture()'s own bounded-read
+# robustness (issue #41 P3) -- a mid-capture remaining_len()/read()
+# failure must never escape as an exception, and must keep whatever was
+# already captured, exactly like a genuine segment boundary already does
+# (test_walk_environment_block_partial_captured_segment_ends_mid_entry
+# above). All three use a >4096-byte segment (the module's own
+# _ENV_READ_CHUNK) of 512 complete "A=1" entries (exactly 4096 bytes)
+# followed by more data the fault must prevent ever being read, so the
+# first read() call captures a full 4096-byte chunk before the SECOND
+# call's fault fires -- proving entries found before the fault survive,
+# not just that nothing raises. ──────────────────────────────────────────
+
+_FAULT_ENV_ENTRIES = 512   # 512 * 8 bytes ("A=1\0") == 4096 == _ENV_READ_CHUNK exactly
+_ONE_ENV_ENTRY = _utf16("A=1") + b"\x00\x00"
+_FAULT_ENV_DATA = (_ONE_ENV_ENTRY * _FAULT_ENV_ENTRIES) + _utf16("B=2") + b"\x00\x00"
+
+
+def _wire_fault_mf(fault_kind):
+    mf = FakeMF()
+    si = SysInfo()
+    si.ProcessorArchitecture = PROCESSOR_ARCHITECTURE.AMD64
+    mf.sysinfo = si
+    mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
+    env_va = 0x7FF000003000
+    wire_environment_walk(mf, _FAULT_ENV_DATA, env_va=env_va,
+                           fault_at=env_va + 4096, fault_kind=fault_kind)
+    return mf
+
+
+def test_walk_environment_block_survives_remaining_len_raising_mid_capture():
+    mf = _wire_fault_mf("remaining_len_raises")
+    state, entries, detail = walk_environment_block(mf)   # must not raise
+    assert state == "partial"
+    assert entries == ["A=1"] * _FAULT_ENV_ENTRIES   # already-captured entries preserved
+    assert detail == "captured_segment"
+
+
+def test_walk_environment_block_survives_read_raising_mid_capture():
+    mf = _wire_fault_mf("read_raises")
+    state, entries, detail = walk_environment_block(mf)   # must not raise
+    assert state == "partial"
+    assert entries == ["A=1"] * _FAULT_ENV_ENTRIES
+    assert detail == "captured_segment"
+
+
+def test_walk_environment_block_survives_read_returning_empty_mid_capture():
+    mf = _wire_fault_mf("read_empty")
+    state, entries, detail = walk_environment_block(mf)   # must not raise
+    assert state == "partial"
+    assert entries == ["A=1"] * _FAULT_ENV_ENTRIES
+    assert detail == "captured_segment"
 
 
 # ── walk_environment_block: never raises, never mutates ─────────────────

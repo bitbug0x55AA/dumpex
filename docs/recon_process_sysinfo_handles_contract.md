@@ -1656,6 +1656,21 @@ re-decide this.
 case where the library's own PEB build was lost to a bad environment
 block.
 
+**`current_directory` is also `null` when `ENVIRONMENT_ARCHITECTURE_
+UNSUPPORTED` fires.** `PEB.from_minidump()` computes `is_x64 = not
+(ProcessorArchitecture == INTEL)`, so it treats every non-INTEL
+architecture (ARM64 included) as x64 and reads `ProcessParameters`'s
+*other* scalar fields -- `current_directory` among them -- through the
+exact same potentially-wrong offset table §4.3.2 already refuses to trust
+for the environment block. `peb` is not `None` in that case, so
+`current_directory` would otherwise be published as ordinary evidence
+read through offsets this contract has already judged unreliable.
+`collect_sysinfo()` therefore nulls it whenever `ENVIRONMENT_
+ARCHITECTURE_UNSUPPORTED` fires, and names the field via that
+limitation's own `unavailable_fields` (§6.1) so the suppression is a
+visible coverage fact rather than a silent drop indistinguishable from
+"PEB present, nothing recorded."
+
 ### 4.3 `environment_variables`: an independent bounded walk
 
 #### 4.3.1 Why the library's list cannot be trusted as-is
@@ -1714,6 +1729,15 @@ re-reads it.
 
 **Read semantics.**
 
+- Obtaining the buffered reader itself (`mf.get_reader().get_buffered_
+  reader()`) is also covered by `pointer_unreadable`, not left to
+  propagate: the installed library's `MinidumpFileReader.__init__`
+  unconditionally dereferences `minidumpfile.modules.modules` and
+  `minidumpfile.memory_segments_64`/`memory_segments`, either of which
+  `open_dump()`'s own per-stream isolation can legitimately leave `None`
+  (an absent or failed stream) — this raises `AttributeError` before any
+  pointer is ever read. `detail` in that case is `"memory reader
+  unavailable: {exception text}"`.
 - Every pointer read is a bounded `read(ptr_size)` through the buffered
   reader. A raised exception (`"Memory address … is not in process
   memory space"`, `"Would read over segment boundaries!"`) or a short
@@ -1777,7 +1801,7 @@ promoted into "the process had no environment".
 |---|---|
 | `unsupported` | `sysinfo` or `threads` absent/empty — no TEB to start from, and the same precondition the PEB itself needs |
 | `architecture_unsupported` | `sysinfo` present with a `ProcessorArchitecture` that is neither AMD64 nor INTEL (e.g. ARM64) — see below |
-| `pointer_unreadable` | one of the three pointer steps failed, short-read, or was null |
+| `pointer_unreadable` | one of the three pointer steps failed, short-read, or was null — or the buffered reader itself could not be obtained |
 | `present_empty` | four captured zero bytes at the block start |
 | `present` | ≥ 1 entries **and** a verified block terminator |
 | `partial` | ≥ 1 entries, block terminator never verified (budget, segment end, or an undecodable entry stopped the walk) |
@@ -1819,6 +1843,17 @@ environment.
 | `partial` | the entries found so far (never discarded) | `present` | `ENVIRONMENT_BLOCK_TRUNCATED` | `partial` |
 | `unparseable` | `null` | `failed` (`detail` set) | `ENVIRONMENT_BLOCK_UNPARSEABLE` | `partial` |
 
+**`coverage.sources["environment_block"].detail` is always human-readable
+text, never a bare machine token.** `walk_environment_block()` itself
+returns one of `None` (its one genuinely ambiguous sub-case — see
+§4.3.2's "verified-empty requires four captured zero bytes" rule) or a
+§4.3.3 scope token (`"environment_bytes"`/`"captured_segment"`/
+`"undecodable_entry"`) for `unparseable`'s own `detail` — `collect_
+sysinfo()` maps every one of those four to its own sentence before it
+reaches `SourceObservation.detail`, so the field's style stays consistent
+with `pointer_unreadable`'s already-full-sentence `detail` rather than
+mixing prose and raw tokens within the same field across states.
+
 **Duplicate-absence suppression, frozen.** `environment_block` is a
 sixth entry in `coverage.sources` but is deliberately **not** declared
 as a `SourceRequirement` in `completeness_checks`. Every gap it produces
@@ -1833,7 +1868,13 @@ rules above. Consequences:
   are exactly the ones `__parse_peb()` itself checks, so `mf.peb` is
   provably `None` whenever it fires and `SYSINFO_PEB_UNAVAILABLE`
   provably explains it. No other state can make that guarantee, which is
-  why `architecture_unsupported` was split out of it.
+  why `architecture_unsupported` was split out of it. This is a real,
+  enforced invariant, not merely an assumption: if a `peb` is present
+  despite `unsupported` firing, `ENVIRONMENT_PRECONDITION_INCONSISTENT`
+  fires instead (`environment_block` FAILED, not silently ABSENT) rather
+  than letting the contradiction vanish into an unexplained
+  `environment_variables: null`. No `open_dump()` output can ever reach
+  that branch.
 - `pointer_unreadable`, `unparseable`, and `partial` **always** emit,
   regardless of the PEB's state. Each is a fact dumpex's own independent
   walk established — *this* pointer step failed, *this* block has no
@@ -1917,6 +1958,24 @@ With `--verbose`, every `name=value` pair is printed under that header,
 in walk order. For `state == "partial"` the truncation `[~]` line is
 printed **above** the list, so a reader sees the list is incomplete
 before reading it.
+
+**Every `coverage.limitations` entry renders exactly once, split across
+its own console position -- never duplicated, never reordered.** §4.7
+freezes `sysinfo, misc_info, <environment limitation, if any>, peb,
+threads, modules` as the order of both `coverage.limitations` and the
+console's `[~]` lines. Combined with this section's own `[~]` line
+above, that means the reasons printed immediately after `═══ SYSTEM
+INFO ═══` are only those ordered *before* the environment limitation
+(`sysinfo`/`misc_info`); the environment limitation itself renders
+*only* in this `ENVIRONMENT` section's own `[~]` line; and any reasons
+ordered *after* it (`peb`/`threads`/`modules`) render immediately
+following this section, before `CPU`. A renderer that prints the full,
+unfiltered `coverage.limitations` list at the top **and** repeats the
+environment one here violates the "exactly once" rule; one that omits
+it from the top block without relocating the later reasons violates the
+frozen order instead (a `modules` reason would print before an
+earlier-ordered environment one). Both are real bugs this contract has
+caught in past implementations.
 
 ### 4.7 Coverage and exit semantics
 
@@ -2296,6 +2355,14 @@ entry (the mechanical `set(_CODE_SPECS) == set(LimitationCode)` test in
 `partial` or `not_evaluated`. The rendered template is frozen text: no
 call site composes it.
 
+**Maintenance note.** This table is the single normative registry #43
+and #44 build the v2.13 schema and public docs from. Any change to a
+code's `_CodeSpec.allowed_fields`, its render function, or which call
+sites construct it (`dumpex/output/coverage.py`) must update this row in
+the same change — a code whose trigger conditions or optional fields
+drift out of sync with this table has shipped three times already in
+this contract's own revision history.
+
 | code | source | fields | rendered template |
 |---|---|---|---|
 | `PROCESS_SOURCES_ABSENT` | `process_identity` | `scope` | "no usable process identity evidence available (MiscInfo and the PEB supplied no usable PID, start time, path, command line, or image base)" |
@@ -2324,10 +2391,11 @@ call site composes it.
 | `IAT_CYCLE_DETECTED` | `iat` | — | "a repeated address was found while walking the import table; walk stopped" |
 | `IAT_BOUNDS_EXCEEDED` | `iat` | — | "an RVA or count in the import directory exceeds plausible bounds" |
 | `IAT_ENTRIES_TRUNCATED` | `iat` | `scope`, `budget_limit`, `budget_consumed` (all required) | "the import table walk stopped after reaching a read budget (budget: {scope}, limit={limit} consumed={consumed})" |
-| `ENVIRONMENT_ARCHITECTURE_UNSUPPORTED` | `environment_block` | `detail` | "environment block not walked: unsupported processor architecture ({detail})" |
-| `ENVIRONMENT_BLOCK_UNREADABLE` | `environment_block` | `detail` | "environment block pointers could not be read: {detail}" |
+| `ENVIRONMENT_ARCHITECTURE_UNSUPPORTED` | `environment_block` | `detail` (required), `unavailable_fields` (optional) | "environment block not walked: unsupported processor architecture ({detail})" — with `"; {'/'.join(unavailable_fields)} unavailable"` appended when `unavailable_fields` is set (collect_sysinfo() sets it to `("current_directory",)` only when a `peb` object actually exists to read a value from — §4.2's own `current_directory` exception — and leaves it empty when `peb` is `None`, so `SYSINFO_PEB_UNAVAILABLE` and this code never both claim to explain the same missing `current_directory`) |
+| `ENVIRONMENT_BLOCK_UNREADABLE` | `environment_block` | `detail` | "environment block pointers could not be read: {detail}" — fires for any of three distinct causes, always with `detail` naming which: a pointer read genuinely failed/short-read/was null (§4.3.2), the buffered reader itself could not be obtained (`"memory reader unavailable: …"`, also §4.3.2), or `walk_environment_block()` returned `"pointer_unreadable"` for any other reason its own contract defines |
 | `ENVIRONMENT_BLOCK_UNPARSEABLE` | `environment_block` | — | "environment block present but no entries could be parsed (malformed, or no terminator found)" |
 | `ENVIRONMENT_BLOCK_TRUNCATED` | `environment_block` | `affected_count`, `scope` (required), `budget_limit`/`budget_consumed` (required for the two byte/entry budgets, `null` for the other two) | "environment block capture ended before a terminator was found; {count} entry(ies) kept (budget: {scope}, limit={limit} consumed={consumed})" — the budget clause is omitted when `scope` is `captured_segment` or `undecodable_entry` |
+| `ENVIRONMENT_PRECONDITION_INCONSISTENT` | `environment_block` | — | "a captured process environment block source exists without the system/thread evidence needed to interpret it; the environment block was never walked" — fires only when `unsupported` (§4.3.2) fires alongside a `peb` that is nonetheless present, an internal-invariant contradiction no real `open_dump()` output can ever produce (§4.3.3); its own dedicated code rather than `ENVIRONMENT_BLOCK_UNREADABLE`, since no pointer read is ever attempted here |
 | `HANDLES_UNAVAILABLE` | `handle_records` | `scope` | "HandleDataStream not present in this dump (not captured with handle data)" |
 | `HANDLES_PARSE_FAILED` | `handle_records` | `scope` | "HandleDataStream is present in this dump but could not be parsed" — the parser's own error text arrives on the companion `SOURCE_FAILED` limitation (§5.5 case 2) |
 | `HANDLES_ALL_DESCRIPTORS_INVALID` | `handle_records` | `scope` | "HandleDataStream present but no descriptor could be normalized" — the descriptor count is on `coverage.sources["handles"].record_count` |

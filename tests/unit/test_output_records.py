@@ -148,12 +148,25 @@ def test_sysinfo_record_all_fields_default_to_none():
 
 
 def test_sysinfo_record_partial_population_leaves_rest_none():
-    rec = SysInfoRecord(pid=1234, thread_count=3)
+    rec = SysInfoRecord(thread_count=3, current_directory=r"C:\work")
     d = rec.to_dict()
-    assert d["pid"] == 1234
     assert d["thread_count"] == 3
+    assert d["current_directory"] == r"C:\work"
     assert d["hostname"] is None
     assert d["os"] is None
+    assert d["environment_variables"] is None
+
+
+def test_sysinfo_record_environment_variables_serialize_as_plain_dicts():
+    rec = SysInfoRecord(environment_variables=({"name": "A", "value": "1"},
+                                                {"name": "A", "value": "2"}))
+    d = rec.to_dict()
+    assert d["environment_variables"] == [{"name": "A", "value": "1"}, {"name": "A", "value": "2"}]
+
+
+def test_sysinfo_record_environment_variables_empty_list_distinct_from_none():
+    rec = SysInfoRecord(environment_variables=())
+    assert rec.to_dict()["environment_variables"] == []
 
 
 def test_pid_record_all_fields_default_to_none():

@@ -2441,3 +2441,131 @@ def test_process_and_iat_codes_are_all_registered_and_render():
     assert len(process_and_iat_codes) == 26
     for code in process_and_iat_codes:
         assert code in _CODE_SPECS
+
+
+# ── --sysinfo (issue #41 / docs/recon_process_sysinfo_handles_contract.md
+# §6.1) -- ENVIRONMENT_* limitation codes ─────────────────────────────────
+
+@pytest.mark.parametrize("code", [
+    LimitationCode.ENVIRONMENT_ARCHITECTURE_UNSUPPORTED,
+    LimitationCode.ENVIRONMENT_BLOCK_UNREADABLE,
+])
+def test_environment_detail_codes_require_detail(code):
+    with pytest.raises(ValueError, match="non-empty string"):
+        CoverageLimitation(code=code, source="environment_block")
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=code, source="peb", detail="x")
+
+
+def test_environment_architecture_unsupported_renders():
+    limitation = CoverageLimitation(code=LimitationCode.ENVIRONMENT_ARCHITECTURE_UNSUPPORTED,
+                                     source="environment_block", detail="ARM64")
+    text = render_limitation(limitation)
+    assert text == ("environment block not walked: unsupported processor architecture "
+                     "(ARM64)")
+
+
+def test_environment_architecture_unsupported_names_unavailable_fields():
+    # P2 regression: collect_sysinfo() suppresses peb.current_directory
+    # whenever this code fires (read through the same untrustworthy
+    # wrong-offset PEB parse) -- unavailable_fields makes that visible.
+    limitation = CoverageLimitation(code=LimitationCode.ENVIRONMENT_ARCHITECTURE_UNSUPPORTED,
+                                     source="environment_block", detail="ARM64",
+                                     unavailable_fields=("current_directory",))
+    text = render_limitation(limitation)
+    assert text == ("environment block not walked: unsupported processor architecture "
+                     "(ARM64); current_directory unavailable")
+
+
+def test_environment_block_unreadable_renders():
+    limitation = CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_UNREADABLE,
+                                     source="environment_block", detail="TEB->PEB pointer unreadable: boom")
+    text = render_limitation(limitation)
+    assert text == ("environment block pointers could not be read: TEB->PEB pointer "
+                     "unreadable: boom")
+
+
+def test_environment_block_unparseable_is_fixed_text():
+    limitation = CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_UNPARSEABLE,
+                                     source="environment_block")
+    text = render_limitation(limitation)
+    assert text == ("environment block present but no entries could be parsed (malformed, "
+                     "or no terminator found)")
+    with pytest.raises(ValueError, match="does not use"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_UNPARSEABLE,
+                            source="environment_block", detail="x")
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_UNPARSEABLE, source="peb")
+
+
+@pytest.mark.parametrize("scope,budget_limit,budget_consumed", [
+    ("environment_bytes", 65536, 65536),
+    ("environment_entries", 2048, 2048),
+])
+def test_environment_block_truncated_budget_scopes_require_budget_fields(scope, budget_limit, budget_consumed):
+    limitation = CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED,
+                                     source="environment_block", affected_count=5, scope=scope,
+                                     budget_limit=budget_limit, budget_consumed=budget_consumed)
+    text = render_limitation(limitation)
+    assert "5 entry(ies) kept" in text
+    assert f"budget: {scope}, limit={budget_limit} consumed={budget_consumed}" in text
+
+    with pytest.raises(ValueError, match="requires budget_limit and budget_consumed"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED,
+                            source="environment_block", affected_count=5, scope=scope)
+
+
+@pytest.mark.parametrize("scope", ["captured_segment", "undecodable_entry"])
+def test_environment_block_truncated_non_budget_scopes_omit_budget_clause(scope):
+    limitation = CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED,
+                                     source="environment_block", affected_count=1, scope=scope)
+    text = render_limitation(limitation)
+    assert text == "environment block capture ended before a terminator was found; 1 entry(ies) kept"
+
+    with pytest.raises(ValueError, match="requires budget_limit and budget_consumed to be None"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED,
+                            source="environment_block", affected_count=1, scope=scope,
+                            budget_limit=1, budget_consumed=1)
+
+
+def test_environment_block_truncated_rejects_unknown_scope():
+    with pytest.raises(ValueError, match="must be one of"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED,
+                            source="environment_block", affected_count=1, scope="not_a_real_scope")
+
+
+def test_environment_block_truncated_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="positive int"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED,
+                            source="environment_block", affected_count=0, scope="captured_segment")
+
+
+def test_environment_block_truncated_rejects_missing_affected_count():
+    # P3 regression: unlike IAT_DIRECTORY_TABLE_INCOMPLETE,
+    # affected_count is REQUIRED here (§6.1) -- omitting it entirely
+    # (not just passing 0/negative) must be rejected too.
+    with pytest.raises(ValueError, match="requires affected_count to be a positive integer"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_BLOCK_TRUNCATED,
+                            source="environment_block", scope="captured_segment")
+
+
+def test_environment_precondition_inconsistent_is_fixed_text():
+    limitation = CoverageLimitation(code=LimitationCode.ENVIRONMENT_PRECONDITION_INCONSISTENT,
+                                     source="environment_block")
+    text = render_limitation(limitation)
+    assert text == ("a captured process environment block source exists without the "
+                     "system/thread evidence needed to interpret it; the environment "
+                     "block was never walked")
+    assert "mf.peb" not in text   # domain language only, never a Python attribute name
+    with pytest.raises(ValueError, match="does not use"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_PRECONDITION_INCONSISTENT,
+                            source="environment_block", detail="x")
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=LimitationCode.ENVIRONMENT_PRECONDITION_INCONSISTENT, source="peb")
+
+
+def test_environment_codes_are_all_registered_and_render():
+    environment_codes = [c for c in LimitationCode if c.value.startswith("ENVIRONMENT_")]
+    assert len(environment_codes) == 5
+    for code in environment_codes:
+        assert code in _CODE_SPECS

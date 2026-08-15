@@ -369,7 +369,16 @@ def test_threads_empty_validates(validator):
 
 
 # ── sysinfo ────────────────────────────────────────────────────────────
+# issue #41 changed collect_sysinfo()'s live SysInfoRecord shape (see
+# tests/integration/test_compat_freeze.py's own "sysinfo_*" xfail block
+# for the full rationale) ahead of the v2.13 schema file #43 will add --
+# CURRENT_SCHEMA (still v2.12 here) freezes the OLD sysInfoRecord shape,
+# so a genuine post-#41 document no longer validates against it. Deferred
+# to #43's atomic public cutover, per #41's own "the public schema switch
+# remains isolated to #43" acceptance criterion.
 
+@pytest.mark.xfail(reason="--sysinfo's SysInfoRecord shape changed in #41; CURRENT_SCHEMA "
+                           "stays v2.12 until #43's schema cutover", strict=True)
 def test_sysinfo_normal_validates(validator):
     mf = FakeMF()
     mf.sysinfo = SysInfo()
@@ -382,6 +391,8 @@ def test_sysinfo_normal_validates(validator):
     assert doc["result"]["coverage"]["status"] == "complete"
 
 
+@pytest.mark.xfail(reason="--sysinfo's SysInfoRecord shape changed in #41; CURRENT_SCHEMA "
+                           "stays v2.12 until #43's schema cutover", strict=True)
 def test_sysinfo_partial_missing_streams_validates(validator):
     result = collect_sysinfo(FakeMF())
     assert result.coverage.status == "partial"

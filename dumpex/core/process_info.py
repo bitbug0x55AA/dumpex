@@ -914,7 +914,20 @@ def walk_environment_block(mf, max_bytes: int = MAX_ENV_BYTES, max_entries: int 
 
     offsets = PEB_OFFSETS[offset_index]
     ptr_size = 8 if offset_index == 1 else 4
-    reader = mf.get_reader().get_buffered_reader()
+    # mf.get_reader() builds a fresh MinidumpFileReader every call, whose
+    # __init__ dereferences mf.modules.modules and mf.memory_segments_64/
+    # mf.memory_segments unconditionally (minidump.minidumpreader) --
+    # either being None (a stream open_dump()'s own per-stream isolation
+    # left absent/failed) raises AttributeError here, before any pointer
+    # is ever read. That is a real, if unusual, environment-block read
+    # failure, not a bug in the walk itself, so it is folded into
+    # "pointer_unreadable" like every other read failure below rather
+    # than left to propagate and break this function's own "never raises"
+    # contract.
+    try:
+        reader = mf.get_reader().get_buffered_reader()
+    except Exception as e:
+        return ("pointer_unreadable", None, f"memory reader unavailable: {e}")
 
     def read_pointer(addr, step):
         try:

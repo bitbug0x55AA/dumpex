@@ -18,8 +18,10 @@ import dumpex.cli as cli
 from dumpex.output.envelope import SCHEMA_VERSION
 from tests.fixtures.fakes import (
     FakeMF, Module, Region, Thread, ThreadInfo, Ctx, FakeStream, Peb, MiscInfo,
-    ExceptionStream, SysInfo,
+    ExceptionStream, SysInfo, wire_environment_walk,
 )
+
+_wire_environment_walk = wire_environment_walk   # local alias, pre-existing call sites unchanged
 
 
 def _run(monkeypatch, argv):
@@ -42,6 +44,12 @@ def test_help_groups_commands_and_modifiers_and_hides_legacy_names(
         assert heading in help_text
     assert "--diff-scope {modules,threads,memory,all}" in help_text
     assert "--strings-encoding {ascii,unicode,both}" in help_text
+    # P3 regression: --verbose's help text must name --sysinfo now that it
+    # gates whether environment variable values print to the console.
+    assert "Show additional detail for --sysinfo, --diff or --hunt" in help_text
+    # --sysinfo's own help text must reflect the removed Process section /
+    # added Environment section, not the pre-#41 "process" summary.
+    assert "Show OS, host, environment and CPU summary" in help_text
     assert "--diff-mode" not in help_text
     assert "--encoding " not in help_text
 
@@ -588,11 +596,12 @@ def test_sysinfo_normal_json_produces_complete_status(monkeypatch, tmp_path):
     dump_path = _make_dump_file()
     try:
         mf = FakeMF()
-        mf.sysinfo = SysInfo()
+        mf.sysinfo = SysInfo()   # SysInfo()'s own default is PROCESSOR_ARCHITECTURE.AMD64
         mf.misc_info = MiscInfo(process_id=1234)
         mf.peb = Peb(0x140000000, r"C:\test.exe")
         mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
         mf.modules = FakeStream([Module(0, 0, "a")], "modules")
+        _wire_environment_walk(mf, b"\x00\x00\x00\x00")   # verified-empty environment block
         monkeypatch.setattr(cli, "open_dump", lambda path: mf)
 
         out_json = str(tmp_path / "out.json")

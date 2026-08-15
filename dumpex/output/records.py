@@ -146,10 +146,15 @@ class ThreadRecord:
 
 @dataclass
 class SysInfoRecord:
-    """`--sysinfo`'s record. Split out from a single shared "process info"
-    record (an earlier iteration bundled sysinfo/pid/peb into one type
-    with dozens of nulled-out fields per command) so each kind's schema
-    can be fully and tightly typed -- see PidRecord/PebRecord below."""
+    """`--sysinfo`'s record -- docs/recon_process_sysinfo_handles_contract.md
+    §4.2's 15-field shape (issue #41): the process identity/runtime fields
+    now owned by `--process` (pid, process_start_utc, image_path,
+    command_line, process_user_time_seconds, process_kernel_time_seconds)
+    are gone; `current_directory`/`environment_variables` are added.
+    Split out from a single shared "process info" record (an earlier
+    iteration bundled sysinfo/pid/peb into one type with dozens of
+    nulled-out fields per command) so each kind's schema can be fully and
+    tightly typed -- see PidRecord/PebRecord below."""
     dump_file:          "str | None" = None
     hostname:           "str | None" = None
     username:           "str | None" = None
@@ -157,42 +162,38 @@ class SysInfoRecord:
     os_version:         "str | None" = None
     architecture:       "str | None" = None
     product_type:       "str | None" = None
-    pid:                "int | None" = None
-    process_start_utc:  "str | None" = None
-    image_path:         "str | None" = None
-    command_line:       "str | None" = None
-    current_directory:  "str | None" = None
     processors:         "int | None" = None
     cpu_vendor:         "str | None" = None
     cpu_current_mhz:    "int | None" = None
     cpu_max_mhz:        "int | None" = None
-    process_user_time_seconds:   "int | float | None" = None
-    process_kernel_time_seconds: "int | float | None" = None
     thread_count:       "int | None" = None   # None if ThreadListStream itself is absent
     module_count:       "int | None" = None   # None if ModuleListStream itself is absent
+    current_directory:  "str | None" = None
+    # tuple[{"name": str, "value": str}] when the environment walk yielded
+    # entries (or a verified-empty block: () ), None when the PEB/walk was
+    # unavailable or unreadable -- §4.3.3. Never a dict: duplicate names,
+    # `=`-prefixed names, and source order are real forensic evidence a
+    # dict would silently destroy.
+    environment_variables: "tuple | None" = None
 
     def to_dict(self) -> dict:
         return {
-            "dump_file":                    self.dump_file,
-            "hostname":                     self.hostname,
-            "username":                     self.username,
-            "os":                           self.os,
-            "os_version":                   self.os_version,
-            "architecture":                 self.architecture,
-            "product_type":                 self.product_type,
-            "pid":                          self.pid,
-            "process_start_utc":            self.process_start_utc,
-            "image_path":                   self.image_path,
-            "command_line":                 self.command_line,
-            "current_directory":            self.current_directory,
-            "processors":                   self.processors,
-            "cpu_vendor":                   self.cpu_vendor,
-            "cpu_current_mhz":              self.cpu_current_mhz,
-            "cpu_max_mhz":                  self.cpu_max_mhz,
-            "process_user_time_seconds":    self.process_user_time_seconds,
-            "process_kernel_time_seconds":  self.process_kernel_time_seconds,
-            "thread_count":                 self.thread_count,
-            "module_count":                 self.module_count,
+            "dump_file":               self.dump_file,
+            "hostname":                self.hostname,
+            "username":                self.username,
+            "os":                      self.os,
+            "os_version":              self.os_version,
+            "architecture":            self.architecture,
+            "product_type":            self.product_type,
+            "processors":              self.processors,
+            "cpu_vendor":              self.cpu_vendor,
+            "cpu_current_mhz":         self.cpu_current_mhz,
+            "cpu_max_mhz":             self.cpu_max_mhz,
+            "thread_count":            self.thread_count,
+            "module_count":            self.module_count,
+            "current_directory":       self.current_directory,
+            "environment_variables":   (None if self.environment_variables is None
+                                         else [dict(e) for e in self.environment_variables]),
         }
 
 
