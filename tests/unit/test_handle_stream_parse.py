@@ -111,13 +111,23 @@ def _top_level_call_names(source: str, target_names: set) -> list:
     Assign (`X = _descriptor_class_size(...)`), which a check that only
     scans `tree.body` for `ast.Expr` nodes would silently miss.
 
-    Also treats a def/lambda's OWN decorator expressions and default-
-    argument expressions as import-time-evaluated (because they are --
-    `def f(x=CALL()):` and `@CALL()` both run CALL() the moment the
-    `def` statement itself executes, not when f is later invoked), while
-    still treating the function/lambda BODY as deferred. A naive
-    "everything under a FunctionDef/Lambda node is deferred" walk misses
-    exactly these two forms."""
+    For a FunctionDef/AsyncFunctionDef/Lambda, ONLY `.body` is treated as
+    deferred (evaluated later, when the function is called) -- every
+    OTHER direct child (decorator expressions, argument defaults,
+    argument/return annotations, and anything else a future Python
+    version adds to these node types) is treated as import-time-
+    evaluated by default, via `ast.iter_child_nodes()` rather than an
+    explicit enumeration of "the fields we thought of". An earlier
+    version of this helper explicitly enumerated decorator_list/defaults/
+    kw_defaults and nothing else, which correctly caught decorators and
+    default arguments but silently missed return/parameter annotations
+    (`def f() -> CALL(): ...` and `def f(x: CALL()): ...` both evaluate
+    that expression at `def`-time, in the enclosing scope) -- an
+    enumerate-what-we-remember approach fails OPEN on anything not
+    enumerated. Deferring only `.body` and treating everything else as
+    import-time by default fails CLOSED instead: a node kind this
+    helper's author never thought of defaults to "not deferred", not
+    "silently ignored"."""
     import ast
 
     tree = ast.parse(source)
@@ -128,21 +138,15 @@ def _top_level_call_names(source: str, target_names: set) -> list:
             self.hits = []
 
         def _visit_def(self, node):
-            # Decorators and default-argument expressions are evaluated
-            # in the ENCLOSING scope when the def/lambda statement itself
-            # runs -- same depth as the def statement, not depth + 1.
-            for dec in getattr(node, "decorator_list", []):
-                self.visit(dec)
-            for default in node.args.defaults:
-                self.visit(default)
-            for default in node.args.kw_defaults:
-                if default is not None:
-                    self.visit(default)
-            self.depth += 1
-            body = node.body if isinstance(node.body, list) else [node.body]
-            for stmt in body:
-                self.visit(stmt)
-            self.depth -= 1
+            deferred = node.body if isinstance(node.body, list) else [node.body]
+            deferred_ids = {id(n) for n in deferred}
+            for child in ast.iter_child_nodes(node):
+                if id(child) in deferred_ids:
+                    self.depth += 1
+                    self.visit(child)
+                    self.depth -= 1
+                else:
+                    self.visit(child)
 
         visit_FunctionDef = _visit_def
         visit_AsyncFunctionDef = _visit_def
@@ -267,6 +271,33 @@ def test_top_level_call_guard_detects_call_in_lambda_default_argument():
         "    return (32, 40)\n"
         "\n"
         "f = lambda layout=_handle_descriptor_layout(): layout\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_return_annotation():
+    # A return annotation expression is evaluated at `def`-time, in the
+    # enclosing scope -- same class of import-time evaluation as
+    # decorators and default arguments, not deferred like the body.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream() -> _handle_descriptor_layout():\n"
+        "    pass\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_parameter_annotation():
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream(x: _handle_descriptor_layout()):\n"
+        "    pass\n"
     )
     hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
     assert hits == ["_handle_descriptor_layout"]
