@@ -297,6 +297,89 @@ jobs:
           coverage report --include="dumpex/commands/sysinfo.py"  --fail-under=70
           coverage report --include="dumpex/commands/peb.py"      --fail-under=90
 
+  minidump-version-range:
+    # Proves the range pinned in pyproject.toml's `minidump>=X,<Y` (issue
+    # #86) actually works, not just that the metadata declares it: pins
+    # minidump to each version in the matrix below (`pip install
+    # "minidump==<version>"` after the normal editable install, so the
+    # exact pin wins over whatever the resolver would otherwise pick),
+    # verifies that exact version actually landed (not just that `pip
+    # install` exited 0 -- a version conflict warning does not fail the
+    # command), imports dumpex.core.memory, and runs the handle-stream
+    # suite -- which is what actually exercises the HandleDataStream
+    # descriptor layout check (dumpex/core/memory.py's
+    # _handle_descriptor_layout()); that check runs lazily on first use,
+    # not merely from `import dumpex.core.memory`.
+    #
+    # The `minidump-version` list below is NOT derived from
+    # pyproject.toml -- it is a separate, hand-written literal, checked
+    # against it by tests/unit/test_minidump_version_pin.py, which fails
+    # at PR time if EITHER (a) the specifier's own floor is missing from
+    # this list, or (b) any version in this list falls outside the
+    # specifier's range. That check does NOT require an exact match --
+    # adding more in-range coverage here (e.g. a real mid-range release)
+    # is always fine. When widening the specifier's ceiling in
+    # pyproject.toml, also add the actual highest minidump release that
+    # now falls in range (check PyPI -- don't invent a version number
+    # that may not exist).
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        minidump-version: ["0.0.24"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dumpex with dev extras
+        run: pip install -e ".[dev]"
+
+      - name: Pin minidump to ${{ matrix.minidump-version }}
+        run: pip install "minidump==${{ matrix.minidump-version }}"
+
+      - name: Verify the pinned version actually installed
+        # `pip install` can exit 0 while printing a dependency-conflict
+        # warning rather than actually installing the requested pin --
+        # check installed metadata directly instead of trusting the exit
+        # code alone.
+        run: |
+          python -c "
+          import importlib.metadata as m
+          installed = m.version('minidump')
+          expected = '${{ matrix.minidump-version }}'
+          assert installed == expected, f'expected minidump=={expected}, got {installed}'
+          "
+
+      - name: Import dumpex.core.memory (module-level import path)
+        run: python -c "import dumpex.core.memory"
+
+      - name: Handle-stream descriptor layout + parsing suite (exercises _handle_descriptor_layout())
+        run: pytest tests/unit/test_handle_stream_parse.py -v
+
+  minidump-version-pin-consistency:
+    # Runs tests/unit/test_minidump_version_pin.py on its own, outside
+    # the main pytest job's matrix, so this specific drift check (CI
+    # matrix above vs. pyproject.toml's specifier) shows up as its own
+    # named, easy-to-spot job rather than one assertion buried in a much
+    # larger test run.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dev extras (packaging, pyyaml, pytest)
+        run: pip install -e ".[dev]"
+
+      - name: minidump version pin <-> CI matrix consistency
+        run: pytest tests/unit/test_minidump_version_pin.py -v
+
   package-smoke:
     # The pytest job above always installs dumpex editable (`pip install
     # -e .`), which never exercises setuptools' actual package-data

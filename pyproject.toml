@@ -14,7 +14,17 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    "minidump",
+    # Both bounds pinned to the exact version dumpex/core/memory.py's
+    # parallel HandleDataStream parser was validated against -- minidump
+    # has never shipped anything but 0.0.x releases, and 0.0.x carries no
+    # compatibility promise between patch releases, so 0.0.25 could change
+    # any of the ~25 names imported across memory.py:11-31 or either
+    # descriptor's on-disk size just as easily as a hypothetical 0.1
+    # would. Widening this range requires re-validating the three
+    # reasons at memory.py:47-63 AND both HandleDataStream descriptor
+    # sizes (see _handle_descriptor_layout() in memory.py) against the
+    # new ceiling version before raising it (see issue #86).
+    "minidump>=0.0.24,<0.0.25",
     "colorama>=0.4.6",
     "pyyaml",
 ]

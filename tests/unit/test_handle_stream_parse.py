@@ -4,6 +4,7 @@ that never walks ObjectInfos, never does an unbounded string read, and
 never emits the library's '<STRING_DECODE_FAILED>' placeholder.
 """
 import io
+import os
 import struct
 
 import pytest
@@ -83,6 +84,547 @@ def _parse(descriptors, **kwargs):
     return parse_handle_stream(directory, file_handle)
 
 
+# ── descriptor size derivation (issue #86) ───────────────────────────────
+
+def test_descriptor_sizes_match_ms_defined_layout():
+    # dumpex's SizeOfDescriptor branch relies on these being 32 and 40; an
+    # upstream layout change should fail loudly here, not silently misread
+    # every descriptor in a stream.
+    v1_size, v2_size = memory._handle_descriptor_layout()
+    assert v1_size == 32
+    assert v2_size == 40
+
+
+def test_layout_is_cached_across_calls():
+    first = memory._handle_descriptor_layout()
+    second = memory._handle_descriptor_layout()
+    assert first is second
+
+
+def _top_level_call_names(source: str, target_names: set) -> list:
+    """Names among `target_names` that are CALLED anywhere in `source`
+    at module-import time -- i.e. NOT merely inside a function/lambda
+    BODY, which only runs when later called. Walks the whole tree, so it
+    catches a call nested inside a module-level Assign/If/Try/
+    comprehension/etc, not only a bare top-level expression statement --
+    the original 9572d46 regression this guards against was exactly an
+    Assign (`X = _descriptor_class_size(...)`), which a check that only
+    scans `tree.body` for `ast.Expr` nodes would silently miss.
+
+    For a FunctionDef/AsyncFunctionDef/Lambda, ONLY `.body` is treated as
+    deferred (evaluated later, when the function is called) -- every
+    OTHER direct child (decorator expressions, argument defaults,
+    argument/return annotations, and anything else a future Python
+    version adds to these node types) is treated as import-time-
+    evaluated by default, via `ast.iter_child_nodes()` rather than an
+    explicit enumeration of "the fields we thought of". An earlier
+    version of this helper explicitly enumerated decorator_list/defaults/
+    kw_defaults and nothing else, which correctly caught decorators and
+    default arguments but silently missed return/parameter annotations
+    (`def f() -> CALL(): ...` and `def f(x: CALL()): ...` both evaluate
+    that expression at `def`-time, in the enclosing scope) -- an
+    enumerate-what-we-remember approach fails OPEN on anything not
+    enumerated. Deferring only `.body` and treating everything else as
+    import-time by default fails CLOSED instead: a node kind this
+    helper's author never thought of defaults to "not deferred", not
+    "silently ignored"."""
+    import ast
+
+    tree = ast.parse(source)
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.depth = 0
+            self.hits = []
+
+        def _visit_def(self, node):
+            deferred = node.body if isinstance(node.body, list) else [node.body]
+            deferred_ids = {id(n) for n in deferred}
+            for child in ast.iter_child_nodes(node):
+                if id(child) in deferred_ids:
+                    self.depth += 1
+                    self.visit(child)
+                    self.depth -= 1
+                else:
+                    self.visit(child)
+
+        visit_FunctionDef = _visit_def
+        visit_AsyncFunctionDef = _visit_def
+        visit_Lambda = _visit_def
+
+        def visit_Call(self, node):
+            if self.depth == 0:
+                func = node.func
+                name = getattr(func, "id", None) or getattr(func, "attr", None)
+                if name in target_names:
+                    self.hits.append(name)
+            self.generic_visit(node)
+
+    visitor = _Visitor()
+    visitor.visit(tree)
+    return visitor.hits
+
+
+def test_layout_derivation_is_not_done_at_import_time():
+    # The layout check must run lazily, from inside parse_handle_stream(),
+    # not at module import -- a failure here must be isolated to the
+    # handle-stream code path by open_dump()'s per-stream try/except, not
+    # able to take down `import dumpex.core.memory` (and therefore every
+    # dumpex command) the way a top-level assert/computation would.
+    import inspect
+    hits = _top_level_call_names(
+        inspect.getsource(memory),
+        {"_descriptor_class_size", "_handle_descriptor_layout"},
+    )
+    assert hits == [], (
+        f"found module-top-level call(s) to {hits} -- these must only ever "
+        f"run lazily, from inside parse_handle_stream()")
+
+
+def test_top_level_call_guard_detects_assign_form():
+    # Meta-test for the guard above: it must actually be ABLE to fail.
+    # This synthetic source reproduces the exact shape of the original
+    # 9572d46 regression the guard exists to catch -- a top-level Assign
+    # whose right-hand side calls the target function -- which an
+    # `isinstance(node, ast.Expr)`-only scan (the guard's first,
+    # insufficient version) silently passed. Without this meta-test, a
+    # guard that can never fire looks identical to a working one.
+    synthetic_source = (
+        "def _descriptor_class_size(cls):\n"
+        "    return 32\n"
+        "\n"
+        "MINIDUMP_HANDLE_DESCRIPTOR_SIZE = _descriptor_class_size(object)\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_descriptor_class_size"})
+    assert hits == ["_descriptor_class_size"]
+
+
+def test_top_level_call_guard_detects_call_inside_if_and_try_blocks():
+    # A module-level `if`/`try` block is still module scope -- a call
+    # inside one still runs at import time. Confirms the walk isn't
+    # limited to `tree.body`'s direct children.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "if True:\n"
+        "    _handle_descriptor_layout()\n"
+        "try:\n"
+        "    _handle_descriptor_layout()\n"
+        "except Exception:\n"
+        "    pass\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout", "_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_ignores_calls_inside_nested_functions():
+    # A call inside a def/lambda is NOT executed at import time -- the
+    # guard must not flag ordinary, correct usage (e.g. the real
+    # parse_handle_stream() calling _handle_descriptor_layout() from
+    # inside its own body).
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream():\n"
+        "    return _handle_descriptor_layout()\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == []
+
+
+def test_top_level_call_guard_detects_call_in_decorator_expression():
+    # A decorator expression is evaluated the moment the `def` statement
+    # itself runs (import time), NOT deferred like the function body it
+    # decorates -- a walk that treats "anything under a FunctionDef" as
+    # deferred would miss this.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "@_handle_descriptor_layout()\n"
+        "def parse_handle_stream():\n"
+        "    pass\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_default_argument():
+    # A default-argument expression is likewise evaluated at `def`-time,
+    # in the enclosing scope, not when the function is later called.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream(layout=_handle_descriptor_layout()):\n"
+        "    return layout\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_lambda_default_argument():
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "f = lambda layout=_handle_descriptor_layout(): layout\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_return_annotation():
+    # A return annotation expression is evaluated at `def`-time, in the
+    # enclosing scope -- same class of import-time evaluation as
+    # decorators and default arguments, not deferred like the body.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream() -> _handle_descriptor_layout():\n"
+        "    pass\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_parameter_annotation():
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream(x: _handle_descriptor_layout()):\n"
+        "    pass\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_upstream_parse_failure_is_isolated_to_handle_stream(monkeypatch):
+    # A descriptor class whose parse() raises must not propagate out of
+    # parse_handle_stream() as anything other than a normal exception
+    # any caller (including open_dump()'s per-stream dispatch) already
+    # knows how to catch -- it must not be able to crash import.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", None)
+
+    class _BrokenDescriptor:
+        @staticmethod
+        def parse(buff):
+            raise RuntimeError("simulated upstream parse failure")
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _BrokenDescriptor)
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="RuntimeError"):
+        _parse([{"handle": 0x1}])
+
+
+def test_simulated_upstream_size_drift_raises_single_attributable_error(monkeypatch):
+    # A wrong-but-non-crashing descriptor size (e.g. an upstream layout
+    # change that adds a field) must raise ONE error naming both the
+    # affected struct and the size it now parses as -- in-process
+    # counterpart to the python -O subprocess test above, without the
+    # subprocess overhead, covering the "size changed" branch directly
+    # rather than only the "parse() raised" branch.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", None)
+
+    class _GrownDescriptor:
+        @staticmethod
+        def parse(buff):
+            buff.read(36)   # 4 bytes more than the MS-defined 32
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _GrownDescriptor)
+    with pytest.raises(memory.HandleDescriptorLayoutError,
+                        match="MINIDUMP_HANDLE_DESCRIPTOR.*36"):
+        _parse([{"handle": 0x1}])
+
+
+def test_size_selection_follows_derived_constants_not_literal(monkeypatch):
+    # Force the derived v2 size away from the literal 40 dumpex used to
+    # hardcode. The SELECTION path must follow the (patched) derived
+    # constants, not a literal baked into the comparison -- proving the
+    # branch tracks the derived value rather than merely happening to
+    # equal it under today's installed library.
+    #
+    # MINIDUMP_HANDLE_DESCRIPTOR_2 must ALSO be patched to genuinely
+    # consume 48 bytes (not just claim to via the layout tuple): the
+    # tell()-delta check in parse_handle_stream() (added after a review
+    # found the plain seek()-based stride enforcement alone didn't catch
+    # a mid-struct conditional over-read) would otherwise correctly
+    # flag a 48-vs-actually-40 mismatch as descriptor layout drift and
+    # raise HandleDescriptorLayoutError -- this test is about proving the
+    # SELECTION path, not about exercising that drift check.
+    from minidump.streams.HandleDataStream import MINIDUMP_HANDLE_DESCRIPTOR_2 as _RealV2
+
+    class _V2ConsumingFortyEightBytes:
+        @staticmethod
+        def parse(buff):
+            raw = _RealV2.parse(buff)
+            buff.read(8)   # genuinely consume the padding, not just claim to
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR_2", _V2ConsumingFortyEightBytes)
+    monkeypatch.setattr(memory, "_handle_descriptor_layout", lambda: (32, 48))
+
+    result = _parse([{"handle": 0x99, "type_name": "Mutant", "object_name": None}],
+                     size_of_descriptor=48)
+    assert result.header.SizeOfDescriptor == 48
+    assert result.handles[0].TypeName == "Mutant"
+
+    # The old-standard 40-byte stride must now be REJECTED: under the
+    # patched layout it matches neither derived size.
+    with pytest.raises(HandleStreamFramingError):
+        _parse([{"handle": 0x1}], size_of_descriptor=40)
+
+
+def test_mid_struct_conditional_read_raises_layout_error_not_silently_misparses(monkeypatch):
+    # Reproduces a review finding: seek()-based stride enforcement (each
+    # iteration seeks to i * SizeOfDescriptor before parsing) prevents
+    # CROSS-descriptor misalignment, but does NOT by itself prove a
+    # single descriptor's own parse() consumed exactly one stride. A
+    # conditional extra read gated on a field that appears BEFORE the
+    # point of divergence (Attributes here, read before the branch) can
+    # leave every field parsed AFTER that point built from the wrong
+    # bytes -- with the seek-only version raising nothing at all, a
+    # "looks clean, is wrong" result. A zero-filled probe (what
+    # _descriptor_class_size() uses to derive the "official" 32/40
+    # sizes) never sets the Attributes bit that triggers the extra read,
+    # so the layout check alone cannot catch this either -- only the
+    # per-descriptor tell()-delta check exercised here can.
+    #
+    # The layout cache is pinned to the REAL (32, 40) here -- not reset
+    # to None -- so _handle_descriptor_layout() short-circuits on the
+    # cache and never re-derives from the patched (broken) class below.
+    # Resetting to None would make this test's outcome depend on
+    # _MidStructConditionalRead's behavior against a ZERO-filled probe
+    # too (attributes=0 there, so it happens to still derive 32 -- but
+    # relying on that coincidence, or on cache state left behind by
+    # whichever earlier test happened to run first, is exactly the kind
+    # of order-dependent fragility this test must not have.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", (32, 40))
+
+    class _MidStructConditionalRead:
+        @staticmethod
+        def parse(buff):
+            handle = int.from_bytes(buff.read(8), "little", signed=False)
+            type_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            object_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            attributes = int.from_bytes(buff.read(4), "little", signed=False)
+            if attributes & 0x1:
+                buff.read(4)   # extra conditional read, gated on a field ALREADY parsed
+            granted_access = int.from_bytes(buff.read(4), "little", signed=False)
+            handle_count = int.from_bytes(buff.read(4), "little", signed=False)
+            pointer_count = int.from_bytes(buff.read(4), "little", signed=False)
+
+            class _Raw:
+                pass
+            raw = _Raw()
+            raw.Handle, raw.TypeNameRva, raw.ObjectNameRva = handle, type_name_rva, object_name_rva
+            raw.Attributes, raw.GrantedAccess = attributes, granted_access
+            raw.HandleCount, raw.PointerCount = handle_count, pointer_count
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _MidStructConditionalRead)
+
+    # A second descriptor here so the conditional over-read in
+    # descriptor 0 has real bytes (descriptor 1's) to spill into --
+    # exercising the tell()-delta path specifically. See the SINGLE-
+    # descriptor variant below (test_single_last_descriptor_conditional_
+    # over_read_raises_at_physical_eof) for the case where there is
+    # nothing after descriptor 0 at all, which _BoundedDescriptorReader
+    # (not the tell()-delta check) is what catches.
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="descriptor 0"):
+        _parse([
+            {"handle": 0x1, "attributes": 0x1, "granted_access": 0xAAAA,
+             "handle_count": 0xBBBB, "pointer_count": 0xCCCC},
+            {"handle": 0x2, "attributes": 0, "granted_access": 0x1111,
+             "handle_count": 0x2222, "pointer_count": 0x3333},
+        ])
+
+
+def test_single_last_descriptor_conditional_over_read_raises_at_physical_eof(monkeypatch):
+    # Reproduces a review finding: for a SINGLE (= only = last)
+    # descriptor, the chunk's raw bytes total exactly one
+    # SizeOfDescriptor stride (32 here) -- a raw BytesIO's read(n)
+    # SILENTLY CLAMPS to whatever physically remains, so an over-read
+    # attempt at the very end of the descriptor's own fields runs off
+    # the end of the WHOLE buffer and returns fewer bytes / empty bytes
+    # with no error, landing tell() at exactly 32 -- the same position a
+    # legitimate full read would leave it at. Before
+    # _BoundedDescriptorReader, this was UNDETECTABLE: the tell()-delta
+    # check alone could not tell "over-read that got silently truncated
+    # at the buffer's own end" apart from "a completely normal read",
+    # because both produce consumed == declared == 32. Confirmed by
+    # calculation before the fix: GrantedAccess would read as the TRUE
+    # HandleCount bytes, HandleCount as the TRUE PointerCount bytes, and
+    # PointerCount as 0 (from an empty read past EOF) -- exactly the
+    # 0xBBBB / 0xCCCC / 0 misreads a review reported, with no exception
+    # raised at all. _BoundedDescriptorReader now raises the moment the
+    # final field's read call would cross the 32-byte boundary, before
+    # any bytes are silently clamped.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", (32, 40))
+
+    class _MidStructConditionalRead:
+        @staticmethod
+        def parse(buff):
+            handle = int.from_bytes(buff.read(8), "little", signed=False)
+            type_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            object_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            attributes = int.from_bytes(buff.read(4), "little", signed=False)
+            if attributes & 0x1:
+                buff.read(4)   # extra conditional read, gated on a field ALREADY parsed
+            granted_access = int.from_bytes(buff.read(4), "little", signed=False)
+            handle_count = int.from_bytes(buff.read(4), "little", signed=False)
+            pointer_count = int.from_bytes(buff.read(4), "little", signed=False)
+
+            class _Raw:
+                pass
+            raw = _Raw()
+            raw.Handle, raw.TypeNameRva, raw.ObjectNameRva = handle, type_name_rva, object_name_rva
+            raw.Attributes, raw.GrantedAccess = attributes, granted_access
+            raw.HandleCount, raw.PointerCount = handle_count, pointer_count
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _MidStructConditionalRead)
+
+    # A SINGLE descriptor: nothing follows it in the buffer at all.
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="descriptor 0"):
+        _parse([{"handle": 0x1, "attributes": 0x1, "granted_access": 0xAAAA,
+                  "handle_count": 0xBBBB, "pointer_count": 0xCCCC}])
+
+
+def test_last_descriptor_under_consuming_parse_raises_layout_error(monkeypatch):
+    # consumed < declared must raise just as reliably as consumed >
+    # declared -- a parser that reads FEWER bytes than SizeOfDescriptor
+    # (here: a descriptor class that forgets to read PointerCount) must
+    # not be allowed to silently leave PointerCount at some default/
+    # garbage value. Uses a single (= last, = only) descriptor, so
+    # there's no next-descriptor spillover involved -- this is a pure
+    # under-consumption case, not a truncation-at-buffer-end case.
+    #
+    # Pinned to the real (32, 40) for the same reason as the test above:
+    # without this, _MissingPointerCountField's own 28-byte zero-probe
+    # result would make _handle_descriptor_layout() itself raise first
+    # (a true positive, but the WRONG check -- this test exists to prove
+    # the per-descriptor tell()-delta check specifically, not to prove
+    # the layout probe catches a permanently-broken class).
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", (32, 40))
+
+    class _MissingPointerCountField:
+        @staticmethod
+        def parse(buff):
+            handle = int.from_bytes(buff.read(8), "little", signed=False)
+            type_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            object_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            attributes = int.from_bytes(buff.read(4), "little", signed=False)
+            granted_access = int.from_bytes(buff.read(4), "little", signed=False)
+            handle_count = int.from_bytes(buff.read(4), "little", signed=False)
+            # PointerCount is never read -- 4 bytes short of the
+            # declared 32-byte v1 stride.
+
+            class _Raw:
+                pass
+            raw = _Raw()
+            raw.Handle, raw.TypeNameRva, raw.ObjectNameRva = handle, type_name_rva, object_name_rva
+            raw.Attributes, raw.GrantedAccess = attributes, granted_access
+            raw.HandleCount, raw.PointerCount = handle_count, 0
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _MissingPointerCountField)
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="descriptor 0"):
+        _parse([{"handle": 0x1, "granted_access": 0xAAAA, "handle_count": 0xBBBB}])
+
+
+def test_equal_derived_sizes_raise_layout_error(monkeypatch):
+    # If v1 and v2 ever derive to the same size, the v2 branch becomes
+    # permanently unreachable -- every v2 stream would silently parse as
+    # v1. This must be caught explicitly rather than left to coincidence.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", None)
+    monkeypatch.setattr(memory, "_descriptor_class_size", lambda cls: 32)
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="never be reachable"):
+        memory._handle_descriptor_layout()
+
+
+def test_descriptor_class_size_rejects_size_attribute_mismatch():
+    class _MismatchedDescriptor:
+        size = 999
+
+        @staticmethod
+        def parse(buff):
+            buff.read(32)
+
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="999"):
+        memory._descriptor_class_size(_MismatchedDescriptor)
+
+
+def test_descriptor_class_size_rejects_probe_overflow():
+    class _RunawayDescriptor:
+        @staticmethod
+        def parse(buff):
+            buff.read(memory._DESCRIPTOR_PROBE_BYTES)   # consumes the whole probe
+
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="probe buffer"):
+        memory._descriptor_class_size(_RunawayDescriptor)
+
+
+def test_layout_check_survives_python_dash_o():
+    # `assert` statements are compiled out entirely under `python -O` /
+    # PYTHONOPTIMIZE=1 -- this is a REQUIRED regression test (not merely
+    # nice-to-have) because a layout drift check written as a bare
+    # `assert` would pass every test in this file under normal `pytest`
+    # while providing zero protection in an optimized interpreter. Runs a
+    # real subprocess with -O and a descriptor class that parses to the
+    # wrong size, and asserts the explicit HandleDescriptorLayoutError
+    # still fires. Uses tempfile (not the tmp_path fixture) so this test
+    # doesn't depend on pytest's own basetemp directory being writable.
+    import subprocess
+    import sys
+    import tempfile
+
+    script_body = (
+        "import dumpex.core.memory as memory\n"
+        "\n"
+        "class _WrongSizeDescriptor:\n"
+        "    @staticmethod\n"
+        "    def parse(buff):\n"
+        "        buff.read(36)   # neither 32 nor 40\n"
+        "\n"
+        "memory.MINIDUMP_HANDLE_DESCRIPTOR = _WrongSizeDescriptor\n"
+        "memory._HANDLE_DESCRIPTOR_LAYOUT_CACHE = None\n"
+        "try:\n"
+        "    memory._handle_descriptor_layout()\n"
+        "except memory.HandleDescriptorLayoutError as e:\n"
+        "    # Plain if/print, NOT assert: this script itself runs under\n"
+        "    # -O, so an `assert` here would be compiled out too, silently\n"
+        "    # turning a wrong-message failure into a false pass -- the\n"
+        "    # exact bug class this whole test exists to catch.\n"
+        "    if 'MINIDUMP_HANDLE_DESCRIPTOR' not in str(e) or '36' not in str(e):\n"
+        "        print('BAD_MESSAGE:' + str(e))\n"
+        "    else:\n"
+        "        print('LAYOUT_ERROR_RAISED')\n"
+        "else:\n"
+        "    print('NO_ERROR_RAISED')\n"
+    )
+    fd, script_path = tempfile.mkstemp(suffix=".py")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(script_body)
+        result = subprocess.run(
+            [sys.executable, "-O", script_path],
+            capture_output=True, text=True, timeout=30,
+        )
+    finally:
+        os.remove(script_path)
+
+    assert "LAYOUT_ERROR_RAISED" in result.stdout, (
+        f"stdout={result.stdout!r} stderr={result.stderr!r}")
+    assert "NO_ERROR_RAISED" not in result.stdout
+    assert "BAD_MESSAGE" not in result.stdout, (
+        f"HandleDescriptorLayoutError message missing struct name/size under "
+        f"-O: stdout={result.stdout!r}")
+
+
 # ── basic shape ────────────────────────────────────────────────────────
 
 def test_parses_header_and_returns_expected_type():
@@ -93,10 +635,16 @@ def test_parses_header_and_returns_expected_type():
     assert len(result.handles) == 1
 
 
-def test_descriptor_fields_are_preserved():
+@pytest.mark.parametrize("size_of_descriptor", [32, 40], ids=["v1", "v2"])
+def test_descriptor_fields_are_preserved(size_of_descriptor):
+    # Symmetric v1/v2 coverage (issue #86 AC 6): every documented field
+    # must round-trip identically regardless of which descriptor version
+    # produced the stream.
     result = _parse([{"handle": 0x234, "type_name": "File", "object_name": r"\Device\NamedPipe\mypipe",
                        "attributes": 0x40, "granted_access": 0x1200a9,
-                       "handle_count": 3, "pointer_count": 32}])
+                       "handle_count": 3, "pointer_count": 32}],
+                     size_of_descriptor=size_of_descriptor)
+    assert result.header.SizeOfDescriptor == size_of_descriptor
     h = result.handles[0]
     assert isinstance(h, ParsedHandleDescriptor)
     assert h.Handle == 0x234
@@ -107,6 +655,30 @@ def test_descriptor_fields_are_preserved():
     assert h.HandleCount == 3
     assert h.PointerCount == 32
     assert h.ObjectInfos == []   # never walked, regardless of descriptor version
+
+
+def test_v2_multiple_descriptors_all_fields_correct_no_misalignment():
+    # Regression for a stride bug where descriptors after the first could
+    # silently misread if a parser consumed a different byte count than
+    # header.SizeOfDescriptor for one descriptor -- each descriptor here
+    # carries distinct field values so any cross-descriptor misalignment
+    # shows up as a wrong value, not just a wrong count.
+    descriptors = [
+        {"handle": 0x10, "type_name": "File",  "object_name": "A",
+         "attributes": 0x1, "granted_access": 0x1, "handle_count": 1, "pointer_count": 1},
+        {"handle": 0x20, "type_name": "Key",   "object_name": "B",
+         "attributes": 0x2, "granted_access": 0x2, "handle_count": 2, "pointer_count": 2},
+        {"handle": 0x30, "type_name": "Event", "object_name": "C",
+         "attributes": 0x3, "granted_access": 0x3, "handle_count": 3, "pointer_count": 3},
+    ]
+    result = _parse(descriptors, size_of_descriptor=40)
+    assert [h.Handle for h in result.handles] == [0x10, 0x20, 0x30]
+    assert [h.TypeName for h in result.handles] == ["File", "Key", "Event"]
+    assert [h.ObjectName for h in result.handles] == ["A", "B", "C"]
+    assert [h.Attributes for h in result.handles] == [0x1, 0x2, 0x3]
+    assert [h.GrantedAccess for h in result.handles] == [0x1, 0x2, 0x3]
+    assert [h.HandleCount for h in result.handles] == [1, 2, 3]
+    assert [h.PointerCount for h in result.handles] == [1, 2, 3]
 
 
 def test_v2_descriptor_parses_and_object_info_rva_is_never_walked():
@@ -272,6 +844,34 @@ def test_trailing_partial_descriptor_is_not_parsed():
     directory = _Directory(rva=0, data_size=data_size + 20)
     result = parse_handle_stream(directory, io.BytesIO(body))
     assert len(result.handles) == 2   # the trailing partial descriptor is skipped
+
+
+def test_file_truncated_before_declared_data_size_does_not_fabricate_descriptors():
+    # `fits` is derived from the stream's OWN declared DataSize (a
+    # producer-supplied value), not from how many bytes the file object
+    # actually has left. If the underlying file ends before DataSize says
+    # it should (a truncated/corrupted capture -- distinct from a stream
+    # honestly declaring a small DataSize), reading past the real end of
+    # the file must not silently hand back a short/empty buffer that gets
+    # parsed as fabricated all-zero descriptors (Handle=0, HandleCount=0,
+    # TypeName=None, ...) which were never on disk.
+    descriptors = [{"handle": 0xAA, "attributes": 0, "granted_access": 0,
+                     "handle_count": 1, "pointer_count": 1}]
+    body, _ = _build_handle_stream(descriptors, number_of_descriptors=3)
+    # `body` physically contains only ONE descriptor's worth of bytes
+    # (16-byte header + 32 bytes), but DataSize is declared as if all 3
+    # NumberOfDescriptors-declared descriptors were present.
+    declared_data_size = 16 + 3 * 32
+    directory = _Directory(rva=0, data_size=declared_data_size)
+    result = parse_handle_stream(directory, io.BytesIO(body))
+    assert result.header.NumberOfDescriptors == 3
+    assert len(result.handles) == 1   # only what the FILE actually had
+    # The #37 contract's truncation-recovery channel: the caller can
+    # always recover the truncated count this way. A fabrication bug
+    # would silently return 0 here instead of 2.
+    assert result.header.NumberOfDescriptors - len(result.handles) == 2
+    assert result.handles[0].Handle == 0xAA   # the one real descriptor,
+                                               # not a fabricated zero one
 
 
 def test_number_of_descriptors_capped_at_max_handle_descriptors(monkeypatch):

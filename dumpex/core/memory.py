@@ -64,6 +64,112 @@ def prot_str(protect) -> str:
 
 MAX_HANDLE_DESCRIPTORS   = 65536   # descriptors parsed from HandleDataStream
 MAX_HANDLE_STRING_BYTES  = 4096    # bytes read for one TypeName/ObjectName
+_DESCRIPTOR_PROBE_BYTES  = 64      # scratch buffer for _descriptor_class_size();
+                                    # must comfortably exceed either real descriptor
+                                    # size or a parser that reads past it would look
+                                    # like a clean, in-bounds size instead of failing
+
+
+class HandleDescriptorLayoutError(Exception):
+    """Raised when the installed minidump library's HandleDataStream
+    descriptor classes no longer match the on-disk layout dumpex assumes
+    (MINIDUMP_HANDLE_DESCRIPTOR == 32 bytes, MINIDUMP_HANDLE_DESCRIPTOR_2
+    == 40 bytes, and the two must differ) -- an explicit exception rather
+    than a bare `assert`, since `assert` is compiled out entirely under
+    `python -O`/`PYTHONOPTIMIZE=1`, silently leaving SizeOfDescriptor
+    comparisons against whatever the drifted parse() happens to consume.
+    Raised lazily, from inside parse_handle_stream() (not at import time),
+    so a layout that fails to validate is caught by open_dump()'s
+    per-stream isolation like any other stream parser's exception --
+    every OTHER command still runs; only --handles / the pipe hunter's
+    handle scan lose this stream."""
+
+
+def _descriptor_class_size(descriptor_cls) -> int:
+    """The number of bytes descriptor_cls.parse() consumes for one
+    descriptor, derived by actually parsing a zero-filled scratch buffer
+    rather than trusting a `.size` class attribute: MINIDUMP_HANDLE_
+    DESCRIPTOR carries one, but the installed library's MINIDUMP_HANDLE_
+    DESCRIPTOR_2 does not -- reading `.size` on it raises AttributeError.
+    This reports the same fact `.size` would, symmetrically for both
+    classes, without assuming the attribute exists on either.
+
+    Raises HandleDescriptorLayoutError if parse() consumes the entire
+    probe buffer (the true size could be >= _DESCRIPTOR_PROBE_BYTES and
+    would otherwise be silently misreported as exactly that many bytes),
+    or if the class DOES carry a `.size` attribute that disagrees with
+    what parse() actually consumed -- that disagreement is itself the
+    most direct signal of upstream drift, and dropping it (rather than
+    just never reading `.size` at all) would remove a detector the
+    original library code depends on for the very same branch."""
+    probe = io.BytesIO(bytes(_DESCRIPTOR_PROBE_BYTES))
+    descriptor_cls.parse(probe)
+    consumed = probe.tell()
+    if consumed >= _DESCRIPTOR_PROBE_BYTES:
+        raise HandleDescriptorLayoutError(
+            f"{descriptor_cls.__name__}.parse() consumed the entire "
+            f"{_DESCRIPTOR_PROBE_BYTES}-byte probe buffer -- its real size "
+            f"cannot be determined from this probe")
+    declared = getattr(descriptor_cls, "size", None)
+    if declared is not None and declared != consumed:
+        raise HandleDescriptorLayoutError(
+            f"{descriptor_cls.__name__}.size ({declared}) disagrees with what "
+            f"its own parse() actually consumes on a zero-filled probe "
+            f"({consumed} bytes)")
+    return consumed
+
+
+_HANDLE_DESCRIPTOR_LAYOUT_CACHE = None
+
+
+def _handle_descriptor_layout() -> "tuple[int, int]":
+    """Returns (v1_size, v2_size) -- the MS-defined on-disk sizes this
+    file's SizeOfDescriptor branch (below) relies on to pick a parser
+    class -- deriving and validating them the first time this is called
+    (from inside parse_handle_stream(), never at import), then caching
+    the result for the life of the process.
+
+    Raises HandleDescriptorLayoutError -- explicitly, not via `assert`,
+    so the check survives `python -O` -- if either derived size disagrees
+    with the MS-defined 32/40, if the two derived sizes are equal (which
+    would make the MINIDUMP_HANDLE_DESCRIPTOR_2 branch below permanently
+    unreachable, silently parsing every v2 stream as v1), or if
+    _descriptor_class_size() itself fails."""
+    global _HANDLE_DESCRIPTOR_LAYOUT_CACHE
+    if _HANDLE_DESCRIPTOR_LAYOUT_CACHE is not None:
+        return _HANDLE_DESCRIPTOR_LAYOUT_CACHE
+
+    try:
+        v1_size = _descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR)
+        v2_size = _descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR_2)
+    except HandleDescriptorLayoutError:
+        raise
+    except Exception as e:
+        raise HandleDescriptorLayoutError(
+            f"could not determine HandleDataStream descriptor sizes from the "
+            f"installed minidump library: {type(e).__name__}: {e}") from e
+
+    # Checked ahead of the exact 32/40 values below: this is the invariant
+    # the SizeOfDescriptor branch in parse_handle_stream() actually needs
+    # (two distinct strides to choose between) and holds independently of
+    # what the two specific expected sizes are, so it stays meaningful
+    # even if a future change to the exact-value checks below is ever
+    # loosened.
+    if v1_size == v2_size:
+        raise HandleDescriptorLayoutError(
+            f"MINIDUMP_HANDLE_DESCRIPTOR and MINIDUMP_HANDLE_DESCRIPTOR_2 both "
+            f"parse as {v1_size} bytes -- the v2 branch would never be reachable")
+    if v1_size != 32:
+        raise HandleDescriptorLayoutError(
+            f"minidump.streams.HandleDataStream.MINIDUMP_HANDLE_DESCRIPTOR now "
+            f"parses as {v1_size} bytes, not the 32 dumpex assumes")
+    if v2_size != 40:
+        raise HandleDescriptorLayoutError(
+            f"minidump.streams.HandleDataStream.MINIDUMP_HANDLE_DESCRIPTOR_2 now "
+            f"parses as {v2_size} bytes, not the 40 dumpex assumes")
+
+    _HANDLE_DESCRIPTOR_LAYOUT_CACHE = (v1_size, v2_size)
+    return _HANDLE_DESCRIPTOR_LAYOUT_CACHE
 
 
 class HandleStreamFramingError(Exception):
@@ -108,6 +214,51 @@ class ParsedHandleDescriptor:
         self.ObjectInfos    = []   # never walked -- see module-level comment above
         self.TypeNameRva    = type_name_rva
         self.ObjectNameRva  = object_name_rva
+
+
+class _BoundedDescriptorReader:
+    """A `.read(n)`-only view over `chunk`, limited to the byte range
+    `[start, end)` belonging to ONE descriptor -- raises
+    HandleDescriptorLayoutError the MOMENT a read call would cross
+    `end`, rather than letting descriptor_cls.parse() silently read past
+    its own stride and finding out afterward (or not at all).
+
+    This exists because a raw BytesIO's read(n) SILENTLY CLAMPS to
+    however many bytes physically remain in the whole shared buffer --
+    it never raises, it just returns fewer bytes than asked for. For any
+    descriptor OTHER than the last one, an over-read spills into the
+    NEXT descriptor's real bytes, and the post-parse tell()-delta check
+    in parse_handle_stream() catches the mismatch (consumed > declared).
+    But for the LAST descriptor, there is nothing real left in the
+    buffer to spill into -- an over-read attempt just hits the buffer's
+    own physical end and gets clamped there, exactly where tell() would
+    ALSO land for a legitimate full read of that stride. The two cases
+    are byte-for-byte indistinguishable from the tell()-delta check's
+    point of view once they've already happened; this class stops the
+    read from happening in the first place, so it doesn't matter whether
+    anything real exists past the boundary or not."""
+    __slots__ = ("_chunk", "_end", "_descriptor_index")
+
+    def __init__(self, chunk, end, descriptor_index):
+        self._chunk = chunk
+        self._end = end
+        self._descriptor_index = descriptor_index
+
+    def read(self, n=-1):
+        pos = self._chunk.tell()
+        if n is None or n < 0:
+            n = self._end - pos
+        if pos + n > self._end:
+            raise HandleDescriptorLayoutError(
+                f"a descriptor parse attempted to read {n} byte(s) starting "
+                f"at buffer offset {pos} for descriptor {self._descriptor_index}, "
+                f"which would cross its own SizeOfDescriptor boundary at "
+                f"{self._end} -- the installed minidump library's layout no "
+                f"longer matches what this stride was selected for")
+        return self._chunk.read(n)
+
+    def tell(self):
+        return self._chunk.tell()
 
 
 class ParsedHandleDataStream:
@@ -195,14 +346,16 @@ def parse_handle_stream(directory, file_handle) -> ParsedHandleDataStream:
             f"HandleDataStream SizeOfHeader {header.SizeOfHeader} is out of bounds "
             f"for a {location.DataSize}-byte stream")
 
-    if header.SizeOfDescriptor == MINIDUMP_HANDLE_DESCRIPTOR.size:      # 32
+    v1_size, v2_size = _handle_descriptor_layout()
+    if header.SizeOfDescriptor == v1_size:
         descriptor_cls = MINIDUMP_HANDLE_DESCRIPTOR
-    elif header.SizeOfDescriptor == 40:
+    elif header.SizeOfDescriptor == v2_size:
         descriptor_cls = MINIDUMP_HANDLE_DESCRIPTOR_2
     else:
         raise HandleStreamFramingError(
             f"HandleDataStream SizeOfDescriptor {header.SizeOfDescriptor} is neither "
-            f"32 (MINIDUMP_HANDLE_DESCRIPTOR) nor 40 (MINIDUMP_HANDLE_DESCRIPTOR_2)")
+            f"{v1_size} (MINIDUMP_HANDLE_DESCRIPTOR) nor "
+            f"{v2_size} (MINIDUMP_HANDLE_DESCRIPTOR_2)")
 
     available_bytes = location.DataSize - header.SizeOfHeader
     fits = available_bytes // header.SizeOfDescriptor   # a trailing partial
@@ -212,11 +365,59 @@ def parse_handle_stream(directory, file_handle) -> ParsedHandleDataStream:
 
     file_handle.seek(location.Rva + header.SizeOfHeader, 0)
     raw_descriptors = file_handle.read(usable * header.SizeOfDescriptor)
+    # `fits` above is derived from location.DataSize -- the PRODUCER's own
+    # declared stream size, not from how many bytes the underlying file
+    # object actually had left to give. A dump truncated partway through
+    # the descriptor array (the file ends before DataSize says it should)
+    # would otherwise hand descriptor_cls.parse() a short/empty buffer for
+    # the missing descriptors; parse() reading b"" back as all-zero fields
+    # (Handle=0, HandleCount=0, ...) rather than raising fabricates
+    # descriptors that were never on disk, AND breaks the "header.
+    # NumberOfDescriptors - len(handles) recovers the truncated count"
+    # contract documented on ParsedHandleDataStream below, since every
+    # such fabricated zero-descriptor still gets appended to handles. The
+    # actual byte count read is a fourth, independent upper bound on how
+    # many WHOLE descriptors can be parsed, alongside declared/
+    # MAX_HANDLE_DESCRIPTORS/fits.
+    usable = min(usable, len(raw_descriptors) // header.SizeOfDescriptor)
     chunk = io.BytesIO(raw_descriptors)
 
     handles = []
-    for _ in range(usable):
-        raw = descriptor_cls.parse(chunk)
+    for i in range(usable):
+        # Seeking to this descriptor's own stride-aligned offset before
+        # every parse prevents CROSS-descriptor misalignment (a parser
+        # that over/under-reads for descriptor i can no longer corrupt
+        # where descriptor i+1 starts). Wrapping `chunk` in a
+        # _BoundedDescriptorReader limited to exactly this descriptor's
+        # own [start, end) range catches an OVER-read the moment it's
+        # attempted -- including for the LAST descriptor, where a raw
+        # BytesIO's read(n) would otherwise silently clamp to the
+        # buffer's own physical end (indistinguishable, from the
+        # caller's side, from a legitimate full read) rather than raise.
+        # The tell()-delta check below still independently catches
+        # UNDER-consumption (parse() finishing early, never attempting
+        # to cross the boundary at all) -- the two checks are
+        # complementary, not redundant: the reader stops an over-read
+        # from happening; the delta check notices a parse that simply
+        # never read enough in the first place.
+        start = i * header.SizeOfDescriptor
+        end = start + header.SizeOfDescriptor
+        chunk.seek(start)
+        raw = descriptor_cls.parse(_BoundedDescriptorReader(chunk, end, i))
+        consumed = chunk.tell() - start
+        if consumed != header.SizeOfDescriptor:
+            # Not a HandleStreamFramingError: the STREAM's own framing
+            # (SizeOfDescriptor, SizeOfHeader, ...) is exactly what it
+            # declared to be -- this is the INSTALLED minidump library's
+            # descriptor_cls.parse() disagreeing with the stride that was
+            # selected for it, i.e. an upstream layout drift, the same
+            # class of error _handle_descriptor_layout() raises.
+            raise HandleDescriptorLayoutError(
+                f"{descriptor_cls.__name__}.parse() consumed {consumed} bytes "
+                f"for descriptor {i}, not the declared SizeOfDescriptor "
+                f"{header.SizeOfDescriptor} -- the installed minidump "
+                f"library's layout no longer matches what this stride was "
+                f"selected for")
         type_name = (_read_handle_string(raw.TypeNameRva, file_handle)
                      if raw.TypeNameRva else None)
         object_name = (_read_handle_string(raw.ObjectNameRva, file_handle)
