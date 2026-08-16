@@ -137,6 +137,26 @@ def test_upstream_parse_failure_is_isolated_to_handle_stream(monkeypatch):
         _parse([{"handle": 0x1}])
 
 
+def test_simulated_upstream_size_drift_raises_single_attributable_error(monkeypatch):
+    # A wrong-but-non-crashing descriptor size (e.g. an upstream layout
+    # change that adds a field) must raise ONE error naming both the
+    # affected struct and the size it now parses as -- in-process
+    # counterpart to the python -O subprocess test above, without the
+    # subprocess overhead, covering the "size changed" branch directly
+    # rather than only the "parse() raised" branch.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", None)
+
+    class _GrownDescriptor:
+        @staticmethod
+        def parse(buff):
+            buff.read(36)   # 4 bytes more than the MS-defined 32
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _GrownDescriptor)
+    with pytest.raises(memory.HandleDescriptorLayoutError,
+                        match="MINIDUMP_HANDLE_DESCRIPTOR.*36"):
+        _parse([{"handle": 0x1}])
+
+
 def test_size_selection_follows_derived_constants_not_literal(monkeypatch):
     # Force the derived v2 size away from the literal 40 dumpex used to
     # hardcode. The SELECTION path must follow the (patched) derived
