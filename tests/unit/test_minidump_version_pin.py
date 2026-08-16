@@ -1,29 +1,48 @@
 """Consistency checks between pyproject.toml's `minidump` version pin and
 the .github/workflows/tests.yml `minidump-version-range` CI job (issue
-#86 review, P2-B), plus a direct check that the pin itself still has an
-upper bound at all (issue #86 review round 4, P2-1): a prior version of
-this file's regex happened to require a `,<A.B.C` clause to even parse
-the specifier, which incidentally enforced an upper bound as a side
-effect of matching a fixed shape. Generalizing that regex to accept any
-PEP 440 specifier (round 3) silently dropped that enforcement --
-`"minidump>=0.0.24"` or `"minidump~=0.0.24"` would both have passed every
-check in this file while re-opening issue #86 Part A's original defect
-(no upper bound, `pip install --upgrade` can pull in anything). The
-upper-bound check below is what actually re-establishes that guarantee,
-independent of whatever shape the rest of the specifier takes.
+#86 review, P2-B), plus direct checks that the pin itself actually
+excludes the next unreviewed upstream release (issue #86 review rounds
+4-5): a prior version of this file's regex happened to require a
+`,<A.B.C` clause to even parse the specifier, which incidentally
+enforced an upper bound as a side effect of matching a fixed shape.
+Generalizing that regex to accept any PEP 440 specifier (round 3)
+silently dropped that enforcement -- `"minidump>=0.0.24"` or
+`"minidump~=0.0.24"` would both have passed every check in this file
+while re-opening issue #86 Part A's original defect (no upper bound,
+`pip install --upgrade` can pull in anything). Round 4 added
+_specifier_has_upper_bound() to catch that.
+
+Round 5 found _specifier_has_upper_bound() itself checks a PROXY for the
+real requirement, not the requirement: it only asks "does a bounding
+clause exist", which a deliberately WIDE one (`<1.0`, `<=0.0.99`,
+`<9999`) still satisfies while admitting every unreviewed release
+between the floor and that ceiling -- the same failure as no bound at
+all, just with extra steps, and `<1.0` in particular is the first
+instinct most people reach for when "widening the range." The real
+requirement is test_specifier_excludes_the_next_unreviewed_release()
+below: the version immediately above the floor must be excluded, checked
+directly via SpecifierSet.contains() rather than inferred from clause
+shape. _specifier_has_upper_bound() is kept as an earlier, friendlier
+pre-check (its failure message is easier to act on than "0.0.25 is
+admitted"), but it is no longer the sole guarantee.
+
+The "next unreviewed release" probe computed here (_next_patch_above())
+is NOT the same kind of computation as the "highest allowed version"
+arithmetic removed in round 3: that one had to be a version that
+actually exists on PyPI and is `pip install`-able, because its failure
+message told a maintainer to add it to the CI matrix. This probe is
+never installed and never added to any matrix -- it exists only to be
+handed to `SpecifierSet.contains()`, so it doesn't matter whether a
+release with that exact number ever ships.
 
 The CI-matrix check (test_ci_matrix_covers_the_declared_floor_and_stays_
 within_the_specifier) deliberately checks a SUBSET relationship (floor
 must be covered, every matrix entry must be in-range), not exact
-equality against a computed "floor and ceiling" pair -- an earlier
-version of this test asserted `matrix == {floor, highest_allowed}`,
-which (a) made adding MORE matrix coverage (e.g. a mid-range version)
-itself a failure, and (b) computed "highest_allowed" as floor/ceiling
-arithmetic on version NUMBERS, not a release that necessarily exists on
-PyPI. Which actual released version(s) besides the floor belong in the
-matrix is a maintainer judgment call (see the comment on the
-minidump-version-range job in tests.yml), not something this test
-derives or enforces.
+equality against a computed "floor and ceiling" pair -- see that
+function's own history for why exact equality was wrong. Which actual
+released version(s) besides the floor belong in the matrix is a
+maintainer judgment call (see the comment on the minidump-version-range
+job in tests.yml), not something this test derives or enforces.
 """
 import re
 from pathlib import Path
@@ -31,6 +50,7 @@ from pathlib import Path
 import pytest
 import yaml
 from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -121,6 +141,19 @@ def _specifier_has_upper_bound(spec: SpecifierSet) -> bool:
     return any(s.operator in ("<", "<=", "==") for s in spec)
 
 
+def _next_patch_above(version_str: str) -> str:
+    """The next patch release above `version_str`, assuming X.Y.Z
+    versioning -- true for every minidump release to date -- e.g.
+    "0.0.25" from "0.0.24". Used purely as a probe for "the next, as yet
+    unreviewed, upstream release": handed to SpecifierSet.contains(),
+    never installed and never added to any CI matrix, so unlike the
+    "highest allowed version" arithmetic removed in round 3 there is no
+    risk of pointing a maintainer at a version that doesn't exist on
+    PyPI -- see this module's docstring."""
+    v = Version(version_str)
+    return f"{v.major}.{v.minor}.{v.micro + 1}"
+
+
 def _ci_matrix_minidump_versions() -> list:
     workflow = yaml.safe_load(
         (REPO_ROOT / ".github" / "workflows" / "tests.yml").read_text(encoding="utf-8"))
@@ -129,11 +162,12 @@ def _ci_matrix_minidump_versions() -> list:
 
 
 def test_specifier_declares_an_explicit_upper_bound():
-    # Issue #86 Part A's core requirement, checked directly rather than
-    # as a side effect of some other regex's shape (see this module's
-    # docstring for how that happened and silently stopped enforcing
-    # anything): an upper bound so an unreviewed upstream minidump
-    # release cannot silently become the installed version.
+    # An early, friendlier pre-check -- "there is no bound at all" gets a
+    # clearer failure message here than from
+    # test_specifier_excludes_the_next_unreviewed_release() below, which
+    # is what actually enforces the real requirement (a wide-but-present
+    # bound like `<1.0` passes THIS check while still failing that one;
+    # see this module's docstring).
     spec = _minidump_specifier()
     assert _specifier_has_upper_bound(spec), (
         f"pyproject.toml's minidump specifier {spec} has no upper bound "
@@ -141,6 +175,51 @@ def test_specifier_declares_an_explicit_upper_bound():
         f"_specifier_has_upper_bound()'s docstring) -- issue #86 requires "
         f"one so an unreviewed upstream release cannot silently become "
         f"the installed version")
+
+
+def test_specifier_excludes_the_next_unreviewed_release():
+    # The actual requirement, not a proxy for it (see this module's
+    # docstring for how _specifier_has_upper_bound() alone is a proxy
+    # that a deliberately wide ceiling like `<1.0` still satisfies):
+    # the version immediately above the floor must be excluded.
+    spec = _minidump_specifier()
+    probe = _next_patch_above(_specifier_floor(spec))
+    assert not spec.contains(probe), (
+        f"minidump specifier {spec} still admits {probe} -- issue #86 "
+        f"requires the ceiling to exclude the next unreviewed upstream "
+        f"release, not merely to exist. Widening the floor requires "
+        f"re-validating dumpex/core/memory.py:47-63 against the new "
+        f"floor version -- update "
+        f"test_pyproject_floor_is_the_version_memory_py_documents_as_"
+        f"validated_against in the same change.")
+
+
+@pytest.mark.parametrize("specifier_str", [
+    ">=0.0.24,<1.0",      # the "first instinct" wide ceiling flagged in review
+    ">=0.0.24,<=0.0.99",
+    ">=0.0.24,<9999",
+    ">=0.0.24",           # no ceiling at all
+])
+def test_specifier_excludes_the_next_unreviewed_release_meta(specifier_str):
+    # Meta-test: proves test_specifier_excludes_the_next_unreviewed_
+    # release() is able to fail against a specifier that HAS an upper
+    # bound (so _specifier_has_upper_bound() alone would wrongly call it
+    # safe) but still admits the very next release.
+    spec = SpecifierSet(specifier_str)
+    probe = _next_patch_above(_specifier_floor(spec))
+    assert spec.contains(probe), (
+        f"expected {specifier_str} to (wrongly) admit the next "
+        f"unreviewed release {probe} for this meta-test to be "
+        f"meaningful -- if it doesn't, this fixture no longer "
+        f"demonstrates the intended failure mode")
+
+
+@pytest.mark.parametrize("version_str,expected_next", [
+    ("0.0.24", "0.0.25"),
+    ("1.2.9", "1.2.10"),
+])
+def test_next_patch_above(version_str, expected_next):
+    assert _next_patch_above(version_str) == expected_next
 
 
 @pytest.mark.parametrize("specifier_str,expected_floor", [

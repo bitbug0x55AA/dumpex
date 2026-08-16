@@ -339,17 +339,38 @@ def parse_handle_stream(directory, file_handle) -> ParsedHandleDataStream:
 
     handles = []
     for i in range(usable):
-        # Seek to this descriptor's own stride-aligned offset before every
-        # parse -- rather than letting descriptor_cls.parse() consume
-        # however many bytes IT thinks it needs and trusting that to equal
-        # header.SizeOfDescriptor -- so a parser that reads more or fewer
-        # bytes than the declared stride for one descriptor (e.g. a
-        # variable-length field gated on a value inside that descriptor)
-        # can never misalign every descriptor after it. The stride actually
-        # used to advance through the array is enforced structurally here,
-        # not merely assumed to match what was used to select descriptor_cls.
-        chunk.seek(i * header.SizeOfDescriptor)
+        # Seeking to this descriptor's own stride-aligned offset before
+        # every parse prevents CROSS-descriptor misalignment (a parser
+        # that over/under-reads for descriptor i can no longer corrupt
+        # where descriptor i+1 starts) -- but it does NOT prove
+        # descriptor_cls.parse() consumed exactly SizeOfDescriptor bytes
+        # for THIS descriptor. A conditional read gated on a field that
+        # appears BEFORE the point where the extra bytes would be read
+        # (e.g. an ObjectInfoRva-style field partway through the struct,
+        # not only one at the very end) can still silently return a value
+        # built from the wrong bytes for every field after that point,
+        # with seeking alone doing nothing to catch it: the next
+        # iteration's seek repositions to the correct START, but this
+        # iteration's OWN fields can already be wrong. The tell()-delta
+        # check below is what actually proves parse() consumed exactly
+        # one stride -- not the seek.
+        start = i * header.SizeOfDescriptor
+        chunk.seek(start)
         raw = descriptor_cls.parse(chunk)
+        consumed = chunk.tell() - start
+        if consumed != header.SizeOfDescriptor:
+            # Not a HandleStreamFramingError: the STREAM's own framing
+            # (SizeOfDescriptor, SizeOfHeader, ...) is exactly what it
+            # declared to be -- this is the INSTALLED minidump library's
+            # descriptor_cls.parse() disagreeing with the stride that was
+            # selected for it, i.e. an upstream layout drift, the same
+            # class of error _handle_descriptor_layout() raises.
+            raise HandleDescriptorLayoutError(
+                f"{descriptor_cls.__name__}.parse() consumed {consumed} bytes "
+                f"for descriptor {i}, not the declared SizeOfDescriptor "
+                f"{header.SizeOfDescriptor} -- the installed minidump "
+                f"library's layout no longer matches what this stride was "
+                f"selected for")
         type_name = (_read_handle_string(raw.TypeNameRva, file_handle)
                      if raw.TypeNameRva else None)
         object_name = (_read_handle_string(raw.ObjectNameRva, file_handle)

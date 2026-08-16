@@ -346,6 +346,25 @@ def test_size_selection_follows_derived_constants_not_literal(monkeypatch):
     # constants, not a literal baked into the comparison -- proving the
     # branch tracks the derived value rather than merely happening to
     # equal it under today's installed library.
+    #
+    # MINIDUMP_HANDLE_DESCRIPTOR_2 must ALSO be patched to genuinely
+    # consume 48 bytes (not just claim to via the layout tuple): the
+    # tell()-delta check in parse_handle_stream() (added after a review
+    # found the plain seek()-based stride enforcement alone didn't catch
+    # a mid-struct conditional over-read) would otherwise correctly
+    # flag a 48-vs-actually-40 mismatch as descriptor layout drift and
+    # raise HandleDescriptorLayoutError -- this test is about proving the
+    # SELECTION path, not about exercising that drift check.
+    from minidump.streams.HandleDataStream import MINIDUMP_HANDLE_DESCRIPTOR_2 as _RealV2
+
+    class _V2ConsumingFortyEightBytes:
+        @staticmethod
+        def parse(buff):
+            raw = _RealV2.parse(buff)
+            buff.read(8)   # genuinely consume the padding, not just claim to
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR_2", _V2ConsumingFortyEightBytes)
     monkeypatch.setattr(memory, "_handle_descriptor_layout", lambda: (32, 48))
 
     result = _parse([{"handle": 0x99, "type_name": "Mutant", "object_name": None}],
@@ -357,6 +376,110 @@ def test_size_selection_follows_derived_constants_not_literal(monkeypatch):
     # patched layout it matches neither derived size.
     with pytest.raises(HandleStreamFramingError):
         _parse([{"handle": 0x1}], size_of_descriptor=40)
+
+
+def test_mid_struct_conditional_read_raises_layout_error_not_silently_misparses(monkeypatch):
+    # Reproduces a review finding: seek()-based stride enforcement (each
+    # iteration seeks to i * SizeOfDescriptor before parsing) prevents
+    # CROSS-descriptor misalignment, but does NOT by itself prove a
+    # single descriptor's own parse() consumed exactly one stride. A
+    # conditional extra read gated on a field that appears BEFORE the
+    # point of divergence (Attributes here, read before the branch) can
+    # leave every field parsed AFTER that point built from the wrong
+    # bytes -- with the seek-only version raising nothing at all, a
+    # "looks clean, is wrong" result. A zero-filled probe (what
+    # _descriptor_class_size() uses to derive the "official" 32/40
+    # sizes) never sets the Attributes bit that triggers the extra read,
+    # so the layout check alone cannot catch this either -- only the
+    # per-descriptor tell()-delta check exercised here can.
+    #
+    # The layout cache is pinned to the REAL (32, 40) here -- not reset
+    # to None -- so _handle_descriptor_layout() short-circuits on the
+    # cache and never re-derives from the patched (broken) class below.
+    # Resetting to None would make this test's outcome depend on
+    # _MidStructConditionalRead's behavior against a ZERO-filled probe
+    # too (attributes=0 there, so it happens to still derive 32 -- but
+    # relying on that coincidence, or on cache state left behind by
+    # whichever earlier test happened to run first, is exactly the kind
+    # of order-dependent fragility this test must not have.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", (32, 40))
+
+    class _MidStructConditionalRead:
+        @staticmethod
+        def parse(buff):
+            handle = int.from_bytes(buff.read(8), "little", signed=False)
+            type_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            object_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            attributes = int.from_bytes(buff.read(4), "little", signed=False)
+            if attributes & 0x1:
+                buff.read(4)   # extra conditional read, gated on a field ALREADY parsed
+            granted_access = int.from_bytes(buff.read(4), "little", signed=False)
+            handle_count = int.from_bytes(buff.read(4), "little", signed=False)
+            pointer_count = int.from_bytes(buff.read(4), "little", signed=False)
+
+            class _Raw:
+                pass
+            raw = _Raw()
+            raw.Handle, raw.TypeNameRva, raw.ObjectNameRva = handle, type_name_rva, object_name_rva
+            raw.Attributes, raw.GrantedAccess = attributes, granted_access
+            raw.HandleCount, raw.PointerCount = handle_count, pointer_count
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _MidStructConditionalRead)
+
+    # A SECOND descriptor is required so the conditional over-read in
+    # descriptor 0 has real bytes to consume (descriptor 1's own data)
+    # rather than hitting the end of the buffer and silently truncating
+    # to a shorter, coincidentally-still-32-byte read.
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="descriptor 0"):
+        _parse([
+            {"handle": 0x1, "attributes": 0x1, "granted_access": 0xAAAA,
+             "handle_count": 0xBBBB, "pointer_count": 0xCCCC},
+            {"handle": 0x2, "attributes": 0, "granted_access": 0x1111,
+             "handle_count": 0x2222, "pointer_count": 0x3333},
+        ])
+
+
+def test_last_descriptor_under_consuming_parse_raises_layout_error(monkeypatch):
+    # consumed < declared must raise just as reliably as consumed >
+    # declared -- a parser that reads FEWER bytes than SizeOfDescriptor
+    # (here: a descriptor class that forgets to read PointerCount) must
+    # not be allowed to silently leave PointerCount at some default/
+    # garbage value. Uses a single (= last, = only) descriptor, so
+    # there's no next-descriptor spillover involved -- this is a pure
+    # under-consumption case, not a truncation-at-buffer-end case.
+    #
+    # Pinned to the real (32, 40) for the same reason as the test above:
+    # without this, _MissingPointerCountField's own 28-byte zero-probe
+    # result would make _handle_descriptor_layout() itself raise first
+    # (a true positive, but the WRONG check -- this test exists to prove
+    # the per-descriptor tell()-delta check specifically, not to prove
+    # the layout probe catches a permanently-broken class).
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", (32, 40))
+
+    class _MissingPointerCountField:
+        @staticmethod
+        def parse(buff):
+            handle = int.from_bytes(buff.read(8), "little", signed=False)
+            type_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            object_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            attributes = int.from_bytes(buff.read(4), "little", signed=False)
+            granted_access = int.from_bytes(buff.read(4), "little", signed=False)
+            handle_count = int.from_bytes(buff.read(4), "little", signed=False)
+            # PointerCount is never read -- 4 bytes short of the
+            # declared 32-byte v1 stride.
+
+            class _Raw:
+                pass
+            raw = _Raw()
+            raw.Handle, raw.TypeNameRva, raw.ObjectNameRva = handle, type_name_rva, object_name_rva
+            raw.Attributes, raw.GrantedAccess = attributes, granted_access
+            raw.HandleCount, raw.PointerCount = handle_count, 0
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _MissingPointerCountField)
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="descriptor 0"):
+        _parse([{"handle": 0x1, "granted_access": 0xAAAA, "handle_count": 0xBBBB}])
 
 
 def test_equal_derived_sizes_raise_layout_error(monkeypatch):
