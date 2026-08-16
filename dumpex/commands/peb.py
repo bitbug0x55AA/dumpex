@@ -1,6 +1,6 @@
 """--peb command."""
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import BOLD
+from dumpex.ui.colors import BOLD, console_safe
 from dumpex.output.records import PebRecord, hex_address
 from dumpex.output.coverage import (
     observe_source, build_coverage_report, EvaluationRequirement, LimitationCode, SourceState,
@@ -89,23 +89,32 @@ def render_peb_console(record: PebRecord, coverage) -> None:
             print(f"[!] {reason}")
         return
 
+    # Every string below is walked out of the target process's own PEB, so
+    # all of it is attacker-controlled. console_safe() is applied to ALL of
+    # them rather than to the five that are obviously free-form: it is the
+    # identity function on ordinary text, so blanket application costs
+    # nothing and removes the "is THIS field dump-derived?" judgement from
+    # the print site, which is where that judgement gets made wrong. The
+    # record and --json keep the exact decoded values.
     print(f"\n{BOLD('═══ PEB ═══')}")
-    print(f"  {'PEB Address':<24} {record.peb_address}")
+    print(f"  {'PEB Address':<24} {console_safe(record.peb_address)}")
     print(f"  {'BeingDebugged':<24} {record.being_debugged}")
-    print(f"  {'ImageBaseAddress':<24} {record.image_base_address}")
-    print(f"  {'ImagePath':<24} {record.image_path or '(none)'}")
-    print(f"  {'CommandLine':<24} {record.command_line or '(none)'}")
-    print(f"  {'WindowTitle':<24} {record.window_title or '(none)'}")
-    print(f"  {'DllPath':<24} {record.dll_path or '(none)'}")
-    print(f"  {'CurrentDirectory':<24} {record.current_directory or '(none)'}")
-    print(f"  {'StandardInput':<24} {record.standard_input}")
-    print(f"  {'StandardOutput':<24} {record.standard_output}")
-    print(f"  {'StandardError':<24} {record.standard_error}")
+    print(f"  {'ImageBaseAddress':<24} {console_safe(record.image_base_address)}")
+    print(f"  {'ImagePath':<24} {console_safe(record.image_path) or '(none)'}")
+    print(f"  {'CommandLine':<24} {console_safe(record.command_line) or '(none)'}")
+    print(f"  {'WindowTitle':<24} {console_safe(record.window_title) or '(none)'}")
+    print(f"  {'DllPath':<24} {console_safe(record.dll_path) or '(none)'}")
+    print(f"  {'CurrentDirectory':<24} {console_safe(record.current_directory) or '(none)'}")
+    print(f"  {'StandardInput':<24} {console_safe(record.standard_input)}")
+    print(f"  {'StandardOutput':<24} {console_safe(record.standard_output)}")
+    print(f"  {'StandardError':<24} {console_safe(record.standard_error)}")
 
     if record.environment_variables:
         print(f"\n  {BOLD('Environment Variables:')}")
         for env in record.environment_variables:
-            print(f"    {env['name']}={env['value']}")
+            # Both halves come from the captured environment block -- a
+            # value is arbitrary bytes the process was started with.
+            print(f"    {console_safe(env['name'])}={console_safe(env['value'])}")
 
 
 def cmd_peb(mf: MinidumpFile) -> CommandResult:

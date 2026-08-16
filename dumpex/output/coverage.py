@@ -867,6 +867,62 @@ class LimitationCode(str, Enum):
     # was ever attempted. source fixed to "environment_block"; fully
     # fixed sentence (no fields); caller_buildable.
 
+    # ── --handles (issue #42 / docs/recon_process_sysinfo_handles_
+    # contract.md §5.5/§6.1) ─────────────────────────────────────────────
+    # The first three are the three mutually exclusive ways --handles'
+    # single-source evaluation group ("handle_records", a DERIVED source:
+    # the usable normalized records) ends up ABSENT. All three are
+    # absent_capable with fixed_source="handle_records" because
+    # collect_handles() selects among them at call time for one
+    # EvaluationRequirement.all_absent_code -- the same shape --peb/
+    # --process already use, applied to a derived source. They must never
+    # be conflated with each other: "not captured with handle data",
+    # "captured but unparseable", and "parsed but no descriptor usable"
+    # send an analyst to three different next steps, and all three map to
+    # exit 4 without becoming the same reason string.
+    HANDLES_UNAVAILABLE = "HANDLES_UNAVAILABLE"
+    # ^ §5.5 case 1: no HandleDataStream directory entry in the dump at
+    # all. Fully fixed sentence, no fields.
+    HANDLES_PARSE_FAILED = "HANDLES_PARSE_FAILED"
+    # ^ §5.5 case 2: the stream IS present but parse_handle_stream()
+    # raised (or, defensively, never ran), so mf.handles is None. The
+    # parser's own error text cannot ride on this code -- the group
+    # derivation path sets no `detail` (see the "No absent_capable code
+    # may interpolate a field the derivation path cannot set" rule below)
+    # -- so it arrives on a companion SOURCE_FAILED limitation over the
+    # `handles` source instead, which build_coverage_report() already
+    # re-surfaces even when a group short-circuits to not_evaluated.
+    HANDLES_ALL_DESCRIPTORS_INVALID = "HANDLES_ALL_DESCRIPTORS_INVALID"
+    # ^ §5.5 case 3, total loss: the stream parsed and carried
+    # descriptors, but not one of them normalized into a record (§5.2.2:
+    # an unusable Handle value is the only discard path). A
+    # normalization-layer failure one level above HANDLES_PARSE_FAILED's
+    # parse-layer failure. The descriptor count stays recoverable from
+    # coverage.sources["handles"].record_count.
+    HANDLE_DESCRIPTOR_INVALID = "HANDLE_DESCRIPTOR_INVALID"
+    # ^ §5.5 case 3, partial loss: some descriptors were discarded
+    # (§5.2.2) while at least one record survived -- `affected_count` is
+    # how many were lost. Surviving records are always still reported.
+    # source fixed to "handles"; caller_buildable.
+    HANDLE_STRING_READ_FAILED = "HANDLE_STRING_READ_FAILED"
+    # ^ §5.2.1: `affected_count` DESCRIPTORS (not fields -- a handle that
+    # lost both names counts once) carry a type or object name whose RVA
+    # was non-zero but whose bounded read/decode failed. Never costs a
+    # record: the descriptor is reported in full with that one name null
+    # and its own *_status field set to "unreadable". source fixed to
+    # "handles"; caller_buildable.
+    HANDLE_STREAM_TRUNCATED = "HANDLE_STREAM_TRUNCATED"
+    # ^ §5.1.1 rules 4-5: the stream declares more descriptors than
+    # dumpex read -- because MAX_HANDLE_DESCRIPTORS capped it, because
+    # Location.DataSize could not hold them, or because the file itself
+    # ended early. `affected_count` is header.NumberOfDescriptors -
+    # len(handles), read off the parser's own returned object (NEVER
+    # recomputed from §5.1.1 rule 4's three-term formula, which omits the
+    # fourth, byte-count bound and would under-report the gap on a
+    # truncated file). Never costs a located record: a truncated tail
+    # discards nothing that was actually read. source fixed to "handles";
+    # caller_buildable.
+
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
@@ -1145,6 +1201,12 @@ _SOURCE_DISPLAY_NAMES = {
     "main_image":  "PEB-reported main image",
     "sysinfo":     "SystemInfoStream",
     "environment_block": "Environment block",
+    # §1.7: --handles' stream source. "handle_records" (the derived
+    # source in the same command's coverage.sources) deliberately has NO
+    # entry -- every code naming it renders fully fixed text that never
+    # interpolates a display name, so an entry here would be dead weight
+    # a reader could mistake for a second stream.
+    "handles":     "HandleDataStream",
 }
 
 
@@ -1949,6 +2011,20 @@ def _validate_environment_block_truncated_fields(limitation: "CoverageLimitation
                 f"budget_limit={limitation.budget_limit!r} budget_consumed={limitation.budget_consumed!r}")
 
 
+def _render_handle_descriptor_invalid(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} handle descriptor(s) could not be normalized"
+
+
+def _render_handle_string_read_failed(limitation: "CoverageLimitation") -> str:
+    return (f"{limitation.affected_count} handle(s) have a type or object name that could "
+            f"not be read or decoded")
+
+
+def _render_handle_stream_truncated(limitation: "CoverageLimitation") -> str:
+    return (f"HandleDataStream declares more descriptors than dumpex will parse; "
+            f"{limitation.affected_count} descriptor(s) were not read")
+
+
 def _render_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
     """Factory for the fully fixed-sentence codes (no field
     interpolation at all) -- avoids five near-identical one-line lambdas."""
@@ -2482,6 +2558,37 @@ _CODE_SPECS = {
             "a captured process environment block source exists without the system/thread "
             "evidence needed to interpret it; the environment block was never walked"),
         fixed_source="environment_block", caller_buildable=True),
+    # ── --handles (issue #42 / §5.5/§6.1) ────────────────────────────────
+    # The three "handle_records" codes are absent_capable ONLY (never
+    # caller_buildable): each one is a fact about the derived evaluation
+    # group as a whole, which build_coverage_report()'s all-absent branch
+    # establishes from the source states themselves -- a hand-built copy
+    # in completeness_checks could claim "no descriptor could be
+    # normalized" while handle_records was in fact PRESENT.
+    LimitationCode.HANDLES_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "HandleDataStream not present in this dump (not captured with handle data)"),
+        fixed_source="handle_records", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.HANDLES_PARSE_FAILED: _CodeSpec(
+        render=_render_fixed_text(
+            "HandleDataStream is present in this dump but could not be parsed"),
+        fixed_source="handle_records", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.HANDLES_ALL_DESCRIPTORS_INVALID: _CodeSpec(
+        render=_render_fixed_text(
+            "HandleDataStream present but no descriptor could be normalized"),
+        fixed_source="handle_records", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.HANDLE_DESCRIPTOR_INVALID: _CodeSpec(
+        render=_render_handle_descriptor_invalid, fixed_source="handles", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("HANDLE_DESCRIPTOR_INVALID"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.HANDLE_STRING_READ_FAILED: _CodeSpec(
+        render=_render_handle_string_read_failed, fixed_source="handles", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("HANDLE_STRING_READ_FAILED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.HANDLE_STREAM_TRUNCATED: _CodeSpec(
+        render=_render_handle_stream_truncated, fixed_source="handles", caller_buildable=True,
+        validate_fields=_require_positive_affected_count("HANDLE_STREAM_TRUNCATED"),
+        allowed_fields=frozenset({"affected_count"})),
 }
 
 # Derived collections -- every other call site (SourceRequirement,

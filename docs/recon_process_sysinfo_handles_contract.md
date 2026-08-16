@@ -2061,19 +2061,43 @@ framing first, in this order:
    value → **parse failure**, not a truncation: dumpex cannot know the
    layout, so no descriptor can be trusted, and guessing 32 (as the
    library's `else` branch effectively does by falling through to the v2
-   parser) would misread every field.
+   parser) would misread every field. Both sizes are **derived from the
+   installed library's own struct classes** and validated against the
+   MS-defined 32/40 before either branch is selected (issue #86's
+   `_handle_descriptor_layout()`), so no literal picks a parser; a
+   library whose layout has drifted raises `HandleDescriptorLayoutError`
+   rather than silently misreading every descriptor. That error and
+   `HandleStreamFramingError` both reach §5.5 case 2, but they mean
+   different things — a drifted **environment** versus *this dump's*
+   malformed stream — so the `SOURCE_FAILED` detail must keep them
+   distinguishable rather than collapsing both into "parse failed".
 4. The number of descriptors dumpex will actually read is
    `usable = min(NumberOfDescriptors, MAX_HANDLE_DESCRIPTORS,
-   (Location.DataSize - SizeOfHeader) // SizeOfDescriptor)`. A trailing
+   (Location.DataSize - SizeOfHeader) // SizeOfDescriptor,
+   bytes_actually_read // SizeOfDescriptor)`. A trailing
    run of bytes shorter than one whole descriptor is **not** parsed —
-   a partial descriptor has no recoverable field set.
+   a partial descriptor has no recoverable field set. The fourth term is
+   not redundant with the third (issue #86): the third is derived from
+   the **producer's own declared** `Location.DataSize`, so a dump whose
+   file ends before that size says it should would otherwise hand the
+   descriptor parser a short buffer, which reads back as all-zero fields
+   rather than raising — fabricating descriptors that were never on disk.
 5. When `usable < NumberOfDescriptors`, one `HANDLE_STREAM_TRUNCATED`
    limitation is emitted with
    `affected_count = NumberOfDescriptors - usable` — the count of
    descriptors the stream *claims* exist that dumpex did not read,
-   whether the cause was the budget or the stream's own size. `usable`
-   descriptors are still parsed and reported: a truncated tail never
-   discards a readable head.
+   whether the cause was the budget, the stream's own size, or the file
+   ending early. `usable` descriptors are still parsed and reported: a
+   truncated tail never discards a readable head.
+
+   A consumer must read that count off the returned object, as
+   `header.NumberOfDescriptors - len(handles)`, and must **not** recompute
+   it from rule 4's formula: `bytes_actually_read` is not derivable from
+   the stream's declared framing, so a recomputation silently under-reports
+   the gap in exactly the truncated-file case this limitation exists for.
+   `dumpex.core.memory.get_handles()` returns only the `handles` list and
+   discards the header, so it cannot serve this — `--handles` reads
+   `mf.handles` directly (§5.5).
 
 The distinction between rules 1–3 (parse failure, exit 4) and rules 4–5
 (truncation, exit 3) is deliberate: 1–3 mean *nothing* in the stream can
@@ -2083,8 +2107,8 @@ tail is missing.
 `parse_handle_stream()` reuses the library's public
 `MINIDUMP_HANDLE_DATA_STREAM`, `MINIDUMP_HANDLE_DESCRIPTOR`, and
 `MINIDUMP_HANDLE_DESCRIPTOR_2` classes for the fixed-size structures
-(including the existing `SizeOfDescriptor == 32` discriminator between
-v1 and v2), and:
+(with `_handle_descriptor_layout()` as the v1/v2 discriminator — rule 3),
+and:
 
 - caps descriptors at `MAX_HANDLE_DESCRIPTORS`; a declared
   `NumberOfDescriptors` beyond that is truncated, emitting
@@ -2322,18 +2346,69 @@ reduction path is introduced.
 
 - `Access` is rendered as `0x%08x` in the console while remaining a
   plain integer in JSON (§1.3).
+- **Names are attacker-controlled and are escaped on their way to the
+  terminal.** `TypeName`/`ObjectName` are decoded out of the dump, so a
+  raw `print()` of one is input to the terminal's parser, not just text
+  on a line: a newline forges an extra line indistinguishable from
+  dumpex's own `[~]` coverage reasons, `ESC` introduces ANSI sequences
+  that clear the screen or overwrite lines already printed, and a bidi
+  override (U+202E) visually reorders the characters around it, so
+  `user<RLO>gnp.exe` reads as `userexe.png`. Every such character is
+  rendered as a visible `\xNN`/`\uNNNN` escape (`console_safe()`) in the
+  table's Type and Object columns, in the `By type:` line, and in the
+  `[~]` lines — nothing is dropped, so the analyst still sees that
+  something was there and what it was. This is a **console-only**
+  projection: records, `summary.by_type` keys, and everything in `--json`
+  keep the exact decoded string, which is where evidence is read
+  byte-for-byte. Backslashes are deliberately not doubled, so ordinary
+  object names (`\Device\NamedPipe\mypipe`) stay readable.
 - Each `null` name prints `(unnamed)` or `(unreadable)` according to
   **its own** status field — `type_name_status` for the Type column,
   `object_name_status` for the Object column. The console keeps exactly
   the distinction the record does (§5.2.1), so a reader scanning the
   table is never told a handle is anonymous when its name was lost, and
   a handle with one good name and one lost one shows both truthfully.
+- Every column width is a **minimum**, never a truncation: a value wider
+  than its column pushes the rest of the row right rather than losing
+  characters. Each column is therefore followed by two **literal**
+  spaces, so the separator survives an oversized value — a width alone
+  does not. Windows carries plenty of 16-to-20-character type names
+  (`WaitCompletionPacket`, `FilterConnectionPort`, `IoCompletionReserve`,
+  …), which a separator-less `Type` column fuses to the `Access` mask
+  into one unsplittable token. `Access` gets the same treatment even
+  though a raw 32-bit mask cannot overflow it: §5.2's deferred
+  type-specific permission decoding would put a decoded name there, and
+  the same fusion would reappear one column over.
 - `summary = {"count": N, "by_type": {…}}`, with `by_type` keyed by
   `type_name`, ordered count-descending then name-ascending (§1.5).
   A `null` `type_name` is keyed `"(unnamed)"` or `"(unreadable)"`
   according to `type_name_status` alone — `object_name_status` never
   affects bucketing — so the two never merge. `by_type` is `{}` when
   there are no records.
+- Those two labels are dumpex's own words, but they share a string space
+  with captured names, and a dump can carry a type or object literally
+  named `(unnamed)`. Both labels are therefore **reserved for the
+  null-name statuses everywhere they are displayed**: a captured name
+  equal to one of them is suffixed with `" [captured name]"`. This is one
+  shared projection (`handle_name_display()`), used by the console's
+  Type and Object columns and by `summary.by_type` alike, so the same
+  handle can never read one way in the table and another in the summary.
+  Bucketing is additionally keyed by `(type_name_status, type_name)`
+  rather than by the label, so the counts are computed on the correct
+  partition before any label exists. The projection is **injective**: a
+  captured name that already ends with the suffix is suffixed again, so
+  distinct names always produce distinct labels and neither call site
+  needs cross-row state to stay consistent with the other — a local
+  uniqueness pass in one of them is what made the two disagree once
+  already, and it is also what made the summary quadratic in the number
+  of distinct type names (`MAX_HANDLE_DESCRIPTORS` allows 65,536).
+  Without this a
+  crafted dump could park handles in the one bucket an analyst is least
+  likely to read through, and the display would contradict the record
+  layer, where `type_name_status` keeps the two apart unconditionally.
+  Label assignment is ordered by bucket (null-name statuses first, then
+  captured names ascending), never by count or record order, and
+  `by_type` is then emitted in §1.5's order **on the final keys**.
 
 ### 5.7 Framing
 

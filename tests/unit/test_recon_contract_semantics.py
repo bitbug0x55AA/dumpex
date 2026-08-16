@@ -34,10 +34,11 @@ own frozen rules:
      small test-only reference wrapper for the not-yet-implemented
      True path -- clearly marked as a #38 prototype, not production
      code. Scoped to the single-source-EvaluationRequirement shape
-     --process/--handles actually use (§3.7.2/§5.5); a
-     --handles-specific instantiation using HANDLES_PARSE_FAILED/
-     HANDLES_ALL_DESCRIPTORS_INVALID is deferred, since those codes are
-     not yet members of the live LimitationCode enum (#38/#40).
+     --process/--handles actually use (§3.7.2/§5.5). The --handles-
+     specific instantiation (HANDLES_PARSE_FAILED/HANDLES_ALL_
+     DESCRIPTORS_INVALID over the derived `handle_records` source) landed
+     with #42 and is exercised against the real command in
+     tests/unit/test_handles_cmd.py, not modelled here.
 """
 import os
 import re

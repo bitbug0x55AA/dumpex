@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
+from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
     read_region, parse_hex_or_int, INDICATOR_DIMS, MAX_REGION_READ,
@@ -752,7 +752,9 @@ def _render_card(mf, card, min_len: int) -> None:
             print(f"  {'Kernel Time':<22} {_duration_100ns_to_str(t.kernel_time_100ns)}")
             print(f"  {'User Time':<22} {_duration_100ns_to_str(t.user_time_100ns)}")
             if t.module_context == MODULE_CONTEXT_RESOLVED:
-                print(f"  {'Backed By':<22} {GREEN(t.backing_module)}")
+                # ModuleListStream string -- escaped before the colour
+                # helper, per console_safe()'s own contract.
+                print(f"  {'Backed By':<22} {GREEN(console_safe(t.backing_module))}")
                 print(f"  {'Module Range':<22} 0x{int(t.backing_module_base, 16):x} — "
                       f"0x{int(t.backing_module_end, 16):x}")
             else:
@@ -844,7 +846,7 @@ def _render_card(mf, card, min_len: int) -> None:
                     fo_abs = None if card.region.file_offset is None else card.region.file_offset + s.offset
                     fo_abs_str = f"0x{fo_abs:x}" if fo_abs is not None else "(not captured)"
                     enc_col = f"[{s.encoding}]"
-                    print(RED(f"    {CYAN(enc_col):<14} {s.text}"))
+                    print(RED(f"    {CYAN(enc_col):<14} {console_safe(s.text)}"))
                     print(RED(f"      VA  = region base 0x{base:016x}  +  offset 0x{s.offset:x}  =  "
                               f"0x{abs_addr:016x}"))
                     print(RED(f"      DMP = file offset {fo_abs_str}"))
@@ -867,7 +869,7 @@ def _render_card(mf, card, min_len: int) -> None:
                     fo_abs = None if card.region.file_offset is None else card.region.file_offset + off
                     fo_abs_str = f"0x{fo_abs:x}" if fo_abs is not None else "?"
                     enc_col = f"[{s.encoding}]"
-                    print(f"    {CYAN(enc_col):<14} {s.text}")
+                    print(f"    {CYAN(enc_col):<14} {console_safe(s.text)}")
                     print(DIM(f"      VA  = 0x{base:016x} + 0x{off:x} = 0x{abs_addr:016x}  DMP = {fo_abs_str}"))
 
             print(DIM(f"\n  Total: {ss['total']} strings  "
@@ -937,7 +939,10 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
             print(f"      VA  = region base 0x{base:016x}  +  offset 0x{off:x}  =  0x{abs_addr:016x}")
             print(f"      DMP = file offset {fo_str}")
         if summary["hits_image"]:
-            mods = ", ".join(summary["image_hit_modules"])
+            # ntpath.basename() of ModuleListStream names (see the summary
+            # builder above) -- dump strings, escaped for the console while
+            # summary/--json keep the exact values.
+            mods = ", ".join(console_safe(m) for m in summary["image_hit_modules"])
             print(DIM(f"    [·] {summary['hits_image']} hit(s) in known MEM_IMAGE modules "
                       f"({mods}) — skipped (expected content)"))
         print()

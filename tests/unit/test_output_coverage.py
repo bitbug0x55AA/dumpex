@@ -2569,3 +2569,102 @@ def test_environment_codes_are_all_registered_and_render():
     assert len(environment_codes) == 5
     for code in environment_codes:
         assert code in _CODE_SPECS
+
+
+# ── --handles (issue #42 / docs/recon_process_sysinfo_handles_contract.md
+# §5.5/§6.1) -- HANDLE*/HANDLES_* limitation codes ────────────────────────
+
+_HANDLE_GROUP_CODES = (
+    LimitationCode.HANDLES_UNAVAILABLE,
+    LimitationCode.HANDLES_PARSE_FAILED,
+    LimitationCode.HANDLES_ALL_DESCRIPTORS_INVALID,
+)
+_HANDLE_COUNT_CODES = (
+    LimitationCode.HANDLE_DESCRIPTOR_INVALID,
+    LimitationCode.HANDLE_STRING_READ_FAILED,
+    LimitationCode.HANDLE_STREAM_TRUNCATED,
+)
+
+
+@pytest.mark.parametrize("code,expected", [
+    (LimitationCode.HANDLES_UNAVAILABLE,
+     "HandleDataStream not present in this dump (not captured with handle data)"),
+    (LimitationCode.HANDLES_PARSE_FAILED,
+     "HandleDataStream is present in this dump but could not be parsed"),
+    (LimitationCode.HANDLES_ALL_DESCRIPTORS_INVALID,
+     "HandleDataStream present but no descriptor could be normalized"),
+])
+def test_handle_group_codes_render_their_frozen_sentence(code, expected):
+    assert render_limitation(
+        CoverageLimitation(code=code, source="handle_records")) == expected
+
+
+@pytest.mark.parametrize("code", _HANDLE_GROUP_CODES)
+def test_handle_group_codes_are_absent_capable_over_handle_records(code):
+    # --handles selects among these three at call time for ONE
+    # single-source evaluation group, so each must be usable as an
+    # all_absent_code -- and only over its own fixed source.
+    assert code in _ABSENT_CAPABLE_CODES
+    EvaluationRequirement(sources=("handle_records",), all_absent_code=code)
+    with pytest.raises(ValueError, match="requires sources\[0\]"):
+        EvaluationRequirement(sources=("handles",), all_absent_code=code)
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=code, source="handles")
+
+
+@pytest.mark.parametrize("code", _HANDLE_GROUP_CODES)
+def test_handle_group_codes_carry_no_interpolated_field(code):
+    # build_coverage_report()'s all-absent branch sets only scope/
+    # related_sources -- a template reading affected_count/detail would
+    # render "None" in real output, so neither field may be attachable.
+    for field in ("affected_count", "detail"):
+        with pytest.raises(ValueError, match="does not use"):
+            CoverageLimitation(code=code, source="handle_records", **{field: 3 if field ==
+                                "affected_count" else "x"})
+
+
+@pytest.mark.parametrize("code,expected", [
+    (LimitationCode.HANDLE_DESCRIPTOR_INVALID,
+     "4 handle descriptor(s) could not be normalized"),
+    (LimitationCode.HANDLE_STRING_READ_FAILED,
+     "4 handle(s) have a type or object name that could not be read or decoded"),
+    (LimitationCode.HANDLE_STREAM_TRUNCATED,
+     "HandleDataStream declares more descriptors than dumpex will parse; "
+     "4 descriptor(s) were not read"),
+])
+def test_handle_count_codes_render_their_frozen_sentence(code, expected):
+    assert render_limitation(
+        CoverageLimitation(code=code, source="handles", affected_count=4)) == expected
+
+
+@pytest.mark.parametrize("code", _HANDLE_COUNT_CODES)
+def test_handle_count_codes_require_a_positive_count_over_handles(code):
+    # A bare, count-free construction renders "None descriptor(s)" -- it
+    # is rejected at construction instead.
+    with pytest.raises(ValueError, match="requires affected_count to be a positive integer"):
+        CoverageLimitation(code=code, source="handles")
+    # 0 is caught one level earlier, by the shared field validator.
+    with pytest.raises(ValueError, match="must be None or a plain positive int"):
+        CoverageLimitation(code=code, source="handles", affected_count=0)
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=code, source="handle_records", affected_count=1)
+    # Caller-buildable only: these are per-descriptor facts the reducer
+    # cannot infer from source state, and none of them describes absence.
+    assert code not in _ABSENT_CAPABLE_CODES
+
+
+def test_handles_source_renders_its_stream_name():
+    # §1.7: without this entry a SOURCE_FAILED over the handle stream
+    # would render the raw key "handles".
+    assert _display_name("handles") == "HandleDataStream"
+    limitation = CoverageLimitation(code=LimitationCode.SOURCE_FAILED, source="handles",
+                                     detail="HandleStreamFramingError: boom")
+    assert render_limitation(limitation) == (
+        "HandleDataStream present but could not be read: HandleStreamFramingError: boom")
+
+
+def test_handle_codes_are_all_registered_and_render():
+    handle_codes = [c for c in LimitationCode if c.value.startswith("HANDLE")]
+    assert len(handle_codes) == 6
+    for code in handle_codes:
+        assert code in _CODE_SPECS

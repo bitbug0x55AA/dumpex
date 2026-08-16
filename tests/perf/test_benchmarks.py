@@ -244,3 +244,35 @@ def test_xor_structural_candidate_heavy_region_completes_within_time_budget():
     # exhausted that must be visible, never a silent clean/complete miss.
     if f["score"] == 0:
         assert f["coverage_status"] == "partial"
+
+
+# ── --handles: the type summary must stay linear in distinct type names ──
+# MAX_HANDLE_DESCRIPTORS (65,536) is a frozen budget, and every descriptor
+# may carry its own type name, so summarize_handles_by_type() is handed up
+# to 65,536 distinct buckets. A per-bucket uniqueness scan over the labels
+# already assigned (the shape the first collision fix used) is quadratic:
+# ~0.3s at 8k names, and minutes at the real cap. collect + render each
+# call it once, so the cost is paid twice per invocation.
+
+def test_handle_type_summary_stays_linear_at_the_descriptor_cap():
+    from dumpex.commands.handles import summarize_handles_by_type
+    from dumpex.core.memory import MAX_HANDLE_DESCRIPTORS
+    from dumpex.output.records import HandleRecord
+
+    records = [
+        HandleRecord(handle=f"0x{i:016x}", type_name=f"Type{i}", type_name_status="ok",
+                      object_name=None, object_name_status="unnamed", attributes=0,
+                      granted_access=1, handle_count=1, pointer_count=1)
+        for i in range(MAX_HANDLE_DESCRIPTORS)
+    ]
+
+    start = time.perf_counter()
+    summary = summarize_handles_by_type(records)
+    elapsed = time.perf_counter() - start
+
+    assert len(summary) == MAX_HANDLE_DESCRIPTORS
+    # Generous by two orders of magnitude against the linear timing, but
+    # far under the quadratic one (which does not finish in minutes here).
+    assert elapsed < 5.0, (
+        f"summarizing {MAX_HANDLE_DESCRIPTORS} distinct handle type names took "
+        f"{elapsed:.2f}s -- the per-bucket label scan is back")

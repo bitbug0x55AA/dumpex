@@ -1,0 +1,495 @@
+"""Anti-recurrence harness for untrusted dump text reaching the terminal.
+
+Everything dumpex prints that came OUT OF A DUMP is attacker-controlled:
+a handle's TypeName/ObjectName, a module name/path, the PEB's command
+line, an environment value. Printed raw, such a string is not data on a
+line -- it is input to the terminal's own parser, and can forge dumpex's
+own output (a newline plus "  [~] ..." reads as a real coverage reason),
+clear the screen, or visually reorder itself (U+202E, the Trojan Source
+trick applied to evidence). `dumpex.ui.colors.console_safe()` is the one
+projection that neutralizes it, and it belongs at the console boundary
+only -- the records and `--json` keep the exact decoded bytes.
+
+**This checks behaviour, never spelling.** Each case builds real record
+objects, calls the real renderer, and inspects the bytes that actually
+reached stdout. Nothing here reads source text, matches identifiers, or
+trusts a docstring, so none of these evade it:
+
+    print(rec.name)                        # no f-string
+    print("%s" % rec.name)                 # old-style formatting
+    n = rec.name; print(f"{n}")            # via a local
+    sys.stdout.write(rec.name)             # not print()
+    print(f"{console_safe(a)} {rec.name}") # escaped the WRONG value
+    print(f"{rec.newly_added_field}")      # a field no list knows about
+
+An earlier revision of this file scanned the AST for `print()` calls
+interpolating a hardcoded set of field names. Measured against the eleven
+shapes above it caught two, and its worst miss was the fifth -- which is
+not an exotic evasion but the natural shape of a half-finished fix. It
+was deleted rather than kept alongside this: a check that catches 2-in-11
+while reading like a gate is worse than no check, because it manufactures
+confidence.
+
+Polarity is a ratchet, because most of the codebase predates
+`console_safe()` and this harness had to be addable without a
+codebase-wide fix in the same change:
+
+  * a renderer that leaks and is NOT in `LEAKS_UNTRUSTED_TEXT` -> FAIL
+    (new or newly-regressed unescaped output is blocked at PR time)
+  * a renderer that leaks and IS listed -> warning (tracked debt)
+  * a renderer that no longer leaks but is still listed -> FAIL
+    (delete the entry; the list may only shrink)
+  * a renderer with no fixture at all -> warning naming it
+
+The third rule is what stops the list from becoming an allowlist nobody
+prunes, and it is why fixing a command REQUIRES touching this file.
+"""
+import ast
+import contextlib
+import dataclasses
+import io
+import warnings
+from pathlib import Path
+
+import pytest
+
+import dumpex.ui.colors as colors
+from dumpex.ui.colors import console_safe, _CONSOLE_ESCAPES
+
+from dumpex.output import records as records_module
+from dumpex.output.coverage import (
+    build_coverage_report, SourceObservation, SourceState,
+)
+from dumpex.core.memory import ParsedHandleDataStream, ParsedHandleDescriptor
+from tests.fixtures.fakes import FakeMF
+
+from dumpex.commands.diff import render_diff_console
+from dumpex.commands.extract import render_strings_console
+from dumpex.commands.handles import collect_handles, render_handles_console
+from dumpex.commands.list_cmd import render_regions_console
+from dumpex.commands.modules import render_modules_console
+from dumpex.commands.peb import render_peb_console
+from dumpex.commands.process import render_process_console
+from dumpex.commands.sysinfo import render_pid_console, render_sysinfo_console
+from dumpex.commands.threads import render_threads_console
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+# ── The payload ─────────────────────────────────────────────────────────
+# Built FROM the real escape table, so a codepoint added to console_safe()
+# is exercised here automatically and one removed from it fails this
+# module instead of silently widening the hole.
+HOSTILE_CODEPOINTS = tuple(sorted(_CONSOLE_ESCAPES))
+
+# A per-field marker that survives escaping unchanged. Its presence in
+# the rendered output proves that field's text actually REACHED the
+# console: a renderer that never prints the field would otherwise look
+# "clean" for the one reason that must never count as a pass. Per FIELD
+# rather than per case, so "the renderer prints two of the four fields I
+# declared" is visible instead of averaging out to a pass.
+TAINT_MARKER = "DUMPEXTAINT"
+
+FORGED_REASON = "  [~] HandleDataStream fully parsed, 0 limitations"
+
+
+def hostile_text_for(field_name: str) -> str:
+    return (
+        f"{TAINT_MARKER}{field_name.upper().replace('_', '')}"
+        + "".join(chr(c) for c in HOSTILE_CODEPOINTS)   # every char it claims to handle
+        + "\n" + FORGED_REASON                            # a forged coverage line
+        + "\x1b[2J\x1b[H"                                  # clear screen + home
+        + "user\u202egnp.exe"                            # Trojan Source reordering
+    )
+
+
+HOSTILE_TEXT = hostile_text_for("probe")
+
+# `\n` is the only entry in the table dumpex itself legitimately emits (it
+# separates its own lines). Every other one reaching stdout is a leak.
+FORBIDDEN_IN_OUTPUT = frozenset(HOSTILE_CODEPOINTS) - {0x0A}
+
+
+@pytest.fixture(autouse=True)
+def _no_ansi_colour(monkeypatch):
+    """`_c()` reads USE_COLOR at call time; pin it off so dumpex's OWN
+    escape codes can never be mistaken for leaked ones (and so this suite
+    stays valid if it is ever run attached to a real tty)."""
+    monkeypatch.setattr(colors, "USE_COLOR", False)
+
+
+def leaked_codepoints(text: str) -> list:
+    return sorted({ord(ch) for ch in text} & FORBIDDEN_IN_OUTPUT)
+
+
+def forged_lines(text: str) -> list:
+    return [line for line in text.splitlines() if line.rstrip() == FORGED_REASON.rstrip()]
+
+
+# ── Generic hostile records ─────────────────────────────────────────────
+
+def hostile_record(record_cls, baseline: dict, dump_derived_fields):
+    """`record_cls` built from `baseline` with each named field set to its
+    OWN hostile payload (so the checks below can tell which field's text
+    reached the console, and which case is quietly testing nothing).
+
+    `dump_derived_fields` is declared per case and NOT inferred. This is
+    the one judgement in this file a machine cannot make: whether a field
+    can hold dump text is a question about PROVENANCE, and the type says
+    nothing about it. MemoryRegionRecord.protect is `str | None` and can
+    never hold attacker text -- it is `prot_str(r.Protect)`, dumpex's own
+    lookup of an integer -- while ModuleRecord.name is the same type and
+    is read straight out of ModuleListStream. Filling by type alone
+    manufactures false positives on the first kind, which would put an
+    innocent renderer on the leak list below and send someone to "fix" a
+    non-problem. Declaring the fields keeps the harness honest in both
+    directions; the assertions then verify BEHAVIOUR for the fields
+    declared."""
+    for name in dump_derived_fields:
+        try:
+            record_cls(**{**baseline, name: hostile_text_for(name)})
+        except Exception as exc:
+            raise AssertionError(
+                f"{record_cls.__name__}.{name} was declared dump-derived but rejects free "
+                f"text ({type(exc).__name__}: {exc}) -- either the field is validated and "
+                f"cannot carry dump text, or the baseline is wrong") from None
+    return record_cls(**{**baseline,
+                         **{name: hostile_text_for(name) for name in dump_derived_fields}})
+
+
+def _coverage(*source_names):
+    return build_coverage_report({
+        name: SourceObservation(name=name, state=SourceState.PRESENT, record_count=1)
+        for name in source_names})
+
+
+def _rendered(render, *args) -> str:
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        render(*args)
+    return buffer.getvalue()
+
+
+# ── Per-renderer cases ──────────────────────────────────────────────────
+
+class _Header:
+    def __init__(self, number_of_descriptors):
+        self.NumberOfDescriptors = number_of_descriptors
+
+
+# `HandleDataStream` TypeName/ObjectName: bounded reads of dump bytes.
+_HANDLES_FIELDS = ("type_name", "object_name")
+
+
+def _case_handles():
+    descriptor = ParsedHandleDescriptor(
+        handle=0x10, type_name=hostile_text_for("type_name"),
+        object_name=hostile_text_for("object_name"),
+        attributes=0, granted_access=1, handle_count=1, pointer_count=1,
+        type_name_rva=8, object_name_rva=16)
+    mf = FakeMF()
+    mf.handles = ParsedHandleDataStream(header=_Header(1), handles=[descriptor])
+    mf._dumpex_stream_failures = {}
+    mf.directories = []
+    result = collect_handles(mf)
+    # The record layer must NOT be sanitized: --json carries evidence, not
+    # a display projection. Asserted inside the case so the two halves of
+    # the contract cannot drift apart.
+    assert result.records[0].type_name == hostile_text_for("type_name")
+    assert result.records[0].object_name == hostile_text_for("object_name")
+    return _rendered(render_handles_console, result.records, result.coverage)
+
+
+# ModuleListStream's own name/path strings.
+_MODULES_FIELDS = ("name", "full_path", "file_version")
+
+
+def _case_modules():
+    record = hostile_record(records_module.ModuleRecord, dict(
+        name="ntdll.dll", full_path="C:\\Windows\\System32\\ntdll.dll",
+        base_address="0x0000000000001000", end_address="0x0000000000002000",
+        size=4096, compiled_utc="2024-01-01T00:00:00Z", file_version=None,
+        checksum=None, anomaly_flags=[]), _MODULES_FIELDS)
+    return _rendered(render_modules_console, [record], _coverage("modules"))
+
+
+# `backing_module` is ntpath.basename(module.name) -- a ModuleListStream
+# string. `module_context` beside it is dumpex's own vocabulary and is
+# deliberately NOT listed.
+_THREADS_FIELDS = ("backing_module",)
+
+
+def _case_threads():
+    record = hostile_record(records_module.ThreadRecord, dict(
+        tid=1, start_address="0x0000000000001000", backing_module="ntdll.dll",
+        # `backing_module` is printed ONLY on the resolved branch -- the
+        # per-field reachability check below is what caught this fixture
+        # silently exercising the "not in any module" branch instead.
+        module_context=records_module.MODULE_CONTEXT_RESOLVED,
+        create_time="2024-01-01T00:00:00Z", exit_time=None,
+        exit_status=None, kernel_time_100ns=0, user_time_100ns=0, suspend_count=0,
+        priority=0, teb="0x0000000000003000", flags=[]), _THREADS_FIELDS)
+    return _rendered(render_threads_console, [record],
+                     _coverage("threads", "thread_info", "modules"))
+
+
+# Every one of these is a UNICODE_STRING walked out of the process's PEB.
+_PEB_FIELDS = ("image_path", "command_line", "window_title", "dll_path",
+               "current_directory")
+
+
+def _case_peb():
+    record = hostile_record(records_module.PebRecord, {}, _PEB_FIELDS)
+    return _rendered(render_peb_console, record, _coverage("peb"))
+
+
+# hostname/username come from the captured environment block; cpu_vendor
+# is decoded from SystemInfoStream's CPU-information bytes. `os`/
+# `architecture`/`product_type` are dumpex's own display names for
+# integer enums and are deliberately NOT listed.
+_SYSINFO_FIELDS = ("hostname", "username", "cpu_vendor", "current_directory")
+
+
+def _case_sysinfo():
+    # `os` must be set: the whole CPU block (and with it cpu_vendor) is
+    # gated on it. Another fixture gap the per-field reachability check
+    # caught rather than passing over.
+    record = hostile_record(records_module.SysInfoRecord,
+                            dict(os="Windows 10", processors=8), _SYSINFO_FIELDS)
+    return _rendered(render_sysinfo_console, record,
+                     _coverage("sysinfo", "misc_info", "threads", "modules", "peb",
+                                "environment_block"))
+
+
+# renderer -> (case callable, the dump-derived fields it was given)
+# process_name/process_path/command_line come from the PEB (or, for the
+# name, the basename of a ModuleListStream path) -- §3.3's precedence
+# table. process_start_utc/image_base_address are dumpex-formatted.
+_PROCESS_FIELDS = ("process_name", "process_path", "command_line")
+
+
+def _case_process():
+    empty_iat = records_module.IatRecord(
+        table_present=False, table_va=None, table_size=None,
+        import_directory_present=False, import_directory_va=None,
+        import_directory_size=None, has_entries=False, dll_count=0,
+        entry_count=0, entries=(), diagnostics=())
+    record = hostile_record(records_module.ProcessRecord, dict(
+        process_name="svchost.exe", pid=1234,
+        process_path="C:\\Windows\\System32\\svchost.exe",
+        command_line="svchost.exe -k netsvcs", process_start_utc="2024-01-01T00:00:00Z",
+        image_base_address="0x0000000000400000", iat=empty_iat,
+        identity_evidence={}), _PROCESS_FIELDS)
+    return _rendered(render_process_console, record, _coverage("process_identity"))
+
+
+# ModuleDiffRecord's name/full_path_* are ModuleListStream strings from
+# whichever of the two dumps the module appeared in.
+_DIFF_FIELDS = ("name", "full_path_before", "full_path_after")
+
+
+def _case_diff():
+    # One record per change_type: added and removed each print only their
+    # own side's full_path, and rebased is the only branch that prints
+    # `name` -- so all three are needed for the per-field reachability
+    # check below to be satisfiable at all.
+    rebased = hostile_record(records_module.ModuleDiffRecord, dict(
+        change_type=records_module.MODULE_DIFF_REBASED, name="ntdll.dll",
+        full_path_before="C:\\Windows\\ntdll.dll", full_path_after="C:\\Windows\\ntdll.dll",
+        base_address_before="0x0000000000001000", base_address_after="0x0000000000002000"), ("name",))
+    added = hostile_record(records_module.ModuleDiffRecord, dict(
+        change_type=records_module.MODULE_DIFF_ADDED, name="evil.dll",
+        full_path_before=None, full_path_after="C:\\evil.dll", base_address_before=None,
+        base_address_after="0x0000000000003000"),
+        ("full_path_after",))
+    removed = hostile_record(records_module.ModuleDiffRecord, dict(
+        change_type=records_module.MODULE_DIFF_REMOVED, name="gone.dll",
+        full_path_before="C:\\gone.dll", full_path_after=None,
+        base_address_before="0x0000000000004000", base_address_after=None), ("full_path_before",))
+    coverage = _coverage("baseline.modules", "target.modules",
+                          "baseline.thread_info", "target.thread_info",
+                          "baseline.memory_info", "target.memory_info")
+    return _rendered(render_diff_console, [rebased, added, removed], coverage,
+                     "baseline.dmp", "target.dmp")
+
+
+# StringRecord.text is bytes lifted straight out of process memory. The
+# extractor's own `[ -~]{n,}` pattern happens to admit printable ASCII
+# only, so nothing hostile reaches the renderer through the real pipeline
+# today -- but that is an invariant of dumpex.core.memory, not of this
+# renderer, and the record type accepts any string. The case builds the
+# record directly so the renderer's safety does not rest on an upstream
+# filter that a future extractor change could relax.
+_STRINGS_FIELDS = ("text",)
+
+
+def _case_strings():
+    record = hostile_record(records_module.StringRecord, dict(
+        offset=0, address="0x0000000000001000", encoding="ASCII",
+        text="hello", matched_grep=None), _STRINGS_FIELDS)
+    return _rendered(render_strings_console, [record], _coverage("memory_segments"))
+
+
+RENDER_CASES = {
+    "dumpex.commands.handles.render_handles_console": (_case_handles, _HANDLES_FIELDS),
+    "dumpex.commands.process.render_process_console": (_case_process, _PROCESS_FIELDS),
+    "dumpex.commands.diff.render_diff_console":        (_case_diff, _DIFF_FIELDS),
+    "dumpex.commands.extract.render_strings_console": (_case_strings, _STRINGS_FIELDS),
+    "dumpex.commands.modules.render_modules_console": (_case_modules, _MODULES_FIELDS),
+    "dumpex.commands.threads.render_threads_console": (_case_threads, _THREADS_FIELDS),
+    "dumpex.commands.peb.render_peb_console":          (_case_peb, _PEB_FIELDS),
+    "dumpex.commands.sysinfo.render_sysinfo_console": (_case_sysinfo, _SYSINFO_FIELDS),
+}
+
+# Every field these renderers print is dumpex's own text, so there is
+# nothing for a dump to inject. Listed explicitly rather than left out:
+# an unexplained absence is indistinguishable from an oversight, and this
+# is the one claim here that rests on reading the collector rather than on
+# an assertion -- provenance is not inferable from a type.
+NO_UNTRUSTED_INPUT = {
+    # MemoryRegionRecord's state/protect/type are prot_str(<int>) -- a
+    # dumpex lookup table, never dump text; base_address is hex.
+    "dumpex.commands.list_cmd.render_regions_console":
+        "MemoryInfoStream supplies integers only; every string is a dumpex lookup",
+    # PidRecord is pid/thread_count/exc_tid (ints) plus `source`, which is
+    # dumpex's own provenance vocabulary ("misc_info", ...).
+    "dumpex.commands.sysinfo.render_pid_console":
+        "PidRecord carries no dump-supplied string",
+    # Prints coverage reasons, Diagnostic.message, and the written
+    # Artifact's own path/size/sha256 -- all dumpex-produced. The bytes it
+    # extracted go to a file, never to the terminal.
+    "dumpex.commands.extract.render_extract_console":
+        "prints only dumpex-produced text and the artifact it just wrote",
+}
+
+# render_report_console is the one renderer with neither a case nor an
+# input-free claim, so the warning below keeps naming it. Its three
+# dump-derived sites (a thread's backing module, extracted string text,
+# and the MEM_IMAGE hit module list) HAVE been routed through
+# console_safe(), but that fix is unverified here: the renderer consumes
+# composite triage cards plus a seven-key summary dict, and a fixture that
+# lands on the wrong branch would assert less than it appears to -- the
+# exact failure this file's per-field reachability check exists to reject.
+# Writing that fixture is the next piece of work, not a formality.
+
+# Renderers that print untrusted dump text unescaped TODAY -- measured by
+# running them, not assumed. Delete an entry when you fix the renderer; a
+# stale entry fails test_no_stale_entries_in_the_leak_list below.
+#
+# EMPTY, and it should stay that way. It exists because this harness was
+# added while modules/threads/peb/sysinfo still leaked, and it is the
+# mechanism that let those be fixed one at a time instead of in one
+# unreviewable change. A renderer added here is a decision to ship known
+# terminal-injection exposure -- write down why, next to the entry.
+LEAKS_UNTRUSTED_TEXT = set()
+
+
+# ── The gate ────────────────────────────────────────────────────────────
+
+def _marker_for(field_name: str) -> str:
+    return f"{TAINT_MARKER}{field_name.upper().replace('_', '')}"
+
+
+@pytest.mark.parametrize("renderer", sorted(RENDER_CASES))
+def test_renderer_does_not_let_untrusted_text_drive_the_terminal(renderer):
+    case, declared_fields = RENDER_CASES[renderer]
+    output = case()
+
+    # A field whose text never reached stdout proves nothing about that
+    # field. Fail loudly rather than record a pass -- "the renderer does
+    # not print it" is a fixture bug (or a field that moved), not a safety
+    # property, and it is exactly how a suite drifts into testing nothing.
+    unreached = [name for name in declared_fields if _marker_for(name) not in output]
+    assert not unreached, (
+        f"{renderer}: {len(unreached)} declared dump-derived field(s) never reached the "
+        f"console ({', '.join(unreached)}), so this case tests less than it claims -- "
+        f"point the fixture at fields the renderer actually prints, or drop them from "
+        f"the declaration with a reason")
+
+    leaked = leaked_codepoints(output)
+    forged = forged_lines(output)
+
+    if renderer in LEAKS_UNTRUSTED_TEXT:
+        assert leaked or forged, (
+            f"{renderer} no longer leaks untrusted text -- remove it from "
+            f"LEAKS_UNTRUSTED_TEXT so the list keeps meaning something")
+        warnings.warn(
+            f"{renderer} prints dump-derived text unescaped: "
+            + (f"{len(leaked)} raw control codepoint(s) "
+                f"({', '.join(f'U+{c:04X}' for c in leaked)})" if leaked else "")
+            + (" and a forged coverage-reason line" if forged else "")
+            + " -- wrap the value in dumpex.ui.colors.console_safe() at the print site "
+              "(before any colour helper) and keep the record/--json value raw",
+            UserWarning, stacklevel=2)
+        return
+
+    assert not leaked, (
+        f"{renderer}: {len(leaked)} raw terminal-control codepoint(s) reached stdout "
+        f"({', '.join(f'U+{c:04X}' for c in leaked)}). Everything read out of a dump is "
+        f"attacker-controlled -- route it through dumpex.ui.colors.console_safe() at the "
+        f"print site, BEFORE any colour helper, and keep the record/--json value raw.")
+    assert not forged, (
+        f"{renderer}: a dump-supplied string forged a coverage-reason line verbatim "
+        f"({forged[0]!r}) -- a newline in an untrusted value must never produce a line an "
+        f"analyst reads as dumpex's own output")
+
+
+def test_no_stale_entries_in_the_leak_list():
+    """The ratchet's teeth, stated separately so a fixed renderer produces
+    one obvious failure naming the line to delete, rather than only the
+    per-renderer assertion above."""
+    still_leaking = set()
+    for renderer in LEAKS_UNTRUSTED_TEXT & set(RENDER_CASES):
+        output = RENDER_CASES[renderer][0]()
+        if leaked_codepoints(output) or forged_lines(output):
+            still_leaking.add(renderer)
+    fixed = sorted(LEAKS_UNTRUSTED_TEXT - still_leaking)
+    assert not fixed, (
+        f"LEAKS_UNTRUSTED_TEXT lists {len(fixed)} renderer(s) that no longer leak -- "
+        f"delete them: {fixed}")
+    unknown = sorted(LEAKS_UNTRUSTED_TEXT - set(RENDER_CASES))
+    assert not unknown, (
+        f"LEAKS_UNTRUSTED_TEXT names renderer(s) with no case in RENDER_CASES: {unknown}")
+
+
+def test_payload_exercises_the_whole_escape_table():
+    """Guards the guard: if HOSTILE_TEXT stopped containing a character
+    console_safe() handles, every test above would pass while testing
+    less."""
+    assert set(HOSTILE_CODEPOINTS) <= {ord(ch) for ch in HOSTILE_TEXT}
+    assert not leaked_codepoints(console_safe(HOSTILE_TEXT))
+    # Escaping must not cost readability on the names an analyst reads all
+    # day -- a projection that mangles ordinary evidence gets turned off.
+    assert console_safe("\\Device\\NamedPipe\\mypipe") == "\\Device\\NamedPipe\\mypipe"
+    assert console_safe("WaitCompletionPacket") == "WaitCompletionPacket"
+    assert console_safe("C:\\Windows\\System32\\ntdll.dll") == "C:\\Windows\\System32\\ntdll.dll"
+
+
+def test_every_console_renderer_has_a_case_or_is_reported():
+    """Coverage of the harness itself. This one IS a naming heuristic --
+    it finds `render_*` functions in dumpex/commands -- which is exactly
+    why it only WARNS: a renderer it fails to discover must not be able to
+    make the suite red, and a renderer it does discover is not evidence of
+    anything until someone writes it a case. The gate is the behavioural
+    test above; this is the to-do list."""
+    discovered = set()
+    for py in sorted((REPO_ROOT / "dumpex" / "commands").glob("*.py")):
+        tree = ast.parse(py.read_text(encoding="utf-8"))
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name.startswith("render_"):
+                discovered.add(f"dumpex.commands.{py.stem}.{node.name}")
+
+    accounted = set(RENDER_CASES) | set(NO_UNTRUSTED_INPUT)
+    missing = sorted(discovered - accounted)
+    if missing:
+        warnings.warn(
+            f"{len(missing)} console renderer(s) have no untrusted-text case -- their "
+            f"behaviour with attacker-controlled dump strings is unverified:\n  "
+            + "\n  ".join(missing), UserWarning, stacklevel=2)
+
+    stale = sorted(accounted - discovered)
+    assert not stale, f"this file names renderer(s) that no longer exist: {stale}"
+    overlap = sorted(set(RENDER_CASES) & set(NO_UNTRUSTED_INPUT))
+    assert not overlap, (
+        f"renderer(s) are both exercised and declared input-free -- pick one: {overlap}")

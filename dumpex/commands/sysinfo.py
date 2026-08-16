@@ -1,7 +1,7 @@
 """--sysinfo and --pid commands."""
 import os
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import BOLD, DIM, GREEN, YELLOW
+from dumpex.ui.colors import BOLD, DIM, GREEN, YELLOW, console_safe
 from dumpex.output.records import SysInfoRecord, PidRecord
 from dumpex.output.coverage import (
     observe_source, build_coverage_report, EvaluationRequirement, SourceRequirement,
@@ -391,8 +391,12 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
 
     # ── Host ────────────────────────────────────────────────────────────
     print(f"\n  {BOLD('Host')}")
-    print(f"    {'Hostname':<22} {record.hostname or '(unknown)'}")
-    print(f"    {'Username':<22} {record.username or '(unknown)'}")
+    # hostname/username are read from the captured environment block --
+    # dump bytes, therefore attacker-controlled. Same rule as peb.py: the
+    # console projection escapes, the record and --json keep the exact
+    # decoded value.
+    print(f"    {'Hostname':<22} {console_safe(record.hostname) or '(unknown)'}")
+    print(f"    {'Username':<22} {console_safe(record.username) or '(unknown)'}")
 
     # ── Environment (§4.6) ─────────────────────────────────────────────
     # A sub-section indented alongside Operating System/Host/CPU/Dump
@@ -400,14 +404,19 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
     # console-layout sample shows "  ═══ ENVIRONMENT ═══" at the same
     # 2-space indent every other subsection header uses.
     print(f"\n  {BOLD('═══ ENVIRONMENT ═══')}")
-    print(f"    {'Current Directory':<22} {record.current_directory or '(unknown)'}")
+    print(f"    {'Current Directory':<22} "
+           f"{console_safe(record.current_directory) or '(unknown)'}")
     print(f"    {'Environment Variables':<22} {_environment_console_text(coverage)}")
     for limitation in env_only:
         print(YELLOW(f"    [~] {render_limitation(limitation)}"))
     if verbose and record.environment_variables:
         print()
         for entry in record.environment_variables:
-            print(f"      {entry['name']}={entry['value']}")
+            # Arbitrary bytes the process was started with -- §4.5 keeps
+            # them unredacted as evidence, which makes escaping the console
+            # projection the only thing between a crafted variable and a
+            # forged dumpex line.
+            print(f"      {console_safe(entry['name'])}={console_safe(entry['value'])}")
     for limitation in after_env:
         print(YELLOW(f"  [~] {render_limitation(limitation)}"))
 
@@ -416,7 +425,9 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
         print(f"\n  {BOLD('CPU')}")
         print(f"    {'Processors':<22} {record.processors}")
         if record.cpu_vendor:
-            print(f"    {'Vendor':<22} {record.cpu_vendor}")
+            # bytes(si.VendorId).decode("ascii", errors="replace") -- raw
+            # SystemInfoStream bytes, so control characters are reachable.
+            print(f"    {'Vendor':<22} {console_safe(record.cpu_vendor)}")
         if record.cpu_current_mhz:
             print(f"    {'Current MHz':<22} {record.cpu_current_mhz}")
         if record.cpu_max_mhz:

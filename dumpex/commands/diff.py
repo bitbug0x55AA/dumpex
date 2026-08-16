@@ -15,7 +15,7 @@ explain why those states were fixed, not preserved.
 """
 import ntpath
 
-from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
+from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.rules_pkg.loader import SUSPICIOUS_PROTS
 from dumpex.output.command_result import CommandResult
 from dumpex.output.records import MODULE_CONTEXT_RESOLVED
@@ -128,7 +128,7 @@ def _render_module_diff(records, coverage, label_baseline, label_target) -> None
     if added:
         print(GREEN(f"  [+] Added in {label_target} ({len(added)}):"))
         for r in added:
-            print(GREEN(f"      {r.base_address_after}  {r.full_path_after}"))
+            print(GREEN(f"      {r.base_address_after}  {console_safe(r.full_path_after)}"))
     else:
         print(DIM("  [+] No new modules."))
 
@@ -136,7 +136,7 @@ def _render_module_diff(records, coverage, label_baseline, label_target) -> None
     if removed:
         print(RED(f"\n  [-] Removed from {label_baseline} ({len(removed)}):"))
         for r in removed:
-            print(RED(f"      {r.base_address_before}  {r.full_path_before}"))
+            print(RED(f"      {r.base_address_before}  {console_safe(r.full_path_before)}"))
     else:
         print(DIM("\n  [-] No removed modules."))
 
@@ -146,7 +146,7 @@ def _render_module_diff(records, coverage, label_baseline, label_target) -> None
         for r in rebased:
             before = _int_or(r.base_address_before)
             after = _int_or(r.base_address_after)
-            print(YELLOW(f"      {r.name}: 0x{before:x} → 0x{after:x}"))
+            print(YELLOW(f"      {console_safe(r.name)}: 0x{before:x} → 0x{after:x}"))
 
 
 def _render_thread_diff(records, coverage, label_baseline, label_target) -> None:
@@ -176,7 +176,7 @@ def _render_thread_diff(records, coverage, label_baseline, label_target) -> None
         for r in added:
             sa = _int_or(r.start_address_after)
             if r.backing_module_context == MODULE_CONTEXT_RESOLVED:
-                backed = r.backing_module_after
+                backed = console_safe(r.backing_module_after)
             else:
                 # Matches the original console's own conflation of
                 # "confirmed unregistered" and "ModuleListStream itself

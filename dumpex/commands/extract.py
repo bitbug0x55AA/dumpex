@@ -2,7 +2,7 @@
 import re
 import sys
 from pathlib import Path
-from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
+from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.core.memory import read_region, _extract_strings_from_data, RegionReadError
 from dumpex.core.safe_io import write_output_bytes, compute_bytes_summary
 from dumpex.output.records import (
@@ -216,7 +216,13 @@ def render_strings_console(records, coverage) -> None:
         if r.matched_grep is False:
             continue
         addr = int(r.address, 16)
-        line = f"0x{addr:<12x} {r.encoding:<7} {r.text}"
+        # Extracted memory bytes. The extractor's own `[ -~]{n,}` /
+        # `(?:[ -~]NUL){n,}` patterns admit printable ASCII only, so
+        # nothing hostile reaches here TODAY -- escaped anyway: that is
+        # an invariant of a different module, this is the console
+        # boundary, and console_safe() is the identity function on
+        # printable text so it costs nothing to not depend on it.
+        line = f"0x{addr:<12x} {r.encoding:<7} {console_safe(r.text)}"
         print(YELLOW(line) if r.matched_grep else line)
         shown += 1
     print(f"\n{GREEN(f'[+] {shown} string(s) shown.')}")
