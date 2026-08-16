@@ -83,6 +83,30 @@ def _parse(descriptors, **kwargs):
     return parse_handle_stream(directory, file_handle)
 
 
+# ── descriptor size derivation (issue #86) ───────────────────────────────
+
+def test_descriptor_sizes_match_ms_defined_layout():
+    # dumpex's SizeOfDescriptor branch relies on these being 32 and 40; an
+    # upstream layout change should fail loudly here, not silently misread
+    # every descriptor in a stream.
+    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_SIZE == 32
+    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE == 40
+
+
+def test_v2_descriptor_size_derived_symmetrically_with_v1():
+    from minidump.streams.HandleDataStream import (
+        MINIDUMP_HANDLE_DESCRIPTOR, MINIDUMP_HANDLE_DESCRIPTOR_2,
+    )
+    # Both sizes come from the same helper -- no literal 40 anywhere in
+    # the selection path -- so the branch that picks MINIDUMP_HANDLE_
+    # DESCRIPTOR_2 can never disagree with the stride actually used to
+    # split the descriptor array.
+    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_SIZE == \
+        memory._descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR)
+    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE == \
+        memory._descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR_2)
+
+
 # ── basic shape ────────────────────────────────────────────────────────
 
 def test_parses_header_and_returns_expected_type():

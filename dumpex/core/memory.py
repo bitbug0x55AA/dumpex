@@ -66,6 +66,33 @@ MAX_HANDLE_DESCRIPTORS   = 65536   # descriptors parsed from HandleDataStream
 MAX_HANDLE_STRING_BYTES  = 4096    # bytes read for one TypeName/ObjectName
 
 
+def _descriptor_class_size(descriptor_cls) -> int:
+    """The number of bytes descriptor_cls.parse() consumes for one
+    descriptor, derived by actually parsing a scratch buffer rather than
+    trusting a `.size` class attribute: MINIDUMP_HANDLE_DESCRIPTOR carries
+    one, but the installed library's MINIDUMP_HANDLE_DESCRIPTOR_2 does
+    not -- reading `.size` on it raises AttributeError. This reports the
+    same fact `.size` would, symmetrically for both classes, without
+    assuming the attribute exists on either."""
+    probe = io.BytesIO(bytes(64))
+    descriptor_cls.parse(probe)
+    return probe.tell()
+
+
+# The MS-defined on-disk sizes this file's SizeOfDescriptor branch (below)
+# relies on to pick a parser class. Asserted at import time -- rather than
+# assumed -- so upstream structural drift becomes a loud, attributable
+# ImportError instead of silently misread descriptors.
+MINIDUMP_HANDLE_DESCRIPTOR_SIZE   = _descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR)
+MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE = _descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR_2)
+assert MINIDUMP_HANDLE_DESCRIPTOR_SIZE == 32, (
+    f"minidump.streams.HandleDataStream.MINIDUMP_HANDLE_DESCRIPTOR now parses "
+    f"as {MINIDUMP_HANDLE_DESCRIPTOR_SIZE} bytes, not the 32 dumpex assumes")
+assert MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE == 40, (
+    f"minidump.streams.HandleDataStream.MINIDUMP_HANDLE_DESCRIPTOR_2 now parses "
+    f"as {MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE} bytes, not the 40 dumpex assumes")
+
+
 class HandleStreamFramingError(Exception):
     """Raised by parse_handle_stream() when the stream's own framing
     cannot be trusted at all (header short-read, SizeOfHeader out of
@@ -195,14 +222,15 @@ def parse_handle_stream(directory, file_handle) -> ParsedHandleDataStream:
             f"HandleDataStream SizeOfHeader {header.SizeOfHeader} is out of bounds "
             f"for a {location.DataSize}-byte stream")
 
-    if header.SizeOfDescriptor == MINIDUMP_HANDLE_DESCRIPTOR.size:      # 32
+    if header.SizeOfDescriptor == MINIDUMP_HANDLE_DESCRIPTOR_SIZE:
         descriptor_cls = MINIDUMP_HANDLE_DESCRIPTOR
-    elif header.SizeOfDescriptor == 40:
+    elif header.SizeOfDescriptor == MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE:
         descriptor_cls = MINIDUMP_HANDLE_DESCRIPTOR_2
     else:
         raise HandleStreamFramingError(
             f"HandleDataStream SizeOfDescriptor {header.SizeOfDescriptor} is neither "
-            f"32 (MINIDUMP_HANDLE_DESCRIPTOR) nor 40 (MINIDUMP_HANDLE_DESCRIPTOR_2)")
+            f"{MINIDUMP_HANDLE_DESCRIPTOR_SIZE} (MINIDUMP_HANDLE_DESCRIPTOR) nor "
+            f"{MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE} (MINIDUMP_HANDLE_DESCRIPTOR_2)")
 
     available_bytes = location.DataSize - header.SizeOfHeader
     fits = available_bytes // header.SizeOfDescriptor   # a trailing partial
