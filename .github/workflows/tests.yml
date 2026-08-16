@@ -312,10 +312,16 @@ jobs:
     # not merely from `import dumpex.core.memory`.
     #
     # The `minidump-version` list below is NOT derived from
-    # pyproject.toml -- it is a separate, hand-written literal, kept in
-    # sync by tests/unit/test_minidump_version_pin.py, which fails at PR
-    # time if this list and pyproject.toml's `minidump>=X,<Y` specifier
-    # ever disagree. Update BOTH together.
+    # pyproject.toml -- it is a separate, hand-written literal, checked
+    # against it by tests/unit/test_minidump_version_pin.py, which fails
+    # at PR time if EITHER (a) the specifier's own floor is missing from
+    # this list, or (b) any version in this list falls outside the
+    # specifier's range. That check does NOT require an exact match --
+    # adding more in-range coverage here (e.g. a real mid-range release)
+    # is always fine. When widening the specifier's ceiling in
+    # pyproject.toml, also add the actual highest minidump release that
+    # now falls in range (check PyPI -- don't invent a version number
+    # that may not exist).
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

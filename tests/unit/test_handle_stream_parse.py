@@ -103,14 +103,21 @@ def test_layout_is_cached_across_calls():
 
 def _top_level_call_names(source: str, target_names: set) -> list:
     """Names among `target_names` that are CALLED anywhere in `source`
-    outside of any function/async-function/lambda body -- i.e. actually
-    executed at module-import time, not merely defined. Walks the WHOLE
-    tree (via ast.NodeVisitor.generic_visit), so it catches a call
-    nested inside a module-level Assign/If/Try/comprehension/etc, not
-    only a bare top-level expression statement -- the original 9572d46
-    regression this guards against was exactly an Assign
-    (`X = _descriptor_class_size(...)`), which a check that only scans
-    `tree.body` for `ast.Expr` nodes would silently miss."""
+    at module-import time -- i.e. NOT merely inside a function/lambda
+    BODY, which only runs when later called. Walks the whole tree, so it
+    catches a call nested inside a module-level Assign/If/Try/
+    comprehension/etc, not only a bare top-level expression statement --
+    the original 9572d46 regression this guards against was exactly an
+    Assign (`X = _descriptor_class_size(...)`), which a check that only
+    scans `tree.body` for `ast.Expr` nodes would silently miss.
+
+    Also treats a def/lambda's OWN decorator expressions and default-
+    argument expressions as import-time-evaluated (because they are --
+    `def f(x=CALL()):` and `@CALL()` both run CALL() the moment the
+    `def` statement itself executes, not when f is later invoked), while
+    still treating the function/lambda BODY as deferred. A naive
+    "everything under a FunctionDef/Lambda node is deferred" walk misses
+    exactly these two forms."""
     import ast
 
     tree = ast.parse(source)
@@ -120,14 +127,26 @@ def _top_level_call_names(source: str, target_names: set) -> list:
             self.depth = 0
             self.hits = []
 
-        def _visit_scope(self, node):
+        def _visit_def(self, node):
+            # Decorators and default-argument expressions are evaluated
+            # in the ENCLOSING scope when the def/lambda statement itself
+            # runs -- same depth as the def statement, not depth + 1.
+            for dec in getattr(node, "decorator_list", []):
+                self.visit(dec)
+            for default in node.args.defaults:
+                self.visit(default)
+            for default in node.args.kw_defaults:
+                if default is not None:
+                    self.visit(default)
             self.depth += 1
-            self.generic_visit(node)
+            body = node.body if isinstance(node.body, list) else [node.body]
+            for stmt in body:
+                self.visit(stmt)
             self.depth -= 1
 
-        visit_FunctionDef = _visit_scope
-        visit_AsyncFunctionDef = _visit_scope
-        visit_Lambda = _visit_scope
+        visit_FunctionDef = _visit_def
+        visit_AsyncFunctionDef = _visit_def
+        visit_Lambda = _visit_def
 
         def visit_Call(self, node):
             if self.depth == 0:
@@ -209,6 +228,48 @@ def test_top_level_call_guard_ignores_calls_inside_nested_functions():
     )
     hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
     assert hits == []
+
+
+def test_top_level_call_guard_detects_call_in_decorator_expression():
+    # A decorator expression is evaluated the moment the `def` statement
+    # itself runs (import time), NOT deferred like the function body it
+    # decorates -- a walk that treats "anything under a FunctionDef" as
+    # deferred would miss this.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "@_handle_descriptor_layout()\n"
+        "def parse_handle_stream():\n"
+        "    pass\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_default_argument():
+    # A default-argument expression is likewise evaluated at `def`-time,
+    # in the enclosing scope, not when the function is later called.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream(layout=_handle_descriptor_layout()):\n"
+        "    return layout\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_detects_call_in_lambda_default_argument():
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "f = lambda layout=_handle_descriptor_layout(): layout\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout"]
 
 
 def test_upstream_parse_failure_is_isolated_to_handle_stream(monkeypatch):
