@@ -20,11 +20,29 @@ between the floor and that ceiling -- the same failure as no bound at
 all, just with extra steps, and `<1.0` in particular is the first
 instinct most people reach for when "widening the range." The real
 requirement is test_specifier_excludes_the_next_unreviewed_release()
-below: the version immediately above the floor must be excluded, checked
-directly via SpecifierSet.contains() rather than inferred from clause
-shape. _specifier_has_upper_bound() is kept as an earlier, friendlier
-pre-check (its failure message is easier to act on than "0.0.25 is
-admitted"), but it is no longer the sole guarantee.
+below: the version immediately above the highest ACTUALLY VALIDATED
+release must be excluded, checked directly via SpecifierSet.contains()
+rather than inferred from clause shape. _specifier_has_upper_bound() is
+kept as an earlier, friendlier pre-check (its failure message is easier
+to act on than "0.0.25 is admitted"), but it is no longer the sole
+guarantee.
+
+Round 6 found that basing the probe on the FLOOR (rather than the
+highest version the CI matrix actually validates) made legitimate range
+widening impossible to express: widening to `>=0.0.24,<0.0.26` with the
+CI matrix updated to cover BOTH 0.0.24 and 0.0.25 is exactly what issue
+#86's design intends (validate before allowing), but a floor-based probe
+of "0.0.25" would still fail this check even though 0.0.25 was, in that
+scenario, genuinely reviewed -- forcing a maintainer to falsely raise
+the floor (silently dropping support for 0.0.24, which nothing was
+actually wrong with) just to silence a check that no longer measures
+what it claims to. The probe is now the next patch release above the
+HIGHEST version in the CI matrix (_highest_ci_matrix_version()), not the
+floor -- which the sibling check
+test_ci_matrix_covers_the_declared_floor_and_stays_within_the_specifier
+already requires to itself satisfy the specifier, so "the CI matrix's
+highest entry" and "an upstream release that was actually reviewed"
+stay the same claim.
 
 The "next unreviewed release" probe computed here (_next_patch_above())
 is NOT the same kind of computation as the "highest allowed version"
@@ -161,6 +179,26 @@ def _ci_matrix_minidump_versions() -> list:
     return job["strategy"]["matrix"]["minidump-version"]
 
 
+def _highest_ci_matrix_version() -> str:
+    """The highest version string in the minidump-version-range CI
+    job's matrix, by PEP 440 ordering -- the basis for the "next
+    unreviewed release" probe below. Using the CI matrix's own highest
+    entry (rather than the specifier's floor) is deliberate: the moment
+    the specifier is legitimately widened AND the CI matrix is updated
+    to cover a newly-validated version in that range (which
+    test_ci_matrix_covers_the_declared_floor_and_stays_within_the_
+    specifier already requires to satisfy the specifier), the version
+    above THAT highest validated entry becomes the new boundary --
+    basing it on the floor instead would keep flagging the
+    newly-validated version as "unreviewed" forever, see this module's
+    docstring."""
+    matrix = _ci_matrix_minidump_versions()
+    assert matrix, (
+        "minidump-version-range CI job's matrix is empty -- "
+        "_highest_ci_matrix_version() has nothing to compute a probe from")
+    return str(max(Version(v) for v in matrix))
+
+
 def test_specifier_declares_an_explicit_upper_bound():
     # An early, friendlier pre-check -- "there is no bound at all" gets a
     # clearer failure message here than from
@@ -180,38 +218,53 @@ def test_specifier_declares_an_explicit_upper_bound():
 def test_specifier_excludes_the_next_unreviewed_release():
     # The actual requirement, not a proxy for it (see this module's
     # docstring for how _specifier_has_upper_bound() alone is a proxy
-    # that a deliberately wide ceiling like `<1.0` still satisfies):
-    # the version immediately above the floor must be excluded.
+    # that a deliberately wide ceiling like `<1.0` still satisfies): the
+    # version immediately above the highest version the CI matrix
+    # actually validates must be excluded.
     spec = _minidump_specifier()
-    probe = _next_patch_above(_specifier_floor(spec))
+    highest_validated = _highest_ci_matrix_version()
+    probe = _next_patch_above(highest_validated)
     assert not spec.contains(probe), (
-        f"minidump specifier {spec} still admits {probe} -- issue #86 "
-        f"requires the ceiling to exclude the next unreviewed upstream "
-        f"release, not merely to exist. Widening the floor requires "
-        f"re-validating dumpex/core/memory.py:47-63 against the new "
-        f"floor version -- update "
-        f"test_pyproject_floor_is_the_version_memory_py_documents_as_"
-        f"validated_against in the same change.")
+        f"minidump specifier {spec} still admits {probe}, the next patch "
+        f"release above {highest_validated} (the highest version actually "
+        f"validated by the minidump-version-range CI job) -- issue #86 "
+        f"requires the ceiling to exclude every unreviewed upstream "
+        f"release, not merely to exist. If {probe} has ALSO been "
+        f"validated, add it to the CI matrix in "
+        f".github/workflows/tests.yml first -- this check follows the CI "
+        f"matrix's own highest entry, not the specifier's floor, so "
+        f"legitimate range widening (with matching CI coverage) does not "
+        f"fail it.")
 
 
-@pytest.mark.parametrize("specifier_str", [
-    ">=0.0.24,<1.0",      # the "first instinct" wide ceiling flagged in review
-    ">=0.0.24,<=0.0.99",
-    ">=0.0.24,<9999",
-    ">=0.0.24",           # no ceiling at all
+@pytest.mark.parametrize("specifier_str,highest_validated,probe_should_be_admitted", [
+    # Wide-but-present ceiling, nothing beyond the floor validated --
+    # _specifier_has_upper_bound() alone would wrongly call these safe.
+    (">=0.0.24,<1.0", "0.0.24", True),
+    (">=0.0.24,<=0.0.99", "0.0.24", True),
+    (">=0.0.24,<9999", "0.0.24", True),
+    (">=0.0.24", "0.0.24", True),
+    # A legitimately widened range whose CI matrix has NOT yet been
+    # updated to cover the newly in-range version: still correctly
+    # flagged -- 0.0.25 is IN range but not yet a validated entry.
+    (">=0.0.24,<0.0.26", "0.0.24", True),
+    # The same widened range, but the CI matrix now ALSO covers 0.0.25:
+    # the probe moves to 0.0.26, which the specifier correctly excludes
+    # -- this is round 6's fix, proving legitimate widening is no longer
+    # blocked once CI coverage catches up.
+    (">=0.0.24,<0.0.26", "0.0.25", False),
+    # Today's real pyproject.toml/CI matrix values.
+    (">=0.0.24,<0.0.25", "0.0.24", False),
 ])
-def test_specifier_excludes_the_next_unreviewed_release_meta(specifier_str):
-    # Meta-test: proves test_specifier_excludes_the_next_unreviewed_
-    # release() is able to fail against a specifier that HAS an upper
-    # bound (so _specifier_has_upper_bound() alone would wrongly call it
-    # safe) but still admits the very next release.
+def test_next_unreviewed_release_logic(specifier_str, highest_validated, probe_should_be_admitted):
+    # Meta-test for the logic behind test_specifier_excludes_the_next_
+    # unreviewed_release(): proves it can both fail (rows where a
+    # deliberately wide-but-present ceiling, or a not-yet-CI-covered
+    # widening, still admits the next release) and pass (today's real
+    # values, and a widened range WITH matching CI coverage).
     spec = SpecifierSet(specifier_str)
-    probe = _next_patch_above(_specifier_floor(spec))
-    assert spec.contains(probe), (
-        f"expected {specifier_str} to (wrongly) admit the next "
-        f"unreviewed release {probe} for this meta-test to be "
-        f"meaningful -- if it doesn't, this fixture no longer "
-        f"demonstrates the intended failure mode")
+    probe = _next_patch_above(highest_validated)
+    assert spec.contains(probe) == probe_should_be_admitted
 
 
 @pytest.mark.parametrize("version_str,expected_next", [

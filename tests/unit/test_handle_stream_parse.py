@@ -427,10 +427,13 @@ def test_mid_struct_conditional_read_raises_layout_error_not_silently_misparses(
 
     monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _MidStructConditionalRead)
 
-    # A SECOND descriptor is required so the conditional over-read in
-    # descriptor 0 has real bytes to consume (descriptor 1's own data)
-    # rather than hitting the end of the buffer and silently truncating
-    # to a shorter, coincidentally-still-32-byte read.
+    # A second descriptor here so the conditional over-read in
+    # descriptor 0 has real bytes (descriptor 1's) to spill into --
+    # exercising the tell()-delta path specifically. See the SINGLE-
+    # descriptor variant below (test_single_last_descriptor_conditional_
+    # over_read_raises_at_physical_eof) for the case where there is
+    # nothing after descriptor 0 at all, which _BoundedDescriptorReader
+    # (not the tell()-delta check) is what catches.
     with pytest.raises(memory.HandleDescriptorLayoutError, match="descriptor 0"):
         _parse([
             {"handle": 0x1, "attributes": 0x1, "granted_access": 0xAAAA,
@@ -438,6 +441,57 @@ def test_mid_struct_conditional_read_raises_layout_error_not_silently_misparses(
             {"handle": 0x2, "attributes": 0, "granted_access": 0x1111,
              "handle_count": 0x2222, "pointer_count": 0x3333},
         ])
+
+
+def test_single_last_descriptor_conditional_over_read_raises_at_physical_eof(monkeypatch):
+    # Reproduces a review finding: for a SINGLE (= only = last)
+    # descriptor, the chunk's raw bytes total exactly one
+    # SizeOfDescriptor stride (32 here) -- a raw BytesIO's read(n)
+    # SILENTLY CLAMPS to whatever physically remains, so an over-read
+    # attempt at the very end of the descriptor's own fields runs off
+    # the end of the WHOLE buffer and returns fewer bytes / empty bytes
+    # with no error, landing tell() at exactly 32 -- the same position a
+    # legitimate full read would leave it at. Before
+    # _BoundedDescriptorReader, this was UNDETECTABLE: the tell()-delta
+    # check alone could not tell "over-read that got silently truncated
+    # at the buffer's own end" apart from "a completely normal read",
+    # because both produce consumed == declared == 32. Confirmed by
+    # calculation before the fix: GrantedAccess would read as the TRUE
+    # HandleCount bytes, HandleCount as the TRUE PointerCount bytes, and
+    # PointerCount as 0 (from an empty read past EOF) -- exactly the
+    # 0xBBBB / 0xCCCC / 0 misreads a review reported, with no exception
+    # raised at all. _BoundedDescriptorReader now raises the moment the
+    # final field's read call would cross the 32-byte boundary, before
+    # any bytes are silently clamped.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", (32, 40))
+
+    class _MidStructConditionalRead:
+        @staticmethod
+        def parse(buff):
+            handle = int.from_bytes(buff.read(8), "little", signed=False)
+            type_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            object_name_rva = int.from_bytes(buff.read(4), "little", signed=False)
+            attributes = int.from_bytes(buff.read(4), "little", signed=False)
+            if attributes & 0x1:
+                buff.read(4)   # extra conditional read, gated on a field ALREADY parsed
+            granted_access = int.from_bytes(buff.read(4), "little", signed=False)
+            handle_count = int.from_bytes(buff.read(4), "little", signed=False)
+            pointer_count = int.from_bytes(buff.read(4), "little", signed=False)
+
+            class _Raw:
+                pass
+            raw = _Raw()
+            raw.Handle, raw.TypeNameRva, raw.ObjectNameRva = handle, type_name_rva, object_name_rva
+            raw.Attributes, raw.GrantedAccess = attributes, granted_access
+            raw.HandleCount, raw.PointerCount = handle_count, pointer_count
+            return raw
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _MidStructConditionalRead)
+
+    # A SINGLE descriptor: nothing follows it in the buffer at all.
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="descriptor 0"):
+        _parse([{"handle": 0x1, "attributes": 0x1, "granted_access": 0xAAAA,
+                  "handle_count": 0xBBBB, "pointer_count": 0xCCCC}])
 
 
 def test_last_descriptor_under_consuming_parse_raises_layout_error(monkeypatch):

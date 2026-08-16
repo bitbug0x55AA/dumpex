@@ -216,6 +216,51 @@ class ParsedHandleDescriptor:
         self.ObjectNameRva  = object_name_rva
 
 
+class _BoundedDescriptorReader:
+    """A `.read(n)`-only view over `chunk`, limited to the byte range
+    `[start, end)` belonging to ONE descriptor -- raises
+    HandleDescriptorLayoutError the MOMENT a read call would cross
+    `end`, rather than letting descriptor_cls.parse() silently read past
+    its own stride and finding out afterward (or not at all).
+
+    This exists because a raw BytesIO's read(n) SILENTLY CLAMPS to
+    however many bytes physically remain in the whole shared buffer --
+    it never raises, it just returns fewer bytes than asked for. For any
+    descriptor OTHER than the last one, an over-read spills into the
+    NEXT descriptor's real bytes, and the post-parse tell()-delta check
+    in parse_handle_stream() catches the mismatch (consumed > declared).
+    But for the LAST descriptor, there is nothing real left in the
+    buffer to spill into -- an over-read attempt just hits the buffer's
+    own physical end and gets clamped there, exactly where tell() would
+    ALSO land for a legitimate full read of that stride. The two cases
+    are byte-for-byte indistinguishable from the tell()-delta check's
+    point of view once they've already happened; this class stops the
+    read from happening in the first place, so it doesn't matter whether
+    anything real exists past the boundary or not."""
+    __slots__ = ("_chunk", "_end", "_descriptor_index")
+
+    def __init__(self, chunk, end, descriptor_index):
+        self._chunk = chunk
+        self._end = end
+        self._descriptor_index = descriptor_index
+
+    def read(self, n=-1):
+        pos = self._chunk.tell()
+        if n is None or n < 0:
+            n = self._end - pos
+        if pos + n > self._end:
+            raise HandleDescriptorLayoutError(
+                f"a descriptor parse attempted to read {n} byte(s) starting "
+                f"at buffer offset {pos} for descriptor {self._descriptor_index}, "
+                f"which would cross its own SizeOfDescriptor boundary at "
+                f"{self._end} -- the installed minidump library's layout no "
+                f"longer matches what this stride was selected for")
+        return self._chunk.read(n)
+
+    def tell(self):
+        return self._chunk.tell()
+
+
 class ParsedHandleDataStream:
     """Return value of parse_handle_stream(): `.header` (the raw
     MINIDUMP_HANDLE_DATA_STREAM) and `.handles` (a list of
@@ -342,21 +387,23 @@ def parse_handle_stream(directory, file_handle) -> ParsedHandleDataStream:
         # Seeking to this descriptor's own stride-aligned offset before
         # every parse prevents CROSS-descriptor misalignment (a parser
         # that over/under-reads for descriptor i can no longer corrupt
-        # where descriptor i+1 starts) -- but it does NOT prove
-        # descriptor_cls.parse() consumed exactly SizeOfDescriptor bytes
-        # for THIS descriptor. A conditional read gated on a field that
-        # appears BEFORE the point where the extra bytes would be read
-        # (e.g. an ObjectInfoRva-style field partway through the struct,
-        # not only one at the very end) can still silently return a value
-        # built from the wrong bytes for every field after that point,
-        # with seeking alone doing nothing to catch it: the next
-        # iteration's seek repositions to the correct START, but this
-        # iteration's OWN fields can already be wrong. The tell()-delta
-        # check below is what actually proves parse() consumed exactly
-        # one stride -- not the seek.
+        # where descriptor i+1 starts). Wrapping `chunk` in a
+        # _BoundedDescriptorReader limited to exactly this descriptor's
+        # own [start, end) range catches an OVER-read the moment it's
+        # attempted -- including for the LAST descriptor, where a raw
+        # BytesIO's read(n) would otherwise silently clamp to the
+        # buffer's own physical end (indistinguishable, from the
+        # caller's side, from a legitimate full read) rather than raise.
+        # The tell()-delta check below still independently catches
+        # UNDER-consumption (parse() finishing early, never attempting
+        # to cross the boundary at all) -- the two checks are
+        # complementary, not redundant: the reader stops an over-read
+        # from happening; the delta check notices a parse that simply
+        # never read enough in the first place.
         start = i * header.SizeOfDescriptor
+        end = start + header.SizeOfDescriptor
         chunk.seek(start)
-        raw = descriptor_cls.parse(chunk)
+        raw = descriptor_cls.parse(_BoundedDescriptorReader(chunk, end, i))
         consumed = chunk.tell() - start
         if consumed != header.SizeOfDescriptor:
             # Not a HandleStreamFramingError: the STREAM's own framing
