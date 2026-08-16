@@ -297,6 +297,45 @@ jobs:
           coverage report --include="dumpex/commands/sysinfo.py"  --fail-under=70
           coverage report --include="dumpex/commands/peb.py"      --fail-under=90
 
+  minidump-version-range:
+    # Proves the range pinned in pyproject.toml's `minidump>=X,<Y` (issue
+    # #86) actually works, not just that the metadata declares it: installs
+    # dumpex once with minidump pinned to the declared FLOOR and once
+    # pinned to the declared CEILING (`pip install "minidump==<version>"`
+    # after the normal editable install, so the exact pin wins over
+    # whatever the resolver would otherwise pick), then imports
+    # dumpex.core.memory (exercising the HandleDataStream descriptor
+    # layout check in dumpex/core/memory.py's _handle_descriptor_layout())
+    # and runs the handle-stream suite against each. Today floor and
+    # ceiling happen to be adjacent (0.0.24 / 0.0.25 exclusive), so this
+    # job effectively re-runs the floor case twice -- but it starts
+    # meaning something the moment that range is ever widened, per the
+    # comment on the dependency line in pyproject.toml.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        minidump-version: ["0.0.24"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dumpex with dev extras
+        run: pip install -e ".[dev]"
+
+      - name: Pin minidump to ${{ matrix.minidump-version }}
+        run: pip install "minidump==${{ matrix.minidump-version }}"
+
+      - name: Import dumpex.core.memory (module-level import path)
+        run: python -c "import dumpex.core.memory"
+
+      - name: Handle-stream descriptor layout + parsing suite
+        run: pytest tests/unit/test_handle_stream_parse.py -v
+
   package-smoke:
     # The pytest job above always installs dumpex editable (`pip install
     # -e .`), which never exercises setuptools' actual package-data

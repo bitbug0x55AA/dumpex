@@ -4,6 +4,7 @@ that never walks ObjectInfos, never does an unbounded string read, and
 never emits the library's '<STRING_DECODE_FAILED>' placeholder.
 """
 import io
+import os
 import struct
 
 import pytest
@@ -89,22 +90,151 @@ def test_descriptor_sizes_match_ms_defined_layout():
     # dumpex's SizeOfDescriptor branch relies on these being 32 and 40; an
     # upstream layout change should fail loudly here, not silently misread
     # every descriptor in a stream.
-    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_SIZE == 32
-    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE == 40
+    v1_size, v2_size = memory._handle_descriptor_layout()
+    assert v1_size == 32
+    assert v2_size == 40
 
 
-def test_v2_descriptor_size_derived_symmetrically_with_v1():
-    from minidump.streams.HandleDataStream import (
-        MINIDUMP_HANDLE_DESCRIPTOR, MINIDUMP_HANDLE_DESCRIPTOR_2,
+def test_layout_is_cached_across_calls():
+    first = memory._handle_descriptor_layout()
+    second = memory._handle_descriptor_layout()
+    assert first is second
+
+
+def test_layout_derivation_is_not_done_at_import_time():
+    # The layout check must run lazily, from inside parse_handle_stream(),
+    # not at module import -- a failure here must be isolated to the
+    # handle-stream code path by open_dump()'s per-stream try/except, not
+    # able to take down `import dumpex.core.memory` (and therefore every
+    # dumpex command) the way a top-level assert/computation would. No
+    # bare top-level call to _descriptor_class_size or the layout function
+    # outside of a function body/definition.
+    import ast
+    import inspect
+    tree = ast.parse(inspect.getsource(memory))
+    for node in tree.body:
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            func = node.value.func
+            name = getattr(func, "id", None) or getattr(func, "attr", None)
+            assert name not in ("_descriptor_class_size", "_handle_descriptor_layout"), (
+                f"{name}() must not be called at module top level")
+
+
+def test_upstream_parse_failure_is_isolated_to_handle_stream(monkeypatch):
+    # A descriptor class whose parse() raises must not propagate out of
+    # parse_handle_stream() as anything other than a normal exception
+    # any caller (including open_dump()'s per-stream dispatch) already
+    # knows how to catch -- it must not be able to crash import.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", None)
+
+    class _BrokenDescriptor:
+        @staticmethod
+        def parse(buff):
+            raise RuntimeError("simulated upstream parse failure")
+
+    monkeypatch.setattr(memory, "MINIDUMP_HANDLE_DESCRIPTOR", _BrokenDescriptor)
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="RuntimeError"):
+        _parse([{"handle": 0x1}])
+
+
+def test_size_selection_follows_derived_constants_not_literal(monkeypatch):
+    # Force the derived v2 size away from the literal 40 dumpex used to
+    # hardcode. The SELECTION path must follow the (patched) derived
+    # constants, not a literal baked into the comparison -- proving the
+    # branch tracks the derived value rather than merely happening to
+    # equal it under today's installed library.
+    monkeypatch.setattr(memory, "_handle_descriptor_layout", lambda: (32, 48))
+
+    result = _parse([{"handle": 0x99, "type_name": "Mutant", "object_name": None}],
+                     size_of_descriptor=48)
+    assert result.header.SizeOfDescriptor == 48
+    assert result.handles[0].TypeName == "Mutant"
+
+    # The old-standard 40-byte stride must now be REJECTED: under the
+    # patched layout it matches neither derived size.
+    with pytest.raises(HandleStreamFramingError):
+        _parse([{"handle": 0x1}], size_of_descriptor=40)
+
+
+def test_equal_derived_sizes_raise_layout_error(monkeypatch):
+    # If v1 and v2 ever derive to the same size, the v2 branch becomes
+    # permanently unreachable -- every v2 stream would silently parse as
+    # v1. This must be caught explicitly rather than left to coincidence.
+    monkeypatch.setattr(memory, "_HANDLE_DESCRIPTOR_LAYOUT_CACHE", None)
+    monkeypatch.setattr(memory, "_descriptor_class_size", lambda cls: 32)
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="never be reachable"):
+        memory._handle_descriptor_layout()
+
+
+def test_descriptor_class_size_rejects_size_attribute_mismatch():
+    class _MismatchedDescriptor:
+        size = 999
+
+        @staticmethod
+        def parse(buff):
+            buff.read(32)
+
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="999"):
+        memory._descriptor_class_size(_MismatchedDescriptor)
+
+
+def test_descriptor_class_size_rejects_probe_overflow():
+    class _RunawayDescriptor:
+        @staticmethod
+        def parse(buff):
+            buff.read(memory._DESCRIPTOR_PROBE_BYTES)   # consumes the whole probe
+
+    with pytest.raises(memory.HandleDescriptorLayoutError, match="probe buffer"):
+        memory._descriptor_class_size(_RunawayDescriptor)
+
+
+def test_layout_check_survives_python_dash_o():
+    # `assert` statements are compiled out entirely under `python -O` /
+    # PYTHONOPTIMIZE=1 -- this is a REQUIRED regression test (not merely
+    # nice-to-have) because a layout drift check written as a bare
+    # `assert` would pass every test in this file under normal `pytest`
+    # while providing zero protection in an optimized interpreter. Runs a
+    # real subprocess with -O and a descriptor class that parses to the
+    # wrong size, and asserts the explicit HandleDescriptorLayoutError
+    # still fires. Uses tempfile (not the tmp_path fixture) so this test
+    # doesn't depend on pytest's own basetemp directory being writable.
+    import subprocess
+    import sys
+    import tempfile
+
+    script_body = (
+        "import dumpex.core.memory as memory\n"
+        "\n"
+        "class _WrongSizeDescriptor:\n"
+        "    @staticmethod\n"
+        "    def parse(buff):\n"
+        "        buff.read(36)   # neither 32 nor 40\n"
+        "\n"
+        "memory.MINIDUMP_HANDLE_DESCRIPTOR = _WrongSizeDescriptor\n"
+        "memory._HANDLE_DESCRIPTOR_LAYOUT_CACHE = None\n"
+        "try:\n"
+        "    memory._handle_descriptor_layout()\n"
+        "except memory.HandleDescriptorLayoutError as e:\n"
+        "    assert 'MINIDUMP_HANDLE_DESCRIPTOR' in str(e)\n"
+        "    assert '36' in str(e)\n"
+        "    print('LAYOUT_ERROR_RAISED')\n"
+        "else:\n"
+        "    print('NO_ERROR_RAISED')\n"
     )
-    # Both sizes come from the same helper -- no literal 40 anywhere in
-    # the selection path -- so the branch that picks MINIDUMP_HANDLE_
-    # DESCRIPTOR_2 can never disagree with the stride actually used to
-    # split the descriptor array.
-    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_SIZE == \
-        memory._descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR)
-    assert memory.MINIDUMP_HANDLE_DESCRIPTOR_2_SIZE == \
-        memory._descriptor_class_size(MINIDUMP_HANDLE_DESCRIPTOR_2)
+    fd, script_path = tempfile.mkstemp(suffix=".py")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(script_body)
+        result = subprocess.run(
+            [sys.executable, "-O", script_path],
+            capture_output=True, text=True, timeout=30,
+        )
+    finally:
+        os.remove(script_path)
+
+    assert "LAYOUT_ERROR_RAISED" in result.stdout, (
+        f"stdout={result.stdout!r} stderr={result.stderr!r}")
+    assert "NO_ERROR_RAISED" not in result.stdout
 
 
 # ── basic shape ────────────────────────────────────────────────────────
@@ -117,10 +247,16 @@ def test_parses_header_and_returns_expected_type():
     assert len(result.handles) == 1
 
 
-def test_descriptor_fields_are_preserved():
+@pytest.mark.parametrize("size_of_descriptor", [32, 40], ids=["v1", "v2"])
+def test_descriptor_fields_are_preserved(size_of_descriptor):
+    # Symmetric v1/v2 coverage (issue #86 AC 6): every documented field
+    # must round-trip identically regardless of which descriptor version
+    # produced the stream.
     result = _parse([{"handle": 0x234, "type_name": "File", "object_name": r"\Device\NamedPipe\mypipe",
                        "attributes": 0x40, "granted_access": 0x1200a9,
-                       "handle_count": 3, "pointer_count": 32}])
+                       "handle_count": 3, "pointer_count": 32}],
+                     size_of_descriptor=size_of_descriptor)
+    assert result.header.SizeOfDescriptor == size_of_descriptor
     h = result.handles[0]
     assert isinstance(h, ParsedHandleDescriptor)
     assert h.Handle == 0x234
@@ -131,6 +267,30 @@ def test_descriptor_fields_are_preserved():
     assert h.HandleCount == 3
     assert h.PointerCount == 32
     assert h.ObjectInfos == []   # never walked, regardless of descriptor version
+
+
+def test_v2_multiple_descriptors_all_fields_correct_no_misalignment():
+    # Regression for a stride bug where descriptors after the first could
+    # silently misread if a parser consumed a different byte count than
+    # header.SizeOfDescriptor for one descriptor -- each descriptor here
+    # carries distinct field values so any cross-descriptor misalignment
+    # shows up as a wrong value, not just a wrong count.
+    descriptors = [
+        {"handle": 0x10, "type_name": "File",  "object_name": "A",
+         "attributes": 0x1, "granted_access": 0x1, "handle_count": 1, "pointer_count": 1},
+        {"handle": 0x20, "type_name": "Key",   "object_name": "B",
+         "attributes": 0x2, "granted_access": 0x2, "handle_count": 2, "pointer_count": 2},
+        {"handle": 0x30, "type_name": "Event", "object_name": "C",
+         "attributes": 0x3, "granted_access": 0x3, "handle_count": 3, "pointer_count": 3},
+    ]
+    result = _parse(descriptors, size_of_descriptor=40)
+    assert [h.Handle for h in result.handles] == [0x10, 0x20, 0x30]
+    assert [h.TypeName for h in result.handles] == ["File", "Key", "Event"]
+    assert [h.ObjectName for h in result.handles] == ["A", "B", "C"]
+    assert [h.Attributes for h in result.handles] == [0x1, 0x2, 0x3]
+    assert [h.GrantedAccess for h in result.handles] == [0x1, 0x2, 0x3]
+    assert [h.HandleCount for h in result.handles] == [1, 2, 3]
+    assert [h.PointerCount for h in result.handles] == [1, 2, 3]
 
 
 def test_v2_descriptor_parses_and_object_info_rva_is_never_walked():
