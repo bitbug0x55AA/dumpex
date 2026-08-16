@@ -1,6 +1,6 @@
 """--threads command."""
 import ntpath
-from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN
+from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.core.memory import get_modules, get_thread_infos, addr_to_module
 from dumpex.core.pe_utils import _filetime_to_str, _dumpflags_str, _duration_100ns_to_str
 from dumpex.output.records import (
@@ -345,7 +345,10 @@ def render_threads_console(records, coverage) -> None:
             print(f"  {'StartAddress':<16} {DIM('unavailable')}  ← {backed}")
         else:
             if rec.module_context == MODULE_CONTEXT_RESOLVED:
-                backed = DIM(rec.backing_module)
+                # ntpath.basename() of a ModuleListStream name -- a dump
+                # string, so escaped before the colour helper. The other
+                # two branches print dumpex's own fixed text.
+                backed = DIM(console_safe(rec.backing_module))
             elif rec.module_context == MODULE_CONTEXT_UNREGISTERED:
                 # Confirmed: ModuleListStream was available and this
                 # address genuinely isn't backed by any known module.

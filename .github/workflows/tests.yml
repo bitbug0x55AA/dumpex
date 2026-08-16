@@ -45,6 +45,24 @@ jobs:
         # scenario at a time with less context.
         run: python scripts/update_hunt_cli_goldens.py --check
 
+      - name: Untrusted console text — ratchet (new unescaped output fails; existing debt warns)
+        # Everything dumpex prints that came out of a dump is attacker-
+        # controlled: a newline in a module name or a handle's ObjectName
+        # forges a "[~]" coverage-reason line, ESC drives the terminal, and
+        # U+202E visually reorders the evidence. Each case builds real
+        # records, calls the real renderer, and inspects the bytes that
+        # actually reached stdout — it does NOT scan source for `print(`/
+        # `console_safe` spellings, which an earlier revision did and which
+        # missed nine of eleven ways to write the same bug (most importantly
+        # `console_safe()` applied to the wrong value in the same call).
+        # Runs as its own named step for the same reason the
+        # minidump-version-pin job below does — the warning list naming
+        # every still-leaking renderer has to be readable, not buried in a
+        # 1700-test run. FAILS on a renderer that leaks and is not already
+        # listed, and on a listed renderer that has since been fixed
+        # (delete its entry); the known ones warn.
+        run: pytest tests/unit/test_console_untrusted_text.py -v -W "always::UserWarning"
+
       - name: Run pytest with coverage (overall gate — see pyproject.toml [tool.coverage.report])
         run: pytest --cov=dumpex --cov-report=term-missing
 

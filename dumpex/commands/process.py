@@ -36,7 +36,7 @@ from dumpex.output.command_result import CommandResult
 from dumpex.output.records import (
     ProcessRecord, IatRecord, ImportEntryRecord, ProcessDiagnosticRecord, hex_address,
 )
-from dumpex.ui.colors import BOLD
+from dumpex.ui.colors import BOLD, console_safe
 
 
 # ── §3.5.4/§6.1 -- IAT diagnostic `details` keys that carry addresses ────
@@ -479,10 +479,13 @@ def render_process_console(record: ProcessRecord, coverage, *, verbose: bool = F
 
     pid_str = f"{record.pid} (0x{record.pid:x})" if record.pid is not None else "(unknown)"
     print()
-    print(f"  {'Process Name':<22} {record.process_name or '(unknown)'}")
+    # Name/path/command line are PEB (or ModuleListStream) strings -- dump
+    # bytes, therefore attacker-controlled. Escaped for the console only;
+    # the record and --json keep the exact decoded values.
+    print(f"  {'Process Name':<22} {console_safe(record.process_name) or '(unknown)'}")
     print(f"  {'PID':<22} {pid_str}")
-    print(f"  {'Path':<22} {record.process_path or '(unknown)'}")
-    print(f"  {'Command Line':<22} {record.command_line or '(unknown)'}")
+    print(f"  {'Path':<22} {console_safe(record.process_path) or '(unknown)'}")
+    print(f"  {'Command Line':<22} {console_safe(record.command_line) or '(unknown)'}")
     print(f"  {'Start Time (UTC)':<22} {record.process_start_utc or '(unknown)'}")
     print(f"  {'Image Base':<22} {record.image_base_address or '(unknown)'}")
 

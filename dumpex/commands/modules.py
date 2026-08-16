@@ -1,6 +1,6 @@
 """--modules command."""
 import ntpath
-from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW
+from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, console_safe
 from dumpex.core.memory import get_modules
 from dumpex.core.pe_utils import _pe_timestamp_to_str, _version_str
 from dumpex.output.records import ModuleRecord, hex_address
@@ -83,12 +83,17 @@ def render_modules_console(records, coverage) -> None:
         badges = [_ANOMALY_BADGES[f]() for f in rec.anomaly_flags if f in _ANOMALY_BADGES]
         flag_str = "  " + " ".join(badges) if badges else ""
 
-        print(f"\n  {BOLD(rec.name)}{flag_str}")
-        print(f"  {'Full path':<18} {DIM(rec.full_path or '(unnamed)')}")
+        # name/full_path/file_version are ModuleListStream strings -- read
+        # straight out of the dump, so attacker-controlled. console_safe()
+        # is applied to the TEXT, before the colour helper: colouring first
+        # would feed dumpex's own escape codes back through the escaper.
+        # The records and --json keep the exact decoded values.
+        print(f"\n  {BOLD(console_safe(rec.name))}{flag_str}")
+        print(f"  {'Full path':<18} {DIM(console_safe(rec.full_path) or '(unnamed)')}")
         print(f"  {'Base → End':<18} {rec.base_address} → {rec.end_address}  (size 0x{rec.size:x})")
         print(f"  {'Compiled (UTC)':<18} {rec.compiled_utc}")
         if rec.file_version:
-            print(f"  {'File version':<18} {rec.file_version}")
+            print(f"  {'File version':<18} {console_safe(rec.file_version)}")
         if rec.checksum:
             print(f"  {'Checksum':<18} 0x{rec.checksum:08x}")
 
