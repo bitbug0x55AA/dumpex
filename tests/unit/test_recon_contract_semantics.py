@@ -21,7 +21,10 @@ exec()'d), and the shipped PRODUCTION function.
      Every truth table runs against the REAL function:
      pe_utils._resolve_directory_present,
      process._select_console_branch, process._select_iat_source_state,
-     coverage.render_limitation().
+     coverage.render_limitation(), and §3.2/§3.3.3's normalizers in
+     process_info (normalize_pid, classify_process_create_time,
+     normalize_windows_path, normalize_command_line,
+     normalize_image_base, resolve_module_by_base).
 
   LAYER 2 -- prose <-> the contract's pseudocode. Is the DOCUMENT
      internally consistent? This is #37's P1 defect in its original
@@ -46,12 +49,28 @@ feeds the result through the real presence resolver, covering the four
 highest-value fixtures from §8.3 item 6b/6b2 against actual bytes rather
 than hand-typed expectations.
 
+Not every frozen section admits all three layers, and the final section
+of this file ("the frozen normalizers") makes that explicit rather than
+leaving it implicit: six of the contract's ten reference functions are
+stated as a signature plus an English rule, with no algorithm text to
+exec, so layers 2 and 3 do not exist for them and only layer 1 plus
+signature equivalence runs. Which function is in which group is pinned
+by test_reference_function_body_classification_is_pinned(), so a doc
+change that adds or removes a body changes the available coverage
+loudly.
+
+§6.1's registry -- which code exists, its source, its fields, and the
+exact sentence it renders -- is a fourth artifact pair (markdown table
+<-> coverage._CODE_SPECS) and is checked in
+tests/unit/test_recon_contract_registry.py.
+
 §3.7.3's not-yet-implemented `retain_completeness_checks_when_not_
 evaluated` design (#38) is NOT modelled here: a reference model of an
 unimplemented feature is not a semantic check of shipped behavior, and
 mixing the two is what made this file's coverage claims hard to read.
 It lives in tests/unit/test_recon_contract_retention_prototype.py.
 """
+import ast
 import inspect
 import os
 import re
@@ -59,8 +78,16 @@ import struct
 
 import pytest
 
-from dumpex.core.pe_utils import parse_pe_header, _resolve_directory_present
+from dumpex.core.pe_utils import (
+    parse_pe_header, _resolve_directory_present, _select_iat_outcome,
+)
 from dumpex.commands.process import _select_console_branch, _select_iat_source_state
+from dumpex.core.memory import observe_stream, stream_failure
+from dumpex.core.process_info import (
+    MAX_ENV_BYTES, MAX_ENV_ENTRIES, classify_process_create_time, normalize_command_line,
+    normalize_image_base, normalize_pid, normalize_windows_path, resolve_module_by_base,
+    walk_environment_block,
+)
 from dumpex.output.coverage import (
     CoverageLimitation, LimitationCode, render_limitation,
 )
@@ -76,28 +103,65 @@ def doc() -> str:
         return fh.read()
 
 
-def _extract_python_function(doc: str, def_name: str):
-    """Pull one fenced ```python block out of the contract by the name
-    of the function it defines, and exec() it in an isolated namespace.
-    This ties the tests below directly to the doc's OWN algorithm text:
-    if the contract's pseudocode changes, these tests exercise the new
-    version automatically rather than a stale copy pasted into the test
-    suite, which is exactly the drift #37's reviews kept catching.
+_PY_FENCE_RE = re.compile(r"^([ \t]*)```python\n(.*?\n)\1```", re.DOTALL | re.MULTILINE)
+
+
+def _iter_python_blocks(doc: str):
+    """Every fenced ```python block in the contract, dedented.
 
     Fences may be nested inside a markdown list item (indented) or sit
     at the top level (not indented) -- the opening/closing fence's own
     indentation is captured and stripped from every line so exec() sees
     valid, unindented Python either way."""
-    pattern = re.compile(
-        r"^([ \t]*)```python\n(.*?\n)\1```", re.DOTALL | re.MULTILINE)
-    for indent, body in pattern.findall(doc):
-        dedented = "\n".join(
+    for indent, body in _PY_FENCE_RE.findall(doc):
+        yield "\n".join(
             line[len(indent):] if line.startswith(indent) else line
             for line in body.splitlines())
-        if dedented.startswith(f"def {def_name}("):
-            ns = {}
-            exec(compile(dedented, f"<contract:{def_name}>", "exec"), ns)
-            return ns[def_name]
+
+
+def _extract_python_function(doc: str, def_name: str, extra_globals: dict = None):
+    """Pull the fenced ```python block that DEFINES `def_name` out of the
+    contract, exec() it in an isolated namespace, and return the
+    function. This ties the tests below directly to the doc's OWN
+    algorithm text: if the contract's pseudocode changes, these tests
+    exercise the new version automatically rather than a stale copy
+    pasted into the test suite, which is exactly the drift #37's reviews
+    kept catching.
+
+    The block is located by searching for a top-level `def <name>(`
+    ANYWHERE in it, not by requiring the block to start with one. The
+    original version required `dedented.startswith("def <name>(")`, which
+    silently made five of the contract's ten reference functions
+    unreachable -- `classify_process_create_time`, `normalize_windows_
+    path`, `normalize_command_line` and `normalize_image_base` all share
+    §3.2's single fence with `normalize_pid` and are therefore not first,
+    and §2.1's `open_dump` sits below that block's imports and
+    `_STREAM_DISPATCH` table. Worse, the failure was indistinguishable
+    from the real thing: this function raised "contract has no ```python
+    block defining X()" for functions the contract plainly defines, so a
+    caller could not tell "the doc never froze this" from "the extractor
+    cannot see it".
+
+    `extra_globals` supplies names a block legitimately reads from its
+    surrounding module rather than defining itself (§4.3's
+    `walk_environment_block` takes `MAX_ENV_BYTES`/`MAX_ENV_ENTRIES` as
+    default arguments). Passing production's own constants there makes
+    the defaults a checked fact rather than an untested assumption.
+    """
+    for dedented in _iter_python_blocks(doc):
+        if not re.search(rf"^def {re.escape(def_name)}\(", dedented, re.MULTILINE):
+            continue
+        ns = dict(extra_globals or {})
+        # Deliberately NOT wrapped in try//except: a block that fails to
+        # exec is a defect in the contract (or a missing extra_globals
+        # entry), and the real traceback names it far better than a
+        # rewritten "not found" ever could.
+        exec(compile(dedented, f"<contract:{def_name}>", "exec"), ns)
+        assert def_name in ns, (
+            f"the contract block containing `def {def_name}(` did not bind "
+            f"that name after exec -- it is nested inside another "
+            f"definition, not a top-level reference function")
+        return ns[def_name]
     raise AssertionError(f"contract has no ```python block defining {def_name}()")
 
 
@@ -125,6 +189,11 @@ def select_iat_source_state():
 @pytest.fixture(scope="module")
 def doc_resolve_present(doc):
     return _extract_python_function(doc, "resolve_present")
+
+
+@pytest.fixture(scope="module")
+def doc_select_iat_outcome(doc):
+    return _extract_python_function(doc, "select_iat_outcome")
 
 
 @pytest.fixture(scope="module")
@@ -204,6 +273,179 @@ def test_presence_resolver_size_never_flips_a_nonzero_rva_to_absent(resolve_pres
         assert resolve_present(1, 16, [(0, 0), (0, size)] + [(0, 0)] * 4) is False
     for size in (0, 1, 0x40, 0xFFFFFFFF):
         assert resolve_present(1, 16, [(0, 0), (0x2000, size)] + [(0, 0)] * 4) is True
+
+
+# ── §3.5.2: outcome matrix truth table ─────────────────────────────────
+#
+# (import_directory_present, table_present) -> (walk_descriptors,
+# limitation, diagnostic), transcribed row by row from §3.5.2's "Frozen
+# consequences of each determined combination" table. Every one of the
+# six rows appears here, including the `null | anything` row expanded
+# over all three values of the second field -- the contract asserts that
+# row absorbs them all, and an expanded table is what checks it.
+#
+# This is the section that had NO executable coverage until #37's third
+# repair pass: which code each pair emits was guarded only by a substring
+# assertion over the markdown ("IAT_DIRECTORY_TABLE_INCOMPLETE" in row),
+# which cannot fail when production changes. Production now decides all
+# three consequences in one place (pe_utils._select_iat_outcome), reached
+# by parse_iat() at each of the three sites that used to re-derive their
+# own condition.
+_IAT_OUTCOME_CASES = [
+    # false | false or true -- determined absent, nothing missing.
+    ("false_false", False, False, (False, None, None)),
+    ("false_true",  False, True,  (False, None, None)),
+    # false | null -- imports determined absent, index 12 still unknown.
+    ("false_null",  False, None,  (False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)),
+    # true | true -- the normal case.
+    ("true_true",   True,  True,  (True, None, None)),
+    # true | false -- walked; no range to check slots against.
+    ("true_false",  True,  False, (True, None, "IAT_BOUNDS_CHECK_UNAVAILABLE")),
+    # true | null -- walked; whether a range exists is unknown, so a
+    # limitation and NOT the bounds diagnostic.
+    ("true_null",   True,  None,  (True, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)),
+    # null | anything -- absorbs every value of the second field.
+    ("null_false",  None,  False, (False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)),
+    ("null_true",   None,  True,  (False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)),
+    ("null_null",   None,  None,  (False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)),
+]
+
+
+def _outcome_tuple(outcome):
+    """Production returns a frozen IatOutcome; the contract's reference
+    function returns a plain tuple. Compared as tuples so the doc is not
+    forced to name a production type it has no business knowing about."""
+    return (outcome.walk_descriptors, outcome.limitation, outcome.diagnostic)
+
+
+@pytest.mark.parametrize("case_id,import_present,table_present,expected",
+                         _IAT_OUTCOME_CASES, ids=[c[0] for c in _IAT_OUTCOME_CASES])
+def test_iat_outcome_matrix_truth_table(case_id, import_present, table_present, expected):
+    assert _outcome_tuple(_select_iat_outcome(import_present, table_present)) == expected
+
+
+def test_iat_bounds_check_unavailable_fires_only_for_a_determined_absent_table():
+    """§6.2's firing rule for diagnostic 6, and §3.5.2's reason for it:
+    the diagnostic ASSERTS the image declares no IAT directory. A `null`
+    table_present does not establish that, so the pair (true, null) must
+    produce the limitation instead -- reporting the diagnostic there
+    would state as fact exactly what is unknown."""
+    for import_present in (True, False, None):
+        for table_present in (True, None):
+            outcome = _select_iat_outcome(import_present, table_present)
+            assert outcome.diagnostic is None
+    assert _select_iat_outcome(True, False).diagnostic == "IAT_BOUNDS_CHECK_UNAVAILABLE"
+    # ... and only when entries were actually walked (§6.2: "6 fires
+    # exactly when table_present == false WHILE ENTRIES WERE WALKED").
+    assert _select_iat_outcome(False, False).diagnostic is None
+    assert _select_iat_outcome(None, False).diagnostic is None
+
+
+def test_iat_outcome_limitation_fires_exactly_when_a_presence_is_undetermined(
+        ):
+    """§3.5.2: "A `null` is never a claim. When either index resolves to
+    `null`, one IAT_DIRECTORY_TABLE_INCOMPLETE limitation fires." Stated
+    as a biconditional and checked as one, over the whole input space."""
+    for import_present in (True, False, None):
+        for table_present in (True, False, None):
+            undetermined = import_present is None or table_present is None
+            outcome = _select_iat_outcome(import_present, table_present)
+            assert (outcome.limitation is not None) is undetermined, (
+                f"({import_present}, {table_present}) -> {outcome.limitation!r}")
+
+
+def test_iat_outcome_never_emits_a_limitation_and_a_diagnostic_together(
+        ):
+    """§1.6's isolation rule at this section's own scale: a determined
+    observation (diagnostic, coverage unaffected) and an undetermined one
+    (limitation, partial) describe incompatible states of index 12, so no
+    pair may produce both."""
+    for import_present in (True, False, None):
+        for table_present in (True, False, None):
+            outcome = _select_iat_outcome(import_present, table_present)
+            assert not (outcome.limitation and outcome.diagnostic)
+
+
+# §3.5.2's outcome table is markdown, but its outcome cells are not
+# prose ABOUT the behavior -- they name the codes by symbol. That makes
+# the table itself checkable against the selector, the same way §6.1's
+# registry is checkable against _CODE_SPECS (see
+# test_recon_contract_registry.py), and it closes the one loop the truth
+# table above leaves open: _IAT_OUTCOME_CASES is a HAND transcription of
+# these rows, so without this, editing a row without editing the
+# transcription would go unnoticed.
+#
+# The only wording rule involved is negation: a code token preceded by
+# "No" is one the row says must NOT fire. Everything else is symbol
+# matching.
+_OUTCOME_ROW_RE = re.compile(r"^\| (.*?) \| (.*?) \| (.*) \|$")
+_OUTCOME_CODE_RE = re.compile(r"`(IAT_[A-Z_]+)`")
+_TRISTATE = {"true": True, "false": False, "null": None}
+
+
+def _parse_outcome_table(doc: str) -> list:
+    """(import_values, table_values, asserted_codes, negated_codes) per
+    row. A cell naming no tri-state value at all ("anything") stands for
+    all three, which is exactly what the `null | anything` row claims."""
+    section = doc.split("Frozen consequences of each determined combination", 1)[1]
+    section = section.split("Restated as a reference selector", 1)[0]
+    rows = []
+    for line in section.splitlines():
+        m = _OUTCOME_ROW_RE.match(line)
+        if not m or m.group(1).startswith("---") or "`import_directory_present`" in m.group(1):
+            continue
+        import_cell, table_cell, outcome_cell = m.groups()
+        asserted, negated = set(), set()
+        for cm in _OUTCOME_CODE_RE.finditer(outcome_cell):
+            preceding = outcome_cell[max(0, cm.start() - 4):cm.start()].rstrip()
+            (negated if preceding.endswith("No") else asserted).add(cm.group(1))
+
+        def values(cell):
+            found = [_TRISTATE[t] for t in re.findall(r"`(true|false|null)`", cell)]
+            return found or list(_TRISTATE.values())
+
+        rows.append((values(import_cell), values(table_cell), asserted, negated))
+    return rows
+
+
+def test_outcome_table_parses(doc):
+    """Guards the row regex: a layout change that stopped matching would
+    turn the conformance check below into a vacuous pass."""
+    rows = _parse_outcome_table(doc)
+    assert len(rows) == 6, f"§3.5.2's outcome table parsed as {len(rows)} rows, expected 6"
+    covered = {(i, t) for imports, tables, _a, _n in rows for i in imports for t in tables}
+    assert len(covered) == 9, (
+        f"§3.5.2 claims every (import_directory_present, table_present) pair "
+        f"appears in exactly one row; the table covers {sorted(map(str, covered))}")
+
+
+def test_outcome_table_rows_name_exactly_the_codes_production_emits(doc):
+    """Each row's outcome cell, against pe_utils._select_iat_outcome:
+    every code the row asserts must be one production emits for that
+    pair, every code production emits must be named in the row, and no
+    code the row explicitly negates ("No `X`") may be emitted."""
+    for imports, tables, asserted, negated in _parse_outcome_table(doc):
+        for import_present in imports:
+            for table_present in tables:
+                outcome = _select_iat_outcome(import_present, table_present)
+                emitted = {c for c in (outcome.limitation, outcome.diagnostic) if c}
+                assert asserted == emitted, (
+                    f"({import_present}, {table_present}): §3.5.2's row names "
+                    f"{sorted(asserted)}, production emits {sorted(emitted)}")
+                assert not (negated & emitted), (
+                    f"({import_present}, {table_present}): §3.5.2's row says "
+                    f"{sorted(negated & emitted)} must NOT fire, production emits it")
+
+
+def test_descriptors_are_walked_exactly_when_imports_are_determined_present():
+    """The walk decision is a pure function of the FIRST field: §3.5.2's
+    two `true | *` rows both walk, and every other row does not. Checked
+    with 1/0 in the table_present slot as well, where an `is`-comparison
+    and bare truthiness would part company."""
+    for table_present in (True, False, None, 1, 0):
+        assert _select_iat_outcome(True, table_present).walk_descriptors is True
+        assert _select_iat_outcome(False, table_present).walk_descriptors is False
+        assert _select_iat_outcome(None, table_present).walk_descriptors is False
 
 
 # ── §3.8: console branch selector truth table ───────────────────────────
@@ -407,6 +649,16 @@ def test_doc_presence_pseudocode_matches_prose_truth_table(
     assert doc_resolve_present(index, declared, dd) is expected
 
 
+@pytest.mark.parametrize("case_id,import_present,table_present,expected",
+                         _IAT_OUTCOME_CASES, ids=[c[0] for c in _IAT_OUTCOME_CASES])
+def test_doc_iat_outcome_pseudocode_matches_prose_truth_table(
+        doc_select_iat_outcome, case_id, import_present, table_present, expected):
+    """§3.5.2's six prose rows against §3.5.2's own selector. This is the
+    layer that would have caught the table and the selector disagreeing
+    before either was implemented."""
+    assert tuple(doc_select_iat_outcome(import_present, table_present)) == expected
+
+
 @pytest.mark.parametrize("import_present,has_entries,partial,expected", _CONSOLE_CASES)
 def test_doc_console_pseudocode_matches_prose_truth_table(
         doc_select_console_branch, import_present, has_entries, partial, expected):
@@ -502,6 +754,19 @@ def test_doc_resolve_present_matches_production(doc_resolve_present, index, decl
         assert doc_resolve_present(index, declared, dd) is \
             _resolve_directory_present(index, declared, dd), (
             f"doc/production divergence at index={index} declared={declared} dd={dd}")
+
+
+@pytest.mark.parametrize("import_present", _EQUIV_PRESENT)
+@pytest.mark.parametrize("table_present", _EQUIV_PRESENT)
+def test_doc_select_iat_outcome_matches_production(
+        doc_select_iat_outcome, import_present, table_present):
+    """Inputs deliberately include 1/0 in both slots -- the doc's selector
+    returns a plain tuple and production returns a frozen IatOutcome, so
+    the comparison is on the tuple, but the DECISION each makes must be
+    identical even for values only an `is`-comparison separates."""
+    _assert_same_parameter_names(doc_select_iat_outcome, _select_iat_outcome)
+    assert tuple(doc_select_iat_outcome(import_present, table_present)) == \
+        _outcome_tuple(_select_iat_outcome(import_present, table_present))
 
 
 @pytest.mark.parametrize("has_entries", _EQUIV_ENTRIES)
@@ -695,3 +960,342 @@ def test_byte_level_number_of_rva_and_sizes_uncaptured_is_null_null(resolve_pres
     assert declared is None
     assert resolve_present(1, declared, parsed["data_directories"]) is None
     assert resolve_present(12, declared, parsed["data_directories"]) is None
+
+
+# ══ §3.2/§3.3.3/§4.3: the frozen normalizers ═══════════════════════════
+#
+# The layers above cover §3.5.2/§3.7.4/§3.8/§6.1 -- four of the
+# contract's ten reference functions. The other six were frozen with no
+# executable coverage at all, and five of them could not even be
+# EXTRACTED: _extract_python_function() used to require its target to be
+# the first `def` in its fence, so §3.2's block (five normalizers sharing
+# one fence) yielded only normalize_pid, and §2.1's open_dump (below that
+# block's imports) yielded nothing. See that function's own docstring.
+#
+# With extraction fixed, the six split by how the contract states them,
+# and the split decides which layers are even POSSIBLE:
+#
+#   FULL BODY -- normalize_pid, classify_process_create_time. All three
+#     layers apply, exactly as for the §3.5.2 selectors.
+#
+#   SIGNATURE + PROSE DOCSTRING only -- normalize_windows_path,
+#     normalize_command_line, normalize_image_base,
+#     resolve_module_by_base, walk_environment_block, observe_stream,
+#     stream_failure. There is no algorithm text to exec, so layers 2 and
+#     3 do not exist for these: running the doc's copy would only assert
+#     that a function returning None returns None. What IS checkable is
+#     layer 1 (the prose, hand-transcribed, against production) plus
+#     signature equivalence -- and that is what runs below.
+#
+# test_reference_function_body_classification_is_pinned() freezes which
+# function is in which group, so fleshing a docstring out into real
+# pseudocode is noticed (it should gain layers 2+3) and hollowing one out
+# is caught (it would silently lose them).
+
+_FULL_BODY_REFERENCE_FUNCTIONS = frozenset({
+    "normalize_pid", "classify_process_create_time", "resolve_present",
+    "select_iat_outcome", "select_iat_source_state", "select_console_branch",
+    "render_iat_directory_table_incomplete", "open_dump",
+})
+_PROSE_ONLY_REFERENCE_FUNCTIONS = frozenset({
+    "normalize_windows_path", "normalize_command_line", "normalize_image_base",
+    "resolve_module_by_base", "walk_environment_block", "observe_stream",
+    "stream_failure",
+})
+
+# §4.3's walk_environment_block reads two budget constants as default
+# arguments -- names it legitimately expects from its surrounding module
+# rather than defining itself. Not a defect; see
+# test_walk_environment_block_defaults_reference_the_budget_constants().
+_ENV_WALK_SENTINELS = {"MAX_ENV_BYTES": object(), "MAX_ENV_ENTRIES": object()}
+
+# §2.1's open_dump is located and classified by AST like every other
+# reference function, but never exec()'d: its block imports a dozen
+# minidump-library symbols and calls parse_handle_stream(), so running it
+# would mean either importing that library here or stubbing out enough of
+# it that the exec proves nothing. open_dump is I/O -- there is no truth
+# table to run it against either way, so nothing is lost by leaving it at
+# the AST level.
+_NOT_EXECUTABLE_HERE = frozenset({"open_dump"})
+
+
+def _reference_function_defs(doc: str) -> dict:
+    """{name: ast.FunctionDef} for every top-level `def` the contract's
+    ```python blocks declare.
+
+    Not every ```python block is module text. Two are deliberately
+    illustrative FRAGMENTS -- §6's `build_coverage_report(sources, *,
+    ...)` call signature and §4.3's bare `while (env_len := ...)` loop
+    header -- neither of which parses on its own and neither of which
+    could contain a top-level `def`. They are skipped rather than
+    treated as defects."""
+    found = {}
+    for block in _iter_python_blocks(doc):
+        try:
+            tree = ast.parse(block)
+        except SyntaxError:
+            continue
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef):
+                found[node.name] = node
+    return found
+
+
+def _is_docstring_only(node: ast.FunctionDef) -> bool:
+    return (len(node.body) == 1 and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str))
+
+
+def test_reference_function_body_classification_is_pinned(doc):
+    """Which reference functions carry real algorithm text, and which are
+    frozen as a signature plus prose. A change in either direction
+    changes which layers of this file can cover them, so it must not
+    happen silently."""
+    defs = _reference_function_defs(doc)
+    expected = _FULL_BODY_REFERENCE_FUNCTIONS | _PROSE_ONLY_REFERENCE_FUNCTIONS
+    assert set(defs) == expected, (
+        f"the contract's set of reference functions changed: "
+        f"added={sorted(set(defs) - expected)} "
+        f"removed={sorted(expected - set(defs))} -- classify each new one into "
+        f"_FULL_BODY_/_PROSE_ONLY_REFERENCE_FUNCTIONS and give it the layers "
+        f"that classification allows")
+    prose_only = {n for n, node in defs.items() if _is_docstring_only(node)}
+    assert prose_only == _PROSE_ONLY_REFERENCE_FUNCTIONS, (
+        f"gained real pseudocode (move to _FULL_BODY_REFERENCE_FUNCTIONS and "
+        f"wire into layers 2+3): {sorted(_PROSE_ONLY_REFERENCE_FUNCTIONS - prose_only)}; "
+        f"lost its body (layers 2+3 would silently stop covering it): "
+        f"{sorted(prose_only - _PROSE_ONLY_REFERENCE_FUNCTIONS)}")
+
+
+@pytest.mark.parametrize("name", sorted((_FULL_BODY_REFERENCE_FUNCTIONS |
+                                         _PROSE_ONLY_REFERENCE_FUNCTIONS) -
+                                        _NOT_EXECUTABLE_HERE))
+def test_every_reference_function_is_extractable(doc, name):
+    """The regression that motivated rewriting _extract_python_function():
+    four of these raised "contract has no ```python block defining X()"
+    -- a message naming the contract as the culprit for what was purely
+    an extractor limitation. (open_dump was a fifth; it is excluded here
+    for the separate reason given at _NOT_EXECUTABLE_HERE, and is still
+    covered structurally by the classification test above.)"""
+    assert callable(_extract_python_function(doc, name, _ENV_WALK_SENTINELS))
+
+
+# ── layers 1+2+3: normalize_pid, classify_process_create_time ──────────
+
+@pytest.fixture(scope="module")
+def doc_normalize_pid(doc):
+    return _extract_python_function(doc, "normalize_pid")
+
+
+@pytest.fixture(scope="module")
+def doc_classify_process_create_time(doc):
+    return _extract_python_function(doc, "classify_process_create_time")
+
+
+# (raw, expected). §3.2: a plain int in 1..UINT32_MAX, else None. `bool`
+# is rejected by name -- it is an int subclass, so a stray True must
+# never normalize to PID 1.
+_PID_CASES = [
+    (1, 1), (4242, 4242), (0xFFFFFFFF, 0xFFFFFFFF),
+    (0, None),                                    # the library's unset value
+    (-1, None), (0x100000000, None),
+    (True, None), (False, None),
+    ("4242", None), (4242.0, None), (None, None), ([], None),
+]
+
+
+@pytest.mark.parametrize("raw,expected", _PID_CASES)
+def test_normalize_pid_truth_table(raw, expected):
+    assert normalize_pid(raw) == expected
+
+
+@pytest.mark.parametrize("raw,expected", _PID_CASES)
+def test_doc_normalize_pid_pseudocode_matches_prose_truth_table(
+        doc_normalize_pid, raw, expected):
+    assert doc_normalize_pid(raw) == expected
+
+
+# (raw, expected). §3.2: range-checked BEFORE any datetime conversion,
+# because datetime.fromtimestamp() is platform-dependent and happily
+# converts values a UINT32 field cannot hold.
+_CREATE_TIME_CASES = [
+    (0, "unset"),
+    (1, "ok"), (0xFFFFFFFF, "ok"),
+    (-1, "invalid"), (0x100000000, "invalid"),
+    (True, "invalid"), (False, "invalid"),
+    ("0", "invalid"), (0.0, "invalid"), (None, "invalid"),
+]
+
+
+@pytest.mark.parametrize("raw,expected", _CREATE_TIME_CASES)
+def test_classify_process_create_time_truth_table(raw, expected):
+    assert classify_process_create_time(raw) == expected
+
+
+@pytest.mark.parametrize("raw,expected", _CREATE_TIME_CASES)
+def test_doc_classify_process_create_time_matches_prose_truth_table(
+        doc_classify_process_create_time, raw, expected):
+    assert doc_classify_process_create_time(raw) == expected
+
+
+_NORMALIZER_EQUIV_INPUTS = (
+    0, 1, -1, 2, 0xFFFFFFFF, 0x100000000, 0xFFFFFFFFFFFFFFFF, 0x10000000000000000,
+    True, False, None, "0", "1", 1.0, 0.0, [], (), object(),
+)
+
+
+@pytest.mark.parametrize("raw", _NORMALIZER_EQUIV_INPUTS)
+def test_doc_normalize_pid_matches_production(doc_normalize_pid, raw):
+    _assert_same_parameter_names(doc_normalize_pid, normalize_pid)
+    assert doc_normalize_pid(raw) == normalize_pid(raw)
+
+
+@pytest.mark.parametrize("raw", _NORMALIZER_EQUIV_INPUTS)
+def test_doc_classify_process_create_time_matches_production(
+        doc_classify_process_create_time, raw):
+    _assert_same_parameter_names(doc_classify_process_create_time,
+                                 classify_process_create_time)
+    assert doc_classify_process_create_time(raw) == classify_process_create_time(raw)
+
+
+# ── layer 1 only: the prose-frozen normalizers ─────────────────────────
+#
+# §3.2 states these as a signature and a rule in English. The rule is
+# transcribed here and run against production; there is no pseudocode to
+# run it against a second time.
+#
+# Note what is deliberately NOT pinned: production applies
+# `raw.rstrip("\x00").strip()`, so a NUL sitting INSIDE trailing
+# whitespace ("x \x00 ") survives. §3.2's "strips trailing NULs and
+# surrounding whitespace" fixes no order between the two operations, so
+# asserting that case would pin an implementation detail the contract
+# never froze -- it would fail on a reordering the contract permits.
+# Every case below is one the prose decides on its own.
+
+_PATH_CASES = [
+    ("C:\\Windows\\System32\\notepad.exe", "C:\\Windows\\System32\\notepad.exe"),
+    ("C:\\Windows\\System32\\notepad.exe\x00\x00", "C:\\Windows\\System32\\notepad.exe"),
+    ("  C:\\Windows\\notepad.exe  ", "C:\\Windows\\notepad.exe"),
+    ("\x00", None), ("", None), ("   ", None), ("\t\n", None),
+    (None, None), (b"C:\\x", None), (42, None),
+    # "never lowercases, never rewrites separators": the stored value is
+    # evidence, so both of these must come back byte-identical.
+    ("C:\\Windows\\NOTEPAD.EXE", "C:\\Windows\\NOTEPAD.EXE"),
+    ("C:/Windows\\mixed/SEPARATORS.exe", "C:/Windows\\mixed/SEPARATORS.exe"),
+]
+
+
+@pytest.mark.parametrize("normalizer", [normalize_windows_path, normalize_command_line],
+                         ids=["normalize_windows_path", "normalize_command_line"])
+@pytest.mark.parametrize("raw,expected", _PATH_CASES)
+def test_string_normalizers_truth_table(normalizer, raw, expected):
+    """§3.2 states normalize_command_line as "same rules as
+    normalize_windows_path, minus any path interpretation" -- neither
+    interprets a path at all, so the same table must hold for both. A
+    divergence means one grew behavior the other didn't."""
+    assert normalizer(raw) == expected
+
+
+def test_string_normalizers_never_truncate_a_long_value():
+    """"Never truncates" is a rule about values no other fixture
+    reaches."""
+    long_path = "C:\\" + "a" * 8192 + "\\x.exe"
+    assert normalize_windows_path(long_path) == long_path
+    assert normalize_command_line(long_path) == long_path
+
+
+# §3.2: plain int (not bool), 0 < raw <= UINT64_MAX, 0x1000-aligned.
+_IMAGE_BASE_CASES = [
+    (0x1000, 0x1000), (0x140000000, 0x140000000),
+    (0xFFFFFFFFFFFFF000, 0xFFFFFFFFFFFFF000),
+    (0, None),                                            # a read artifact
+    (-0x1000, None), (0x10000000000000000, None),
+    (0x1001, None), (0x140000001, None), (0xFFF, None),   # unaligned
+    (True, None), (False, None), ("0x1000", None), (4096.0, None), (None, None),
+]
+
+
+@pytest.mark.parametrize("raw,expected", _IMAGE_BASE_CASES)
+def test_normalize_image_base_truth_table(raw, expected):
+    assert normalize_image_base(raw) == expected
+
+
+class _FakeModule:
+    def __init__(self, baseaddress, name="m"):
+        self.baseaddress = baseaddress
+        self.name = name
+
+
+def test_resolve_module_by_base_matches_only_an_exact_base():
+    """§3.3.3's whole point: EXACT equality, never addr_to_module()'s
+    containment test, which would match the main image for any address
+    inside it and so answer a weaker question than the one asked."""
+    mods = [_FakeModule(0x1000, "a"), _FakeModule(0x140000000, "b")]
+    assert resolve_module_by_base(0x140000000, mods) is mods[1]
+    assert resolve_module_by_base(0x1000, mods) is mods[0]
+    # Inside module a's range but not its base -- containment would match
+    # here, exact equality must not.
+    assert resolve_module_by_base(0x1004, mods) is None
+    assert resolve_module_by_base(0x2000, mods) is None
+    assert resolve_module_by_base(0x1000, []) is None
+
+
+@pytest.mark.parametrize("base", [True, False, "0x1000", 4096.0, None, []])
+def test_resolve_module_by_base_returns_none_for_a_non_int_base(base):
+    """"Returns None immediately for a base_address that isn't a real int
+    ... rather than raising" -- including bool, which would otherwise
+    match a module registered at base 1 or 0."""
+    assert resolve_module_by_base(base, [_FakeModule(0), _FakeModule(1)]) is None
+
+
+def test_resolve_module_by_base_returns_the_module_object_itself():
+    """§3.3.3 freezes the return as the module, not a copy or a wrapper
+    -- process_info.py converts it into a scalar-only ModuleReference at
+    its own boundary, and that conversion is only correct if this hands
+    back the live object."""
+    m = _FakeModule(0x1000)
+    assert resolve_module_by_base(0x1000, [m]) is m
+
+
+# ── signature equivalence for the prose-frozen functions ───────────────
+
+@pytest.mark.parametrize("name,production", [
+    ("normalize_windows_path", normalize_windows_path),
+    ("normalize_command_line", normalize_command_line),
+    ("normalize_image_base", normalize_image_base),
+    ("resolve_module_by_base", resolve_module_by_base),
+    ("walk_environment_block", walk_environment_block),
+    ("observe_stream", observe_stream),
+    ("stream_failure", stream_failure),
+])
+def test_prose_frozen_functions_match_their_production_signature(doc, name, production):
+    """With no body to compare, the signature IS the machine-checkable
+    part of the freeze -- and it is not a formality: observe_stream's
+    five parameters and resolve_module_by_base's two are the shape
+    #38-#44 implement against."""
+    doc_fn = _extract_python_function(doc, name, _ENV_WALK_SENTINELS)
+    _assert_same_parameter_names(doc_fn, production)
+
+
+def test_walk_environment_block_defaults_reference_the_budget_constants(doc):
+    """§4.3's signature must take its budgets FROM the module constants,
+    not hardcode two numbers that then drift from MAX_ENV_BYTES/
+    MAX_ENV_ENTRIES.
+
+    Checked with sentinel objects rather than by injecting the real
+    constants and comparing: injecting them and asserting equality would
+    be circular -- it passes both for a doc that spells the name and for
+    one that hardcodes today's value. Identity against a sentinel proves
+    the doc spells the NAME. Production's own defaults are then checked
+    against the real constants separately."""
+    doc_fn = _extract_python_function(doc, "walk_environment_block", _ENV_WALK_SENTINELS)
+    doc_defaults = {p.name: p.default
+                    for p in inspect.signature(doc_fn).parameters.values()}
+    assert doc_defaults["max_bytes"] is _ENV_WALK_SENTINELS["MAX_ENV_BYTES"]
+    assert doc_defaults["max_entries"] is _ENV_WALK_SENTINELS["MAX_ENV_ENTRIES"]
+
+    prod_defaults = {p.name: p.default
+                     for p in inspect.signature(walk_environment_block).parameters.values()}
+    assert prod_defaults["max_bytes"] == MAX_ENV_BYTES
+    assert prod_defaults["max_entries"] == MAX_ENV_ENTRIES

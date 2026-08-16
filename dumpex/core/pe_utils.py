@@ -896,6 +896,65 @@ def _resolve_directory_present(index: int, declared_directory_count, data_direct
     return rva != 0
 
 
+@dataclass(frozen=True)
+class IatOutcome:
+    """§3.5.2's frozen consequences of one
+    (import_directory_present, table_present) pair."""
+    walk_descriptors: bool
+    # "IAT_DIRECTORY_TABLE_INCOMPLETE", or None when the pair is fully
+    # determined and nothing is missing.
+    limitation: "str | None"
+    # "IAT_BOUNDS_CHECK_UNAVAILABLE", or None.
+    diagnostic: "str | None"
+
+
+def _select_iat_outcome(import_directory_present, table_present) -> IatOutcome:
+    """§3.5.2's outcome matrix, as the ONE place the three consequences of
+    a presence pair are decided.
+
+    The three facts were previously decided at three separate sites
+    inside parse_iat() -- `import_present is None or table_present is
+    None` for the limitation, a bare `if import_present` for the walk,
+    and `if import_present and table_present is False` for the diagnostic
+    -- each correct, none of them named, and no single expression a
+    reader (or a test) could point at and call "the matrix". Collecting
+    them here is what lets tests/unit/test_recon_contract_semantics.py
+    run §3.5.2's table against shipped behavior instead of matching the
+    markdown's wording, which is all that guarded this before.
+
+    Both inputs are nullable booleans and are compared with `is`, never
+    bare truthiness: `not import_directory_present` is True for `False`
+    and `None` alike, and those two rows of the matrix have different
+    outcomes (determined-absent imports are `complete`; undetermined ones
+    are `partial`, exit 3).
+
+    Note the walk decision is only half the real condition at its call
+    site: parse_iat() also requires a resolvable `import_directory_va`.
+    That guard is deliberately NOT folded in here -- it is an address-
+    arithmetic failure, not one of §3.5.2's presence states, and the
+    matrix stays a pure function of the pair it is defined over.
+    """
+    if import_directory_present is None:
+        # `null | anything`: nothing is claimed, nothing is walked.
+        return IatOutcome(False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)
+    if import_directory_present is False:
+        # Imports are determined absent, so there is nothing to walk and
+        # no bounds check to miss. An undetermined index 12 is still its
+        # own, narrower gap -- it does not retract the import claim.
+        if table_present is None:
+            return IatOutcome(False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)
+        return IatOutcome(False, None, None)
+    # import_directory_present is True -- descriptors are walked in every
+    # remaining row; only the slot-bounds check varies.
+    if table_present is None:
+        return IatOutcome(True, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)
+    if table_present is False:
+        # Determined absent: an answered question, so a diagnostic and
+        # not a limitation -- coverage is unaffected (§1.6).
+        return IatOutcome(True, None, "IAT_BOUNDS_CHECK_UNAVAILABLE")
+    return IatOutcome(True, None, None)
+
+
 def parse_iat(read, image_base: int, pe: dict) -> IatParseResult:
     """Bounded, defensive walk of the standard Import Directory (data
     directory index 1) and IAT Directory (index 12) belonging to the
@@ -925,6 +984,9 @@ def parse_iat(read, image_base: int, pe: dict) -> IatParseResult:
         IMAGE_DIRECTORY_ENTRY_IMPORT, declared_directory_count, data_directories)
     table_present = _resolve_directory_present(
         IMAGE_DIRECTORY_ENTRY_IAT, declared_directory_count, data_directories)
+    # §3.5.2's matrix, decided once. Every consequence below reads it
+    # rather than re-deriving its own condition from the pair.
+    outcome = _select_iat_outcome(import_present, table_present)
 
     entries = []
     directory_read_failed = directory_short_read = False
@@ -1006,7 +1068,7 @@ def parse_iat(read, image_base: int, pe: dict) -> IatParseResult:
             # end (bounds_exceeded is already set by the failed _addr()
             # call above).
 
-    directory_table_incomplete = import_present is None or table_present is None
+    directory_table_incomplete = outcome.limitation is not None
     directory_incomplete_affected_count = None
     if directory_table_incomplete and declared_directory_count is not None:
         short_by = declared_directory_count - len(data_directories)
@@ -1025,7 +1087,7 @@ def parse_iat(read, image_base: int, pe: dict) -> IatParseResult:
 
     stop_all = False
 
-    if import_present and import_directory_va is not None:
+    if outcome.walk_descriptors and import_directory_va is not None:
         budget = _IatBudget()
         d_index = 0
         while True:
@@ -1259,7 +1321,7 @@ def parse_iat(read, image_base: int, pe: dict) -> IatParseResult:
                 break
 
     diagnostics = []
-    if import_present and table_present is False:
+    if outcome.diagnostic == "IAT_BOUNDS_CHECK_UNAVAILABLE":
         diagnostics.append(IatDiagnostic(
             code="IAT_BOUNDS_CHECK_UNAVAILABLE", severity="info",
             message="the image declares no IAT directory, so slot bounds could not be checked",

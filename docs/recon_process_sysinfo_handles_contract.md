@@ -1128,6 +1128,41 @@ combination of `false`/`true` for the first field against
 `false`/`true`/`null` for the second is covered by name. No pair is
 undefined.
 
+Restated as a reference selector, so the table above has a single
+executable form rather than six prose rows an implementation has to be
+read against by hand. Its three results are exactly the three
+consequences that vary across the table: whether descriptors are walked,
+which limitation fires, and which diagnostic is emitted. Everything else
+each row states (`entries: []`, `has_entries: false`, `dll_count`/
+`entry_count` = `0`, `table_va`/`table_size` = `null`, `slot_in_bounds`
+nullability) follows from those three and is not restated here.
+
+```python
+def select_iat_outcome(import_directory_present, table_present):
+    """-> (walk_descriptors, limitation, diagnostic).
+
+    Both inputs are nullable booleans and are compared with `is`, never
+    bare truthiness: `not import_directory_present` is True for `false`
+    and `null` alike, and those rows differ -- determined-absent imports
+    are `complete`, undetermined ones are `partial`, exit 3."""
+    if import_directory_present is None:
+        return (False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)
+    if import_directory_present is False:
+        if table_present is None:
+            return (False, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)
+        return (False, None, None)
+    if table_present is None:
+        return (True, "IAT_DIRECTORY_TABLE_INCOMPLETE", None)
+    if table_present is False:
+        return (True, None, "IAT_BOUNDS_CHECK_UNAVAILABLE")
+    return (True, None, None)
+```
+
+`walk_descriptors` is a necessary, not sufficient, condition: the walk
+also requires a resolvable `import_directory_va`, which is address
+arithmetic rather than one of §3.5.2's presence states and so is checked
+at the call site, not here.
+
 `slot_in_bounds` is therefore typed `true | false | null`. `null` means
 "the check could not be performed", and which of the two reasons applies
 is read off `table_present`: `false` → the image declares no IAT

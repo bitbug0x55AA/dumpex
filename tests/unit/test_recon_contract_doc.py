@@ -1,10 +1,37 @@
 """
-Contract-document tests for docs/recon_process_sysinfo_handles_contract.md
+Contract-DOCUMENT tests for docs/recon_process_sysinfo_handles_contract.md
 (issue #37's completion gate, items 1 and 2).
 
-Two things are checked mechanically, because both failed review at least
-once while the contract was being written and neither is visible to any
-other test:
+This file checks the things that are true of the contract AS A DOCUMENT
+-- that it is independently readable, that its registry tables are
+internally coherent, and that its live-enum invariants hold. It does not
+check behavior. Anything a reader could describe as "the contract says
+the console should do X" belongs somewhere executable:
+
+  * §3.5.2/§3.7.4/§3.8's selectors, §3.2/§3.3.3's normalizers and every
+    other reference function -> tests/unit/test_recon_contract_semantics.py,
+    which exec()s the contract's own ```python blocks and runs them
+    against production over shared truth tables.
+  * §6.1's code registry (source, fields, rendered sentence) ->
+    tests/unit/test_recon_contract_registry.py, which diffs the markdown
+    table against dumpex.output.coverage._CODE_SPECS directly.
+
+That split is the point, and it is a correction of how this file used to
+work. It previously carried ~15 substring assertions over the contract's
+EXPLANATORY PROSE -- `assert "RVA is zero (regardless of \\`Size\\`)" in
+normalized`, `assert "index 1 **uncaptured**" in normalized`, and so on.
+Those fail in both wrong directions at once: rewording a sentence turns
+them red with no defect present, and changing the algorithm they
+describe leaves them green with a real one. A `_normalize_ws()` helper
+was added to survive markdown reflow, which fixed the line-wrapping
+symptom without touching the underlying problem, namely that matching
+prose is not checking behavior. Every one of those assertions now has an
+executable counterpart in one of the two files above and has been
+removed from here.
+
+Two things are still checked mechanically, because both failed review at
+least once while the contract was being written and neither is visible to
+any other test:
 
 1. The document is INDEPENDENTLY READABLE. Issues #38-#44 implement
    against it alone, so no normative rule may depend on an earlier,
@@ -20,6 +47,10 @@ other test:
    result as a LESS complete one. This is asserted against the LIVE enum,
    not against the document, so a later child that adds one of them to
    dumpex.output.coverage.LimitationCode fails here immediately.
+
+Exactly one prose check survives, at the bottom, and the comment above it
+says why it is not a gap: it forbids a gating condition, and a
+prohibition has no positive behavior to execute.
 """
 import os
 import re
@@ -101,8 +132,28 @@ def diagnostic_codes(doc: str) -> list:
 
 # ── Gate item 1: independently readable ─────────────────────────────────
 
-def test_contract_document_exists(doc):
-    assert "revision 4" in doc.split("\n\n", 2)[0].lower() or "revision 4" in doc[:600]
+def test_document_states_a_revision_matching_its_own_history(doc):
+    """The header's revision number must exist and must match the newest
+    entry in Appendix A.
+
+    Previously this asserted the literal string "revision 4", which made
+    every revision bump a test failure with no defect behind it -- the
+    same wording-coupling this file exists to get out of. Comparing the
+    header to the history checks the property that actually matters: a
+    reader cannot be told they are holding rev4 while the history stops
+    at rev3."""
+    header = doc[:600]
+    stated = re.search(r"(?i)revision (\d+)", header)
+    assert stated, f"the contract header states no revision: {header[:200]!r}"
+    appendix = doc.split("## Appendix A", 1)[1]
+    # `\b` rather than a closing `**`: Appendix A's entries carry
+    # qualifiers inside the bold span ("**rev4 (this revision)**",
+    # "**rev4, third review pass**").
+    logged = [int(n) for n in re.findall(r"(?i)\*\*rev(\d+)\b", appendix)]
+    assert logged, "Appendix A logs no revisions"
+    assert int(stated.group(1)) == max(logged), (
+        f"the header says revision {stated.group(1)}, but Appendix A's newest "
+        f"entry is rev{max(logged)}")
 
 
 @pytest.mark.parametrize("heading", _REQUIRED_SECTIONS)
@@ -177,6 +228,13 @@ def test_iat_slot_out_of_directory_bounds_is_diagnostic_only(
     assert code not in LimitationCode.__members__
 
 
+@pytest.mark.parametrize("code", _RETIRED_BUT_RETAINED)
+def test_retired_pid_peb_codes_keep_their_enum_membership(code):
+    """§6.3: --pid/--peb go away, their codes do not -- historical
+    documents containing them must stay renderable."""
+    assert code in LimitationCode.__members__
+
+
 # ── JSON examples must match their own field tables ────────────────────
 
 _JSON_KEY_RE = re.compile(r'^\s*"([a-z_]+)":')
@@ -187,7 +245,12 @@ def test_handle_record_example_matches_its_field_table(doc):
     """§5.2's example and its field table drifted apart twice while this
     contract was being written (a field added to one, not the other).
     Every field the table declares must appear in the example, so a
-    reader implementing from either one gets the same record."""
+    reader implementing from either one gets the same record.
+
+    This stays a document check on purpose: both artifacts live in the
+    markdown, so there is no third, executable copy to compare them
+    against. It is a consistency check between two machine-readable
+    structures, not a match against prose."""
     section = doc.split("### 5.2 Record shape", 1)[1].split("#### 5.2.1", 1)[0]
     example = section.split("```json", 1)[1].split("```", 1)[0]
 
@@ -203,88 +266,23 @@ def test_handle_record_example_matches_its_field_table(doc):
     assert not undeclared, f"present in §5.2's example but not declared in its table: {undeclared}"
 
 
-# ── The group-derivation path cannot fill a placeholder ────────────────
-
-# §6.1: these are the codes reachable through build_coverage_report()'s
-# all-absent branch (as a SourceRequirement.absent_code, or a
-# single-source EvaluationRequirement.all_absent_code). That branch
-# constructs CoverageLimitation(code, source, scope="dump",
-# related_sources=...) and sets NOTHING else -- no detail, no
-# affected_count -- so any {placeholder} in one of their templates would
-# render as "None" in real output.
-_ABSENT_CAPABLE = (
-    "PROCESS_SOURCES_ABSENT", "PROCESS_MISC_INFO_UNAVAILABLE",
-    "PROCESS_PEB_UNAVAILABLE", "PROCESS_MODULE_FALLBACK_UNAVAILABLE",
-    "HANDLES_UNAVAILABLE", "HANDLES_PARSE_FAILED",
-    "HANDLES_ALL_DESCRIPTORS_INVALID",
-)
-_TEMPLATE_RE = re.compile(r'"([^"]+)"')
-
-
-@pytest.mark.parametrize("code", _ABSENT_CAPABLE)
-def test_absent_capable_templates_have_no_placeholders(doc, code):
-    row = next((l for l in doc.splitlines() if l.startswith(f"| `{code}` |")), None)
-    assert row is not None, f"{code} has no §6.1 row"
-    template = _TEMPLATE_RE.search(row)
-    assert template is not None, f"{code}'s row has no quoted message template"
-    assert "{" not in template.group(1), (
-        f"{code} is absent_capable, so its limitation is built by "
-        f"build_coverage_report()'s all-absent branch, which sets no detail/"
-        f"affected_count -- its template must be fixed text, got "
-        f"{template.group(1)!r}")
-
-
-@pytest.mark.parametrize("code", _ABSENT_CAPABLE)
-def test_absent_capable_codes_are_declared_as_limitations(code, limitation_codes):
-    assert code in limitation_codes
-
-
-def _declared_absent_capable(doc: str) -> set:
-    """The codes §6.1's capability list actually declares absent_capable."""
-    section = doc.split("- `absent_capable`", 1)[1].split("- `caller_buildable`", 1)[0]
-    return {t for t in _CODE_TOKEN_RE.findall(section)
-            if not t.startswith(_NOT_A_CODE)}
-
-
-def test_absent_capable_list_matches_this_test(doc):
-    """Keeps _ABSENT_CAPABLE above from silently drifting away from the
-    contract's own capability list -- otherwise the placeholder check
-    below would quietly stop covering a newly-added code."""
-    assert _declared_absent_capable(doc) == set(_ABSENT_CAPABLE)
-
-
-def test_every_absent_code_used_is_declared_absent_capable(doc):
-    """SourceRequirement.__post_init__ and EvaluationRequirement reject
-    any code outside _ABSENT_CAPABLE_CODES, so a section that specifies
-    `absent_code=X` while §6.1 files X as caller-buildable-only
-    specifies a configuration that raises on the first call. This caught
-    exactly that for PROCESS_MODULE_FALLBACK_UNAVAILABLE."""
-    used = set(re.findall(r"absent_code=([A-Z][A-Z0-9_]+)", doc))
-    undeclared = sorted(used - _declared_absent_capable(doc))
-    assert not undeclared, (
-        f"used as an absent_code but not declared absent_capable in §6.1: "
-        f"{undeclared}")
-
-
-@pytest.mark.parametrize("code", _RETIRED_BUT_RETAINED)
-def test_retired_pid_peb_codes_keep_their_enum_membership(code):
-    """§6.3: --pid/--peb go away, their codes do not -- historical
-    documents containing them must stay renderable."""
-    assert code in LimitationCode.__members__
-
-
-# ── Issue #37 follow-up: nullable-boolean/tri-state regressions ────────
+# ── One prose-only check remains ───────────────────────────────────────
 #
-# A second review pass found that the substring checks below can pass
-# for the wrong reason: markdown line-wrapping breaks a literal phrase
-# like "not iat.import_directory_present" across a newline, so a plain
-# `"..." not in doc` check silently stops covering the exact regression
-# it names the moment the paragraph reflows. Every check in this section
-# either normalizes whitespace first, or -- for the semantics that
-# actually matter -- is superseded by the EXECUTABLE truth tables in
-# tests/unit/test_recon_contract_semantics.py, which exec() the
-# contract's own embedded reference functions rather than pattern-match
-# its prose.
+# §3.5.2's outcome matrix -- the last section that had no executable
+# form -- now has one (`select_iat_outcome()`), a production counterpart
+# (pe_utils._select_iat_outcome, reached by parse_iat() at all three
+# decision sites), and full three-layer coverage in
+# test_recon_contract_semantics.py. The substring assertion that used to
+# stand in for it is gone.
+#
+# What survives here is the ONE rule below, and it survives for a
+# specific reason rather than by omission: it is a prohibition on a
+# gating condition, and a prohibition has no positive behavior to run.
+# The selectors are structurally unable to consult coverage.status
+# (semantics.py asserts that against their compiled code objects), which
+# covers the shipped code; this covers the DOCUMENT, so a future revision
+# cannot quietly reintroduce the requirement in prose and have the next
+# implementer build it.
 
 _WS_RE = re.compile(r"\s+")
 
@@ -292,114 +290,6 @@ _WS_RE = re.compile(r"\s+")
 def _normalize_ws(text: str) -> str:
     return _WS_RE.sub(" ", text)
 
-
-def test_console_branch_definitions_use_no_truthiness_on_a_nullable_bool(doc):
-    """The four branch DEFINITIONS in §3.8 (not the surrounding prose,
-    which is allowed to quote the anti-pattern by name when explaining
-    why it's forbidden) must never spell a condition as `not iat.<x>`.
-    `not iat.import_directory_present` is `True` for BOTH `false` and
-    `null`, which would make the console's "no imports" line fire on an
-    undetermined result. Checked whitespace-normalized so a future
-    line-wrap can't silently defeat this."""
-    branches = doc.split("The four branches, in evaluation order:", 1)[1]
-    branches = branches.split("Restated as a reference selector", 1)[0]
-    normalized = _normalize_ws(branches)
-    assert not re.search(r"\bnot\s+iat\.\w", normalized), (
-        f"a §3.8 branch definition uses truthiness on a nullable `iat.*` "
-        f"field instead of an explicit is-comparison: {normalized!r}")
-
-
-def test_forbidden_truthiness_phrase_only_appears_as_a_named_anti_pattern(doc):
-    """`not iat.import_directory_present`/`not iat.has_entries` may only
-    appear in the doc as the explicit anti-pattern §3.8 calls out by name
-    ("... is never used: ...") -- never as an actual, live condition
-    written elsewhere. Whitespace-normalized so line-wrap can't hide a
-    real occurrence from a literal substring check."""
-    normalized = _normalize_ws(doc)
-    for phrase in ("not iat.import_directory_present", "not iat.has_entries"):
-        for m in re.finditer(re.escape(phrase), normalized):
-            window = normalized[m.start():m.start() + 200]
-            assert "is never used" in window, (
-                f"{phrase!r} appears outside the sentence that explicitly "
-                f"forbids it as a live condition -- context: {window!r}")
-
-
-def test_iat_outcome_matrix_covers_false_present_null_table(doc):
-    """§3.5.2's outcome table must freeze a result for
-    import_directory_present=false, table_present=null -- the reachable
-    combination the third review pass left out."""
-    row = next((l for l in doc.splitlines() if l.startswith("| `false` | `null` |")),
-               None)
-    assert row is not None, (
-        "§3.5.2's outcome table has no row for "
-        "import_directory_present=false, table_present=null")
-    assert "IAT_DIRECTORY_TABLE_INCOMPLETE" in row
-    assert "No `IAT_BOUNDS_CHECK_UNAVAILABLE`" in row
-
-
-def test_iat_source_state_is_defined_for_import_present_null(doc):
-    """§3.7.4 must give `coverage.sources["iat"]` a legal state in every
-    branch of §3.5.2's `import_directory_present`, including `null` --
-    previously only 'no image base'/'no main image' produced `absent`,
-    leaving the uncaptured-directory-count case with no defined state."""
-    section = doc.split("#### 3.7.4 Coverage sources", 1)[1]
-    section = section.split("### 3.8", 1)[0]
-    assert "import_directory_present is null` | `absent`" in section
-    assert "import_directory_present is false` | `present_empty`" in section
-    assert "import_directory_present is true` and `entry_count == 0` | `present_empty`" in section
-    assert "import_directory_present is true` and `entry_count > 0` | `present`" in section
-
-
-def test_iat_directory_table_incomplete_declares_optional_affected_count(doc):
-    """§6.1's registry row is the frozen contract an implementer's
-    `_CodeSpec` validator and renderer are built from. It must declare
-    `affected_count` optional and carry both frozen renderings, not just
-    the {count} template -- otherwise a validator that requires a
-    positive count would reject the legitimate `None` case."""
-    row = next((l for l in doc.splitlines()
-                if l.startswith("| `IAT_DIRECTORY_TABLE_INCOMPLETE` |")), None)
-    assert row is not None, "IAT_DIRECTORY_TABLE_INCOMPLETE has no §6.1 row"
-    assert "optional" in row
-    assert "declared data directory entr(y/ies) were not captured" in row
-    assert "the data directory table was not captured" in row
-
-
-def test_section_8_3_fixture_6b_pins_index1_rva_for_every_case(doc):
-    """§8.3 item 6b's expected results (true+null vs. false+null) are
-    only unique given index 1's exact (rva, size) pair -- the previous
-    revision only described capture length, which is consistent with
-    either outcome."""
-    section = doc.split("6b. **Truncated directory capture must preserve", 1)[1]
-    section = section.split("6c. **A handle name", 1)[0]
-    assert "nonzero_import_rva" in section, (
-        "the true+null fixture must pin index 1 to a non-zero RVA")
-    assert section.count("data_directories[1] = (0, 0)") >= 2, (
-        "both false-outcome fixtures (false+null and false+false) must "
-        "pin index 1 to an explicit (0, 0) pair")
-
-
-def test_section_8_3_item_6b_title_does_not_contradict_its_own_fixture(doc):
-    """A prior revision's item-6b title ("An uncaptured directory table
-    cannot be reported as \"no imports\"") directly contradicted the
-    false+null fixture two paragraphs below it, which requires exactly
-    that console text when index 1 (not index 12) is the captured,
-    determined-false one. The title must not survive as a blanket ban,
-    and the section must explicitly distinguish "index 1 uncaptured"
-    (forbidden) from "index 1 captured with a zero RVA" (required, even
-    with index 12 still uncaptured)."""
-    assert 'An uncaptured directory table cannot be reported as "no imports"' not in doc, (
-        "the old, over-broad item-6b title must not reappear -- it banned "
-        "the exact console text the false+null fixture requires")
-    section = doc.split("6b. **Truncated directory capture must preserve", 1)[1]
-    section = section.split("6c. **A handle name", 1)[0]
-    normalized = _normalize_ws(section)
-    assert "index 1 **uncaptured**" in normalized
-    assert "forbidden from claiming" in normalized
-    assert "index 1 **captured** with a zero RVA" in normalized
-    assert "even if** index 12 is uncaptured" in normalized
-
-
-# ── Issue #37 second follow-up: false/null console routing, RVA/Size ───
 
 def test_import_claim_is_not_gated_on_global_process_coverage_status(doc):
     """A prior revision required `coverage.status == "complete"` for the
@@ -415,63 +305,3 @@ def test_import_claim_is_not_gated_on_global_process_coverage_status(doc):
     assert 'supported **exactly** when `import_directory_present is false`' in normalized, (
         "§3.5.2 must state the claim is gated on import_directory_present "
         "alone")
-    assert "remains valid when `table_present` is `null`" in normalized, (
-        "§3.5.2 must state the claim survives an undetermined table_present")
-
-
-def test_console_branch_4_no_longer_claims_to_cover_the_false_null_case(doc):
-    """Branch 2 (`import_directory_present is false`) is checked before
-    branch 4 and matches unconditionally on `table_present`, so the
-    false/null combination can never structurally reach branch 4. A
-    prior revision's branch-4 prose claimed otherwise -- self-
-    contradictory, since branch 2 already consumed that case."""
-    section = doc.split("### 3.8 Console layout", 1)[1]
-    section = section.split("## §4", 1)[0]
-    normalized = _normalize_ws(section)
-    assert "never reached when `import_directory_present is false`" in normalized, (
-        "§3.8 must explicitly state branch 4 is unreachable for "
-        "import_directory_present=false")
-    # The old, contradictory claim must be gone: branch 4's own
-    # description no longer names table_present is null as one of ITS
-    # reachable cases.
-    branch4_desc = section.split("4. Otherwise", 1)[1].split("Restated as", 1)[0]
-    assert "table_present" not in _normalize_ws(branch4_desc), (
-        "branch 4's own bullet must not mention table_present at all -- "
-        "that combination is fully handled by branch 2")
-
-
-def test_presence_resolver_defines_rva_zero_regardless_of_size(doc):
-    """A captured `(RVA=0, Size>0)` pair was previously undefined: the
-    old row matched only the literal pair `(0, 0)`. Presence must be a
-    pure function of RVA; Size must never be a second discriminator in
-    either direction."""
-    section = doc.split("Presence of one directory index", 1)[1]
-    section = section.split("A `null` is never a claim", 1)[0]
-    normalized = _normalize_ws(section)
-    assert "the pair is `(0, 0)`" not in normalized, (
-        "the presence table must no longer gate falseness on the exact "
-        "pair (0, 0) -- RVA alone must decide it")
-    assert "RVA is zero (regardless of `Size`)" in normalized, (
-        "the presence table must explicitly state RVA-zero is false "
-        "regardless of Size")
-    assert "RVA is non-zero (regardless of `Size`)" in normalized, (
-        "the presence table must explicitly state RVA-non-zero is true "
-        "regardless of Size")
-    assert "second presence discriminator" in normalized
-
-
-def test_section_8_3_has_rva_size_independence_fixtures(doc):
-    """At least one §8.3 fixture must exercise a captured `(0,
-    nonzero_size)` pair and a captured `(nonzero_rva, 0)` pair for BOTH
-    index 1 and index 12, so the RVA/Size independence rule cannot
-    silently regress back to undefined behavior."""
-    section = doc.split("6b2. **`Size` is never a second presence", 1)[1]
-    section = section.split("6c. **A handle name", 1)[0]
-    assert "(0, 0x100)" in section, (
-        "missing an index-1 (zero RVA, non-zero Size) fixture")
-    assert "(0, 0x40)" in section, (
-        "missing an index-12 (zero RVA, non-zero Size) fixture")
-    assert "(0x2000, 0)" in section, (
-        "missing an index-1 (non-zero RVA, zero Size) fixture")
-    assert "(0x3000, 0)" in section, (
-        "missing an index-12 (non-zero RVA, zero Size) fixture")
