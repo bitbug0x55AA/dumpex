@@ -14,6 +14,7 @@ from dumpex.output.records import (
     MemoryDiffRecord, MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED,
     ReportIocString, ReportThreadInfo, ReportRegionInfo,
     ImportEntryRecord, ProcessDiagnosticRecord, IatRecord, ProcessRecord,
+    HandleRecord, handle_name_display, HANDLE_NAME_STATUSES,
 )
 
 
@@ -1336,3 +1337,75 @@ def test_process_record_rejects_non_dict_identity_evidence():
 def test_process_record_rejects_non_dict_peb_extended():
     with pytest.raises(TypeError, match="peb_extended"):
         _process_record(peb_extended="nope")
+
+
+# ── HandleRecord (issue #42 / contract §5.2/§5.2.1) ─────────────────────
+
+
+def _record(**overrides):
+    fields = dict(handle="0x0000000000000010", type_name="File", type_name_status="ok",
+                   object_name=None, object_name_status="unnamed", attributes=0,
+                   granted_access=1, handle_count=1, pointer_count=1)
+    fields.update(overrides)
+    return HandleRecord(**fields)
+
+
+def test_handle_record_requires_a_fixed_width_handle():
+    with pytest.raises(ValueError, match="handle"):
+        _record(handle="0x10")
+    with pytest.raises(ValueError, match="handle"):
+        _record(handle=0x10)
+
+
+@pytest.mark.parametrize("status", ["", "OK", "missing", None])
+def test_handle_record_rejects_an_unknown_name_status(status):
+    with pytest.raises(ValueError, match="type_name_status must be one of"):
+        _record(type_name_status=status)
+
+
+def test_handle_record_rejects_a_status_value_contradiction():
+    # "ok" promises a non-null, non-empty value ...
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        _record(type_name=None, type_name_status="ok")
+    with pytest.raises(ValueError, match="must be a non-empty string"):
+        _record(type_name="", type_name_status="ok")
+    # ... and every other status promises null.
+    with pytest.raises(ValueError, match="must be None"):
+        _record(type_name="File", type_name_status="unnamed")
+    with pytest.raises(ValueError, match="must be None"):
+        _record(object_name="\\Device\\X", object_name_status="unreadable")
+
+
+def test_handle_record_statuses_are_independent():
+    record = _record(type_name=None, type_name_status="unnamed",
+                      object_name=None, object_name_status="unreadable")
+    assert (record.type_name_status, record.object_name_status) == ("unnamed", "unreadable")
+
+
+@pytest.mark.parametrize("field", ["attributes", "granted_access", "handle_count", "pointer_count"])
+def test_handle_record_rejects_unusable_numeric_fields(field):
+    with pytest.raises(ValueError, match=field):
+        _record(**{field: -1})
+    with pytest.raises(ValueError, match=field):
+        _record(**{field: True})
+    with pytest.raises(ValueError, match=field):
+        _record(**{field: "1"})
+
+
+def test_handle_record_to_dict_emits_every_field_always():
+    assert set(_record().to_dict()) == {
+        "handle", "type_name", "type_name_status", "object_name", "object_name_status",
+        "attributes", "granted_access", "handle_count", "pointer_count",
+    }
+
+
+def test_handle_name_display_uses_each_fields_own_status():
+    # §5.6: a lost name must never print as if the handle were anonymous.
+    assert handle_name_display("File", "ok") == "File"
+    assert handle_name_display(None, "unnamed") == "(unnamed)"
+    assert handle_name_display(None, "unreadable") == "(unreadable)"
+    assert handle_name_display(None, "unnamed") != handle_name_display(None, "unreadable")
+
+
+def test_handle_name_statuses_are_the_frozen_three():
+    assert HANDLE_NAME_STATUSES == ("ok", "unnamed", "unreadable")

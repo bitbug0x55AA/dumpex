@@ -550,6 +550,23 @@ def stream_failure(mf: MinidumpFile, stream_type) -> "str | None":
     return failures.get(stream_type)
 
 
+def has_stream_directory(mf: MinidumpFile, stream_type) -> bool:
+    """True when the dump's own directory table carries an entry for
+    `stream_type` -- i.e. the stream WAS captured, whatever later became
+    of parsing it. The complement of stream_failure() for a command that
+    must tell "this dump was never captured with that stream" apart from
+    "it was captured and something went wrong with it": mf.<attr> is None
+    in BOTH cases, so absence of the parsed object alone cannot decide it.
+
+    Reads mf.directories (populated by open_dump()'s phase 1, before any
+    per-stream parser runs, so it is unaffected by phase 2's isolation).
+    An `mf` assembled by a test/fixture without a directories list at all
+    is treated as declaring no streams rather than raising -- the same
+    missing-attribute tolerance stream_failure() applies."""
+    directories = getattr(mf, "directories", None) or ()
+    return any(getattr(d, "StreamType", None) == stream_type for d in directories)
+
+
 def observe_stream(mf: MinidumpFile, name: str, stream_type, obj, items: list) -> SourceObservation:
     """The observe_source() every command currently hand-rolls via
     `bool(mf.X)` plus `len(items)`, extended with SourceState.FAILED for

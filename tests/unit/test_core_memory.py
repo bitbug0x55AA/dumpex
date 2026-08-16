@@ -3,7 +3,9 @@ from dumpex.core.memory import (
     module_name_only, verdict_for, _verdict, _search_string_in_memory, StringSearchStats,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS, VERDICT_HIGH_CONFIDENCE_MALICIOUS,
     va_range_captured_bytes, clamped_reader, read_region_clamped, read_region_spanning,
+    has_stream_directory,
 )
+from minidump.constants import MINIDUMP_STREAM_TYPE
 from tests.fixtures.fakes import FakeMF, FakeStream, Region, Segment, mem_reader
 
 
@@ -388,3 +390,43 @@ def test_read_region_spanning_never_raises_when_get_reader_fails():
     mf = FakeMF()
     mf.get_reader = lambda: (_ for _ in ()).throw(Exception("reader unavailable"))
     assert read_region_spanning(mf, 0x1000, 8) == b""
+
+
+# ── has_stream_directory (issue #42 §5.5 case 1 vs case 2) ───────────────
+# mf.<stream> is None both for "never captured" and for "captured, but its
+# parse raised" -- the directory table is the only place those two are
+# still distinguishable once open_dump() has run.
+
+class _Dir:
+    def __init__(self, stream_type):
+        self.StreamType = stream_type
+
+
+def test_has_stream_directory_true_when_the_dump_declares_the_stream():
+    mf = FakeMF()
+    mf.directories = [_Dir(MINIDUMP_STREAM_TYPE.ThreadListStream),
+                       _Dir(MINIDUMP_STREAM_TYPE.HandleDataStream)]
+    assert has_stream_directory(mf, MINIDUMP_STREAM_TYPE.HandleDataStream) is True
+
+
+def test_has_stream_directory_false_when_another_stream_is_declared():
+    mf = FakeMF()
+    mf.directories = [_Dir(MINIDUMP_STREAM_TYPE.ThreadListStream)]
+    assert has_stream_directory(mf, MINIDUMP_STREAM_TYPE.HandleDataStream) is False
+
+
+def test_has_stream_directory_is_independent_of_whether_the_parse_succeeded():
+    # The whole point: a declared stream stays declared after its parser
+    # raised and left mf.handles at None.
+    mf = FakeMF()
+    mf.directories = [_Dir(MINIDUMP_STREAM_TYPE.HandleDataStream)]
+    mf.handles = None
+    mf._dumpex_stream_failures = {MINIDUMP_STREAM_TYPE.HandleDataStream: "boom"}
+    assert has_stream_directory(mf, MINIDUMP_STREAM_TYPE.HandleDataStream) is True
+
+
+def test_has_stream_directory_tolerates_a_dump_object_without_directories():
+    # A test/fixture-built mf that never went through open_dump() has no
+    # directories list at all -- treated as declaring nothing, never an
+    # AttributeError, matching stream_failure()'s own tolerance.
+    assert has_stream_directory(FakeMF(), MINIDUMP_STREAM_TYPE.HandleDataStream) is False
