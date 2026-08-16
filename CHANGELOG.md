@@ -14,17 +14,20 @@ library ([issue #86](https://github.com/bitbug0x55AA/dumpex/issues/86)):
 upstream rename or removal of any of the structures `dumpex/core/memory.py`
 imports at module scope would break `import dumpex.core.memory` and, with
 it, every dumpex command (`--list`, `--modules`, `--threads`, `--hunt`, ...)
-— not just `--handles`. `minidump` is now pinned to the exact version
-dumpex's HandleDataStream parser was validated against
-(`minidump>=0.0.24,<0.0.25`); widening that range requires re-validating
-both the parser's own reasoning and the descriptor sizes below against the
-new ceiling.
+— not just the internal HandleDataStream parser. `minidump` is now pinned
+to the exact version dumpex's HandleDataStream parser was validated
+against (`minidump>=0.0.24,<0.0.25`); widening that range requires
+re-validating both the parser's own reasoning and the descriptor sizes
+below against the new ceiling.
 
-Separately, `--handles`' internal v1/v2 descriptor-size selection compared
+Separately, the internal handle-stream parser's v1/v2 descriptor-size
+selection (consumed today by `--hunt pipe`'s named-pipe handle scan;
+feeds a future standalone `--handles` command tracked in
+[issue #42](https://github.com/bitbug0x55AA/dumpex/issues/42)) compared
 the v1 branch against its struct class's own size but the v2 branch
 against a hardcoded literal `40` — so an upstream size change to the v2
-descriptor could either misdiagnose valid `--handles` output as corrupted,
-or silently select the wrong parser and misread every field
+descriptor could either misdiagnose a valid handle stream as corrupted, or
+silently select the wrong parser and misread every field
 (`GrantedAccess`, `HandleCount`, `TypeName`, `ObjectName`, ...) for every
 handle in the stream, with no error and no coverage caveat. Both branches
 now derive their size the same way, and the layout is validated (raising a

@@ -101,23 +101,114 @@ def test_layout_is_cached_across_calls():
     assert first is second
 
 
+def _top_level_call_names(source: str, target_names: set) -> list:
+    """Names among `target_names` that are CALLED anywhere in `source`
+    outside of any function/async-function/lambda body -- i.e. actually
+    executed at module-import time, not merely defined. Walks the WHOLE
+    tree (via ast.NodeVisitor.generic_visit), so it catches a call
+    nested inside a module-level Assign/If/Try/comprehension/etc, not
+    only a bare top-level expression statement -- the original 9572d46
+    regression this guards against was exactly an Assign
+    (`X = _descriptor_class_size(...)`), which a check that only scans
+    `tree.body` for `ast.Expr` nodes would silently miss."""
+    import ast
+
+    tree = ast.parse(source)
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self.depth = 0
+            self.hits = []
+
+        def _visit_scope(self, node):
+            self.depth += 1
+            self.generic_visit(node)
+            self.depth -= 1
+
+        visit_FunctionDef = _visit_scope
+        visit_AsyncFunctionDef = _visit_scope
+        visit_Lambda = _visit_scope
+
+        def visit_Call(self, node):
+            if self.depth == 0:
+                func = node.func
+                name = getattr(func, "id", None) or getattr(func, "attr", None)
+                if name in target_names:
+                    self.hits.append(name)
+            self.generic_visit(node)
+
+    visitor = _Visitor()
+    visitor.visit(tree)
+    return visitor.hits
+
+
 def test_layout_derivation_is_not_done_at_import_time():
     # The layout check must run lazily, from inside parse_handle_stream(),
     # not at module import -- a failure here must be isolated to the
     # handle-stream code path by open_dump()'s per-stream try/except, not
     # able to take down `import dumpex.core.memory` (and therefore every
-    # dumpex command) the way a top-level assert/computation would. No
-    # bare top-level call to _descriptor_class_size or the layout function
-    # outside of a function body/definition.
-    import ast
+    # dumpex command) the way a top-level assert/computation would.
     import inspect
-    tree = ast.parse(inspect.getsource(memory))
-    for node in tree.body:
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
-            func = node.value.func
-            name = getattr(func, "id", None) or getattr(func, "attr", None)
-            assert name not in ("_descriptor_class_size", "_handle_descriptor_layout"), (
-                f"{name}() must not be called at module top level")
+    hits = _top_level_call_names(
+        inspect.getsource(memory),
+        {"_descriptor_class_size", "_handle_descriptor_layout"},
+    )
+    assert hits == [], (
+        f"found module-top-level call(s) to {hits} -- these must only ever "
+        f"run lazily, from inside parse_handle_stream()")
+
+
+def test_top_level_call_guard_detects_assign_form():
+    # Meta-test for the guard above: it must actually be ABLE to fail.
+    # This synthetic source reproduces the exact shape of the original
+    # 9572d46 regression the guard exists to catch -- a top-level Assign
+    # whose right-hand side calls the target function -- which an
+    # `isinstance(node, ast.Expr)`-only scan (the guard's first,
+    # insufficient version) silently passed. Without this meta-test, a
+    # guard that can never fire looks identical to a working one.
+    synthetic_source = (
+        "def _descriptor_class_size(cls):\n"
+        "    return 32\n"
+        "\n"
+        "MINIDUMP_HANDLE_DESCRIPTOR_SIZE = _descriptor_class_size(object)\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_descriptor_class_size"})
+    assert hits == ["_descriptor_class_size"]
+
+
+def test_top_level_call_guard_detects_call_inside_if_and_try_blocks():
+    # A module-level `if`/`try` block is still module scope -- a call
+    # inside one still runs at import time. Confirms the walk isn't
+    # limited to `tree.body`'s direct children.
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "if True:\n"
+        "    _handle_descriptor_layout()\n"
+        "try:\n"
+        "    _handle_descriptor_layout()\n"
+        "except Exception:\n"
+        "    pass\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == ["_handle_descriptor_layout", "_handle_descriptor_layout"]
+
+
+def test_top_level_call_guard_ignores_calls_inside_nested_functions():
+    # A call inside a def/lambda is NOT executed at import time -- the
+    # guard must not flag ordinary, correct usage (e.g. the real
+    # parse_handle_stream() calling _handle_descriptor_layout() from
+    # inside its own body).
+    synthetic_source = (
+        "def _handle_descriptor_layout():\n"
+        "    return (32, 40)\n"
+        "\n"
+        "def parse_handle_stream():\n"
+        "    return _handle_descriptor_layout()\n"
+    )
+    hits = _top_level_call_names(synthetic_source, {"_handle_descriptor_layout"})
+    assert hits == []
 
 
 def test_upstream_parse_failure_is_isolated_to_handle_stream(monkeypatch):
@@ -235,9 +326,14 @@ def test_layout_check_survives_python_dash_o():
         "try:\n"
         "    memory._handle_descriptor_layout()\n"
         "except memory.HandleDescriptorLayoutError as e:\n"
-        "    assert 'MINIDUMP_HANDLE_DESCRIPTOR' in str(e)\n"
-        "    assert '36' in str(e)\n"
-        "    print('LAYOUT_ERROR_RAISED')\n"
+        "    # Plain if/print, NOT assert: this script itself runs under\n"
+        "    # -O, so an `assert` here would be compiled out too, silently\n"
+        "    # turning a wrong-message failure into a false pass -- the\n"
+        "    # exact bug class this whole test exists to catch.\n"
+        "    if 'MINIDUMP_HANDLE_DESCRIPTOR' not in str(e) or '36' not in str(e):\n"
+        "        print('BAD_MESSAGE:' + str(e))\n"
+        "    else:\n"
+        "        print('LAYOUT_ERROR_RAISED')\n"
         "else:\n"
         "    print('NO_ERROR_RAISED')\n"
     )
@@ -255,6 +351,9 @@ def test_layout_check_survives_python_dash_o():
     assert "LAYOUT_ERROR_RAISED" in result.stdout, (
         f"stdout={result.stdout!r} stderr={result.stderr!r}")
     assert "NO_ERROR_RAISED" not in result.stdout
+    assert "BAD_MESSAGE" not in result.stdout, (
+        f"HandleDescriptorLayoutError message missing struct name/size under "
+        f"-O: stdout={result.stdout!r}")
 
 
 # ── basic shape ────────────────────────────────────────────────────────
@@ -476,6 +575,34 @@ def test_trailing_partial_descriptor_is_not_parsed():
     directory = _Directory(rva=0, data_size=data_size + 20)
     result = parse_handle_stream(directory, io.BytesIO(body))
     assert len(result.handles) == 2   # the trailing partial descriptor is skipped
+
+
+def test_file_truncated_before_declared_data_size_does_not_fabricate_descriptors():
+    # `fits` is derived from the stream's OWN declared DataSize (a
+    # producer-supplied value), not from how many bytes the file object
+    # actually has left. If the underlying file ends before DataSize says
+    # it should (a truncated/corrupted capture -- distinct from a stream
+    # honestly declaring a small DataSize), reading past the real end of
+    # the file must not silently hand back a short/empty buffer that gets
+    # parsed as fabricated all-zero descriptors (Handle=0, HandleCount=0,
+    # TypeName=None, ...) which were never on disk.
+    descriptors = [{"handle": 0xAA, "attributes": 0, "granted_access": 0,
+                     "handle_count": 1, "pointer_count": 1}]
+    body, _ = _build_handle_stream(descriptors, number_of_descriptors=3)
+    # `body` physically contains only ONE descriptor's worth of bytes
+    # (16-byte header + 32 bytes), but DataSize is declared as if all 3
+    # NumberOfDescriptors-declared descriptors were present.
+    declared_data_size = 16 + 3 * 32
+    directory = _Directory(rva=0, data_size=declared_data_size)
+    result = parse_handle_stream(directory, io.BytesIO(body))
+    assert result.header.NumberOfDescriptors == 3
+    assert len(result.handles) == 1   # only what the FILE actually had
+    # The #37 contract's truncation-recovery channel: the caller can
+    # always recover the truncated count this way. A fabrication bug
+    # would silently return 0 here instead of 2.
+    assert result.header.NumberOfDescriptors - len(result.handles) == 2
+    assert result.handles[0].Handle == 0xAA   # the one real descriptor,
+                                               # not a fabricated zero one
 
 
 def test_number_of_descriptors_capped_at_max_handle_descriptors(monkeypatch):

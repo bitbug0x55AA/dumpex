@@ -320,6 +320,21 @@ def parse_handle_stream(directory, file_handle) -> ParsedHandleDataStream:
 
     file_handle.seek(location.Rva + header.SizeOfHeader, 0)
     raw_descriptors = file_handle.read(usable * header.SizeOfDescriptor)
+    # `fits` above is derived from location.DataSize -- the PRODUCER's own
+    # declared stream size, not from how many bytes the underlying file
+    # object actually had left to give. A dump truncated partway through
+    # the descriptor array (the file ends before DataSize says it should)
+    # would otherwise hand descriptor_cls.parse() a short/empty buffer for
+    # the missing descriptors; parse() reading b"" back as all-zero fields
+    # (Handle=0, HandleCount=0, ...) rather than raising fabricates
+    # descriptors that were never on disk, AND breaks the "header.
+    # NumberOfDescriptors - len(handles) recovers the truncated count"
+    # contract documented on ParsedHandleDataStream below, since every
+    # such fabricated zero-descriptor still gets appended to handles. The
+    # actual byte count read is a fourth, independent upper bound on how
+    # many WHOLE descriptors can be parsed, alongside declared/
+    # MAX_HANDLE_DESCRIPTORS/fits.
+    usable = min(usable, len(raw_descriptors) // header.SizeOfDescriptor)
     chunk = io.BytesIO(raw_descriptors)
 
     handles = []
