@@ -1,6 +1,6 @@
 # Recon `--process`/`--sysinfo`/`--handles` contract (issue #37)
 
-**Status: frozen decision record, revision 4 — self-contained.**
+**Status: frozen decision record, revision 5 — self-contained.**
 
 This document is the complete, normative contract for the v2.13 Recon
 redesign. Issues #38–#44 implement against **this file alone**: every
@@ -209,6 +209,7 @@ render the raw key. v2.13 adds exactly these entries:
 | `handles` | `HandleDataStream` |
 | `memory_info` … | *(existing entries unchanged)* |
 | `environment_block` | `Environment block` |
+| `dump_file` | `Dump file` |
 | `main_image` | `PEB-reported main image` |
 
 ### 1.8 Frozen constants
@@ -458,6 +459,7 @@ a reader can check it against the code rather than against intent.
 | `--sysinfo` | `sysinfo`, `misc_info`, `threads`, `modules` | completeness only | `partial` (3), each source's own `SYSINFO_*` code | **`partial` (3)**, `SOURCE_FAILED` |
 | `--sysinfo` | `peb` | completeness only | `partial` (3), `SYSINFO_PEB_UNAVAILABLE` | n/a — see below |
 | `--sysinfo` | `environment_block` | neither (§4.3.3) | — | — |
+| `--sysinfo` | `dump_file` | neither (§4.2.1) — observed always; the hand-built `SYSINFO_DUMP_FILE_UNREADABLE` carries its gap | n/a — never `absent` (the source is the file on disk, not a stream) | **`partial` (3)**, `SYSINFO_DUMP_FILE_UNREADABLE`, every other field still reported |
 | `--process` | `process_identity` | evaluation (derived, §3.7.4) | `not_evaluated` (4), `PROCESS_SOURCES_ABSENT` | n/a — derived |
 | `--process` | `misc_info` | completeness only | `partial` (3), `PROCESS_MISC_INFO_UNAVAILABLE` | **`partial` (3)**, `SOURCE_FAILED` |
 | `--process` | `peb` | completeness only | `partial` (3), `PROCESS_PEB_UNAVAILABLE` | n/a — see below |
@@ -1664,27 +1666,86 @@ which is why `misc_info` remains a required `--sysinfo` source and
 `SYSINFO_MISC_INFO_UNAVAILABLE` remains meaningful. #41 does not
 re-decide this.
 
-**Added**: `current_directory` and `environment_variables`.
+**Added**: `current_directory`, `environment_variables`,
+`dump_file_size_bytes`, `dump_sha256`, and `dump_time_utc`.
 
-### 4.2 Complete field table (15 fields)
+### 4.2 Complete field table (18 fields)
 
 | # | field | type | source |
 |---|---|---|---|
 | 1 | `dump_file` | `string \| null` | basename of the dump path |
-| 2 | `hostname` | `string \| null` | `COMPUTERNAME` from the environment walk |
-| 3 | `username` | `string \| null` | `USERNAME` from the environment walk |
-| 4 | `os` | `string \| null` | `SystemInfoStream` (+ the Win11 build correction already in `_os_display_name()`) |
-| 5 | `os_version` | `string \| null` | `SystemInfoStream` |
-| 6 | `architecture` | `string \| null` | `SystemInfoStream` |
-| 7 | `product_type` | `string \| null` | `SystemInfoStream` |
-| 8 | `processors` | `integer \| null` | `SystemInfoStream` |
-| 9 | `cpu_vendor` | `string \| null` | `SystemInfoStream` |
-| 10 | `cpu_current_mhz` | `integer \| null` | `MiscInfo` |
-| 11 | `cpu_max_mhz` | `integer \| null` | `MiscInfo` |
-| 12 | `thread_count` | `integer \| null` | `ThreadListStream` (`null`, not `0`, when the stream is absent) |
-| 13 | `module_count` | `integer \| null` | `ModuleListStream` (same rule) |
-| 14 | `current_directory` | `string \| null` | `peb.current_directory`, normalized |
-| 15 | `environment_variables` | `list[{name,value}] \| null` | §4.3 |
+| 2 | `dump_file_size_bytes` | `integer \| null` | the dump file on disk (§4.2.1) |
+| 3 | `dump_sha256` | `string \| null` | the dump file on disk (§4.2.1) |
+| 4 | `dump_time_utc` | `string \| null` | `MinidumpHeader.TimeDateStamp` (§4.2.2) |
+| 5 | `hostname` | `string \| null` | `COMPUTERNAME` from the environment walk |
+| 6 | `username` | `string \| null` | `USERNAME` from the environment walk |
+| 7 | `os` | `string \| null` | `SystemInfoStream` (+ the Win11 build correction already in `_os_display_name()`) |
+| 8 | `os_version` | `string \| null` | `SystemInfoStream` |
+| 9 | `architecture` | `string \| null` | `SystemInfoStream` |
+| 10 | `product_type` | `string \| null` | `SystemInfoStream` |
+| 11 | `processors` | `integer \| null` | `SystemInfoStream` |
+| 12 | `cpu_vendor` | `string \| null` | `SystemInfoStream` |
+| 13 | `cpu_current_mhz` | `integer \| null` | `MiscInfo` |
+| 14 | `cpu_max_mhz` | `integer \| null` | `MiscInfo` |
+| 15 | `thread_count` | `integer \| null` | `ThreadListStream` (`null`, not `0`, when the stream is absent) |
+| 16 | `module_count` | `integer \| null` | `ModuleListStream` (same rule) |
+| 17 | `current_directory` | `string \| null` | `peb.current_directory`, normalized |
+| 18 | `environment_variables` | `list[{name,value}] \| null` | §4.3 |
+
+#### 4.2.1 `dump_file_size_bytes` / `dump_sha256`
+
+These are the only `--sysinfo` fields whose evidence is **not** already in
+memory when `collect_sysinfo()` runs: establishing them re-reads the file
+from disk. Frozen rules:
+
+- **They are one claim, not two.** Both are populated, or both are
+  `null`. A size without a digest identifies nothing, and reporting one
+  half of a failed read as if it succeeded would be a false claim about
+  the evidence file's identity.
+- `dump_file_size_bytes` is the number of bytes **actually hashed**, not
+  a separate `os.path.getsize()` observation. It therefore describes
+  exactly the bytes that produced `dump_sha256`, instead of being a
+  second, independently-timed reading that a file changing underneath
+  could put out of step with the digest.
+- The digest is **SHA-256**, computed through
+  `dumpex.core.evidence.cached_sha256_file()` — not `sha256_file()`.
+  A `--sysinfo --json` run has two consumers of this exact fact about
+  this exact file (this record, and `meta.evidence[].sha256`); the cached
+  wrapper makes a multi-gigabyte dump be read once rather than twice, and
+  makes it structurally impossible for the two to report different
+  digests. Its cache key includes `st_size`/`st_mtime_ns`, so a file
+  genuinely replaced mid-run is re-hashed rather than served stale.
+- A stat/read failure emits `SYSINFO_DUMP_FILE_UNREADABLE` (§6.1) — a
+  genuine evaluation gap, since dumpex was asked for the evidence file's
+  identity and could not establish it. It must **not** cost any other
+  field: everything the already-parsed `mf` holds is still reported.
+  `dump_file` in particular stays populated, because a basename never
+  required reading the file.
+- The guard catches `ValueError` as well as `OSError`: `os.stat()`/
+  `open()` reject a structurally invalid path (an embedded NUL) with the
+  former, and letting that escape would defeat the isolation rule above.
+
+#### 4.2.2 `dump_time_utc`
+
+`MinidumpHeader.TimeDateStamp` — when the dump was written — formatted
+per §1.3 (`"%Y-%m-%d %H:%M:%S UTC"`).
+
+Read off the header, not a directory stream. `open_dump()`'s phase 1
+(§2.2) parses the header before any per-stream parser runs and exits 1 if
+it cannot, so the header is present for every dump that reaches a
+command. That is why this field declares **no coverage source and no
+limitation** of its own.
+
+It is a UINT32 `time_t` with the same "`0` means the producer never set
+it" convention as `MINIDUMP_MISC_INFO.ProcessCreateTime`, so it reuses
+that field's range check and formatter
+(`process_info.format_uint32_time_utc()`, which
+`format_process_create_time_utc()` now delegates to) rather than growing
+a second near-identical copy. `0`, out-of-range, non-integer, and
+"no header at all" all normalize to `null` with **no** limitation — the
+same field-level "present but not certifiable" rule `cpu_vendor` already
+follows here, not §3.2's raw-preservation treatment, which exists for
+`--process`'s identity claims specifically.
 
 `hostname`/`username` now derive from the independent environment walk
 (§4.3) rather than from `peb.environment_variables`, so they survive the
@@ -1973,11 +2034,35 @@ names, and full user paths. The contract's position, frozen:
 
 ### 4.6 Console layout
 
-The `Process` section is gone. The OS/Host/CPU/Dump-File sections are
-unchanged. One new section is added, after `Host`:
+The `Process` section is gone. `--sysinfo` prints **three peer top-level
+sections**, in this order:
 
 ```
-  ═══ ENVIRONMENT ═══
+═══ DUMP ═══
+  [~] <reasons whose source is dump_file / threads / modules>
+    File                   <dump_file>
+    Size                   <dump_file_size_bytes, formatted>      if not null
+    SHA-256                <dump_sha256>                          if not null
+    Dump Time              <dump_time_utc>                        if not null
+    Threads in dump        <thread_count>                         if threads present
+    Modules in dump        <module_count>                         if modules present
+
+═══ SYSTEM INFO ═══
+  [~] <reasons whose source is sysinfo / misc_info>
+
+  Operating System
+    OS / Version / Architecture / Product Type
+    <"(sysinfo stream not available)" when os is null>
+
+  Host
+    Hostname               <hostname or "(unknown)">
+    Username               <username or "(unknown)">
+
+  CPU                                                             if os is not null
+    Processors / Vendor / Current MHz / Max MHz
+
+═══ ENVIRONMENT ═══
+  [~] <reasons whose source is environment_block / peb>
     Current Directory      <current_directory or "(unknown)">
     Environment Variables  <"N captured (--verbose or --json to view)"   if state in
                               (present, present_empty, partial)>
@@ -1986,62 +2071,177 @@ unchanged. One new section is added, after `Host`:
                            <"(not supported for this architecture)"     if state ==
                               architecture_unsupported>
                            <"(unparseable -- see coverage below)"       if state == unparseable>
-    [~] <coverage.reasons entries naming environment_block, if any>
 ```
 
-With `--verbose`, every `name=value` pair is printed under that header,
-in walk order. For `state == "partial"` the truncation `[~]` line is
-printed **above** the list, so a reader sees the list is incomplete
-before reading it.
+Frozen properties of this layout:
 
-**Every `coverage.limitations` entry renders exactly once, split across
-its own console position -- never duplicated, never reordered.** §4.7
-freezes `sysinfo, misc_info, <environment limitation, if any>, peb,
-threads, modules` as the order of both `coverage.limitations` and the
-console's `[~]` lines. Combined with this section's own `[~]` line
-above, that means the reasons printed immediately after `═══ SYSTEM
-INFO ═══` are only those ordered *before* the environment limitation
-(`sysinfo`/`misc_info`); the environment limitation itself renders
-*only* in this `ENVIRONMENT` section's own `[~]` line; and any reasons
-ordered *after* it (`peb`/`threads`/`modules`) render immediately
-following this section, before `CPU`. A renderer that prints the full,
-unfiltered `coverage.limitations` list at the top **and** repeats the
-environment one here violates the "exactly once" rule; one that omits
-it from the top block without relocating the later reasons violates the
-frozen order instead (a `modules` reason would print before an
-earlier-ordered environment one). Both are real bugs this contract has
-caught in past implementations.
+- **All three banners are peers at column 0**, and all three put their
+  fields at the same 4-space indent, so the value column lines up across
+  the whole command. `ENVIRONMENT` was previously a `  ═══ ENVIRONMENT
+  ═══` banner *in the middle of* `SYSTEM INFO`'s own subsections. That is
+  a real defect, not a cosmetic one: a banner is how a terminal reader
+  segments output, and indentation is not — so `CPU` and the dump-file
+  fields printed after it read as belonging to `ENVIRONMENT` even though
+  they never did structurally. An analyst reported exactly that.
+- **`CPU` stays a `SYSTEM INFO` subsection**, alongside `Operating
+  System` and `Host`. Processor count/vendor/clocks describe the machine
+  the process ran on, not the process's environment block.
+- **`DUMP` is first.** It answers "which artifact am I looking at?" —
+  the question every other section's answer is qualified by — and it is
+  where a reader looks to copy a hash into a case note.
+- **`ENVIRONMENT` is last.** With `--verbose` it can run to hundreds of
+  lines, so anything printed after it is effectively invisible.
+- A dump-identity field that could not be established prints **no line at
+  all** rather than `(unknown)`: for size/SHA-256 the reason is already
+  on a `[~]` line, and a dump carrying no `TimeDateStamp` has nothing to
+  explain.
+
+With `--verbose`, every captured variable is printed under the
+`ENVIRONMENT` fields, in walk order — see §4.6.1 for its layout.
+
+**Every `coverage.limitations` entry renders exactly once, under the
+section that owns the field it explains -- never duplicated, never
+dropped.** The mapping is closed and total over `--sysinfo`'s seven
+sources:
+
+| section | sources whose reasons it prints |
+|---|---|
+| `DUMP` | `dump_file`, `threads`, `modules` |
+| `SYSTEM INFO` | `sysinfo`, `misc_info` |
+| `ENVIRONMENT` | `environment_block`, `peb` |
+
+Each section prints its `[~]` lines immediately after its own banner,
+before its fields. For `ENVIRONMENT` that also satisfies the older rule
+this section has always carried: a `state == "partial"` truncation
+reason is printed **above** the `--verbose` list, so a reader sees the
+list is incomplete before reading it.
+
+§4.7 declares `completeness_checks` in exactly this section order, so
+`coverage.limitations` and the console's `[~]` lines remain a **single
+sequence** rather than two orders a reader has to reconcile. A renderer
+that prints the full, unfiltered `coverage.limitations` list at the top
+**and** repeats a reason locally violates the "exactly once" rule; one
+that assigns a source to no section drops a reason silently. Both are
+real bugs this contract has caught in past implementations, which is why
+the mapping above is inverted into a lookup once and asserted to be a
+partition, rather than re-derived per render.
+
+#### 4.6.1 The `--verbose` environment listing
+
+Printed as an **aligned two-column block**, one variable per line:
+
+Example values below are illustrative, and any user-profile path is
+written with a `<user>` placeholder rather than a real account name —
+`scripts/repo_privacy_scan.py`'s `windows-user-profile` rule rejects a
+concrete `C:\Users\<name>\…` anywhere in a tracked file, including in
+documentation samples pasted from a real dump.
+
+```
+      ALLUSERSPROFILE                 C:\ProgramData
+      APPDATA                         C:\Users\<user>\AppData\Roaming
+      FPS_BROWSER_APP_PROFILE_STRING  Internet Explorer
+      Path                            C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;
+                                      C:\Windows\System32\WindowsPowerShell\v1.0\;
+                                      C:\Program Files\nodejs\
+      PATHEXT                         .COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC
+      EMPTYVAR                        (empty)
+```
+
+The listing was previously one flat `name=value` per line. On a real
+dump's ~40 variables that is unreadable for two compounding reasons:
+names run from 2 to 30-odd characters, so there is no column for the eye
+to follow, and the handful of `;`-joined list values (`Path` above all)
+run far past the terminal and hard-wrap at column 0, destroying whatever
+block structure the rest of the listing had.
+
+Frozen rules:
+
+- **Names are padded to a shared column**, sized from the widest captured
+  name and clamped to `[14, 30]` visible columns. A name **wider than the
+  cap gets its own line**, with its value on the next line at the value
+  column — one pathological, attacker-controlled name must not shove the
+  value column right for every other entry, and must not be truncated
+  either, since the name is evidence.
+- **The `=` separator is dropped**, not padded around. Padding it would
+  stop the line being the literal `name=value` anyway while leaving it
+  harder to scan. This listing is the human projection; `--json`/`--csv`
+  remain the machine-readable forms and are untouched. An entry whose
+  name genuinely begins with `=` (§4.4) reads correctly in two columns.
+- **Values soft-wrap under their own column**, breaking (in order of
+  preference) just *after* a `;` or `,`, then just after whitespace, then
+  on any token boundary for a single unbroken token. Breaking after the
+  separator lets a reader see the entry continues.
+- **The wrap is lossless.** Concatenating a value's printed lines
+  reproduces the escaped value exactly: nothing is inserted (no ellipsis,
+  no in-text continuation marker) and nothing is dropped. This is soft
+  wrapping, never truncation — §4.5 keeps these values unredacted
+  precisely because they are evidence.
+- **A `\xNN`/`\uNNNN` escape produced by `console_safe()` is atomic** and
+  is never broken across lines. A wrap landing inside one would show
+  `\x0` on one line and `a` on the next, i.e. the analyst would read a
+  different byte than the dump contained.
+- A captured-but-empty value renders as `(empty)`. `NAME=` with nothing
+  after it is real evidence that the block was walked; a name followed by
+  blank space would read as a rendering bug.
+- **Every name and value goes through `console_safe()` FIRST**, and all
+  measuring, padding and wrapping operates on the escaped text. The other
+  order both mis-aligns the columns (an escape expands) and, far worse,
+  lets a crafted variable wrap into something that forges a dumpex line.
+- Colour is applied **after** padding, never before: padding an
+  already-coloured string makes the ANSI escape count toward the field
+  width, so the column breaks whenever stdout is a TTY — i.e. for every
+  real user and in no test.
+- Width comes from `dumpex.ui.console_layout.resolve_width()`, which is
+  pinned to a fixed `FALLBACK_WIDTH` whenever stdout is not a terminal.
+  Console goldens and wrapping tests must never depend on the terminal a
+  run happens in.
 
 ### 4.7 Coverage and exit semantics
 
-`coverage.sources` has **six** keys: `sysinfo`, `misc_info`, `peb`,
-`threads`, `modules`, `environment_block`.
+`coverage.sources` has **seven** keys: `dump_file`, `sysinfo`,
+`misc_info`, `peb`, `threads`, `modules`, `environment_block`.
 
 `completeness_checks` keeps the five existing `SourceRequirement`s
 unchanged — `SYSINFO_SYSTEM_INFO_UNAVAILABLE`,
 `SYSINFO_MISC_INFO_UNAVAILABLE`, `SYSINFO_PEB_UNAVAILABLE`,
-`SYSINFO_THREADS_UNAVAILABLE`, `SYSINFO_MODULES_UNAVAILABLE` — and there
-is no sixth `SourceRequirement` (§4.3.3).
+`SYSINFO_THREADS_UNAVAILABLE`, `SYSINFO_MODULES_UNAVAILABLE`.
 
-**Order, frozen as one rule.** Any hand-built environment limitation is
-inserted **immediately before** the `peb` requirement, giving exactly:
+**Two of the seven sources carry no `SourceRequirement` at all**:
+`environment_block` (§4.3.3) and `dump_file` (§4.2.1). Every gap either
+one produces arrives as a hand-built, caller-buildable
+`CoverageLimitation` instead, so the reason an analyst reads names the
+actual failure rather than a generic absent/failed template. For
+`dump_file` that distinction is load-bearing: the auto-derived
+`SOURCE_FAILED` wording is "*X* present but could not be read", and the
+commonest failure here is a file that is no longer present at all.
+
+`dump_file` is nonetheless a real `coverage.sources` entry (`present`
+when the size/digest were established, `failed` with the OS error as
+`detail` otherwise) — `build_coverage_report()` requires every source a
+completeness check names to exist in `sources`.
+
+**Order, frozen as one rule: `completeness_checks` are declared in §4.6's
+SECTION order**, giving exactly:
 
 ```
-sysinfo, misc_info, <environment limitation, if any>, peb, threads, modules
+<dump-file limitation, if any>, threads, modules,     ← DUMP
+sysinfo, misc_info,                                   ← SYSTEM INFO
+<environment limitation, if any>, peb                 ← ENVIRONMENT
 ```
 
 `build_coverage_report()` preserves `completeness_checks` order verbatim,
-so this is the order of `coverage.limitations` and of the console's
-`[~]` lines. The specific environment failure is read before the general
-PEB consequence — an analyst should see "environment block pointers
-could not be read: X" and only then "PEB not available", not the other
-way round. The five existing checks keep their relative order among
-themselves, so no already-shipped `--sysinfo` reason sequence changes
-for a dump with no environment limitation.
+so this is the order of `coverage.limitations` **and** of the console's
+`[~]` lines — one sequence, not two. The environment-before-PEB rule is
+preserved verbatim: the two stay adjacent and in that order, so an
+analyst still sees "environment block pointers could not be read: X" and
+only then "PEB not available", never the other way round.
 
-`--sysinfo` never reports `not_evaluated`: `dump_file` is derived from
-the dump path itself and is always available, so there is always
-something evaluated. That is unchanged from today.
+`--sysinfo` never reports `not_evaluated`: `dump_file`'s basename is
+derived from the dump path itself and is always available, so there is
+always something evaluated. That is unchanged from today, and a `failed`
+`dump_file` source does not change it (§2.4: a failed source is never
+`absent`, so it can never satisfy an evaluation group's all-absent
+condition).
 
 ---
 
@@ -2506,6 +2706,7 @@ this contract's own revision history.
 | `ENVIRONMENT_BLOCK_UNPARSEABLE` | `environment_block` | — | "environment block present but no entries could be parsed (malformed, or no terminator found)" |
 | `ENVIRONMENT_BLOCK_TRUNCATED` | `environment_block` | `affected_count`, `scope` (required), `budget_limit`/`budget_consumed` (required for the two byte/entry budgets, `null` for the other two) | "environment block capture ended before a terminator was found; {count} entry(ies) kept (budget: {scope}, limit={limit} consumed={consumed})" — the budget clause is omitted when `scope` is `captured_segment` or `undecodable_entry` |
 | `ENVIRONMENT_PRECONDITION_INCONSISTENT` | `environment_block` | — | "a captured process environment block source exists without the system/thread evidence needed to interpret it; the environment block was never walked" — fires only when `unsupported` (§4.3.2) fires alongside a `peb` that is nonetheless present, an internal-invariant contradiction no real `open_dump()` output can ever produce (§4.3.3); its own dedicated code rather than `ENVIRONMENT_BLOCK_UNREADABLE`, since no pointer read is ever attempted here |
+| `SYSINFO_DUMP_FILE_UNREADABLE` | `dump_file` | `detail` (required) | "dump file could not be read for size/SHA-256: {detail}" — `detail` is the OS error, formatted by the caller as the exception type and message, so an analyst can tell a deleted file from a permissions problem from an unmounted share. Its own dedicated code rather than the auto-derived `SOURCE_FAILED`, whose present-but-unreadable wording asserts a presence the commonest cause (the file is gone) contradicts; `caller_buildable`, since a failed identity read is not a source state the reducer can infer. Never emitted for `dump_time_utc`, which needs no file read (§4.2.2) |
 | `HANDLES_UNAVAILABLE` | `handle_records` | `scope` | "HandleDataStream not present in this dump (not captured with handle data)" |
 | `HANDLES_PARSE_FAILED` | `handle_records` | `scope` | "HandleDataStream is present in this dump but could not be parsed" — the parser's own error text arrives on the companion `SOURCE_FAILED` limitation (§5.5 case 2) |
 | `HANDLES_ALL_DESCRIPTORS_INVALID` | `handle_records` | `scope` | "HandleDataStream present but no descriptor could be normalized" — the descriptor count is on `coverage.sources["handles"].record_count` |
@@ -2972,7 +3173,48 @@ excuses anything in §0–§8.
   `datetime.fromtimestamp()` raising is a sufficient timestamp check (it
   is platform-dependent). Added `MAX_IAT_READ_OPERATIONS`,
   `name_matched_candidate`, and per-field IAT nullability.
-- **rev4 (this revision)** — made the document self-contained (every
+- **rev5 (this revision)** — `--sysinfo`'s console layout and dump
+  identity, from an analyst's report against the shipped rev4 output.
+  Three defects, all in §4:
+
+  1. **`ENVIRONMENT` was a banner inside another section's body.** rev4's
+     §4.6 placed `  ═══ ENVIRONMENT ═══` between `SYSTEM INFO`'s own
+     `Host` and `CPU` subsections, distinguished from the top-level
+     `═══ SYSTEM INFO ═══` banner only by two spaces of indent. Readers
+     segment terminal output by banners, not by indentation, so `CPU` and
+     the dump-file fields printed after it read as ENVIRONMENT data even
+     though they were never structurally nested. §4.6 now freezes three
+     **peer** top-level sections — `DUMP`, `SYSTEM INFO`, `ENVIRONMENT` —
+     with `CPU` explicitly a `SYSTEM INFO` subsection.
+  2. **Dump-file facts trailed the output.** They now lead it, as the
+     `DUMP` section: it answers which artifact is being read, which
+     qualifies everything else. `ENVIRONMENT` moves last, because
+     `--verbose` can make it hundreds of lines and anything after it is
+     invisible.
+  3. **The dump had no identity beyond a basename.** §4.2 adds
+     `dump_file_size_bytes`, `dump_sha256` (§4.2.1) and `dump_time_utc`
+     (§4.2.2), taking the 15-field record to 18.
+  4. **The `--verbose` environment listing was a wall of text.** A flat
+     `name=value` per line gives ~40 variables no column to scan, and the
+     `;`-joined list values (`Path`, `PSModulePath`) overran the terminal
+     and hard-wrapped at column 0. New §4.6.1 freezes an aligned
+     two-column block with lossless, separator-aware soft wrapping.
+
+  Consequent rule changes, both stated in full at their own sections:
+  §4.7's frozen limitation order is now §4.6's **section** order
+  (`dump_file, threads, modules, sysinfo, misc_info, environment, peb`),
+  which keeps `coverage.limitations` and the console's `[~]` lines one
+  sequence while preserving the environment-before-PEB guarantee
+  verbatim; and `coverage.sources` grows a seventh key, `dump_file`,
+  which — like `environment_block` — carries no `SourceRequirement`, its
+  gap arriving as the new `SYSINFO_DUMP_FILE_UNREADABLE` (§6.1) instead.
+
+  This revision is behaviour-compatible with everything already
+  published: `--sysinfo`'s post-#41 record shape has never shipped in any
+  schema (`CURRENT_SCHEMA` is still v2.12, whose `sysInfoRecord` freezes
+  the pre-#41 shape), so #43's pending v2.13 cutover absorbs all of it
+  without a second version bump.
+- **rev4** — made the document self-contained (every
   "unchanged from rev2/rev3" replaced with the complete rule); moved the
   loader contract to its own section and completed it (thread-context
   preservation, exit-1 preservation for header/directory failures,

@@ -206,12 +206,28 @@ class ExceptionStream:
         self.ThreadId = thread_id
 
 
+# Content for the on-disk file backing FakeMF.filename (created once per
+# session by tests/conftest.py's _fake_dump_file_on_disk). Fixed bytes, so
+# --sysinfo's dump_file_size_bytes/dump_sha256 are identical on every run
+# and every machine and can be frozen in a golden. Deliberately NOT a
+# parseable minidump: nothing reads these bytes back through a parser —
+# FakeMF stands in for the already-parsed result — they exist only to give
+# the dump path a real size and digest.
+FAKE_DUMP_BYTES = b"dumpex fake dump fixture\n"
+
+
 class FakeMF:
     """
     Stand-in MinidumpFile. Every stream defaults to None (== "not present
     in this dump", matching a real MinidumpFile whose stream attributes
     are all None until MinidumpFile.parse() populates the ones the dump
     actually contains) — tests opt in to whichever streams they need.
+
+    `filename` is rebound to a real temp path by tests/conftest.py's
+    session-scoped _fake_dump_file_on_disk fixture; see that fixture for
+    why a non-existent path would be an unreachable state to test against.
+    `header` defaults to None, which --sysinfo reads as "no dump
+    timestamp" — tests wanting one set `header = FakeHeader(<time_t>)`.
     """
     memory_info         = None
     modules              = None
@@ -225,10 +241,19 @@ class FakeMF:
     misc_info                  = None
     exception                   = None
     filename                     = "test.dmp"
+    header                        = None
     _reader                   = None
 
     def get_reader(self):
         return self._reader
+
+
+class FakeHeader:
+    """MinidumpHeader stand-in carrying only TimeDateStamp — the one
+    header field any command reads (--sysinfo's dump_time_utc)."""
+
+    def __init__(self, time_date_stamp):
+        self.TimeDateStamp = time_date_stamp
 
 
 # ── environment-block walk fake ───────────────────────────────────────────

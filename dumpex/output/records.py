@@ -147,7 +147,7 @@ class ThreadRecord:
 @dataclass
 class SysInfoRecord:
     """`--sysinfo`'s record -- docs/recon_process_sysinfo_handles_contract.md
-    §4.2's 15-field shape (issue #41): the process identity/runtime fields
+    §4.2's 18-field shape (issue #41): the process identity/runtime fields
     now owned by `--process` (pid, process_start_utc, image_path,
     command_line, process_user_time_seconds, process_kernel_time_seconds)
     are gone; `current_directory`/`environment_variables` are added.
@@ -156,6 +156,15 @@ class SysInfoRecord:
     nulled-out fields per command) so each kind's schema can be fully and
     tightly typed -- see PidRecord/PebRecord below."""
     dump_file:          "str | None" = None
+    # The dump's own identity, reported together in the console's DUMP
+    # section. size/sha256 come from re-reading the file (None together,
+    # with SYSINFO_DUMP_FILE_UNREADABLE, when that read fails);
+    # dump_time_utc is MinidumpHeader.TimeDateStamp, a UINT32 time_t whose
+    # 0 means "the producer never set it" -> None, exactly like
+    # MiscInfo.ProcessCreateTime.
+    dump_file_size_bytes: "int | None" = None
+    dump_sha256:        "str | None" = None
+    dump_time_utc:      "str | None" = None
     hostname:           "str | None" = None
     username:           "str | None" = None
     os:                 "str | None" = None
@@ -179,6 +188,9 @@ class SysInfoRecord:
     def to_dict(self) -> dict:
         return {
             "dump_file":               self.dump_file,
+            "dump_file_size_bytes":    self.dump_file_size_bytes,
+            "dump_sha256":             self.dump_sha256,
+            "dump_time_utc":           self.dump_time_utc,
             "hostname":                self.hostname,
             "username":                self.username,
             "os":                      self.os,

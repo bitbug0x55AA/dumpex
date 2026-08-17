@@ -5,6 +5,77 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Changed: `--sysinfo` is now three sections, and identifies the dump itself
+
+`--sysinfo` previously printed a `═══ ENVIRONMENT ═══` banner *inside*
+the `SYSTEM INFO` body, between `Host` and `CPU`, set apart from the
+top-level `═══ SYSTEM INFO ═══` banner only by two spaces of indent. A
+terminal reader segments output by banners, not by indentation, so the
+`CPU` and dump-file blocks printed after it read as environment data even
+though they had never been nested under it
+([issue #41](https://github.com/bitbug0x55AA/dumpex/issues/41)).
+
+The command now prints three peer sections, in this order:
+
+- `═══ DUMP ═══` — which artifact this is: file name, size, SHA-256, the
+  dump's own creation time, and the thread/module counts it contains.
+- `═══ SYSTEM INFO ═══` — the machine the process ran on: `Operating
+  System`, `Host`, and `CPU`, which is now unambiguously a system
+  subsection.
+- `═══ ENVIRONMENT ═══` — the process's own environment block. Last,
+  because with `--verbose` it can run to hundreds of lines and anything
+  printed after it is effectively invisible.
+
+**New evidence in the `DUMP` section**, also on the `--json`/`--csv`
+record as `dump_file_size_bytes`, `dump_sha256`, and `dump_time_utc`:
+
+- **Size and SHA-256** of the dump file, so a report carries the evidence
+  file's identity without a separate `sha256sum` run. The digest is
+  computed once per invocation and shared with `--json`'s
+  `meta.evidence[].sha256`, so a multi-gigabyte dump is not read twice
+  and the two can never disagree. If the file cannot be read (deleted,
+  unmounted, permissions), both fields are `null`, a
+  `dump file could not be read for size/SHA-256: …` caveat names the OS
+  error, and **every other field is still reported** — one unreadable
+  evidence file does not cost the analyst the parsed dump.
+- **Dump time** — `MinidumpHeader.TimeDateStamp`, when the dump was
+  written. `null` when the producing tool left the field unset.
+
+Each `[~]` coverage caveat now prints under the section that owns the
+field it explains, so `ThreadListStream not present (thread_count
+unavailable)` appears next to the thread count rather than above the OS
+table. `coverage.reasons` follows the same order, so the console and the
+structured output remain a single sequence.
+
+**`--sysinfo --verbose`'s environment listing is now readable.** It was
+one flat `name=value` per line, which on a real dump's ~40 variables gave
+the eye no column to follow, and let the `;`-joined values (`Path`,
+`PATHEXT`, `PSModulePath`) overrun the terminal and hard-wrap at column 0.
+It is now an aligned two-column block, with long values wrapping under
+their own column and breaking after their semicolons:
+
+```
+      ALLUSERSPROFILE                 C:\ProgramData
+      FPS_BROWSER_APP_PROFILE_STRING  Internet Explorer
+      Path                            C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;
+                                      C:\Windows\System32\WindowsPowerShell\v1.0\;
+                                      C:\Program Files\nodejs\
+      EMPTYVAR                        (empty)
+```
+
+The wrapping is lossless — joining a value's lines reproduces it exactly,
+nothing inserted and nothing truncated — so a wrapped `Path` is still the
+exact captured value. The `=` separator is dropped rather than padded
+around; `--json` and `--csv` remain the machine-readable forms and are
+unchanged.
+
+`--json` consumers: `SysInfoRecord` grows the three fields above; no
+existing field is removed or renamed by this change. `coverage.sources`
+grows a seventh key, `dump_file`. The record shape is still frozen for
+the pending v2.13 schema cutover
+([issue #43](https://github.com/bitbug0x55AA/dumpex/issues/43)) — the
+current published schema (v2.12) predates it either way.
+
 ## Fixed: `minidump` dependency now pinned; HandleDataStream descriptor sizing made symmetric
 
 `pip install dumpex` (or `pip install --upgrade minidump` into an existing

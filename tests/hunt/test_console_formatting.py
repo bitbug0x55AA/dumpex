@@ -1,9 +1,16 @@
-"""Unit tests for dumpex.hunt._console -- the shared width/wrap primitives
-every hunter's console rendering reads from. Pure functions, no
-hunt-package/FakeMF dependency."""
+"""Unit tests for dumpex.ui.console_layout -- the shared width/wrap
+primitives every hunter's console rendering, and --sysinfo --verbose's
+environment listing, read from. Pure functions, no hunt-package/FakeMF
+dependency.
+
+Imported under its real module name rather than through the
+`dumpex.hunt._console` compatibility shim: the width tests monkeypatch
+`sys`/`shutil` as module attributes, which only exist on the module that
+actually defines resolve_width(). test_console_layout_shim.py covers the
+shim itself."""
 import re
 
-from dumpex.hunt import _console
+from dumpex.ui import console_layout as _console
 from dumpex.ui.colors import RED
 
 

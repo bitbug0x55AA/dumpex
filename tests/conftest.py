@@ -21,6 +21,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from dumpex.core.memory import get_thread_contexts as _real_get_thread_contexts
+from tests.fixtures.fakes import FAKE_DUMP_BYTES, FakeMF
 import dumpex.hunt.stomping as stomping
 import dumpex.hunt.pipe as pipemod
 import dumpex.hunt.cs_beacon as cs_beacon
@@ -28,6 +29,36 @@ import dumpex.rules_pkg.loader as _rules_loader
 import dumpex.hunt.yara_hunt as _yara_hunt_mod
 
 _THREAD_CONTEXT_MODULES = (stomping, pipemod, cs_beacon)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _fake_dump_file_on_disk(tmp_path_factory):
+    """
+    Back FakeMF.filename with a real, deterministic file for the whole
+    session.
+
+    `--sysinfo` reports the dump's own size and SHA-256 (contract §4.2),
+    which is the one field group that goes back to disk instead of reading
+    an already-parsed `mf`. A FakeMF whose `filename` names a file that
+    does not exist is a state a real `open_dump()` can never return --
+    open_dump() exits 1 on a missing path long before any command sees an
+    `mf` -- so leaving it that way would make every fake-driven test
+    assert against a SYSINFO_DUMP_FILE_UNREADABLE limitation that no real
+    invocation of these commands can produce. That is the same
+    "don't freeze a golden no real open_dump() output could produce" rule
+    tests/integration/test_compat_freeze.py already enforces for the PEB
+    and the environment walk, applied to the dump path itself.
+
+    Still no external fixture: the file is synthesized here, from bytes
+    this repo owns, exactly like every other fake in this suite. The
+    basename stays "test.dmp" so `dump_file` (a basename) is unchanged,
+    and the content is fixed so size/SHA-256 are stable across runs and
+    across machines -- both are frozen in test_compat_freeze.py's goldens.
+    """
+    path = tmp_path_factory.mktemp("fake-dump") / "test.dmp"
+    path.write_bytes(FAKE_DUMP_BYTES)
+    FakeMF.filename = str(path)
+    return str(path)
 
 
 @pytest.fixture(autouse=True)

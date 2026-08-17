@@ -9,7 +9,7 @@ import datetime
 import importlib.metadata
 from dumpex.ui.colors import DIM
 from dumpex.core.safe_io import write_text_to_target, summarize_file
-from dumpex.core.evidence import sha256_file
+from dumpex.core.evidence import cached_sha256_file
 
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*m')
 
@@ -170,7 +170,7 @@ class StructuredOutput:
             return out
         if self._evidence_sha256 is None and self._evidence_hash_error is None:
             try:
-                self._evidence_sha256 = sha256_file(self._dump_path_abs)
+                self._evidence_sha256 = cached_sha256_file(self._dump_path_abs)
             except Exception as e:
                 self._evidence_hash_error = str(e)
         if self._evidence_sha256 is not None:

@@ -26,7 +26,7 @@ import datetime
 import importlib.metadata
 from dataclasses import dataclass, field
 
-from dumpex.core.evidence import sha256_file
+from dumpex.core.evidence import cached_sha256_file
 from dumpex.output.coverage import EXECUTION_COMPLETED, EXECUTION_PARTIAL, EXECUTION_FAILED
 
 __all__ = [
@@ -240,7 +240,7 @@ def _evidence_entry(dump_path_abs: str, dump_file_name: str, id_: str, role: str
         entry["error"] = f"could not stat evidence file: {e}"
         return entry
     try:
-        entry["sha256"] = sha256_file(dump_path_abs)
+        entry["sha256"] = cached_sha256_file(dump_path_abs)
     except Exception as e:
         entry["error"] = f"sha256 computation failed: {e}"
     return entry

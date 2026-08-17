@@ -26,7 +26,7 @@ formats documented for their individual options.
 | `--strings ADDR` | Extract strings from the region containing `ADDR` |
 | `--peb` | Show Process Environment Block information |
 | `--pid` | Show the process ID recorded in the dump |
-| `--sysinfo` | Show OS, host, process, and CPU summary |
+| `--sysinfo` | Show dump identity (size/SHA-256/dump time), OS, host, CPU, and environment |
 | `--diff REFERENCE` | Compare the primary target dump against a reference dump |
 | `--report` | Generate a focused triage report |
 | `--hunt TTP` | Run `injection`, `hollowing`, `stomping`, `pipe`, `cs-beacon`, `yara`, `obfuscation`, or `all` |
