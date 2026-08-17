@@ -51,7 +51,7 @@ import dumpex.cli as cli
 import dumpex.output.collector as collector_mod
 from dumpex.output.envelope import SCHEMA_VERSION
 from tests.fixtures.fakes import (
-    FakeMF, Region, Module, Thread, ThreadInfo, Ctx, FakeStream, Peb, MiscInfo,
+    FakeMF, FakeHeader, Region, Module, Thread, ThreadInfo, Ctx, FakeStream, Peb, MiscInfo,
     SysInfo, ExceptionStream, wire_environment_walk, EnvReader, UnconstructibleEnvReader,
 )
 
@@ -273,6 +273,12 @@ def _assert_sysinfo_reachable_via_open_dump(mf):
 
 def _sysinfo_full():
     mf = FakeMF()
+    # MinidumpHeader.TimeDateStamp -- the source of --sysinfo's
+    # dump_time_utc. A real open_dump() always has a parsed header by the
+    # time any command runs (phase 1 exits 1 otherwise), so every sysinfo
+    # golden below freezes a real timestamp rather than the null a
+    # header-less fake would produce. 1723598105 == 2024-08-14 01:15:05 UTC.
+    mf.header     = FakeHeader(1723598105)
     mf.sysinfo    = SysInfo()   # SysInfo()'s own default is PROCESSOR_ARCHITECTURE.AMD64
     mf.misc_info  = MiscInfo(process_id=1234)
     mf.peb        = Peb(0x140000000, r"C:\test.exe", current_directory=r"C:\work")
@@ -668,249 +674,177 @@ SCENARIOS = [
     ),
     (
         "sysinfo_all_absent", ["--sysinfo"], _sysinfo_all_absent, 3,
+        '\n═══ DUMP ═══\n  [~] ThreadListStream not present (thread_count unavailable)\n'
+        '  [~] ModuleListStream not present (module_count unavailable)\n'
+        '    File                   test.dmp\n    Size                   25 bytes\n'
+        '    SHA-256                5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509\n'
         '\n═══ SYSTEM INFO ═══\n  [~] SystemInfoStream not present\n'
-        '  [~] MiscInfo stream not present\n  [~] PEB not available (requires sysinfo + '
-        'thread list)\n  [~] ThreadListStream not present (thread_count unavailable)\n'
-        '  [~] ModuleListStream not present (module_count unavailable)\n\n'
-        '  Operating System\n    (sysinfo stream not available)\n\n  Host\n'
-        '    Hostname               (unknown)\n    Username               (unknown)\n\n'
-        '  ═══ ENVIRONMENT ═══\n'
-        '    Current Directory      (unknown)\n'
-        '    Environment Variables  (unavailable)\n\n'
-        '  Dump File\n    File                   test.dmp\n\n',
+        '  [~] MiscInfo stream not present\n\n  Operating System\n'
+        '    (sysinfo stream not available)\n\n  Host\n    Hostname               (unknown)\n'
+        '    Username               (unknown)\n\n═══ ENVIRONMENT ═══\n'
+        '  [~] PEB not available (requires sysinfo + thread list)\n'
+        '    Current Directory      (unknown)\n    Environment Variables  (unavailable)\n\n',
         {"kind": "sysinfo", "execution_status": "completed",
          "coverage": {"status": "partial",
-                      "reasons": ["SystemInfoStream not present", "MiscInfo stream not present",
-                                  "PEB not available (requires sysinfo + thread list)",
-                                  "ThreadListStream not present (thread_count unavailable)",
-                                  "ModuleListStream not present (module_count unavailable)"]},
+                      "reasons": ["ThreadListStream not present (thread_count unavailable)", "ModuleListStream not present (module_count unavailable)", "SystemInfoStream not present", "MiscInfo stream not present", "PEB not available (requires sysinfo + thread list)"]},
          "summary": {"count": 1},
-         "data": {"records": [{"dump_file": "test.dmp", "hostname": None, "username": None,
-                                "os": None, "os_version": None, "architecture": None,
-                                "product_type": None, "processors": None,
-                                "cpu_vendor": None, "cpu_current_mhz": None,
-                                "cpu_max_mhz": None, "thread_count": None,
-                                "module_count": None, "current_directory": None,
-                                "environment_variables": None}]}},
+         "data": {"records": [{"dump_file": "test.dmp", "dump_file_size_bytes": 25, "dump_sha256": "5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509", "dump_time_utc": None, "hostname": None, "username": None, "os": None, "os_version": None, "architecture": None, "product_type": None, "processors": None, "cpu_vendor": None, "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": None, "module_count": None, "current_directory": None, "environment_variables": None}]}},
         '## sysinfo / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'sysinfo,completed,partial,SystemInfoStream not present; MiscInfo stream not present; '
-        'PEB not available (requires sysinfo + thread list); ThreadListStream not present '
-        '(thread_count unavailable); ModuleListStream not present (module_count unavailable),1\n\n'
-        '## sysinfo / records\ndump_file,hostname,username,os,os_version,architecture,'
-        'product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,'
-        'module_count,current_directory,environment_variables\n'
-        'test.dmp,,,,,,,,,,,,,,\n\n',
+        'sysinfo,completed,partial,ThreadListStream not present (thread_count unavailable); ModuleListStream not present (module_count unavailable); SystemInfoStream not present; MiscInfo stream not present; PEB not available (requires sysinfo + thread list),1\n'
+        '\n## sysinfo / records\n'
+        'dump_file,dump_file_size_bytes,dump_sha256,dump_time_utc,hostname,username,os,os_version,architecture,product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,module_count,current_directory,environment_variables\n'
+        'test.dmp,25,5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509,,,,,,,,,,,,,,,\n'
+        '\n',
     ),
     (
         "sysinfo_missing_sysinfo_only", ["--sysinfo"], _sysinfo_missing_sysinfo_only, 3,
-        '\n═══ SYSTEM INFO ═══\n  [~] SystemInfoStream not present\n'
-        '  [~] PEB not available (requires sysinfo + thread list)\n\n'
-        '  Operating System\n    (sysinfo stream not available)\n\n  Host\n'
-        '    Hostname               (unknown)\n    Username               (unknown)\n\n'
-        '  ═══ ENVIRONMENT ═══\n'
-        '    Current Directory      (unknown)\n'
-        '    Environment Variables  (unavailable)\n\n'
-        '  Dump File\n'
-        '    File                   test.dmp\n    Threads in dump        1\n'
-        '    Modules in dump        1\n\n',
+        '\n═══ DUMP ═══\n    File                   test.dmp\n'
+        '    Size                   25 bytes\n'
+        '    SHA-256                5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509\n'
+        '    Dump Time              2024-08-14 01:15:05 UTC\n    Threads in dump        1\n'
+        '    Modules in dump        1\n\n═══ SYSTEM INFO ═══\n'
+        '  [~] SystemInfoStream not present\n\n  Operating System\n'
+        '    (sysinfo stream not available)\n\n  Host\n    Hostname               (unknown)\n'
+        '    Username               (unknown)\n\n═══ ENVIRONMENT ═══\n'
+        '  [~] PEB not available (requires sysinfo + thread list)\n'
+        '    Current Directory      (unknown)\n    Environment Variables  (unavailable)\n\n',
         {"kind": "sysinfo", "execution_status": "completed",
          "coverage": {"status": "partial",
-                      "reasons": ["SystemInfoStream not present",
-                                  "PEB not available (requires sysinfo + thread list)"]},
+                      "reasons": ["SystemInfoStream not present", "PEB not available (requires sysinfo + thread list)"]},
          "summary": {"count": 1},
-         "data": {"records": [{"dump_file": "test.dmp", "hostname": None, "username": None,
-                                "os": None, "os_version": None, "architecture": None,
-                                "product_type": None, "processors": None,
-                                "cpu_vendor": None, "cpu_current_mhz": None,
-                                "cpu_max_mhz": None, "thread_count": 1,
-                                "module_count": 1, "current_directory": None,
-                                "environment_variables": None}]}},
+         "data": {"records": [{"dump_file": "test.dmp", "dump_file_size_bytes": 25, "dump_sha256": "5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509", "dump_time_utc": "2024-08-14 01:15:05 UTC", "hostname": None, "username": None, "os": None, "os_version": None, "architecture": None, "product_type": None, "processors": None, "cpu_vendor": None, "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1, "module_count": 1, "current_directory": None, "environment_variables": None}]}},
         '## sysinfo / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'sysinfo,completed,partial,SystemInfoStream not present; PEB not available '
-        '(requires sysinfo + thread list),1\n\n'
-        '## sysinfo / records\ndump_file,hostname,username,os,os_version,architecture,'
-        'product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,'
-        'module_count,current_directory,environment_variables\n'
-        'test.dmp,,,,,,,,,,,1,1,,\n\n',
+        'sysinfo,completed,partial,SystemInfoStream not present; PEB not available (requires sysinfo + thread list),1\n'
+        '\n## sysinfo / records\n'
+        'dump_file,dump_file_size_bytes,dump_sha256,dump_time_utc,hostname,username,os,os_version,architecture,product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,module_count,current_directory,environment_variables\n'
+        'test.dmp,25,5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509,2024-08-14 01:15:05 UTC,,,,,,,,,,,1,1,,\n'
+        '\n',
     ),
     (
         "sysinfo_missing_misc_info_only", ["--sysinfo"], _sysinfo_missing_misc_info_only, 3,
-        '\n═══ SYSTEM INFO ═══\n  [~] MiscInfo stream not present\n\n'
-        '  Operating System\n    OS                     Windows 10\n'
-        '    Version                10.0.19041\n'
-        '    Architecture           AMD64\n'
-        '    Product Type           VER_NT_WORKSTATION\n\n  Host\n'
-        '    Hostname               HOST1\n    Username               alice\n\n'
-        '  ═══ ENVIRONMENT ═══\n'
-        '    Current Directory      C:\\work\n'
-        '    Environment Variables  2 captured (--verbose or --json to view)\n\n'
-        '  CPU\n    Processors             4\n    Vendor                 GenuineIntel\n\n'
-        '  Dump File\n    File                   test.dmp\n    Threads in dump        1\n'
-        '    Modules in dump        1\n\n',
+        '\n═══ DUMP ═══\n    File                   test.dmp\n'
+        '    Size                   25 bytes\n'
+        '    SHA-256                5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509\n'
+        '    Dump Time              2024-08-14 01:15:05 UTC\n    Threads in dump        1\n'
+        '    Modules in dump        1\n\n═══ SYSTEM INFO ═══\n'
+        '  [~] MiscInfo stream not present\n\n  Operating System\n'
+        '    OS                     Windows 10\n    Version                10.0.19041\n'
+        '    Architecture           AMD64\n    Product Type           VER_NT_WORKSTATION\n\n'
+        '  Host\n    Hostname               HOST1\n    Username               alice\n\n  CPU\n'
+        '    Processors             4\n    Vendor                 GenuineIntel\n\n'
+        '═══ ENVIRONMENT ═══\n    Current Directory      C:\\work\n'
+        '    Environment Variables  2 captured (--verbose or --json to view)\n\n',
         {"kind": "sysinfo", "execution_status": "completed",
-         "coverage": {"status": "partial", "reasons": ["MiscInfo stream not present"]},
+         "coverage": {"status": "partial",
+                      "reasons": ["MiscInfo stream not present"]},
          "summary": {"count": 1},
-         "data": {"records": [{"dump_file": "test.dmp", "hostname": "HOST1", "username": "alice",
-                                "os": "Windows 10", "os_version": "10.0.19041",
-                                "architecture": "AMD64",
-                                "product_type": "VER_NT_WORKSTATION", "processors": 4,
-                                "cpu_vendor": "GenuineIntel",
-                                "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1,
-                                "module_count": 1, "current_directory": "C:\\work",
-                                "environment_variables": [{"name": "COMPUTERNAME", "value": "HOST1"},
-                                                           {"name": "USERNAME", "value": "alice"}]}]}},
+         "data": {"records": [{"dump_file": "test.dmp", "dump_file_size_bytes": 25, "dump_sha256": "5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509", "dump_time_utc": "2024-08-14 01:15:05 UTC", "hostname": "HOST1", "username": "alice", "os": "Windows 10", "os_version": "10.0.19041", "architecture": "AMD64", "product_type": "VER_NT_WORKSTATION", "processors": 4, "cpu_vendor": "GenuineIntel", "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1, "module_count": 1, "current_directory": "C:\\work", "environment_variables": [{"name": "COMPUTERNAME", "value": "HOST1"}, {"name": "USERNAME", "value": "alice"}]}]}},
         '## sysinfo / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'sysinfo,completed,partial,MiscInfo stream not present,1\n\n'
-        '## sysinfo / records\ndump_file,hostname,username,os,os_version,architecture,'
-        'product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,'
-        'module_count,current_directory,environment_variables\n'
-        'test.dmp,HOST1,alice,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,'
-        '1,1,C:\\work,\n\n',
+        'sysinfo,completed,partial,MiscInfo stream not present,1\n\n## sysinfo / records\n'
+        'dump_file,dump_file_size_bytes,dump_sha256,dump_time_utc,hostname,username,os,os_version,architecture,product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,module_count,current_directory,environment_variables\n'
+        'test.dmp,25,5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509,2024-08-14 01:15:05 UTC,HOST1,alice,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,1,1,C:\\work,"[{\'name\': \'COMPUTERNAME\', \'value\': \'HOST1\'}, {\'name\': \'USERNAME\', \'value\': \'alice\'}]"\n'
+        '\n',
     ),
     (
         "sysinfo_missing_peb_only", ["--sysinfo"], _sysinfo_missing_peb_only, 3,
-        '\n═══ SYSTEM INFO ═══\n  [~] PEB not available (requires sysinfo + thread list)\n\n'
-        '  Operating System\n    OS                     Windows 10\n'
-        '    Version                10.0.19041\n'
-        '    Architecture           AMD64\n'
-        '    Product Type           VER_NT_WORKSTATION\n\n  Host\n'
-        '    Hostname               HOST1\n    Username               alice\n\n'
-        '  ═══ ENVIRONMENT ═══\n'
+        '\n═══ DUMP ═══\n    File                   test.dmp\n'
+        '    Size                   25 bytes\n'
+        '    SHA-256                5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509\n'
+        '    Dump Time              2024-08-14 01:15:05 UTC\n    Threads in dump        1\n'
+        '    Modules in dump        1\n\n═══ SYSTEM INFO ═══\n\n  Operating System\n'
+        '    OS                     Windows 10\n    Version                10.0.19041\n'
+        '    Architecture           AMD64\n    Product Type           VER_NT_WORKSTATION\n\n'
+        '  Host\n    Hostname               HOST1\n    Username               alice\n\n  CPU\n'
+        '    Processors             4\n    Vendor                 GenuineIntel\n\n'
+        '═══ ENVIRONMENT ═══\n  [~] PEB not available (requires sysinfo + thread list)\n'
         '    Current Directory      (unknown)\n'
-        '    Environment Variables  2 captured (--verbose or --json to view)\n\n'
-        '  CPU\n    Processors             4\n    Vendor                 GenuineIntel\n\n'
-        '  Dump File\n    File                   test.dmp\n    Threads in dump        1\n'
-        '    Modules in dump        1\n\n',
+        '    Environment Variables  2 captured (--verbose or --json to view)\n\n',
         {"kind": "sysinfo", "execution_status": "completed",
          "coverage": {"status": "partial",
                       "reasons": ["PEB not available (requires sysinfo + thread list)"]},
          "summary": {"count": 1},
-         "data": {"records": [{"dump_file": "test.dmp", "hostname": "HOST1", "username": "alice",
-                                "os": "Windows 10", "os_version": "10.0.19041",
-                                "architecture": "AMD64",
-                                "product_type": "VER_NT_WORKSTATION", "processors": 4,
-                                "cpu_vendor": "GenuineIntel",
-                                "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1,
-                                "module_count": 1, "current_directory": None,
-                                "environment_variables": [{"name": "COMPUTERNAME", "value": "HOST1"},
-                                                           {"name": "USERNAME", "value": "alice"}]}]}},
+         "data": {"records": [{"dump_file": "test.dmp", "dump_file_size_bytes": 25, "dump_sha256": "5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509", "dump_time_utc": "2024-08-14 01:15:05 UTC", "hostname": "HOST1", "username": "alice", "os": "Windows 10", "os_version": "10.0.19041", "architecture": "AMD64", "product_type": "VER_NT_WORKSTATION", "processors": 4, "cpu_vendor": "GenuineIntel", "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1, "module_count": 1, "current_directory": None, "environment_variables": [{"name": "COMPUTERNAME", "value": "HOST1"}, {"name": "USERNAME", "value": "alice"}]}]}},
         '## sysinfo / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
         'sysinfo,completed,partial,PEB not available (requires sysinfo + thread list),1\n\n'
-        '## sysinfo / records\ndump_file,hostname,username,os,os_version,architecture,'
-        'product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,'
-        'module_count,current_directory,environment_variables\n'
-        'test.dmp,HOST1,alice,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,'
-        '1,1,,\n\n',
+        '## sysinfo / records\n'
+        'dump_file,dump_file_size_bytes,dump_sha256,dump_time_utc,hostname,username,os,os_version,architecture,product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,module_count,current_directory,environment_variables\n'
+        'test.dmp,25,5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509,2024-08-14 01:15:05 UTC,HOST1,alice,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,1,1,,"[{\'name\': \'COMPUTERNAME\', \'value\': \'HOST1\'}, {\'name\': \'USERNAME\', \'value\': \'alice\'}]"\n'
+        '\n',
     ),
     (
         "sysinfo_missing_threads_only", ["--sysinfo"], _sysinfo_missing_threads_only, 3,
-        '\n═══ SYSTEM INFO ═══\n  [~] PEB not available (requires sysinfo + thread list)\n'
-        '  [~] ThreadListStream not present (thread_count unavailable)\n\n'
-        '  Operating System\n    OS                     Windows 10\n'
-        '    Version                10.0.19041\n'
-        '    Architecture           AMD64\n'
+        '\n═══ DUMP ═══\n  [~] ThreadListStream not present (thread_count unavailable)\n'
+        '    File                   test.dmp\n    Size                   25 bytes\n'
+        '    SHA-256                5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509\n'
+        '    Dump Time              2024-08-14 01:15:05 UTC\n    Modules in dump        1\n\n'
+        '═══ SYSTEM INFO ═══\n\n  Operating System\n    OS                     Windows 10\n'
+        '    Version                10.0.19041\n    Architecture           AMD64\n'
         '    Product Type           VER_NT_WORKSTATION\n\n  Host\n'
-        '    Hostname               (unknown)\n    Username               (unknown)\n\n'
-        '  ═══ ENVIRONMENT ═══\n'
-        '    Current Directory      (unknown)\n'
-        '    Environment Variables  (unavailable)\n\n'
-        '  CPU\n    Processors             4\n    Vendor                 GenuineIntel\n\n'
-        '  Dump File\n    File                   test.dmp\n    Modules in dump        1\n\n',
+        '    Hostname               (unknown)\n    Username               (unknown)\n\n  CPU\n'
+        '    Processors             4\n    Vendor                 GenuineIntel\n\n'
+        '═══ ENVIRONMENT ═══\n  [~] PEB not available (requires sysinfo + thread list)\n'
+        '    Current Directory      (unknown)\n    Environment Variables  (unavailable)\n\n',
         {"kind": "sysinfo", "execution_status": "completed",
          "coverage": {"status": "partial",
-                      "reasons": ["PEB not available (requires sysinfo + thread list)",
-                                  "ThreadListStream not present (thread_count unavailable)"]},
+                      "reasons": ["ThreadListStream not present (thread_count unavailable)", "PEB not available (requires sysinfo + thread list)"]},
          "summary": {"count": 1},
-         "data": {"records": [{"dump_file": "test.dmp", "hostname": None, "username": None,
-                                "os": "Windows 10", "os_version": "10.0.19041",
-                                "architecture": "AMD64",
-                                "product_type": "VER_NT_WORKSTATION", "processors": 4,
-                                "cpu_vendor": "GenuineIntel",
-                                "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": None,
-                                "module_count": 1, "current_directory": None,
-                                "environment_variables": None}]}},
+         "data": {"records": [{"dump_file": "test.dmp", "dump_file_size_bytes": 25, "dump_sha256": "5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509", "dump_time_utc": "2024-08-14 01:15:05 UTC", "hostname": None, "username": None, "os": "Windows 10", "os_version": "10.0.19041", "architecture": "AMD64", "product_type": "VER_NT_WORKSTATION", "processors": 4, "cpu_vendor": "GenuineIntel", "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": None, "module_count": 1, "current_directory": None, "environment_variables": None}]}},
         '## sysinfo / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'sysinfo,completed,partial,PEB not available (requires sysinfo + thread list); '
-        'ThreadListStream not present (thread_count unavailable),1\n\n'
-        '## sysinfo / records\ndump_file,hostname,username,os,os_version,architecture,'
-        'product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,'
-        'module_count,current_directory,environment_variables\n'
-        'test.dmp,,,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,,1,,\n\n',
+        'sysinfo,completed,partial,ThreadListStream not present (thread_count unavailable); PEB not available (requires sysinfo + thread list),1\n'
+        '\n## sysinfo / records\n'
+        'dump_file,dump_file_size_bytes,dump_sha256,dump_time_utc,hostname,username,os,os_version,architecture,product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,module_count,current_directory,environment_variables\n'
+        'test.dmp,25,5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509,2024-08-14 01:15:05 UTC,,,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,,1,,\n'
+        '\n',
     ),
     (
         "sysinfo_missing_modules_only", ["--sysinfo"], _sysinfo_missing_modules_only, 3,
-        '\n═══ SYSTEM INFO ═══\n\n'
-        '  Operating System\n    OS                     Windows 10\n'
-        '    Version                10.0.19041\n'
-        '    Architecture           AMD64\n'
+        '\n═══ DUMP ═══\n  [~] ModuleListStream not present (module_count unavailable)\n'
+        '    File                   test.dmp\n    Size                   25 bytes\n'
+        '    SHA-256                5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509\n'
+        '    Dump Time              2024-08-14 01:15:05 UTC\n    Threads in dump        1\n\n'
+        '═══ SYSTEM INFO ═══\n\n  Operating System\n    OS                     Windows 10\n'
+        '    Version                10.0.19041\n    Architecture           AMD64\n'
         '    Product Type           VER_NT_WORKSTATION\n\n  Host\n'
-        '    Hostname               (unknown)\n    Username               (unknown)\n\n'
-        '  ═══ ENVIRONMENT ═══\n'
-        '    Current Directory      C:\\work\n'
-        '    Environment Variables  (unavailable)\n'
-        '    [~] environment block pointers could not be read: memory reader unavailable: '
-        "'NoneType' object has no attribute 'modules'\n"
-        '  [~] ModuleListStream not present (module_count unavailable)\n\n'
-        '  CPU\n    Processors             4\n    Vendor                 GenuineIntel\n\n'
-        '  Dump File\n    File                   test.dmp\n    Threads in dump        1\n\n',
+        '    Hostname               (unknown)\n    Username               (unknown)\n\n  CPU\n'
+        '    Processors             4\n    Vendor                 GenuineIntel\n\n'
+        '═══ ENVIRONMENT ═══\n'
+        '  [~] environment block pointers could not be read: memory reader unavailable: \'NoneType\' object has no attribute \'modules\'\n'
+        '    Current Directory      C:\\work\n    Environment Variables  (unavailable)\n\n',
         {"kind": "sysinfo", "execution_status": "completed",
          "coverage": {"status": "partial",
-                      "reasons": ["environment block pointers could not be read: memory "
-                                  "reader unavailable: 'NoneType' object has no attribute "
-                                  "'modules'",
-                                  "ModuleListStream not present (module_count unavailable)"]},
+                      "reasons": ["ModuleListStream not present (module_count unavailable)", "environment block pointers could not be read: memory reader unavailable: 'NoneType' object has no attribute 'modules'"]},
          "summary": {"count": 1},
-         "data": {"records": [{"dump_file": "test.dmp", "hostname": None, "username": None,
-                                "os": "Windows 10", "os_version": "10.0.19041",
-                                "architecture": "AMD64",
-                                "product_type": "VER_NT_WORKSTATION", "processors": 4,
-                                "cpu_vendor": "GenuineIntel",
-                                "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1,
-                                "module_count": None, "current_directory": "C:\\work",
-                                "environment_variables": None}]}},
+         "data": {"records": [{"dump_file": "test.dmp", "dump_file_size_bytes": 25, "dump_sha256": "5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509", "dump_time_utc": "2024-08-14 01:15:05 UTC", "hostname": None, "username": None, "os": "Windows 10", "os_version": "10.0.19041", "architecture": "AMD64", "product_type": "VER_NT_WORKSTATION", "processors": 4, "cpu_vendor": "GenuineIntel", "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1, "module_count": None, "current_directory": "C:\\work", "environment_variables": None}]}},
         '## sysinfo / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        "sysinfo,completed,partial,environment block pointers could not be read: memory "
-        "reader unavailable: 'NoneType' object has no attribute 'modules'; "
-        'ModuleListStream not present (module_count unavailable),1\n\n'
-        '## sysinfo / records\ndump_file,hostname,username,os,os_version,architecture,'
-        'product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,'
-        'module_count,current_directory,environment_variables\n'
-        'test.dmp,,,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,'
-        '1,,C:\\work,\n\n',
+        'sysinfo,completed,partial,ModuleListStream not present (module_count unavailable); environment block pointers could not be read: memory reader unavailable: \'NoneType\' object has no attribute \'modules\',1\n'
+        '\n## sysinfo / records\n'
+        'dump_file,dump_file_size_bytes,dump_sha256,dump_time_utc,hostname,username,os,os_version,architecture,product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,module_count,current_directory,environment_variables\n'
+        'test.dmp,25,5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509,2024-08-14 01:15:05 UTC,,,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,1,,C:\\work,\n'
+        '\n',
     ),
     (
         "sysinfo_complete", ["--sysinfo"], _sysinfo_complete, 0,
-        '\n═══ SYSTEM INFO ═══\n\n  Operating System\n'
+        '\n═══ DUMP ═══\n    File                   test.dmp\n'
+        '    Size                   25 bytes\n'
+        '    SHA-256                5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509\n'
+        '    Dump Time              2024-08-14 01:15:05 UTC\n    Threads in dump        1\n'
+        '    Modules in dump        1\n\n═══ SYSTEM INFO ═══\n\n  Operating System\n'
         '    OS                     Windows 10\n    Version                10.0.19041\n'
-        '    Architecture           AMD64\n'
-        '    Product Type           VER_NT_WORKSTATION\n\n  Host\n'
-        '    Hostname               HOST1\n    Username               alice\n\n'
-        '  ═══ ENVIRONMENT ═══\n'
-        '    Current Directory      C:\\work\n'
-        '    Environment Variables  2 captured (--verbose or --json to view)\n\n'
-        '  CPU\n    Processors             4\n'
-        '    Vendor                 GenuineIntel\n\n  Dump File\n'
-        '    File                   test.dmp\n    Threads in dump        1\n'
-        '    Modules in dump        1\n\n',
+        '    Architecture           AMD64\n    Product Type           VER_NT_WORKSTATION\n\n'
+        '  Host\n    Hostname               HOST1\n    Username               alice\n\n  CPU\n'
+        '    Processors             4\n    Vendor                 GenuineIntel\n\n'
+        '═══ ENVIRONMENT ═══\n    Current Directory      C:\\work\n'
+        '    Environment Variables  2 captured (--verbose or --json to view)\n\n',
         {"kind": "sysinfo", "execution_status": "completed",
-         "coverage": {"status": "complete", "reasons": []},
+         "coverage": {"status": "complete",
+                      "reasons": []},
          "summary": {"count": 1},
-         "data": {"records": [{"dump_file": "test.dmp", "hostname": "HOST1", "username": "alice",
-                                "os": "Windows 10", "os_version": "10.0.19041",
-                                "architecture": "AMD64",
-                                "product_type": "VER_NT_WORKSTATION", "processors": 4,
-                                "cpu_vendor": "GenuineIntel",
-                                "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1,
-                                "module_count": 1, "current_directory": "C:\\work",
-                                "environment_variables": [{"name": "COMPUTERNAME", "value": "HOST1"},
-                                                           {"name": "USERNAME", "value": "alice"}]}]}},
+         "data": {"records": [{"dump_file": "test.dmp", "dump_file_size_bytes": 25, "dump_sha256": "5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509", "dump_time_utc": "2024-08-14 01:15:05 UTC", "hostname": "HOST1", "username": "alice", "os": "Windows 10", "os_version": "10.0.19041", "architecture": "AMD64", "product_type": "VER_NT_WORKSTATION", "processors": 4, "cpu_vendor": "GenuineIntel", "cpu_current_mhz": None, "cpu_max_mhz": None, "thread_count": 1, "module_count": 1, "current_directory": "C:\\work", "environment_variables": [{"name": "COMPUTERNAME", "value": "HOST1"}, {"name": "USERNAME", "value": "alice"}]}]}},
         '## sysinfo / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'sysinfo,completed,complete,,1\n\n'
-        '## sysinfo / records\ndump_file,hostname,username,os,os_version,architecture,'
-        'product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,'
-        'module_count,current_directory,environment_variables\n'
-        'test.dmp,HOST1,alice,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,'
-        '1,1,C:\\work,\n\n',
+        'sysinfo,completed,complete,,1\n\n## sysinfo / records\n'
+        'dump_file,dump_file_size_bytes,dump_sha256,dump_time_utc,hostname,username,os,os_version,architecture,product_type,processors,cpu_vendor,cpu_current_mhz,cpu_max_mhz,thread_count,module_count,current_directory,environment_variables\n'
+        'test.dmp,25,5ab9667424b5f6af9c187e32671245bdbe969c16667f04ffa2a3eaa2786c3509,2024-08-14 01:15:05 UTC,HOST1,alice,Windows 10,10.0.19041,AMD64,VER_NT_WORKSTATION,4,GenuineIntel,,,1,1,C:\\work,"[{\'name\': \'COMPUTERNAME\', \'value\': \'HOST1\'}, {\'name\': \'USERNAME\', \'value\': \'alice\'}]"\n'
+        '\n',
     ),
 ]
 
@@ -1018,15 +952,23 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
          "exception": _src("absent")},
         [_lim("PID_NO_USABLE_FALLBACK", "misc_info")],
     ),
+    # --sysinfo's seven sources, and its limitations in §4.7's SECTION
+    # order -- DUMP (dump_file, threads, modules), then SYSTEM INFO
+    # (sysinfo, misc_info), then ENVIRONMENT (environment_block, peb).
+    # "dump_file" is `present` throughout: conftest's
+    # _fake_dump_file_on_disk backs FakeMF.filename with a real file, so
+    # every scenario below establishes the dump's size and SHA-256, which
+    # is the only state a real open_dump() can hand a command.
     "sysinfo_all_absent": (
-        {"sysinfo": _src("absent"), "misc_info": _src("absent"), "peb": _src("absent"),
+        {"dump_file": _src("present", 1),
+         "sysinfo": _src("absent"), "misc_info": _src("absent"), "peb": _src("absent"),
          "threads": _src("absent"), "modules": _src("absent"),
          "environment_block": _src("absent")},
-        [_lim("SYSINFO_SYSTEM_INFO_UNAVAILABLE", "sysinfo", scope="dump"),
+        [_lim("SYSINFO_THREADS_UNAVAILABLE", "threads", scope="dump"),
+         _lim("SYSINFO_MODULES_UNAVAILABLE", "modules", scope="dump"),
+         _lim("SYSINFO_SYSTEM_INFO_UNAVAILABLE", "sysinfo", scope="dump"),
          _lim("SYSINFO_MISC_INFO_UNAVAILABLE", "misc_info", scope="dump"),
-         _lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump"),
-         _lim("SYSINFO_THREADS_UNAVAILABLE", "threads", scope="dump"),
-         _lim("SYSINFO_MODULES_UNAVAILABLE", "modules", scope="dump")],
+         _lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump")],
     ),
     "sysinfo_missing_sysinfo_only": (
         # sysinfo absent implies peb absent too via a real open_dump()
@@ -1035,20 +977,23 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
         # "unsupported" state requires) -- the builder nulls both, so
         # this is a genuinely reachable state: environment_block's
         # "unsupported" suppression applies (no limitation of its own).
-        {"sysinfo": _src("absent"), "misc_info": _src("present", 1), "peb": _src("absent"),
+        {"dump_file": _src("present", 1),
+         "sysinfo": _src("absent"), "misc_info": _src("present", 1), "peb": _src("absent"),
          "threads": _src("present", 1), "modules": _src("present", 1),
          "environment_block": _src("absent")},
         [_lim("SYSINFO_SYSTEM_INFO_UNAVAILABLE", "sysinfo", scope="dump"),
          _lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump")],
     ),
     "sysinfo_missing_misc_info_only": (
-        {"sysinfo": _src("present", 1), "misc_info": _src("absent"), "peb": _src("present", 1),
+        {"dump_file": _src("present", 1),
+         "sysinfo": _src("present", 1), "misc_info": _src("absent"), "peb": _src("present", 1),
          "threads": _src("present", 1), "modules": _src("present", 1),
          "environment_block": _src("present", 2)},
         [_lim("SYSINFO_MISC_INFO_UNAVAILABLE", "misc_info", scope="dump")],
     ),
     "sysinfo_missing_peb_only": (
-        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1), "peb": _src("absent"),
+        {"dump_file": _src("present", 1),
+         "sysinfo": _src("present", 1), "misc_info": _src("present", 1), "peb": _src("absent"),
          "threads": _src("present", 1), "modules": _src("present", 1),
          "environment_block": _src("present", 2)},
         [_lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump")],
@@ -1056,27 +1001,30 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
     "sysinfo_missing_threads_only": (
         # threads absent implies peb absent too -- see
         # sysinfo_missing_sysinfo_only's own comment above.
-        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1),
+        {"dump_file": _src("present", 1),
+         "sysinfo": _src("present", 1), "misc_info": _src("present", 1),
          "peb": _src("absent"), "threads": _src("absent"), "modules": _src("present", 1),
          "environment_block": _src("absent")},
-        [_lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump"),
-         _lim("SYSINFO_THREADS_UNAVAILABLE", "threads", scope="dump")],
+        [_lim("SYSINFO_THREADS_UNAVAILABLE", "threads", scope="dump"),
+         _lim("SYSINFO_PEB_UNAVAILABLE", "peb", scope="dump")],
     ),
     "sysinfo_missing_modules_only": (
         # modules absent implies the environment walk fails too (a real
         # MinidumpFileReader can't be constructed without mf.modules) --
         # see _assert_env_walk_reachable_via_open_dump's own docstring.
-        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1),
+        {"dump_file": _src("present", 1),
+         "sysinfo": _src("present", 1), "misc_info": _src("present", 1),
          "peb": _src("present", 1), "threads": _src("present", 1), "modules": _src("absent"),
          "environment_block": _src("failed", detail="memory reader unavailable: "
                                     "'NoneType' object has no attribute 'modules'")},
-        [_lim("ENVIRONMENT_BLOCK_UNREADABLE", "environment_block",
+        [_lim("SYSINFO_MODULES_UNAVAILABLE", "modules", scope="dump"),
+         _lim("ENVIRONMENT_BLOCK_UNREADABLE", "environment_block",
               detail="memory reader unavailable: 'NoneType' object has no attribute "
-                     "'modules'"),
-         _lim("SYSINFO_MODULES_UNAVAILABLE", "modules", scope="dump")],
+                     "'modules'")],
     ),
     "sysinfo_complete": (
-        {"sysinfo": _src("present", 1), "misc_info": _src("present", 1),
+        {"dump_file": _src("present", 1),
+         "sysinfo": _src("present", 1), "misc_info": _src("present", 1),
          "peb": _src("present", 1), "threads": _src("present", 1),
          "modules": _src("present", 1), "environment_block": _src("present", 2)},
         [],

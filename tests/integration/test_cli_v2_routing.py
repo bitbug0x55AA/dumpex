@@ -580,12 +580,14 @@ def test_sysinfo_missing_streams_json_produces_v2_shaped_document_via_command_re
         assert doc["result"]["kind"] == "sysinfo"
         assert doc["result"]["execution_status"] == "completed"
         assert doc["result"]["coverage"]["status"] == "partial"
+        # §4.7's section order: DUMP's (threads, modules), then SYSTEM
+        # INFO's (sysinfo, misc_info), then ENVIRONMENT's (peb).
         assert doc["result"]["coverage"]["reasons"] == [
+            "ThreadListStream not present (thread_count unavailable)",
+            "ModuleListStream not present (module_count unavailable)",
             "SystemInfoStream not present",
             "MiscInfo stream not present",
             "PEB not available (requires sysinfo + thread list)",
-            "ThreadListStream not present (thread_count unavailable)",
-            "ModuleListStream not present (module_count unavailable)",
         ]
         assert doc["result"]["data"]["records"][0]["dump_file"] is not None
     finally:

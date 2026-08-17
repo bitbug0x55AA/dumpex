@@ -88,20 +88,34 @@ def classify_process_create_time(raw) -> str:
     return "ok"
 
 
-def format_process_create_time_utc(raw) -> "str | None":
-    """MINIDUMP_MISC_INFO.ProcessCreateTime -> the contract's UTC string
+def format_uint32_time_utc(raw) -> "str | None":
+    """A UINT32 `time_t` field -> the contract's UTC string
     ("%Y-%m-%d %H:%M:%S UTC", §1.3), or None when
-    classify_process_create_time(raw) is not "ok" -- 'unset'/'invalid'
-    both normalize to unavailable evidence here; the raw value itself
-    (0, negative, out-of-range, non-int) is preserved separately by the
-    caller (misc_info_claim.raw_process_create_time, §3.2), never
-    reconstructed from this function's None. Uses an explicit UTC
-    timezone rather than the platform-local one datetime.fromtimestamp()
-    would otherwise apply, so the same raw value renders identically on
-    every analysis host."""
+    classify_process_create_time(raw) is not "ok".
+
+    Shared by the two UINT32 epoch-seconds fields dumpex reports:
+    MINIDUMP_MISC_INFO.ProcessCreateTime (§3.2) and MinidumpHeader.
+    TimeDateStamp (§4.2's `dump_time_utc`). Both are the same width, the
+    same epoch, and have the same "0 means the producer never set it"
+    convention, so they share one range check and one formatter rather
+    than growing a second near-identical copy that could drift.
+
+    Uses an explicit UTC timezone rather than the platform-local one
+    datetime.fromtimestamp() would otherwise apply, so the same raw value
+    renders identically on every analysis host."""
     if classify_process_create_time(raw) != "ok":
         return None
     return datetime.fromtimestamp(raw, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def format_process_create_time_utc(raw) -> "str | None":
+    """MINIDUMP_MISC_INFO.ProcessCreateTime -> the contract's UTC string,
+    or None when classify_process_create_time(raw) is not "ok" --
+    'unset'/'invalid' both normalize to unavailable evidence here; the raw
+    value itself (0, negative, out-of-range, non-int) is preserved
+    separately by the caller (misc_info_claim.raw_process_create_time,
+    §3.2), never reconstructed from this function's None."""
+    return format_uint32_time_utc(raw)
 
 
 def _safe_str(raw) -> str:

@@ -255,9 +255,29 @@ def _case_sysinfo():
     # `os` must be set: the whole CPU block (and with it cpu_vendor) is
     # gated on it. Another fixture gap the per-field reachability check
     # caught rather than passing over.
-    record = hostile_record(records_module.SysInfoRecord,
-                            dict(os="Windows 10", processors=8), _SYSINFO_FIELDS)
-    return _rendered(render_sysinfo_console, record,
+    #
+    # Rendered with verbose=True, and with hostile environment entries in
+    # the baseline, so the --verbose listing -- the single most
+    # attacker-controlled surface in this command, and the one that now
+    # pads, wraps and colours its text (§4.6.1) -- is inside the
+    # leaked_codepoints()/forged_lines() sweep below, which reads the
+    # WHOLE output rather than only the declared fields.
+    #
+    # environment_variables is deliberately NOT in _SYSINFO_FIELDS:
+    # hostile_record() sets a declared field to a plain string, and this
+    # one holds a tuple of {name, value} dicts, so declaring it would
+    # replace the tuple with a string the renderer then iterates
+    # character-by-character. Its own reachability and escaping are
+    # asserted directly in test_sysinfo_cmd.py, where the fixture can be
+    # the right shape.
+    record = hostile_record(
+        records_module.SysInfoRecord,
+        dict(os="Windows 10", processors=8,
+             environment_variables=({"name": hostile_text_for("env_name"),
+                                      "value": hostile_text_for("env_value")},)),
+        _SYSINFO_FIELDS)
+    return _rendered(lambda rec, cov: render_sysinfo_console(rec, cov, verbose=True),
+                     record,
                      _coverage("sysinfo", "misc_info", "threads", "modules", "peb",
                                 "environment_block"))
 

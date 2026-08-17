@@ -2586,6 +2586,36 @@ def test_environment_codes_are_all_registered_and_render():
         assert code in _CODE_SPECS
 
 
+# ── --sysinfo's DUMP section (§4.2) -- SYSINFO_DUMP_FILE_UNREADABLE ──────
+
+def test_sysinfo_dump_file_unreadable_requires_detail_and_its_own_source():
+    # The OS error is the whole point of the line: it tells an analyst
+    # whether the evidence file was deleted, is on an unmounted share, or
+    # is simply unreadable by this user. A detail-less construction would
+    # render a sentence that names no cause at all.
+    with pytest.raises(ValueError, match="non-empty string"):
+        CoverageLimitation(code=LimitationCode.SYSINFO_DUMP_FILE_UNREADABLE, source="dump_file")
+    with pytest.raises(ValueError, match="source must be"):
+        CoverageLimitation(code=LimitationCode.SYSINFO_DUMP_FILE_UNREADABLE,
+                            source="sysinfo", detail="x")
+
+
+def test_sysinfo_dump_file_unreadable_renders_the_os_error():
+    limitation = CoverageLimitation(
+        code=LimitationCode.SYSINFO_DUMP_FILE_UNREADABLE, source="dump_file",
+        detail="FileNotFoundError: [Errno 2] No such file or directory: 'x.dmp'")
+    assert render_limitation(limitation) == (
+        "dump file could not be read for size/SHA-256: FileNotFoundError: "
+        "[Errno 2] No such file or directory: 'x.dmp'")
+
+
+def test_sysinfo_dump_file_source_has_a_display_name():
+    # Not consumed by SYSINFO_DUMP_FILE_UNREADABLE's own fixed template,
+    # but _display_name() must still resolve the source rather than
+    # leaking the raw key if any generic template ever renders over it.
+    assert _display_name("dump_file") == "Dump file"
+
+
 # ── --handles (issue #42 / docs/recon_process_sysinfo_handles_contract.md
 # §5.5/§6.1) -- HANDLE*/HANDLES_* limitation codes ────────────────────────
 

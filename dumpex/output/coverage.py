@@ -342,6 +342,23 @@ class LimitationCode(str, Enum):
     # (requires sysinfo + thread list)") differs from --peb's own
     # PEB_UNAVAILABLE text, so it needs a distinctly-named code rather
     # than reusing that one.
+    SYSINFO_DUMP_FILE_UNREADABLE = "SYSINFO_DUMP_FILE_UNREADABLE"
+    # ^ --sysinfo's DUMP section reports the dump's own size and SHA-256
+    # (§4.2), which requires re-reading the file from disk -- the one
+    # --sysinfo field group whose evidence is NOT already in memory by the
+    # time collect_sysinfo() runs. A stat/read failure there (the file was
+    # moved, unmounted, or its permissions changed between open_dump() and
+    # now) is a genuine evaluation gap: dumpex was asked for the evidence
+    # file's identity and could not establish it. source fixed to
+    # "dump_file"; `detail` (the OS error) is REQUIRED; caller_buildable.
+    #
+    # "dump_file" IS a `coverage.sources` key (§4.7's seventh), observed
+    # PRESENT/FAILED -- build_coverage_report() requires every source a
+    # completeness check names to exist there. Like "environment_block",
+    # it deliberately carries no SourceRequirement of its own, so its gap
+    # arrives as this hand-built code and not as an auto-derived
+    # SOURCE_FAILED, whose "present but could not be read" wording would
+    # assert presence for a file that is most often simply gone.
     REGION_READ_TRUNCATED = "REGION_READ_TRUNCATED"
     # ^ --extract/--strings/--report: read_region() returned fewer bytes
     # than requested (the requested range extends past what's actually
@@ -1201,6 +1218,9 @@ _SOURCE_DISPLAY_NAMES = {
     "main_image":  "PEB-reported main image",
     "sysinfo":     "SystemInfoStream",
     "environment_block": "Environment block",
+    # --sysinfo's DUMP section: the evidence file on disk, not a stream
+    # inside it (SYSINFO_DUMP_FILE_UNREADABLE, §4.2).
+    "dump_file":   "Dump file",
     # §1.7: --handles' stream source. "handle_records" (the derived
     # source in the same command's coverage.sources) deliberately has NO
     # entry -- every code naming it renders fully fixed text that never
@@ -1987,6 +2007,14 @@ def _validate_environment_block_unreadable_fields(limitation: "CoverageLimitatio
     _require_non_empty_str(limitation.detail, "CoverageLimitation.detail")
 
 
+def _render_sysinfo_dump_file_unreadable(limitation: "CoverageLimitation") -> str:
+    return (f"dump file could not be read for size/SHA-256: {limitation.detail}")
+
+
+def _validate_sysinfo_dump_file_unreadable_fields(limitation: "CoverageLimitation") -> None:
+    _require_non_empty_str(limitation.detail, "CoverageLimitation.detail")
+
+
 def _validate_environment_block_truncated_fields(limitation: "CoverageLimitation") -> None:
     if (not isinstance(limitation.affected_count, int) or isinstance(limitation.affected_count, bool)
             or limitation.affected_count <= 0):
@@ -2259,6 +2287,14 @@ _CODE_SPECS = {
     LimitationCode.SYSINFO_MODULES_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("ModuleListStream not present (module_count unavailable)"),
         fixed_source="modules", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.SYSINFO_DUMP_FILE_UNREADABLE: _CodeSpec(
+        render=_render_sysinfo_dump_file_unreadable, fixed_source="dump_file",
+        caller_buildable=True, validate_fields=_validate_sysinfo_dump_file_unreadable_fields,
+        allowed_fields=frozenset({"detail"})),
+        # No "scope": reached only through collect_sysinfo()'s own
+        # hand-built construction, never through an auto-derivation path
+        # that would force scope="dump" on it -- same as the PID_* fallback
+        # codes above.
     LimitationCode.REGION_READ_TRUNCATED: _CodeSpec(
         render=_render_fixed_text("Requested memory region was only partially read"),
         fixed_source="requested_region", caller_buildable=True),

@@ -1,7 +1,9 @@
 """--sysinfo and --pid commands."""
 import os
+import re
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import BOLD, DIM, GREEN, YELLOW, console_safe
+from dumpex.ui.colors import BOLD, CYAN, DIM, GREEN, YELLOW, console_safe
+from dumpex.ui.console_layout import resolve_width
 from dumpex.output.records import SysInfoRecord, PidRecord
 from dumpex.output.coverage import (
     observe_source, build_coverage_report, EvaluationRequirement, SourceRequirement,
@@ -10,13 +12,14 @@ from dumpex.output.coverage import (
 from dumpex.output.command_result import CommandResult
 from dumpex.core.process_info import (
     walk_environment_block, parse_environment_entries, normalize_windows_path,
-    MAX_ENV_BYTES, MAX_ENV_ENTRIES,
+    format_uint32_time_utc, MAX_ENV_BYTES, MAX_ENV_ENTRIES,
 )
+from dumpex.core.evidence import cached_sha256_file
 
 
 def sysinfo_source_present(coverage, name: str) -> bool:
-    """True when `name` (one of sysinfo/misc_info/peb/threads/modules)
-    was present AND readable -- derived from the CoverageReport's own
+    """True when `name` (one of dump_file/sysinfo/misc_info/peb/threads/
+    modules) was present AND readable -- derived from the CoverageReport's own
     source state rather than a separately-returned flag, matching
     threads.py's/peb.py's is-present helpers. Deliberately PRESENT/
     PRESENT_EMPTY only, not `!= ABSENT`: a FAILED source did not
@@ -196,6 +199,64 @@ def _environment_evidence(mf: MinidumpFile):
             limitation, entries)
 
 
+def _dump_file_identity(path) -> "tuple[int | None, str | None, str | None]":
+    """(size_bytes, sha256, failure_detail) for the dump file itself.
+
+    The only --sysinfo evidence that is not already in memory: every other
+    field is read off an already-parsed `mf`, while size/SHA-256 require
+    going back to disk. Both are reported together or not at all -- they
+    are one claim ("this is the evidence file dumpex looked at"), and a
+    size without a digest identifies nothing.
+
+    Hashing goes through evidence.cached_sha256_file() rather than
+    sha256_file(), so a `--sysinfo --json` run reads a multi-gigabyte dump
+    once for both this record and meta.evidence's own sha256, and the two
+    can never report different digests for the same file.
+
+    `size_bytes` is the number of bytes actually hashed rather than a
+    separate os.path.getsize() call: it then describes exactly the bytes
+    that produced `sha256`, instead of being a second, independently-timed
+    observation that a file changing under us could put out of step with
+    the digest. Returns the OS error's text as the third element (with
+    both values None) rather than raising -- collect_sysinfo() turns it
+    into SYSINFO_DUMP_FILE_UNREADABLE, since one unreadable evidence file
+    must not cost the analyst every other field the dump already yielded.
+    """
+    if not isinstance(path, str) or not path:
+        return None, None, "no dump path recorded on the parsed dump"
+    try:
+        sha256 = cached_sha256_file(path)
+        size = os.path.getsize(path)
+    except (OSError, ValueError) as e:
+        # ValueError as well as OSError: os.stat()/open() reject a
+        # structurally invalid path (an embedded NUL, most notably) with
+        # ValueError, not OSError, and letting that one escape would cost
+        # the analyst every other field the already-parsed dump still
+        # holds -- the exact opposite of what this guard is for.
+        return None, None, f"{type(e).__name__}: {e}"
+    return size, sha256, None
+
+
+def _dump_time_utc(mf: MinidumpFile) -> "str | None":
+    """MinidumpHeader.TimeDateStamp as the contract's UTC string, or None.
+
+    Read off the header rather than any directory stream: open_dump()'s
+    phase 1 parses the header before any per-stream parser runs and exits
+    1 if it cannot, so by the time this runs the header is present for
+    every dump that got this far -- which is why no coverage source or
+    limitation is declared for it. A `0` (the producer never filled the
+    field in) or an out-of-UINT32-range value normalizes to None, the same
+    field-level "present but not certifiable" rule cpu_vendor already
+    follows here.
+
+    getattr-guarded because test fakes and hand-assembled MinidumpFile
+    objects do not always carry a header, and a missing one is exactly the
+    same answer as an unset TimeDateStamp: no dump timestamp available.
+    """
+    header = getattr(mf, "header", None)
+    return format_uint32_time_utc(getattr(header, "TimeDateStamp", None))
+
+
 def _hostname_username_from_entries(entries) -> "tuple[str | None, str | None]":
     """COMPUTERNAME/USERNAME from the independently-walked environment
     block (§4.2), never mf.peb.environment_variables. A missing entry
@@ -224,22 +285,25 @@ def collect_sysinfo(mf: MinidumpFile) -> CommandResult:
     Pure data, no printing. Returns a CommandResult[SysInfoRecord] --
     records is a single-element list even for this one-record result.
     'partial' coverage when the sysinfo/misc-info/PEB/threads/modules/
-    environment-block sources are individually missing; never
+    environment-block/dump-file sources are individually missing; never
     'not_evaluated' (no evaluation_sources given) since --sysinfo always
-    has at least dump_file (derived from the dump path itself, never
-    dependent on any of these six sources) to report -- unlike --pid, a
-    single-purpose command that reports nothing at all when all its
-    sources are absent. Each of the five SourceRequirement completeness
-    checks below uses its own dedicated code: none of these five reasons
-    matches the generic SOURCE_ABSENT template's exact wording ("X not
-    present in this dump"), and SYSINFO_PEB_UNAVAILABLE's text differs
-    from --peb's own PEB_UNAVAILABLE, so it isn't reused across commands.
-    `environment_block` is a sixth `coverage.sources` entry but is
-    deliberately never declared as a SourceRequirement (§4.3.3/§4.7) --
-    every gap it produces is instead a hand-built, caller-buildable
-    CoverageLimitation from _environment_evidence(), inserted immediately
-    before the `peb` completeness check so the specific environment
-    failure reads before the general PEB consequence.
+    has at least `dump_file`'s basename (derived from the dump path
+    itself, never dependent on any of these seven sources) to report --
+    unlike --pid, a single-purpose command that reports nothing at all
+    when all its sources are absent. Each of the five SourceRequirement
+    completeness checks below uses its own dedicated code: none of these
+    five reasons matches the generic SOURCE_ABSENT template's exact
+    wording ("X not present in this dump"), and SYSINFO_PEB_UNAVAILABLE's
+    text differs from --peb's own PEB_UNAVAILABLE, so it isn't reused
+    across commands.
+
+    Two of the seven `coverage.sources` entries -- `environment_block`
+    (§4.3.3) and `dump_file` (§4.2) -- are deliberately never declared as
+    SourceRequirements: every gap they produce is instead a hand-built,
+    caller-buildable CoverageLimitation, so the reason an analyst reads
+    names the actual failure rather than the generic absent/failed
+    template. `dump_file` is also the one source whose evidence is not
+    already in memory: establishing it re-reads the file from disk.
     """
     si  = mf.sysinfo
     mi  = mf.misc_info
@@ -247,6 +311,8 @@ def collect_sysinfo(mf: MinidumpFile) -> CommandResult:
 
     env_source, env_limitation, env_entries = _environment_evidence(mf)
     hostname, username = _hostname_username_from_entries(env_entries)
+    dump_size, dump_sha256, dump_read_failure = _dump_file_identity(
+        getattr(mf, "filename", None))
     # PEB.from_minidump() (the installed minidump library) computes
     # is_x64 = not (ProcessorArchitecture == INTEL), so it treats EVERY
     # non-INTEL architecture -- ARM64 included -- as x64 and reads
@@ -271,6 +337,9 @@ def collect_sysinfo(mf: MinidumpFile) -> CommandResult:
 
     record = SysInfoRecord(
         dump_file=os.path.basename(mf.filename),
+        dump_file_size_bytes=dump_size,
+        dump_sha256=dump_sha256,
+        dump_time_utc=_dump_time_utc(mf),
         hostname=hostname,
         username=username,
         os=(_os_display_name(si) if si else None),
@@ -301,25 +370,59 @@ def collect_sysinfo(mf: MinidumpFile) -> CommandResult:
                                      items=(mf.threads.threads if mf.threads else []))
     modules_source = observe_source("modules", present=bool(mf.modules),
                                      items=(mf.modules.modules if mf.modules else []))
+    # The dump file itself, observed exactly like environment_block (§4.3.3):
+    # a real `coverage.sources` key with NO SourceRequirement of its own, so
+    # the gap it can produce is the hand-built SYSINFO_DUMP_FILE_UNREADABLE
+    # below rather than an auto-derived SOURCE_FAILED. The generic
+    # SOURCE_FAILED template ("... present but could not be read") would be
+    # the wrong claim here: the commonest failure is a file that is no longer
+    # present at all, which that wording asserts it is.
+    #
+    # record_count=1 for the PRESENT case because SourceObservation
+    # requires a positive count there and this source yields exactly one
+    # thing: the file's identity (size + digest), established or not.
+    dump_file_source = SourceObservation(
+        name="dump_file",
+        state=(SourceState.PRESENT if dump_read_failure is None else SourceState.FAILED),
+        record_count=(1 if dump_read_failure is None else None),
+        detail=dump_read_failure)
     sources = {
+        "dump_file": dump_file_source,
         "sysinfo": si_source, "misc_info": mi_source, "peb": peb_source,
         "threads": threads_source, "modules": modules_source,
         "environment_block": env_source,
     }
 
-    # §4.7's frozen order: sysinfo, misc_info, <environment limitation, if
-    # any>, peb, threads, modules.
-    completeness_checks = [
+    # §4.7's frozen order, which is SECTION order (§4.6): the console's
+    # three top-level banners are DUMP, SYSTEM INFO, ENVIRONMENT, and each
+    # limitation renders under the section that owns the field it explains
+    # -- so declaring them in that same order keeps coverage.limitations
+    # and the console's [~] lines a single sequence, exactly as before,
+    # rather than making the renderer reorder one against the other.
+    #
+    #   DUMP         <dump-file limitation, if any>, threads, modules
+    #   SYSTEM INFO  sysinfo, misc_info
+    #   ENVIRONMENT  <environment limitation, if any>, peb
+    #
+    # The environment-before-peb rule §4.7 froze survives verbatim: the
+    # two stay adjacent and in that order, so an analyst still reads
+    # "environment block pointers could not be read: X" before the general
+    # "PEB not available" consequence, never the other way round.
+    completeness_checks = []
+    if dump_read_failure is not None:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SYSINFO_DUMP_FILE_UNREADABLE, source="dump_file",
+            detail=dump_read_failure))
+    completeness_checks += [
+        SourceRequirement("threads", absent_code=LimitationCode.SYSINFO_THREADS_UNAVAILABLE),
+        SourceRequirement("modules", absent_code=LimitationCode.SYSINFO_MODULES_UNAVAILABLE),
         SourceRequirement("sysinfo", absent_code=LimitationCode.SYSINFO_SYSTEM_INFO_UNAVAILABLE),
         SourceRequirement("misc_info", absent_code=LimitationCode.SYSINFO_MISC_INFO_UNAVAILABLE),
     ]
     if env_limitation is not None:
         completeness_checks.append(env_limitation)
-    completeness_checks += [
-        SourceRequirement("peb", absent_code=LimitationCode.SYSINFO_PEB_UNAVAILABLE),
-        SourceRequirement("threads", absent_code=LimitationCode.SYSINFO_THREADS_UNAVAILABLE),
-        SourceRequirement("modules", absent_code=LimitationCode.SYSINFO_MODULES_UNAVAILABLE),
-    ]
+    completeness_checks.append(
+        SourceRequirement("peb", absent_code=LimitationCode.SYSINFO_PEB_UNAVAILABLE))
 
     coverage = build_coverage_report(sources, completeness_checks=completeness_checks)
     return CommandResult(kind="sysinfo", records=[record], coverage=coverage, summary={"count": 1})
@@ -341,45 +444,242 @@ def _environment_console_text(coverage) -> str:
     return "(unavailable)"
 
 
+# ── --verbose environment listing (§4.6.1) ───────────────────────────────
+
+_ENV_INDENT = 6                 # matches the listing's existing indent
+_ENV_NAME_MIN_WIDTH = 14        # a narrow dump still gets a scannable column
+_ENV_NAME_MAX_WIDTH = 30        # ... and one pathological name can't widen it
+_ENV_GUTTER = 2                 # spaces between the name and value columns
+
+# Break a wrapped value only at these separators, and only AFTER them, so
+# a reader can see the piece is continued. `;` first because that is what
+# every Windows list-valued variable (Path, PATHEXT, PSModulePath) uses.
+_ENV_VALUE_BREAK_AFTER = ";,"
+
+# console_safe() renders a control character as the literal text `\xNN` or
+# `\uNNNN`. Those must never be split across a wrap, or the evidence reads
+# as a different byte than it was -- so a value is tokenized into escape
+# sequences and single characters, and a break can only fall BETWEEN
+# tokens.
+_ENV_ESCAPE_TOKEN_RE = re.compile(r"\\x[0-9a-f]{2}|\\u[0-9a-f]{4}|.", re.DOTALL)
+
+
+def _wrap_env_value(value: str, width: int) -> list:
+    """Split an already-console_safe()d value into display lines of at
+    most `width` columns.
+
+    Lossless by construction: `"".join(result) == value`. Nothing is
+    inserted (no ellipsis, no continuation marker inside the text) and
+    nothing is dropped, so an analyst reading a wrapped `Path` across four
+    lines is reading the exact captured value -- this is soft wrapping,
+    not truncation, and §4.5 keeps environment values unredacted as
+    evidence.
+
+    Break preference, in order:
+      1. just after a `;`/`,` -- the natural boundary of the list-valued
+         variables that make this listing unreadable in the first place;
+      2. just after whitespace, for prose-like values;
+      3. anywhere a token boundary allows, for one long unbroken token
+         (a URL, a base64 blob) -- overflowing the terminal instead would
+         re-create the wall of text this exists to fix.
+    A `\\xNN`/`\\uNNNN` escape produced by console_safe() is one token and
+    is never broken into.
+    """
+    if not value:
+        return []
+    tokens = _ENV_ESCAPE_TOKEN_RE.findall(value)
+    lines, start = [], 0
+    while start < len(tokens):
+        if len(tokens) - start <= width:
+            lines.append("".join(tokens[start:]))
+            break
+        window = tokens[start:start + width]
+        # Rightmost separator inside the window: the fullest line that
+        # still ends on a boundary. `+ 1` keeps the separator itself on
+        # the line it terminates.
+        cut = max((i + 1 for i, t in enumerate(window) if t in _ENV_VALUE_BREAK_AFTER),
+                   default=0)
+        if not cut:
+            cut = max((i + 1 for i, t in enumerate(window) if t.isspace()), default=0)
+        if not cut:
+            cut = len(window)   # no boundary at all -- break on the token grid
+        lines.append("".join(tokens[start:start + cut]))
+        start += cut
+    return lines
+
+
+def _render_environment_entries(entries, *, width: "int | None" = None) -> None:
+    """Print the --verbose `name`/`value` listing as an aligned two-column
+    block (§4.6.1).
+
+    The listing used to be one flat `name=value` per line. With a real
+    dump's ~40 variables that is unreadable for two compounding reasons:
+    names vary from 2 to 30-odd characters, so there is no column for the
+    eye to follow, and the handful of `;`-joined list values (`Path` above
+    all) run far past the terminal and hard-wrap at column 0, destroying
+    what block structure the rest of the listing had.
+
+    So: names are padded to a shared column, values wrap under their own
+    column with a hanging indent, and `Path` breaks after its semicolons.
+    The `=` separator is dropped rather than padded around, because
+    padding it would stop the line being the literal `name=value` anyway
+    while keeping it harder to scan -- and this listing is the human
+    projection; `--json`/`--csv` remain the machine-readable forms and are
+    untouched.
+
+    Every name and value goes through console_safe() FIRST, and all
+    measuring, padding, and wrapping happens on the escaped text. Doing it
+    the other way round would both mis-align the columns (an escape
+    expands) and, worse, let a crafted variable wrap in a way that forges
+    a line -- §4.5 keeps these values unredacted precisely because they
+    are evidence, which is what makes them attacker-controlled.
+    """
+    safe = [(console_safe(e["name"]), console_safe(e["value"])) for e in entries]
+    total = resolve_width(width)
+
+    longest = max((len(name) for name, _ in safe), default=0)
+    name_width = max(_ENV_NAME_MIN_WIDTH, min(_ENV_NAME_MAX_WIDTH, longest))
+    value_column = _ENV_INDENT + name_width + _ENV_GUTTER
+    value_width = max(20, total - value_column)
+    pad = " " * value_column
+
+    for name, value in safe:
+        lines = _wrap_env_value(value, value_width)
+        if len(name) > name_width:
+            # An over-long name gets its own line rather than shoving the
+            # value column right for all 40 entries. Deliberately not
+            # truncated: the name is evidence too.
+            print(f"{' ' * _ENV_INDENT}{CYAN(name)}")
+            for line in lines or [DIM("(empty)")]:
+                print(f"{pad}{line}")
+            continue
+        # Padded BEFORE colouring: colouring first would make the ANSI
+        # escape count toward the field width and break the column
+        # whenever colour is enabled.
+        label = CYAN(f"{name:<{name_width}}")
+        first = lines[0] if lines else DIM("(empty)")
+        print(f"{' ' * _ENV_INDENT}{label}{' ' * _ENV_GUTTER}{first}")
+        for line in lines[1:]:
+            print(f"{pad}{line}")
+
+
+_SIZE_UNITS = ("KiB", "MiB", "GiB", "TiB")
+
+
+def _format_size(size_bytes: int) -> str:
+    """Console projection of a byte count: the exact number always, with a
+    binary-unit approximation in front of it once the file is big enough
+    for the digits alone to be unreadable ("2.1 GiB (2254857216 bytes)").
+
+    The exact count is never replaced, only prefixed -- a size is evidence
+    an analyst may need to match against a hash manifest or a file listing,
+    and "2.1 GiB" matches nothing. Binary units (not decimal MB/GB), since
+    that is what every Windows tool an analyst would cross-check against
+    reports."""
+    scaled, unit = float(size_bytes), None
+    for candidate in _SIZE_UNITS:
+        if scaled < 1024:
+            break
+        scaled /= 1024
+        unit = candidate
+    if unit is None:
+        return f"{size_bytes} bytes"
+    return f"{scaled:.1f} {unit} ({size_bytes} bytes)"
+
+
+# §4.6's section ownership: which top-level console section prints the
+# [~] line for a limitation carrying a given `source`. A limitation
+# renders under the section that owns the FIELD it explains -- "ThreadList
+# Stream not present (thread_count unavailable)" belongs next to the
+# Threads-in-dump line, not above the OS table -- which is also why
+# collect_sysinfo() declares its completeness_checks in this same order
+# (§4.7), so coverage.limitations and the console's [~] lines stay one
+# sequence instead of two that a reader has to reconcile.
+_SECTION_SOURCES = {
+    "DUMP":        ("dump_file", "threads", "modules"),
+    "SYSTEM INFO": ("sysinfo", "misc_info"),
+    "ENVIRONMENT": ("environment_block", "peb"),
+}
+# Inverted once at import, and asserted to be a partition: a source listed
+# under two sections would print its limitation twice, and one listed
+# under none would drop it silently. Both are exactly the "renders exactly
+# once" bugs §4.6 says this contract has already caught in past
+# implementations, so the structure enforces it rather than the renderer
+# re-deriving it per call.
+_SECTION_BY_SOURCE = {}
+for _section, _sources in _SECTION_SOURCES.items():
+    for _source in _sources:
+        assert _source not in _SECTION_BY_SOURCE, f"{_source} owned by two sections"
+        _SECTION_BY_SOURCE[_source] = _section
+
+
+def _limitations_by_section(coverage) -> dict:
+    """coverage.limitations split into one list per console section,
+    each keeping coverage.limitations' own relative order.
+
+    An unrecognized source (none exists today; a future one added to
+    collect_sysinfo without a _SECTION_SOURCES entry would) falls back to
+    the DUMP section rather than vanishing: printing a reason under a
+    slightly odd heading is a cosmetic defect, silently dropping one is an
+    evidence defect."""
+    by_section = {name: [] for name in _SECTION_SOURCES}
+    for limitation in coverage.limitations:
+        by_section[_SECTION_BY_SOURCE.get(limitation.source, "DUMP")].append(limitation)
+    return by_section
+
+
+def _render_section_limitations(limitations) -> None:
+    for limitation in limitations:
+        print(YELLOW(f"  [~] {render_limitation(limitation)}"))
+
+
 def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = False) -> None:
     """Takes the whole CoverageReport, not three separately-derived
     presence booleans -- each is recomputed here via
     sysinfo_source_present() rather than trusted from a stale call site,
-    matching peb.py's render_peb_console(record, coverage) contract."""
+    matching peb.py's render_peb_console(record, coverage) contract.
+
+    §4.6's layout is three PEER top-level sections, in this order:
+
+        ═══ DUMP ═══           what file this is, and how much is in it
+        ═══ SYSTEM INFO ═══    the machine the process ran on
+        ═══ ENVIRONMENT ═══    the process's own environment block
+
+    All three carry the same `═══ X ═══` banner at column 0 and put their
+    fields at the same 4-space indent, so the value column lines up across
+    the whole command and no section reads as nested inside another. That
+    last part is the actual defect this layout fixes: ENVIRONMENT used to
+    be a `  ═══ ENVIRONMENT ═══` banner in the MIDDLE of SYSTEM INFO's own
+    subsections, and a banner is how a terminal reader segments output --
+    indentation is not. CPU and Dump File printed after it were therefore
+    read as belonging to ENVIRONMENT even though they never did
+    structurally, which is precisely what an analyst reported.
+    """
     threads_present = sysinfo_source_present(coverage, "threads")
     modules_present = sysinfo_source_present(coverage, "modules")
+    section_limitations = _limitations_by_section(coverage)
 
-    # §4.7's ordering guarantee is frozen text, not a suggestion: "this is
-    # the order of coverage.limitations AND OF THE CONSOLE'S [~] LINES...
-    # an analyst should see 'environment block pointers could not be
-    # read: X' and only then 'PEB not available', not the other way
-    # round." Every limitation must render EXACTLY ONCE, at the console
-    # position matching its own place in that frozen order -- so
-    # coverage.limitations is split into three segments around the (at
-    # most one) environment_block-sourced entry: reasons before it print
-    # in the top SYSTEM INFO block, the environment reason itself prints
-    # only inside the ENVIRONMENT section below (§4.6's own sample
-    # layout), and reasons after it print immediately following that
-    # section -- never duplicated at the top AND locally, which would
-    # both restate one line twice and, if the top block were left
-    # unfiltered instead, print later-ordered reasons (e.g. modules)
-    # before the environment section's own earlier-ordered one.
-    before_env, env_only, after_env = [], [], []
-    seen_env = False
-    for limitation in coverage.limitations:
-        if limitation.source == "environment_block":
-            env_only.append(limitation)
-            seen_env = True
-        elif seen_env:
-            after_env.append(limitation)
-        else:
-            before_env.append(limitation)
+    # ── DUMP ────────────────────────────────────────────────────────────
+    # First, because it answers "which artifact am I even looking at?" --
+    # the question every other section's answer is qualified by.
+    print(f"\n{BOLD('═══ DUMP ═══')}")
+    _render_section_limitations(section_limitations["DUMP"])
+    print(f"    {'File':<22} {record.dump_file}")
+    if record.dump_file_size_bytes is not None:
+        print(f"    {'Size':<22} {_format_size(record.dump_file_size_bytes)}")
+    if record.dump_sha256 is not None:
+        print(f"    {'SHA-256':<22} {record.dump_sha256}")
+    if record.dump_time_utc is not None:
+        print(f"    {'Dump Time':<22} {record.dump_time_utc}")
+    if threads_present:
+        print(f"    {'Threads in dump':<22} {record.thread_count}")
+    if modules_present:
+        print(f"    {'Modules in dump':<22} {record.module_count}")
 
+    # ── SYSTEM INFO ─────────────────────────────────────────────────────
     print(f"\n{BOLD('═══ SYSTEM INFO ═══')}")
-    for limitation in before_env:
-        print(YELLOW(f"  [~] {render_limitation(limitation)}"))
+    _render_section_limitations(section_limitations["SYSTEM INFO"])
 
-    # ── OS ──────────────────────────────────────────────────────────────
     print(f"\n  {BOLD('Operating System')}")
     if record.os is not None:
         print(f"    {'OS':<22} {record.os}")
@@ -389,7 +689,6 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
     else:
         print(f"    {DIM('(sysinfo stream not available)')}")
 
-    # ── Host ────────────────────────────────────────────────────────────
     print(f"\n  {BOLD('Host')}")
     # hostname/username are read from the captured environment block --
     # dump bytes, therefore attacker-controlled. Same rule as peb.py: the
@@ -398,29 +697,9 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
     print(f"    {'Hostname':<22} {console_safe(record.hostname) or '(unknown)'}")
     print(f"    {'Username':<22} {console_safe(record.username) or '(unknown)'}")
 
-    # ── Environment (§4.6) ─────────────────────────────────────────────
-    # A sub-section indented alongside Operating System/Host/CPU/Dump
-    # File, not a second top-level command banner -- the contract's own
-    # console-layout sample shows "  ═══ ENVIRONMENT ═══" at the same
-    # 2-space indent every other subsection header uses.
-    print(f"\n  {BOLD('═══ ENVIRONMENT ═══')}")
-    print(f"    {'Current Directory':<22} "
-           f"{console_safe(record.current_directory) or '(unknown)'}")
-    print(f"    {'Environment Variables':<22} {_environment_console_text(coverage)}")
-    for limitation in env_only:
-        print(YELLOW(f"    [~] {render_limitation(limitation)}"))
-    if verbose and record.environment_variables:
-        print()
-        for entry in record.environment_variables:
-            # Arbitrary bytes the process was started with -- §4.5 keeps
-            # them unredacted as evidence, which makes escaping the console
-            # projection the only thing between a crafted variable and a
-            # forged dumpex line.
-            print(f"      {console_safe(entry['name'])}={console_safe(entry['value'])}")
-    for limitation in after_env:
-        print(YELLOW(f"  [~] {render_limitation(limitation)}"))
-
-    # ── CPU ─────────────────────────────────────────────────────────────
+    # CPU stays a SYSTEM INFO subsection alongside Operating System/Host:
+    # processor count/vendor/clocks describe the machine, not the
+    # process's environment.
     if record.os is not None:
         print(f"\n  {BOLD('CPU')}")
         print(f"    {'Processors':<22} {record.processors}")
@@ -433,13 +712,25 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
         if record.cpu_max_mhz:
             print(f"    {'Max MHz':<22} {record.cpu_max_mhz}")
 
-    # ── Dump metadata ────────────────────────────────────────────────────
-    print(f"\n  {BOLD('Dump File')}")
-    print(f"    {'File':<22} {record.dump_file}")
-    if threads_present:
-        print(f"    {'Threads in dump':<22} {record.thread_count}")
-    if modules_present:
-        print(f"    {'Modules in dump':<22} {record.module_count}")
+    # ── ENVIRONMENT (§4.6) ──────────────────────────────────────────────
+    # Last, and a peer of the two above rather than a subsection of
+    # SYSTEM INFO: with --verbose it can run to hundreds of lines, so
+    # anything printed after it is effectively invisible.
+    print(f"\n{BOLD('═══ ENVIRONMENT ═══')}")
+    # Above the fields AND above the --verbose list, so a reader learns
+    # the capture was truncated/unreadable before reading what it yielded
+    # -- §4.6's "the truncation [~] line is printed above the list".
+    _render_section_limitations(section_limitations["ENVIRONMENT"])
+    print(f"    {'Current Directory':<22} "
+           f"{console_safe(record.current_directory) or '(unknown)'}")
+    print(f"    {'Environment Variables':<22} {_environment_console_text(coverage)}")
+    if verbose and record.environment_variables:
+        # Arbitrary bytes the process was started with -- §4.5 keeps them
+        # unredacted as evidence, which makes escaping the console
+        # projection the only thing between a crafted variable and a
+        # forged dumpex line. _render_environment_entries() owns that.
+        print()
+        _render_environment_entries(record.environment_variables)
     print()
 
 
