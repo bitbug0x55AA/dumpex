@@ -769,9 +769,19 @@ def test_derived_judgment_fields_match_the_shared_reducers():
                                                       report.status)
 
 
-def test_verdict_level_table_is_this_hunters_own_and_has_three_tiers():
-    assert VERDICT_LEVEL_BY_SCORE == {1: "possible", 2: "likely", 3: "high"}
-    assert MAX_SCORE == 3
+def test_pipe_scores_escalate_one_tier_at_a_time_to_high():
+    """Pipe evidence is individually weak (a name is contextual and can
+    be spoofed), so this hunter climbs through every tier rather than
+    jumping: one signal is only "possible", and "high" needs all three.
+    Asserted through verdict_level() across the hunter's whole score
+    range -- the values are a calibration decision with no other home in
+    the repo, so they are pinned here on purpose; what IS derivable (the
+    table covering exactly 1..MAX_SCORE, its top being "high", severity
+    rising with score) is checked for every hunter in
+    tests/hunt/test_verdict_level_tables.py instead."""
+    verdicts = [verdict_level(score, VERDICT_LEVEL_BY_SCORE, status="DETECTED")
+                for score in range(1, MAX_SCORE + 1)]
+    assert verdicts == ["possible", "likely", "high"]
 
 
 def test_score_above_the_hunters_ceiling_is_rejected():

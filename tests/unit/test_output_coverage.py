@@ -82,17 +82,32 @@ def test_observe_source_present_true_items_none_defaults_to_empty():
 
 # ── enum/string interop: existing call sites compare against bare strings ─
 
-def test_source_state_enum_members_equal_plain_strings():
-    assert SOURCE_ABSENT == "absent"
-    assert SOURCE_PRESENT_EMPTY == "present_empty"
-    assert SOURCE_PRESENT == "present"
-    assert SOURCE_FAILED == "failed"
+# What actually has to hold is that these compare equal to the bare
+# strings call sites use -- i.e. they stay str-subclass enums. Written
+# against each member's own `.value` rather than a re-typed copy of the
+# strings: the values themselves are pinned where they carry real
+# information, against the schema enums that close over them, in
+# tests/unit/test_record_schema_alignment.py.
+
+@pytest.mark.parametrize("member", list(SourceState))
+def test_source_state_members_are_str_subclass_enums(member):
+    assert isinstance(member, str)
+    assert member == member.value
 
 
-def test_coverage_status_enum_members_equal_plain_strings():
-    assert COVERAGE_COMPLETE == "complete"
-    assert COVERAGE_PARTIAL == "partial"
-    assert COVERAGE_NOT_EVALUATED == "not_evaluated"
+@pytest.mark.parametrize("member", list(CoverageStatus))
+def test_coverage_status_members_are_str_subclass_enums(member):
+    assert isinstance(member, str)
+    assert member == member.value
+
+
+def test_module_level_aliases_point_at_the_enum_members():
+    # The SOURCE_*/COVERAGE_* aliases are what most call sites import;
+    # they must be the enum members themselves, not copies of the values.
+    assert (SOURCE_ABSENT, SOURCE_PRESENT_EMPTY, SOURCE_PRESENT, SOURCE_FAILED) == (
+        SourceState.ABSENT, SourceState.PRESENT_EMPTY, SourceState.PRESENT, SourceState.FAILED)
+    assert (COVERAGE_COMPLETE, COVERAGE_PARTIAL, COVERAGE_NOT_EVALUATED) == (
+        CoverageStatus.COMPLETE, CoverageStatus.PARTIAL, CoverageStatus.NOT_EVALUATED)
 
 
 # ── SourceObservation: state/record_count invariant validation ──────────

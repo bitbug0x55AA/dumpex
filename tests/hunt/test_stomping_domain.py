@@ -658,10 +658,20 @@ def test_build_report_still_makes_the_no_anomaly_claim_when_evaluated():
     assert report.status == "INCONCLUSIVE"
 
 
-def test_verdict_level_table_is_this_hunters_own_and_has_no_third_tier():
+def test_stomping_jumps_from_possible_straight_to_high_skipping_likely():
+    """The deliberate gap in this hunter's scale: a protection deviation
+    alone is only "possible", but the second signal is a VERIFIED content
+    change against a trusted same-build reference, which is conclusive
+    enough that there is no intermediate "likely" tier to land on.
+    Asserted through verdict_level() rather than by re-typing the table;
+    its structural properties are covered for every hunter in
+    tests/hunt/test_verdict_level_tables.py."""
     from dumpex.hunt.stomping import domain as stomping_domain
-    assert stomping_domain.VERDICT_LEVEL_BY_SCORE == {1: "possible", 2: "high"}
-    assert 3 not in stomping_domain.VERDICT_LEVEL_BY_SCORE
+
+    table = stomping_domain.VERDICT_LEVEL_BY_SCORE
+    assert verdict_level(1, table, status="DETECTED") == "possible"
+    assert verdict_level(MAX_SCORE, table, status="DETECTED") == "high"
+    assert "likely" not in table.values()
     assert stomping_aggregate.build_report.__module__.endswith("aggregate")
 
 

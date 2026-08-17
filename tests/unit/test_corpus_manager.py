@@ -6,10 +6,8 @@ import jsonschema
 import pytest
 import yaml
 
+from dumpex.output.records import HUNTERS
 from scripts import corpus_manager
-
-
-HUNTS = ("injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation")
 
 
 def _public_mount(root: Path):
@@ -176,7 +174,13 @@ def test_cleanup_requires_tracked_mount_shape(tmp_path):
 
 
 def test_all_hunter_names_stay_aligned_with_corpus_contract():
-    assert corpus_manager.HUNTERS == set(HUNTS)
+    # scripts/corpus_manager.py is a standalone script that deliberately
+    # does not import dumpex (it validates a corpus mount without the
+    # package installed), so its roster IS a genuine second copy. Compared
+    # against dumpex.output.records.HUNTERS -- the source of truth a
+    # renamed/added hunter actually moves -- rather than against a third
+    # copy typed into this test file, which would agree with neither.
+    assert corpus_manager.HUNTERS == set(HUNTERS)
 
 
 def test_private_corpus_workflow_cannot_schedule_runner_from_public_repo():

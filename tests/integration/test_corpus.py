@@ -15,18 +15,14 @@ import pytest
 
 from dumpex.core.memory import open_dump
 from dumpex.hunt import cmd_hunt
+from dumpex.output.records import HUNTERS
 
 
 _CONFIG_PATH = os.environ.get("DUMPEX_CORPUS_MANIFEST")
-_HUNTERS = {
-    "injection",
-    "hollowing",
-    "stomping",
-    "pipe",
-    "cs-beacon",
-    "yara",
-    "obfuscation",
-}
+# Not a local copy of the seven names: a manifest naming a hunter this
+# build does not have must be rejected against the roster the build
+# actually runs, not against a list that drifts with it.
+_HUNTERS = set(HUNTERS)
 
 
 def _discover_manifests(config_path):

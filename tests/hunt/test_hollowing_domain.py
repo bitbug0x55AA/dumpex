@@ -697,10 +697,25 @@ def test_derived_judgment_fields_match_the_shared_reducers():
                                                       report.status)
 
 
-def test_verdict_level_table_is_this_hunters_own_and_has_no_third_tier():
-    assert VERDICT_LEVEL_BY_SCORE == {1: "likely", 2: "high"}
-    assert 3 not in VERDICT_LEVEL_BY_SCORE
-    assert MAX_SCORE == 2
+def test_one_hollowing_signal_already_reads_as_likely_unlike_injections_scale():
+    """This hunter's calibration, asserted through the function the
+    console and the JSON both call rather than by re-typing the table:
+    a hollowing signal is heavy enough that ONE already means "likely",
+    where injection's score 1 means only "possible". That same-number-
+    different-meaning is exactly why verdict_level() takes a per-hunter
+    table instead of deriving from score/max_score arithmetic.
+
+    The table's STRUCTURE -- keys covering 1..MAX_SCORE with nothing
+    beyond, the ceiling being the strongest verdict, severity rising with
+    score, values inside the schema's verdict_level enum -- is checked
+    generically for every hunter in tests/hunt/test_verdict_level_tables.py
+    and is deliberately not repeated here."""
+    from dumpex.hunt.injection.domain import VERDICT_LEVEL_BY_SCORE as INJECTION_TABLE
+
+    assert verdict_level(1, VERDICT_LEVEL_BY_SCORE, status="DETECTED") == "likely"
+    assert verdict_level(MAX_SCORE, VERDICT_LEVEL_BY_SCORE, status="DETECTED") == "high"
+    assert (verdict_level(1, VERDICT_LEVEL_BY_SCORE, status="DETECTED")
+            != verdict_level(1, INJECTION_TABLE, status="DETECTED"))
 
 
 def test_score_above_the_hunters_ceiling_is_rejected():

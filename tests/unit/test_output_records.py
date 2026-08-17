@@ -15,6 +15,7 @@ from dumpex.output.records import (
     ReportIocString, ReportThreadInfo, ReportRegionInfo,
     ImportEntryRecord, ProcessDiagnosticRecord, IatRecord, ProcessRecord,
     HandleRecord, handle_name_display, HANDLE_NAME_STATUSES,
+    HANDLE_NAME_STATUS_LABELS, HANDLE_RESERVED_NAME_LABELS,
 )
 
 
@@ -60,12 +61,21 @@ def test_module_record_missing_fields_are_none_not_empty_string():
     assert d["anomaly_flags"] == []
 
 
-def test_module_record_has_no_size_hex_field():
+def test_module_record_size_is_a_plain_int_not_a_hex_string():
+    # The point the removed `"size_hex" not in to_dict()` assertion was
+    # reaching for: size is emitted once, as an int. Which fields exist
+    # at all is no longer asserted here one name at a time -- naming a
+    # single removed field can only ever catch THAT field returning, and
+    # says nothing about any other field drifting away from the schema.
+    # tests/unit/test_record_schema_alignment.py pins the whole key set
+    # of every record against its closed schema $def instead, which
+    # catches size_hex and everything like it.
     rec = ModuleRecord(name="a.dll", full_path=None, base_address="0x1000",
                         end_address="0x2000", size=4096, compiled_utc=None,
                         file_version=None, checksum=None)
-    assert "size_hex" not in rec.to_dict()
-    assert rec.to_dict()["size"] == 4096
+    d = rec.to_dict()
+    assert d["size"] == 4096
+    assert isinstance(d["size"], int) and not isinstance(d["size"], bool)
 
 
 def test_module_record_anomaly_flags_is_a_list_not_joined_string():
@@ -329,7 +339,9 @@ def test_string_record_rejects_non_bool_matched_grep():
 def test_diagnostic_to_dict():
     d = Diagnostic(severity=SEVERITY_WARNING, message="something", code="W001").to_dict()
     assert d == {"severity": "warning", "message": "something", "code": "W001"}
-    assert SEVERITY_ERROR == "error"
+    # SEVERITY_ERROR's own value used to be re-asserted here as a bare
+    # literal; both severities are pinned against diagnosticEntry's schema
+    # enum in tests/unit/test_record_schema_alignment.py instead.
 
 
 def test_diagnostic_code_defaults_to_none():
@@ -1407,5 +1419,42 @@ def test_handle_name_display_uses_each_fields_own_status():
     assert handle_name_display(None, "unnamed") != handle_name_display(None, "unreadable")
 
 
-def test_handle_name_statuses_are_the_frozen_three():
-    assert HANDLE_NAME_STATUSES == ("ok", "unnamed", "unreadable")
+def test_every_non_ok_status_has_its_own_display_label():
+    # The vocabulary's VALUES are pinned against the contract document's
+    # own §5.2/§5.2.1 tables in tests/unit/test_recon_contract_doc.py --
+    # the artifact an implementer works from, and the one that cannot be
+    # edited by the same hand that edits this tuple. What matters here is
+    # that the label map stays in step with the vocabulary: a status with
+    # no label would raise a KeyError inside handle_name_display(), and a
+    # label for a status that no longer exists is a bucket nothing lands
+    # in. "ok" is the one status that renders the captured name itself,
+    # so it must NOT have a reserved label.
+    assert set(HANDLE_NAME_STATUS_LABELS) == set(HANDLE_NAME_STATUSES) - {"ok"}
+    assert len(HANDLE_RESERVED_NAME_LABELS) == len(HANDLE_NAME_STATUS_LABELS)
+
+
+@pytest.mark.parametrize("status", HANDLE_NAME_STATUSES)
+def test_handle_name_display_renders_every_status_distinctly(status):
+    value = "File" if status == "ok" else None
+    rendered = handle_name_display(value, status)
+    assert rendered and isinstance(rendered, str)
+    others = {handle_name_display("File" if s == "ok" else None, s)
+              for s in HANDLE_NAME_STATUSES if s != status}
+    assert rendered not in others
+
+
+@pytest.mark.parametrize("status", HANDLE_NAME_STATUSES)
+def test_handle_record_accepts_every_status_in_the_vocabulary(status):
+    rec = HandleRecord(
+        handle=hex_address(0x1000), type_name="File" if status == "ok" else None,
+        type_name_status=status, object_name=None, object_name_status="unnamed",
+        attributes=0, granted_access=0x1F0001, handle_count=1, pointer_count=2)
+    assert rec.to_dict()["type_name_status"] == status
+
+
+def test_handle_record_rejects_a_status_outside_the_vocabulary():
+    with pytest.raises(ValueError, match="type_name_status"):
+        HandleRecord(
+            handle=hex_address(0x1000), type_name=None, type_name_status="missing",
+            object_name=None, object_name_status="unnamed", attributes=0,
+            granted_access=0x1F0001, handle_count=1, pointer_count=2)

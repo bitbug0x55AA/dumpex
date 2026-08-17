@@ -58,6 +58,7 @@ import re
 import pytest
 
 from dumpex.output.coverage import LimitationCode
+from dumpex.output.records import HANDLE_NAME_STATUSES
 
 _DOC_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
@@ -264,6 +265,35 @@ def test_handle_record_example_matches_its_field_table(doc):
     assert not missing, f"declared in §5.2's table but absent from its example: {missing}"
     undeclared = sorted(example_keys - table_fields)
     assert not undeclared, f"present in §5.2's example but not declared in its table: {undeclared}"
+
+
+_STATUS_ROW_RE = re.compile(r'^\| `"([a-z]+)"` \|')
+_STATUS_UNION_RE = re.compile(r'^\| `(?:type|object)_name_status` \| `("[a-z]+"(?: \\\| "[a-z]+")*)`')
+
+
+def test_handle_name_status_vocabulary_matches_the_shipped_enum(doc):
+    """§5.2's field table declares the status union, §5.2.1's table gives
+    one row per value, and dumpex.output.records.HANDLE_NAME_STATUSES is
+    what HandleRecord actually validates against. All three have to name
+    the same three values: a fourth status invented in the code would
+    render as "not ok" against a contract that never described it, and a
+    value described only in the document is one no producer can emit.
+
+    Asserted against the shipped tuple rather than a fourth copy typed
+    into this file -- the document is the independent artifact here, and
+    it is the one an implementer works from."""
+    section = doc.split("#### 5.2.1", 1)[1].split("#### 5.2.2", 1)[0]
+    per_value_rows = [m.group(1) for line in section.splitlines()
+                      if (m := _STATUS_ROW_RE.match(line))]
+    assert per_value_rows, "§5.2.1's status table did not parse -- check the row format"
+    assert tuple(per_value_rows) == HANDLE_NAME_STATUSES
+
+    shape = doc.split("### 5.2 Record shape", 1)[1].split("#### 5.2.1", 1)[0]
+    unions = [m.group(1) for line in shape.splitlines()
+              if (m := _STATUS_UNION_RE.match(line))]
+    assert len(unions) == 2, "§5.2's table must declare both *_name_status fields"
+    for union in unions:
+        assert tuple(value.strip(' "') for value in union.split(r"\|")) == HANDLE_NAME_STATUSES
 
 
 # ── One prose-only check remains ───────────────────────────────────────

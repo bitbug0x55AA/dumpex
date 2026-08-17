@@ -11,7 +11,7 @@ from dumpex.output.coverage import CoverageReport, CoverageStatus
 from dumpex.output.records import (
     HunterRecord, HuntRegionRef, HuntThreadRef, HuntPeHeaderHit, InjectionDetails,
     HollowingDetails, StompingDetails, PipeDetails, CsBeaconDetails, YaraDetails,
-    ObfuscationDetails, HUNTERS,
+    ObfuscationDetails,
 )
 
 
@@ -255,9 +255,18 @@ def test_hunter_record_rejects_bad_findings_shape():
             details=_empty_injection_details())
 
 
-def test_hunters_tuple_has_all_seven_in_fixed_order():
-    assert HUNTERS == (
-        "injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation")
+# HUNTERS itself is not re-asserted against a second copy of the seven
+# names here -- that assertion can only fail if this file and records.py
+# are edited apart, which no roster change ever does. What HUNTERS has to
+# agree with lives elsewhere and is pinned there instead:
+#   * tests/unit/test_hunter_roster_alignment.py -- the four schema
+#     enums, the console display maps, region correlation's collector
+#     table, cmd_hunt()'s accepted set, the CLI help, README and
+#     CLI_REFERENCE.
+#   * tests/integration/test_hunt_all_seven_collectors.py -- the emitted
+#     order from a real `--hunt all` run.
+#   * tests/unit/test_corpus_manager.py -- scripts/corpus_manager.py's
+#     own copy.
 
 
 # ── The 6 not-yet-wired *Details shapes ────────────────────────────────

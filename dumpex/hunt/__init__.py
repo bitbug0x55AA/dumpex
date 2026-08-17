@@ -193,7 +193,11 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     verdict color/score suffix/lead count) still reads from `results`,
     since that's each hunter's own presentation choice, not a
     cross-hunter reduction."""
-    valid = {"injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation", "all"}
+    # Derived from HUNTERS (already imported above for the record order)
+    # rather than repeated as a second literal: a hunter added to /
+    # renamed in HUNTERS but forgotten here used to be accepted-or-
+    # rejected purely by whichever copy the caller happened to hit.
+    valid = set(HUNTERS) | {"all"}
     if ttp not in valid:
         print(RED(f"[!] Unknown TTP '{ttp}'. Choose from: {', '.join(sorted(valid))}"))
         sys.exit(1)

@@ -32,7 +32,11 @@ def _meta(tmp_path, **overrides):
 
 def test_meta_evidence_is_a_single_element_array(tmp_path):
     meta = _meta(tmp_path)
-    assert meta["schema_version"] == SCHEMA_VERSION == "2.12"
+    # The stamped value must be SCHEMA_VERSION -- what SCHEMA_VERSION
+    # itself has to agree with (the packaged schema file, its own const,
+    # docs/OUTPUT_SCHEMA.md's contract table) is pinned in
+    # tests/unit/test_schema_version_wiring.py, not re-typed here.
+    assert meta["schema_version"] == SCHEMA_VERSION
     assert isinstance(meta["evidence"], list)
     assert len(meta["evidence"]) == 1
     entry = meta["evidence"][0]
@@ -444,9 +448,14 @@ def test_result_keeps_execution_status_and_coverage_status_independent():
     assert d["data"]["records"] == [{"tid": 1}]
 
 
-def test_execution_status_constants_are_distinct_strings():
-    assert {EXECUTION_COMPLETED, EXECUTION_PARTIAL, EXECUTION_FAILED} == {
-        "completed", "partial", "failed"}
+def test_execution_status_constants_are_three_distinct_strings():
+    # Distinctness is the property this file cares about (a copy-paste
+    # collision would silently merge two statuses); the values themselves
+    # are pinned against result.execution_status' schema enum in
+    # tests/unit/test_record_schema_alignment.py.
+    constants = (EXECUTION_COMPLETED, EXECUTION_PARTIAL, EXECUTION_FAILED)
+    assert all(isinstance(value, str) and value for value in constants)
+    assert len(set(constants)) == 3
 
 
 def test_result_defaults_are_empty_not_none():
