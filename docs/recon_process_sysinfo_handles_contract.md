@@ -1736,6 +1736,26 @@ it cannot, so the header is present for every dump that reaches a
 command. That is why this field declares **no coverage source and no
 limitation** of its own.
 
+**The header field this reads is corrected by `open_dump()`, not taken as
+the library parsed it.** `MINIDUMP_HEADER` declares `Reserved` and
+`TimeDateStamp` as a *union* — one `ULONG32` at offset `0x14` — followed
+by a `ULONG64 Flags`. The installed `minidump` library reads those as
+three consecutive `UINT32`s, which still totals the same 32 bytes, so the
+parse succeeds and nothing raises while every field from `0x14` on lands
+one slot late: `header.TimeDateStamp` holds `Flags`'s low 32 bits, and the
+real timestamp ends up in `header.Reserved`. Rendered as epoch seconds, a
+dump's type-flag mask is a small, constant, producer-dependent 1970 date
+(`0x00021826` → `1970-01-02`) — wrong for every dump ever written, and
+indistinguishable from real evidence to the analyst reading it.
+`open_dump()`'s phase 1 therefore re-reads the header's trailing 12 bytes
+at their true offsets (`memory._correct_header_union()`) before any
+command sees the header, so `TimeDateStamp`, `Reserved`, and the full
+64-bit `Flags` all mean what their names say. A field whose bytes are not
+all present in a header truncated mid-read is set to its pre-parse default
+(`0` for the union, `None` for `Flags`) rather than left holding the
+shifted value; the two are decided independently, so a header truncated
+inside `Flags` still yields a real `dump_time_utc`.
+
 It is a UINT32 `time_t` with the same "`0` means the producer never set
 it" convention as `MINIDUMP_MISC_INFO.ProcessCreateTime`, so it reuses
 that field's range check and formatter

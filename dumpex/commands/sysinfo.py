@@ -252,6 +252,14 @@ def _dump_time_utc(mf: MinidumpFile) -> "str | None":
     getattr-guarded because test fakes and hand-assembled MinidumpFile
     objects do not always carry a header, and a missing one is exactly the
     same answer as an unset TimeDateStamp: no dump timestamp available.
+
+    `header.TimeDateStamp` is only the real timestamp because open_dump()'s
+    phase 1 corrects it: the installed minidump library reads
+    MINIDUMP_HEADER's Reserved/TimeDateStamp union as two separate fields
+    and lands Flags's low 32 bits in TimeDateStamp instead (see
+    dumpex.core.memory._correct_header_union). An `mf` built by hand,
+    without going through open_dump(), carries the library's uncorrected
+    value -- which is why the fix lives at the single loader, not here.
     """
     header = getattr(mf, "header", None)
     return format_uint32_time_utc(getattr(header, "TimeDateStamp", None))

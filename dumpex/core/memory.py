@@ -15,7 +15,7 @@ except ImportError:
 
 from minidump.header import MinidumpHeader
 from minidump.directory import MINIDUMP_DIRECTORY
-from minidump.constants import MINIDUMP_STREAM_TYPE
+from minidump.constants import MINIDUMP_STREAM_TYPE, MINIDUMP_TYPE
 from minidump.streams import (
     MinidumpThreadList, MinidumpModuleList, MinidumpMemoryList,
     MinidumpSystemInfo, MinidumpThreadExList, MinidumpMemory64List,
@@ -460,6 +460,85 @@ _STREAM_DISPATCH = {
 }
 
 
+# ── MINIDUMP_HEADER's union: an installed-library layout misread ──────────
+# The real MINIDUMP_HEADER (dbghelp.h) is 32 bytes and declares
+# Reserved/TimeDateStamp as a UNION -- the SAME four bytes at offset 0x14 --
+# followed by a ULONG64 Flags:
+#
+#   0x00 Signature            0x04 Version + ImplementationVersion
+#   0x08 NumberOfStreams      0x0C StreamDirectoryRva      0x10 CheckSum
+#   0x14 union { ULONG32 Reserved; ULONG32 TimeDateStamp; }
+#   0x18 ULONG64 Flags
+#
+# The installed library (.venv/Lib/site-packages/minidump/header.py,
+# MinidumpHeader.parse) reads the union as two CONSECUTIVE UINT32s and
+# Flags as a UINT32, so its fields still total exactly 32 bytes -- the
+# parse succeeds, the signature check passes, nothing raises -- but every
+# field from 0x14 on lands one slot too late:
+#   header.Reserved      <- 0x14: the REAL TimeDateStamp
+#   header.TimeDateStamp <- 0x18: Flags's low 32 bits
+#   header.Flags         <- 0x1C: Flags's high 32 bits (0 for every
+#                                 currently-defined MINIDUMP_TYPE bit)
+# Left uncorrected, --sysinfo's `dump_time_utc` (§4.2.2) renders a dump's
+# TYPE FLAGS as epoch seconds: a small, constant, producer-dependent 1970
+# date (0x00021826 -> 1970-01-02) that reads as real evidence and is wrong
+# for every dump ever written. The fix-up below re-reads those trailing 12
+# bytes at their true offsets, so `header.TimeDateStamp` means what its
+# name says for every `mf` that came from open_dump().
+
+_HEADER_UNION_OFFSET = 0x14    # union { Reserved, TimeDateStamp }
+_HEADER_UNION_SIZE   = 4       # ULONG32 Reserved / TimeDateStamp
+_HEADER_FLAGS_SIZE   = 8       # ULONG64 Flags
+_HEADER_TAIL_SIZE    = _HEADER_UNION_SIZE + _HEADER_FLAGS_SIZE
+
+
+def _correct_header_union(header, file_handle) -> None:
+    """Re-read MINIDUMP_HEADER's trailing 12 bytes at their REAL offsets
+    and write them back onto an already-parsed `header`, in place (see the
+    block comment above for the upstream misread this compensates for).
+    TimeDateStamp and Reserved are set to the same value BECAUSE they are
+    one union -- not a copy of one field into another.
+
+    A field whose bytes are not ALL present is set to the value
+    MinidumpHeader.__init__ gives it before any parse (0 for the union,
+    None for Flags), never left holding what the upstream parse put there:
+    a file truncated inside the header still parses successfully upstream
+    (int.from_bytes(b'') is 0, and MINIDUMP_TYPE(0) is a valid
+    MiniDumpNormal), so "the header parsed" is no proof that 32 bytes were
+    there to read -- and the shifted value sitting in TimeDateStamp is
+    precisely the flags-as-a-1970-date artifact this whole fix-up exists
+    to stop publishing. The two fields are decided independently: bytes
+    0x14-0x17 being present is the only thing the timestamp depends on, so
+    a header truncated inside Flags still yields a real dump time.
+
+    Flags is corrected too, not just the field --sysinfo reads: half-fixing
+    a shifted layout leaves the other half as a landmine for the next
+    caller, who would have no reason to suspect the field is a high dword.
+    A mask the enum cannot decode is kept as the plain int rather than
+    dropped -- the raw value is still the most faithful thing available,
+    and this fix-up exists to make header fields MORE accurate, never to
+    turn an odd one into a parse failure."""
+    file_handle.seek(_HEADER_UNION_OFFSET, 0)
+    tail = file_handle.read(_HEADER_TAIL_SIZE)
+
+    if len(tail) >= _HEADER_UNION_SIZE:
+        time_date_stamp = int.from_bytes(
+            tail[:_HEADER_UNION_SIZE], byteorder="little", signed=False)
+    else:
+        time_date_stamp = 0
+    header.TimeDateStamp = time_date_stamp
+    header.Reserved = time_date_stamp
+
+    if len(tail) != _HEADER_TAIL_SIZE:
+        header.Flags = None
+        return
+    flags = int.from_bytes(tail[_HEADER_UNION_SIZE:], byteorder="little", signed=False)
+    try:
+        header.Flags = MINIDUMP_TYPE(flags)
+    except Exception:
+        header.Flags = flags
+
+
 def open_dump(path: str) -> MinidumpFile:
     # Phase 0 -- unchanged, existing behavior, still exit 1.
     if not os.path.exists(path):
@@ -479,6 +558,12 @@ def open_dump(path: str) -> MinidumpFile:
     try:
         mf.file_handle = open(path, "rb")
         mf.header = MinidumpHeader.parse(mf.file_handle)
+        # Before anything reads a header field: the parse above lands
+        # TimeDateStamp/Reserved/Flags on the wrong bytes (see
+        # _correct_header_union). The directory walk below seeks
+        # absolutely, so the file position this leaves behind is
+        # irrelevant to it.
+        _correct_header_union(mf.header, mf.file_handle)
         for i in range(mf.header.NumberOfStreams):
             mf.file_handle.seek(mf.header.StreamDirectoryRva + i * 12, 0)
             d = MINIDUMP_DIRECTORY.parse(mf.file_handle)

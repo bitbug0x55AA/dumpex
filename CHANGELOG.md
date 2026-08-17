@@ -5,6 +5,26 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Fixed: `--sysinfo`'s `Dump Time` was a 1970 date on every dump
+
+`--sysinfo`'s `Dump Time` (and `dump_time_utc` in `--json`/`--csv`)
+reported a constant 1970 date — the same one for every dump written by the
+same tool — instead of when the dump was taken.
+
+`MINIDUMP_HEADER` declares `Reserved` and `TimeDateStamp` as a *union*
+(one `ULONG32`), followed by a 64-bit `Flags`. The `minidump` library
+reads those as three separate 32-bit fields, which still adds up to the
+header's 32 bytes, so the parse succeeds silently while every field past
+the union shifts by one slot: what dumpex published as the dump's
+timestamp was really the dump's type-flag mask read as epoch seconds
+(`0x00021826` → `1970-01-02`, `0x00241826` → `1970-01-28`).
+
+dumpex now re-reads those header bytes at their real offsets when it opens
+a dump, so `Dump Time` is the actual time the dump was written. A dump
+whose producer genuinely left the field unset still reports `null` /
+prints no `Dump Time` line, exactly as before. No other field was
+affected, and no output shape changed.
+
 ## Changed: `--sysinfo` is now three sections, and identifies the dump itself
 
 `--sysinfo` previously printed a `═══ ENVIRONMENT ═══` banner *inside*
