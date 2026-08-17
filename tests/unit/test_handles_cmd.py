@@ -1010,13 +1010,42 @@ def test_cmd_handles_renders_and_returns_the_same_result():
 
 # ── The collector must not go through get_handles()'s narrow view ───────
 
-def test_collect_handles_does_not_use_get_handles():
+def test_collect_handles_never_routes_through_the_narrow_get_handles_view(monkeypatch):
     """get_handles() returns only mf.handles.handles -- it discards the
     header, and with it NumberOfDescriptors, so a builder written against
     it could not emit HANDLE_STREAM_TRUNCATED at all. The truncation
-    tests above prove the header IS read; this pins the reason."""
-    import inspect
+    tests above prove the header IS read; this pins the reason.
+
+    Enforced by arming every route to that view with a tripwire rather
+    than by scanning the module text for the name. The tripwire sits on
+    the CALLEE, so it fires no matter how the caller reaches it -- a
+    local alias, `getattr(memory, "get_" + "handles")`, an
+    `importlib.import_module()` lookup, or a renamed wrapper -- none of
+    which a source-text assertion can see. The fixture is the
+    header-only truncation shape, so an implementation that quietly
+    swapped in the narrow view would fail the coverage assertion below
+    even with the tripwire removed.
+    """
+    def _tripwire(*args, **kwargs):
+        raise AssertionError(
+            "collect_handles() routed through get_handles()'s header-less view")
+
+    import dumpex.core.memory as memory_module
     import dumpex.commands.handles as handles_module
-    source = inspect.getsource(handles_module)
-    body = source.split('"""', 2)[-1]   # skip the module docstring, which names it
-    assert "get_handles" not in body
+
+    monkeypatch.setattr(memory_module, "get_handles", _tripwire)
+    # A module-level `from dumpex.core.memory import get_handles` would bind
+    # its own reference that patching core.memory cannot reach.
+    monkeypatch.setattr(handles_module, "get_handles", _tripwire, raising=False)
+
+    # DataSize claims room for 5 descriptors but the file ends after 2, so
+    # only `header.NumberOfDescriptors` can yield the true count of 3.
+    mf = _mf_with([{"handle": 0x10 * (i + 1)} for i in range(2)],
+                   number_of_descriptors=5, declared_data_size=16 + 5 * 32)
+    mf.get_handles = _tripwire   # minidump's own method, the same narrow view
+
+    result = collect_handles(mf)
+
+    assert len(result.records) == 2
+    assert _limitation(result.coverage,
+                        LimitationCode.HANDLE_STREAM_TRUNCATED).affected_count == 3

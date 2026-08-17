@@ -1070,10 +1070,51 @@ def test_undetermined_import_directory_never_prints_declares_no_imports():
 
 # ── P3: renderer takes no `mf` -- structurally cannot re-read evidence ──
 
-def test_render_process_console_signature_has_no_mf_parameter():
+def test_render_process_console_has_no_way_in_for_the_dump():
+    """No parameter names the dump, and no `*args`/`**kwargs` catch-all
+    could smuggle one in. The exact parameter list is deliberately NOT
+    pinned: adding a rendering option is not a regression, and asserting
+    the full list only fires on renames while staying green for real
+    breaks."""
     import inspect
-    params = list(inspect.signature(render_process_console).parameters)
-    assert params == ["record", "coverage", "verbose"]
+    signature = inspect.signature(render_process_console)
+    assert not ({"mf", "minidump", "dump", "reader"} & set(signature.parameters))
+    catch_alls = [name for name, p in signature.parameters.items()
+                  if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
+    assert catch_alls == []
+
+
+def test_render_process_console_output_survives_the_dump_being_gutted():
+    """The behavioural half: a record rendered after the dump object it
+    came from has been destroyed is byte-identical to one rendered while
+    the dump was intact. An implementation that reached back for evidence
+    -- through a captured reference, a closure or a record attribute --
+    would change its output or raise here, whatever its signature says.
+    """
+    mf = _complete_mf()
+    result = collect_process(mf)
+    record = result.records[0]
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        render_process_console(record, result.coverage)
+    before = buf.getvalue()
+
+    def _tripwire(*args, **kwargs):
+        raise AssertionError("render_process_console() re-read the dump")
+
+    mf.misc_info = None
+    mf.peb = None
+    mf.modules = None
+    mf.memory_segments_64 = None
+    mf.memory_segments = None
+    mf._dumpex_stream_failures = {}
+    mf.get_reader = _tripwire
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        render_process_console(record, result.coverage)
+    assert buf.getvalue() == before
 
 
 # ── P3: MiscInfo absent -> pid stays null, never substituted from a TID ─

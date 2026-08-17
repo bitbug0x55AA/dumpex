@@ -266,12 +266,56 @@ def test_overall_status_matches_build_hunt_summary_exactly():
 
 # ── renderer never reads legacy `results` ──────────────────────────────────
 
-def test_render_hunt_summary_signature_has_no_legacy_results_parameter():
+def test_render_hunt_summary_has_no_way_in_for_the_legacy_results_dict():
+    """The legacy `results` dict must have no route into the renderer:
+    not as a named parameter, and not through a `*args`/`**kwargs`
+    catch-all that would quietly accept `results=` again either.
+
+    The full parameter set is deliberately NOT pinned. Adding a
+    rendering option is not a regression, so asserting the exact set only
+    produces a red test when someone renames or adds a parameter, while
+    staying green for every behavioural break -- which is the opposite of
+    what this guard is for.
+    """
     import inspect
-    params = set(inspect.signature(render_hunt_summary).parameters)
-    assert "results" not in params
-    assert params == {"records", "summary", "doc_coverage_status", "width", "region_correlations",
-                       "investigation_actions", "deep_triage_diagnostics", "verbose"}
+    signature = inspect.signature(render_hunt_summary)
+    assert "results" not in signature.parameters
+    catch_alls = [name for name, p in signature.parameters.items()
+                  if p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)]
+    assert catch_alls == []
+    # The record-derived triple is the whole required input.
+    required = [name for name, p in signature.parameters.items()
+                if p.default is inspect.Parameter.empty]
+    assert len(required) == 3
+
+
+def test_hunt_summary_card_is_derived_from_the_records_it_is_handed():
+    """The behavioural half of the same rule: the card's content tracks
+    the HunterRecords passed in. Detected and clean record sets must
+    render differently, and re-rendering the same records must reproduce
+    the card byte-for-byte -- so the text can only have come from the
+    arguments, not from a legacy dict or any state carried between
+    calls."""
+    detected = all_seven_detected_variety()
+    clean = _all_clean_records()
+
+    out_detected = _capture(detected, build_hunt_summary(detected, selected="all"))
+    out_clean = _capture(clean, build_hunt_summary(clean, selected="all"))
+
+    # Record-derived sectioning, asserted in BOTH directions inside one
+    # test. Comparing the two outputs for mere inequality would not do:
+    # their `summary` dicts differ too, so a renderer that ignored
+    # `records` entirely -- caching the first call's list, or reading a
+    # legacy dict -- would still emit two different cards and pass. These
+    # assertions pin the section each RECORD set must produce, so such a
+    # renderer carries REVIEW FIRST into the clean card or loses it from
+    # the detected one, whichever order it cached in.
+    assert "REVIEW FIRST" in out_detected
+    assert "REVIEW FIRST" not in out_clean
+    assert "OTHER HUNTERS" in out_clean
+
+    # ...and rendering is a pure function of what it was handed.
+    assert _capture(detected, build_hunt_summary(detected, selected="all")) == out_detected
 
 
 def test_rejects_non_hunter_record_list():
