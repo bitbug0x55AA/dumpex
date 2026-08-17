@@ -2130,9 +2130,15 @@ partition, rather than re-derived per render.
 
 Printed as an **aligned two-column block**, one variable per line:
 
+Example values below are illustrative, and any user-profile path is
+written with a `<user>` placeholder rather than a real account name —
+`scripts/repo_privacy_scan.py`'s `windows-user-profile` rule rejects a
+concrete `C:\Users\<name>\…` anywhere in a tracked file, including in
+documentation samples pasted from a real dump.
+
 ```
       ALLUSERSPROFILE                 C:\ProgramData
-      APPDATA                         C:\Users\s1rx\AppData\Roaming
+      APPDATA                         C:\Users\<user>\AppData\Roaming
       FPS_BROWSER_APP_PROFILE_STRING  Internet Explorer
       Path                            C:\Windows\system32;C:\Windows;C:\Windows\System32\Wbem;
                                       C:\Windows\System32\WindowsPowerShell\v1.0\;
