@@ -9,6 +9,7 @@ v2-routed commands.
 """
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -18,7 +19,7 @@ import dumpex.cli as cli
 from dumpex.output.envelope import SCHEMA_VERSION
 from tests.fixtures.fakes import (
     FakeMF, Module, Region, Thread, ThreadInfo, Ctx, FakeStream, Peb, MiscInfo,
-    ExceptionStream, SysInfo, wire_environment_walk,
+    SysInfo, wire_environment_walk,
 )
 
 _wire_environment_walk = wire_environment_walk   # local alias, pre-existing call sites unchanged
@@ -45,13 +46,29 @@ def test_help_groups_commands_and_modifiers_and_hides_legacy_names(
     assert "--diff-scope {modules,threads,memory,all}" in help_text
     assert "--strings-encoding {ascii,unicode,both}" in help_text
     # P3 regression: --verbose's help text must name --sysinfo now that it
-    # gates whether environment variable values print to the console.
-    assert "Show additional detail for --sysinfo, --diff or --hunt" in help_text
+    # gates whether environment variable values print to the console --
+    # and, since #43's v2.13 cutover, --process too (peb_extended).
+    assert "Show additional detail for --process, --sysinfo," in help_text
+    # argparse's own line-wrapping is width-dependent and can break
+    # mid-word at a hyphen -- "peb_extended" (an underscore, never
+    # hyphen-broken by textwrap) is the resistant marker to check for.
+    collapsed_help = " ".join(help_text.split())
+    assert "adds the retired" in collapsed_help
+    assert "peb_extended" in collapsed_help
     # --sysinfo's own help text must reflect the removed Process section /
     # added Environment section, not the pre-#41 "process" summary.
     assert "Show OS, host, environment and CPU summary" in help_text
     assert "--diff-mode" not in help_text
     assert "--encoding " not in help_text
+    # #43: --pid/--peb are gone from public routing (no longer offered as
+    # argparse flags in the usage/commands section), and the epilogue
+    # redirects a user of the old flags to their replacement.
+    assert "  --pid " not in help_text
+    assert "  --peb " not in help_text
+    assert "--pid and --peb were replaced by --process in v2.13" in help_text
+    assert "--process " in help_text
+    assert "--handles " in help_text
+    assert "--profile " in help_text
 
 
 def test_legacy_encoding_alias_still_reaches_strings_command(monkeypatch, capsys):
@@ -399,25 +416,373 @@ def test_threads_neither_stream_present_json_is_not_evaluated(monkeypatch, tmp_p
         os.remove(dump_path)
 
 
-def test_pid_complete_via_misc_info_json_exits_zero(monkeypatch, tmp_path):
-    # Fills the missing "pid, complete via MiscInfo" exit-code combo --
-    # the existing pid tests here only cover the fallback/not_evaluated
-    # cases.
+# ── process / handles / profile (--process/--handles/--profile, issue #43:
+# atomic v2.13 cutover replacing --pid/--peb) ─────────────────────────────
+
+def test_process_complete_json_exits_zero(monkeypatch, tmp_path):
+    # "Complete" requires every one of PID/start-time/path/command-line/
+    # image-base to be available AND the PEB-reported main image's PE
+    # header to actually read/validate -- reuses
+    # tests/unit/test_process_cmd.py's own fully-populated fixture (a
+    # real synthetic PE image with one import) rather than re-building
+    # that machinery here.
+    from tests.unit.test_process_cmd import _complete_mf
     dump_path = _make_dump_file()
     try:
-        mf = FakeMF()
-        mf.misc_info = MiscInfo(process_id=100)
+        mf = _complete_mf()
         monkeypatch.setattr(cli, "open_dump", lambda path: mf)
 
         out_json = str(tmp_path / "out.json")
-        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--pid", "--json", out_json])
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--process", "--json", out_json])
         cli.main()   # no SystemExit -- coverage is complete, exit code 0
 
         doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == SCHEMA_VERSION
+        assert doc["result"]["kind"] == "process"
         assert doc["result"]["coverage"]["status"] == "complete"
+        record = doc["result"]["data"]["records"][0]
+        assert record["pid"] == 4242
+        assert record["iat"]["entries"][0]["dll"] == "KERNEL32.dll"
+        assert "peb_extended" not in record   # --verbose not given
+    finally:
+        os.remove(dump_path)
+
+
+def test_process_verbose_adds_peb_extended(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.peb = Peb(0x140000000, r"C:\test.exe")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--process", "--verbose", "--json", out_json])
+        with pytest.raises(SystemExit):
+            cli.main()   # not_evaluated (no MiscInfo) -> exit 4, still writes JSON
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "process"
+        assert doc["result"]["data"]["records"][0]["peb_extended"] is not None
+    finally:
+        os.remove(dump_path)
+
+
+def test_process_empty_dump_json_is_not_evaluated(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # misc_info/peb/modules all absent
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--process", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "process"
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        # §3: --process always emits exactly one record, even when every
+        # field is null.
+        assert len(doc["result"]["data"]["records"]) == 1
+        assert doc["result"]["data"]["records"][0]["process_name"] is None
+    finally:
+        os.remove(dump_path)
+
+
+def test_process_partial_json_exits_3(monkeypatch, tmp_path):
+    # PEB present with a path but no command line, no image base -- a real
+    # gap (PROCESS_COMMAND_LINE_UNAVAILABLE/PROCESS_IMAGE_BASE_UNAVAILABLE),
+    # not the "nothing evaluated at all" case -- exit 3, not 4.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.misc_info = MiscInfo(process_id=100, process_create_time=1786670105)
+        mf.peb = Peb(None, r"C:\test.exe")   # image_base_address=None, command_line=None
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--process", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_PARTIAL == 3
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "process"
+        assert doc["result"]["coverage"]["status"] == "partial"
         assert doc["result"]["data"]["records"][0]["pid"] == 100
     finally:
         os.remove(dump_path)
+
+
+def test_handles_complete_json_exits_zero(monkeypatch, tmp_path):
+    from tests.fixtures.fakes import Handle
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.handles = FakeStream(
+            [Handle(0x10, "File", r"\Device\HarddiskVolume1\notes.txt")], "handles")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--handles", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == SCHEMA_VERSION
+        assert doc["result"]["kind"] == "handles"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        assert doc["result"]["data"]["records"][0]["handle"] == "0x0000000000000010"
+    finally:
+        os.remove(dump_path)
+
+
+def test_handles_absent_stream_json_is_not_evaluated(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # no HandleDataStream at all
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--handles", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "handles"
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        assert doc["result"]["data"]["records"] == []
+    finally:
+        os.remove(dump_path)
+
+
+def test_handles_partial_json_exits_3(monkeypatch, tmp_path):
+    # A descriptor whose name RVA points past the end of the captured
+    # stream body -- an unreadable (not merely unnamed) name, real
+    # HANDLE_STRING_READ_FAILED evidence a genuine dump can produce --
+    # reuses tests/unit/test_handles_cmd.py's own real-parser fixture
+    # builder (_mf_with/BAD_RVA) rather than hand-shaping bytes here.
+    from tests.unit.test_handles_cmd import _mf_with, BAD_RVA
+    dump_path = _make_dump_file()
+    try:
+        mf = _mf_with([{"handle": 0x10, "type_name": "File", "object_name": BAD_RVA}])
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--handles", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_PARTIAL == 3
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "handles"
+        assert doc["result"]["coverage"]["status"] == "partial"
+        assert len(doc["result"]["data"]["records"]) == 1   # descriptor kept, name lost
+        assert doc["result"]["data"]["records"][0]["object_name_status"] == "unreadable"
+    finally:
+        os.remove(dump_path)
+
+
+class _FakeMinidumpHeader:
+    """Minimal stand-in for the dump's own header -- only `.Flags`
+    (MINIDUMP_TYPE), the one field collect_profile() reads from it."""
+    def __init__(self, flags=0):
+        self.Flags = flags
+
+
+def test_profile_complete_json_exits_zero(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.header = _FakeMinidumpHeader(0)
+        mf.sysinfo = SysInfo()
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--profile", "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["meta"]["schema_version"] == SCHEMA_VERSION
+        assert doc["result"]["kind"] == "profile"
+        assert doc["result"]["coverage"]["status"] == "complete"
+        # #95's own explicit acceptance case: a successfully profiled
+        # sparse dump stays complete even though some capabilities are
+        # unavailable.
+        assert any(c["status"] == "unavailable"
+                   for c in doc["result"]["data"]["records"][0]["capabilities"])
+    finally:
+        os.remove(dump_path)
+
+
+def test_profile_partial_json_exits_3(monkeypatch, tmp_path):
+    # A real header/directory table (profile_directory is PRESENT, so
+    # coverage can never fall to not_evaluated) but no SystemInfoStream --
+    # PROFILE_ARCHITECTURE_UNAVAILABLE, a genuine partial gap.
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.header = _FakeMinidumpHeader(0)   # no mf.sysinfo
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--profile", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_PARTIAL == 3
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "profile"
+        assert doc["result"]["coverage"]["status"] == "partial"
+        assert doc["result"]["data"]["records"][0]["architecture"] is None
+    finally:
+        os.remove(dump_path)
+
+
+def test_profile_no_header_json_is_not_evaluated(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()   # header defaults to None -- no defensible profile at all
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--profile", "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "profile"
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        assert doc["result"]["data"]["records"] == []
+    finally:
+        os.remove(dump_path)
+
+
+# ── --txt for the three new commands (issue #43's own "--txt, --json,     │
+#    output collision safety, case metadata, and path-redaction plumbing   │
+#    continue to work for all three new modes" requirement) -- --txt's own │
+#    mechanism (AtomicTextTee wrapping sys.stdout, ANSI-stripped on write) │
+#    is command-agnostic and already unit-tested at that level             │
+#    (tests/unit/test_safe_io.py); these prove it actually engages for     │
+#    --process/--handles/--profile specifically, not just in principle. ───
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def test_process_txt_writes_a_real_ansi_free_transcript(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.peb = Peb(0x140000000, r"C:\test.exe")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_txt = str(tmp_path / "out.txt")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--process", "--txt", out_txt])
+        with pytest.raises(SystemExit):
+            cli.main()   # not_evaluated (no MiscInfo) -> exit 4, --txt still commits
+
+        assert os.path.exists(out_txt)
+        text = open(out_txt, encoding="utf-8").read()
+        assert text   # something was actually written, not an empty placeholder
+        assert not _ANSI_ESCAPE_RE.search(text)
+    finally:
+        os.remove(dump_path)
+
+
+def test_handles_txt_writes_a_real_ansi_free_transcript(monkeypatch, tmp_path):
+    from tests.fixtures.fakes import Handle
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.handles = FakeStream(
+            [Handle(0x10, "File", r"\Device\HarddiskVolume1\notes.txt")], "handles")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_txt = str(tmp_path / "out.txt")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--handles", "--txt", out_txt])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        assert os.path.exists(out_txt)
+        text = open(out_txt, encoding="utf-8").read()
+        assert text
+        assert not _ANSI_ESCAPE_RE.search(text)
+    finally:
+        os.remove(dump_path)
+
+
+def test_profile_txt_writes_a_real_ansi_free_transcript(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.header = _FakeMinidumpHeader(0)
+        mf.sysinfo = SysInfo()
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_txt = str(tmp_path / "out.txt")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--profile", "--txt", out_txt])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        assert os.path.exists(out_txt)
+        text = open(out_txt, encoding="utf-8").read()
+        assert text
+        assert not _ANSI_ESCAPE_RE.search(text)
+    finally:
+        os.remove(dump_path)
+
+
+def test_process_json_and_txt_together_both_produced_correctly(monkeypatch, tmp_path):
+    from tests.unit.test_process_cmd import _complete_mf
+    dump_path = _make_dump_file()
+    try:
+        mf = _complete_mf()
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        out_txt = str(tmp_path / "out.txt")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--process", "--json", out_json, "--txt", out_txt])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "process"
+        assert doc["result"]["coverage"]["status"] == "complete"
+
+        text = open(out_txt, encoding="utf-8").read()
+        assert not _ANSI_ESCAPE_RE.search(text)
+        # The --txt transcript is the SAME run's console output, so it must
+        # show the same process identity the --json document reports --
+        # not two independent collections that could disagree.
+        assert "4242" in text   # _complete_mf()'s own PID
+    finally:
+        os.remove(dump_path)
+
+
+def test_process_txt_path_colliding_with_json_path_is_refused(monkeypatch, tmp_path, capsys):
+    same = str(tmp_path / "same.out")
+    code = _run(monkeypatch, [str(tmp_path / "sample.dmp"), "--process",
+                              "--json", same, "--txt", same])
+    assert code == 1
+    out = capsys.readouterr().out
+    assert "would both write to the same file" in out
+    assert "--txt" in out
+
+
+def test_removed_pid_flag_is_rejected_by_argparse(monkeypatch, capsys):
+    # A valid mode flag (--modules) is also given so the mutually-
+    # exclusive group's own "one of the arguments ... is required" check
+    # doesn't fire first and mask the unrecognized --pid.
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--pid"])
+    assert code == 2
+    assert "unrecognized arguments: --pid" in capsys.readouterr().err
+
+
+def test_removed_peb_flag_is_rejected_by_argparse(monkeypatch, capsys):
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--peb"])
+    assert code == 2
+    assert "unrecognized arguments: --peb" in capsys.readouterr().err
 
 
 def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(monkeypatch, tmp_path):
@@ -453,106 +818,6 @@ def test_threads_json_produces_v2_shaped_document_via_command_result_adapter(mon
         assert doc["result"]["data"]["records"][0]["tid"] == 1
         assert doc["artifacts"] == []
         assert doc["diagnostics"] == {"warnings": [], "errors": []}
-    finally:
-        os.remove(dump_path)
-
-
-def test_peb_missing_json_produces_v2_shaped_document_via_command_result_adapter(monkeypatch, tmp_path):
-    # peb.py is migrated onto CommandResult -- proves the real CLI path
-    # (cli.main -> _apply_command_result -> V2Output.set_command_result)
-    # for the not_evaluated / dedicated-code (PEB_UNAVAILABLE) case.
-    dump_path = _make_dump_file()
-    try:
-        mf = FakeMF()   # no mf.peb at all
-        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
-
-        out_json = str(tmp_path / "out.json")
-        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--peb", "--json", out_json])
-        with pytest.raises(SystemExit) as exc:
-            cli.main()
-        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
-
-        doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["meta"]["schema_version"] == SCHEMA_VERSION
-        assert doc["result"]["kind"] == "peb"
-        assert doc["result"]["execution_status"] == "completed"
-        assert doc["result"]["coverage"]["status"] == "not_evaluated"
-        assert doc["result"]["coverage"]["reasons"] == [
-            "PEB could not be parsed (missing sysinfo or thread list in dump)"]
-        assert doc["result"]["data"]["records"][0]["peb_address"] is None
-    finally:
-        os.remove(dump_path)
-
-
-def test_peb_present_json_produces_complete_status(monkeypatch, tmp_path):
-    dump_path = _make_dump_file()
-    try:
-        mf = FakeMF()
-        mf.peb = Peb(0x140000000, r"C:\test.exe")
-        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
-
-        out_json = str(tmp_path / "out.json")
-        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--peb", "--json", out_json])
-        cli.main()   # no SystemExit -- coverage is complete, exit code 0
-
-        doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["result"]["kind"] == "peb"
-        assert doc["result"]["coverage"]["status"] == "complete"
-        assert doc["result"]["coverage"]["reasons"] == []
-    finally:
-        os.remove(dump_path)
-
-
-def test_pid_fallback_json_produces_v2_shaped_document_via_command_result_adapter(monkeypatch, tmp_path):
-    # sysinfo.py's collect_pid is migrated onto CommandResult -- proves the
-    # real CLI path (cli.main -> _apply_command_result ->
-    # V2Output.set_command_result) for the thread-list/exception-stream
-    # fallback (structured PID_THREAD_LIST_FALLBACK/PID_EXCEPTION_TID_FALLBACK
-    # limitations) case.
-    dump_path = _make_dump_file()
-    try:
-        mf = FakeMF()
-        mf.threads = FakeStream([Thread(9, Ctx(0))], "threads")
-        mf.exception = ExceptionStream(9)
-        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
-
-        out_json = str(tmp_path / "out.json")
-        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--pid", "--json", out_json])
-        with pytest.raises(SystemExit) as exc:
-            cli.main()
-        assert exc.value.code == cli.EXIT_PARTIAL == 3
-
-        doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["result"]["kind"] == "pid"
-        assert doc["result"]["execution_status"] == "completed"
-        assert doc["result"]["coverage"]["status"] == "partial"
-        assert doc["result"]["coverage"]["reasons"] == [
-            "MiscInfo stream absent — PID not directly recoverable from thread list.\n"
-            "    1 thread(s) found: 0x9",
-            "Exception stream present: faulting TID = 0x9 (this is a Thread ID, not a Process ID)",
-        ]
-        assert doc["result"]["data"]["records"][0]["exc_tid"] == 9
-    finally:
-        os.remove(dump_path)
-
-
-def test_pid_all_absent_json_is_not_evaluated(monkeypatch, tmp_path):
-    dump_path = _make_dump_file()
-    try:
-        mf = FakeMF()   # misc_info/threads/exception all absent
-        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
-
-        out_json = str(tmp_path / "out.json")
-        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--pid", "--json", out_json])
-        with pytest.raises(SystemExit) as exc:
-            cli.main()
-        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
-
-        doc = json.loads(open(out_json, encoding="utf-8").read())
-        assert doc["result"]["coverage"]["status"] == "not_evaluated"
-        assert doc["result"]["coverage"]["reasons"] == [
-            "MiscInfo, thread list, and exception stream are all absent from this "
-            "dump; PID could not be evaluated"]
     finally:
         os.remove(dump_path)
 

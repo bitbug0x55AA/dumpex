@@ -1,8 +1,14 @@
 """
-Table-driven compatibility-freeze suite for the six recon commands.
+Table-driven compatibility-freeze suite for four of dumpex's recon
+commands (--list/--modules/--threads/--sysinfo). `--pid`/`--peb` were
+removed in issue #43's atomic v2.13 cutover (see
+docs/recon_process_sysinfo_handles_contract.md §7.2) -- their golden
+scenarios were removed from this suite in the same change, and #44 owns
+adding fresh compatibility fixtures for their replacements (--process/
+--handles/--profile).
 
 For every legal source-state scenario (absent / present_empty / present --
-SourceState.FAILED is explicitly N/A for all six of these commands, see
+SourceState.FAILED is explicitly N/A for all four of these commands, see
 dumpex.output.coverage's SourceState docstring: none of their mf.<stream>
 accesses are wrapped in a try/except, so a read failure propagates as a
 fatal exception rather than becoming a SOURCE_FAILED observation), this
@@ -52,7 +58,7 @@ import dumpex.output.collector as collector_mod
 from dumpex.output.envelope import SCHEMA_VERSION
 from tests.fixtures.fakes import (
     FakeMF, FakeHeader, Region, Module, Thread, ThreadInfo, Ctx, FakeStream, Peb, MiscInfo,
-    SysInfo, ExceptionStream, wire_environment_walk, EnvReader, UnconstructibleEnvReader,
+    SysInfo, wire_environment_walk, EnvReader, UnconstructibleEnvReader,
 )
 
 
@@ -66,7 +72,7 @@ DUMP_SIZE = len(DUMP_BYTES)
 _FIXED_RUNTIME_KEYS = {"python_version", "minidump_version", "yara_version", "pyyaml_version"}
 
 _CMD_LABEL = {"--list": "list", "--modules": "modules", "--threads": "threads",
-              "--peb": "peb", "--pid": "pid", "--sysinfo": "sysinfo"}
+              "--sysinfo": "sysinfo"}
 _CMD_OPTIONS = {"--list": {"verbose": False, "filter": None}}   # every other command: {"verbose": False}
 
 
@@ -165,11 +171,6 @@ def _modules_present():
                              "modules")
     return mf
 
-def _peb_absent(): return FakeMF()
-
-def _peb_present():
-    mf = FakeMF(); mf.peb = Peb(0x140000000, r"C:\test.exe"); return mf
-
 def _threads_all_absent(): return FakeMF()
 
 def _threads_degraded():
@@ -201,28 +202,6 @@ def _threads_tid_mismatch():
     mf.thread_info = FakeStream([ThreadInfo(1, 0x7ffe0000), ThreadInfo(4, 0x7fff0000)], "infos")
     mf.modules     = FakeStream([], "modules")
     return mf
-
-def _pid_all_absent(): return FakeMF()
-
-def _pid_complete():
-    mf = FakeMF(); mf.misc_info = MiscInfo(process_id=4321); return mf
-
-def _pid_thread_fallback():
-    mf = FakeMF()
-    mf.threads = FakeStream([Thread(9, Ctx(0)), Thread(10, Ctx(0))], "threads")
-    return mf
-
-def _pid_exception_fallback():
-    mf = FakeMF()
-    mf.threads   = FakeStream([Thread(9, Ctx(0))], "threads")
-    mf.exception = ExceptionStream(9)
-    return mf
-
-def _pid_no_usable_fallback():
-    # mf.threads is present as a stream object but reports zero threads --
-    # neither fallback branch fires on its own, exercising the
-    # PID_NO_USABLE_FALLBACK safety-net code.
-    mf = FakeMF(); mf.threads = FakeStream([], "threads"); return mf
 
 def _sysinfo_all_absent(): return _assert_sysinfo_reachable_via_open_dump(FakeMF())
 
@@ -415,49 +394,6 @@ SCENARIOS = [
         '20480,(not set),,,[]\n\n',
     ),
     (
-        "peb_absent", ["--peb"], _peb_absent, 4,
-        '[!] PEB could not be parsed (missing sysinfo or thread list in dump)\n',
-        {"kind": "peb", "execution_status": "completed",
-         "coverage": {"status": "not_evaluated",
-                      "reasons": ["PEB could not be parsed (missing sysinfo or thread list in dump)"]},
-         "summary": {"count": 1},
-         "data": {"records": [{"peb_address": None, "image_base_address": None,
-                                "being_debugged": None, "image_path": None,
-                                "command_line": None, "window_title": None, "dll_path": None,
-                                "current_directory": None, "standard_input": None,
-                                "standard_output": None, "standard_error": None,
-                                "environment_variables": None}]}},
-        '## peb / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'peb,completed,not_evaluated,PEB could not be parsed (missing sysinfo or thread list in dump),1\n\n'
-        '## peb / records\npeb_address,image_base_address,being_debugged,image_path,command_line,'
-        'window_title,dll_path,current_directory,standard_input,standard_output,standard_error\n'
-        ',,,,,,,,,,\n\n',
-    ),
-    (
-        "peb_present", ["--peb"], _peb_present, 0,
-        '\n\u2550\u2550\u2550 PEB \u2550\u2550\u2550\n  PEB Address              0x0000000000000000\n'
-        '  BeingDebugged            False\n  ImageBaseAddress         0x0000000140000000\n'
-        '  ImagePath                C:\\test.exe\n  CommandLine              (none)\n'
-        '  WindowTitle              (none)\n  DllPath                  (none)\n'
-        '  CurrentDirectory         (none)\n  StandardInput            None\n'
-        '  StandardOutput           None\n  StandardError            None\n',
-        {"kind": "peb", "execution_status": "completed",
-         "coverage": {"status": "complete", "reasons": []},
-         "summary": {"count": 1},
-         "data": {"records": [{"peb_address": "0x0000000000000000",
-                                "image_base_address": "0x0000000140000000",
-                                "being_debugged": False, "image_path": "C:\\test.exe",
-                                "command_line": None, "window_title": None, "dll_path": None,
-                                "current_directory": None, "standard_input": None,
-                                "standard_output": None, "standard_error": None,
-                                "environment_variables": None}]}},
-        '## peb / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'peb,completed,complete,,1\n\n'
-        '## peb / records\npeb_address,image_base_address,being_debugged,image_path,command_line,'
-        'window_title,dll_path,current_directory,standard_input,standard_output,standard_error\n'
-        '0x0000000000000000,0x0000000140000000,False,C:\\test.exe,,,,,,,\n\n',
-    ),
-    (
         "threads_all_absent", ["--threads"], _threads_all_absent, 4,
         '  [~] Neither ThreadListStream nor ThreadInfoListStream present in this dump\n\n\n'
         '  [~] CreateTime/ExitTime not available in the captured ThreadInfo data.\n\n[+] 0 thread(s).\n',
@@ -582,95 +518,6 @@ SCENARIOS = [
         '2,,,,[],,,,,,,,\n'
         '3,,,,[],,,,,,,,\n'
         '4,0x000000007fff0000,,unregistered,[],,,,,,,,\n\n',
-    ),
-    (
-        "pid_all_absent", ["--pid"], _pid_all_absent, 4,
-        '\n\u2550\u2550\u2550 PROCESS ID \u2550\u2550\u2550\n  [!] ProcessId not found in MiscInfo stream.\n\n'
-        '  [~] MiscInfo, thread list, and exception stream are all absent from this dump; '
-        'PID could not be evaluated\n\n',
-        {"kind": "pid", "execution_status": "completed",
-         "coverage": {"status": "not_evaluated",
-                      "reasons": ["MiscInfo, thread list, and exception stream are all absent "
-                                  "from this dump; PID could not be evaluated"]},
-         "summary": {"count": 1},
-         "data": {"records": [{"pid": None, "source": None, "thread_count": None,
-                                "exc_tid": None}]}},
-        '## pid / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'pid,completed,not_evaluated,"MiscInfo, thread list, and exception stream are all '
-        'absent from this dump; PID could not be evaluated",1\n\n'
-        '## pid / records\npid,source,thread_count,exc_tid\n,,,\n\n',
-    ),
-    (
-        "pid_complete", ["--pid"], _pid_complete, 0,
-        '\n\u2550\u2550\u2550 PROCESS ID \u2550\u2550\u2550\n  PID (decimal)              4321\n'
-        '  PID (hex)                  0x10e1\n'
-        '  Source                     MINIDUMP_MISC_INFO (ProcessId field)\n\n',
-        {"kind": "pid", "execution_status": "completed",
-         "coverage": {"status": "complete", "reasons": []},
-         "summary": {"count": 1},
-         "data": {"records": [{"pid": 4321, "source": "MINIDUMP_MISC_INFO (ProcessId field)",
-                                "thread_count": None, "exc_tid": None}]}},
-        '## pid / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'pid,completed,complete,,1\n\n'
-        '## pid / records\npid,source,thread_count,exc_tid\n'
-        '4321,MINIDUMP_MISC_INFO (ProcessId field),,\n\n',
-    ),
-    (
-        "pid_thread_fallback", ["--pid"], _pid_thread_fallback, 3,
-        '\n\u2550\u2550\u2550 PROCESS ID \u2550\u2550\u2550\n  [!] ProcessId not found in MiscInfo stream.\n\n'
-        '  [~] MiscInfo stream absent \u2014 PID not directly recoverable from thread list.\n'
-        '    2 thread(s) found: 0x9, 0xa\n\n',
-        {"kind": "pid", "execution_status": "completed",
-         "coverage": {"status": "partial",
-                      "reasons": ["MiscInfo stream absent \u2014 PID not directly recoverable "
-                                  "from thread list.\n    2 thread(s) found: 0x9, 0xa"]},
-         "summary": {"count": 1},
-         "data": {"records": [{"pid": None, "source": None, "thread_count": 2,
-                                "exc_tid": None}]}},
-        '## pid / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'pid,completed,partial,"MiscInfo stream absent \u2014 PID not directly recoverable from '
-        'thread list.\n    2 thread(s) found: 0x9, 0xa",1\n\n'
-        '## pid / records\npid,source,thread_count,exc_tid\n,,2,\n\n',
-    ),
-    (
-        "pid_exception_fallback", ["--pid"], _pid_exception_fallback, 3,
-        '\n\u2550\u2550\u2550 PROCESS ID \u2550\u2550\u2550\n  [!] ProcessId not found in MiscInfo stream.\n\n'
-        '  [~] MiscInfo stream absent \u2014 PID not directly recoverable from thread list.\n'
-        '    1 thread(s) found: 0x9\n\n'
-        '  [~] Exception stream present: faulting TID = 0x9 (this is a Thread ID, not a '
-        'Process ID)\n\n',
-        {"kind": "pid", "execution_status": "completed",
-         "coverage": {"status": "partial",
-                      "reasons": ["MiscInfo stream absent \u2014 PID not directly recoverable "
-                                  "from thread list.\n    1 thread(s) found: 0x9",
-                                  "Exception stream present: faulting TID = 0x9 (this is a "
-                                  "Thread ID, not a Process ID)"]},
-         "summary": {"count": 1},
-         "data": {"records": [{"pid": None, "source": None, "thread_count": 1,
-                                "exc_tid": 9}]}},
-        '## pid / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'pid,completed,partial,"MiscInfo stream absent \u2014 PID not directly recoverable from '
-        'thread list.\n    1 thread(s) found: 0x9; Exception stream present: faulting TID = '
-        '0x9 (this is a Thread ID, not a Process ID)",1\n\n'
-        '## pid / records\npid,source,thread_count,exc_tid\n,,1,9\n\n',
-    ),
-    (
-        "pid_no_usable_fallback", ["--pid"], _pid_no_usable_fallback, 3,
-        '\n═══ PROCESS ID ═══\n  [!] ProcessId not found in MiscInfo stream.\n\n'
-        '  [~] PID not found in MINIDUMP_MISC_INFO, and no usable cross-check data was '
-        'available from the thread list or exception stream\n\n',
-        {"kind": "pid", "execution_status": "completed",
-         "coverage": {"status": "partial",
-                      "reasons": ["PID not found in MINIDUMP_MISC_INFO, and no usable "
-                                  "cross-check data was available from the thread list or "
-                                  "exception stream"]},
-         "summary": {"count": 1},
-         "data": {"records": [{"pid": None, "source": None, "thread_count": 0,
-                                "exc_tid": None}]}},
-        '## pid / summary\nkind,execution_status,coverage_status,coverage_reasons,count\n'
-        'pid,completed,partial,"PID not found in MINIDUMP_MISC_INFO, and no usable cross-check '
-        'data was available from the thread list or exception stream",1\n\n'
-        '## pid / records\npid,source,thread_count,exc_tid\n,,0,\n\n',
     ),
     (
         "sysinfo_all_absent", ["--sysinfo"], _sysinfo_all_absent, 3,
@@ -887,11 +734,6 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
     ),
     "modules_present_empty": ({"modules": _src("present_empty", 0)}, []),
     "modules_present": ({"modules": _src("present", 1)}, []),
-    "peb_absent": (
-        {"peb": _src("absent")},
-        [_lim("PEB_UNAVAILABLE", "peb", scope="dump")],
-    ),
-    "peb_present": ({"peb": _src("present", 1)}, []),
     "threads_all_absent": (
         {"threads": _src("absent"), "thread_info": _src("absent"), "modules": _src("absent")},
         [_lim("SOURCE_GROUP_ABSENT", "threads", scope="dump",
@@ -925,32 +767,6 @@ _COVERAGE_SOURCES_AND_LIMITATIONS = {
          _lim("SOURCE_KEY_MISMATCH", "threads", scope="thread", affected_count=1,
               unavailable_fields=["SuspendCount", "Priority", "TEB"],
               counterpart_source="thread_info")],
-    ),
-    "pid_all_absent": (
-        {"misc_info": _src("absent"), "threads": _src("absent"), "exception": _src("absent")},
-        [_lim("PID_SOURCES_ABSENT", "misc_info", scope="dump",
-              related_sources=["misc_info", "threads", "exception"])],
-    ),
-    "pid_complete": (
-        {"misc_info": _src("present", 1), "threads": _src("absent"), "exception": _src("absent")},
-        [],
-    ),
-    "pid_thread_fallback": (
-        {"misc_info": _src("absent"), "threads": _src("present", 2), "exception": _src("absent")},
-        [_lim("PID_THREAD_LIST_FALLBACK", "misc_info", counterpart_source="threads",
-              related_tids=[9, 10])],
-    ),
-    "pid_exception_fallback": (
-        {"misc_info": _src("absent"), "threads": _src("present", 1),
-         "exception": _src("present", 1)},
-        [_lim("PID_THREAD_LIST_FALLBACK", "misc_info", counterpart_source="threads",
-              related_tids=[9]),
-         _lim("PID_EXCEPTION_TID_FALLBACK", "exception", thread_id=9)],
-    ),
-    "pid_no_usable_fallback": (
-        {"misc_info": _src("absent"), "threads": _src("present_empty", 0),
-         "exception": _src("absent")},
-        [_lim("PID_NO_USABLE_FALLBACK", "misc_info")],
     ),
     # --sysinfo's seven sources, and its limitations in §4.7's SECTION
     # order -- DUMP (dump_file, threads, modules), then SYSTEM INFO

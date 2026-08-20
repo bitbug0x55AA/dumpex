@@ -15,7 +15,7 @@ from importlib import resources
 # version string; schema_path()'s own default stays pinned to v1.1 for
 # backward compatibility with existing callers (see its own docstring) --
 # it is NOT updated in lockstep with this constant.
-CURRENT_SCHEMA = "dumpex-output-v2.12.schema.json"
+CURRENT_SCHEMA = "dumpex-output-v2.13.schema.json"
 
 
 def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
@@ -27,19 +27,29 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
     StructuredOutput -- the legacy v1.1-shaped writer -- against it) --
     this default is deliberately NOT changed to track the current schema;
     use CURRENT_SCHEMA/current_schema_path() for that instead. Pass
-    "dumpex-output-v2.12.schema.json" (or CURRENT_SCHEMA) for the current
+    "dumpex-output-v2.13.schema.json" (or CURRENT_SCHEMA) for the current
     v2 contract every command, including --hunt, now produces, or
-    "dumpex-output-v2.11.schema.json"/"dumpex-output-v2.10.schema.json"/
+    "dumpex-output-v2.12.schema.json"/"dumpex-output-v2.11.schema.json"/
+    "dumpex-output-v2.10.schema.json"/
     "dumpex-output-v2.9.schema.json"/"dumpex-output-v2.8.schema.json"/
     "dumpex-output-v2.7.schema.json"/"dumpex-output-v2.6.schema.json"/
     "dumpex-output-v2.5.schema.json"/
     "dumpex-output-v2.4.schema.json"/"dumpex-output-v2.3.schema.json"/
     "dumpex-output-v2.2.schema.json"/"dumpex-output-v2.1.schema.json"/
     "dumpex-output-v2.0.schema.json" for the frozen historical
-    v2.11/2.10/2.9/2.8/2.7/2.6/2.5/2.4/2.3/2.2/2.1/2.0 schemas (still
+    v2.12/2.11/2.10/2.9/2.8/2.7/2.6/2.5/2.4/2.3/2.2/2.1/2.0 schemas (still
     valid for validating output produced before schema_version
-    2.12/2.11/2.10/2.9/2.8/2.7/2.6/2.5/2.4/2.3/2.2/2.1
-    respectively -- v2.11's own `coverageLimitation`/`scanTarget`/
+    2.13/2.12/2.11/2.10/2.9/2.8/2.7/2.6/2.5/2.4/2.3/2.2/2.1
+    respectively -- v2.13 (issue #43) removes `--pid`/`--peb` (kinds
+    "pid"/"peb") and adds `--process`/`--handles`/`--profile` (kinds
+    "process"/"handles"/"profile") in one atomic cutover, and its own
+    `sysInfoRecord` drops the process-identity fields `--process` now
+    owns (`pid`/`process_start_utc`/`image_path`/`command_line`/
+    `process_user_time_seconds`/`process_kernel_time_seconds`) while
+    adding `current_directory`/`environment_variables` -- so neither a
+    v2.12 "pid"/"peb" document nor a v2.12-shaped `sysinfo` document
+    validates against v2.13, and v2.13 output does not validate against
+    v2.12; v2.11's own `coverageLimitation`/`scanTarget`/
     `skipRelationship` are closed (`additionalProperties: false`) around
     field sets that do NOT include the `targets` array on PE_HEADER_*/
     SCAN_REGION_*_FAILED codes, the nullable `size_limit`, or
@@ -73,7 +83,7 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
 
 
 def current_schema_path():
-    """Path to CURRENT_SCHEMA (the v2.12 contract every command, including
+    """Path to CURRENT_SCHEMA (the v2.13 contract every command, including
     --hunt, now produces) -- usable as a context manager, same as
     schema_path(). Prefer this over schema_path() with no arguments, whose
     default stays pinned to v1.1 for backward compatibility (see its own

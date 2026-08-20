@@ -1,12 +1,21 @@
 """
 Validates real dumpex.output.V2Output JSON against
-dumpex/schemas/dumpex-output-v2.12.schema.json (the current v2 schema --
-every producer now stamps schema_version "2.12") for each of the six
-recon-command kinds (memory_regions/modules/threads/sysinfo/pid/peb),
-in normal, empty, and partial-coverage shapes -- built through the
-actual collect_*() functions against synthetic fixtures, not
+dumpex/schemas/dumpex-output-v2.13.schema.json (the current v2 schema --
+every producer now stamps schema_version "2.13") for each of the seven
+recon-command kinds (memory_regions/modules/threads/process/sysinfo/
+handles/profile), in normal, empty, and partial-coverage shapes -- built
+through the actual collect_*() functions against synthetic fixtures, not
 hand-written fixture JSON, so a shape change in any of them is caught
-here. dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
+here. v2.13 (issue #43) is the single atomic cutover that removed
+`--pid`/`--peb` (kinds "pid"/"peb") and replaced them with `--process`/
+`--handles`/`--profile` -- dumpex-output-v2.12.schema.json (and every
+schema before it) still describes the six-kind shape those two commands
+used, and stays installed so a genuine v2.12-era pid/peb document remains
+validatable against its own frozen schema (see the "v2.12-era pid/peb"
+section below), separate from the historical-delta chain this docstring
+otherwise describes below (v2.0 through v2.10, all of which predate #43
+and never touched the pid/peb/sysinfo shapes at all).
+dumpex-output-v2.0.schema.json, dumpex-output-v2.1.schema.json,
 dumpex-output-v2.2.schema.json, dumpex-output-v2.3.schema.json,
 dumpex-output-v2.4.schema.json, dumpex-output-v2.5.schema.json,
 dumpex-output-v2.6.schema.json, dumpex-output-v2.7.schema.json,
@@ -79,8 +88,9 @@ jsonschema = pytest.importorskip("jsonschema")
 
 from tests.fixtures.fakes import (
     Region, Module, ThreadInfo, Thread, Ctx, Peb, SysInfo, MiscInfo,
-    ExceptionStream, FakeStream, FakeMF, mem_reader,
+    FakeStream, FakeMF, mem_reader, Handle, wire_environment_walk,
 )
+from tests.unit.test_process_cmd import _complete_mf as _process_complete_mf
 
 from dumpex.output import V2Output
 from dumpex.output.envelope import SCHEMA_VERSION
@@ -88,8 +98,10 @@ from dumpex.schemas import CURRENT_SCHEMA, schema_path
 from dumpex.commands.list_cmd import collect_regions
 from dumpex.commands.modules import collect_modules
 from dumpex.commands.threads import collect_threads
-from dumpex.commands.sysinfo import collect_sysinfo, collect_pid
-from dumpex.commands.peb import collect_peb
+from dumpex.commands.sysinfo import collect_sysinfo
+from dumpex.commands.process import collect_process
+from dumpex.commands.handles import collect_handles
+from dumpex.commands.profile import collect_profile
 from dumpex.output.coverage import (
     SourceObservation, CoverageLimitation, LimitationCode, CoverageReport, COVERAGE_COMPLETE,
 )
@@ -113,6 +125,18 @@ def schema_v2_9():
 def validator_v2_9(schema_v2_9):
     jsonschema.Draft202012Validator.check_schema(schema_v2_9)
     return jsonschema.Draft202012Validator(schema_v2_9)
+
+
+@pytest.fixture(scope="module")
+def schema_v2_12():
+    with schema_path("dumpex-output-v2.12.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_12(schema_v2_12):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_12)
+    return jsonschema.Draft202012Validator(schema_v2_12)
 
 
 @pytest.fixture(scope="module")
@@ -278,6 +302,61 @@ def memory_diff_record_schema(schema):
     return _fragment_validator(schema, "memoryDiffRecord")
 
 
+@pytest.fixture(scope="module")
+def profile_capability_entry_schema(schema):
+    return _fragment_validator(schema, "profileCapabilityEntry")
+
+
+@pytest.fixture(scope="module")
+def capability_thread_analysis_schema(schema):
+    return _fragment_validator(schema, "profileCapabilityThreadAnalysis")
+
+
+@pytest.fixture(scope="module")
+def capability_handle_analysis_schema(schema):
+    return _fragment_validator(schema, "profileCapabilityHandleAnalysis")
+
+
+@pytest.fixture(scope="module")
+def capability_module_analysis_schema(schema):
+    return _fragment_validator(schema, "profileCapabilityModuleAnalysis")
+
+
+@pytest.fixture(scope="module")
+def capability_injector_handle_assessment_schema(schema):
+    return _fragment_validator(schema, "profileCapabilityInjectorHandleAssessment")
+
+
+@pytest.fixture(scope="module")
+def profile_record_schema(schema):
+    return _fragment_validator(schema, "profileRecord")
+
+
+@pytest.fixture(scope="module")
+def profile_stream_entry_schema(schema):
+    return _fragment_validator(schema, "profileStreamEntry")
+
+
+@pytest.fixture(scope="module")
+def iat_record_schema(schema):
+    return _fragment_validator(schema, "iatRecord")
+
+
+@pytest.fixture(scope="module")
+def process_diagnostic_record_schema(schema):
+    return _fragment_validator(schema, "processDiagnosticRecord")
+
+
+@pytest.fixture(scope="module")
+def import_entry_record_schema(schema):
+    return _fragment_validator(schema, "importEntryRecord")
+
+
+@pytest.fixture(scope="module")
+def handle_record_schema(schema):
+    return _fragment_validator(schema, "handleRecord")
+
+
 def _make_dump_file() -> str:
     fd, path = tempfile.mkstemp(suffix=".dmp")
     with os.fdopen(fd, "wb") as fh:
@@ -369,30 +448,25 @@ def test_threads_empty_validates(validator):
 
 
 # ── sysinfo ────────────────────────────────────────────────────────────
-# issue #41 changed collect_sysinfo()'s live SysInfoRecord shape (see
-# tests/integration/test_compat_freeze.py's own "sysinfo_*" xfail block
-# for the full rationale) ahead of the v2.13 schema file #43 will add --
-# CURRENT_SCHEMA (still v2.12 here) freezes the OLD sysInfoRecord shape,
-# so a genuine post-#41 document no longer validates against it. Deferred
-# to #43's atomic public cutover, per #41's own "the public schema switch
-# remains isolated to #43" acceptance criterion.
+# issue #41 changed collect_sysinfo()'s live SysInfoRecord shape ahead of
+# the v2.13 schema cutover #43 now performs -- these two tests were xfail
+# (CURRENT_SCHEMA still froze the OLD sysInfoRecord shape) until this
+# commit; see tests/unit/test_record_schema_alignment.py's own dropped
+# xfail marker for the equivalent field-set-only pin.
 
-@pytest.mark.xfail(reason="--sysinfo's SysInfoRecord shape changed in #41; CURRENT_SCHEMA "
-                           "stays v2.12 until #43's schema cutover", strict=True)
 def test_sysinfo_normal_validates(validator):
     mf = FakeMF()
     mf.sysinfo = SysInfo()
     mf.misc_info = MiscInfo(process_id=1234)
-    mf.peb = Peb(0x140000000, r"C:\test.exe")
+    mf.peb = Peb(0x140000000, r"C:\test.exe", current_directory=r"C:\work")
     mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
     mf.modules = FakeStream([Module(0, 0, "a")], "modules")
+    wire_environment_walk(mf, b"\x00\x00\x00\x00")   # verified-empty environment block
     result = collect_sysinfo(mf)
     doc = _validate(validator, result)
     assert doc["result"]["coverage"]["status"] == "complete"
 
 
-@pytest.mark.xfail(reason="--sysinfo's SysInfoRecord shape changed in #41; CURRENT_SCHEMA "
-                           "stays v2.12 until #43's schema cutover", strict=True)
 def test_sysinfo_partial_missing_streams_validates(validator):
     result = collect_sysinfo(FakeMF())
     assert result.coverage.status == "partial"
@@ -400,55 +474,161 @@ def test_sysinfo_partial_missing_streams_validates(validator):
     assert doc["result"]["coverage"]["reasons"]
 
 
-# ── pid ────────────────────────────────────────────────────────────────
+def test_sysinfo_environment_variable_entry_with_an_extra_key_is_rejected(validator):
+    doc = _minimal_valid_doc(kind="sysinfo")
+    doc["result"]["data"]["records"] = [{
+        "dump_file": None, "dump_file_size_bytes": None, "dump_sha256": None,
+        "dump_time_utc": None, "hostname": None, "username": None, "os": None,
+        "os_version": None, "architecture": None, "product_type": None,
+        "processors": None, "cpu_vendor": None, "cpu_current_mhz": None,
+        "cpu_max_mhz": None, "thread_count": None, "module_count": None,
+        "current_directory": None,
+        "environment_variables": [{"name": "A", "value": "1", "extra_key": "x"}]}]
+    assert not validator.is_valid(doc)
 
-def test_pid_normal_via_misc_info_validates(validator):
-    mf = FakeMF()
-    mf.misc_info = MiscInfo(process_id=4321)
-    result = collect_pid(mf)
+
+# ── process (--process, issues #40/#43 -- replaces v2.12's pid/peb) ─────
+
+def test_process_complete_with_imports_and_verbose_peb_extended_validates(validator):
+    # Reuses test_process_cmd.py's own fully-populated fixture (one named
+    # IAT import, PEB/MiscInfo/ModuleList all present and agreeing) --
+    # exercises importEntryRecord, iatRecord, and identity_evidence's own
+    # nested misc_info_claim/peb_claim/module_claim/main_image_pe shapes
+    # against the real ProcessRecord.to_dict() output, not a hand-shaped
+    # stand-in. --verbose also populates the schema's one optional
+    # property, peb_extended.
+    mf = _process_complete_mf()
+    result = collect_process(mf, verbose=True)
     doc = _validate(validator, result)
     assert doc["result"]["coverage"]["status"] == "complete"
+    record = doc["result"]["data"]["records"][0]
+    assert record["iat"]["entries"][0]["dll"] == "KERNEL32.dll"
+    assert record["identity_evidence"]["module_claim"]["match_state"] == "resolved"
+    assert record["peb_extended"] is not None
 
 
-def test_pid_fallback_partial_validates(validator):
-    mf = FakeMF()
-    mf.threads = FakeStream([Thread(9, Ctx(0))], "threads")
-    mf.exception = ExceptionStream(9)
-    result = collect_pid(mf)
-    assert result.coverage.status == "partial"
+def test_process_empty_dump_still_returns_one_all_null_record_and_validates(validator):
+    # §3: --process always emits exactly one record, even when every
+    # scalar field (and the optional peb_extended key) is absent/null.
+    result = collect_process(FakeMF())
+    assert result.coverage.status == "not_evaluated"
     doc = _validate(validator, result)
-    assert doc["result"]["coverage"]["reasons"]
+    record = doc["result"]["data"]["records"][0]
+    assert record["process_name"] is None
+    assert "peb_extended" not in record
 
 
-def test_pid_empty_validates(validator):
-    result = collect_pid(FakeMF())
-    _validate(validator, result)
+def test_process_peb_module_base_conflict_diagnostic_validates(validator):
+    # Exercises identity_evidence.diagnostics[] (processDiagnosticRecord)
+    # with a real PROCESS_MODULE_BASE_CONFLICT entry -- the PEB and module
+    # claims disagree on base address but neither overwrites the other
+    # (§3.3.4), and the diagnostic's severity stays in the info/warning
+    # vocabulary the schema enforces.
+    from tests.unit.test_process_cmd import _mf as _process_mf, _build_valid_image_no_imports, IMAGE_BASE
+    misc = MiscInfo(process_id=4242, process_create_time=1786670105)
+    peb = Peb(IMAGE_BASE, r"C:\Samples\malware.exe", command_line=r"C:\Samples\malware.exe")
+    other_base = 0x00007ff700000000
+    mod = Module(other_base, 0x6000, r"C:\Windows\Temp\malware.exe")
+    mf = _process_mf(misc_info=misc, peb=peb, modules=[mod], memory=_build_valid_image_no_imports())
+    result = collect_process(mf)
+    doc = _validate(validator, result)
+    diagnostics = doc["result"]["data"]["records"][0]["identity_evidence"]["diagnostics"]
+    assert any(d["code"] == "PROCESS_MODULE_BASE_CONFLICT" for d in diagnostics)
+    assert all(d["severity"] in ("info", "warning") for d in diagnostics)
 
 
-# ── peb ────────────────────────────────────────────────────────────────
+# ── handles (--handles, issues #42/#43) ─────────────────────────────────
 
-def test_peb_normal_validates(validator):
+def test_handles_populated_validates(validator):
     mf = FakeMF()
-    mf.peb = Peb(0x140000000, r"C:\test.exe")
-    result = collect_peb(mf)
+    mf.handles = FakeStream(
+        [Handle(0x10, "File", r"\Device\HarddiskVolume1\notes.txt")], "handles")
+    result = collect_handles(mf)
     doc = _validate(validator, result)
     assert doc["result"]["coverage"]["status"] == "complete"
+    assert doc["result"]["data"]["records"][0]["handle"] == "0x0000000000000010"
 
 
-def test_peb_missing_is_not_evaluated_and_validates(validator):
-    # --peb has exactly one data source; when it's absent there is
-    # nothing to report at all, not merely an incomplete subset.
-    result = collect_peb(FakeMF())
+def test_handles_present_empty_stream_validates(validator):
+    # A present-but-empty HandleDataStream is complete with zero records
+    # (§5.5 case 4), not a failure -- FakeStream([], "handles") gives a
+    # parsed object whose own `.handles` list is empty.
+    mf = FakeMF()
+    mf.handles = FakeStream([], "handles")
+    result = collect_handles(mf)
+    assert result.coverage.status == "complete"
+    doc = _validate(validator, result)
+    assert doc["result"]["data"]["records"] == []
+
+
+def test_handles_absent_stream_is_not_evaluated_and_validates(validator):
+    result = collect_handles(FakeMF())
     assert result.coverage.status == "not_evaluated"
     doc = _validate(validator, result)
     assert doc["result"]["coverage"]["reasons"]
-    assert doc["result"]["coverage"]["sources"] == {
-        "peb": {"state": "absent", "record_count": None, "detail": None}}
-    assert doc["result"]["coverage"]["limitations"] == [
-        {"code": "PEB_UNAVAILABLE", "source": "peb", "scope": "dump", "affected_count": None,
-         "unavailable_fields": [], "available_fields": [], "counterpart_source": None,
-         "related_sources": [], "related_tids": [], "thread_id": None, "detail": None,
-         "targets": [], "budget_limit": None, "budget_consumed": None}]
+
+
+# ── profile (--profile, issue #95/#43 -- issue #95's own evidence-       │
+#    capability map, never a verdict) ────────────────────────────────────
+
+def test_profile_fully_populated_every_capability_available_validates(validator):
+    # Reuses test_profile_cmd.py's own fully-populated fixture -- every
+    # one of the six frozen capability ids reaches "available" with zero
+    # limitations, exercising profileCapabilityEntry's "available implies
+    # no limitations" schema rule against real collector output.
+    from minidump.constants import MINIDUMP_STREAM_TYPE, MINIDUMP_TYPE
+    from tests.unit.test_profile_cmd import _mf as _profile_mf, _Directory
+    mf = _profile_mf(
+        flags=MINIDUMP_TYPE.MiniDumpWithFullMemory.value,
+        directories=[
+            _Directory(MINIDUMP_STREAM_TYPE.SystemInfoStream),
+            _Directory(MINIDUMP_STREAM_TYPE.ModuleListStream),
+            _Directory(MINIDUMP_STREAM_TYPE.ThreadListStream),
+            _Directory(MINIDUMP_STREAM_TYPE.ThreadInfoListStream),
+            _Directory(MINIDUMP_STREAM_TYPE.MemoryInfoListStream),
+            _Directory(MINIDUMP_STREAM_TYPE.Memory64ListStream),
+            _Directory(MINIDUMP_STREAM_TYPE.HandleDataStream),
+        ],
+        sysinfo=SysInfo(),
+        modules=FakeStream([Module(0x1000, 0x1000, "a.dll")], "modules"),
+        threads=FakeStream([Thread(1, Ctx(0x1000))], "threads"),
+        thread_info=FakeStream([object()], "infos"),
+        memory_info=FakeStream([object()], "infos"),
+        memory_segments_64=FakeStream([object()], "memory_segments"),
+        handles=FakeStream([Handle(0x10, "File", r"\Device\x")], "handles"),
+    )
+    result = collect_profile(mf)
+    doc = _validate(validator, result)
+    assert doc["result"]["coverage"]["status"] == "complete"
+    for entry in doc["result"]["data"]["records"][0]["capabilities"]:
+        assert entry["status"] == "available"
+        assert entry["limitations"] == []
+
+
+def test_profile_successfully_profiled_sparse_dump_stays_complete_with_unavailable_capabilities_validates(
+        validator):
+    # #95's own explicit acceptance case: a successfully profiled sparse
+    # dump validates and exits 0 while one or more downstream capabilities
+    # remain unavailable -- coverage.status must not be dragged down by a
+    # capability gap.
+    from tests.unit.test_profile_cmd import _mf as _profile_mf
+    result = collect_profile(_profile_mf(flags=0, directories=[], sysinfo=SysInfo()))
+    assert result.coverage.status == "complete"
+    doc = _validate(validator, result)
+    capabilities = doc["result"]["data"]["records"][0]["capabilities"]
+    assert any(c["status"] == "unavailable" for c in capabilities)
+    for entry in capabilities:
+        if entry["status"] == "unavailable":
+            assert any(l["code"].startswith("REQUIRED_SOURCE_") for l in entry["limitations"])
+
+
+def test_profile_no_defensible_profile_is_not_evaluated_and_validates(validator):
+    from tests.unit.test_profile_cmd import _mf as _profile_mf
+    result = collect_profile(_profile_mf(header=False))
+    assert result.records == []
+    assert result.coverage.status == "not_evaluated"
+    doc = _validate(validator, result)
+    assert doc["result"]["data"]["records"] == []
 
 
 # ── negative cases: documents that MUST fail schema validation ───────────
@@ -489,6 +669,32 @@ def _minimal_thread_record():
             "priority": None, "teb": None}
 
 
+def _minimal_process_record():
+    return {"process_name": None, "pid": None, "process_path": None, "command_line": None,
+            "process_start_utc": None, "image_base_address": None,
+            "iat": {"table_present": None, "table_va": None, "table_size": None,
+                     "import_directory_present": None, "import_directory_va": None,
+                     "import_directory_size": None, "has_entries": False, "dll_count": 0,
+                     "entry_count": 0, "entries": [], "diagnostics": []},
+            "identity_evidence": {
+                "misc_info_claim": {"pid": None, "process_create_time_utc": None,
+                                     "raw_pid": None, "raw_process_create_time": None},
+                "peb_claim": {"image_base_address": None, "image_path": None, "name": None,
+                              "raw_image_base_address": None, "raw_image_path": None,
+                              "raw_command_line": None},
+                "module_claim": {"match_state": "unavailable", "base_address": None,
+                                  "name": None, "path": None, "name_matched_candidate": None,
+                                  "name_matched_candidate_ambiguous": False},
+                "main_image_pe": {"checked": False, "valid": None, "reason": None},
+                "selected_path_source": None, "diagnostics": []}}
+
+
+def _minimal_handle_record():
+    return {"handle": "0x0000000000000010", "type_name": None, "type_name_status": "unnamed",
+            "object_name": None, "object_name_status": "unnamed", "attributes": None,
+            "granted_access": None, "handle_count": None, "pointer_count": None}
+
+
 def test_dropped_required_field_is_rejected(validator):
     doc = _minimal_valid_doc()
     del doc["result"]["data"]["records"][0]["checksum"]
@@ -499,6 +705,601 @@ def test_variable_width_hex_address_is_rejected(validator):
     doc = _minimal_valid_doc()
     doc["result"]["data"]["records"][0]["base_address"] = "0x1000"   # not zero-padded to 16 digits
     assert not validator.is_valid(doc)
+
+
+# ── profile capability status/limitations cross-field rules ──────────────
+# Mirrors dumpex.output.records.ProfileCapabilityEntry.__post_init__'s own
+# status<->limitations cross-checks (§4.3 of docs/recon_profile_contract.md)
+# in the schema itself, not just in the Python model that happens to be the
+# only current producer -- a hand-built or third-party document making the
+# same claim must be rejected too.
+
+def _capability(**overrides):
+    base = {"capability_id": "handle_analysis", "status": "unavailable",
+            "required_source_groups": [["handles"]], "required_sources": ["handles"],
+            "optional_sources": [], "limitations": [
+                {"code": "REQUIRED_SOURCE_ABSENT", "source": "handles",
+                 "detail": "HandleDataStream is not present in this dump"}]}
+    base.update(overrides)
+    return base
+
+
+def test_capability_available_with_nonempty_limitations_is_rejected(profile_capability_entry_schema):
+    doc = _capability(status="available")   # limitations left non-empty -- contradiction
+    assert not profile_capability_entry_schema.is_valid(doc)
+
+
+def test_capability_unavailable_with_no_limitations_is_rejected(profile_capability_entry_schema):
+    # The exact illegal shape a real ProfileCapabilityEntry() construction
+    # already refuses: "unavailable" with nothing explaining why.
+    doc = _capability(status="unavailable", limitations=[])
+    assert not profile_capability_entry_schema.is_valid(doc)
+
+
+def test_capability_unavailable_with_only_optional_gap_is_rejected(profile_capability_entry_schema):
+    # A capability cannot be "unavailable" over a merely optional gap --
+    # that's REQUIRED_SOURCE_* territory.
+    doc = _capability(status="unavailable", limitations=[
+        {"code": "OPTIONAL_SOURCE_ABSENT", "source": "threads", "detail": "threads is optional"}])
+    assert not profile_capability_entry_schema.is_valid(doc)
+
+
+def test_capability_limited_with_no_limitations_is_rejected(profile_capability_entry_schema):
+    doc = _capability(status="limited", limitations=[])
+    assert not profile_capability_entry_schema.is_valid(doc)
+
+
+def test_capability_limited_with_a_blocking_required_source_gap_is_rejected(profile_capability_entry_schema):
+    # A REQUIRED_SOURCE_* gap makes the capability unavailable, never
+    # merely "limited" -- "limited" is reserved for a satisfied-but-
+    # degraded evidence set (group-member/optional/truncated gaps).
+    doc = _capability(status="limited", limitations=[
+        {"code": "REQUIRED_SOURCE_ABSENT", "source": "handles",
+         "detail": "HandleDataStream is not present in this dump"}])
+    assert not profile_capability_entry_schema.is_valid(doc)
+
+
+def test_capability_limited_with_a_genuine_degraded_gap_validates(profile_capability_entry_schema):
+    doc = _capability(status="limited", limitations=[
+        {"code": "OPTIONAL_SOURCE_ABSENT", "source": "threads", "detail": "threads is optional"}])
+    assert profile_capability_entry_schema.is_valid(doc)
+
+
+def test_capability_unavailable_with_a_real_required_source_gap_validates(profile_capability_entry_schema):
+    assert profile_capability_entry_schema.is_valid(_capability())
+
+
+# ── per-capability limitation cross-field rules ───────────────────────────
+# The generic $defs/profileCapabilityEntry above cannot know which sources
+# a given capability_id actually owns, so its own status<->limitations
+# rules stop short of source-level enforcement -- that lives in each of
+# the six per-capability $defs instead (profileCapabilityThreadAnalysis,
+# ...), which additionally close `limitations[*].source` to that
+# capability's own known sources, forbid a source from appearing twice,
+# and pair each limitation code's family (REQUIRED_SOURCE_*/
+# REQUIRED_GROUP_MEMBER_*/OPTIONAL_SOURCE_*) to whether its source is a
+# required-group member or purely optional -- mirroring
+# ProfileCapabilityEntry.__post_init__'s own per-instance checks.
+
+def test_multi_member_group_partially_blocked_unavailable_is_rejected(capability_thread_analysis_schema):
+    # thread_analysis's own required group is ("threads", "thread_info") --
+    # only "threads" carries a REQUIRED_SOURCE_* limitation, "thread_info"
+    # carries none at all, yet status claims "unavailable". A required
+    # OR-group is either fully blocked or fully unblocked, never partially.
+    doc = {"capability_id": "thread_analysis", "status": "unavailable",
+           "required_source_groups": [["threads", "thread_info"]],
+           "required_sources": ["threads", "thread_info"], "optional_sources": ["modules"],
+           "limitations": [{"code": "REQUIRED_SOURCE_ABSENT", "source": "threads",
+                             "detail": "not present"}]}
+    assert not capability_thread_analysis_schema.is_valid(doc)
+
+
+def test_multi_member_group_fully_blocked_unavailable_validates(capability_thread_analysis_schema):
+    doc = {"capability_id": "thread_analysis", "status": "unavailable",
+           "required_source_groups": [["threads", "thread_info"]],
+           "required_sources": ["threads", "thread_info"], "optional_sources": ["modules"],
+           "limitations": [{"code": "REQUIRED_SOURCE_ABSENT", "source": "threads",
+                             "detail": "not present"},
+                            {"code": "REQUIRED_SOURCE_FAILED", "source": "thread_info",
+                             "detail": "could not be parsed"}]}
+    assert capability_thread_analysis_schema.is_valid(doc)
+
+
+def test_nonexistent_source_name_is_rejected(capability_handle_analysis_schema):
+    doc = {"capability_id": "handle_analysis", "status": "unavailable",
+           "required_source_groups": [["handles"]], "required_sources": ["handles"],
+           "optional_sources": [],
+           "limitations": [{"code": "REQUIRED_SOURCE_ABSENT", "source": "totally_wrong",
+                             "detail": "not present"}]}
+    assert not capability_handle_analysis_schema.is_valid(doc)
+
+
+def test_same_source_with_two_contradictory_codes_is_rejected(capability_handle_analysis_schema):
+    doc = {"capability_id": "handle_analysis", "status": "unavailable",
+           "required_source_groups": [["handles"]], "required_sources": ["handles"],
+           "optional_sources": [],
+           "limitations": [{"code": "REQUIRED_SOURCE_ABSENT", "source": "handles", "detail": "x"},
+                            {"code": "REQUIRED_SOURCE_FAILED", "source": "handles", "detail": "y"}]}
+    assert not capability_handle_analysis_schema.is_valid(doc)
+
+
+def test_optional_source_code_used_on_a_required_source_is_rejected(capability_thread_analysis_schema):
+    # OPTIONAL_SOURCE_* asserts "optional corroborating evidence" -- using
+    # it on "threads" (a required-group member) would fabricate that claim
+    # for a source the registry genuinely requires.
+    doc = {"capability_id": "thread_analysis", "status": "limited",
+           "required_source_groups": [["threads", "thread_info"]],
+           "required_sources": ["threads", "thread_info"], "optional_sources": ["modules"],
+           "limitations": [{"code": "OPTIONAL_SOURCE_ABSENT", "source": "threads",
+                             "detail": "wrong family"}]}
+    assert not capability_thread_analysis_schema.is_valid(doc)
+
+
+def test_required_source_code_used_on_an_optional_source_is_rejected(capability_thread_analysis_schema):
+    doc = {"capability_id": "thread_analysis", "status": "limited",
+           "required_source_groups": [["threads", "thread_info"]],
+           "required_sources": ["threads", "thread_info"], "optional_sources": ["modules"],
+           "limitations": [{"code": "REQUIRED_SOURCE_ABSENT", "source": "modules",
+                             "detail": "wrong family"}]}
+    assert not capability_thread_analysis_schema.is_valid(doc)
+
+
+def test_optional_source_code_on_its_own_optional_source_validates(capability_thread_analysis_schema):
+    doc = {"capability_id": "thread_analysis", "status": "limited",
+           "required_source_groups": [["threads", "thread_info"]],
+           "required_sources": ["threads", "thread_info"], "optional_sources": ["modules"],
+           "limitations": [{"code": "OPTIONAL_SOURCE_ABSENT", "source": "modules",
+                             "detail": "modules is optional"}]}
+    assert capability_thread_analysis_schema.is_valid(doc)
+
+
+def test_required_group_member_code_on_a_single_member_group_is_rejected(capability_handle_analysis_schema):
+    # handle_analysis's own required group has exactly one member
+    # ("handles") -- REQUIRED_GROUP_MEMBER_* asserts "a DIFFERENT member of
+    # this SAME group already satisfies it", which is meaningless (and
+    # therefore forbidden) when there is no sibling to make that claim
+    # about.
+    doc = {"capability_id": "handle_analysis", "status": "limited",
+           "required_source_groups": [["handles"]], "required_sources": ["handles"],
+           "optional_sources": [],
+           "limitations": [{"code": "REQUIRED_GROUP_MEMBER_ABSENT", "source": "handles",
+                             "detail": "no sibling exists"}]}
+    assert not capability_handle_analysis_schema.is_valid(doc)
+
+
+def test_required_group_member_code_on_a_multi_member_group_validates(capability_thread_analysis_schema):
+    # A genuinely degraded (not blocking) gap: "thread_info" satisfies the
+    # group, "threads" is absent but has a sibling that already covers it.
+    doc = {"capability_id": "thread_analysis", "status": "limited",
+           "required_source_groups": [["threads", "thread_info"]],
+           "required_sources": ["threads", "thread_info"], "optional_sources": ["modules"],
+           "limitations": [{"code": "REQUIRED_GROUP_MEMBER_ABSENT", "source": "threads",
+                             "detail": "thread_info already satisfies this capability"}]}
+    assert capability_thread_analysis_schema.is_valid(doc)
+
+
+def test_no_optional_sources_at_all_rejects_any_optional_code(capability_module_analysis_schema):
+    # module_analysis has zero optional_sources -- there is no source an
+    # OPTIONAL_SOURCE_* code could legally describe.
+    doc = {"capability_id": "module_analysis", "status": "limited",
+           "required_source_groups": [["modules"]], "required_sources": ["modules"],
+           "optional_sources": [],
+           "limitations": [{"code": "OPTIONAL_SOURCE_ABSENT", "source": "modules",
+                             "detail": "wrong family for a required source"}]}
+    assert not capability_module_analysis_schema.is_valid(doc)
+
+
+def test_injector_handle_assessment_optional_threads_source_validates(
+        capability_injector_handle_assessment_schema):
+    doc = {"capability_id": "injector_handle_assessment", "status": "limited",
+           "required_source_groups": [["handles"]], "required_sources": ["handles"],
+           "optional_sources": ["threads"],
+           "limitations": [{"code": "OPTIONAL_SOURCE_ABSENT", "source": "threads",
+                             "detail": "threads is optional"}]}
+    assert capability_injector_handle_assessment_schema.is_valid(doc)
+
+
+# ── profile capability registry: frozen six-slot order/identity ──────────
+# #95's own six capability ids, each with its own frozen source rule, are
+# a closed matrix -- a producer must not be able to repeat, reorder, drop,
+# or misattribute a capability's own required/optional sources and still
+# validate as a "profile" document.
+
+def _minimal_profile_record(capabilities):
+    return {
+        "architecture": None, "raw_flags": None, "recognized_flags": [],
+        "unrecognized_flag_bits": None,
+        "memory_capture": {"full_memory_flag_set": None, "memory64_list_present": False,
+                            "memory_list_present": False, "captured_segment_count": None,
+                            "captured_bytes_total": None},
+        "streams": [], "capabilities": capabilities,
+    }
+
+
+_FROZEN_CAPABILITY_ORDER = (
+    ("memory_region_analysis", [["memory_info"]], ["memory_info"], []),
+    ("module_analysis", [["modules"]], ["modules"], []),
+    ("injection_artifact_analysis", [["memory_info", "thread_info"]],
+     ["memory_info", "thread_info"], ["modules", "threads", "memory_content"]),
+    ("thread_analysis", [["threads", "thread_info"]], ["threads", "thread_info"], ["modules"]),
+    ("handle_analysis", [["handles"]], ["handles"], []),
+    ("injector_handle_assessment", [["handles"]], ["handles"], ["threads"]),
+)
+
+
+def _unavailable_entry(capability_id, required_source_groups, required_sources, optional_sources):
+    # A required OR-group is either fully blocked or fully unblocked, never
+    # partially (ProfileCapabilityEntry.__post_init__'s own rule) -- every
+    # member of the FIRST group, not just its first member, needs its own
+    # REQUIRED_SOURCE_* limitation for a genuinely "unavailable" capability.
+    first_group = required_source_groups[0]
+    return {"capability_id": capability_id, "status": "unavailable",
+            "required_source_groups": required_source_groups, "required_sources": required_sources,
+            "optional_sources": optional_sources,
+            "limitations": [{"code": "REQUIRED_SOURCE_ABSENT", "source": name,
+                              "detail": "not present in this dump"} for name in first_group]}
+
+
+def _frozen_capabilities():
+    return [_unavailable_entry(*row) for row in _FROZEN_CAPABILITY_ORDER]
+
+
+def test_correctly_ordered_frozen_capabilities_validates(profile_record_schema):
+    doc = _minimal_profile_record(_frozen_capabilities())
+    assert profile_record_schema.is_valid(doc)
+
+
+# ── raw_flags <-> recognized_flags/unrecognized_flag_bits/                │
+#    memory_capture.full_memory_flag_set nullability ─────────────────────
+# dumpex.commands.profile._decode_flags()/_build_memory_capture() read all
+# three of the other fields from the SAME raw_flags is-None branch (a
+# truncated header union means nothing was read at all, so nothing can be
+# recognized/unaccounted/flag-tested) -- the schema mirrors that.
+
+def test_raw_flags_null_with_nonempty_recognized_flags_is_rejected(profile_record_schema):
+    doc = _minimal_profile_record(_frozen_capabilities())
+    doc["raw_flags"] = None
+    doc["recognized_flags"] = ["MiniDumpWithDataSegs"]
+    assert not profile_record_schema.is_valid(doc)
+
+
+def test_raw_flags_null_with_nonnull_unrecognized_flag_bits_is_rejected(profile_record_schema):
+    doc = _minimal_profile_record(_frozen_capabilities())
+    doc["raw_flags"] = None
+    doc["unrecognized_flag_bits"] = 0
+    assert not profile_record_schema.is_valid(doc)
+
+
+def test_raw_flags_null_with_nonnull_full_memory_flag_set_is_rejected(profile_record_schema):
+    doc = _minimal_profile_record(_frozen_capabilities())
+    doc["raw_flags"] = None
+    doc["memory_capture"]["full_memory_flag_set"] = False
+    assert not profile_record_schema.is_valid(doc)
+
+
+def test_raw_flags_set_with_null_unrecognized_flag_bits_is_rejected(profile_record_schema):
+    doc = _minimal_profile_record(_frozen_capabilities())
+    doc["raw_flags"] = 2
+    doc["unrecognized_flag_bits"] = None
+    assert not profile_record_schema.is_valid(doc)
+
+
+def test_raw_flags_set_with_null_full_memory_flag_set_is_rejected(profile_record_schema):
+    doc = _minimal_profile_record(_frozen_capabilities())
+    doc["raw_flags"] = 2
+    doc["unrecognized_flag_bits"] = 0
+    doc["memory_capture"]["full_memory_flag_set"] = None
+    assert not profile_record_schema.is_valid(doc)
+
+
+def test_raw_flags_set_with_all_fields_consistent_validates(profile_record_schema):
+    doc = _minimal_profile_record(_frozen_capabilities())
+    doc["raw_flags"] = 2
+    doc["recognized_flags"] = ["MiniDumpWithDataSegs"]
+    doc["unrecognized_flag_bits"] = 0
+    doc["memory_capture"]["full_memory_flag_set"] = False
+    assert profile_record_schema.is_valid(doc)
+
+
+def test_unknown_stream_type_and_duplicate_stream_type_entries_validate_and_survive(
+        profile_record_schema):
+    # docs/recon_profile_contract.md: an unrecognized numeric stream type
+    # gets its own row (stream_type_name null) rather than being dropped,
+    # and a stream type with 2+ directory entries stays INDETERMINATE
+    # rather than being merged/deduplicated -- both must reach the schema
+    # as real, separate entries, not be silently discarded on the way to
+    # --json.
+    doc = _minimal_profile_record(_frozen_capabilities())
+    doc["streams"] = [
+        {"directory_index": 0, "stream_type_id": 999999, "stream_type_name": None,
+         "parser_state": "unparsed", "record_count": None, "detail": None},
+        {"directory_index": 1, "stream_type_id": 7, "stream_type_name": "SystemInfoStream",
+         "parser_state": "indeterminate", "record_count": None,
+         "detail": "duplicate directory entries for this stream type"},
+        {"directory_index": 2, "stream_type_id": 7, "stream_type_name": "SystemInfoStream",
+         "parser_state": "indeterminate", "record_count": None,
+         "detail": "duplicate directory entries for this stream type"},
+    ]
+    assert profile_record_schema.is_valid(doc)
+    # Both duplicate-type rows and the unknown-type row are present, not
+    # collapsed -- the schema's own acceptance is only meaningful if the
+    # instance we validated actually kept all three.
+    assert len(doc["streams"]) == 3
+    assert [s["stream_type_id"] for s in doc["streams"]] == [999999, 7, 7]
+
+
+def test_six_duplicate_capabilities_with_wrong_sources_is_rejected(profile_record_schema):
+    bad = {"capability_id": "handle_analysis", "status": "available",
+           "required_source_groups": [["totally_wrong"]],
+           "required_sources": ["different_wrong_value"],
+           "optional_sources": ["also_wrong"], "limitations": []}
+    doc = _minimal_profile_record([dict(bad) for _ in range(6)])
+    assert not profile_record_schema.is_valid(doc)
+
+
+def test_capabilities_out_of_order_is_rejected(profile_record_schema):
+    caps = _frozen_capabilities()
+    caps[0], caps[1] = caps[1], caps[0]   # swap module_analysis/memory_region_analysis
+    assert not profile_record_schema.is_valid(_minimal_profile_record(caps))
+
+
+def test_capabilities_missing_one_slot_is_rejected(profile_record_schema):
+    caps = _frozen_capabilities()[:5]   # only 5 of the frozen 6
+    assert not profile_record_schema.is_valid(_minimal_profile_record(caps))
+
+
+def test_capability_with_tampered_required_source_is_rejected(profile_record_schema):
+    caps = _frozen_capabilities()
+    caps[4] = _unavailable_entry("handle_analysis", [["not_handles"]], ["not_handles"], [])
+    assert not profile_record_schema.is_valid(_minimal_profile_record(caps))
+
+
+def test_capability_with_tampered_optional_source_is_rejected(profile_record_schema):
+    caps = _frozen_capabilities()
+    entry = dict(caps[2])   # injection_artifact_analysis
+    entry["optional_sources"] = ["not_a_real_optional_source"]
+    caps[2] = entry
+    assert not profile_record_schema.is_valid(_minimal_profile_record(caps))
+
+
+def test_capability_required_groups_flattening_mismatch_is_rejected(profile_record_schema):
+    caps = _frozen_capabilities()
+    entry = dict(caps[3])   # thread_analysis: required_sources must equal the flattened groups
+    entry["required_sources"] = ["threads"]   # dropped "thread_info"
+    caps[3] = entry
+    assert not profile_record_schema.is_valid(_minimal_profile_record(caps))
+
+
+# ── profile stream entry: parser_state <-> record_count/detail ───────────
+
+def test_present_empty_stream_with_nonzero_count_and_detail_is_rejected(profile_stream_entry_schema):
+    doc = {"directory_index": 0, "stream_type_id": 7, "stream_type_name": "SystemInfoStream",
+           "parser_state": "present_empty", "record_count": 99, "detail": "impossible"}
+    assert not profile_stream_entry_schema.is_valid(doc)
+
+
+def test_unparsed_stream_with_a_count_is_rejected(profile_stream_entry_schema):
+    doc = {"directory_index": 0, "stream_type_id": 999999, "stream_type_name": None,
+           "parser_state": "unparsed", "record_count": 3, "detail": None}
+    assert not profile_stream_entry_schema.is_valid(doc)
+
+
+def test_failed_stream_without_a_detail_is_rejected(profile_stream_entry_schema):
+    doc = {"directory_index": 0, "stream_type_id": 7, "stream_type_name": "SystemInfoStream",
+           "parser_state": "failed", "record_count": None, "detail": None}
+    assert not profile_stream_entry_schema.is_valid(doc)
+
+
+def test_indeterminate_stream_with_a_count_is_rejected(profile_stream_entry_schema):
+    doc = {"directory_index": 0, "stream_type_id": 7, "stream_type_name": "SystemInfoStream",
+           "parser_state": "indeterminate", "record_count": 1, "detail": "duplicate directory entries"}
+    assert not profile_stream_entry_schema.is_valid(doc)
+
+
+def test_correctly_shaped_present_empty_stream_validates(profile_stream_entry_schema):
+    doc = {"directory_index": 0, "stream_type_id": 7, "stream_type_name": "SystemInfoStream",
+           "parser_state": "present_empty", "record_count": 0, "detail": None}
+    assert profile_stream_entry_schema.is_valid(doc)
+
+
+# ── IAT presence/address/count consistency ────────────────────────────────
+
+def _iat(**overrides):
+    base = {"table_present": None, "table_va": None, "table_size": None,
+            "import_directory_present": None, "import_directory_va": None,
+            "import_directory_size": None, "has_entries": False, "dll_count": 0,
+            "entry_count": 0, "entries": [], "diagnostics": []}
+    base.update(overrides)
+    return base
+
+
+def test_iat_table_not_present_with_address_and_size_is_rejected(iat_record_schema):
+    doc = _iat(table_present=False, table_va="0x0000000000001000", table_size=8)
+    assert not iat_record_schema.is_valid(doc)
+
+
+def test_iat_table_va_without_table_size_is_rejected(iat_record_schema):
+    doc = _iat(table_present=True, table_va="0x0000000000001000", table_size=None)
+    assert not iat_record_schema.is_valid(doc)
+
+
+def test_iat_import_directory_not_present_with_address_is_rejected(iat_record_schema):
+    doc = _iat(import_directory_present=False, import_directory_va="0x0000000000002000")
+    assert not iat_record_schema.is_valid(doc)
+
+
+def test_iat_import_directory_size_without_va_validates_when_present(iat_record_schema):
+    # Contract-approved asymmetry: import_directory_size can legitimately
+    # be set while import_directory_va stays null when
+    # import_directory_present is True (the RVA's own address arithmetic
+    # overflowed, but the declared Size was still recorded).
+    doc = _iat(import_directory_present=True, import_directory_va=None, import_directory_size=0x28)
+    assert iat_record_schema.is_valid(doc)
+
+
+def test_iat_has_entries_true_with_zero_entry_count_is_rejected(iat_record_schema):
+    doc = _iat(has_entries=True, entry_count=0, entries=[])
+    assert not iat_record_schema.is_valid(doc)
+
+
+def test_iat_has_entries_false_with_nonzero_entry_count_is_rejected(iat_record_schema):
+    entry = {"dll": "a.dll", "import_by": "name", "symbol": "X", "ordinal": None,
+             "iat_slot_va": "0x0000000000001000", "resolved_target_va": "0x0000000000002000",
+             "slot_in_bounds": True}
+    doc = _iat(has_entries=False, entry_count=1, entries=[entry])
+    assert not iat_record_schema.is_valid(doc)
+
+
+def test_iat_zero_entries_with_nonempty_entries_array_is_rejected(iat_record_schema):
+    entry = {"dll": "a.dll", "import_by": "name", "symbol": "X", "ordinal": None,
+             "iat_slot_va": "0x0000000000001000", "resolved_target_va": "0x0000000000002000",
+             "slot_in_bounds": True}
+    doc = _iat(has_entries=False, entry_count=0, entries=[entry])
+    assert not iat_record_schema.is_valid(doc)
+
+
+# ── processDiagnosticRecord: verdict vocabulary cannot masquerade as a ────
+#    Recon diagnostic (§37/§40/§43's frozen "no peb_trusted, no verdict"
+#    boundary, enforced at the schema level, not just by Python discipline)
+
+def test_fabricated_peb_trusted_verdict_diagnostic_is_rejected(process_diagnostic_record_schema):
+    # The exact payload a producer could otherwise use to smuggle a
+    # verdict/confidence/ATT&CK/reconstructed-address claim into a Recon
+    # diagnostic under a plausible-looking but non-frozen code.
+    doc = {"code": "PEB_TRUSTED", "severity": "info", "message": "peb verified authentic",
+           "affected_count": None,
+           "details": {"peb_trusted": True, "confidence": 0.98, "verdict": "malicious",
+                       "reconstructed_image_base": "0x0000000140000000", "attck": "T1055"}}
+    assert not process_diagnostic_record_schema.is_valid(doc)
+
+
+def test_diagnostic_code_outside_the_frozen_seven_is_rejected(process_diagnostic_record_schema):
+    doc = {"code": "PROCESS_SOMETHING_MADE_UP", "severity": "info", "message": "x",
+           "affected_count": None, "details": {}}
+    assert not process_diagnostic_record_schema.is_valid(doc)
+
+
+def test_diagnostic_severity_outside_info_warning_is_rejected(process_diagnostic_record_schema):
+    doc = {"code": "PROCESS_MODULE_BASE_UNMATCHED", "severity": "critical",
+           "message": "x", "affected_count": None, "details": {"peb_base": None}}
+    assert not process_diagnostic_record_schema.is_valid(doc)
+
+
+def test_diagnostic_details_with_an_extra_key_is_rejected(process_diagnostic_record_schema):
+    # additionalProperties: false per code -- a legitimate code cannot be
+    # used to smuggle an extra, unrelated key into details either.
+    doc = {"code": "PROCESS_MODULE_BASE_UNMATCHED", "severity": "info", "message": "x",
+           "affected_count": None, "details": {"peb_base": None, "verdict": "malicious"}}
+    assert not process_diagnostic_record_schema.is_valid(doc)
+
+
+def test_diagnostic_details_missing_the_required_key_is_rejected(process_diagnostic_record_schema):
+    doc = {"code": "PROCESS_MODULE_BASE_UNMATCHED", "severity": "info", "message": "x",
+           "affected_count": None, "details": {}}
+    assert not process_diagnostic_record_schema.is_valid(doc)
+
+
+@pytest.mark.parametrize("code,details", [
+    ("PROCESS_MODULE_BASE_UNMATCHED", {"peb_base": "0x0000000140000000"}),
+    ("PROCESS_MODULE_BASE_CONFLICT", {"name": "a.exe", "module_base": "0x0000000140010000",
+                                       "peb_base": "0x0000000140000000"}),
+    ("PROCESS_MODULE_NAME_AMBIGUOUS", {"name": "a.exe", "count": 2}),
+    ("PROCESS_MODULE_IDENTITY_MISMATCH", {"peb_name": "a.exe", "module_name": "b.exe"}),
+    ("PROCESS_PATH_SOURCE_FALLBACK", {"module_path": r"C:\a.exe"}),
+    ("IAT_BOUNDS_CHECK_UNAVAILABLE", {"import_directory_va": None}),
+    ("IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS", {"table_va": "0x0000000140001000", "table_size": 40,
+                                           "first_out_of_bounds_slot_va": "0x0000000140002000"}),
+])
+def test_each_frozen_diagnostic_code_validates_with_its_own_details_shape(
+        process_diagnostic_record_schema, code, details):
+    doc = {"code": code, "severity": "info", "message": "x", "affected_count": None,
+           "details": details}
+    assert process_diagnostic_record_schema.is_valid(doc)
+
+
+# ── importEntryRecord: import_by <-> symbol/ordinal pairing ──────────────
+
+def _import_entry(**overrides):
+    base = {"dll": "a.dll", "import_by": "name", "symbol": "CreateFileW", "ordinal": None,
+            "iat_slot_va": "0x0000000000001000", "resolved_target_va": "0x0000000000002000",
+            "slot_in_bounds": True}
+    base.update(overrides)
+    return base
+
+
+def test_import_by_name_with_a_nonnull_ordinal_is_rejected(import_entry_record_schema):
+    doc = _import_entry(import_by="name", symbol="CreateFileW", ordinal=7)
+    assert not import_entry_record_schema.is_valid(doc)
+
+
+def test_import_by_ordinal_with_a_nonnull_symbol_is_rejected(import_entry_record_schema):
+    doc = _import_entry(import_by="ordinal", symbol="CreateFileW", ordinal=7)
+    assert not import_entry_record_schema.is_valid(doc)
+
+
+def test_import_by_ordinal_with_a_null_ordinal_is_rejected(import_entry_record_schema):
+    # §3.5.3: an ordinal is decoded directly from the already-captured
+    # thunk value -- there is no "ordinal read failed" case, unlike symbol.
+    doc = _import_entry(import_by="ordinal", symbol=None, ordinal=None)
+    assert not import_entry_record_schema.is_valid(doc)
+
+
+def test_import_by_unavailable_with_a_symbol_is_rejected(import_entry_record_schema):
+    doc = _import_entry(import_by="unavailable", symbol="CreateFileW", ordinal=None)
+    assert not import_entry_record_schema.is_valid(doc)
+
+
+def test_import_by_name_entry_validates(import_entry_record_schema):
+    assert import_entry_record_schema.is_valid(_import_entry())
+
+
+def test_import_by_ordinal_entry_validates(import_entry_record_schema):
+    doc = _import_entry(import_by="ordinal", symbol=None, ordinal=7)
+    assert import_entry_record_schema.is_valid(doc)
+
+
+# ── handleRecord: name value <-> name status pairing, malformed handles ──
+
+def _handle(**overrides):
+    base = {"handle": "0x0000000000000010", "type_name": "File", "type_name_status": "ok",
+            "object_name": r"\Device\HarddiskVolume1\x", "object_name_status": "ok",
+            "attributes": 0x40, "granted_access": 0x12019f, "handle_count": 1, "pointer_count": 1}
+    base.update(overrides)
+    return base
+
+
+def test_handle_ok_status_with_a_null_name_is_rejected(handle_record_schema):
+    doc = _handle(type_name=None, type_name_status="ok")
+    assert not handle_record_schema.is_valid(doc)
+
+
+def test_handle_unnamed_status_with_a_nonnull_name_is_rejected(handle_record_schema):
+    doc = _handle(type_name="File", type_name_status="unnamed")
+    assert not handle_record_schema.is_valid(doc)
+
+
+def test_handle_unreadable_status_with_a_nonnull_object_name_is_rejected(handle_record_schema):
+    doc = _handle(object_name=r"\Device\x", object_name_status="unreadable")
+    assert not handle_record_schema.is_valid(doc)
+
+
+def test_handle_value_null_is_rejected(handle_record_schema):
+    doc = _handle(handle=None)
+    assert not handle_record_schema.is_valid(doc)
+
+
+def test_handle_value_variable_width_is_rejected(handle_record_schema):
+    doc = _handle(handle="0x10")   # not zero-padded to 16 digits
+    assert not handle_record_schema.is_valid(doc)
+
+
+def test_handle_negative_attributes_is_rejected(handle_record_schema):
+    doc = _handle(attributes=-1)
+    assert not handle_record_schema.is_valid(doc)
+
+
+def test_well_formed_handle_validates(handle_record_schema):
+    assert handle_record_schema.is_valid(_handle())
 
 
 def test_uppercase_hex_address_is_rejected(validator):
@@ -526,6 +1327,36 @@ def test_thread_fields_in_a_modules_record_is_rejected(validator):
     doc = _minimal_valid_doc(kind="modules")
     doc["result"]["data"]["records"] = [_minimal_thread_record()]
     assert not validator.is_valid(doc)
+
+
+def test_a_handle_record_in_a_process_result_is_rejected(validator):
+    doc = _minimal_valid_doc(kind="process")
+    doc["result"]["data"]["records"] = [_minimal_handle_record()]
+    assert not validator.is_valid(doc)
+
+
+def test_a_process_record_in_a_handles_result_is_rejected(validator):
+    doc = _minimal_valid_doc(kind="handles")
+    doc["result"]["data"]["records"] = [_minimal_process_record()]
+    assert not validator.is_valid(doc)
+
+
+def test_a_module_record_in_a_profile_result_is_rejected(validator):
+    doc = _minimal_valid_doc(kind="profile")
+    doc["result"]["data"]["records"] = [_minimal_module_record()]
+    assert not validator.is_valid(doc)
+
+
+def test_a_well_formed_process_record_validates(validator):
+    doc = _minimal_valid_doc(kind="process")
+    doc["result"]["data"]["records"] = [_minimal_process_record()]
+    assert validator.is_valid(doc)
+
+
+def test_a_well_formed_handle_record_in_a_handles_result_validates(validator):
+    doc = _minimal_valid_doc(kind="handles")
+    doc["result"]["data"]["records"] = [_minimal_handle_record()]
+    assert validator.is_valid(doc)
 
 
 def test_unknown_extra_field_is_rejected(validator):
@@ -1372,6 +2203,58 @@ def test_a_genuine_v2_9_era_document_still_validates_against_the_v2_9_schema(val
     doc = _minimal_valid_doc(kind="modules")
     doc["meta"]["schema_version"] = "2.9"
     assert validator_v2_9.is_valid(doc)
+
+
+# ── v2.12-era pid/peb: frozen and still validatable, and rejected by ─────
+#    v2.13 -- #43's own "immediate removal, no hidden deprecation alias"
+#    decision (docs/recon_process_sysinfo_handles_contract.md §7.2) means
+#    a genuine pre-#43 document must still validate against ITS OWN frozen
+#    v2.12 schema, and result.kind == "pid"/"peb" must be rejected by the
+#    new v2.13 file that replaced them with "process"/"handles". These
+#    records are genuine collector output captured before #43 removed the
+#    commands that produced them (frozen here as static JSON rather than
+#    re-generated, since collect_pid()/collect_peb() no longer exist to
+#    regenerate them from).
+
+_V2_12_ERA_PID_RECORD = {"pid": 4321, "source": "MINIDUMP_MISC_INFO (ProcessId field)",
+                          "thread_count": None, "exc_tid": None}
+
+_V2_12_ERA_PEB_RECORD = {"peb_address": "0x0000000000000000",
+                          "image_base_address": "0x0000000140000000",
+                          "being_debugged": False, "image_path": "C:\\test.exe",
+                          "command_line": None, "window_title": None, "dll_path": None,
+                          "current_directory": None, "standard_input": None,
+                          "standard_output": None, "standard_error": None,
+                          "environment_variables": None}
+
+
+def test_a_genuine_v2_12_era_pid_document_still_validates_against_the_v2_12_schema(validator_v2_12):
+    doc = _minimal_valid_doc(kind="pid")
+    doc["meta"]["schema_version"] = "2.12"
+    doc["result"]["data"]["records"] = [_V2_12_ERA_PID_RECORD]
+    assert validator_v2_12.is_valid(doc)
+
+
+def test_a_genuine_v2_12_era_peb_document_still_validates_against_the_v2_12_schema(validator_v2_12):
+    doc = _minimal_valid_doc(kind="peb")
+    doc["meta"]["schema_version"] = "2.12"
+    doc["result"]["data"]["records"] = [_V2_12_ERA_PEB_RECORD]
+    assert validator_v2_12.is_valid(doc)
+
+
+def test_pid_kind_is_rejected_by_v2_13(validator):
+    # v2.13 (issue #43) removed "pid" from result.kind's enum entirely --
+    # the same genuine v2.12-era document that just validated above must
+    # now be rejected once it claims to be a v2.13 document.
+    doc = _minimal_valid_doc(kind="pid")
+    doc["result"]["data"]["records"] = [_V2_12_ERA_PID_RECORD]
+    assert not validator.is_valid(doc)
+
+
+def test_peb_kind_is_rejected_by_v2_13(validator):
+    doc = _minimal_valid_doc(kind="peb")
+    doc["result"]["data"]["records"] = [_V2_12_ERA_PEB_RECORD]
+    assert not validator.is_valid(doc)
 
 
 def test_comparison_kind_is_rejected_by_the_frozen_v2_0_schema(validator_v2_0):

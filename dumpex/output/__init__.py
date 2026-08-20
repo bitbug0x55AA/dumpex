@@ -8,8 +8,8 @@ formal schema.
 
 Layout:
   records.py    canonical record dataclasses (ModuleRecord, ThreadRecord,
-                MemoryRegionRecord, SysInfoRecord, PidRecord, PebRecord,
-                ExtractRecord, Diagnostic, Artifact) -- plain dataclasses
+                MemoryRegionRecord, SysInfoRecord, ProcessRecord, HandleRecord,
+                ProfileRecord, ExtractRecord, Diagnostic, Artifact) -- plain dataclasses
                 with an explicit to_dict(), the same house style as
                 dumpex.hunt._finding.Finding.
   coverage.py   command/domain-layer coverage model (SourceObservation,

@@ -305,7 +305,7 @@ def render_threads_console(records, coverage) -> None:
     (degraded, has_times, reasons) triple derived from them separately --
     both are recomputed here via thread_info_is_degraded()/
     thread_records_have_times() rather than trusted from a stale call
-    site, matching peb.py's render_peb_console(record, coverage)
+    site, matching every other recon renderer's (record, coverage)
     contract."""
     degraded = thread_info_is_degraded(coverage)
     has_times = thread_records_have_times(records)

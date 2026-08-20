@@ -24,11 +24,17 @@ promise. Automation must use `--json`, never scrape `--txt`.
 
 Every command now shares a single JSON contract. `--hunt` was the last
 holdout on the older v1.1 contract; it has since migrated onto v2, and
-the whole v2 envelope has since moved onto v2.12:
+the whole v2 envelope has since moved onto v2.13. v2.13 (issue #43) is a
+breaking, atomic cutover: `--pid`/`--peb` are removed, with no hidden
+alias, and replaced by `--process`/`--handles`/`--profile`; see
+docs/recon_process_sysinfo_handles_contract.md and
+docs/recon_profile_contract.md for the full contract those three
+commands and the new `sysInfoRecord` shape implement:
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--pid`, `--sysinfo`, `--peb`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.12 (current) | [`dumpex-output-v2.12.schema.json`](../dumpex/schemas/dumpex-output-v2.12.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.13 (current) | [`dumpex-output-v2.13.schema.json`](../dumpex/schemas/dumpex-output-v2.13.schema.json) |
+| — (historical) | v2.12 | [`dumpex-output-v2.12.schema.json`](../dumpex/schemas/dumpex-output-v2.12.schema.json) — frozen, kept only to validate output produced before `schema_version 2.13`; no command emits this anymore |
 | — (historical) | v2.11 | [`dumpex-output-v2.11.schema.json`](../dumpex/schemas/dumpex-output-v2.11.schema.json) — frozen, kept only to validate output produced before `schema_version 2.12`; no command emits this anymore |
 | — (historical) | v2.10 | [`dumpex-output-v2.10.schema.json`](../dumpex/schemas/dumpex-output-v2.10.schema.json) — frozen, kept only to validate output produced before `schema_version 2.11`; no command emits this anymore |
 | — (historical) | v2.9 | [`dumpex-output-v2.9.schema.json`](../dumpex/schemas/dumpex-output-v2.9.schema.json) — frozen, kept only to validate output produced before `schema_version 2.10`; no command emits this anymore |
@@ -152,14 +158,15 @@ commands' output before each change existed, so they stay byte-frozen —
 each change gets its own new schema_version instead). `dumpex-output-
 v2.0.schema.json`/`v2.1.schema.json`/`v2.2.schema.json`/`v2.3.schema.json`/
 `v2.4.schema.json`/`v2.5.schema.json`/`v2.6.schema.json`/`v2.7.schema.json`/
-`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`/`v2.11.schema.json`
+`v2.8.schema.json`/`v2.9.schema.json`/`v2.10.schema.json`/`v2.11.schema.json`/
+`v2.12.schema.json`
 stay installed and importable via
 `dumpex.schemas.schema_path("dumpex-output-v2.0.schema.json")` (or `v2.1`/
-`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`/`v2.9`/`v2.10`/`v2.11`) for validating output captured
+`v2.2`/`v2.3`/`v2.4`/`v2.5`/`v2.6`/`v2.7`/`v2.8`/`v2.9`/`v2.10`/`v2.11`/`v2.12`) for validating output captured
 before each respective
 change; none is deleted or overwritten, following the same precedent
-v1.0→v1.1 set. All eleven commands, including `--hunt`, now produce the
-v2.12 contract.
+v1.0→v1.1 set. All twelve commands, including `--hunt`, now produce the
+v2.13 contract.
 
 `--extract` is the first command to populate the top-level `artifacts[]`
 (the file it wrote) and `diagnostics.warnings[]` (e.g. an MZ-header-detected
@@ -417,7 +424,7 @@ the legacy-compatibility coverage described above:
 
 ## v2 structured output
 
-These eleven commands are always structured internally — even
+These twelve commands are always structured internally — even
 without `--json` — and use a distinct envelope from v1.1's old
 `hunt`-shaped root. `--diff` is the one two-dump exception (`kind:
 "comparison"`, a two-entry `meta.evidence`) — see "`result.kind ==
@@ -427,7 +434,7 @@ too:
 ```json
 {
   "meta": {
-    "schema_version": "2.12",
+    "schema_version": "2.13",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "same shape as v1.1" },
     "evidence": [
@@ -463,7 +470,7 @@ array's own shape.
 a verdict:
 
 - **`execution_status`** — did the *command* run to completion
-  (`"completed"` / `"partial"` / `"failed"`)? Ten of these eleven commands
+  (`"completed"` / `"partial"` / `"failed"`)? Eleven of these twelve commands
   have no internal scan-budget/timeout, so this is `"completed"` in every
   case that doesn't crash. `--report` is the exception: its own per-region
   string scan is capped at a fixed byte ceiling
@@ -481,16 +488,16 @@ a verdict:
   vocabulary `--hunt`'s own hunter-level coverage derivation uses
   (`dumpex.hunt._coverage.derive_coverage_status`)? For example,
   `--threads` reports `"partial"` when a dump lacks
-  `ThreadInfoListStream`; `--pid` reports `"partial"` when it had to fall
-  back past `MINIDUMP_MISC_INFO` to a thread-list/exception-stream
-  heuristic; `--hunt`'s document-level `coverage.status` (built by
+  `ThreadInfoListStream`; `--process` reports `"partial"` when the PEB is
+  present but a required identity field (e.g. the command line or the
+  main image's own PE header) could not be resolved; `--hunt`'s document-level `coverage.status` (built by
   `dumpex.hunt._hunt_coverage_report()` from `result.summary`) is
   `"not_evaluated"` when every selected hunter is, `"partial"` when any
   hunter is INCONCLUSIVE or NOT_EVALUATED, and `"complete"` otherwise —
   independent of each individual `HunterRecord`'s own, more detailed
   `coverage`. `coverage.reasons` explains why.
 - **verdict/confidence** — not a top-level `result` concept for any of
-  these eleven commands. Two carry it per-record instead: `--report`'s
+  these twelve commands. Two carry it per-record instead: `--report`'s
   `triageCardRecord.verdict` (one triage card's own MECE score),
   independent of and orthogonal to that card's `execution_status`/
   `coverage.status` — a card can be `"CLEAN"` with `coverage.status:
@@ -570,7 +577,7 @@ the second rule structurally: it raises rather than silently
 stringifying any value that isn't already a plain JSON scalar/list/dict
 by the time it's serialized.
 
-An exit code mirrors `coverage.status` one-for-one for these eleven
+An exit code mirrors `coverage.status` one-for-one for these twelve
 commands, independent of whether `--json` was even requested: `0`
 for `"complete"`, `3` for `"partial"`, `4` for `"not_evaluated"` (the
 primary stream a command needed was entirely absent from the dump — e.g.
@@ -584,7 +591,7 @@ when any hunter is INCONCLUSIVE or NOT_EVALUATED, `0` otherwise) — the
 same three-way split `dumpex/hunt/__init__.py`'s `_hunt_coverage_report()`
 derives from `result.summary`, replacing the unconditional `0` `--hunt`
 used to exit with under the v1.1 contract. This convention is scoped to
-these eleven commands only; every other command's exit-code behavior (`0`
+these twelve commands only; every other command's exit-code behavior (`0`
 on completion, an uncaught exception's default nonzero on a fatal error)
 is unchanged. `--extract`/`--strings`/`--report`
 also use `"partial"` for a short read (`REGION_READ_TRUNCATED` —

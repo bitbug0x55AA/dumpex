@@ -1,5 +1,5 @@
 """Unit tests for dumpex.commands.sysinfo's collect/render split
-(cmd_sysinfo and cmd_pid).
+(cmd_sysinfo).
 
 --sysinfo (issue #41 / docs/recon_process_sysinfo_handles_contract.md §4):
 SysInfoRecord no longer carries the process identity/runtime fields owned
@@ -20,14 +20,13 @@ import re
 import pytest
 
 from tests.fixtures.fakes import (
-    SysInfo, MiscInfo, ExceptionStream, Peb, Thread, Ctx, Module,
+    SysInfo, MiscInfo, Peb, Thread, Ctx, Module,
     FakeStream, FakeMF, FakeHeader, FAKE_DUMP_BYTES, wire_environment_walk,
 )
 
 from dumpex.commands.sysinfo import (
     collect_sysinfo, render_sysinfo_console, cmd_sysinfo, sysinfo_source_present,
-    collect_pid, render_pid_console, cmd_pid, _format_size,
-    _render_environment_entries,
+    _format_size, _render_environment_entries,
 )
 from dumpex.ui import colors
 from dumpex.ui.console_layout import strip_ansi
@@ -1026,131 +1025,4 @@ def test_cmd_sysinfo_returns_command_result(capsys):
     result = cmd_sysinfo(FakeMF())
     assert len(result.records) == 1
     assert result.coverage.status == "partial"
-    capsys.readouterr()
-
-
-# ── --pid ──────────────────────────────────────────────────────────────
-# collect_pid() returns a dumpex.output.command_result.CommandResult
-# (migrated onto the shared coverage core in dumpex.output.coverage);
-# accessed via attributes, never unpacked as a tuple.
-
-def test_collect_pid_via_misc_info_is_complete():
-    mf = FakeMF()
-    mf.misc_info = MiscInfo(process_id=4321)
-    result = collect_pid(mf)
-    assert result.coverage.status == "complete"
-    assert result.coverage.reasons == []
-    rec = result.records[0]
-    assert rec.pid == 4321
-    assert rec.source == "MINIDUMP_MISC_INFO (ProcessId field)"
-
-
-def test_collect_pid_fallback_to_thread_list_is_partial():
-    mf = FakeMF()
-    mf.threads = FakeStream([Thread(9, Ctx(0)), Thread(10, Ctx(0))], "threads")
-    result = collect_pid(mf)
-    assert result.coverage.status == "partial"
-    assert result.coverage.reasons
-    assert "thread list" in result.coverage.reasons[0]
-    rec = result.records[0]
-    assert rec.pid is None
-    assert rec.thread_count == 2
-
-    # Structured: the reducer never inferred this -- it's business logic
-    # collect_pid itself decided, so it must be a hand-built
-    # PID_THREAD_LIST_FALLBACK carrying the raw TIDs, not a free-text blob.
-    limitation = result.coverage.limitations[0]
-    assert limitation.code == LimitationCode.PID_THREAD_LIST_FALLBACK
-    assert limitation.source == "misc_info"
-    assert limitation.counterpart_source == "threads"
-    assert limitation.related_tids == (9, 10)
-
-
-def test_collect_pid_fallback_to_exception_stream():
-    mf = FakeMF()
-    mf.threads = FakeStream([Thread(9, Ctx(0))], "threads")
-    mf.exception = ExceptionStream(9)
-    result = collect_pid(mf)
-    assert result.coverage.status == "partial"
-    assert len(result.coverage.reasons) == 2   # thread-list warning + exception-stream warning
-    assert result.records[0].exc_tid == 9
-    assert isinstance(result.records[0].exc_tid, int)
-
-    codes = [l.code for l in result.coverage.limitations]
-    assert codes == [LimitationCode.PID_THREAD_LIST_FALLBACK, LimitationCode.PID_EXCEPTION_TID_FALLBACK]
-    exc_limitation = result.coverage.limitations[1]
-    assert exc_limitation.source == "exception"
-    assert exc_limitation.thread_id == 9
-
-
-def test_collect_pid_nothing_available():
-    # None of MiscInfo/thread list/exception stream present at all --
-    # nothing to even attempt a fallback with.
-    result = collect_pid(FakeMF())
-    assert result.coverage.status == "not_evaluated"
-    assert result.coverage.reasons and "could not be evaluated" in result.coverage.reasons[0]
-    rec = result.records[0]
-    assert rec.pid is None
-    assert rec.thread_count is None   # never 0 when ThreadListStream itself is absent
-
-    limitation = result.coverage.limitations[0]
-    assert limitation.code == LimitationCode.PID_SOURCES_ABSENT
-
-
-def test_collect_pid_partial_status_never_has_empty_reasons():
-    # mf.threads is present as a stream object but reports zero threads,
-    # and there's no exception stream -- neither fallback branch appends
-    # a warning on its own, so this exercises the safety-net reason.
-    mf = FakeMF()
-    mf.threads = FakeStream([], "threads")
-    result = collect_pid(mf)
-    assert result.coverage.status == "partial"
-    assert result.coverage.reasons   # must never be empty for a non-complete status
-    assert result.coverage.limitations[0].code == LimitationCode.PID_NO_USABLE_FALLBACK
-
-
-def test_collect_pid_threads_present_but_misc_info_absent_is_partial():
-    mf = FakeMF()
-    mf.threads = FakeStream([Thread(1, Ctx(0))], "threads")
-    result = collect_pid(mf)
-    assert result.coverage.status == "partial"   # a real (if weaker) source was available
-    assert result.records[0].thread_count == 1
-
-
-def test_render_pid_console_not_evaluated_prints_the_stable_reason(capsys):
-    result = collect_pid(FakeMF())
-    render_pid_console(result.records[0], result.coverage)
-    out = capsys.readouterr().out
-    assert "ProcessId not found" in out
-    assert "could not be evaluated" in out
-
-
-def test_render_pid_console_complete_via_misc_info(capsys):
-    mf = FakeMF()
-    mf.misc_info = MiscInfo(process_id=4321)
-    result = collect_pid(mf)
-    render_pid_console(result.records[0], result.coverage)
-    out = capsys.readouterr().out
-    assert "4321" in out
-    assert "0x10e1" in out   # hex(4321)
-    assert "MINIDUMP_MISC_INFO" in out
-    assert "[~]" not in out   # complete -- no warning lines
-
-
-def test_render_pid_console_partial_fallback_prints_warning(capsys):
-    mf = FakeMF()
-    mf.threads = FakeStream([Thread(9, Ctx(0))], "threads")
-    result = collect_pid(mf)
-    render_pid_console(result.records[0], result.coverage)
-    out = capsys.readouterr().out
-    assert "ProcessId not found" in out
-    assert "thread list" in out
-
-
-def test_cmd_pid_returns_command_result(capsys):
-    mf = FakeMF()
-    mf.misc_info = MiscInfo(process_id=100)
-    result = cmd_pid(mf)
-    assert result.records[0].pid == 100
-    assert result.coverage.status == "complete"
     capsys.readouterr()

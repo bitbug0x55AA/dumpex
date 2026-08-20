@@ -171,8 +171,9 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     The two branches are genuinely different reports, not one report with
     optional parts:
 
-      PEB ABSENT -- matches `dumpex.commands.peb.collect_peb()`'s own
-        PEB_UNAVAILABLE precedent exactly. `--peb`'s own docstring explains
+      PEB ABSENT -- matches v2.12's now-retired
+        `dumpex.commands.peb.collect_peb()`'s own PEB_UNAVAILABLE
+        precedent exactly. That command's own docstring explained
         why this needs a dedicated code rather than the automatic
         single-source SOURCE_ABSENT default: "PEB could not be parsed
         (missing sysinfo or thread list in dump)" doesn't fit the generic

@@ -1,12 +1,12 @@
-"""--sysinfo and --pid commands."""
+"""--sysinfo command."""
 import os
 import re
 from minidump.minidumpfile import MinidumpFile
-from dumpex.ui.colors import BOLD, CYAN, DIM, GREEN, YELLOW, console_safe
+from dumpex.ui.colors import BOLD, CYAN, DIM, YELLOW, console_safe
 from dumpex.ui.console_layout import resolve_width
-from dumpex.output.records import SysInfoRecord, PidRecord
+from dumpex.output.records import SysInfoRecord
 from dumpex.output.coverage import (
-    observe_source, build_coverage_report, EvaluationRequirement, SourceRequirement,
+    observe_source, build_coverage_report, SourceRequirement,
     CoverageLimitation, LimitationCode, SourceState, SourceObservation, render_limitation,
 )
 from dumpex.output.command_result import CommandResult
@@ -297,13 +297,14 @@ def collect_sysinfo(mf: MinidumpFile) -> CommandResult:
     'not_evaluated' (no evaluation_sources given) since --sysinfo always
     has at least `dump_file`'s basename (derived from the dump path
     itself, never dependent on any of these seven sources) to report --
-    unlike --pid, a single-purpose command that reports nothing at all
-    when all its sources are absent. Each of the five SourceRequirement
-    completeness checks below uses its own dedicated code: none of these
-    five reasons matches the generic SOURCE_ABSENT template's exact
-    wording ("X not present in this dump"), and SYSINFO_PEB_UNAVAILABLE's
-    text differs from --peb's own PEB_UNAVAILABLE, so it isn't reused
-    across commands.
+    unlike v2.12's now-retired --pid, a single-purpose command that
+    reported nothing at all when all its sources were absent. Each of the
+    five SourceRequirement completeness checks below uses its own
+    dedicated code: none of these five reasons matches the generic
+    SOURCE_ABSENT template's exact wording ("X not present in this
+    dump"), and SYSINFO_PEB_UNAVAILABLE's text differs from v2.12's
+    now-retired --peb's own PEB_UNAVAILABLE, so it isn't reused across
+    commands.
 
     Two of the seven `coverage.sources` entries -- `environment_block`
     (§4.3.3) and `dump_file` (§4.2) -- are deliberately never declared as
@@ -645,7 +646,7 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
     """Takes the whole CoverageReport, not three separately-derived
     presence booleans -- each is recomputed here via
     sysinfo_source_present() rather than trusted from a stale call site,
-    matching peb.py's render_peb_console(record, coverage) contract.
+    matching every other recon renderer's (record, coverage) contract.
 
     §4.6's layout is three PEER top-level sections, in this order:
 
@@ -745,139 +746,4 @@ def render_sysinfo_console(record: SysInfoRecord, coverage, *, verbose: bool = F
 def cmd_sysinfo(mf: MinidumpFile, *, verbose: bool = False) -> CommandResult:
     result = collect_sysinfo(mf)
     render_sysinfo_console(result.records[0], result.coverage, verbose=verbose)
-    return result
-
-
-# ── --pid ────────────────────────────────────────────────────────────────
-
-def collect_pid(mf: MinidumpFile) -> CommandResult:
-    """
-    Report the Process ID recorded in the minidump.
-
-    Tries multiple streams in priority order so the result is as reliable
-    as possible even when a dump was produced by a non-standard tool:
-
-      1. MINIDUMP_MISC_INFO  – most authoritative; written by MiniDumpWriteDump
-      2. Thread list         – all threads share the same owning PID on Windows;
-                               reported as a cross-check when MiscInfo is absent
-      3. Exception stream    – contains ThreadId; used purely as a last resort
-         (gives TID, not PID, so it is labelled accordingly)
-
-    Pure data, no printing. Returns a CommandResult[PidRecord] --
-    'complete' only when MiscInfo directly supplied the PID; 'partial'
-    when a weaker fallback path was used (reuses the same human-readable
-    explanations the console has always shown, now rendered from
-    dumpex.output.coverage's PID_THREAD_LIST_FALLBACK/
-    PID_EXCEPTION_TID_FALLBACK/PID_NO_USABLE_FALLBACK codes instead of
-    hand-composed here); 'not_evaluated' when none of the three sources
-    are present in the dump at all -- there is nothing to fall back to,
-    not merely an unreliable answer (PID_SOURCES_ABSENT, via
-    EvaluationRequirement, since the wording doesn't fit the generic
-    3-source SOURCE_GROUP_ABSENT template).
-
-    The two fallback limitations (thread-list cross-check, exception TID)
-    are hand-built CoverageLimitations, not derived by the reducer --
-    "MiscInfo didn't yield a usable PID" isn't a plain source-absence fact
-    the reducer can infer from SourceObservation state alone (MiscInfo
-    can be present yet lack a ProcessId), so this is business logic only
-    the command itself can determine, same as threads.py's TID-mismatch
-    limitations.
-    """
-    pid    = None
-    source = None
-
-    # ── 1. MiscInfo (most reliable) ──────────────────────────────────────
-    mi = mf.misc_info
-    if mi and getattr(mi, "ProcessId", None):
-        pid    = mi.ProcessId
-        source = "MINIDUMP_MISC_INFO (ProcessId field)"
-
-    threads = mf.threads.threads if mf.threads else []
-    exc = getattr(mf, "exception", None)
-    exc_tid = None
-
-    completeness_checks = []
-
-    # ── 2. Thread list cross-check / fallback ────────────────────────────
-    if threads and pid is None:
-        tids = [t.ThreadId for t in threads]
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.PID_THREAD_LIST_FALLBACK, source="misc_info",
-            counterpart_source="threads", related_tids=tuple(tids)))
-
-    # ── 3. Exception stream – last resort (gives TID, not PID) ───────────
-    if exc and pid is None:
-        try:
-            exc_tid = exc.ThreadId
-        except AttributeError:
-            pass
-        if exc_tid:
-            completeness_checks.append(CoverageLimitation(
-                code=LimitationCode.PID_EXCEPTION_TID_FALLBACK, source="exception", thread_id=exc_tid))
-
-    record = PidRecord(
-        pid=pid,
-        source=source,
-        # None (not 0) when ThreadListStream itself is absent -- "no
-        # thread list captured" and "thread list captured, zero threads"
-        # are not the same claim (same rule as SysInfoRecord.thread_count).
-        thread_count=(len(threads) if mf.threads else None),
-        exc_tid=exc_tid,
-    )
-
-    misc_info_source = observe_source("misc_info", present=bool(mi), items=[mi] if mi else [])
-    threads_source    = observe_source("threads", present=bool(mf.threads), items=threads)
-    exception_source  = observe_source("exception", present=bool(exc), items=[exc] if exc else [])
-    sources = {"misc_info": misc_info_source, "threads": threads_source, "exception": exception_source}
-
-    if pid is None and not completeness_checks:
-        # A source object can be present yet contribute nothing usable
-        # (e.g. mf.threads exists but its own .threads list is empty, or
-        # the exception stream exists but carries no ThreadId) -- neither
-        # fallback above appended a limitation in that case, which would
-        # otherwise leave a non-complete status with empty reasons. Added
-        # unconditionally (not gated on an independently-recomputed
-        # "are all three sources absent" check) -- if they really are all
-        # absent, build_coverage_report's own not_evaluated branch (see
-        # evaluation_sources below) reads `sources` directly and returns
-        # before ever looking at completeness_checks, so this entry is
-        # simply never used in that case rather than needing to be kept
-        # in sync with a second, separately-computed condition.
-        completeness_checks.append(
-            CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="misc_info"))
-
-    coverage = build_coverage_report(
-        sources,
-        evaluation_sources=EvaluationRequirement(
-            sources=("misc_info", "threads", "exception"),
-            all_absent_code=LimitationCode.PID_SOURCES_ABSENT),
-        completeness_checks=completeness_checks,
-    )
-    return CommandResult(kind="pid", records=[record], coverage=coverage, summary={"count": 1})
-
-
-def render_pid_console(record: PidRecord, coverage) -> None:
-    """Takes the whole CoverageReport, not a bare reasons list -- matches
-    peb.py's render_peb_console(record, coverage) contract, so a stale
-    call site can't pass a mismatched/incomplete reasons list."""
-    print(f"\n{BOLD('═══ PROCESS ID ═══')}")
-
-    if record.pid is not None:
-        print(f"  {'PID (decimal)':<26} {GREEN(str(record.pid))}")
-        print(f"  {'PID (hex)':<26} {GREEN(f'0x{record.pid:x}')}")
-        print(f"  {'Source':<26} {DIM(record.source)}")
-        if record.thread_count:
-            print(f"  {'Threads in dump':<26} {record.thread_count}")
-    else:
-        print(f"  {YELLOW('[!] ProcessId not found in MiscInfo stream.')}")
-
-    for w in coverage.reasons:
-        print(f"\n  {YELLOW('[~]')} {w}")
-
-    print()
-
-
-def cmd_pid(mf: MinidumpFile) -> CommandResult:
-    result = collect_pid(mf)
-    render_pid_console(result.records[0], result.coverage)
     return result

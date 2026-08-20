@@ -420,12 +420,13 @@ def _build_peb_extended(mf: MinidumpFile) -> dict:
     unavailable; presence of the KEY depends only on the flag (handled by
     the caller), never on this dict's own contents.
 
-    Direct attribute access, matching dumpex.commands.peb.collect_peb()'s
-    own convention for the same seven fields -- a real PEB object is
-    guaranteed to carry every one of them (they are not conditionally
-    populated the way stream-backed evidence is), so a rename/removal
-    upstream should raise loudly here rather than silently rendering
-    every field null and indistinguishable from "PEB unavailable"."""
+    Direct attribute access, matching v2.12's now-retired
+    dumpex.commands.peb.collect_peb() convention for the same seven
+    fields -- a real PEB object is guaranteed to carry every one of them
+    (they are not conditionally populated the way stream-backed evidence
+    is), so a rename/removal upstream should raise loudly here rather
+    than silently rendering every field null and indistinguishable from
+    "PEB unavailable"."""
     peb = mf.peb
     if peb is None:
         return {

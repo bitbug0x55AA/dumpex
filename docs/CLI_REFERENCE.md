@@ -24,8 +24,9 @@ formats documented for their individual options.
 | `--threads` | List threads with analysis |
 | `--extract ADDR` | Extract raw bytes from the region containing `ADDR` |
 | `--strings ADDR` | Extract strings from the region containing `ADDR` |
-| `--peb` | Show Process Environment Block information |
-| `--pid` | Show the process ID recorded in the dump |
+| `--process` | Show consolidated process identity (PID, path, command line, start time, image base, IAT) — replaces `--pid`/`--peb` (removed in v2.13, no alias) |
+| `--handles` | List captured handle descriptors from `HandleDataStream` |
+| `--profile` | Describe dump evidence and the analysis-capability map (an evidence boundary, not a verdict) |
 | `--sysinfo` | Show dump identity (size/SHA-256/dump time), OS, host, CPU, and environment |
 | `--diff REFERENCE` | Compare the primary target dump against a reference dump |
 | `--report` | Generate a focused triage report |
@@ -122,11 +123,16 @@ write silently clobbering an earlier one's output is never allowed, even
 with `--force`.
 
 `--json` routes through a single contract for every mode:
-`--list`/`--modules`/`--threads`/`--pid`/`--sysinfo`/`--peb`/`--diff`/
-`--extract`/`--strings`/`--report`/`--hunt` all use the v2 contract
-(canonical records, `null` for missing values, normalized hex addresses —
-see [Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
-All eleven commands support `--json` on this same v2.12 contract;
+`--list`/`--modules`/`--threads`/`--process`/`--sysinfo`/`--handles`/
+`--profile`/`--diff`/`--extract`/`--strings`/`--report`/`--hunt` all use
+the v2 contract (canonical records, `null` for missing values, normalized
+hex addresses — see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
+All twelve commands support `--json` on this same v2.13 contract, the
+single atomic cutover that replaced `--pid`/`--peb` (result kinds
+`"pid"`/`"peb"`) with `--process`/`--handles`/`--profile` (result kinds
+`"process"`/`"handles"`/`"profile"`) with no hidden alias between the
+old and new flags;
 `--hunt` was the last to migrate — its `result.kind` is `"hunt"` and
 `result.data.records` holds one `hunterRecord` per hunter.
 `--diff` produces a `kind: "comparison"` result with a two-entry
@@ -159,8 +165,9 @@ See [Output and Evidence Schema](OUTPUT_SCHEMA.md) for formats and metadata.
 
 ```bash
 dumpex sample.dmp --sysinfo
-dumpex sample.dmp --pid
-dumpex sample.dmp --peb
+dumpex sample.dmp --process
+dumpex sample.dmp --handles
+dumpex sample.dmp --profile
 dumpex sample.dmp --modules
 dumpex sample.dmp --threads
 dumpex sample.dmp --list
