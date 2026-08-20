@@ -15,6 +15,7 @@ except ImportError:
 
 from minidump.header import MinidumpHeader
 from minidump.directory import MINIDUMP_DIRECTORY
+from minidump.common_structs import MINIDUMP_LOCATION_DESCRIPTOR
 from minidump.constants import MINIDUMP_STREAM_TYPE, MINIDUMP_TYPE
 from minidump.streams import (
     MinidumpThreadList, MinidumpModuleList, MinidumpMemoryList,
@@ -459,6 +460,16 @@ _STREAM_DISPATCH = {
     MINIDUMP_STREAM_TYPE.ThreadInfoListStream:     ("thread_info", MinidumpThreadInfoList.parse),
 }
 
+# Public view of _STREAM_DISPATCH's own keys/attr-name mapping, for a
+# caller outside this module that needs to know "does dumpex parse this
+# stream type at all, and if so onto which mf.<attr>?" (dumpex.commands.
+# profile's stream inventory) without importing the private dict itself
+# (whose values also carry each parse function -- not this module's to
+# hand out) or hand-maintaining a second copy of the same association
+# that could drift from it.
+DISPATCHED_STREAM_TYPES = frozenset(_STREAM_DISPATCH.keys())
+STREAM_ATTR_NAMES = {stream_type: attr_name for stream_type, (attr_name, _) in _STREAM_DISPATCH.items()}
+
 
 # ── MINIDUMP_HEADER's union: an installed-library layout misread ──────────
 # The real MINIDUMP_HEADER (dbghelp.h) is 32 bytes and declares
@@ -539,6 +550,63 @@ def _correct_header_union(header, file_handle) -> None:
         header.Flags = flags
 
 
+def _parse_directory_entry(file_handle):
+    """`MINIDUMP_DIRECTORY.parse()`, made tolerant of a `StreamType` value
+    the installed minidump library cannot decode -- issue #95's --profile
+    inventory needs every directory entry, "preserving unknown stream-type
+    IDs rather than silently dropping them", and this closes the two gaps
+    that would otherwise make an unrecognized entry unreachable, crash the
+    whole dump open, or be silently omitted from the inventory entirely.
+
+    The upstream parser (minidump.directory.MINIDUMP_DIRECTORY.parse)
+    special-cases exactly one unrecognized-StreamType shape: a raw value
+    greater than MINIDUMP_STREAM_TYPE.LastReservedStream (0xFFFF) is a
+    real Microsoft MINIDUMP_USER_STREAM, and the library silently DROPS it
+    (returns None, never even reading its own Location bytes), matching
+    Microsoft's own "tools that don't understand a user stream should
+    ignore it" documented guidance -- but #95's own acceptance criteria
+    make no such exception ("Every directory entry is represented,
+    including unknown and duplicate stream types" / "preserve unknown
+    stream-type IDs rather than silently dropping them"), so this function
+    does NOT reproduce that drop: a >0xFFFF value is treated exactly like
+    any other unrecognized StreamType below, preserved as its own
+    inventory row rather than vanishing without a trace.
+
+    Any raw value that isn't one of MINIDUMP_STREAM_TYPE's ~30 named
+    members -- whether >0xFFFF or a reserved-but-unassigned ID in the gap
+    between two named values, and whether a genuine vendor/tool extension,
+    a newer stream type this installed library version has never heard
+    of, or fuzzed/corrupted bytes -- previously fell through to
+    `MINIDUMP_STREAM_TYPE(raw_stream_type_value)`, which RAISES ValueError
+    for anything the upstream library's own special case didn't already
+    return None for. Nothing inside MINIDUMP_DIRECTORY.parse() catches
+    that, so it propagated straight out of open_dump()'s Phase 1
+    try/except and aborted the ENTIRE dump open with exit(1) -- for a dump
+    that may otherwise be perfectly readable, and for every dumpex
+    command, not just --profile. Phase 2 below already established the
+    principle that one malformed/unrecognized stream must never take the
+    rest of the dump down with it; this closes the one gap in that
+    principle that sits BEFORE Phase 2 even runs, in the directory WALK
+    itself.
+
+    Returns a MINIDUMP_DIRECTORY whose `.StreamType` is either the real
+    MINIDUMP_STREAM_TYPE member (unchanged from today for every recognized
+    value) or the raw int itself for any unrecognized value -- `.Location`
+    is always parsed too, so Rva/DataSize survive for an unknown entry.
+    `_STREAM_DISPATCH.get(d.StreamType)` (an int key matches no dict key
+    there) and `has_stream_directory()`'s `==` comparison (a plain int
+    never equals a MINIDUMP_STREAM_TYPE enum member) already treat an
+    unrecognized StreamType exactly like any other stream dumpex has no
+    parser for -- no other Phase 1/2 code needs to change. Never returns
+    None any more."""
+    raw_value = MINIDUMP_DIRECTORY.get_stream_type_value(file_handle)
+    is_recognized = raw_value in MINIDUMP_STREAM_TYPE._value2member_map_
+    d = MINIDUMP_DIRECTORY()
+    d.StreamType = MINIDUMP_STREAM_TYPE(raw_value) if is_recognized else raw_value
+    d.Location = MINIDUMP_LOCATION_DESCRIPTOR.parse(file_handle)
+    return d
+
+
 def open_dump(path: str) -> MinidumpFile:
     # Phase 0 -- unchanged, existing behavior, still exit 1.
     if not os.path.exists(path):
@@ -564,13 +632,41 @@ def open_dump(path: str) -> MinidumpFile:
         # absolutely, so the file position this leaves behind is
         # irrelevant to it.
         _correct_header_union(mf.header, mf.file_handle)
-        for i in range(mf.header.NumberOfStreams):
+        # header.NumberOfStreams is an attacker-controlled uint32 with no
+        # relationship enforced to the file's real size -- a directory
+        # entry is a fixed 12 bytes (StreamType(4) + Location(8)), so a
+        # file of size S can back at most (S - StreamDirectoryRva) // 12
+        # of them, however large NumberOfStreams claims to be. Walking
+        # past that bound reads past EOF, where file.read(n) silently
+        # returns FEWER than n bytes (b'' at the very end) rather than
+        # raising -- and int.from_bytes(b'', ...) is 0, a real,
+        # recognized MINIDUMP_STREAM_TYPE.UnusedStream value. Unbounded,
+        # this fabricates one plausible-looking directory entry per
+        # missing byte range out of a file that may be only tens of
+        # bytes long: a trivially small, easily crafted input claiming a
+        # near-uint32-max stream count turns into minutes of CPU time and
+        # a directories list sized to match, none of which the file
+        # actually contains. Bounding the walk here -- BEFORE any entry
+        # is read, not by catching a short read afterwards -- is what
+        # keeps a corrupted/truncated/adversarial directory table a
+        # cheap, bounded fact instead of a DoS.
+        file_size = os.fstat(mf.file_handle.fileno()).st_size
+        max_readable_entries = max(0, (file_size - mf.header.StreamDirectoryRva) // 12)
+        walkable_streams = min(mf.header.NumberOfStreams, max_readable_entries)
+        # The declared count itself is not separately cached -- it is
+        # already directly readable as mf.header.NumberOfStreams, so a
+        # second copy here would be redundant state with nothing to keep
+        # it in sync. Only the DERIVED shortfall (declared - readable) is
+        # worth caching, since directory_truncated_count() is the one
+        # fact callers actually need and recomputing it inline at every
+        # call site would risk two different subtractions drifting apart.
+        mf._dumpex_directory_truncated_count = mf.header.NumberOfStreams - walkable_streams
+        for i in range(walkable_streams):
             mf.file_handle.seek(mf.header.StreamDirectoryRva + i * 12, 0)
-            d = MINIDUMP_DIRECTORY.parse(mf.file_handle)
-            if d:
+            d = _parse_directory_entry(mf.file_handle)
+            if d:   # never actually falsy any more (see that function's own
+                     # docstring) -- kept as a defensive guard, not a live branch
                 mf.directories.append(d)
-            # A falsy directory entry is an unknown UserStream -- the
-            # library logs and skips it; so do we.
     except Exception as e:
         print(RED(f"[!] Could not parse {path} as a minidump file: "
                    f"{type(e).__name__}: {e}"))
@@ -650,6 +746,18 @@ def has_stream_directory(mf: MinidumpFile, stream_type) -> bool:
     missing-attribute tolerance stream_failure() applies."""
     directories = getattr(mf, "directories", None) or ()
     return any(getattr(d, "StreamType", None) == stream_type for d in directories)
+
+
+def directory_truncated_count(mf: MinidumpFile) -> int:
+    """How many directory entries `mf.header.NumberOfStreams` declared
+    that open_dump()'s Phase 1 walk could not actually read from the
+    file (see open_dump()'s own file-size bound, next to where this
+    attribute is set) -- 0 for a dump whose declared count and real size
+    agree, or whenever `mf` was never built by open_dump() at all (a
+    test/fixture `mf` is treated as declaring no shortfall, the same
+    missing-attribute tolerance stream_failure()/has_stream_directory()
+    apply)."""
+    return getattr(mf, "_dumpex_directory_truncated_count", 0) or 0
 
 
 def observe_stream(mf: MinidumpFile, name: str, stream_type, obj, items: list) -> SourceObservation:
@@ -974,6 +1082,17 @@ def _memory_segments(mf: MinidumpFile) -> list:
     if mf.memory_segments and mf.memory_segments.memory_segments:
         return mf.memory_segments.memory_segments
     return []
+
+
+def get_memory_segments(mf: MinidumpFile) -> list:
+    """Public wrapper over _memory_segments() for callers outside this
+    module (dumpex.commands.profile's memory-capture facts and
+    injection-artifact-analysis capability gating) that need the exact
+    same Memory64List-preferred-over-MemoryList segment table
+    read_region()/va_to_file_offset() already resolve VAs against --
+    without a second, independently-maintained copy of that preference
+    order that could drift from this one."""
+    return _memory_segments(mf)
 
 
 def va_to_file_offset(mf: MinidumpFile, va: int):
