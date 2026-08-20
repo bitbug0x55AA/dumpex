@@ -101,17 +101,45 @@ def main() -> None:
                          "dumpex-output-v2.5.schema.json", "dumpex-output-v2.6.schema.json",
                          "dumpex-output-v2.7.schema.json", "dumpex-output-v2.8.schema.json",
                          "dumpex-output-v2.9.schema.json", "dumpex-output-v2.10.schema.json",
-                         "dumpex-output-v2.11.schema.json", "dumpex-output-v2.12.schema.json")
+                         "dumpex-output-v2.11.schema.json", "dumpex-output-v2.12.schema.json",
+                         "dumpex-output-v2.13.schema.json")
+
+    # This hardcoded historical list still needs a manual add on every
+    # schema bump (same as every other exact-filename check in this
+    # script), but CURRENT_SCHEMA itself is cross-checked against it and
+    # against SCHEMA_VERSION below -- both read from the INSTALLED package,
+    # not this repo's source tree -- so a bump that updates SCHEMA_VERSION/
+    # CURRENT_SCHEMA but forgets this list (or the reverse) fails loudly
+    # here instead of silently shipping a package-smoke gate that never
+    # actually loads the schema every producer stamps.
+    from dumpex.schemas import CURRENT_SCHEMA
+    from dumpex.output.envelope import SCHEMA_VERSION
+
+    if CURRENT_SCHEMA not in _schema_filenames:
+        _fail(f"dumpex.schemas.CURRENT_SCHEMA ({CURRENT_SCHEMA!r}) is not in this script's own "
+              f"_schema_filenames list -- the installed package's current contract would never "
+              f"actually be smoke-tested")
+
     for schema_filename in _schema_filenames:
         schema_path = importlib.resources.files("dumpex.schemas").joinpath(schema_filename)
         if not schema_path.is_file():
             _fail(f"dumpex/schemas/{schema_filename} not found via importlib.resources")
         schema_text = schema_path.read_text(encoding="utf-8")
         try:
-            json.loads(schema_text)
+            schema_doc = json.loads(schema_text)
         except json.JSONDecodeError as e:
             _fail(f"packaged {schema_filename} is not valid JSON: {e}")
+        if schema_filename == CURRENT_SCHEMA:
+            declared_version = schema_doc.get("$defs", {}).get("meta", {}) \
+                .get("properties", {}).get("schema_version", {}).get("const")
+            if declared_version != SCHEMA_VERSION:
+                _fail(f"CURRENT_SCHEMA ({CURRENT_SCHEMA!r})'s own "
+                      f"$defs.meta.properties.schema_version.const is {declared_version!r}, "
+                      f"not SCHEMA_VERSION {SCHEMA_VERSION!r} -- every producer stamps "
+                      f"SCHEMA_VERSION into meta.schema_version, so a document built by this "
+                      f"installed package would fail validation against its own current schema")
     print(f"packaged schemas: {', '.join(_schema_filenames)}")
+    print(f"CURRENT_SCHEMA loads and matches SCHEMA_VERSION: {CURRENT_SCHEMA} == {SCHEMA_VERSION!r}")
 
     from dumpex.rules_pkg import loader
 

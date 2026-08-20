@@ -549,7 +549,7 @@ examples below correctly show it as `[]`.
 ```json
 {
   "meta": {
-    "schema_version": "2.12",
+    "schema_version": "2.13",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:12:01Z",
@@ -648,7 +648,7 @@ hunter's own `coverage.status`) is what makes this run exit `0` — see
 ```json
 {
   "meta": {
-    "schema_version": "2.12",
+    "schema_version": "2.13",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": {
       "started_at": "2026-03-14T09:14:01Z",

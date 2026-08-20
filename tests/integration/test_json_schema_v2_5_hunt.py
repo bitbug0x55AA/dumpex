@@ -310,6 +310,23 @@ def test_detected_requires_positive_score(hunter_record_validator):
     assert errors
 
 
+def test_profile_capability_object_in_a_finding_position_is_rejected(hunter_record_validator):
+    # --profile's own evidence-capability entries (§0.2/§1.6's own
+    # non-goal: "no malicious/clean verdict, confidence, ATT&CK mapping,
+    # ... no automatic hunter integration") must not be usable as a
+    # `finding` -- `finding` is closed (additionalProperties: false, 14
+    # required fields), so a capability-shaped object cannot pass as one
+    # even by accident.
+    d = injection_detected().to_dict()
+    d["findings"] = [{"capability_id": "handle_analysis", "status": "unavailable",
+                       "required_source_groups": [["handles"]], "required_sources": ["handles"],
+                       "optional_sources": [],
+                       "limitations": [{"code": "REQUIRED_SOURCE_ABSENT", "source": "handles",
+                                         "detail": "not present in this dump"}]}]
+    errors = list(hunter_record_validator.iter_errors(d))
+    assert errors
+
+
 def test_coverage_not_evaluated_requires_status_not_evaluated(hunter_record_validator):
     # The reverse-direction safety net: coverage.status == "not_evaluated"
     # must force status == "NOT_EVALUATED" even if some future edit only
@@ -1006,6 +1023,14 @@ _FROZEN_SHA256 = {
         "a9d6fcf21aab0f9d0586d807805c3f5fcd8923f510af8fad16d0f6b1f3d72a55",
     "dumpex-output-v2.3.schema.json":
         "ca02f62b42ff6f4baba2da1bb4ff5ab7cbf190ebab5d9a1521854367ca798775",
+    # v2.12 just became the newest HISTORICAL file in issue #43's v2.13
+    # cutover -- "never edit v2.12 in place" (docs/recon_process_sysinfo_
+    # handles_contract.md §7.2) is otherwise a convention-only claim, same
+    # as the two entries above.
+    # The hash is the LF form: .gitattributes pins this file to eol=lf so
+    # a Windows checkout hashes exactly the bytes Linux CI does.
+    "dumpex-output-v2.12.schema.json":
+        "a5b68b9cfae4d095705bf1522c8769a1914a2f55ad80a49e2c406a57d0f784c2",
 }
 
 

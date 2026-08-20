@@ -70,10 +70,9 @@ from dumpex.commands.extract import render_strings_console
 from dumpex.commands.handles import collect_handles, render_handles_console
 from dumpex.commands.list_cmd import render_regions_console
 from dumpex.commands.modules import render_modules_console
-from dumpex.commands.peb import render_peb_console
 from dumpex.commands.process import render_process_console
 from dumpex.commands.profile import collect_profile, render_profile_console
-from dumpex.commands.sysinfo import render_pid_console, render_sysinfo_console
+from dumpex.commands.sysinfo import render_sysinfo_console
 from dumpex.commands.threads import render_threads_console
 
 
@@ -237,16 +236,6 @@ def _case_threads():
                      _coverage("threads", "thread_info", "modules"))
 
 
-# Every one of these is a UNICODE_STRING walked out of the process's PEB.
-_PEB_FIELDS = ("image_path", "command_line", "window_title", "dll_path",
-               "current_directory")
-
-
-def _case_peb():
-    record = hostile_record(records_module.PebRecord, {}, _PEB_FIELDS)
-    return _rendered(render_peb_console, record, _coverage("peb"))
-
-
 # hostname/username come from the captured environment block; cpu_vendor
 # is decoded from SystemInfoStream's CPU-information bytes. `os`/
 # `architecture`/`product_type` are dumpex's own display names for
@@ -399,7 +388,6 @@ RENDER_CASES = {
     "dumpex.commands.extract.render_strings_console": (_case_strings, _STRINGS_FIELDS),
     "dumpex.commands.modules.render_modules_console": (_case_modules, _MODULES_FIELDS),
     "dumpex.commands.threads.render_threads_console": (_case_threads, _THREADS_FIELDS),
-    "dumpex.commands.peb.render_peb_console":          (_case_peb, _PEB_FIELDS),
     "dumpex.commands.sysinfo.render_sysinfo_console": (_case_sysinfo, _SYSINFO_FIELDS),
 }
 
@@ -413,10 +401,6 @@ NO_UNTRUSTED_INPUT = {
     # dumpex lookup table, never dump text; base_address is hex.
     "dumpex.commands.list_cmd.render_regions_console":
         "MemoryInfoStream supplies integers only; every string is a dumpex lookup",
-    # PidRecord is pid/thread_count/exc_tid (ints) plus `source`, which is
-    # dumpex's own provenance vocabulary ("misc_info", ...).
-    "dumpex.commands.sysinfo.render_pid_console":
-        "PidRecord carries no dump-supplied string",
     # Prints coverage reasons, Diagnostic.message, and the written
     # Artifact's own path/size/sha256 -- all dumpex-produced. The bytes it
     # extracted go to a file, never to the terminal.

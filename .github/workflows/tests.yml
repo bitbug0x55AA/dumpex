@@ -286,11 +286,11 @@ jobs:
           coverage report --include="dumpex/hunt/yara_hunt/collect.py"        --fail-under=95
           coverage report --include="dumpex/hunt/_context.py"               --fail-under=90
           # dumpex/output/*: the v2 structured-output contract (--list/
-          # --modules/--threads/--pid/--sysinfo/--peb). New in this change,
-          # so gates sit close to measured coverage from day one rather
-          # than starting loose -- records.py/serializer.py are pure data
-          # transforms with no console/presentation branches
-          # to skip testing.
+          # --modules/--threads/--process/--sysinfo/--handles/--profile).
+          # New in this change, so gates sit close to measured coverage
+          # from day one rather than starting loose -- records.py/
+          # serializer.py are pure data transforms with no console/
+          # presentation branches to skip testing.
           coverage report --include="dumpex/output/records.py"       --fail-under=95
           coverage report --include="dumpex/output/serializer.py"    --fail-under=95
           coverage report --include="dumpex/output/envelope.py"      --fail-under=85
@@ -303,17 +303,31 @@ jobs:
           # the tight gates.
           coverage report --include="dumpex/output/coverage.py"       --fail-under=95
           coverage report --include="dumpex/output/command_result.py" --fail-under=95
-          # dumpex/commands/{list_cmd,modules,threads,sysinfo,peb}.py: the
-          # six recon commands' collect_*()/render_*_console() split.
+          # dumpex/commands/{list_cmd,modules,threads,sysinfo}.py: four of
+          # the seven recon commands' collect_*()/render_*_console() split.
           # collect_*() (the part that matters for --json output) is
           # thoroughly covered; render_*_console()'s console-formatting
           # branches are not chased for coverage the same way presentation
-          # modules elsewhere in this file aren't.
+          # modules elsewhere in this file aren't. --pid/--peb (and
+          # dumpex/commands/peb.py) were retired in issue #43's atomic
+          # v2.13 cutover, replaced by --process/--handles below and
+          # --profile (already gated further down) -- there is no
+          # command-only module left for either retired flag to gate.
           coverage report --include="dumpex/commands/list_cmd.py" --fail-under=90
           coverage report --include="dumpex/commands/modules.py"  --fail-under=80
           coverage report --include="dumpex/commands/threads.py"  --fail-under=65
           coverage report --include="dumpex/commands/sysinfo.py"  --fail-under=70
-          coverage report --include="dumpex/commands/peb.py"      --fail-under=90
+          # dumpex/commands/process.py + handles.py: --process (issue #40)
+          # and --handles (issue #42), the two other commands #43 exposed
+          # through the CLI in the same cutover as --profile below. Gated
+          # from day one for the same "evidence-boundary claim" reason
+          # --profile is: collect_process()/collect_handles() are the part
+          # that matters for --json output and are thoroughly covered
+          # (measured ~98%/100%); render_*_console()'s own formatting
+          # branches are not chased for coverage, same as every other
+          # recon command's console renderer above.
+          coverage report --include="dumpex/commands/process.py" --fail-under=90
+          coverage report --include="dumpex/commands/handles.py" --fail-under=90
           # dumpex/commands/profile.py: --profile's own collect/render/
           # command slice (issue #95, docs/recon_profile_contract.md).
           # Gated from day one like the block above, and for the same

@@ -134,3 +134,45 @@ def test_every_historical_row_is_marked_frozen_and_not_produced():
         if "(current)" in row:
             continue
         assert "frozen" in row and "no command emits this anymore" in row, row
+
+
+# ── scripts/package_smoke.py's own hardcoded schema-filename list ────────
+# package_smoke.py is deliberately standalone (runs against an installed
+# wheel outside this repo, with no pytest/repo-tree dependency -- see its
+# own module docstring), so its `_schema_filenames` tuple is a local
+# variable inside main(), not an importable constant. This parses the
+# tuple literal straight out of the script's source text instead, and
+# compares it against the same _packaged_schemas() every other test in
+# this file already trusts -- a schema file added or removed from the
+# package without updating that hardcoded tuple (exactly the class of
+# drift that left dumpex-output-v2.13.schema.json out of it after the
+# v2.13 cutover) now fails here instead of leaving the package-smoke gate
+# silently checking a stale set of files forever.
+
+_PACKAGE_SMOKE = _REPO_ROOT / "scripts" / "package_smoke.py"
+
+
+def _package_smoke_schema_filenames():
+    text = _PACKAGE_SMOKE.read_text(encoding="utf-8")
+    match = re.search(r"_schema_filenames\s*=\s*\((.*?)\)", text, re.DOTALL)
+    assert match, f"could not find a _schema_filenames = (...) tuple in {_PACKAGE_SMOKE}"
+    return set(re.findall(r'"(dumpex-output-v\d+\.\d+\.schema\.json)"', match.group(1)))
+
+
+def test_package_smoke_schema_filenames_match_the_packaged_set():
+    packaged = {filename for filename in _packaged_schemas().values()}
+    listed = _package_smoke_schema_filenames()
+    assert listed == packaged, (
+        f"scripts/package_smoke.py's own _schema_filenames tuple has drifted from the "
+        f"packaged dumpex/schemas/ files -- missing: {sorted(packaged - listed)}, "
+        f"extra: {sorted(listed - packaged)}")
+
+
+def test_package_smoke_checks_current_schema_is_in_its_own_list():
+    """The list can be complete and package_smoke.py could still forget to
+    single out CURRENT_SCHEMA for the schema_version cross-check -- this
+    pins that the script's own source still contains that guard, not just
+    that its historical-filename tuple is complete."""
+    text = _PACKAGE_SMOKE.read_text(encoding="utf-8")
+    assert "CURRENT_SCHEMA not in _schema_filenames" in text
+    assert "SCHEMA_VERSION" in text

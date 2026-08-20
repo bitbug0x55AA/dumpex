@@ -18,8 +18,10 @@ from dumpex.commands.list_cmd import cmd_list
 from dumpex.commands.modules  import cmd_modules
 from dumpex.commands.threads  import cmd_threads
 from dumpex.commands.extract  import cmd_extract, cmd_strings
-from dumpex.commands.peb      import cmd_peb
-from dumpex.commands.sysinfo  import cmd_sysinfo, cmd_pid
+from dumpex.commands.process  import cmd_process
+from dumpex.commands.handles  import cmd_handles
+from dumpex.commands.profile  import cmd_profile
+from dumpex.commands.sysinfo  import cmd_sysinfo
 from dumpex.commands.report   import cmd_report
 from dumpex.commands.diff     import cmd_diff
 from dumpex.hunt              import cmd_hunt
@@ -28,18 +30,22 @@ from dumpex.hunt              import _hunt_coverage_report
 from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
-# All eleven commands are migrated onto the v2 envelope (see dumpex/output/
-# and dumpex-output-v2.12.schema.json); --diff produces a kind="comparison"
+# All twelve commands are migrated onto the v2 envelope (see dumpex/output/
+# and dumpex-output-v2.13.schema.json); --diff produces a kind="comparison"
 # result via V2Output.from_evidence() (two dumps), --report produces a
 # kind="report" result (one TriageCardRecord per triage card -- see
 # dumpex.commands.report's own module docstring), --hunt produces a
 # kind="hunt" result (one HunterRecord per selected TTP -- see
 # dumpex.hunt.cmd_hunt()'s own collect_records= docstring), the other
-# eight produce their usual single-dump kinds.
-_V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo", "peb", "diff",
-                                    "extract", "strings", "report", "hunt"})
+# nine produce their usual single-dump kinds. v2.13 (issue #43) is the
+# single atomic cutover that replaces --pid/--peb (kinds "pid"/"peb")
+# with --process/--handles/--profile (kinds "process"/"handles"/
+# "profile") -- see docs/recon_process_sysinfo_handles_contract.md §7.2
+# for why there is no hidden alias between the two.
+_V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "process", "sysinfo", "handles",
+                                    "profile", "diff", "extract", "strings", "report", "hunt"})
 
-# Exit codes for all eleven v2-routed commands, independent of
+# Exit codes for all twelve v2-routed commands, independent of
 # --json having been requested at all: a SOC script checking `$?`
 # on a bare `dumpex --threads dump.dmp` should be able to detect
 # incomplete coverage without needing to also parse JSON. `--hunt` uses
@@ -55,7 +61,7 @@ _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "pid", "sysinfo"
 # EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED and the status->code mapping
 # itself (exit_code_for) live in dumpex.output.coverage, not here --
 # that's the single place a coverage status becomes a process exit code,
-# used by _apply_command_result() below for all eleven of these commands.
+# used by _apply_command_result() below for all twelve of these commands.
 
 
 def _selected_run_mode(args) -> str:
@@ -68,8 +74,9 @@ def _selected_run_mode(args) -> str:
     if args.threads:   return "threads"
     if args.extract:   return "extract"
     if args.strings:   return "strings"
-    if args.peb:       return "peb"
-    if args.pid:       return "pid"
+    if args.process:   return "process"
+    if args.handles:   return "handles"
+    if args.profile:   return "profile"
     if args.sysinfo:   return "sysinfo"
     if args.diff:      return "diff"
     if args.report:    return "report"
@@ -86,11 +93,20 @@ def main():
     # AFTER the dump was already open.
     started_at = datetime.datetime.now(datetime.timezone.utc)
 
+    # v2.13 (issue #43) removed --pid/--peb immediately, with no hidden
+    # alias -- docs/recon_process_sysinfo_handles_contract.md §7.2 requires
+    # this one-line redirect in the help epilogue instead, so a user of the
+    # old flags is pointed at their replacement rather than left guessing
+    # from argparse's own "unrecognized arguments" error alone.
+    _epilog_lines = [line for line in
+                      ('\n'.join(__doc__.strip().splitlines()[3:]) if __doc__ else "").splitlines()
+                      if line]
+    _epilog_lines.append("--pid and --peb were replaced by --process in v2.13")
     parser = argparse.ArgumentParser(
         prog="dumpex",
         description=BOLD("dumpex — Minidump Memory Extractor & Analyzer"),
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='\n'.join(__doc__.strip().splitlines()[3:]) if __doc__ else None
+        epilog='\n'.join(_epilog_lines)
     )
 
     parser.add_argument("dumpfile", help="Primary .DMP file")
@@ -103,8 +119,11 @@ def main():
     mode.add_argument("--threads",      action="store_true", help="List threads with analysis")
     mode.add_argument("--extract",      metavar="ADDR",      help="Extract raw bytes at address")
     mode.add_argument("--strings",      metavar="ADDR",      help="Extract strings at address")
-    mode.add_argument("--peb",          action="store_true", help="Show PEB info")
-    mode.add_argument("--pid",          action="store_true", help="Show the Process ID recorded in the dump")
+    mode.add_argument("--process",      action="store_true", help="Show consolidated process identity (PID, path, "
+                                                                    "command line, start time, image base, IAT)")
+    mode.add_argument("--handles",      action="store_true", help="List captured handle descriptors from HandleDataStream")
+    mode.add_argument("--profile",      action="store_true", help="Describe dump evidence and the analysis-capability "
+                                                                    "map (an evidence boundary, not a verdict)")
     mode.add_argument("--sysinfo",      action="store_true", help="Show OS, host, environment and CPU summary")
     mode.add_argument("--diff",         metavar="REFERENCE", help="Compare the primary dump against a reference .DMP file")
     mode.add_argument("--report",        action="store_true", help="Generate triage report anchored to a TID, address, or string")
@@ -145,9 +164,10 @@ def main():
 
     display_group = parser.add_argument_group("display options")
     display_group.add_argument('--verbose', action='store_true',
-                               help='Show additional detail for --sysinfo, --diff or --hunt '
-                                    '(--sysinfo: prints environment variable values, which may '
-                                    'contain secrets)')
+                               help='Show additional detail for --process, --sysinfo, --diff or '
+                                    '--hunt (--process: adds the retired --peb-only fields under '
+                                    'peb_extended; --sysinfo: prints environment variable values, '
+                                    'which may contain secrets)')
 
     hunt_group = parser.add_argument_group("hunt options")
     hunt_group.add_argument('--yara-dir', metavar='DIR', default=None,
@@ -243,9 +263,10 @@ def main():
             return f"hunt_{args.hunt.replace('-', '_')}"
         if args.modules:    return "modules"
         if args.threads:    return "threads"
-        if args.pid:        return "pid"
+        if args.process:    return "process"
+        if args.handles:    return "handles"
+        if args.profile:    return "profile"
         if args.sysinfo:    return "sysinfo"
-        if args.peb:        return "peb"
         if args.list:       return "list"
         if args.report:
             sub = (f"tid_{args.report_tid}"     if args.report_tid else
@@ -319,8 +340,8 @@ def main():
         # V2Output (built regardless of --json, so the exit-code
         # contract below is consistent whether or not structured output was
         # actually written). run_mode is always in _V2_STRUCTURED_MODES
-        # (argparse's mode group guarantees exactly one of the eleven flags
-        # above is set, and all eleven are v2-routed) — diff just needs its
+        # (argparse's mode group guarantees exactly one of the twelve flags
+        # above is set, and all twelve are v2-routed) — diff just needs its
         # own two-evidence constructor.
         if run_mode == "diff":
             out = V2Output.from_evidence(
@@ -355,7 +376,7 @@ def main():
 
 
 def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
-    """Returns the process exit code for all eleven v2-routed commands
+    """Returns the process exit code for all twelve v2-routed commands
     (EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED — see module docstring), or
     None for every other command (unchanged exit-code behavior: 0 on
     completion, an uncaught exception's default nonzero exit on a fatal
@@ -363,7 +384,7 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
     exit_code = None
 
     def _apply_command_result(result):
-        """CommandResult-based path -- all eleven v2-routed commands
+        """CommandResult-based path -- all twelve v2-routed commands
         are migrated onto dumpex.output.coverage/.command_result (see
         those modules). Routed through set_command_result(), which
         forwards every CommandResult field (execution_status, structured
@@ -378,10 +399,12 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
         exit_code = _apply_command_result(cmd_modules(mf))
     elif args.threads:
         exit_code = _apply_command_result(cmd_threads(mf))
-    elif args.peb:
-        exit_code = _apply_command_result(cmd_peb(mf))
-    elif args.pid:
-        exit_code = _apply_command_result(cmd_pid(mf))
+    elif args.process:
+        exit_code = _apply_command_result(cmd_process(mf, verbose=args.verbose))
+    elif args.handles:
+        exit_code = _apply_command_result(cmd_handles(mf))
+    elif args.profile:
+        exit_code = _apply_command_result(cmd_profile(mf))
     elif args.sysinfo:
         exit_code = _apply_command_result(cmd_sysinfo(mf, verbose=args.verbose))
     elif args.report:

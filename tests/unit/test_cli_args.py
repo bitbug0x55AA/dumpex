@@ -11,12 +11,17 @@ This module previously had 0% coverage despite being the very first
 thing every invocation goes through, including the safety checks that
 protect the evidence file from being overwritten.
 """
+import argparse
+import re
 import sys
 import tempfile
+from pathlib import Path
 
 import pytest
 
 import dumpex.cli as cli
+
+_CLI_SOURCE = Path(cli.__file__).read_text(encoding="utf-8")
 
 
 def _run(monkeypatch, argv):
@@ -42,7 +47,7 @@ def test_missing_mode_flag_exits_2(monkeypatch, capsys):
 
 
 def test_conflicting_mode_flags_exits_2(monkeypatch, capsys):
-    code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--peb"])
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--process"])
     assert code == 2
     assert "not allowed with argument" in capsys.readouterr().err
 
@@ -176,3 +181,59 @@ def test_extract_default_output_path_collides_with_json_refused(monkeypatch, tmp
     assert "would both write to the same file" in out
     assert "--extract's default output filename" in out
     assert not (tmp_path / "region_0x1000.bin").exists()
+
+
+# ── _selected_run_mode() <-> _V2_STRUCTURED_MODES <-> the mode group ─────
+# _selected_run_mode()'s return value for a new mode flag is otherwise
+# unobservable: its only real call site (main()) only ever compares the
+# result to == "diff", so a flag added to the mutually-exclusive group
+# without a matching branch here (or spelled wrong, e.g. "proccess")
+# would not fail a single existing test -- out.set_command_result() would
+# just never be called for that mode, silently writing a --json document
+# with no result. This pins the three-way agreement that class of bug
+# would break: every flag argparse's mode group actually offers, every
+# value _selected_run_mode() can actually return, and the set cli.py
+# itself claims those values live in.
+
+def _mode_group_flags() -> tuple:
+    # Parsed straight out of cli.py's own source rather than hand-listed
+    # here a second time -- a flag added to (or removed from) the real
+    # `mode.add_argument(...)` mutex group changes what THIS function
+    # returns too, so the three-way comparison below can't quietly drift
+    # from the actual argparse definition the same way a hand-copied list
+    # could.
+    calls = re.findall(r'mode\.add_argument\("--([a-z-]+)"', _CLI_SOURCE)
+    return tuple(name.replace("-", "_") for name in calls)
+
+
+_MODE_FLAGS = _mode_group_flags()
+
+
+def _namespace_selecting(flag: str) -> argparse.Namespace:
+    # extract/strings/diff/hunt are metavar-valued (a string), the rest
+    # are store_true booleans -- either way, "truthy" is what
+    # _selected_run_mode()'s own `if args.X:` checks test.
+    values = {name: (name if name in ("extract", "strings", "diff", "hunt") else True)
+              if name == flag else (None if name in ("extract", "strings", "diff", "hunt") else False)
+              for name in _MODE_FLAGS}
+    return argparse.Namespace(**values)
+
+
+def test_mode_group_flags_are_actually_parsed_from_cli_py():
+    # Guards the guard: a regex that stopped matching would make every
+    # test below vacuously pass an empty-set comparison instead of
+    # catching real drift.
+    assert len(_MODE_FLAGS) >= 10
+    assert "process" in _MODE_FLAGS and "handles" in _MODE_FLAGS and "profile" in _MODE_FLAGS
+    assert "pid" not in _MODE_FLAGS and "peb" not in _MODE_FLAGS
+
+
+@pytest.mark.parametrize("flag", _MODE_FLAGS)
+def test_selected_run_mode_returns_the_one_flag_selected(flag):
+    assert cli._selected_run_mode(_namespace_selecting(flag)) == flag
+
+
+def test_mode_flags_selected_run_mode_values_and_v2_structured_modes_all_agree():
+    possible_returns = {cli._selected_run_mode(_namespace_selecting(flag)) for flag in _MODE_FLAGS}
+    assert possible_returns == set(_MODE_FLAGS)
+    assert cli._V2_STRUCTURED_MODES == set(_MODE_FLAGS)

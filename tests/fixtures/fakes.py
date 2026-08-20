@@ -200,8 +200,12 @@ class MiscInfo:
 
 
 class ExceptionStream:
-    """Stand-in for MinidumpFile.exception (ExceptionStream) -- only the
-    field dumpex.commands.sysinfo.collect_pid reads as a last-resort TID."""
+    """Stand-in for MinidumpFile.exception (ExceptionStream) -- carries
+    only ThreadId, the one field --pid's now-retired thread/exception-TID
+    fallback used to read (issue #43); kept as a fixture so tests can
+    still prove that tempting fallback data is IGNORED by --process
+    (see test_process_cmd.py's own test_pid_never_substituted_from_
+    thread_or_exception_stream, §3.3.2's "PID has no fallback chain")."""
     def __init__(self, thread_id):
         self.ThreadId = thread_id
 

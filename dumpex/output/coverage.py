@@ -2,9 +2,10 @@
 First-class coverage/provenance model, extracted from the ad hoc
 bool(mf.X)-check-plus-hand-written-reason-string pattern every recon
 command previously hand-rolled independently (see dumpex/commands/
-list_cmd.py, modules.py, threads.py, peb.py, sysinfo.py -- the last one
-holds both --sysinfo and --pid). All six of dumpex's original recon
-commands are migrated onto this model.
+list_cmd.py, modules.py, threads.py, sysinfo.py, process.py, handles.py,
+profile.py -- --pid/--peb, which sysinfo.py and a since-deleted peb.py
+used to hold, were retired in issue #43's v2.13 cutover). Every recon
+command is migrated onto this model.
 
 Layered as: SourceObservation (what state was ONE underlying minidump
 stream in) -> CoverageLimitation (one specific, machine-readable way
@@ -1443,8 +1444,10 @@ class _CodeSpec:
     # PID_EXCEPTION_TID_FALLBACK/PID_NO_USABLE_FALLBACK) is never reached
     # through that path and never receives scope from any production call
     # site, so it does NOT list "scope" -- confirmed empirically: the only
-    # call sites (sysinfo.py's collect_pid) never pass scope= to any of
-    # the three. SOURCE_KEY_MISMATCH is caller_buildable too but DOES list
+    # call sites (sysinfo.py's now-retired collect_pid, removed in v2.13's
+    # --process cutover -- §6.3 keeps these codes in LimitationCode for
+    # historical v2.12-and-earlier documents) never passed scope= to any
+    # of the three. SOURCE_KEY_MISMATCH is caller_buildable too but DOES list
     # "scope" since it's a real, rendered part of its text
     # (threads.py passes scope="thread" explicitly).
     allowed_fields: frozenset = frozenset()
@@ -2401,8 +2404,9 @@ _CODE_SPECS = {
         caller_buildable=True, validate_fields=_validate_pid_thread_list_fallback_fields,
         validate_against_sources=_validate_pid_thread_list_fallback_against_sources,
         # No "scope": never rendered, and never set by the one production
-        # call site (sysinfo.py's collect_pid) -- unlike SOURCE_ABSENT/
-        # SOURCE_FAILED/SOURCE_KEY_MISMATCH/the group codes, this one is
+        # call site (sysinfo.py's now-retired collect_pid -- see §6.3's
+        # "stays in LimitationCode for historical documents") -- unlike
+        # SOURCE_ABSENT/SOURCE_FAILED/SOURCE_KEY_MISMATCH/the group codes, this one is
         # never reached through an auto-derivation path that would
         # otherwise force scope="dump" on it regardless of code.
         allowed_fields=frozenset({"counterpart_source", "related_tids"})),

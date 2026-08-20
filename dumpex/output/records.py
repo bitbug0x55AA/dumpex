@@ -156,7 +156,8 @@ class SysInfoRecord:
     Split out from a single shared "process info" record (an earlier
     iteration bundled sysinfo/pid/peb into one type with dozens of
     nulled-out fields per command) so each kind's schema can be fully and
-    tightly typed -- see PidRecord/PebRecord below."""
+    tightly typed -- see ProcessRecord below (--pid/--peb's own
+    PidRecord/PebRecord were retired in issue #43's v2.13 cutover)."""
     dump_file:          "str | None" = None
     # The dump's own identity, reported together in the console's DUMP
     # section. size/sha256 come from re-reading the file (None together,
@@ -211,55 +212,13 @@ class SysInfoRecord:
         }
 
 
-@dataclass
-class PidRecord:
-    """`--pid`'s record."""
-    pid:          "int | None" = None
-    source:       "str | None" = None   # which stream determined pid
-    thread_count: "int | None" = None
-    exc_tid:      "int | None" = None   # exception-stream TID (last resort, not a PID)
-
-    def to_dict(self) -> dict:
-        return {
-            "pid":          self.pid,
-            "source":       self.source,
-            "thread_count": self.thread_count,
-            "exc_tid":      self.exc_tid,
-        }
-
-
-@dataclass
-class PebRecord:
-    """`--peb`'s record."""
-    peb_address:        "str | None" = None
-    image_base_address: "str | None" = None
-    being_debugged:     "bool | None" = None
-    image_path:         "str | None" = None
-    command_line:       "str | None" = None
-    window_title:       "str | None" = None
-    dll_path:           "str | None" = None
-    current_directory:  "str | None" = None
-    standard_input:     "str | None" = None   # handle value, hex
-    standard_output:    "str | None" = None   # handle value, hex
-    standard_error:     "str | None" = None   # handle value, hex
-    environment_variables: "list | None" = None   # list[{"name","value"}]
-
-    def to_dict(self) -> dict:
-        return {
-            "peb_address":           self.peb_address,
-            "image_base_address":    self.image_base_address,
-            "being_debugged":        self.being_debugged,
-            "image_path":            self.image_path,
-            "command_line":          self.command_line,
-            "window_title":          self.window_title,
-            "dll_path":              self.dll_path,
-            "current_directory":     self.current_directory,
-            "standard_input":        self.standard_input,
-            "standard_output":       self.standard_output,
-            "standard_error":        self.standard_error,
-            "environment_variables": (list(self.environment_variables)
-                                       if self.environment_variables is not None else None),
-        }
+# PidRecord/PebRecord (--pid/--peb's own records) were removed here in
+# issue #43's atomic v2.13 cutover, which replaces both commands with
+# --process (see ProcessRecord below) -- see
+# docs/recon_process_sysinfo_handles_contract.md §7.2 for why there is no
+# hidden alias. dumpex/schemas/dumpex-output-v2.12.schema.json (and
+# earlier) still define $defs/pidRecord and $defs/pebRecord, frozen, so
+# historical output produced by those commands stays validatable.
 
 
 # ── Extraction records (Phase E) ────────────────────────────────────────
@@ -1917,11 +1876,41 @@ class ImportEntryRecord:
         }
 
 
+# The closed, frozen seven-code registry from
+# docs/recon_process_sysinfo_handles_contract.md §6.2 -- code -> the exact
+# `details` key set that code carries. Mirrors dumpex-output-v2.13.
+# schema.json's own processDiagnosticRecord allOf (code -> per-code
+# closed `details` shape) so the two can never drift silently: a code or
+# a details key set that the schema would reject is now also rejected
+# here, at construction time, not only by an external validator run
+# against the eventual --json output. This is the single place every
+# diagnostic reaches on its way to to_dict() -- core/process_info.py's
+# ProcessDiagnostic and core/pe_utils.py's IatDiagnostic are deliberately
+# separate, uncoupled types (see IatDiagnostic's own docstring on why),
+# both translated into this type by dumpex/commands/process.py before
+# anything is serialized, so enforcing the contract here covers both
+# origins with one check.
+_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA = {
+    "PROCESS_MODULE_BASE_UNMATCHED":     frozenset({"peb_base"}),
+    "PROCESS_MODULE_BASE_CONFLICT":      frozenset({"name", "module_base", "peb_base"}),
+    "PROCESS_MODULE_NAME_AMBIGUOUS":     frozenset({"name", "count"}),
+    "PROCESS_MODULE_IDENTITY_MISMATCH":  frozenset({"peb_name", "module_name"}),
+    "PROCESS_PATH_SOURCE_FALLBACK":      frozenset({"module_path"}),
+    "IAT_BOUNDS_CHECK_UNAVAILABLE":      frozenset({"import_directory_va"}),
+    "IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS":  frozenset({"table_va", "table_size",
+                                                      "first_out_of_bounds_slot_va"}),
+}
+
+
 @dataclass(frozen=True)
 class ProcessDiagnosticRecord:
     """One `identity_evidence.diagnostics`/`iat.diagnostics` entry --
     §3.4.4/§6.2. Never carries verdict semantics: `severity` is `"info"`
-    or `"warning"` only."""
+    or `"warning"` only, and `code`/`details` are both closed to the
+    frozen seven-entry registry in `_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA` --
+    a code outside that registry (e.g. a fabricated "PEB_TRUSTED") or a
+    `details` key set that doesn't exactly match the registered code's own
+    keys cannot be constructed at all."""
     code:            str
     severity:        str
     message:         str
@@ -1929,8 +1918,10 @@ class ProcessDiagnosticRecord:
     details:         dict = field(default_factory=dict)
 
     def __post_init__(self):
-        if not isinstance(self.code, str) or not self.code:
-            raise ValueError("ProcessDiagnosticRecord.code must be a non-empty string")
+        if self.code not in _PROCESS_DIAGNOSTIC_DETAILS_SCHEMA:
+            raise ValueError(
+                f"ProcessDiagnosticRecord.code must be one of "
+                f"{sorted(_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA)}, got {self.code!r}")
         if self.severity not in _PROCESS_DIAGNOSTIC_SEVERITIES:
             raise ValueError(
                 f"ProcessDiagnosticRecord.severity must be one of "
@@ -1945,6 +1936,11 @@ class ProcessDiagnosticRecord:
                 f"got {self.affected_count!r}")
         if not isinstance(self.details, dict):
             raise ValueError("ProcessDiagnosticRecord.details must be a dict")
+        expected_keys = _PROCESS_DIAGNOSTIC_DETAILS_SCHEMA[self.code]
+        if set(self.details) != expected_keys:
+            raise ValueError(
+                f"ProcessDiagnosticRecord.details for code {self.code!r} must have exactly "
+                f"the keys {sorted(expected_keys)}, got {sorted(self.details)}")
 
     def to_dict(self) -> dict:
         return {

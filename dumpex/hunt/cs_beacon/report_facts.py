@@ -155,9 +155,10 @@ def project_coverage_v1(coverage: CoverageSnapshot, *, has_hits: bool,
 def project_coverage_report(coverage: CoverageSnapshot, *, has_hits: bool = False,
                              any_corroborated: bool = False) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a
-    cs-beacon run. Matches hollowing's/--peb's PEB_UNAVAILABLE-style
-    precedent for the `not coverage.evaluated` branch: no memory segments
-    at all -- a dedicated single-source not_evaluated case."""
+    cs-beacon run. Matches hollowing's/v2.12's now-retired --peb's
+    PEB_UNAVAILABLE-style precedent for the `not coverage.evaluated`
+    branch: no memory segments at all -- a dedicated single-source
+    not_evaluated case."""
     if not coverage.evaluated:
         sources = {"memory64_list": observe_source("memory64_list", present=False)}
         return build_coverage_report(
