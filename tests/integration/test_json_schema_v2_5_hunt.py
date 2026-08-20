@@ -1027,8 +1027,10 @@ _FROZEN_SHA256 = {
     # cutover -- "never edit v2.12 in place" (docs/recon_process_sysinfo_
     # handles_contract.md §7.2) is otherwise a convention-only claim, same
     # as the two entries above.
+    # The hash is the LF form: .gitattributes pins this file to eol=lf so
+    # a Windows checkout hashes exactly the bytes Linux CI does.
     "dumpex-output-v2.12.schema.json":
-        "926010a4d132d709f8c26881bb2b11f6b6daf07325919598ff7d25fc0dfdd183",
+        "a5b68b9cfae4d095705bf1522c8769a1914a2f55ad80a49e2c406a57d0f784c2",
 }
 
 
