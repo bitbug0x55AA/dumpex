@@ -615,8 +615,9 @@ recomputation or dump re-read.
 
 ## §8 Acceptance gate
 
-`tests/unit/test_profile_cmd.py` and `tests/unit/test_open_dump.py`
-(the loader fix, §2.5) together verify:
+`tests/unit/test_profile_cmd.py`, `tests/unit/test_profile_records.py`
+(the record family's own construction-time validation), and
+`tests/unit/test_open_dump.py` (the loader fix, §2.5) together verify:
 
 - Known, unknown, duplicate, absent, present-empty, unparsed, and failed
   stream entries, including directory-order preservation and
@@ -658,3 +659,8 @@ recomputation or dump re-read.
   complete cases enumerated in §5.
 - The console renderer is registered in
   `tests/unit/test_console_untrusted_text.py`'s shared harness.
+- Every rule each `--profile` record's own `__post_init__` enforces
+  rejects a record built directly, not only one built by
+  `collect_profile()` — a rule that merely happens to hold for the
+  collector is caller discipline, not the enforcement this contract
+  requires of the record types themselves.

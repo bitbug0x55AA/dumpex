@@ -314,6 +314,22 @@ jobs:
           coverage report --include="dumpex/commands/threads.py"  --fail-under=65
           coverage report --include="dumpex/commands/sysinfo.py"  --fail-under=70
           coverage report --include="dumpex/commands/peb.py"      --fail-under=90
+          # dumpex/commands/profile.py: --profile's own collect/render/
+          # command slice (issue #95, docs/recon_profile_contract.md).
+          # Gated from day one like the block above, and for the same
+          # reason the record types it builds are: --profile's whole
+          # output is an evidence-boundary claim ("this capability can be
+          # analysed from this dump, that one cannot"), so an untested
+          # path here does not merely skip a display branch -- it can
+          # publish a capability status no evidence supports. Sits a few
+          # points below its measured coverage when this was added: what
+          # is uncovered is the defensive fallback arm of the stream
+          # record-count helper (an mf attribute that is neither a sized
+          # collection nor a singular object) plus two collector early
+          # returns, none of which the FakeMF-driven suite in
+          # tests/unit/test_profile_cmd.py can reach without faking a
+          # dump shape open_dump() never produces.
+          coverage report --include="dumpex/commands/profile.py"  --fail-under=90
 
   minidump-version-range:
     # Proves the range pinned in pyproject.toml's `minidump>=X,<Y` (issue

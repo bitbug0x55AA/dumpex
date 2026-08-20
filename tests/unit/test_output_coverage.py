@@ -2713,3 +2713,82 @@ def test_handle_codes_are_all_registered_and_render():
     assert len(handle_codes) == 6
     for code in handle_codes:
         assert code in _CODE_SPECS
+
+
+# -- --profile (issue #95): the three codes whose rendered sentence is --
+# composed from a field rather than being fixed text. The fixed-text
+# profile codes are covered by test_every_limitation_code_has_a_registered_spec
+# plus dumpex.commands.profile's own suite; these three interpolate, so
+# each one's own singular/plural agreement and required field need their
+# own dedicated tests -- the pattern that test's own comment describes.
+
+def test_profile_stream_state_ambiguous_renders_singular_and_plural():
+    # The count is stream TYPES, not directory entries: three duplicate
+    # entries of one type are one ambiguous type (§2.4).
+    one = CoverageLimitation(code=LimitationCode.PROFILE_STREAM_STATE_AMBIGUOUS,
+                              source="profile_directory", affected_count=1)
+    assert render_limitation(one) == (
+        "1 stream type has duplicate directory entries whose individual parser state "
+        "could not be attributed with confidence -- see the affected entries' own "
+        '"indeterminate" state')
+    many = CoverageLimitation(code=LimitationCode.PROFILE_STREAM_STATE_AMBIGUOUS,
+                               source="profile_directory", affected_count=2)
+    assert render_limitation(many).startswith("2 stream types have duplicate")
+
+
+def test_profile_stream_state_ambiguous_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="positive int"):
+        CoverageLimitation(code=LimitationCode.PROFILE_STREAM_STATE_AMBIGUOUS,
+                            source="profile_directory", affected_count=0)
+
+
+def test_profile_directory_truncated_renders_singular_and_plural():
+    # §2.5: the shortfall is stated, never fabricated from bytes past EOF.
+    one = CoverageLimitation(code=LimitationCode.PROFILE_DIRECTORY_TRUNCATED,
+                              source="profile_directory", affected_count=1)
+    assert render_limitation(one) == (
+        "the dump's own header declares 1 more directory entry than the file is large "
+        "enough to hold; the shortfall was not read (and was never fabricated from bytes "
+        "past the end of the file)")
+    many = CoverageLimitation(code=LimitationCode.PROFILE_DIRECTORY_TRUNCATED,
+                               source="profile_directory", affected_count=3)
+    assert "declares 3 more directory entries than" in render_limitation(many)
+
+
+def test_profile_directory_truncated_rejects_non_positive_affected_count():
+    with pytest.raises(ValueError, match="positive int"):
+        CoverageLimitation(code=LimitationCode.PROFILE_DIRECTORY_TRUNCATED,
+                            source="profile_directory", affected_count=0)
+
+
+def test_profile_memory_content_fallback_renders_the_parser_error_it_fell_back_from():
+    # §3.2: the fallback is not silent -- the MemoryListStream reading
+    # that followed may cover less memory than Memory64ListStream would.
+    limitation = CoverageLimitation(code=LimitationCode.PROFILE_MEMORY_CONTENT_FALLBACK,
+                                     source="memory_content",
+                                     detail="struct.error: unpack requires 16 bytes")
+    assert render_limitation(limitation) == (
+        "Memory64ListStream present but could not be parsed: struct.error: unpack "
+        "requires 16 bytes -- captured memory content was instead read from the "
+        "MemoryListStream fallback, which may cover less memory than Memory64ListStream "
+        "would have")
+
+
+def test_profile_memory_content_fallback_requires_a_detail():
+    # This code's sentence cannot be composed without the parser error it
+    # names -- a missing detail would render "could not be parsed: " and
+    # then trail off, which is exactly the half-composed output the
+    # fixed-template rule exists to prevent.
+    with pytest.raises(ValueError, match="PROFILE_MEMORY_CONTENT_FALLBACK.*non-empty detail"):
+        CoverageLimitation(code=LimitationCode.PROFILE_MEMORY_CONTENT_FALLBACK,
+                            source="memory_content")
+
+
+@pytest.mark.parametrize("detail", ["", 7])
+def test_profile_memory_content_fallback_rejects_an_unusable_detail(detail):
+    # Caught by the generic detail shape check shared across every code,
+    # not this code's own validate_fields hook -- same reasoning (and
+    # same split) as REPORT_STRING_SCAN_TRUNCATED's own pair above.
+    with pytest.raises(ValueError, match="detail must be None or a non-empty string"):
+        CoverageLimitation(code=LimitationCode.PROFILE_MEMORY_CONTENT_FALLBACK,
+                            source="memory_content", detail=detail)
