@@ -940,6 +940,116 @@ class LimitationCode(str, Enum):
     # discards nothing that was actually read. source fixed to "handles";
     # caller_buildable.
 
+    # ── --profile (issue #95 / docs/recon_profile_contract.md) ────────────
+    # These four describe whether PROFILING ITSELF completed -- the
+    # command-level CoverageReport dumpex.commands.profile.collect_profile()
+    # returns -- never a specific capability's own AVAILABILITY (whether
+    # memory_info/threads/handles/... satisfy that capability's own
+    # required/optional sources), which lives entirely inside the
+    # ProfileRecord itself (ProfileCapabilityEntry/CapabilityLimitation,
+    # dumpex.output.records) and never becomes a CoverageLimitation: a
+    # capability being unavailable because a dump legitimately never
+    # captured optional forensic evidence must NOT, by itself, downgrade
+    # command-level coverage (issue #95's own "Command coverage and exit
+    # semantics" section) -- only the facts below do.
+    # PROFILE_MEMORY_CONTENT_FALLBACK is fixed to the capability SOURCE
+    # "memory_content" (it names which coverage.sources entry the fact is
+    # about, the same way SOURCE_FAILED's own fixed_source works
+    # elsewhere in this registry) without describing any one capability'S
+    # OWN status -- it never downgrades handle_analysis/thread_analysis/
+    # etc., which remain governed entirely by their own ProfileCapabilityEntry.
+    PROFILE_DIRECTORY_UNAVAILABLE = "PROFILE_DIRECTORY_UNAVAILABLE"
+    # ^ mf.header is None -- the one precondition collect_profile() cannot
+    # work around at all: without a parsed header there is no directory
+    # table, no flags, nothing to build even a stream inventory from.
+    # Unreachable through today's open_dump() (a header that fails to
+    # parse aborts the whole dump open with exit 1 before any command
+    # runs -- see open_dump()'s own Phase 1), but handled here the same
+    # way handles.py's own case 1 handles its own "unreachable but fail
+    # closed" state: if open_dump()'s own contract ever changes, this is
+    # profile's not_evaluated floor, never a crash or a fabricated
+    # profile. source fixed to "profile_directory"; absent_capable (a
+    # single-source EvaluationRequirement.all_absent_code). Fully fixed
+    # sentence, no fields.
+    PROFILE_FLAGS_UNAVAILABLE = "PROFILE_FLAGS_UNAVAILABLE"
+    # ^ mf.header.Flags is None -- dumpex.core.memory._correct_header_union
+    # found the header's own trailing union+Flags bytes (offsets 0x14-0x1F)
+    # truncated, so the dump's raw MINIDUMP_TYPE bitmask could not be read
+    # at all (ProfileRecord.raw_flags/recognized_flags/
+    # unrecognized_flag_bits are then null/empty/null). The directory table
+    # itself is still readable in this state -- streams/capabilities are
+    # unaffected -- so this is partial, not not_evaluated. source fixed to
+    # "profile_directory"; caller_buildable; fully fixed sentence, no fields.
+    PROFILE_ARCHITECTURE_UNAVAILABLE = "PROFILE_ARCHITECTURE_UNAVAILABLE"
+    # ^ SystemInfoStream itself is absent, so ProfileRecord.architecture is
+    # null -- a distinct code from the general SYSINFO_SYSTEM_INFO_
+    # UNAVAILABLE (--sysinfo's own OS/hostname-oriented wording would
+    # misdescribe what --profile actually lost). A FAILED sysinfo stream
+    # renders via the generic SOURCE_FAILED template instead (same "object-
+    # level absence vs. failure is always distinguished the same way" rule
+    # every other §2.4-style code follows). source fixed to "sysinfo";
+    # absent_capable (a SourceRequirement.absent_code on --profile's
+    # always-present "sysinfo" completeness check). Fully fixed sentence,
+    # no fields.
+    PROFILE_STREAM_STATE_AMBIGUOUS = "PROFILE_STREAM_STATE_AMBIGUOUS"
+    # ^ N stream TYPE(s) have two or more directory entries apiece whose
+    # combined parse outcome (a single shared mf.<attr>/
+    # _dumpex_stream_failures pair open_dump() produces per stream TYPE,
+    # not per directory ENTRY) cannot be attributed back to any one
+    # physical entry with confidence -- see ProfileStreamEntry's own
+    # "indeterminate" state and dumpex.commands.profile's docstring on
+    # exactly which mechanical property of open_dump() makes this
+    # genuinely undecidable rather than merely inconvenient. The affected
+    # entries are still fully listed in ProfileRecord.streams (each with
+    # parser_state="indeterminate") -- this limitation is what makes that
+    # a PARTIAL result rather than a silently-confident one. `affected_count`
+    # is the number of AMBIGUOUS STREAM TYPES (not directory entries -- two
+    # duplicate entries of one type is one ambiguous fact, not two).
+    # source fixed to "profile_directory"; caller_buildable.
+    PROFILE_DIRECTORY_TRUNCATED = "PROFILE_DIRECTORY_TRUNCATED"
+    # ^ header.NumberOfStreams (an attacker-controlled uint32 with no
+    # required relationship to the file's real size) declared more
+    # directory entries than open_dump()'s own file-size bound (Phase 1,
+    # dumpex.core.memory.open_dump) could actually read -- 12 bytes per
+    # entry, from StreamDirectoryRva to EOF. Before that bound existed,
+    # a directory walk past EOF silently fabricated additional
+    # UnusedStream-typed entries out of short reads (file.read() returning
+    # b'' at EOF, and int.from_bytes(b'', ...) == 0 == a real, recognized
+    # MINIDUMP_STREAM_TYPE value) rather than stopping -- this code is
+    # what makes the shortfall a reported fact instead of a silent
+    # fabrication. `affected_count` is dumpex.core.memory.
+    # directory_truncated_count(mf): declared entries minus entries the
+    # file could actually back, always exactly 0 when this limitation does
+    # not fire (never constructed with a non-positive count -- see
+    # _require_positive_affected_count). The `streams`/`capabilities`
+    # already reported are NOT invalidated by this -- they cover exactly
+    # the entries that WERE actually read -- so this is partial, not
+    # not_evaluated (mirrors PROFILE_STREAM_STATE_AMBIGUOUS's own
+    # reasoning: a defensible profile still exists for what was read).
+    # source fixed to "profile_directory"; caller_buildable.
+    PROFILE_MEMORY_CONTENT_FALLBACK = "PROFILE_MEMORY_CONTENT_FALLBACK"
+    # ^ Memory64ListStream (the PREFERRED source dumpex.core.memory.
+    # get_memory_segments() reads first -- typically far richer than the
+    # legacy MemoryList in a full-memory dump) genuinely failed to parse,
+    # but real captured-memory data is nonetheless available from the
+    # MemoryListStream fallback, so ProfileRecord.memory_capture's own
+    # captured_segment_count/captured_bytes_total are real, trustworthy
+    # numbers -- just possibly a SMALLER real capture than Memory64List
+    # would have reported, since dumpex cannot know what that stream
+    # would have held. Silently reporting the fallback's own numbers with
+    # no trace of the preferred stream's failure would understate the
+    # dump's own true memory coverage without saying so -- this is a
+    # genuine coverage gap, not merely a presentation nicety, and must
+    # not stay silent just because a fallback happened to produce
+    # something usable (the same reasoning PID_THREAD_LIST_FALLBACK
+    # already applies to --process's own preferred-source-empty
+    # fallback). `detail` is REQUIRED: the Memory64ListStream parser's own
+    # error text (mirrors SOURCE_FAILED's own `detail` usage). Does NOT
+    # fire when Memory64ListStream is itself ambiguous (§2.4's own
+    # INDETERMINATE handling already covers that case with a stronger,
+    # not-necessarily-a-failure statement). source fixed to
+    # "memory_content"; caller_buildable.
+
 
 LIMITATION_SOURCE_ABSENT       = LimitationCode.SOURCE_ABSENT
 LIMITATION_SOURCE_FAILED       = LimitationCode.SOURCE_FAILED
@@ -2053,6 +2163,40 @@ def _render_handle_stream_truncated(limitation: "CoverageLimitation") -> str:
             f"{limitation.affected_count} descriptor(s) were not read")
 
 
+def _render_profile_stream_state_ambiguous(limitation: "CoverageLimitation") -> str:
+    is_plural = limitation.affected_count != 1
+    noun = "stream types" if is_plural else "stream type"
+    verb = "have" if is_plural else "has"
+    return (f"{limitation.affected_count} {noun} {verb} duplicate directory entries whose "
+            f"individual parser state could not be attributed with confidence -- see the "
+            f"affected entries' own \"indeterminate\" state")
+
+
+def _render_profile_directory_truncated(limitation: "CoverageLimitation") -> str:
+    plural = "entries" if limitation.affected_count != 1 else "entry"
+    return (f"the dump's own header declares {limitation.affected_count} more directory "
+            f"{plural} than the file is large enough to hold; the shortfall was not read "
+            f"(and was never fabricated from bytes past the end of the file)")
+
+
+def _render_profile_memory_content_fallback(limitation: "CoverageLimitation") -> str:
+    return (f"Memory64ListStream present but could not be parsed: {limitation.detail} -- "
+            f"captured memory content was instead read from the MemoryListStream fallback, "
+            f"which may cover less memory than Memory64ListStream would have")
+
+
+def _require_nonempty_detail(code_label: str) -> Callable[["CoverageLimitation"], None]:
+    """Factory mirroring _require_positive_affected_count's own shape,
+    for a code whose `detail` (rather than `affected_count`) carries the
+    one fact its fixed-sentence template cannot compose without."""
+    def _validate(limitation: "CoverageLimitation") -> None:
+        if not isinstance(limitation.detail, str) or not limitation.detail:
+            raise ValueError(
+                f"CoverageLimitation(code={code_label}) requires a non-empty detail, "
+                f"got {limitation.detail!r}")
+    return _validate
+
+
 def _render_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
     """Factory for the fully fixed-sentence codes (no field
     interpolation at all) -- avoids five near-identical one-line lambdas."""
@@ -2625,6 +2769,36 @@ _CODE_SPECS = {
         render=_render_handle_stream_truncated, fixed_source="handles", caller_buildable=True,
         validate_fields=_require_positive_affected_count("HANDLE_STREAM_TRUNCATED"),
         allowed_fields=frozenset({"affected_count"})),
+    # ── --profile (issue #95) ──────────────────────────────────────────
+    LimitationCode.PROFILE_DIRECTORY_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "dump header/directory table could not be established; no defensible capability "
+            "profile can be constructed"),
+        fixed_source="profile_directory", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.PROFILE_FLAGS_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "MINIDUMP_TYPE flags could not be read (header truncated); raw dump-type flags "
+            "are unavailable"),
+        fixed_source="profile_directory", caller_buildable=True),
+    LimitationCode.PROFILE_ARCHITECTURE_UNAVAILABLE: _CodeSpec(
+        render=_render_fixed_text(
+            "SystemInfoStream not present in this dump; processor architecture is unavailable"),
+        fixed_source="sysinfo", absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.PROFILE_STREAM_STATE_AMBIGUOUS: _CodeSpec(
+        render=_render_profile_stream_state_ambiguous, fixed_source="profile_directory",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("PROFILE_STREAM_STATE_AMBIGUOUS"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.PROFILE_DIRECTORY_TRUNCATED: _CodeSpec(
+        render=_render_profile_directory_truncated, fixed_source="profile_directory",
+        caller_buildable=True,
+        validate_fields=_require_positive_affected_count("PROFILE_DIRECTORY_TRUNCATED"),
+        allowed_fields=frozenset({"affected_count"})),
+    LimitationCode.PROFILE_MEMORY_CONTENT_FALLBACK: _CodeSpec(
+        render=_render_profile_memory_content_fallback, fixed_source="memory_content",
+        caller_buildable=True,
+        validate_fields=_require_nonempty_detail("PROFILE_MEMORY_CONTENT_FALLBACK"),
+        allowed_fields=frozenset({"detail"})),
 }
 
 # Derived collections -- every other call site (SourceRequirement,

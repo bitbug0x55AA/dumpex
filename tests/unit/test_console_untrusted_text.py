@@ -53,6 +53,8 @@ from pathlib import Path
 
 import pytest
 
+from minidump.constants import MINIDUMP_STREAM_TYPE
+
 import dumpex.ui.colors as colors
 from dumpex.ui.colors import console_safe, _CONSOLE_ESCAPES
 
@@ -70,6 +72,7 @@ from dumpex.commands.list_cmd import render_regions_console
 from dumpex.commands.modules import render_modules_console
 from dumpex.commands.peb import render_peb_console
 from dumpex.commands.process import render_process_console
+from dumpex.commands.profile import collect_profile, render_profile_console
 from dumpex.commands.sysinfo import render_pid_console, render_sysinfo_console
 from dumpex.commands.threads import render_threads_console
 
@@ -351,8 +354,46 @@ def _case_strings():
     return _rendered(render_strings_console, [record], _coverage("memory_segments"))
 
 
+# ProfileStreamEntry.detail: a parser exception's own text ("ExcType:
+# message", dumpex.core.memory.open_dump's Phase 2 isolation) can embed
+# bytes read from the dump (a struct.error interpolating a malformed
+# length, a decoded fragment) -- see dumpex.commands.profile.
+# render_profile_console's own docstring. Every other field --profile
+# prints (architecture, stream_type_name, capability labels/codes) is a
+# dumpex-owned display name for a closed-vocabulary integer enum/registry
+# id, never dump text, so `detail` is the one field declared here.
+_PROFILE_FIELDS = ("detail",)
+
+
+class _ProfileLocation:
+    def __init__(self, rva=0, data_size=0):
+        self.Rva = rva
+        self.DataSize = data_size
+
+
+class _ProfileDirectory:
+    def __init__(self, stream_type):
+        self.StreamType = stream_type
+        self.Location = _ProfileLocation()
+
+
+class _ProfileHeader:
+    Flags = 0
+
+
+def _case_profile():
+    mf = FakeMF()
+    mf.header = _ProfileHeader()
+    mf.directories = [_ProfileDirectory(MINIDUMP_STREAM_TYPE.ModuleListStream)]
+    mf._dumpex_stream_failures = {MINIDUMP_STREAM_TYPE.ModuleListStream: hostile_text_for("detail")}
+    result = collect_profile(mf)
+    assert result.records[0].streams[0].detail == hostile_text_for("detail")
+    return _rendered(render_profile_console, result.records, result.coverage)
+
+
 RENDER_CASES = {
     "dumpex.commands.handles.render_handles_console": (_case_handles, _HANDLES_FIELDS),
+    "dumpex.commands.profile.render_profile_console": (_case_profile, _PROFILE_FIELDS),
     "dumpex.commands.process.render_process_console": (_case_process, _PROCESS_FIELDS),
     "dumpex.commands.diff.render_diff_console":        (_case_diff, _DIFF_FIELDS),
     "dumpex.commands.extract.render_strings_console": (_case_strings, _STRINGS_FIELDS),

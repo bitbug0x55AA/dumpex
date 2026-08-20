@@ -16,6 +16,8 @@ from dumpex.output.records import (
     ImportEntryRecord, ProcessDiagnosticRecord, IatRecord, ProcessRecord,
     HandleRecord, handle_name_display, HANDLE_NAME_STATUSES,
     HANDLE_NAME_STATUS_LABELS, HANDLE_RESERVED_NAME_LABELS,
+    TriageCardRecord, TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
+    _TRIAGE_FINDING_KEYS, _TRIAGE_VERDICTS,
 )
 
 
@@ -1458,3 +1460,248 @@ def test_handle_record_rejects_a_status_outside_the_vocabulary():
             handle=hex_address(0x1000), type_name=None, type_name_status="missing",
             object_name=None, object_name_status="unnamed", attributes=0,
             granted_access=0x1F0001, handle_count=1, pointer_count=2)
+
+
+# ── TriageCardRecord ────────────────────────────────────────────────────
+# --report's own record, and the only one in this module that carries a
+# VERDICT. Its __post_init__ is the single place the card's internal
+# consistency is enforced against any caller -- dumpex.commands.report is
+# the only thing that builds one today, and it always builds a valid one,
+# so without the negative tests below every rule here would be caller
+# discipline rather than enforcement. Note what these do NOT duplicate:
+# tests/integration/test_json_schema_v2.py has same-named checks for the
+# string_hit/string_scan rules, but those build plain dicts and validate
+# them against the JSON schema -- the schema half of a rule that is
+# written twice. These drive the record half.
+
+def _thread_info(**overrides):
+    kwargs = dict(tid=4321, start_address=None, backing_module=None, module_context=None,
+                   kernel_time_100ns=None, user_time_100ns=None)
+    kwargs.update(overrides)
+    return ReportThreadInfo(**kwargs)
+
+
+def _region_info(**overrides):
+    kwargs = dict(base_address=hex_address(0x2000), size=0x1000,
+                   protect="PAGE_EXECUTE_READWRITE", type="MEM_PRIVATE", module_owner=None,
+                   file_offset=None, is_rwx_private=True, module_context="unregistered",
+                   mz_header_detected=False, has_injected_pe=False, protection_suspicious=True)
+    kwargs.update(overrides)
+    return ReportRegionInfo(**kwargs)
+
+
+def _string_hit(**overrides):
+    kwargs = dict(offset=16, address=hex_address(0x1010), encoding="ASCII")
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _string_scan(**overrides):
+    kwargs = dict(requested_bytes=4096, bytes_read=4096, clamped=False, truncated=False,
+                   total=3, ascii_count=2, utf16_count=1)
+    kwargs.update(overrides)
+    return kwargs
+
+
+def _card(**overrides):
+    # The same minimal shape tests/integration/test_json_schema_v2.py's
+    # own _minimal_valid_triage_card_record() spells out as a dict --
+    # deliberately, so the two halves of each doubly-written rule are
+    # driven from the same starting point.
+    kwargs = dict(anchor_tid=None, anchor_address=hex_address(0x1000),
+                   anchor_source=TRIAGE_ANCHOR_ADDRESS, thread=None, region=None,
+                   string_hit=None, other_threads_in_region=[], notable_strings=[],
+                   ioc_strings=[], string_scan=None, string_scan_error=None,
+                   thread_region_correlation_excluded=False, findings=[], finding_details={},
+                   verdict="CLEAN", artifact_id=None, extract_read_clamped=None,
+                   extract_read_truncated=None)
+    kwargs.update(overrides)
+    return TriageCardRecord(**kwargs)
+
+
+def test_triage_card_baseline_fixture_is_valid_and_a_populated_card_builds():
+    # Guards every negative test below (a fixture that stopped being
+    # constructible would make each pytest.raises pass for the wrong
+    # reason), and exercises the populated shape the collector really
+    # produces -- not just the all-None minimum.
+    assert _card().to_dict()["verdict"] == "CLEAN"
+    populated = _card(anchor_tid=1234, anchor_source=TRIAGE_ANCHOR_TID,
+                       thread=_thread_info(), region=_region_info(),
+                       other_threads_in_region=[_thread_info(tid=99)],
+                       notable_strings=[StringRecord(offset=0, address=hex_address(0x2000),
+                                                      encoding="ASCII", text="hi",
+                                                      matched_grep=None)],
+                       ioc_strings=[ReportIocString(**_valid_ioc_kwargs())],
+                       string_scan=_string_scan(), findings=["rwx_private"],
+                       finding_details={"rwx_private": "PAGE_EXECUTE_READWRITE + MEM_PRIVATE"},
+                       verdict="SUSPICIOUS")
+    assert populated.to_dict()["findings"] == ["rwx_private"]
+
+
+def test_triage_card_rejects_an_anchor_source_outside_the_vocabulary():
+    with pytest.raises(ValueError, match="anchor_source must be one of"):
+        _card(anchor_source="grep")
+
+
+def test_triage_card_thread_and_region_must_be_their_own_report_types():
+    # A ThreadRecord/MemoryRegionRecord is a wider, differently-shaped
+    # record (see ReportThreadInfo's own docstring) -- accepting one here
+    # would emit fields --report's own schema does not declare.
+    with pytest.raises(TypeError, match="thread must be None or a ReportThreadInfo"):
+        _card(thread="tid 1234")
+    with pytest.raises(TypeError, match="region must be None or a ReportRegionInfo"):
+        _card(region={"base_address": hex_address(0x2000)})
+
+
+@pytest.mark.parametrize("string_hit", [
+    hex_address(0x1010),                                      # not a dict at all
+    {"offset": 16, "address": hex_address(0x1010)},            # a key short
+    {"offset": 16, "address": hex_address(0x1010), "encoding": "ASCII", "text": "x"},
+])
+def test_triage_card_string_hit_must_have_exactly_its_three_keys(string_hit):
+    with pytest.raises(ValueError, match="offset.*address.*encoding"):
+        _card(anchor_source=TRIAGE_ANCHOR_STRING_HIT, string_hit=string_hit)
+
+
+def test_triage_card_string_hit_encoding_must_be_in_the_string_vocabulary():
+    with pytest.raises(ValueError, match="string_hit..encoding.. must be one of"):
+        _card(anchor_source=TRIAGE_ANCHOR_STRING_HIT, string_hit=_string_hit(encoding="UTF8"))
+
+
+def test_triage_card_string_hit_and_anchor_source_agree_in_both_directions():
+    # string-hit mode produces N cards, each anchored at a real hit; any
+    # other mode never has one. Either half alone would let a card claim
+    # a hit location it never found, or lose the one it did.
+    with pytest.raises(ValueError, match="string_hit is required when anchor_source"):
+        _card(anchor_source=TRIAGE_ANCHOR_STRING_HIT, string_hit=None)
+    with pytest.raises(ValueError, match="string_hit must be None when anchor_source"):
+        _card(anchor_source=TRIAGE_ANCHOR_ADDRESS, string_hit=_string_hit())
+
+
+def test_triage_card_other_threads_must_all_be_report_thread_infos():
+    with pytest.raises(TypeError, match="other_threads_in_region must be a list"):
+        _card(other_threads_in_region=[_thread_info(), "tid 99"])
+    with pytest.raises(TypeError, match="other_threads_in_region must be a list"):
+        _card(other_threads_in_region=(_thread_info(),))
+
+
+def test_triage_card_notable_strings_must_all_be_string_records():
+    with pytest.raises(TypeError, match="notable_strings must be a list of StringRecord"):
+        _card(notable_strings=[{"text": "hi"}])
+
+
+def test_triage_card_ioc_strings_reject_a_plain_string_record():
+    # ReportIocString is NOT interchangeable with StringRecord: it adds
+    # is_network_pattern plus the bounded hexdump context, and --report's
+    # own schema declares both. A StringRecord here would silently drop
+    # them -- and it is the single most likely wrong type to pass, since
+    # notable_strings right above it takes exactly that.
+    plain = StringRecord(offset=0, address=hex_address(0x2000), encoding="ASCII",
+                          text="http://evil.example", matched_grep=None)
+    with pytest.raises(TypeError, match="ioc_strings must be a list of ReportIocString"):
+        _card(ioc_strings=[plain])
+
+
+def test_triage_card_string_scan_must_be_a_dict_with_exactly_its_seven_keys():
+    with pytest.raises(TypeError, match="string_scan must be None or a dict"):
+        _card(string_scan="4096 bytes")
+    short = _string_scan()
+    del short["utf16_count"]
+    with pytest.raises(ValueError, match="string_scan must have exactly the keys"):
+        _card(string_scan=short)
+
+
+def test_triage_card_string_scan_read_can_come_up_short_never_long():
+    with pytest.raises(ValueError, match="must not exceed"):
+        _card(string_scan=_string_scan(requested_bytes=4096, bytes_read=8192, truncated=False))
+
+
+def test_triage_card_string_scan_truncated_must_agree_with_the_byte_counts():
+    # The flag is not an independent opinion -- it IS bytes_read <
+    # requested_bytes. A card claiming a complete scan over a short read
+    # publishes "scanned it all, found nothing" for evidence that was
+    # never fully read, which is the one thing this record must not do.
+    with pytest.raises(ValueError, match="truncated.. must equal"):
+        _card(string_scan=_string_scan(requested_bytes=4096, bytes_read=1024, truncated=False))
+    with pytest.raises(ValueError, match="truncated.. must equal"):
+        _card(string_scan=_string_scan(requested_bytes=4096, bytes_read=4096, truncated=True))
+
+
+def test_triage_card_string_scan_and_its_error_are_mutually_exclusive():
+    # A scan either produced counts or raised; both at once is a
+    # self-contradicting evidence state no real dump can produce.
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        _card(string_scan=_string_scan(), string_scan_error="read_region failed: boom")
+
+
+def test_triage_card_extract_read_flags_travel_together():
+    # Both None means no --output was attempted for this card at all;
+    # once it was, both are real answers. One alone would make "no
+    # extract happened" indistinguishable from "the extract was complete".
+    with pytest.raises(ValueError, match="must both be"):
+        _card(extract_read_clamped=True, extract_read_truncated=None)
+    with pytest.raises(ValueError, match="must both be"):
+        _card(extract_read_clamped=None, extract_read_truncated=False)
+
+
+def test_triage_card_findings_are_restricted_to_the_closed_dimension_keys():
+    with pytest.raises(ValueError, match="findings entries must all be one of"):
+        _card(findings=["looked_weird"], finding_details={"looked_weird": "a hunch"},
+               verdict="SUSPICIOUS")
+
+
+def test_triage_card_findings_may_not_repeat_a_dimension():
+    # The dimensions are MECE: counting one twice would inflate the
+    # verdict tier below, which is derived from len(findings).
+    with pytest.raises(ValueError, match="must not contain duplicate keys"):
+        _card(findings=["rwx_private", "rwx_private"],
+               finding_details={"rwx_private": "x"}, verdict="LIKELY_MALICIOUS")
+
+
+def test_triage_card_finding_details_must_be_str_to_str():
+    with pytest.raises(TypeError, match="finding_details must be a dict of str"):
+        _card(findings=["rwx_private"], finding_details={"rwx_private": 1},
+               verdict="SUSPICIOUS")
+
+
+def test_triage_card_findings_and_finding_details_must_name_the_same_keys():
+    # A finding with no detail prints as a bare key with nothing behind
+    # it; a detail with no finding is text for a dimension that never
+    # fired -- and neither is visible in the JSON without cross-reading.
+    with pytest.raises(ValueError, match="must name the same keys"):
+        _card(findings=["rwx_private"], finding_details={}, verdict="SUSPICIOUS")
+    with pytest.raises(ValueError, match="must name the same keys"):
+        _card(findings=[], finding_details={"rwx_private": "x"}, verdict="CLEAN")
+
+
+def test_triage_card_rejects_a_verdict_outside_the_vocabulary():
+    with pytest.raises(ValueError, match="verdict must be one of"):
+        _card(verdict="MALICIOUS")
+
+
+def test_triage_card_verdict_must_match_the_four_tier_rule():
+    with pytest.raises(ValueError, match="does not match the four-tier rule"):
+        _card(findings=["rwx_private"], finding_details={"rwx_private": "x"}, verdict="CLEAN")
+    with pytest.raises(ValueError, match="does not match the four-tier rule"):
+        _card(findings=[], finding_details={}, verdict="HIGH_CONFIDENCE_MALICIOUS")
+
+
+@pytest.mark.parametrize("count", [0, 1, 2, 3, 4])
+def test_triage_card_verdict_tiering_agrees_with_core_memory_verdict_for(count):
+    """The one rule in this module that is deliberately MIRRORED rather
+    than imported: records.py keeps its own _TRIAGE_VERDICTS and its own
+    four-tier check so it takes no dependency on dumpex.core.memory,
+    while core.memory.verdict_for() is what the console's own colored
+    text renders from. The class docstring claims the wire value and the
+    console text are provably the same rule -- nothing proved it until
+    here. A test can import both sides without creating the dependency
+    the records module is avoiding, so this is where the mirror is
+    checked, including the len(findings) >= 3 saturation both share.
+    """
+    from dumpex.core.memory import verdict_for
+
+    findings = list(_TRIAGE_FINDING_KEYS)[:count]
+    dims = {key: f"{key} fired" for key in findings}
+    expected = verdict_for(dims)
+    card = _card(findings=findings, finding_details=dims, verdict=expected)
+    assert card.verdict == expected == _TRIAGE_VERDICTS[min(count, 3)]
