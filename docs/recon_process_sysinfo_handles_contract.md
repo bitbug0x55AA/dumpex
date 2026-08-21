@@ -2825,16 +2825,30 @@ per-type counts, and `--verbose` renders every record.
   identical in both views. A folded row remains captured, normalized,
   counted, and present in `--json`. The headline and the `By type:` line
   always describe the **complete** inventory.
+- A row is **anonymous** when `object_name_status == "unnamed"` — the
+  descriptor positively records no object name. Only the **object** name
+  decides this; a row with a captured object name is never folded,
+  whatever its type says.
 - An anonymous row folds **unless** one of two things holds:
-  1. **the row lost evidence.** `object_name_status == "unreadable"` (a
-     name should have been there and the bounded read failed) is a
-     different fact from `"unnamed"` (the descriptor positively records
-     none), and so is an unreadable **type** name. Folding either would
-     hide the one row that says something was lost, so only a row whose
-     type read cleanly **and** whose object name is positively absent is
-     ever a fold candidate.
+  1. **the row lost evidence.** `"unreadable"` (a name should have been
+     there and the bounded read failed) is a different fact from
+     `"unnamed"` (the descriptor positively records none) — §5.2.1 — and
+     an `"unreadable"` status in **either** name field blocks folding.
+     That row is the one an analyst needs in order to know something was
+     lost.
+
+     This is a test for `type_name_status != "unreadable"`, **not** for
+     `== "ok"`, and the difference is normative. A descriptor whose
+     `TypeNameRva` is 0 has no type name at all, so its status is
+     `"unnamed"` — not a read failure, and not evidence loss. A row with
+     neither a type nor an object name is the **lowest**-context row the
+     table can hold, and real dump writers emit whole handle streams in
+     exactly that shape. Requiring a captured type name therefore
+     disables the fold precisely on the dumps that need it most, while
+     leaving every fixture that happens to carry type names passing.
   2. **its type is on the retain list**: `Job`, `Process`, `Section`,
-     `Thread`, `Token`.
+     `Thread`, `Token`. A `null` type name is not on it, so a typeless
+     anonymous row folds.
 - `object_name_status == "unnamed"` alone is therefore **not** the
   suppression rule: rule 2 is what keeps an anonymous `Process`,
   `Thread`, `Token`, `Section`, or `Job` handle — exactly the evidence a
@@ -2851,7 +2865,12 @@ per-type counts, and `--verbose` renders every record.
 - The fold line states the exact total, says **why** those rows folded
   (no object name recorded), lists the per-type counts ordered by §1.5
   (count descending, then type name ascending), and names `--verbose` as
-  the way to see them. Folding is deterministic, bounded,
+  the way to see them. Its type labels come from the same
+  `summarize_handles_by_type()`/`handle_name_display()` projection as
+  `By type:` and `summary.by_type`, so a folded row with no type name is
+  labelled `(unnamed)` there exactly as it is counted there, and a
+  captured type literally named `(unnamed)` still cannot merge into that
+  bucket. Folding is deterministic, bounded,
   and linear in the record count: it is decided per record with no
   cross-row state.
 - The two null-name labels are explained inline whenever one of them is
@@ -3448,7 +3467,12 @@ excuses anything in §0–§8.
      `Thread`, `Token`), not an allow-to-fold list: the first cut of this
      used the allow direction, which left every unlisted type visible and
      so still printed the wall of anonymous rows the fold exists to
-     collapse.
+     collapse. The second cut then gated folding on the type name having
+     been *captured* (`status == "ok"`), which pinned every row of a dump
+     whose writer left `TypeNameRva` 0 — the typeless, nameless rows that
+     are the least informative in the table — so the rule is now stated
+     as `!= "unreadable"`, i.e. only genuine evidence loss blocks a
+     fold.
   3. **The tables were separated but not aligned.** A per-column
      minimum width is not truncation, so one long type, DLL or API name
      pushed that one row's remaining columns right and left both tables

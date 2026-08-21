@@ -33,6 +33,11 @@ counted in the headline and the `By type:` line, still in `summary`, and
 still in `--json`, and the fold line always names each type and its exact
 count, so nothing disappears unnamed.
 
+Only the **object** name decides whether a row is anonymous, so a handle
+with a captured object name is never folded whatever its type says — and
+a handle whose descriptor recorded no type name either (some dump writers
+record none for any handle) folds like any other anonymous row.
+
 Two kinds of row never fold. Anonymous `Process`, `Thread`, `Token`,
 `Section` and `Job` handles stay visible however many a dump carries —
 an anonymous handle to one of those is exactly the evidence a

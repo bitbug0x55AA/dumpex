@@ -612,7 +612,11 @@ def test_missing_descriptor_count_never_invents_a_truncation():
 
 
 def test_console_marks_an_unavailable_access_mask_without_faking_a_value():
-    result = collect_handles(_mf_from_descriptors([_descriptor(0x10, granted_access=None)]))
+    # A retained type, so the row survives the default projection -- a
+    # descriptor with no type and no object name is the exact shape the
+    # fold collapses (#98), and this case is about the Access column.
+    result = collect_handles(_mf_from_descriptors(
+        [_descriptor(0x10, granted_access=None, type_name="Process", type_name_rva=8)]))
     row = next(l for l in _console(result).splitlines() if "0x0000000000000010" in l)
     # The Access column says the mask is unavailable -- never a
     # fabricated 0x00000000, which reads as a real, zero-rights mask.
@@ -727,9 +731,9 @@ def test_the_console_table_and_the_summary_project_names_the_same_way():
         {"handle": 0x20, "type_name": None, "object_name": None},
     ]))
     # Rendered verbose: both rows are anonymous, so the DEFAULT console
-    # folds one of them (#98). The claim under test is that the Type
-    # column and by_type project a name the same way, which is a property
-    # of the projection, not of which rows a view chose to print.
+    # folds BOTH (#98). The claim under test is that the Type column and
+    # by_type project a name the same way, which is a property of the
+    # projection, not of which rows a view chose to print.
     rows = [l for l in _console(result, verbose=True).splitlines() if "0x00000000000000" in l]
     types = [l.split("  ")[2].strip() for l in rows]
 
@@ -1198,6 +1202,77 @@ def test_an_unclassified_anonymous_type_is_folded_but_never_lost():
     assert "SomeFutureObjectType 1" in text                   # named and counted
     assert result.summary["by_type"] == {"SomeFutureObjectType": 1}
     assert len(_rows(_console(result, verbose=True))) == 1     # reachable
+
+
+def test_a_descriptor_with_no_type_name_at_all_is_folded():
+    """The shape that made the shipped fold a no-op on real dumps.
+
+    A dump writer that leaves `TypeNameRva` 0 produces descriptors with
+    NO type name -- status "unnamed", which is not a read failure -- and
+    typically no object name either. That is the lowest-context row the
+    table can hold, and whole handle streams are written that way. The
+    first cut of the predicate required `type_name_status == "ok"`, so
+    every one of those rows stayed pinned on screen and the fold did
+    nothing on exactly the dumps that need it; every fixture in this file
+    happened to carry a type name, so nothing caught it."""
+    result = collect_handles(_mf_with(
+        [{"handle": 0x10 + i, "type_name": None, "object_name": None} for i in range(8)]))
+    text = _console(result)
+
+    assert _rows(text) == []
+    assert "8 anonymous handle(s) not shown" in text
+    # Bucketed and labelled exactly as `By type:` labels it, so the two
+    # lines describe the same handles the same way.
+    assert "(unnamed) 8" in text
+    assert result.summary["by_type"] == {"(unnamed)": 8}
+    assert len(_rows(_console(result, verbose=True))) == 8
+
+
+def test_a_typeless_row_still_shows_when_it_has_an_object_name():
+    """Only the OBJECT name decides whether a row is anonymous. A
+    descriptor with no type name but a captured object name is evidence
+    an analyst reads, and it must survive the default projection."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": None, "object_name": r"\\Device\\HarddiskVolume1\\a.txt"},
+        {"handle": 0x20, "type_name": None, "object_name": None},
+    ]))
+    text = _console(result)
+    assert len(_rows(text)) == 1
+    assert "a.txt" in text
+    assert "1 anonymous handle(s) not shown" in text
+
+
+def test_an_unreadable_type_name_blocks_folding_even_when_anonymous():
+    """"unnamed" and "unreadable" stay different facts in the TYPE field
+    too: a type that should have been there and could not be read is
+    evidence loss, and the row that says so is never folded."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": BAD_RVA, "object_name": None},
+        {"handle": 0x20, "type_name": None, "object_name": None},
+    ]))
+    text = _console(result)
+    rows = _rows(text)
+
+    assert len(rows) == 1
+    assert "0x0000000000000010" in rows[0]        # the lost type name: kept
+    assert "(unreadable)" in rows[0]
+    assert "1 anonymous handle(s) not shown" in text
+
+
+def test_the_fold_line_and_by_type_never_describe_a_handle_differently():
+    """Both lines go through handle_name_display(), so a dump carrying a
+    type literally named "(unnamed)" cannot make the fold line claim a
+    handle is typeless -- nor merge into the null-type bucket."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "(unnamed)", "object_name": None},
+        {"handle": 0x20, "type_name": None, "object_name": None},
+    ]))
+    fold_line = next(l for l in _console(result).splitlines() if "not shown" in l)
+
+    assert "(unnamed) 1" in fold_line
+    assert "(unnamed) [captured name] 1" in fold_line
+    for label in result.summary["by_type"]:
+        assert label in fold_line
 
 
 @pytest.mark.parametrize("type_name", ["Process", "Thread", "Token", "Section", "Job"])
