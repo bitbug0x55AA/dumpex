@@ -2935,20 +2935,28 @@ mask permits **for that row's own recorded type**:
 ```
   Handle              Type            Access      Cnt  Ptr  Object
   0x000000000000005c  Key             0x00020019    2  65536  \REGISTRY\...\Versions
-      Rights  QueryValue | EnumerateSubKeys | Notify | ReadControl
+      └─ Rights   KeyRead
   0x00000000000001dc  Thread          0x001fffff    6  131062  (unnamed)
-      Rights  AllAccess
-  0x000000000000006c  TpWorkerFactory 0x000f037f    1    1  (unnamed)
-      Rights  Delete | ReadControl | WriteDac | WriteOwner |
-              TypeSpecificUnavailable(0x0000037f)
-  0x0000000000000070  Event           (unknown)     1    1  (unnamed)
+      └─ Rights   AllAccess
+  0x000000000000006c  WindowStation   0x000f037f    1    1  WinSta0
+      └─ Type     EnumDesktops · ReadAttributes · AccessClipboard · CreateDesktop ·
+                  WriteAttributes · AccessGlobalAtoms · ExitWindows · Enumerate · ReadScreen
+         Standard Delete · ReadControl · WriteDac · WriteOwner
+  0x0000000000000070  TpWorkerFactory 0x000f037f    1    1  (unnamed)
+      └─ Rights   TypeSpecificUnavailable(0x0000037f) · Delete · ReadControl · WriteDac ·
+                  WriteOwner
+  0x0000000000000074  Event           (unknown)     1    1  (unnamed)
   Rights decode each row's own Access mask against its recorded object type -- the same
-  bit means different things for a File, a Process and a Token. They are an observation
-  about what the handle permitted, never evidence that it was used.
+  bit means different things for a File, a Process and a Token. A long list splits into
+  Type (rights that object type defines) and Standard (the rights every type shares).
+  They are an observation about what the handle permitted, never evidence that it was
+  used.
 ```
 
 - **The rights belong to the row, not to a table of their own.** The
-  line sits directly under the handle it decodes, so an investigator
+  line sits directly under the handle it decodes, behind a drawn `└─`
+  branch, so a glance tells "this continues the handle above" from "this
+  is another handle" without reading either line — and an investigator
   reads one row and gets its answer, in the order §5.4 already put the
   rows in. This is a correction of this feature's first cut, which
   collected the decodes into a de-duplicated `(type, mask)` block under
@@ -2972,6 +2980,51 @@ mask permits **for that row's own recorded type**:
   names need. The only hexadecimal value a `Rights` line may carry is an
   undecoded remainder, which is a **part** of the mask that appears
   nowhere else.
+- **Composite aliases carry the reading a dump repeats.** `0x00020019`
+  on a `Key` is `KEY_READ`, and a dump carries that same mask on every
+  `Key` handle it has; spelling out its four component names on each of
+  several hundred rows says less than the name an analyst already
+  recognises. The registry therefore maps the documented combination
+  constants — each type's `*_ALL_ACCESS`, plus the `FILE_GENERIC_*`,
+  `KEY_READ`/`KEY_WRITE` and `TOKEN_READ`/`TOKEN_WRITE` family — and
+  every such display name is **type-qualified wherever the bare word
+  would be ambiguous** (`FileGenericRead`, not `Read`: `GENERIC_READ` is
+  a real, different bit). `AllAccess` is the one unqualified name, and
+  only because no other right is called that — never because it means the
+  same thing on two types; see the two bullets below for the exact
+  permitted set and for what `AllAccess` does and does not promise.
+- **Two names may share bits; no name may add nothing.** An alias is
+  matched against the whole captured mask and only then claims its bits,
+  because SDK composites legitimately overlap: `FILE_GENERIC_READ` and
+  `FILE_GENERIC_WRITE` both carry `READ_CONTROL|SYNCHRONIZE`, and
+  `0x0012019f` is exactly their union, so claiming greedily would let the
+  first swallow the shared bits and disqualify the second. What is
+  forbidden is a name that accounts for no bit an earlier name did not —
+  which is also what keeps `AllAccess` from appearing beside the rights
+  it contains. Aliases are listed widest-first for the same reason.
+- **A long list is split into `Type` and `Standard`.** A wrapped run of
+  thirteen names mixes rights that mean something only for the recorded
+  object type with rights that mean the same thing for every type, and a
+  reader cannot see where one ends and the other begins:
+  `EnumDesktops` is a window-station capability, `WriteOwner` is not. The
+  split is taken only when the whole decode does not fit on one line and
+  both halves exist, so a short decode — `KeyRead`, `AllAccess`,
+  `(no rights)` — stays a single `Rights` line. The remainder is split by
+  the same rule the decoder uses: bits 0-15 are type-specific and go with
+  the `Type` group, everything above them is shared and goes with
+  `Standard`.
+- **Names are separated by ` · `, not by ` | `.** The line is prose
+  sitting under a table row, not a column an `awk` reads, so the
+  separator's whole job is to be legible without competing with the names
+  for attention — and a run of `|` between thirteen names does compete.
+- **Colour is a projection of the same text.** On a terminal the branch,
+  the label and the separators are dimmed and a remainder token is
+  yellow — it is the one piece on the line that says something was *not*
+  read — while the right names keep the default colour. Colouring happens
+  **after** wrapping, so the width budget is spent on text rather than on
+  escape sequences and the wrap is identical with colour on and off; with
+  colour disabled (a pipe, a `--txt` transcript, every test run) the
+  lines are byte-identical to the plain text.
 - **The decoder is a pure projection of the record.** It consumes the
   already-normalized `granted_access` integer and `type_name`, and
   nothing else: it never queries a live process, opens a handle, reads
@@ -3006,17 +3059,170 @@ mask permits **for that row's own recorded type**:
   object reuses another type's rights by convention only, and a guess
   presented as a decoded permission is exactly what §5.2 refused to
   ship.
-- **Names are the Windows constant with its object-type prefix dropped
-  and the remainder CamelCased** (`FILE_READ_DATA` → `ReadData`,
-  `THREAD_QUERY_LIMITED_INFORMATION` → `QueryLimitedInformation`): the
+- **Every displayed name is a dumpex display form that maps precisely to
+  one Windows SDK, WDK or native constant** — it is never the constant's
+  own spelling, and "maps to a constant" is a narrower claim than "maps
+  to a *documented* constant": §5.6's provenance model exists precisely
+  because a handful of constants (`SYMBOLIC_LINK_*`, `THREAD_ALERT`,
+  `SEMAPHORE_QUERY_STATE`, `IO_COMPLETION_QUERY_STATE`) have no confirmed
+  header, and no prose anywhere in dumpex may round that back down to
+  "documented" for convenience. The mapping drops the object-type prefix
+  and CamelCases the remainder (`FILE_READ_DATA` → `ReadData`,
+  `THREAD_QUERY_LIMITED_INFORMATION` → `QueryLimitedInformation`,
+  `KEY_READ` → `KeyRead`, each type's `*_ALL_ACCESS` → `AllAccess`): the
   type is already on the row the line sits under, and repeating it in
   each of nine names costs the width that makes the rights readable at
-  all. Each table in `dumpex/ui/access_rights.py` carries the
-  authoritative constant next to the short name. Where one bit has two
-  documented spellings (`FILE_READ_DATA`/`FILE_LIST_DIRECTORY`), the
-  file-semantics name is used for both: the descriptor does not record
-  whether the object is a directory, and the two readings are the same
-  captured bit.
+  all. No header defines the spelling `AllAccess` or `KeyRead`, and no
+  console or documentation string may call one "the SDK's own name" — a
+  reader who went looking for that symbol would find nothing.
+
+  Where one bit has two documented spellings
+  (`FILE_READ_DATA`/`FILE_LIST_DIRECTORY`), the file-semantics name is
+  used for both: the descriptor does not record whether the object is a
+  directory, and the two readings are the same captured bit.
+- **The source is tracked per CONSTANT, never per object type.** An
+  object type is not a header. `dumpex/ui/access_rights.py` carries the
+  authoritative constant *and* the header it is defined in on every
+  registry entry, and a type's sources are **derived** from the constants
+  it actually uses (`object_type_sources`), so a type drawing on two
+  headers is reported as drawing on two headers:
+
+  | source | constants | what establishes it |
+  |---|---|---|
+  | Win32 SDK `winnt.h` | the standard and generic rights, and every per-type constant except those below | present in an installed SDK header |
+  | Win32 SDK `winuser.h` | `DESKTOP_*`, `WINSTA_*` | present in an installed SDK header |
+  | WDK `ntifs.h` | `DIRECTORY_*` (incl. `DIRECTORY_ALL_ACCESS`), `EVENT_QUERY_STATE` | named in a Microsoft reference page stating `ntifs.h` |
+  | *no confirmed header* (attributed: WDK `wdm.h`) | `SYMBOLIC_LINK_*` | nothing — see below |
+  | *no confirmed header* (attributed: WDK `ntddk.h`) | `THREAD_ALERT` | nothing — see below |
+  | *no confirmed header* | `SEMAPHORE_QUERY_STATE`, `IO_COMPLETION_QUERY_STATE` | nothing — see below |
+
+  Row three is established per constant, not per family: Microsoft's
+  [`ZwOpenDirectoryObject`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwopendirectoryobject)
+  reference names all four `DIRECTORY_*` bits and `DIRECTORY_ALL_ACCESS`
+  in its `DesiredAccess` table, and
+  [`ZwCreateEvent`](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/nf-ntifs-zwcreateevent)
+  names `EVENT_QUERY_STATE`; both state `ntifs.h` under Requirements.
+  These two sets share a **header**, not an object family — an `Event` is
+  not an Object Manager object — so this row must never be relabelled
+  "the Object Manager headers".
+
+- **A source and the evidence for it are two different claims, and the
+  model keeps them apart.** `Provenance.header` is the *confirmed*
+  defining header and is `None` until something confirms one;
+  `attributed_header` carries an unconfirmed attribution without
+  dignifying it; `evidence` says which a reader is looking at.
+  `constant_source()` returns `header` alone, so it **never hands back a
+  specific WDK header for a constant nobody has verified**. Asking about
+  `SYMBOLIC_LINK_QUERY` yields `None`, not `wdm.h`.
+
+  That distinction is not pedantry. Microsoft documents the *routine*
+  `ZwOpenSymbolicLinkObject` under `wdm.h`, but that page names no
+  `SYMBOLIC_LINK_*` constant — it tells callers to pass `GENERIC_READ` —
+  and no Microsoft page naming `THREAD_ALERT`, `SEMAPHORE_QUERY_STATE`
+  or `IO_COMPLETION_QUERY_STATE` was located either. While every source
+  was a bare string, `SYMBOLIC_LINK_QUERY` naming `wdm.h` was
+  indistinguishable from `DIRECTORY_QUERY` naming `ntifs.h`, though only
+  one of the two is on a Microsoft page.
+
+  For the two `*_QUERY_STATE` names the **bit** is not in doubt —
+  `SEMAPHORE_ALL_ACCESS` and `IO_COMPLETION_ALL_ACCESS` are both
+  `STANDARD_RIGHTS_REQUIRED|SYNCHRONIZE|0x3` in `winnt.h`, so the SDK
+  establishes `0x0001` as a real right of each — only the name is
+  unsourced.
+
+- **The console never describes an unconfirmed constant in the words it
+  uses for a confirmed one.** The `Aliases used` caption said "one
+  documented Windows constant", which an investigator reads as "I can go
+  and check this": true of `KEY_READ`, false of
+  `SYMBOLIC_LINK_ALL_ACCESS`. It now reads "one Windows SDK, WDK or
+  native constant", and any composite whose constant has no confirmed
+  source is marked `[source unconfirmed]` on its own expansion line,
+  with a one-line explanation printed underneath — and only when such a
+  name is actually on screen. Marking is per composite, so
+  `Directory AllAccess` (confirmed) and `SymbolicLink AllAccess`
+  (unconfirmed) are visibly different in the same block.
+
+  **The same split reaches a bare single-bit name, not only a
+  composite.** `decode_access_mask()` can print `QueryState` for a
+  `Semaphore` handle from the single bit `SEMAPHORE_QUERY_STATE` alone,
+  with no alias involved at all, and that name is typographically
+  identical to the `QueryState` a `Timer` row prints for the confirmed
+  `TIMER_QUERY_STATE` — a reader has no way to tell the two apart from
+  the word alone. Every such name is checked against
+  `unconfirmed_names()`, and an unconfirmed one is suffixed `[?]` on its
+  `Rights`/`Type` line, with its own one-line explanation printed
+  underneath the table whenever one appears. A `Semaphore` handle
+  carrying both bits therefore reads `QueryState [?] · ModifyState`: one
+  name marked, the other not, on the same line. The mark is short rather
+  than the alias block's full `[source unconfirmed]` because a `Rights`
+  line can carry a dozen names and the mark has to survive being one of
+  them; `wrap_rights()` treats a marked name as one piece, so it can
+  never be split from its mark across a wrapped line. `AllAccess` on an
+  `IoCompletion` row is NOT marked even though that type is mixed-source
+  — `IO_COMPLETION_ALL_ACCESS` is its own, confirmed, `winnt.h` constant,
+  and the mark tracks the constant actually printed, never the type it
+  came from.
+
+  **Mixed-source types are the reason for the rule.** `IoCompletion`,
+  `Event`, `Semaphore` and `Thread` each take most of their constants
+  from one header and at least one from another, and a per-type label
+  necessarily mis-files the minority. It did: `IoCompletion` was once
+  documented as WDK-only, which was false for `IO_COMPLETION_MODIFY_STATE`
+  **and** `IO_COMPLETION_ALL_ACCESS`, both of which `winnt.h` defines
+  under "I/O Completion Specific Access Rights". `Timer` looks identical
+  to `Event` and `Semaphore` from the outside and is *not* mixed —
+  `winnt.h` names both of its rights — which is precisely the kind of
+  distinction only a per-constant record can carry.
+
+  **Per constant means per constant *checked*.** A first attempt at this
+  rule filed `EVENT_QUERY_STATE`, `SEMAPHORE_QUERY_STATE` and
+  `IO_COMPLETION_QUERY_STATE` together as unsourced because the three
+  look alike — same value, same display name, same relationship to their
+  type's `*_ALL_ACCESS` — and Microsoft documents one of them. Grouping
+  by resemblance reproduces the original defect at a smaller scale.
+  `tests/unit/test_access_rights.py` therefore carries an **evidence
+  register** rather than a mirror of the registry: every non-`winnt.h`
+  constant with what establishes it, unconfirmed rows marked as such, a
+  test that the three `*_QUERY_STATE` bits never collapse to one source,
+  and — on any machine with a Windows SDK installed — a check that greps
+  the real `winnt.h`/`winuser.h` in both directions, which is the only
+  check here that can catch dumpex and its own tests being wrong
+  together.
+- **Two composites depend on the Windows version, and the decode says
+  which one it used.** `winnt.h` defines `PROCESS_ALL_ACCESS` and
+  `THREAD_ALL_ACCESS` twice, behind `#if (NTDDI_VERSION >= NTDDI_VISTA)`,
+  and Microsoft states the change in
+  [Process Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights)
+  and
+  [Thread Security and Access Rights](https://learn.microsoft.com/en-us/windows/win32/procthread/thread-security-and-access-rights):
+
+  | constant | XP / Server 2003 | Vista and later |
+  |---|---|---|
+  | `PROCESS_ALL_ACCESS` | `0x001f0fff` | `0x001fffff` |
+  | `THREAD_ALL_ACCESS` | `0x001f03ff` | `0x001fffff` |
+
+  `decode_access_mask()` takes an optional `os_major`, and `--handles`
+  passes the dump's own `SYSTEM_INFO.MajorVersion`. A full process handle
+  in an XP dump therefore reads `AllAccess`, not the twelve-name list it
+  would otherwise decay to — which is the readability this whole feature
+  exists to deliver.
+
+  **The default is the modern value, and that direction matters.**
+  `0x001f0fff` on a Vista+ dump is a *partial* mask (both
+  `*_LIMITED_INFORMATION` rights are absent), so naming it `AllAccess`
+  would claim a capability the handle does not have. A version that is
+  missing, unparsable, or not a plain non-negative `int` therefore
+  selects the modern constants rather than guessing "old" from absent
+  evidence.
+
+  The version selects a **display name and nothing else**. It is read in
+  `cmd_handles()` and reaches the renderer only, never `HandleRecord`:
+  `granted_access` is the same integer either way and the v2.13 schema is
+  untouched. Note that the two constants genuinely cover different bits,
+  so the same mask can leave a different `UnknownBits` remainder under
+  each — the pre-Vista constant stops below the undocumented `0xc000`
+  bits and the modern one does not. No reading ever loses a bit, which is
+  the invariant the tests pin across both eras.
 - **Order is frozen and deterministic**: composite aliases that fired,
   then the type's specific rights by ascending bit value, then the
   standard rights by ascending bit value (`Delete`, `ReadControl`,
@@ -3024,27 +3230,113 @@ mask permits **for that row's own recorded type**:
   `MaximumAllowed`), then the generic bits. Ordering by bit value rather
   than alphabetically keeps a right in the same position across every
   type and every mask, so two rows can be compared by eye.
-- **An alias consumes its own bits, so nothing is reported twice.** The
-  only composite emitted is a type's own `*_ALL_ACCESS`, which fires when
-  the mask carries **all** of its bits; `AllAccess` and the fourteen
-  component names it stands for can never both appear. The
-  `FILE_GENERIC_READ`/`KEY_READ` family is deliberately not aliased: such
-  a name differs from the `GENERIC_*` bits by one word while meaning
-  something entirely different, and a reader who saw `Read` beside
-  `(0x00120089)` could not tell which of the two the dump captured.
+- **Every composite is an explicit Windows combination constant, and
+  nothing else** — never a grouping dumpex invented. Most are confirmed
+  by an installed SDK header or a Microsoft reference page;
+  `SYMBOLIC_LINK_ALL_ACCESS` is the one exception with no confirmed
+  header (see its `PROV_WDM_H_ROUTINE_ONLY` entry), and is marked
+  `[source unconfirmed]` wherever the console expands it rather than
+  being described in the same words as the rest. The permitted set is
+  exactly:
 
-  An alias is the SDK constant as defined, never a tidied-up version of
-  it, and a type without such a constant gets none. `WINSTA_ALL_ACCESS`
-  is the specific bits alone and winuser.h defines no
-  `DESKTOP_ALL_ACCESS`, so `WindowStation` and `Desktop` list their
-  rights instead — one name that meant "everything, standard rights
-  included" on a `File` and something narrower here would be worse than
-  the list. `SYMBOLIC_LINK_ALL_ACCESS` is
-  `STANDARD_RIGHTS_REQUIRED | SYMBOLIC_LINK_QUERY` and predates
+  | constant | source | displayed as |
+  |---|---|---|
+  | each type's `*_ALL_ACCESS` | `winnt.h` — including `IO_COMPLETION_ALL_ACCESS` — except `DIRECTORY_ALL_ACCESS` (`ntifs.h`) and `SYMBOLIC_LINK_ALL_ACCESS` (no confirmed header) | `AllAccess` |
+  | `FILE_GENERIC_READ` / `_WRITE` / `_EXECUTE` | `winnt.h` | `FileGenericRead` / `FileGenericWrite` / `FileGenericExecute` |
+  | `KEY_READ` / `KEY_WRITE` | `winnt.h` | `KeyRead` / `KeyWrite` |
+  | `TOKEN_READ` / `TOKEN_WRITE` | `winnt.h` | `TokenRead` / `TokenWrite` |
+
+  dumpex must never invent a grouping of its own, however convenient: a
+  combination Windows does not define cannot be checked against Windows,
+  and an analyst who looked up the constant behind the display name would
+  find nothing. `KEY_EXECUTE` is not a
+  second alias because it is defined as `KEY_READ`'s own value, and
+  `TOKEN_EXECUTE` is not one because it is `STANDARD_RIGHTS_EXECUTE`
+  alone — a single bit already named `ReadControl`. Every registry entry
+  carries its constant and that constant's own source, and
+  `tests/unit/test_access_rights.py` pins each one — name, value and full
+  expansion — against a hand-written table that is **not** derived from
+  the production registry, so a registry that swapped two constants
+  would stay internally coherent and still fail.
+
+  A type without such a constant gets none. `WINSTA_ALL_ACCESS` is the
+  specific bits alone and winuser.h defines no `DESKTOP_ALL_ACCESS`, so
+  `WindowStation` and `Desktop` list their rights instead — one name that
+  meant "everything, standard rights included" on a `File` and something
+  narrower here would be worse than the list. `SYMBOLIC_LINK_ALL_ACCESS`
+  is `STANDARD_RIGHTS_REQUIRED | SYMBOLIC_LINK_QUERY` and predates
   `SYMBOLIC_LINK_SET` (`0x0002`), which was never folded into it, so
-  `0x000f0003` decodes as `AllAccess | Set` — the honest decomposition.
+  `0x000f0003` decodes as `AllAccess · Set` — the honest decomposition.
   Widening either alias would claim `AllAccess` for a mask that is not
   that constant and would swallow the extra bit on the way.
+- **`AllAccess` names the recorded type's own constant — it does not
+  mean the same capability on two types.** On a `Process` it includes
+  terminating the process, writing its memory and creating threads in
+  it; on an `Event` it is querying and setting the event; on a `Token`
+  it is querying, duplicating and adjusting privileges and groups.
+  Reading two `AllAccess` rows of different types as equivalent is
+  precisely the cross-type mistake this decoder exists to prevent, which
+  is why the name is unqualified **only** because no other right is
+  called that — never because it is type-independent — and why every
+  expansion in the `Aliases used` block is labelled with its object
+  type.
+- **A composite is expanded once, under the table.** A short,
+  recognisable name is what makes a composite worth printing on every
+  row; the cost is that the capabilities inside it stop being visible,
+  and `TOKEN_WRITE` contains `AdjustPrivileges`. An investigator
+  scanning a console or `--txt` transcript for that word must be able to
+  find the handle that carries it, so every composite the printed rows
+  actually used is listed once beneath them:
+
+  ```
+  Aliases used
+    Each display name maps to one Windows SDK, WDK or native constant, and what
+    that constant contains depends on the object type it was read against.
+      Key      KeyRead    = QueryValue · EnumerateSubKeys · Notify · ReadControl
+      Token    TokenWrite = AdjustPrivileges · AdjustGroups · AdjustDefault · ReadControl
+  ```
+
+  An entry whose constant has no confirmed header (`SymbolicLink`
+  `AllAccess`, for instance) has its expansion suffixed
+  `· [source unconfirmed]`, and a one-line note explaining that mark is
+  printed under the block whenever one appears — the same on-demand rule
+  every other caveat here follows.
+
+  Once, not per row: repeating five component names on every row is the
+  wall the composites exist to collapse. Entries are keyed by
+  `(canonical_type_name(type_name), alias)` — the registry's OWN spelling
+  of the type, not the record's raw `type_name` text — because
+  `decode_access_mask()` already normalizes a type name case- and
+  whitespace-insensitively before looking it up: `"Process"`,
+  `"  process  "` and a thousands-of-bytes-of-whitespace variant of it
+  are one registry entry, and keying or labelling this block on the raw
+  text instead once produced a separate (redundant) line per spelling
+  and let a single crafted or corrupted `type_name` inflate the shared
+  type column for every OTHER entry alongside it. Entries are ordered by
+  type label then alias name (§1.5), and derived from the rows the
+  current view **printed**, so the block never explains a name that is
+  not on screen. It is bounded three ways — by the rows on screen, by the
+  registry (which defines at most three composites per type), and by the
+  canonical spelling's own bounded length (13 characters at its longest,
+  `WindowStation`), regardless of what any dump's `type_name` field
+  contains. An expansion never expands into another composite (that would
+  answer the question with the thing asked about), and it names any bit
+  its constant covers that has no documented right:
+  a `Process`'s own `*_ALL_ACCESS` is defined over the whole specific
+  range, two bits of which Windows documents no right for, so its
+  expansion ends `· UnknownBits(0x0000c000)`.
+
+  `UnknownBits` means something different **here** than on a `Rights`
+  line, and the block says so whenever one appears — and only then:
+
+  ```
+    UnknownBits in an alias expansion are included by that Windows constant but have
+    no individually documented right name in this definition set.
+  ```
+
+  On a `Rights` line the bits were captured and dumpex cannot read them;
+  in an expansion they are part of the constant itself, and it is that
+  constant which names no right for them.
 - **Nothing is invented and nothing is dropped.** The names plus the
   remainder always reconstruct the captured mask exactly:
   - bits with no documented right for a type the registry carries are
@@ -3073,12 +3365,12 @@ mask permits **for that row's own recorded type**:
   read like the `(unknown)` an **absent** mask prints (§1.4), which stays
   the column's word alone — a null `granted_access` gets no `Rights` line
   at all, because absent evidence is never decoded into "no rights".
-- **A wrapped line never loses a name.** Breaks fall only on the ` | `
+- **A wrapped line never loses a name.** Breaks fall only on the ` · `
   separators this projection wrote itself, so a continued line ends in
-  ` |`, and neither a right name nor a remainder token is ever split in
+  ` ·`, and neither a right name nor a remainder token is ever split in
   half. A single piece wider than the console overflows rather than
-  being cut. Continuation lines are indented past the `Rights` label, so
-  they cannot be read as a new row.
+  being cut. Continuation lines are indented under the names, past the
+  label column, so they cannot be read as a new row.
 - **No dump-derived string reaches the line.** It is dumpex's own
   vocabulary plus numbers derived from one integer, so unlike the Type
   and Object columns it has nothing for a hostile name to ride in on.
@@ -3642,9 +3934,26 @@ excuses anything in §0–§8.
   Access column alone.
 
   The decode is attached to **each printed row** as an indented `Rights`
-  line, and it never repeats the captured mask: the `Access` column is
-  the single printed copy of that value, kept as the aligned evidence
-  anchor a reader scans, compares and copies. A first cut collected it into a de-duplicated `(type, mask)`
+  line behind a `└─` branch, and it never repeats the captured mask: the
+  `Access` column is the single printed copy of that value, kept as the
+  aligned evidence anchor a reader scans, compares and copies. Composite
+  aliases (`KeyRead`, `FileGenericRead`, each type's `AllAccess`) carry
+  the masks a dump repeats, names are separated by a dimmed ` · `, and a
+  list too long for one line splits into `Type` and `Standard` — a
+  reviewer of the first row-attached cut called the unsplit `|`-joined
+  run "debug output", and the three changes are that review's answer.
+
+  A review of the composites then found three more, all fixed here: this
+  section still carried the pre-composite rule ("the only composite
+  emitted is a type's own `*_ALL_ACCESS`"), which contradicted the
+  section above it and would have licensed a later maintainer to "fix"
+  the implementation back; `AllAccess` was described as meaning the same
+  thing on every type, which is false and is the cross-type reading the
+  whole decoder exists to prevent; and a composite hid the capabilities
+  inside it, so `AdjustPrivileges` could not be found in a transcript at
+  all. The permitted composite set is now a table, `AllAccess` is stated
+  as type-dependent, and every composite the printed rows used is
+  expanded once under the table. A first cut collected it into a de-duplicated `(type, mask)`
   block under the table; a review against a real sample found that this
   only moved the lookup inside dumpex's own output — the reader still had
   to carry a type and a mask to a second, differently-ordered table —

@@ -786,13 +786,7 @@ def test_handles_txt_writes_a_real_ansi_free_transcript(monkeypatch, tmp_path):
         # Rights line, what it permitted for the recorded object type --
         # with no ANSI in between.
         assert text.count("0x0012019f") == 1
-        assert "    Rights  ReadData | WriteData |" in text
-        # Rejoining the wrap (a continued line ends in " |") recovers the
-        # complete rights list -- nothing was truncated on the way to the
-        # file.
-        rejoined = " ".join(line.strip() for line in text.splitlines())
-        assert ("ReadData | WriteData | AppendData | ReadEa | WriteEa | ReadAttributes | "
-                "WriteAttributes | ReadControl | Synchronize") in rejoined
+        assert "      └─ Rights   FileGenericRead · FileGenericWrite" in text
     finally:
         os.remove(dump_path)
 
@@ -833,22 +827,42 @@ def test_handles_json_and_txt_together_keep_the_raw_mask_and_the_decode_apart(
         # File bit 0x0001 is ReadData; the same bit on a Process is
         # Terminate -- and each reading sits under its own row, so the
         # transcript never asks the reader to match a mask to a type.
-        rows, rights = [], []
+        # One (row, rights) pair per handle. A long decode splits into a
+        # `Type` and a `Standard` group under the same row, so the groups
+        # are collected per row rather than per line.
+        head = re.compile(r"^ {6}(?:└─ |   )(Rights|Type|Standard) +(\S.*)$")
+        rows = []
+        # A continuation counts only while it immediately follows its own
+        # group: the `Aliases used` block below the table is indented
+        # past the same column.
+        open_group = None
         for line in text.splitlines():
+            matched = head.match(line)
             if line.strip().startswith("0x"):
-                rows.append(line)
-            elif line.startswith("      Rights  "):
-                rights.append(line.strip()[len("Rights  "):])
-            elif rights and line.startswith(" " * 14) and line.strip():
-                # A wrapped Rights line, rejoined with the one above it.
-                rights[-1] += " " + line.strip()
-        assert len(rows) == len(rights) == 2
-        assert " File " in rows[0] and rights[0].startswith("ReadData | WriteData |")
-        assert " Process " in rows[1] and rights[1].startswith("Terminate | CreateThread |")
+                rows.append([line, []])
+                open_group = None
+            elif matched and rows:
+                rows[-1][1].append([matched.group(1), matched.group(2)])
+                open_group = rows[-1][1][-1]
+            elif open_group is not None and line.startswith(" " * 18) and line.strip():
+                # A wrapped rights line, rejoined with the one above it.
+                open_group[1] += " " + line.strip()
+            else:
+                open_group = None
+
+        assert len(rows) == 2
+        # The same captured mask, decoded against each row's own recorded
+        # type -- the one thing a raw hexadecimal column could not say.
+        assert " File " in rows[0][0]
+        assert rows[0][1] == [["Rights", "FileGenericRead · FileGenericWrite"]]
+        assert " Process " in rows[1][0]
+        assert [label for label, _ in rows[1][1]] == ["Type", "Standard"]
+        assert rows[1][1][0][1].startswith("Terminate · CreateThread · SetSessionId ·")
+        assert rows[1][1][1][1] == "ReadControl · Synchronize"
         # Each row prints the captured mask once, in its own Access
         # column; the derived reading never repeats it.
-        assert all("0x0012019f" in row for row in rows)
-        assert not any("0x" in line for line in rights)
+        assert all("0x0012019f" in row for row, _ in rows)
+        assert not any("0x" in group for _row, groups in rows for _label, group in groups)
     finally:
         os.remove(dump_path)
 

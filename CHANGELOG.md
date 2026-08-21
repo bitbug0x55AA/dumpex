@@ -15,17 +15,81 @@ up the Windows definitions. `--handles` now does that for you, on each row:
 
 ```text
   0x000000000000005c  Key             0x00020019    2  65536  \REGISTRY\...\Versions
-      Rights  QueryValue | EnumerateSubKeys | Notify | ReadControl
+      └─ Rights   KeyRead
   0x00000000000001dc  Thread          0x001fffff    6  131062  (unnamed)
-      Rights  AllAccess
-  0x000000000000006c  TpWorkerFactory 0x000f037f    1    1  (unnamed)
-      Rights  Delete | ReadControl | WriteDac | WriteOwner |
-              TypeSpecificUnavailable(0x0000037f)
+      └─ Rights   AllAccess
+  0x000000000000006c  WindowStation   0x000f037f    1    1  WinSta0
+      └─ Type     EnumDesktops · ReadAttributes · AccessClipboard · CreateDesktop ·
+                  WriteAttributes · AccessGlobalAtoms · ExitWindows · Enumerate · ReadScreen
+         Standard Delete · ReadControl · WriteDac · WriteOwner
+  0x0000000000000070  Event           (unknown)     1    1  (unnamed)
 ```
 
 The answer sits on the handle it belongs to, in the table's own order —
 there is no second table to look a `type + mask` up in — and the mask
-itself is still printed exactly once, in the `Access` column.
+itself is still printed exactly once, in the `Access` column. A row whose
+descriptor recorded no mask keeps `(unknown)` there and gets no rights
+line at all.
+
+**Where Windows documents a combination, you get a name for it.**
+`0x00020019` on a `Key` reads `KeyRead` — dumpex's display form of
+`KEY_READ` — rather than its four components repeated on every `Key`
+row; `0x0012019f` on a `File` reads `FileGenericRead ·
+FileGenericWrite`. The spelling is dumpex's, the constant behind it is
+Windows': each type's `*_ALL_ACCESS`, `FILE_GENERIC_*`,
+`KEY_READ`/`KEY_WRITE` and `TOKEN_READ`/`TOKEN_WRITE`. Which header
+defines a constant is recorded **per constant**, not per object type —
+mostly the Win32 SDK (`winnt.h`, `winuser.h`), with `DIRECTORY_*` and
+`EVENT_QUERY_STATE` coming from the WDK's `ntifs.h`, where Microsoft
+documents them and the Win32 SDK defines nothing. Types that draw on two
+headers say so: `IoCompletion` takes `IO_COMPLETION_MODIFY_STATE` and
+`IO_COMPLETION_ALL_ACCESS` from `winnt.h` and only
+`IO_COMPLETION_QUERY_STATE` from outside it; `Event`, `Semaphore` and
+`Thread` are mixed too, while `Timer` — which looks identical — is not.
+The few names with no Microsoft source we could find carry no header at
+all rather than a plausible one, and a composite built on one is marked
+`[source unconfirmed]` where it is expanded — `SYMBOLIC_LINK_ALL_ACCESS`
+does not get described in the words `KEY_READ` earns. The same split
+reaches a bare single-bit right name, not only a composite: `QueryState`
+decoded from the unconfirmed `SEMAPHORE_QUERY_STATE` bit alone is marked
+`[?]` right on the `Rights` line, since otherwise it prints identically
+to `Timer`'s confirmed `QueryState`. Never a grouping, and never a
+provenance, dumpex invented.
+
+**`AllAccess` follows the dump's Windows version on `Process` and
+`Thread`.** Vista widened `PROCESS_ALL_ACCESS` from `0x001f0fff` to
+`0x001fffff` and `THREAD_ALL_ACCESS` from `0x001f03ff` to `0x001fffff`,
+and `winnt.h` still carries both definitions. `--handles` reads the
+dump's `SYSTEM_INFO.MajorVersion` and decodes against the matching one,
+so a full process handle in an XP or Server 2003 capture reads
+`AllAccess` instead of twelve separate rights. A dump whose version
+cannot be read uses the modern values — on Vista and later `0x001f0fff`
+is a genuinely partial handle, and calling it `AllAccess` would overstate
+it. The version picks a display name only: `granted_access` is unchanged
+in `--json` and the schema is untouched. A display name is type-qualified wherever the bare word would
+be ambiguous, since `GENERIC_READ` is a real and different bit. A list too long for one line
+splits into `Type` (rights that object type defines) and `Standard` (the
+rights every type shares), and on a terminal the branch, labels and
+separators are dimmed so the names are what the eye lands on.
+
+**A short name never hides what is inside it.** Every composite the table
+used is expanded once beneath it, so the capabilities stay findable —
+searching a transcript for `AdjustPrivileges` reaches the `TokenWrite`
+rows:
+
+```text
+  Aliases used
+      Key      KeyRead    = QueryValue · EnumerateSubKeys · Notify · ReadControl
+      Token    TokenWrite = AdjustPrivileges · AdjustGroups · AdjustDefault · ReadControl
+```
+
+Each expansion is labelled with its **object type**, because `AllAccess`
+maps to that type's own `*_ALL_ACCESS`: on a `Process` it includes
+terminating it and writing its memory, on an `Event` it is querying and
+setting the event. Two `AllAccess` rows of different types are not the
+same capability. An expansion ending in `UnknownBits(0x…)` means the
+constant covers those bits but names no right for them — the block says
+so whenever one appears.
 
 **The decode is per recorded object type.** Bit `0x0001` is `ReadData` on
 a `File`, `Terminate` on a `Process`, `AssignPrimary` on a `Token` and

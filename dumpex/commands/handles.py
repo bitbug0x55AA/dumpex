@@ -58,7 +58,11 @@ from dumpex.output.records import (
     HandleRecord, handle_name_display, hex_address,
 )
 from dumpex.ui.access_rights import (
-    decode_access_mask, format_access_rights, wrap_rights,
+    NO_RIGHTS_TEXT, RIGHTS_CONTINUED_SUFFIX, RIGHTS_SEPARATOR,
+    access_right_groups, alias_names_in, alias_provenance, canonical_type_name,
+    decode_access_mask, expand_alias, unconfirmed_names,
+    unconfirmed_names_in_alias,
+    is_undecoded_token, wrap_rights,
 )
 from dumpex.ui.colors import BOLD, DIM, YELLOW, console_safe
 from dumpex.ui.console_layout import column_width, resolve_width, wrap_text
@@ -682,26 +686,250 @@ def _namespace_notes(records) -> list:
 # an inline decode would either pad every row to 110 columns or (with
 # §5.6's cap) push every File row's remaining columns right. The
 # continuation line wraps instead, and truncation never enters into it.
-_RIGHTS_LINE_LABEL = "Rights  "
-
-# Indented under the row it belongs to (the rows themselves are printed
-# at two columns), so the line reads as "this row, continued" rather than
-# as another row.
+# The rights sit under their row behind a drawn branch, so a glance can
+# tell "this belongs to the handle above" from "this is another handle"
+# without reading either line. Indented four columns past the row (which
+# is itself printed at two), and the branch is dimmed, so the names are
+# what the eye lands on.
 _RIGHTS_LINE_INDENT = 4
+_RIGHTS_BRANCH = "└─ "
+_RIGHTS_BRANCH_BLANK = " " * len(_RIGHTS_BRANCH)
 
-# One caption, printed once under the table whenever any Rights line was
-# printed. It carries the two things a reader has to know to read those
-# lines correctly, and §1.6 requires the second: the rights are
-# type-dependent, and they are an observation rather than a finding.
+# One label column, wide enough for the longest of the three labels, so
+# the names all start in the same place whichever shape a row takes.
+_RIGHTS_LABEL_WIDTH = 8
+_RIGHTS_ALL_LABEL = "Rights"
+_RIGHTS_TYPE_LABEL = "Type"
+_RIGHTS_STANDARD_LABEL = "Standard"
+
+# What the names are indented to, once the row indent, the branch, the
+# label column and its trailing space are accounted for. Continuation
+# lines of a wrapped group align here.
+_RIGHTS_TEXT_INDENT = (_RIGHTS_LINE_INDENT + len(_RIGHTS_BRANCH)
+                        + _RIGHTS_LABEL_WIDTH + 1)
+
+# One caption, printed once under the table whenever any rights line was
+# printed. It carries the three things a reader has to know to read those
+# lines correctly, and §1.6 requires the last: the rights are
+# type-dependent, the two labels mean different halves of the mask, and
+# the whole thing is an observation rather than a finding.
 _RIGHTS_LEGEND = (
     "Rights decode each row's own Access mask against its recorded object type -- the "
-    "same bit means different things for a File, a Process and a Token. They are an "
-    "observation about what the handle permitted, never evidence that it was used.")
+    "same bit means different things for a File, a Process and a Token. A long list "
+    "splits into Type (rights that object type defines) and Standard (the rights every "
+    "type shares). They are an observation about what the handle permitted, never "
+    "evidence that it was used.")
+
+# A single right NAME can carry the same confirmed/unconfirmed split an
+# alias can (`unconfirmed_names()` in dumpex.ui.access_rights): `Semaphore`
+# `0x1` decodes to `QueryState`, and no Microsoft header or reference page
+# names `SEMAPHORE_QUERY_STATE` -- unlike `TIMER_QUERY_STATE`, which
+# `winnt.h` defines, and which decodes to the SAME display word on a
+# `Timer` row. Printing both without distinction told a reader they were
+# equally checkable. The mark is short, unlike the alias block's
+# `[source unconfirmed]`, because a Rights line can carry a dozen names on
+# one row and a per-name marker has to survive being one of them, not the
+# only thing on the line.
+_RIGHTS_UNCONFIRMED_MARK = "[?]"
+_RIGHTS_UNCONFIRMED_NOTE = (
+    "Names marked [?] map to a constant no Microsoft header or reference page could "
+    "be found for; the decoded bits are unaffected.")
+
+# #102: a composite is short and recognisable, which is what makes it
+# worth printing on every row -- but the capabilities inside it stop
+# being visible, and `TokenWrite` contains `AdjustPrivileges`. An
+# investigator scanning a transcript for that word has to be able to find
+# it, so every composite the table actually used is expanded once,
+# underneath it. Once, not per row: repeating five component names on
+# every row is the wall the composites exist to collapse.
+#
+# Each entry is labelled with the OBJECT TYPE as well as the name,
+# because `AllAccess` stands for a different constant on every type --
+# reading a Process `AllAccess` and an Event `AllAccess` as the same
+# capability is exactly the cross-type mistake this decoder exists to
+# prevent.
+_ALIAS_BLOCK_HEADING = "Aliases used"
+
+# The names on the left are dumpex DISPLAY FORMS, not header spellings:
+# `KeyRead` maps to `KEY_READ`, `AllAccess` to the recorded type's own
+# `*_ALL_ACCESS`. Saying "the SDK's own name" (as this line first did)
+# would send a reader looking for `AllAccess` in a header that has no
+# such symbol, and it would also mis-attribute two of the aliases:
+# `DIRECTORY_ALL_ACCESS` and `SYMBOLIC_LINK_ALL_ACCESS` are WDK
+# definitions, not Win32 SDK ones.
+#
+# The note stays at the header-FAMILY level rather than naming one header
+# per object type, and that is deliberate on two counts.
+#
+# `dumpex.ui.access_rights` tracks the defining header PER CONSTANT,
+# because a type can draw on more than one: an `IoCompletion` row's
+# `AllAccess` is `IO_COMPLETION_ALL_ACCESS`, a `winnt.h` constant, even
+# though the same type's `QueryState` bit is not one. A caption assigning
+# a single header to each type would be wrong here.
+#
+# And the two WDK aliases do not share a header either --
+# `DIRECTORY_ALL_ACCESS` is documented under `ntifs.h`, while for
+# `SYMBOLIC_LINK_ALL_ACCESS` only the ROUTINE is documented (`wdm.h`) and
+# the constant spelling is unconfirmed. Both objects are Object Manager
+# objects, so the family wording is true of both; a specific header here
+# would not be. The per-constant record, with its evidence, lives in
+# access_rights.py and tests/unit/test_access_rights.py.
+_ALIAS_BLOCK_NOTE = (
+    "Each display name maps to one Windows SDK, WDK or native constant, and what "
+    "that constant contains depends on the object type it was read against.")
+
+# Appended to any expansion whose constant has no confirmed Microsoft
+# source, because the block must not describe `SYMBOLIC_LINK_ALL_ACCESS`
+# in the same words as `KEY_READ`. An investigator reads "documented" as
+# "I can go and check this", and for the unconfirmed names they cannot:
+# no Microsoft page names them. Saying so on the line is cheaper than a
+# reader discovering it by failing to find the symbol.
+_ALIAS_UNCONFIRMED_MARK = "[source unconfirmed]"
+_ALIAS_UNCONFIRMED_NOTE = (
+    "Names marked [source unconfirmed] map to a constant no Microsoft header or "
+    "reference page could be found for; the decoded bits are unaffected.")
+
+# Printed only when an expansion actually carries an UnknownBits token,
+# so the caveat never explains something that is not on screen. A
+# remainder means something different here than on a Rights line: the
+# bits are not undecodable, they are covered BY the constant and simply
+# have no individually documented right name.
+_ALIAS_UNKNOWN_BITS_NOTE = (
+    "UnknownBits in an alias expansion are included by that Windows constant but have "
+    "no individually documented right name in this definition set.")
+_ALIAS_BLOCK_INDENT = 4
 
 
-def _rights_lines(record: HandleRecord, width: int) -> list:
-    """The wrapped `Rights` text for ONE record, or [] when there is
-    nothing to decode.
+def _paint_rights(line: str) -> str:
+    """Colour ONE already-wrapped rights line: separators dimmed so they
+    do not compete with the names, and a remainder token in yellow --
+    it is the one piece on the line that says something was NOT read.
+
+    Applied after wrapping, never before: the widths are measured on the
+    plain text, and colouring first would spend them on escape
+    sequences."""
+    body, suffix = ((line[:-len(RIGHTS_CONTINUED_SUFFIX)], RIGHTS_CONTINUED_SUFFIX)
+                     if line.endswith(RIGHTS_CONTINUED_SUFFIX) else (line, ""))
+    painted = DIM(RIGHTS_SEPARATOR).join(
+        YELLOW(piece) if is_undecoded_token(piece) else piece
+        for piece in body.split(RIGHTS_SEPARATOR))
+    return painted + DIM(suffix)
+
+
+def _alias_entries(records, width: int, os_major=None) -> list:
+    """-> [(label, [expansion lines]), ...] for §5.6.4's `Aliases used`
+    block: one entry per distinct (registry type, composite) pair the
+    PRINTED rows actually used, ordered by type label then alias name
+    (§1.5).
+
+    Bounded twice over: by the rows on screen, and by the registry -- a
+    type defines at most three composites, so a 65,536-row dump whose
+    handles are all Files contributes four lines here, not 65,536.
+
+    Keyed by `(canonical_type_name(record.type_name), alias)`, and
+    labelled with that same CANONICAL spelling ("Process", "SymbolicLink",
+    ...) rather than the record's raw `type_name`. Both halves of that
+    choice matter, and both were bugs before it: `alias_names_in()` (and
+    `decode_access_mask()` underneath it) already normalize a type name
+    case- and whitespace-insensitively before looking it up, so `"Process"`,
+    `"  process  "` and a raw descriptor field padded with whitespace
+    around `"Process"` are ONE registry entry and decode identically.
+    Keying on the raw text produced one entry PER SPELLING instead of one
+    per fact -- the same `AllAccess` expansion printed two or three times
+    -- and echoing that raw text back as the label let one crafted or
+    corrupted `type_name` (attacker-controlled, and up to
+    `MAX_HANDLE_STRING_BYTES` -- 4096 bytes, see
+    dumpex/core/memory.py -- of it, not merely a few extra spaces) blow
+    the type column out to its own width, dragging every OTHER entry's
+    column out with it, because `column_width()` sizes one shared column
+    across the whole block. The canonical spelling comes from a fixed,
+    short, dumpex-owned set (`SUPPORTED_OBJECT_TYPES`), so neither
+    failure mode has anything left to act on: same key for every
+    spelling of one type, and a label no dump can make long.
+
+    A record whose type does not resolve to a registry entry contributes
+    no alias at all (`alias_names_in()` returns `()` for it), so
+    `canonical_type_name()` is never called on that None-producing input
+    here -- this function only ever sees names it already knows are
+    keyable."""
+    seen = set()
+    for record in records:
+        decoded = decode_access_mask(record.granted_access, record.type_name,
+                                      os_major=os_major)
+        if decoded is None:
+            continue
+        canonical = canonical_type_name(record.type_name)
+        if canonical is None:
+            continue
+        for alias in alias_names_in(decoded, record.type_name):
+            seen.add((canonical, alias))
+
+    entries = sorted(seen)
+    if not entries:
+        return []
+
+    # Two measured columns, so the types line up, the composite names
+    # line up under each other, and every `=` sits in the same place --
+    # the block reads as a table rather than as ragged prose. No cap is
+    # needed here (contrast the main table's Type column): every value is
+    # a canonical registry spelling, so the widest possible one
+    # ("WindowStation") already bounds this regardless of what any dump
+    # contains.
+    type_w = column_width("", [type_name for type_name, _alias in entries])
+    alias_w = column_width("", [alias for _type_name, alias in entries])
+    label_width = type_w + 2 + alias_w
+    lines = []
+    for type_name, alias in entries:
+        label = f"{type_name:<{type_w}}  {alias}"
+        expansion = expand_alias(alias, type_name, os_major=os_major)
+
+        # Two independent questions, both marked, because they can and do
+        # disagree: is the ALIAS's own combination constant confirmed
+        # (`IoCompletion AllAccess` -- yes, `IO_COMPLETION_ALL_ACCESS` is
+        # winnt.h's own), and is each COMPONENT the expansion names
+        # confirmed on its own (`QueryState` inside that same expansion
+        # -- no). Marking only the first would print `QueryState` next to
+        # `Delete`/`ReadControl` with nothing to tell a reader the first
+        # has no Microsoft source and the rest do.
+        component_unconfirmed = unconfirmed_names_in_alias(alias, type_name,
+                                                             os_major=os_major)
+        if component_unconfirmed:
+            expansion = _mark_unconfirmed(expansion, component_unconfirmed)
+        provenance = alias_provenance(alias, type_name)
+        if provenance is not None and not provenance.confirmed:
+            expansion = f"{expansion}{RIGHTS_SEPARATOR}{_ALIAS_UNCONFIRMED_MARK}"
+
+        indent = _ALIAS_BLOCK_INDENT + label_width + 3   # "<label> = "
+        for index, line in enumerate(wrap_rights(expansion, width - 2 - indent)):
+            head = (f"{' ' * _ALIAS_BLOCK_INDENT}{label:<{label_width}} {DIM('=')} "
+                     if index == 0 else " " * indent)
+            lines.append((head, _paint_rights(line)))
+    return lines
+
+
+def _mark_unconfirmed(text: str, unconfirmed: frozenset) -> str:
+    """Append `_RIGHTS_UNCONFIRMED_MARK` to every piece of an already
+    RIGHTS_SEPARATOR-joined string whose bare name is in `unconfirmed`,
+    and leave every other piece -- including a remainder token like
+    `UnknownBits(0x...)`, which is not a name at all -- untouched.
+
+    Splits and rejoins on RIGHTS_SEPARATOR rather than editing the
+    DecodedAccess names before formatting, so format_access_rights() and
+    access_right_groups() stay pure projections of the decode and this
+    stays a console-only concern: nothing about --json or the decode
+    itself changes because a mark was added or not. wrap_rights() then
+    sees "QueryState [?]" as ONE piece, so the mark can never be split
+    from its name across a wrapped line -- the same guarantee that
+    already protects every right name."""
+    pieces = text.split(RIGHTS_SEPARATOR)
+    marked = [f"{piece} {_RIGHTS_UNCONFIRMED_MARK}" if piece in unconfirmed else piece
+              for piece in pieces]
+    return RIGHTS_SEPARATOR.join(marked)
+
+
+def _rights_lines(record: HandleRecord, width: int, os_major=None) -> list:
+    """The finished, indented, coloured rights lines for ONE record, or
+    [] when there is nothing to decode.
 
     A null `granted_access` returns no lines at all: that is absent
     evidence (§5.2.2), the row's Access column already says `(unknown)`,
@@ -710,17 +938,59 @@ def _rights_lines(record: HandleRecord, width: int) -> list:
     captured mask of zero DOES get a line, because "this handle was
     granted nothing" is a fact the dump recorded.
 
-    `width` is the full console width; the label and indent this function
-    prints under are subtracted here so the caller cannot get the two
-    out of step."""
-    decoded = decode_access_mask(record.granted_access, record.type_name)
+    One `Rights` line while the whole decode fits; `Type` + `Standard`
+    once it does not. The split is not cosmetic -- a wrapped run of
+    thirteen names mixes rights that mean something only for THIS object
+    type with rights that mean the same thing for every type, and the
+    reader cannot see where one ends and the other begins. It is taken
+    only when both halves exist, so a mask with no standard bits stays
+    one labelled line rather than gaining an empty one.
+
+    `width` is the full console width; everything this function prints in
+    front of the names is subtracted here, so the caller cannot get the
+    two out of step.
+
+    `os_major` is the dump's Windows major version when it could be read,
+    and reaches decode_access_mask() unchanged -- see there for the one
+    thing it changes (`AllAccess` on a Process or Thread predates Vista's
+    widening of those two constants)."""
+    decoded = decode_access_mask(record.granted_access, record.type_name,
+                                  os_major=os_major)
     if decoded is None:
         return []
-    return wrap_rights(format_access_rights(decoded),
-                        width - 2 - _RIGHTS_LINE_INDENT - len(_RIGHTS_LINE_LABEL))
+
+    # `standard_names` can never contain an unconfirmed name --
+    # `_STANDARD_RIGHTS`/`_GENERIC_RIGHTS` are `winnt.h` in full -- so
+    # only the TYPE half of the text is ever marked.
+    unconfirmed = unconfirmed_names(decoded, record.type_name, os_major=os_major)
+
+    text_width = width - 2 - _RIGHTS_TEXT_INDENT
+    type_text, standard_text = access_right_groups(decoded)
+    if unconfirmed:
+        type_text = _mark_unconfirmed(type_text, unconfirmed)
+    single = RIGHTS_SEPARATOR.join(part for part in (type_text, standard_text) if part) \
+        or NO_RIGHTS_TEXT
+    if len(single) <= text_width or not (type_text and standard_text):
+        groups = ((_RIGHTS_ALL_LABEL, single),)
+    else:
+        groups = ((_RIGHTS_TYPE_LABEL, type_text),
+                   (_RIGHTS_STANDARD_LABEL, standard_text))
+
+    lines = []
+    for group_index, (label, text) in enumerate(groups):
+        # Only the first group carries the branch: the second is part of
+        # the same handle's answer, not a new one.
+        branch = _RIGHTS_BRANCH if group_index == 0 else _RIGHTS_BRANCH_BLANK
+        head = (f"{' ' * _RIGHTS_LINE_INDENT}{DIM(branch)}"
+                 f"{DIM(f'{label:<{_RIGHTS_LABEL_WIDTH}}')} ")
+        for line_index, line in enumerate(wrap_rights(text, text_width)):
+            prefix = head if line_index == 0 else " " * _RIGHTS_TEXT_INDENT
+            lines.append(f"{prefix}{_paint_rights(line)}")
+    return lines
 
 
-def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
+def render_handles_console(records, coverage, *, verbose: bool = False,
+                            os_major=None) -> None:
     """Projects ONLY the collected records and CoverageReport -- it never
     re-reads `mf.handles`, so console and JSON can never describe two
     different reads of the same dump.
@@ -773,6 +1043,10 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     # whose mask is absent contributes no line, so "any record has a
     # mask" is not the same question.
     rights_lines_printed = False
+    # Set inside the same loop, the same way: whether any printed Rights
+    # line actually carried an unconfirmed-name mark, so the caveat below
+    # is never printed when nothing on screen needed it.
+    unconfirmed_rights_printed = False
 
     if shown:
         # Cells are built once, up front, so the column widths below are
@@ -804,17 +1078,31 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
         # permits, indented under it. Zipped against `shown` rather than
         # re-derived, so a row and its rights can never come from
         # different records.
-        row_indent = " " * _RIGHTS_LINE_INDENT
-        hang_indent = " " * (_RIGHTS_LINE_INDENT + len(_RIGHTS_LINE_LABEL))
         for record, (handle, type_display, access, count, pointers, object_display) in zip(
                 shown, rows):
             print(f"  {handle:<{_HANDLE_COLUMN_WIDTH}}  {type_display:<{type_w}}  "
                   f"{access:<{access_w}}  {count:>{cnt_w}}  {pointers:>{ptr_w}}  "
                   f"{object_display}")
-            for index, line in enumerate(_rights_lines(record, width)):
-                prefix = f"{row_indent}{_RIGHTS_LINE_LABEL}" if index == 0 else hang_indent
-                print(f"  {prefix}{line}")
+            for line in _rights_lines(record, width, os_major):
+                print(f"  {line}")
                 rights_lines_printed = True
+                if _RIGHTS_UNCONFIRMED_MARK in line:
+                    unconfirmed_rights_printed = True
+
+    # #102: what each composite on screen stands for, once. Derived from
+    # the printed rows, so it never explains a name that is not there.
+    #
+    # Computed here, ahead of the Rights caption below, because the `[?]`
+    # mark can now appear inside an alias's own expansion (a COMPONENT of
+    # `AllAccess`, not `AllAccess` itself) even on a row whose `Rights`
+    # line carried no mark at all -- an `IoCompletion` row that decoded to
+    # a bare `AllAccess` is exactly this case. The caption explaining what
+    # `[?]` means has to know about both places it can show up, or it
+    # would go unprinted while the mark it explains sits on screen further
+    # down.
+    alias_lines = _alias_entries(shown, width, os_major)
+    if any(_RIGHTS_UNCONFIRMED_MARK in text for _head, text in alias_lines):
+        unconfirmed_rights_printed = True
 
     # The two null-name labels are dumpex's own vocabulary and mean two
     # different things (§5.2.1); printed only when one of them is
@@ -830,6 +1118,29 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     if rights_lines_printed:
         for line in wrap_text(_RIGHTS_LEGEND, width - 2):
             print(f"  {DIM(line)}")
+        # Same rule as the alias block's own caveats: printed only when a
+        # marked name is actually on screen, in EITHER place `[?]` can
+        # appear -- see where `unconfirmed_rights_printed` is widened
+        # above.
+        if unconfirmed_rights_printed:
+            for line in wrap_text(_RIGHTS_UNCONFIRMED_NOTE, width - 2):
+                print(f"  {DIM(line)}")
+
+    if alias_lines:
+        print()
+        print(f"  {BOLD(_ALIAS_BLOCK_HEADING)}")
+        for line in wrap_text(_ALIAS_BLOCK_NOTE, width - 4):
+            print(f"    {DIM(line)}")
+        for head, text in alias_lines:
+            print(f"  {head}{text}")
+        if any("UnknownBits(" in text for _head, text in alias_lines):
+            for line in wrap_text(_ALIAS_UNKNOWN_BITS_NOTE, width - 4):
+                print(f"    {DIM(line)}")
+        # Same rule: printed only when a marked name is actually on
+        # screen, so the caveat never explains something absent.
+        if any(_ALIAS_UNCONFIRMED_MARK in text for _head, text in alias_lines):
+            for line in wrap_text(_ALIAS_UNCONFIRMED_NOTE, width - 4):
+                print(f"    {DIM(line)}")
 
     # #98: exactly how many rows the default view folded, in per-type
     # counts, with the way to see them. Every folded row is still a
@@ -866,11 +1177,34 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     print()
 
 
+def _dump_os_major(mf: MinidumpFile) -> "int | None":
+    """The dump's Windows MAJOR version from its SYSTEM_INFO stream, or
+    None when there is no usable one.
+
+    Read here rather than in collect_handles() because it changes nothing
+    about the records: `granted_access` is the same integer either way,
+    `--json` is untouched, and the version affects only which composite
+    NAME the console prints for a Process or Thread mask. Keeping it out
+    of HandleRecord is what leaves the v2.13 schema alone.
+
+    None on anything unusable, including a version this reads as a
+    non-int -- decode_access_mask() then uses the modern constants, which
+    is the safe direction (see _registry_for)."""
+    major = getattr(getattr(mf, "sysinfo", None), "MajorVersion", None)
+    if isinstance(major, bool) or not isinstance(major, int) or major < 0:
+        return None
+    return major
+
+
 def cmd_handles(mf: MinidumpFile, *, verbose: bool = False) -> CommandResult:
     """`verbose` reaches the RENDERER only. `collect_handles()` takes no
     verbosity at all, which is what makes "console filtering never
     removes a record from --json" a structural property rather than a
-    rule someone has to remember (#98)."""
+    rule someone has to remember (#98).
+
+    The dump's OS major version reaches the renderer the same way and for
+    the same reason: it selects a display NAME, never a record."""
     result = collect_handles(mf)
-    render_handles_console(result.records, result.coverage, verbose=verbose)
+    render_handles_console(result.records, result.coverage, verbose=verbose,
+                            os_major=_dump_os_major(mf))
     return result
