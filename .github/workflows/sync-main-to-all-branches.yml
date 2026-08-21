@@ -1,11 +1,26 @@
 name: Sync main to all branches
 
+# Long-lived branches (architecture_restructure, feature_adding,
+# urgent_patch, ...) drift the moment a pull request lands on main. The
+# cost of that drift is not paid here -- it is paid weeks later, as a
+# conflict in whichever branch merged second. So main is merged outward
+# automatically the moment it moves, not whenever someone remembers to
+# press a button.
+#
+# Note on CI: pushes made with GITHUB_TOKEN deliberately do not trigger
+# other workflows. Syncing therefore costs zero test runs -- but it also
+# means an open pull request's green checks still describe the tree from
+# BEFORE the sync. Push any commit (or re-run its checks) to re-validate.
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+# Never let two syncs interleave; queue the second one instead of
+# cancelling it, so no push to main is silently dropped.
 concurrency:
   group: sync-main-to-all-branches
   cancel-in-progress: false
@@ -14,6 +29,7 @@ jobs:
   sync:
     name: Merge main into every branch
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - name: Check out main with full history
@@ -22,12 +38,15 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Preflight every merge, then push atomically
+      - name: Merge main into every other branch, independently
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          set -euo pipefail
+          # No `set -e`: a branch that will not merge is an expected
+          # outcome to be reported, not a reason to abandon the branches
+          # that would have merged fine.
+          set -uo pipefail
 
           if [[ "$DEFAULT_BRANCH" != "main" ]]; then
             echo "This workflow expects the repository default branch to be 'main', but it is '$DEFAULT_BRANCH'." >&2
@@ -46,43 +65,103 @@ jobs:
 
           if (( ${#branches[@]} == 0 )); then
             echo "No branches other than main were found."
-            echo "## Sync result" >> "$GITHUB_STEP_SUMMARY"
-            echo "No branches other than \`main\` were found." >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## Sync result"
+              echo
+              echo "No branches other than \`main\` were found."
+            } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          updates=()
           synced=()
+          already=()
+          conflicted=()
+          rejected=()
 
-          # Build every merge locally first. Nothing is pushed unless all
-          # branches merge cleanly, so a conflict cannot leave a partial sync.
-          for index in "${!branches[@]}"; do
-            branch="${branches[$index]}"
-            local_ref="refs/heads/sync-main-$index"
+          # Each branch is merged and pushed on its own. The previous
+          # revision preflighted every merge and pushed atomically, which
+          # sounds safer but inverts the priority: one stale or abandoned
+          # branch then blocked the sync for every healthy branch, every
+          # time, until a human intervened. Independent pushes mean a
+          # conflict costs exactly the branch it is on.
+          for branch in "${branches[@]}"; do
+            echo "::group::main -> $branch"
 
-            echo "Preflighting main -> $branch"
-            git switch --detach "refs/remotes/origin/$branch"
-
-            if ! git merge --no-edit refs/remotes/origin/main; then
-              git merge --abort || true
-              echo "main could not be merged cleanly into '$branch'. Nothing was pushed." >&2
-              exit 1
+            if git merge-base --is-ancestor refs/remotes/origin/main "refs/remotes/origin/$branch"; then
+              echo "Already contains main; nothing to do."
+              already+=("$branch")
+              echo "::endgroup::"
+              continue
             fi
 
-            git update-ref "$local_ref" HEAD
-            updates+=("$local_ref:refs/heads/$branch")
-            synced+=("$branch")
-          done
+            pushed=false
+            # Attempt twice: between fetch and push the branch may have
+            # received a commit, which the remote rejects as non-fast-
+            # forward. Re-fetching and rebuilding the merge on the new tip
+            # resolves the ordinary version of that race.
+            for attempt in 1 2; do
+              git switch --detach "refs/remotes/origin/$branch" --quiet
 
-          # GitHub supports atomic pushes: if any branch rejects its update
-          # (for example due to protection or a concurrent push), none change.
-          git push --atomic origin "${updates[@]}"
+              if ! git merge --no-edit -m "Merge main into $branch" refs/remotes/origin/main; then
+                conflicts="$(git diff --name-only --diff-filter=U | paste -sd', ' -)"
+                git merge --abort || true
+                echo "Conflict in: ${conflicts:-<unknown>}" >&2
+                conflicted+=("$branch|${conflicts:-unknown}")
+                break
+              fi
+
+              if git push origin "HEAD:refs/heads/$branch"; then
+                pushed=true
+                break
+              fi
+
+              echo "Push to '$branch' was rejected (attempt $attempt); re-fetching." >&2
+              git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+            done
+
+            if [[ "$pushed" == true ]]; then
+              synced+=("$branch")
+            elif [[ "${conflicted[*]-}" != *"$branch|"* ]]; then
+              rejected+=("$branch")
+            fi
+
+            echo "::endgroup::"
+          done
 
           {
             echo "## Sync result"
             echo
-            echo "Merged \`main\` into ${#synced[@]} branch(es):"
-            for branch in "${synced[@]}"; do
-              echo "- \`$branch\`"
+            echo "| Branch | Result |"
+            echo "| --- | --- |"
+            for branch in "${synced[@]-}";  do [[ -n "$branch" ]] && echo "| \`$branch\` | ✅ merged and pushed |"; done
+            for branch in "${already[@]-}"; do [[ -n "$branch" ]] && echo "| \`$branch\` | ➖ already up to date |"; done
+            for entry in "${conflicted[@]-}"; do
+              [[ -n "$entry" ]] || continue
+              echo "| \`${entry%%|*}\` | ❌ conflict in ${entry#*|} — **not pushed** |"
             done
+            for branch in "${rejected[@]-}"; do [[ -n "$branch" ]] && echo "| \`$branch\` | ⚠️ push rejected (branch moved or protected) — **not pushed** |"; done
           } >> "$GITHUB_STEP_SUMMARY"
+
+          failures=$(( ${#conflicted[@]} + ${#rejected[@]} ))
+          if (( failures > 0 )); then
+            {
+              echo
+              echo "### Resolve manually"
+              echo
+              echo '```bash'
+              for entry in "${conflicted[@]-}"; do
+                [[ -n "$entry" ]] || continue
+                branch="${entry%%|*}"
+                echo "git switch $branch && git pull && git merge main   # then resolve, commit, push"
+              done
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            # Fail the job so the run goes red and GitHub sends its usual
+            # failed-workflow notification. Every branch that COULD sync
+            # already has -- this is a report, not a rollback.
+            echo "$failures branch(es) could not be synced; see the job summary." >&2
+            exit 1
+          fi
+
+          echo "All branches are in sync with main."

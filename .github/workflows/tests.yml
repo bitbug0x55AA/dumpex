@@ -1,12 +1,108 @@
 name: Tests
 
+# One PR used to cost three identical full runs: the branch push, the
+# pull_request event fired seconds later on the same tree, and the push to
+# main after the merge. The `plan` job below collapses that -- see its own
+# comment for the tiering rules.
 on:
   push:
     branches: ["**"]
   pull_request:
+  workflow_dispatch:
+
+# A second push supersedes the first: nothing is learned from finishing a
+# run against a tree that is already stale. main is exempt -- every commit
+# that lands there gets its own complete, uncancelled verification.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  plan:
+    # Decides how much of this workflow actually needs to run, so the same
+    # tree is never fully tested twice:
+    #
+    #   skip  push to a branch that already has an open PR. The
+    #         pull_request event fires on the same commit (they landed 33s
+    #         apart before this job existed) and tests refs/pull/N/merge,
+    #         which is strictly more relevant. The push run added nothing.
+    #   fast  push to a branch with no open PR -- pre-PR work in progress.
+    #         One leg (ubuntu + 3.12), no coverage, no auxiliary jobs:
+    #         ~1 minute for "did I break something obvious".
+    #   full  every pull_request, every push to main, every manual
+    #         dispatch. The complete 2x2 matrix plus the packaging,
+    #         minidump-pin and pin-consistency jobs.
+    #
+    # This job is deliberately checkout-free; it is metadata only.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      mode: ${{ steps.pick.outputs.mode }}
+      os: ${{ steps.pick.outputs.os }}
+      python: ${{ steps.pick.outputs.python }}
+    steps:
+      - name: Pick test tier for this event
+        id: pick
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          # Never interpolate a ref straight into a shell script: a branch
+          # name is attacker-controllable on a public repo and would be
+          # evaluated by bash. Pass it as an environment value instead.
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+
+          mode=full
+          if [[ "$EVENT_NAME" == "push" && "$REF" != "refs/heads/main" ]]; then
+            # `gh api` fails open here: if the lookup errors we assume no
+            # PR and run the fast lane, which is the safe direction (extra
+            # signal, never missing signal).
+            open_prs="$(gh api \
+              --method GET \
+              "repos/$REPO/pulls" \
+              -f state=open \
+              -f "head=$OWNER:$REF_NAME" \
+              --jq 'length' 2>/dev/null || echo 0)"
+
+            if [[ "$open_prs" -gt 0 ]]; then
+              mode=skip
+            else
+              mode=fast
+            fi
+          fi
+
+          case "$mode" in
+            full) os='["ubuntu-latest", "windows-latest"]'; python='["3.10", "3.12"]' ;;
+            *)    os='["ubuntu-latest"]';                   python='["3.12"]' ;;
+          esac
+
+          {
+            echo "mode=$mode"
+            echo "os=$os"
+            echo "python=$python"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "## Test tier: \`$mode\`"
+            echo
+            case "$mode" in
+              skip) echo "Branch \`$REF_NAME\` has an open pull request; its \`pull_request\` run tests the same commit merged into \`main\`. Nothing to do here." ;;
+              fast) echo "Pre-PR push: ubuntu-latest / Python 3.12 only, no coverage gates. Open a pull request for the full matrix." ;;
+              full) echo "Full matrix: ubuntu-latest + windows-latest, Python 3.10 + 3.12, coverage gates, packaging and minidump-pin jobs." ;;
+            esac
+          } >> "$GITHUB_STEP_SUMMARY"
+
   pytest:
+    needs: plan
+    if: needs.plan.outputs.mode != 'skip'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -15,7 +111,7 @@ jobs:
         # version stands in for "a main supported runtime". No real
         # .dmp/PE sample files are needed — the suite builds its own
         # synthetic fixtures (see tests/fixtures/fakes.py).
-        python-version: ["3.10", "3.12"]
+        python-version: ${{ fromJSON(needs.plan.outputs.python) }}
         # dumpex parses Windows minidumps and reasons about Windows-
         # specific memory/protection semantics (MEM_IMAGE/MEM_PRIVATE,
         # PAGE_EXECUTE_WRITECOPY, backslash paths in module/PEB records,
@@ -23,7 +119,7 @@ jobs:
         # platform it targets. Path handling, file-locking/O_EXCL
         # semantics (safe_io), and temp-directory behavior can all differ
         # in ways Linux CI can't catch.
-        os: [ubuntu-latest, windows-latest]
+        os: ${{ fromJSON(needs.plan.outputs.os) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -31,6 +127,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          # Cache the pip *download* cache, keyed on pyproject.toml. The
+          # install itself still runs (an editable install must), but the
+          # wheels no longer come off the network on every leg -- which is
+          # where a large share of the Windows legs' wall time went.
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install dumpex with dev + optional extras
         run: pip install -e ".[dev,full]"
@@ -63,8 +165,24 @@ jobs:
         # (delete its entry); the known ones warn.
         run: pytest tests/unit/test_console_untrusted_text.py -v -W "always::UserWarning"
 
-      - name: Run pytest with coverage (overall gate — see pyproject.toml [tool.coverage.report])
-        run: pytest --cov=dumpex --cov-report=term-missing
+      - name: Run pytest (coverage measured on the ubuntu / 3.12 leg only)
+        # The coverage gates below are platform- and version-independent by
+        # construction -- the same thresholds were already applied to all
+        # four legs, because "the modules under test don't branch on
+        # platform". Measuring the identical numbers four times bought
+        # nothing, so exactly one leg carries --cov and the other legs run
+        # the suite plain. Coverage still gates every pull request and
+        # every commit on main; it is skipped on the pre-PR fast lane.
+        shell: bash
+        env:
+          COVERAGE_LEG: ${{ needs.plan.outputs.mode == 'full' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' }}
+        run: |
+          set -euo pipefail
+          if [[ "$COVERAGE_LEG" == "true" ]]; then
+            pytest --cov=dumpex --cov-report=term-missing
+          else
+            pytest
+          fi
 
       - name: Coverage gate — key detection modules
         # Use the same fail-fast native-command semantics on every runner.
@@ -78,8 +196,12 @@ jobs:
         # this was added — raise them as coverage improves, don't lower
         # them to make a failing PR pass. Same thresholds on every OS in
         # the matrix: the modules under test don't branch on platform, so
-        # coverage shouldn't either.
-        if: always()
+        # coverage shouldn't either -- which is exactly why only the
+        # ubuntu/3.12 leg measures it. `always()` keeps this step running
+        # when the suite above failed, so both classes of regression
+        # surface in one run; the leg check keeps it off the legs that
+        # produced no .coverage file to report on.
+        if: always() && needs.plan.outputs.mode == 'full' && matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
         run: |
           coverage report --include="dumpex/core/pe_utils.py"   --fail-under=56
           coverage report --include="dumpex/hunt/_coverage.py"  --fail-under=85
@@ -379,6 +501,12 @@ jobs:
     # pyproject.toml, also add the actual highest minidump release that
     # now falls in range (check PyPI -- don't invent a version number
     # that may not exist).
+    needs: plan
+    # Auxiliary gate: full tier only (pull requests, main, manual
+    # dispatch). The pre-PR fast lane deliberately skips it -- packaging
+    # metadata and the minidump pin change on the order of once a
+    # release, not once a work-in-progress commit.
+    if: needs.plan.outputs.mode == 'full'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -423,6 +551,12 @@ jobs:
     # matrix above vs. pyproject.toml's specifier) shows up as its own
     # named, easy-to-spot job rather than one assertion buried in a much
     # larger test run.
+    needs: plan
+    # Auxiliary gate: full tier only (pull requests, main, manual
+    # dispatch). The pre-PR fast lane deliberately skips it -- packaging
+    # metadata and the minidump pin change on the order of once a
+    # release, not once a work-in-progress commit.
+    if: needs.plan.outputs.mode == 'full'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -449,6 +583,12 @@ jobs:
     # packaged rules.yaml / YARA rules / JSON schema are actually inside
     # the distributed artifact and readable via importlib.resources --
     # not just present in the source tree.
+    needs: plan
+    # Auxiliary gate: full tier only (pull requests, main, manual
+    # dispatch). The pre-PR fast lane deliberately skips it -- packaging
+    # metadata and the minidump pin change on the order of once a
+    # release, not once a work-in-progress commit.
+    if: needs.plan.outputs.mode == 'full'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
