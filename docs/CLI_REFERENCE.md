@@ -202,31 +202,40 @@ filesystem path and not a list of DLLs; the handle descriptor records
 its name only, and the objects inside it are not captured by it. dumpex
 never expands such a directory from the machine running the analysis.
 
-An `Access rights` block under the table decodes each printed mask
-against **that row's own recorded object type**, once per distinct
-`(type, mask)` pair:
+Each printed row is followed by its own `Rights` line, naming what that
+row's mask permits **for the object type the descriptor recorded**:
 
 ```text
-  Access rights
-    File 0x0012019f
-      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
-      ReadControl|Synchronize
-    Key 0x00020019
-      QueryValue|EnumerateSubKeys|Notify|ReadControl
-    Process 0x001fffff
-      AllAccess
+  0x000000000000005c  Key             0x00020019    2  65536  \REGISTRY\...\Versions
+      Rights  QueryValue | EnumerateSubKeys | Notify | ReadControl
+  0x00000000000001dc  Thread          0x001fffff    6  131062  (unnamed)
+      Rights  AllAccess
+  0x000000000000006c  TpWorkerFactory 0x000f037f    1    1  (unnamed)
+      Rights  Delete | ReadControl | WriteDac | WriteOwner |
+              TypeSpecificUnavailable(0x0000037f)
 ```
 
 The same bit means different things for different object types, so the
-decode is only valid for the type the descriptor recorded. The `Access`
-column still prints the exact captured mask and `granted_access` is
-unchanged in `--json` and in every historical schema — the names are
+decode is only valid for the type the descriptor recorded — and it is
+printed on the row that recorded it, in the table's own order, so there
+is no second table to look anything up in. `File`, `Process`, `Thread`,
+`Token`, `Section`, `Job`, `Directory`, `SymbolicLink`, `Event`,
+`Mutant`, `Semaphore`, `Timer`, `Key`, `IoCompletion`, `Desktop` and
+`WindowStation` are decoded; a type whose rights have no authoritative
+public definition (`TpWorkerFactory`, `ALPC Port`, …) is left as
+captured rather than guessed at.
+
+The `Access` column still prints the exact captured mask — once, as the
+aligned value you scan, compare and copy — and `granted_access` is
+unchanged in `--json` and in every historical schema; the names are
 derived text, nothing more. A zero mask reads `(no rights)`; an absent
-one still reads `(unknown)`. Bits that were not decoded are kept at
-their raw value, tagged `+0x…` (no documented right for that type) or
-`?0x…` (dumpex has no right table for that type), never guessed. Decoded
-rights are **observations** about what a captured handle permitted — not
-proof it was used, and not a maliciousness verdict.
+one still reads `(unknown)` in the column and gets no `Rights` line at
+all. Bits that were not decoded are kept at their raw value as
+`UnknownBits(0x…)` (no documented right for that type) or
+`TypeSpecificUnavailable(0x…)` (dumpex has no right table for that
+type), never guessed. Decoded rights are **observations** about what a
+captured handle permitted — not proof it was used, and not a
+maliciousness verdict.
 
 ### `--process`
 

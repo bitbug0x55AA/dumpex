@@ -20,6 +20,8 @@ The invariants are the properties #102 turns on --
 actually meets (`0x001fffff` on a Process, `0x00020019` on a Key), which
 are worth pinning by value.
 """
+import re
+
 import pytest
 
 from dumpex.ui.access_rights import (
@@ -176,17 +178,48 @@ def test_the_same_low_order_bit_decodes_per_recorded_type():
 
 
 def test_masks_an_analyst_actually_meets():
+    """Derived names only -- the captured mask is printed once, by the
+    console's own Access column, and is never repeated here."""
     # PROCESS_ALL_ACCESS -- the composite, not its fourteen components.
     assert format_access_rights(decode_access_mask(0x001FFFFF, "Process")) == "AllAccess"
     # KEY_READ.
     assert (format_access_rights(decode_access_mask(0x00020019, "Key"))
-            == "QueryValue|EnumerateSubKeys|Notify|ReadControl")
+            == "QueryValue | EnumerateSubKeys | Notify | ReadControl")
     # Cross-process memory read on a Process handle.
     assert (format_access_rights(decode_access_mask(0x00000438, "Process"))
-            == "VmOperation|VmRead|VmWrite|QueryInformation")
+            == "VmOperation | VmRead | VmWrite | QueryInformation")
     # A remote thread context write.
     assert (format_access_rights(decode_access_mask(0x0000001A, "Thread"))
-            == "SuspendResume|GetContext|SetContext")
+            == "SuspendResume | GetContext | SetContext")
+    # A station handle -- the reason the registry is not #102's list
+    # verbatim (WINSTA_ALL_ACCESS's own bits, spelled out).
+    assert (format_access_rights(decode_access_mask(0x00000024, "WindowStation"))
+            == "AccessClipboard | AccessGlobalAtoms")
+    # ... and a desktop handle that can drive another session's input.
+    assert (format_access_rights(decode_access_mask(0x00000102, "Desktop"))
+            == "CreateWindow | SwitchDesktop")
+
+
+@pytest.mark.parametrize("type_name", ["File", "Process", "TpWorkerFactory", None])
+@pytest.mark.parametrize("mask", _MASKS)
+def test_the_derived_text_carries_no_value_but_its_own_remainder(type_name, mask):
+    """The Access column is the one printed copy of the captured mask: it
+    is aligned for a column-wise scan and it is what gets compared and
+    copied. A second copy one line below says nothing new and costs the
+    width the right names need.
+
+    The one hexadecimal value the derived text may carry is the
+    REMAINDER, because that value is a part of the mask that no name
+    accounts for and it exists nowhere else on screen. (It equals the
+    whole mask exactly when nothing at all decoded, which is that same
+    fact, not a repetition.)"""
+    decoded = decode_access_mask(mask, type_name)
+    text = format_access_rights(decoded)
+
+    printed = re.findall(r"0x[0-9a-f]+", text)
+    assert printed == ([f"0x{decoded.undecoded_bits:08x}"] if decoded.undecoded_bits else [])
+    if decoded.undecoded_bits != mask:
+        assert f"0x{mask:08x}" not in text
 
 
 def test_type_matching_ignores_case_and_surrounding_space():
@@ -224,7 +257,7 @@ def test_generic_bits_are_reported_as_captured_and_never_expanded():
 def test_a_zero_mask_is_no_rights_and_not_missing_evidence():
     decoded = decode_access_mask(0, "File")
     assert decoded == DecodedAccess(mask=0, type_supported=True, names=(), undecoded_bits=0)
-    assert format_access_rights(decoded) == NO_RIGHTS_TEXT
+    assert format_access_rights(decoded) == NO_RIGHTS_TEXT == "(no rights)"
 
 
 def test_an_absent_mask_decodes_to_nothing_at_all():
@@ -240,14 +273,28 @@ def test_bits_with_no_documented_right_stay_visible_at_their_raw_value():
     decoded = decode_access_mask(0x00008001, "File")
     assert decoded.names == ("ReadData",)
     assert decoded.undecoded_bits == 0x00008000
-    assert format_access_rights(decoded) == "ReadData|+0x00008000"
+    assert format_access_rights(decoded) == "ReadData | UnknownBits(0x00008000)"
 
 
-def test_the_two_residual_markers_say_which_half_is_undecoded():
+def test_the_two_remainders_say_which_half_is_undecoded():
+    """Each names its own kind and carries its own value, so a reader
+    tells an undocumented BIT from an undecodable TYPE without a legend
+    under the table."""
     known_type = format_access_rights(decode_access_mask(0x00008000, "File"))
     unknown_type = format_access_rights(decode_access_mask(0x00008000, "TpWorkerFactory"))
-    assert known_type == "+0x00008000"
-    assert unknown_type == "?0x00008000"
+    assert known_type == "UnknownBits(0x00008000)"
+    assert unknown_type == "TypeSpecificUnavailable(0x00008000)"
+
+
+def test_a_remainder_reports_the_remainder_and_never_the_whole_mask():
+    """`TypeSpecificUnavailable(0x000f037f)` would claim the standard
+    rights this decode just named were undecodable too."""
+    text = format_access_rights(decode_access_mask(0x000F037F, "TpWorkerFactory"))
+    assert text == ("Delete | ReadControl | WriteDac | WriteOwner | "
+                    "TypeSpecificUnavailable(0x0000037f)")
+    # ... and a type the registry does carry has no remainder at all.
+    assert "Unavailable" not in format_access_rights(
+        decode_access_mask(0x000F037F, "WindowStation"))
 
 
 def test_an_alias_and_its_components_never_both_appear():
@@ -294,30 +341,51 @@ def test_order_is_specific_then_standard_then_generic():
 
 # ── Wrapping ────────────────────────────────────────────────────────────
 
+def _rejoin(lines) -> str:
+    """The inverse of the wrap: a continued line ends in ` |` and the
+    next line carries on from there, so a single space re-joins them."""
+    return " ".join(lines)
+
+
 def test_wrapping_never_splits_a_right_name_and_never_drops_one():
     text = format_access_rights(decode_access_mask(0xFFFFFFFF, "Process"))
     lines = wrap_rights(text, 24)
 
-    assert "".join(lines) == text            # nothing added, nothing lost
-    assert all(len(line) <= 24 for line in lines)
+    assert len(lines) > 1
+    assert _rejoin(lines) == text            # nothing added, nothing lost
     for line in lines[:-1]:
-        assert line.endswith("|")            # reads as "continues below"
+        assert line.endswith(" |")           # reads as "continues below"
+    # Every line fits, unless it is a single piece that cannot: an
+    # over-wide piece overflows rather than being cut in half.
+    for line in lines:
+        assert len(line) <= 24 or " | " not in line
 
 
-def test_a_name_wider_than_the_wrap_width_overflows_instead_of_truncating():
-    lines = wrap_rights("QueryLimitedInformation|Terminate", 8)
-    assert lines == ["QueryLimitedInformation|", "Terminate"]
+def test_a_remainder_token_is_never_split_across_two_lines():
+    """`TypeSpecificUnavailable(0x0000037f)` broken in half reads as two
+    values, and whitespace wrapping would break it."""
+    text = format_access_rights(decode_access_mask(0x000F037F, "TpWorkerFactory"))
+    lines = wrap_rights(text, 46)
+
+    assert lines == ["Delete | ReadControl | WriteDac | WriteOwner |",
+                     "TypeSpecificUnavailable(0x0000037f)"]
+    assert _rejoin(lines) == text
 
 
-def test_wrapping_a_single_name_is_one_line():
-    assert wrap_rights(NO_RIGHTS_TEXT, 40) == [NO_RIGHTS_TEXT]
+def test_a_piece_wider_than_the_wrap_width_overflows_instead_of_truncating():
+    lines = wrap_rights("QueryLimitedInformation | Terminate", 8)
+    assert lines == ["QueryLimitedInformation |", "Terminate"]
+
+
+def test_wrapping_a_single_piece_is_one_line():
     assert wrap_rights("AllAccess", 40) == ["AllAccess"]
+    assert wrap_rights(NO_RIGHTS_TEXT, 40) == [NO_RIGHTS_TEXT]
 
 
 @pytest.mark.parametrize("width", [1, 0, -5])
 def test_a_degenerate_width_still_returns_every_name(width):
-    text = "ReadData|WriteData|Synchronize"
-    assert "".join(wrap_rights(text, width)) == text
+    text = "ReadData | WriteData | Synchronize"
+    assert _rejoin(wrap_rights(text, width)) == text
 
 
 def test_symbolic_link_decodes_both_of_its_documented_rights():
@@ -329,6 +397,54 @@ def test_symbolic_link_decodes_both_of_its_documented_rights():
     assert decode_access_mask(0x0003, "SymbolicLink").names == ("Query", "Set")
 
 
+def test_the_registry_carries_the_types_a_real_handle_table_is_full_of():
+    """`Desktop` and `WindowStation` are why the registry is not #102's
+    list verbatim: a station/desktop handle is how one session's process
+    reaches another's input queue, clipboard and screen, and a row that
+    could only say "unknown type-specific bits" for it answered
+    nothing."""
+    for type_name in ("Desktop", "WindowStation", "IoCompletion"):
+        assert type_name in SUPPORTED_OBJECT_TYPES
+        assert decode_access_mask(0x0001, type_name).type_supported is True
+
+    assert decode_access_mask(0x0001, "Desktop").names == ("ReadObjects",)
+    assert decode_access_mask(0x0001, "WindowStation").names == ("EnumDesktops",)
+    assert decode_access_mask(0x0001, "IoCompletion").names == ("QueryState",)
+
+
+def test_a_station_or_desktop_mask_is_never_reported_as_all_access():
+    """Neither type has an `*_ALL_ACCESS` that includes the standard
+    rights (`WINSTA_ALL_ACCESS` is the specific bits alone, and winuser.h
+    defines no `DESKTOP_ALL_ACCESS`), so neither gets an alias: one name
+    that meant "everything plus the standard rights" on a File and
+    something narrower here would be worse than the list."""
+    for type_name in ("Desktop", "WindowStation"):
+        _specific, aliases = _TYPE_REGISTRY[type_name.casefold()]
+        assert aliases == ()
+
+    decoded = decode_access_mask(0x000F037F, "WindowStation")
+    assert "AllAccess" not in decoded.names
+    assert decoded.undecoded_bits == 0
+    assert decoded.names == (
+        "EnumDesktops", "ReadAttributes", "AccessClipboard", "CreateDesktop",
+        "WriteAttributes", "AccessGlobalAtoms", "ExitWindows", "Enumerate",
+        "ReadScreen", "Delete", "ReadControl", "WriteDac", "WriteOwner")
+
+
+def test_types_with_no_authoritative_right_definitions_are_left_undecoded():
+    """`TpWorkerFactory` and friends fill real handle tables, and their
+    rights live in reverse-engineered headers only. Decoding them would
+    be a guess presented as a permission -- the thing §5.2 refused to
+    ship -- so they report their type-independent bits and say the rest
+    is unknown."""
+    for type_name in ("TpWorkerFactory", "WaitCompletionPacket", "ALPC Port",
+                       "EtwRegistration", "IRTimer"):
+        decoded = decode_access_mask(0x00100003, type_name)
+        assert decoded.type_supported is False
+        assert decoded.names == ("Synchronize",)
+        assert decoded.undecoded_bits == 0x0003
+
+
 def test_symbolic_link_all_access_is_the_constant_and_not_a_tidied_version():
     """`SYMBOLIC_LINK_ALL_ACCESS` is
     `STANDARD_RIGHTS_REQUIRED | SYMBOLIC_LINK_QUERY` and predates
@@ -337,7 +453,7 @@ def test_symbolic_link_all_access_is_the_constant_and_not_a_tidied_version():
     alias would claim `AllAccess` for a mask that is not that constant,
     and would swallow the `Set` bit on the way."""
     decoded = decode_access_mask(0x000F0003, "SymbolicLink")
-    assert format_access_rights(decoded) == "AllAccess|Set"
+    assert format_access_rights(decoded) == "AllAccess | Set"
     assert decoded.undecoded_bits == 0
     # The constant itself still reads as exactly the constant.
     assert format_access_rights(decode_access_mask(0x000F0001, "SymbolicLink")) == "AllAccess"

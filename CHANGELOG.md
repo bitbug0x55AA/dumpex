@@ -11,19 +11,21 @@ The Access column was faithful to the dump and unreadable during triage
 ([issue #102](https://github.com/bitbug0x55AA/dumpex/issues/102)):
 `0x0012019f` only says what a handle permits once you know that access
 bits are **object-type specific**, identify the captured type, and look
-up the Windows definitions. `--handles` now does that for you, under the
-table:
+up the Windows definitions. `--handles` now does that for you, on each row:
 
 ```text
-  Access rights
-    File 0x0012019f
-      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
-      ReadControl|Synchronize
-    Key 0x00020019
-      QueryValue|EnumerateSubKeys|Notify|ReadControl
-    Process 0x001fffff
-      AllAccess
+  0x000000000000005c  Key             0x00020019    2  65536  \REGISTRY\...\Versions
+      Rights  QueryValue | EnumerateSubKeys | Notify | ReadControl
+  0x00000000000001dc  Thread          0x001fffff    6  131062  (unnamed)
+      Rights  AllAccess
+  0x000000000000006c  TpWorkerFactory 0x000f037f    1    1  (unnamed)
+      Rights  Delete | ReadControl | WriteDac | WriteOwner |
+              TypeSpecificUnavailable(0x0000037f)
 ```
+
+The answer sits on the handle it belongs to, in the table's own order —
+there is no second table to look a `type + mask` up in — and the mask
+itself is still printed exactly once, in the `Access` column.
 
 **The decode is per recorded object type.** Bit `0x0001` is `ReadData` on
 a `File`, `Terminate` on a `Process`, `AssignPrimary` on a `Token` and
@@ -31,11 +33,16 @@ a `File`, `Terminate` on a `Process`, `AssignPrimary` on a `Token` and
 different readings — which is exactly why the raw mask shipped
 undecoded until now. `File`, `Process`, `Thread`, `Token`, `Section`,
 `Job`, `Directory`, `SymbolicLink`, `Event`, `Mutant`, `Semaphore`,
-`Timer` and `Key` are covered.
+`Timer`, `Key`, `IoCompletion`, `Desktop` and `WindowStation` are
+covered. A type whose access rights have no authoritative public
+definition (`TpWorkerFactory`, `ALPC Port`, …) is left as captured
+rather than guessed at.
 
 **The captured evidence is untouched.** The Access column still prints
-the exact mask, `granted_access` is the same raw integer in `--json`
-and in every frozen schema, and this release changes no record shape,
+the exact mask — and remains the single printed copy of it, aligned for
+a column-wise scan — `granted_access` is the same raw integer in
+`--json` and in every frozen schema, and this release changes no record
+shape,
 coverage meaning, limitation code, ordering rule or exit code —
 structured output is byte-identical. Console folding is unchanged too:
 the decode explains the rows a view prints and never decides which rows
@@ -43,9 +50,10 @@ print.
 
 **Nothing is invented, dropped, or double-reported.** A zero mask reads
 `(no rights)` (a captured mask granting nothing) and an absent one still
-reads `(unknown)` (no mask captured). Undecoded bits stay visible at
-their raw value — `+0x…` for a bit with no documented right for that
-type, `?0x…` for an object type dumpex has no table for — and generic
+reads `(unknown)` in the column, with no `Rights` line at all. Undecoded
+bits stay visible at their raw value — `UnknownBits(0x…)` for a bit with
+no documented right for that type, `TypeSpecificUnavailable(0x…)` for an
+object type dumpex has no table for — and generic
 `GENERIC_*` bits are reported as captured rather than expanded through a
 mapping the dump does not contain. A composite such as `AllAccess`
 consumes its own bits, so it never appears alongside the component
