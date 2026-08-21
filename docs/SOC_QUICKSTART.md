@@ -24,6 +24,43 @@ directory (`--ref-dir DIR`) to run at all — see
 [Module Stomping](#module-stomping) below before concluding a "no
 stomping" result actually checked anything.
 
+## Reading recon evidence (`--process`, `--handles`)
+
+Recon commands report what the dump **recorded at capture time**. They
+never query a live process, and nothing they print should be read as a
+statement about the machine you are running on.
+
+Two console conventions are worth knowing before you read either
+command's output:
+
+- **`--verbose` changes the console only.** The records, coverage,
+  limitation codes and exit code are identical with and without it, so
+  `--json` is always the complete inventory. If a console line says
+  something is "not shown", it is still in the JSON.
+- **`(unnamed)` and `(unreadable)` are different facts.** `(unnamed)`
+  means the descriptor records no name — nothing was lost. `(unreadable)`
+  means a name should have been there and the bounded read failed —
+  evidence was lost, and it is reported as a coverage limitation.
+
+`--handles` folds routine anonymous rows (anonymous `Event`, `Mutant`,
+`Semaphore`, and similar low-context types) into per-type counts and
+tells you how many it folded; run it again with `--verbose` for the full
+inventory. Anonymous `Process`, `Thread`, `Token`, `Section` and `Job`
+handles are never folded — those are the ones a cross-process access
+question turns on. A name like `\KnownDlls` is a real NT Object Manager
+**directory**, not a filesystem path; the descriptor records the
+directory's name, and the objects inside it are not in the dump.
+
+`--process --verbose` prints the import table as
+`IAT Slot VA -> Resolved Target VA` — where the import pointer is
+stored, and what is stored there — followed by an `Identity
+Verification` block that states, per check, whether the PEB and
+ModuleListStream agreed (`[OK]`), conflicted (`[!!]`), or could not be
+compared (`[--]`). **A conflict is an observation, not a verdict.** A
+PEB/ModuleList disagreement is a lead worth pulling, and it is also
+something benign software produces; use `--hunt hollowing` and
+`--hunt injection` for the questions that carry a disposition.
+
 ## The four fields that matter
 
 `--json` wraps every hunter's result in dumpex's shared v2.12

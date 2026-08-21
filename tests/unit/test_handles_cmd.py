@@ -125,11 +125,18 @@ def _limitation(coverage, code):
     return next((l for l in coverage.limitations if l.code == code), None)
 
 
-def _console(result) -> str:
+def _console(result, *, verbose=False) -> str:
     buffer = io.StringIO()
     with contextlib.redirect_stdout(buffer):
-        render_handles_console(result.records, result.coverage)
+        render_handles_console(result.records, result.coverage, verbose=verbose)
     return buffer.getvalue()
+
+
+def _rows(text: str) -> list:
+    """The table rows only -- every one starts with a fixed-width handle
+    value, which no other line in the block does."""
+    return [line for line in text.splitlines()
+            if line.strip().startswith("0x") and "  " in line.strip()]
 
 
 # ── §5.5 case 1: no HandleDataStream at all ─────────────────────────────
@@ -1049,3 +1056,245 @@ def test_collect_handles_never_routes_through_the_narrow_get_handles_view(monkey
     assert len(result.records) == 2
     assert _limitation(result.coverage,
                         LimitationCode.HANDLE_STREAM_TRUNCATED).affected_count == 3
+
+
+# ── #98: console folding is a projection, never a filter ────────────────
+# Every case here asserts the same underlying invariant from a different
+# side: the records, the summary and by_type are what collect_handles()
+# produced, whatever the console chose to print.
+
+# One anonymous handle of each foldable type, plus the investigation-
+# relevant anonymous types that must survive folding, plus a named row.
+_FOLDING_FIXTURE = (
+    [{"handle": 0x10 + i, "type_name": "Event", "object_name": None} for i in range(5)]
+    + [{"handle": 0x30 + i, "type_name": "Mutant", "object_name": None} for i in range(2)]
+    + [{"handle": 0x100, "type_name": "Process", "object_name": None},
+       {"handle": 0x110, "type_name": "Thread", "object_name": None},
+       {"handle": 0x120, "type_name": "Token", "object_name": None},
+       {"handle": 0x130, "type_name": "Section", "object_name": None},
+       {"handle": 0x140, "type_name": "Job", "object_name": None},
+       {"handle": 0x200, "type_name": "File", "object_name": "\\Device\\HarddiskVolume1\\a.txt"}]
+)
+
+
+def test_default_console_folds_only_approved_low_context_anonymous_rows():
+    result = collect_handles(_mf_with(_FOLDING_FIXTURE))
+    text = _console(result)
+    shown = "\n".join(_rows(text))
+
+    # Folded: anonymous Event/Mutant.
+    assert "Event" not in shown and "Mutant" not in shown
+    # Never folded: the anonymous types an investigation turns on.
+    for kept in ("Process", "Thread", "Token", "Section", "Job"):
+        assert kept in shown, f"{kept} was folded but must stay visible"
+    assert "\\Device\\HarddiskVolume1\\a.txt" in shown
+
+
+def test_default_console_reports_the_exact_folded_count_per_type():
+    text = _console(collect_handles(_mf_with(_FOLDING_FIXTURE)))
+    line = next(l for l in text.splitlines() if "not shown" in l)
+
+    assert "7 anonymous handle(s)" in line       # 5 Event + 2 Mutant
+    assert "Event 5" in line and "Mutant 2" in line
+    assert "use --verbose to show all" in text
+
+
+def test_folded_counts_are_ordered_count_desc_then_name_asc():
+    """§1.5's frozen order, applied to the fold line so two runs over the
+    same dump print the same text."""
+    descriptors = (
+        [{"handle": 0x10 + i, "type_name": "Mutant", "object_name": None} for i in range(3)]
+        + [{"handle": 0x40 + i, "type_name": "Event", "object_name": None} for i in range(3)]
+        + [{"handle": 0x80, "type_name": "Semaphore", "object_name": None}])
+    line = next(l for l in _console(collect_handles(_mf_with(descriptors))).splitlines()
+                if "not shown" in l)
+    listed = line.split("not shown:")[1]
+
+    assert listed.index("Event 3") < listed.index("Mutant 3") < listed.index("Semaphore 1")
+
+
+def test_verbose_console_shows_every_record_and_folds_nothing():
+    result = collect_handles(_mf_with(_FOLDING_FIXTURE))
+    text = _console(result, verbose=True)
+
+    assert len(_rows(text)) == len(result.records)
+    assert "not shown" not in text
+    assert "use --verbose to show all" not in text
+
+
+def test_verbosity_never_changes_the_records_the_summary_or_by_type():
+    """The console is a projection. Whatever it folds, the CommandResult
+    an analyst reads in --json is the same object either way."""
+    mf = _mf_with(_FOLDING_FIXTURE)
+    result = collect_handles(mf)
+    before = [r.to_dict() for r in result.records]
+    summary_before = dict(result.summary)
+
+    default_text = _console(result)
+    verbose_text = _console(result, verbose=True)
+
+    assert [r.to_dict() for r in result.records] == before
+    assert dict(result.summary) == summary_before
+    assert result.summary["count"] == len(_FOLDING_FIXTURE)
+    # The headline and the by_type line count the COMPLETE inventory in
+    # both projections -- a folded row is still captured evidence.
+    assert f"{len(_FOLDING_FIXTURE)} handle(s) captured" in default_text
+    assert f"{len(_FOLDING_FIXTURE)} handle(s) captured" in verbose_text
+    for text in (default_text, verbose_text):
+        by_type_line = next(l for l in text.splitlines() if "By type:" in l)
+        assert "Event 5" in by_type_line and "Mutant 2" in by_type_line
+
+
+def test_folding_never_hides_an_unreadable_name():
+    """"unnamed" and "unreadable" are different facts (§5.2.1): the
+    second is evidence LOSS, and folding it would hide the row an analyst
+    needs in order to know something was lost."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Event", "object_name": None},
+        {"handle": 0x20, "type_name": "Event", "object_name": BAD_RVA},
+        {"handle": 0x30, "type_name": BAD_RVA, "object_name": None},
+    ]))
+    shown = "\n".join(_rows(_console(result)))
+
+    assert "0x0000000000000020" in shown      # unreadable object name: kept
+    assert "0x0000000000000030" in shown      # unreadable TYPE name: kept
+    assert "0x0000000000000010" not in shown  # genuinely anonymous Event: folded
+
+
+def test_a_named_handle_of_a_foldable_type_is_never_folded():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Event", "object_name": "\\BaseNamedObjects\\evil"},
+        {"handle": 0x20, "type_name": "Event", "object_name": None},
+    ]))
+    shown = "\n".join(_rows(_console(result)))
+    assert "\\BaseNamedObjects\\evil" in shown
+    assert "0x0000000000000020" not in shown
+
+
+def test_an_unknown_type_stays_visible_by_default():
+    """The fold list is an ALLOW list: a type nobody has classified --
+    including one a dump invents -- must default to being shown."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "SomeFutureObjectType", "object_name": None},
+    ]))
+    assert "SomeFutureObjectType" in _console(result)
+
+
+def test_nothing_is_folded_when_no_row_qualifies():
+    result = collect_handles(_mf_with(_POPULATED))
+    assert "not shown" not in _console(result)
+
+
+def test_the_name_status_legend_explains_unnamed_versus_unreadable():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": None},
+    ]))
+    text = _console(result)
+    assert "(unnamed) = the descriptor records no name" in text
+    assert "(unreadable) = a name was recorded but the bounded read failed" in text
+
+
+def test_the_legend_is_absent_when_every_name_read():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "\\Device\\X"},
+    ]))
+    assert "the descriptor records no name" not in _console(result)
+
+
+# ── #98: NT namespace object names are explained, never expanded ────────
+
+def test_known_dlls_is_explained_as_an_nt_object_manager_directory():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Directory", "object_name": "\\KnownDlls"},
+    ]))
+    text = _console(result)
+
+    assert "NT Object Manager directory" in text
+    assert "\\KnownDlls (Directory)" in text
+    # The note must not claim the directory's contents were captured, and
+    # nothing may be enumerated from the analysis host.
+    assert "not captured" in text
+    for forbidden in ("contains:", "entries:", "ntdll.dll", "kernel32.dll"):
+        assert forbidden not in text
+
+
+def test_a_directory_note_is_not_attached_to_a_handle_of_another_type():
+    """A dump can name a File handle "\\KnownDlls". Attaching the
+    directory note to it would be dumpex asserting something the
+    descriptor does not say."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "\\KnownDlls"},
+    ]))
+    text = _console(result)
+    assert "\\KnownDlls" in text                            # the name is still shown
+    assert "pre-mapped system DLL sections" not in text     # the note is not
+
+
+def test_an_unlisted_directory_gets_one_generic_note_however_many_there_are():
+    """Bounded output: the notes block can never grow with the dump."""
+    descriptors = [{"handle": 0x10 + i, "type_name": "Directory",
+                    "object_name": f"\\Sessions\\{i}\\BaseNamedObjects"} for i in range(50)]
+    text = _console(collect_handles(_mf_with(descriptors)))
+    generic = [l for l in text.splitlines()
+               if "Directory handles name an NT Object Manager namespace directory" in l]
+    assert len(generic) == 1
+
+
+def test_a_note_survives_its_row_being_folded():
+    """A folded row is still captured evidence, so a note derived from it
+    must not disappear with the row. (Directory is not foldable today;
+    the notes are built from the COLLECTED records so this holds however
+    the fold list changes.)"""
+    import dumpex.commands.handles as handles_module
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Directory", "object_name": "\\KnownDlls"},
+    ]))
+    text = _console(result)
+    assert "NT Object Manager directory" in text
+
+    original = handles_module._FOLDABLE_ANONYMOUS_TYPES
+    try:
+        handles_module._FOLDABLE_ANONYMOUS_TYPES = frozenset(original | {"Directory"})
+        assert "NT Object Manager directory" in _console(result)
+    finally:
+        handles_module._FOLDABLE_ANONYMOUS_TYPES = original
+
+
+def test_the_notes_block_escapes_its_own_labels():
+    """The label carries a dump-derived object name, so it is the same
+    attack surface as the table."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Directory", "object_name": "A\x1b[31mB"},
+    ]))
+    text = _console(result)
+    assert "\x1b[31m" not in text
+
+
+def test_folding_and_notes_never_imply_live_state():
+    result = collect_handles(_mf_with(_FOLDING_FIXTURE + [
+        {"handle": 0x500, "type_name": "Directory", "object_name": "\\KnownDlls"}]))
+    for text in (_console(result), _console(result, verbose=True)):
+        lowered = text.lower()
+        for forbidden in ("current", "live", "open process", "running process", "now holds"):
+            assert forbidden not in lowered
+
+
+def test_cmd_handles_forwards_verbose_to_the_renderer_only():
+    """--verbose reaches the renderer; the collector has no verbosity
+    parameter at all, which is what makes "console filtering never
+    removes a record from --json" structural."""
+    import inspect
+    assert "verbose" not in inspect.signature(collect_handles).parameters
+
+    mf = _mf_with(_FOLDING_FIXTURE)
+    default_buf, verbose_buf = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(default_buf):
+        default_result = cmd_handles(mf)
+    with contextlib.redirect_stdout(verbose_buf):
+        verbose_result = cmd_handles(mf, verbose=True)
+
+    assert ([r.to_dict() for r in default_result.records]
+            == [r.to_dict() for r in verbose_result.records])
+    assert default_result.summary == verbose_result.summary
+    assert default_result.coverage.status == verbose_result.coverage.status
+    assert len(_rows(verbose_buf.getvalue())) > len(_rows(default_buf.getvalue()))

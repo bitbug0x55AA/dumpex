@@ -10,6 +10,7 @@ so no real .dmp is required.
 import io
 import struct
 import contextlib
+import dataclasses
 
 import pytest
 
@@ -19,7 +20,11 @@ from tests.fixtures.fakes import (
 )
 
 from dumpex.commands.process import collect_process, cmd_process, render_process_console
-from dumpex.output.coverage import exit_code_for, CoverageStatus, LimitationCode, render_limitation
+from dumpex.output import records as records_module
+from dumpex.output.coverage import (
+    build_coverage_report, exit_code_for, CoverageStatus, LimitationCode, render_limitation,
+    SourceObservation, SourceState,
+)
 
 
 IMAGE_BASE = 0x00007ff600010000
@@ -1410,20 +1415,352 @@ def test_collect_process_is_deterministic_across_calls():
     assert first == second
 
 
-# ── --verbose rendering ────────────────────────────────────────────────
+# ── #98 console-projection helpers ──────────────────────────────────────
+# These build a ProcessRecord DIRECTLY rather than going through a fake
+# dump, for the cases whose whole point is a rendering decision over a
+# particular identity_evidence shape (an unregistered base with an
+# ambiguous name candidate, a PE header that was never checked, a
+# hostile string in one specific field). Driving those from dump bytes
+# would need a fixture per case and would still only reach the renderer
+# through the same record.
 
-def test_verbose_console_prints_iat_table_evidence_matrix_and_extended_peb():
-    mf = _complete_mf()
-    result = collect_process(mf, verbose=True)
+
+def _rendered(result, *, verbose=False) -> str:
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
-        render_process_console(result.records[0], result.coverage, verbose=True)
-    out = buf.getvalue()
+        render_process_console(result.records[0], result.coverage, verbose=verbose)
+    return buf.getvalue()
+
+
+def _rendered_record(record, *, verbose=False) -> str:
+    coverage = build_coverage_report({"process_identity": SourceObservation(
+        name="process_identity", state=SourceState.PRESENT, record_count=1)})
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        render_process_console(record, coverage, verbose=verbose)
+    return buf.getvalue()
+
+
+def _identity_evidence(*, peb_path=r"C:\Samples\malware.exe", peb_name="malware.exe",
+                       module_path=r"C:\Samples\malware.exe", module_name="malware.exe",
+                       match_state="resolved", ambiguous=False, candidate=None,
+                       main_image_pe=None, selected_path_source="peb") -> dict:
+    return {
+        "misc_info_claim": {"pid": 4242, "process_create_time_utc": None,
+                            "raw_pid": 4242, "raw_process_create_time": None},
+        "peb_claim": {"image_base_address": "0x00007ff600010000", "image_path": peb_path,
+                      "name": peb_name, "raw_image_base_address": None,
+                      "raw_image_path": None, "raw_command_line": None},
+        "module_claim": {"match_state": match_state,
+                         "base_address": ("0x00007ff600010000"
+                                          if match_state == "resolved" else None),
+                         "name": module_name, "path": module_path,
+                         "name_matched_candidate": candidate,
+                         "name_matched_candidate_ambiguous": ambiguous},
+        "main_image_pe": main_image_pe or {"checked": True, "valid": True, "reason": None},
+        "selected_path_source": selected_path_source,
+        "diagnostics": [],
+    }
+
+
+def _process_record(*, entries=(), identity_evidence=None, peb_extended=None,
+                    process_path=r"C:\Samples\malware.exe", process_name="malware.exe"):
+    iat = records_module.IatRecord(
+        table_present=bool(entries),
+        table_va="0x00007ff600021000" if entries else None,
+        table_size=(8 * len(entries)) or None,
+        import_directory_present=bool(entries),
+        import_directory_va="0x00007ff600020000" if entries else None,
+        import_directory_size=40 if entries else None, has_entries=bool(entries),
+        dll_count=len({e.dll for e in entries}) if entries else 0,
+        entry_count=len(entries), entries=tuple(entries), diagnostics=())
+    return records_module.ProcessRecord(
+        process_name=process_name, pid=4242, process_path=process_path,
+        command_line=r'"C:\Samples\malware.exe" -k',
+        process_start_utc="2026-08-14 01:15:05 UTC",
+        image_base_address="0x00007ff600010000", iat=iat,
+        identity_evidence=identity_evidence or _identity_evidence(),
+        peb_extended=peb_extended)
+
+
+def _process_record_with_entries(entries):
+    return _process_record(entries=entries)
+
+
+def _identity_record(*, peb_name, module_name, match_state, ambiguous=False,
+                     main_image_pe=None):
+    candidate = None
+    if match_state == "unregistered" and ambiguous:
+        candidate = {"base_address": "0x00007ff700000000", "name": peb_name,
+                     "path": r"C:\Windows\Temp\%s" % peb_name}
+    return _process_record(identity_evidence=_identity_evidence(
+        peb_name=peb_name, module_name=module_name, match_state=match_state,
+        ambiguous=ambiguous, candidate=candidate, main_image_pe=main_image_pe))
+
+
+def _empty_peb_extended(**overrides) -> dict:
+    base = {"peb_address": "0x0000000000001000", "being_debugged": False,
+            "window_title": None, "dll_path": None, "standard_input": None,
+            "standard_output": None, "standard_error": None}
+    base.update(overrides)
+    return base
+
+
+def _hostile_verbose_record(field: str, hostile: str):
+    """One record with `hostile` planted in exactly one dump-derived
+    field, so a passing case names the field that is actually escaped
+    rather than averaging several together."""
+    identity_kwargs = {}
+    peb_extended = _empty_peb_extended()
+    entry_kwargs = {"dll": "KERNEL32.dll", "import_by": "name", "symbol": "CreateFileW",
+                    "ordinal": None, "iat_slot_va": "0x00007ff600021018",
+                    "resolved_target_va": "0x00007ffb12345678", "slot_in_bounds": True}
+    if field == "peb_path":
+        identity_kwargs["peb_path"] = hostile
+    elif field == "peb_name":
+        identity_kwargs["peb_name"] = hostile
+        identity_kwargs["module_name"] = "malware.exe"
+    elif field == "module_path":
+        identity_kwargs["module_path"] = hostile
+    elif field == "module_name":
+        identity_kwargs["module_name"] = hostile
+    elif field == "pe_reason":
+        identity_kwargs["main_image_pe"] = {"checked": True, "valid": False,
+                                            "reason": hostile}
+    elif field == "window_title":
+        peb_extended = _empty_peb_extended(window_title=hostile)
+    elif field == "dll_path":
+        peb_extended = _empty_peb_extended(dll_path=hostile)
+    elif field in ("dll", "symbol"):
+        entry_kwargs[field] = hostile
+    else:                                        # pragma: no cover -- guard
+        raise AssertionError(f"unknown field {field!r}")
+
+    entry = records_module.ImportEntryRecord(**entry_kwargs)
+    record = _process_record(entries=[entry],
+                             identity_evidence=_identity_evidence(**identity_kwargs),
+                             peb_extended=peb_extended)
+    # The record layer must keep the exact decoded value -- escaping is a
+    # console projection, and --json is where evidence is read.
+    if field in ("dll", "symbol"):
+        assert getattr(record.iat.entries[0], field) == hostile
+    return record
+
+
+# ── --verbose rendering ────────────────────────────────────────────────
+
+def test_verbose_console_prints_iat_table_identity_checks_and_extended_peb():
+    mf = _complete_mf()
+    result = collect_process(mf, verbose=True)
+    out = _rendered(result, verbose=True)
     assert "KERNEL32.dll" in out
     assert "CreateFileW" in out
-    assert "Evidence Matrix" in out
+    assert "Identity Verification" in out
     assert "Extended PEB" in out
-    assert "main-image PE: valid" in out
+    assert "[OK] a valid PE header was found at the PEB image base" in out
+
+
+# ── #98: the verbose IAT table explains its own address pair ────────────
+
+def test_verbose_iat_table_has_headers_for_all_four_columns():
+    """The pre-#98 rendering was `<address> -> <address>` with no header
+    and no legend, so which of the two was the slot and which the target
+    was only recoverable from the source."""
+    mf = _complete_mf()
+    result = collect_process(mf, verbose=True)
+    out = _rendered(result, verbose=True)
+
+    header = next(l for l in out.splitlines() if "IAT Slot VA" in l and "DLL" in l)
+    for column in ("DLL", "Imported API", "IAT Slot VA", "Resolved Target VA"):
+        assert column in header
+    assert header.index("DLL") < header.index("Imported API") < \
+           header.index("IAT Slot VA") < header.index("Resolved Target VA")
+
+
+def test_verbose_iat_legend_states_which_address_is_which():
+    mf = _complete_mf()
+    result = collect_process(mf, verbose=True)
+    out = " ".join(_rendered(result, verbose=True).split())
+
+    assert "IAT Slot VA -> Resolved Target VA" in out
+    assert "the slot is the address where the import pointer is stored" in out.lower()
+    assert "the target is the address stored in that slot" in out.lower()
+
+
+def test_verbose_iat_row_keeps_the_slot_and_target_in_their_own_columns():
+    mf = _complete_mf()
+    result = collect_process(mf, verbose=True)
+    entry = result.records[0].iat.entries[0]
+    out = _rendered(result, verbose=True)
+
+    row = next(l for l in out.splitlines() if entry.iat_slot_va in l and "KERNEL32" in l)
+    tokens = row.split()
+    assert tokens.index(entry.iat_slot_va) < tokens.index(entry.resolved_target_va)
+    # The addresses are two independent tokens, never fused by a column
+    # that ran out of width.
+    assert f"{entry.iat_slot_va}{entry.resolved_target_va}" not in row
+
+
+def test_verbose_iat_marks_an_out_of_bounds_slot_without_calling_it_a_verdict():
+    """`slot_in_bounds is False` is an observation (§3.5.5 files it as a
+    diagnostic, never a limitation). It must be visible in the table, and
+    it must not read as a hooking verdict or a coverage failure."""
+    entry = records_module.ImportEntryRecord(
+        dll="KERNEL32.dll", import_by="name", symbol="CreateFileW", ordinal=None,
+        iat_slot_va="0x00007ff600021018", resolved_target_va="0x00007ffb12345678",
+        slot_in_bounds=False)
+    in_bounds = dataclasses.replace(entry, symbol="CloseHandle", slot_in_bounds=True)
+    record = _process_record_with_entries([entry, in_bounds])
+
+    out = _rendered_record(record, verbose=True)
+    marked = next(l for l in out.splitlines() if "CreateFileW" in l)
+    unmarked = next(l for l in out.splitlines() if "CloseHandle" in l)
+    assert marked.rstrip().endswith("*")
+    assert not unmarked.rstrip().endswith("*")
+    assert "outside the recorded import directory bounds" in " ".join(out.split())
+    for verdict in ("hook", "malicious", "suspicious", "tamper"):
+        assert verdict not in out.lower()
+
+
+def test_verbose_iat_footnote_is_absent_when_every_slot_is_in_bounds():
+    record = _process_record_with_entries([records_module.ImportEntryRecord(
+        dll="KERNEL32.dll", import_by="name", symbol="CloseHandle", ordinal=None,
+        iat_slot_va="0x00007ff600021018", resolved_target_va="0x00007ffb12345678",
+        slot_in_bounds=True)])
+    out = _rendered_record(record, verbose=True)
+    assert "outside the recorded import directory" not in out
+    assert "*" not in out
+
+
+# ── #98: Identity Verification replaces the Evidence Matrix ─────────────
+
+def test_identity_block_shows_the_selected_value_not_the_source_name():
+    """The old matrix printed "peb" in a column headed `Selected`, i.e. a
+    SOURCE NAME where a reader expects the selected VALUE."""
+    mf = _complete_mf()
+    result = collect_process(mf, verbose=True)
+    out = _rendered(result, verbose=True)
+
+    selected = next(l for l in out.splitlines() if "Selected path" in l)
+    assert r"C:\Samples\malware.exe" in selected
+    assert selected.split()[2] != "peb"
+    source = next(l for l in out.splitlines() if l.strip().startswith("Source"))
+    assert "PEB" in source
+
+
+def test_identity_block_states_each_check_as_a_conclusion():
+    mf = _complete_mf()
+    result = collect_process(mf, verbose=True)
+    out = _rendered(result, verbose=True)
+
+    assert "[OK] PEB image base is registered in ModuleList" in out
+    assert "[OK] PEB and ModuleList process names agree" in out
+    assert "[OK] a valid PE header was found at the PEB image base" in out
+    assert "[OK] no competing module shares this process name" in out
+    # The internal claim vocabulary is no longer the LEAD, but the raw
+    # per-source claims stay available underneath.
+    assert "Raw claims" in out
+    assert "(resolved)" in out
+
+
+def test_identity_block_renders_an_unregistered_base_as_a_conflict_not_a_verdict():
+    misc = MiscInfo(process_id=4242, process_create_time=1786670105)
+    peb = Peb(IMAGE_BASE, r"C:\Samples\malware.exe", command_line=r"C:\Samples\malware.exe")
+    other_base = 0x00007ff700000000
+    mod = Module(other_base, 0x6000, r"C:\Windows\Temp\malware.exe")
+    mf = _mf(misc_info=misc, peb=peb, modules=[mod], memory=_build_valid_image_no_imports())
+
+    result = collect_process(mf, verbose=True)
+    out = _rendered(result, verbose=True)
+
+    assert "[!!] no module is registered at the PEB image base" in out
+    assert "0x00007ff700000000" in out          # the competing registration
+    # An identity conflict is an observation: it never becomes a verdict,
+    # a trust boolean, or a coverage/exit-code change.
+    assert "peb_trusted" not in out
+    for verdict in ("malicious", "injected", "hollowed"):
+        assert verdict not in out.lower()
+    assert result.coverage.status == collect_process(mf).coverage.status
+
+
+def test_identity_block_reports_unavailable_checks_as_unavailable():
+    """Absent ModuleListStream: every ModuleList-dependent check has to
+    read as "could not be evaluated", never as agreement and never as a
+    conflict."""
+    misc = MiscInfo(process_id=4242, process_create_time=1786670105)
+    peb = Peb(IMAGE_BASE, r"C:\Samples\malware.exe", command_line=r"C:\Samples\malware.exe")
+    mf = _mf(misc_info=misc, peb=peb, memory=_build_valid_image_no_imports())
+
+    result = collect_process(mf, verbose=True)
+    out = _rendered(result, verbose=True)
+
+    assert "[--] PEB image base could not be compared with ModuleList" in out
+    assert "[--] PEB and ModuleList process names could not be compared" in out
+    assert "PEB and ModuleList process names agree" not in out
+
+
+def test_identity_name_agreement_ignores_case_only_differences():
+    """Windows module and file names are case-insensitive, so a case
+    difference alone must not be reported to an analyst as a conflict."""
+    record = _identity_record(peb_name="Malware.exe", module_name="malware.exe",
+                              match_state="resolved")
+    out = _rendered_record(record, verbose=True)
+    assert "[OK] PEB and ModuleList process names agree" in out
+
+
+def test_identity_name_disagreement_shows_both_values():
+    record = _identity_record(peb_name="malware.exe", module_name="svchost.exe",
+                              match_state="resolved")
+    out = _rendered_record(record, verbose=True)
+    assert "[!!] PEB and ModuleList process names differ" in out
+    assert "malware.exe" in out and "svchost.exe" in out
+
+
+def test_identity_block_reports_an_ambiguous_name_candidate():
+    record = _identity_record(peb_name="malware.exe", module_name=None,
+                              match_state="unregistered", ambiguous=True)
+    out = _rendered_record(record, verbose=True)
+    assert "[!!] more than one module shares this process name" in out
+
+
+def test_identity_block_reports_an_invalid_pe_header_with_its_reason():
+    record = _identity_record(peb_name="malware.exe", module_name="malware.exe",
+                              match_state="resolved",
+                              main_image_pe={"checked": True, "valid": False,
+                                             "reason": "no PE\0\0 signature at e_lfanew"})
+    out = _rendered_record(record, verbose=True)
+    assert "[!!] no valid PE header at the PEB image base" in out
+    assert "e_lfanew" in out
+
+
+def test_identity_block_reports_an_unchecked_pe_header_as_unavailable():
+    record = _identity_record(peb_name="malware.exe", module_name="malware.exe",
+                              match_state="resolved",
+                              main_image_pe={"checked": False, "valid": None, "reason": None})
+    out = _rendered_record(record, verbose=True)
+    assert "[--] the PEB image base was not checked for a PE header" in out
+
+
+# ── #98: every dump-derived verbose string is console-escaped ───────────
+
+@pytest.mark.parametrize("hostile,escaped", [
+    ("evil\n  [~] forged coverage reason", "\\x0a"),
+    ("evil\x1b[2Jcleared", "\\x1b"),
+    ("user\u202egnp.exe", "\\u202e"),
+])
+@pytest.mark.parametrize("field", ["peb_path", "peb_name", "module_path", "module_name",
+                                   "pe_reason", "window_title", "dll_path", "dll", "symbol"])
+def test_verbose_process_strings_cannot_drive_the_terminal(field, hostile, escaped):
+    """Newline/ANSI/bidi regression coverage for every dump-derived
+    string the verbose renderer prints -- the identity block's paths and
+    names, the PE rejection reason, the Extended PEB window title and DLL
+    path, and the import table's DLL/API names."""
+    record = _hostile_verbose_record(field, hostile)
+    out = _rendered_record(record, verbose=True)
+
+    assert hostile not in out               # never verbatim
+    assert escaped in out                   # rendered visibly instead
+    assert not any(line.strip().startswith("[~] forged") for line in out.splitlines())
 
 
 def test_verbose_console_renders_ordinal_and_unavailable_import_entries():

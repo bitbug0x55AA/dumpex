@@ -53,8 +53,21 @@ def test_help_groups_commands_and_modifiers_and_hides_legacy_names(
     # mid-word at a hyphen -- "peb_extended" (an underscore, never
     # hyphen-broken by textwrap) is the resistant marker to check for.
     collapsed_help = " ".join(help_text.split())
+
+    def collapsed_verbose_help() -> str:
+        """The display-options group alone, reflowed onto one line:
+        argparse wraps at a width this test cannot control, so a
+        substring check against the raw text is width-dependent. Sliced
+        from the group heading, not from the first "--verbose" in the
+        text -- that one is in the usage line."""
+        start = collapsed_help.index("display options:")
+        return collapsed_help[start:collapsed_help.index("hunt options:", start)]
+
     assert "adds the retired" in collapsed_help
     assert "peb_extended" in collapsed_help
+    # #98: --verbose now also gates the --handles projection, and the
+    # help text has to say so -- passing it used to be silently ignored.
+    assert "--handles" in collapsed_verbose_help()
     # --sysinfo's own help text must reflect the removed Process section /
     # added Environment section, not the pre-#41 "process" summary.
     assert "Show OS, host, environment and CPU summary" in help_text
@@ -583,6 +596,53 @@ def test_handles_partial_json_exits_3(monkeypatch, tmp_path):
         assert doc["result"]["data"]["records"][0]["object_name_status"] == "unreadable"
     finally:
         os.remove(dump_path)
+
+
+def test_handles_verbose_is_wired_end_to_end_without_changing_the_json(monkeypatch, tmp_path, capsys):
+    """#98: `--handles --verbose` used to be silently ignored -- the CLI
+    never forwarded the flag. It must now reach the renderer, show the
+    rows the default projection folds, and leave the structured result
+    byte-identical."""
+    from tests.unit.test_handles_cmd import _mf_with
+    descriptors = ([{"handle": 0x10 + i, "type_name": "Event", "object_name": None}
+                    for i in range(4)]
+                   + [{"handle": 0x100, "type_name": "File",
+                       "object_name": r"\Device\HarddiskVolume1\notes.txt"}])
+    dump_path = _make_dump_file()
+    try:
+        monkeypatch.setattr(cli, "open_dump", lambda path: _mf_with(descriptors))
+
+        default_json = str(tmp_path / "default.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--handles",
+                                          "--json", default_json])
+        cli.main()
+        default_console = capsys.readouterr().out
+
+        verbose_json = str(tmp_path / "verbose.json")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--handles", "--verbose",
+                                          "--json", verbose_json])
+        cli.main()
+        verbose_console = capsys.readouterr().out
+    finally:
+        os.remove(dump_path)
+
+    default_doc = json.loads(open(default_json, encoding="utf-8").read())
+    verbose_doc = json.loads(open(verbose_json, encoding="utf-8").read())
+
+    # Console verbosity NEVER removes or mutates a structured record.
+    assert default_doc["result"]["data"] == verbose_doc["result"]["data"]
+    assert len(default_doc["result"]["data"]["records"]) == len(descriptors)
+    assert default_doc["result"]["coverage"] == verbose_doc["result"]["coverage"]
+    # ... and the flag IS recorded as an execution option either way.
+    assert default_doc["meta"]["execution"]["options"]["verbose"] is False
+    assert verbose_doc["meta"]["execution"]["options"]["verbose"] is True
+
+    # The console, and only the console, differs.
+    assert "not shown" in default_console
+    assert "use --verbose to show all" in default_console
+    assert "0x0000000000000010" not in default_console      # a folded anonymous Event
+    assert "0x0000000000000010" in verbose_console
+    assert "not shown" not in verbose_console
 
 
 class _FakeMinidumpHeader:
