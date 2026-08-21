@@ -26,6 +26,7 @@ from dumpex.core.memory import parse_handle_stream, ParsedHandleDescriptor, Pars
 from dumpex.commands.handles import (
     collect_handles, cmd_handles, render_handles_console, summarize_handles_by_type,
 )
+from dumpex.ui.console_layout import resolve_width
 from dumpex.output.coverage import (
     CoverageStatus, LimitationCode, SourceState, exit_code_for, render_limitation,
 )
@@ -1532,3 +1533,300 @@ def test_column_widths_are_measured_on_the_escaped_text():
     text = _console(result)
     assert "\\x1b" in text
     _assert_columns_line_up(text)
+
+
+# ── #102 §5.6.4: the Access rights block ────────────────────────────────
+
+_ACCESS_LABEL_RE = re.compile(r"^ {4}(\S.*? 0x[0-9a-f]{8})$")
+
+
+def _access_block(text: str) -> list:
+    """The `Access rights` block's own lines, or [] when it was not
+    printed. Bounded by the blank line every following block starts
+    with."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines)
+                   if line.strip() == "Access rights"), None)
+    if start is None:
+        return []
+    body = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            break
+        body.append(line)
+    return body
+
+
+def _access_entries(text: str) -> list:
+    """-> [(label, rights text), ...] in the order printed, with each
+    entry's wrapped rights lines rejoined exactly as they were split."""
+    entries = []
+    for line in _access_block(text):
+        matched = _ACCESS_LABEL_RE.match(line)
+        if matched:
+            entries.append([matched.group(1), ""])
+        elif entries and line.startswith(" " * 6):
+            entries[-1][1] += line.strip()
+    return [(label, rights) for label, rights in entries]
+
+
+def _access_prose(text: str) -> str:
+    """Everything in the block that is not an entry -- the intro and, when
+    a residual marker is on screen, the marker legend."""
+    return " ".join(line.strip() for line in _access_block(text)
+                     if not _ACCESS_LABEL_RE.match(line)
+                     and not line.startswith(" " * 6))
+
+
+def test_the_access_column_still_carries_the_exact_raw_mask():
+    """#102 decodes the mask; it never replaces it. The captured value is
+    what a reader compares against a reference, and an unknown or future
+    bit is only auditable against the number."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x234, "type_name": "File", "object_name": "A",
+         "granted_access": 0x0012019F, "handle_count": 1, "pointer_count": 32},
+    ]))
+    text = _console(result)
+
+    assert ("0x0000000000000234  File            0x0012019f    1   32  A") in text
+    assert result.records[0].granted_access == 0x0012019F   # ... and the record is raw
+    assert _access_entries(text)[0][0] == "File 0x0012019f"
+
+
+def test_the_same_low_order_bit_decodes_by_each_row_s_recorded_type():
+    """The cross-type case the raw-mask contract could not express: bit
+    0x0001 is FILE_READ_DATA on a File, PROCESS_TERMINATE on a Process
+    and TOKEN_ASSIGN_PRIMARY on a Token, in one table."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 1},
+        {"handle": 0x20, "type_name": "Process", "object_name": "B", "granted_access": 1},
+        {"handle": 0x30, "type_name": "Token", "object_name": "C", "granted_access": 1},
+    ]))
+
+    assert _access_entries(_console(result)) == [
+        ("File 0x00000001", "ReadData"),
+        ("Process 0x00000001", "Terminate"),
+        ("Token 0x00000001", "AssignPrimary"),
+    ]
+
+
+def test_one_entry_per_distinct_type_and_mask_however_many_rows_share_it():
+    """A real handle table repeats a handful of masks across hundreds of
+    rows. De-duplicating is what keeps the block a few lines instead of a
+    second copy of the table."""
+    result = collect_handles(_mf_with(
+        [{"handle": 0x10 + i, "type_name": "File", "object_name": f"A{i}",
+          "granted_access": 0x00120089} for i in range(20)]
+        + [{"handle": 0x100, "type_name": "File", "object_name": "B",
+            "granted_access": 0x0012019F}]))
+    entries = _access_entries(_console(result))
+
+    assert [label for label, _ in entries] == ["File 0x00120089", "File 0x0012019f"]
+
+
+def test_entries_are_ordered_by_type_then_mask():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "A", "granted_access": 0x20019},
+        {"handle": 0x20, "type_name": "File", "object_name": "B", "granted_access": 0x120089},
+        {"handle": 0x30, "type_name": "File", "object_name": "C", "granted_access": 0x000F01FF},
+    ]))
+
+    assert [label for label, _ in _access_entries(_console(result))] == [
+        "File 0x000f01ff", "File 0x00120089", "Key 0x00020019"]
+
+
+def test_a_zero_mask_reads_as_no_rights_rather_than_missing_evidence():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Section", "object_name": "A", "granted_access": 0},
+    ]))
+    text = _console(result)
+
+    assert _access_entries(text) == [("Section 0x00000000", "(no rights)")]
+    assert "(unknown)" not in text
+
+
+def test_an_absent_mask_is_never_decoded_at_all():
+    """§5.2.2's null `granted_access` is absent evidence. It prints
+    `(unknown)` in the column and contributes no entry -- an entry saying
+    "(no rights)" would turn a missing value into a captured one."""
+    result = collect_handles(_mf_from_descriptors(
+        [_descriptor(0x10, granted_access=None, type_name="Process", type_name_rva=8)]))
+    text = _console(result)
+
+    assert "(unknown)" in text
+    assert _access_block(text) == []
+
+
+def test_an_unsupported_type_keeps_the_mask_and_says_what_is_undecoded():
+    """A type dumpex has no table for still decodes the type-INDEPENDENT
+    half of the mask; the type-specific half is shown exactly as captured
+    under the `?` marker, never read against some other type's rights."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "WaitCompletionPacket", "object_name": "A",
+         "granted_access": 0x0012019F},
+    ]))
+    text = _console(result)
+
+    assert _access_entries(text) == [
+        ("WaitCompletionPacket 0x0012019f", "ReadControl|Synchronize|?0x0000019f")]
+    assert "?0x... = the recorded type is not one dumpex decodes" in _access_prose(text)
+
+
+def test_a_row_with_no_readable_type_is_decoded_the_same_way():
+    """`(unnamed)`/`(unreadable)` are §5.2.1 facts about the NAME, and
+    neither is a type to decode against -- but the standard rights are
+    still the standard rights."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": BAD_RVA, "object_name": "A", "granted_access": 0x00100001},
+    ]))
+
+    assert _access_entries(_console(result)) == [
+        ("(unreadable) 0x00100001", "Synchronize|?0x00000001")]
+
+
+def test_bits_with_no_documented_right_stay_visible_at_their_raw_value():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x00008001},
+    ]))
+    text = _console(result)
+
+    assert _access_entries(text) == [("File 0x00008001", "ReadData|+0x00008000")]
+    assert "+0x... = bits with no documented right" in _access_prose(text)
+
+
+def test_generic_bits_are_reported_as_captured_and_never_expanded():
+    """Expanding a GENERIC_* bit needs the kernel object type's own
+    GENERIC_MAPPING, which the dump does not record. The captured bit is
+    the fact."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x80000000},
+    ]))
+
+    assert _access_entries(_console(result)) == [("File 0x80000000", "GenericRead")]
+
+
+def test_the_marker_legend_is_printed_only_when_a_marker_is_on_screen():
+    clean = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Process", "object_name": "A",
+         "granted_access": 0x001FFFFF}]))
+    text = _console(clean)
+
+    assert _access_entries(text) == [("Process 0x001fffff", "AllAccess")]
+    assert "+0x..." not in _access_prose(text)
+    assert "?0x..." not in _access_prose(text)
+
+
+def test_long_rights_wrap_without_losing_a_name_or_the_mask():
+    """§5.6.4 must not truncate: a fully decoded File mask is wider than
+    any console, so it wraps -- and every name survives the wrap."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x0012019F},
+    ]))
+    text = _console(result)
+    (label, rights), = _access_entries(text)
+
+    assert label == "File 0x0012019f"
+    assert rights == ("ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|"
+                      "WriteAttributes|ReadControl|Synchronize")
+    # It really did wrap, and no line runs past the resolved width.
+    body = [line for line in _access_block(text) if line.startswith(" " * 6)]
+    assert len(body) > 1
+    assert all(len(line) <= resolve_width() for line in body)
+
+
+def test_the_block_is_an_observation_and_never_a_verdict():
+    """§1.6: a powerful permission is evidence worth reading, not a
+    finding. Nothing in this block may score, rank, or accuse."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Process", "object_name": "A",
+         "granted_access": 0x001FFFFF},
+    ]))
+    text = _console(result)
+
+    assert "not evidence that anything was done with it" in _access_prose(text)
+    lowered = "\n".join(_access_block(text)).lower()
+    for word in ("suspicious", "malicious", "injection", "detected", "score",
+                  "confidence", "threat"):
+        assert word not in lowered
+
+
+# ── #102 x #98: decoding changes nothing about which rows exist ─────────
+
+def test_decoding_does_not_change_folding_retention_or_coverage():
+    descriptors = [
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x120089},
+        {"handle": 0x20, "type_name": "Event", "object_name": None, "granted_access": 0x1F0003},
+        {"handle": 0x30, "type_name": "Process", "object_name": None, "granted_access": 0x1FFFFF},
+    ]
+    default = collect_handles(_mf_with(descriptors))
+    verbose = collect_handles(_mf_with(descriptors))
+
+    # Same records, summary, coverage and exit code either way -- the
+    # decode is a projection of the records, not an input to them.
+    assert [r.to_dict() for r in default.records] == [r.to_dict() for r in verbose.records]
+    assert default.summary == verbose.summary == {
+        "count": 3, "by_type": {"Event": 1, "File": 1, "Process": 1}}
+    assert exit_code_for(default.coverage.status) == 0
+
+    default_text = _console(default)
+    verbose_text = _console(verbose, verbose=True)
+    # #98's fold is untouched: the anonymous Event row is still folded,
+    # the anonymous Process row is still retained.
+    assert "1 anonymous handle(s) not shown (no object name recorded): Event 1" in default_text
+    assert len(_rows(default_text)) == 2
+    assert len(_rows(verbose_text)) == 3
+
+
+def test_an_entry_describes_a_row_the_reader_can_actually_see():
+    """The block explains the Access column, so it is derived from the
+    PRINTED rows: a folded row's mask would otherwise be explained
+    nowhere near a row carrying it. `--verbose` prints the row and gets
+    its entry with it."""
+    descriptors = [
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x120089},
+        {"handle": 0x20, "type_name": "Event", "object_name": None, "granted_access": 0x1F0003},
+    ]
+    default = _access_entries(_console(collect_handles(_mf_with(descriptors))))
+    verbose = _access_entries(_console(collect_handles(_mf_with(descriptors)), verbose=True))
+
+    assert [label for label, _ in default] == ["File 0x00120089"]
+    assert [label for label, _ in verbose] == ["Event 0x001f0003", "File 0x00120089"]
+
+
+def test_a_hostile_type_name_cannot_forge_output_from_the_block():
+    """The entry label carries a dump-derived type name and is escaped
+    exactly like the Type column it mirrors."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "A\x1bB\nHandle", "object_name": "X",
+         "granted_access": 1},
+    ]))
+    text = _console(result)
+
+    assert "A\\x1bB\\x0aHandle 0x00000001" in text
+    assert "\x1b[" not in text.replace("\x1b[0m", "")
+
+
+def test_the_block_is_absent_when_no_row_is_printed():
+    """Nothing to explain, and a header over an empty block would read as
+    a claim about handles that were not captured."""
+    assert _access_block(_console(collect_handles(_mf_with([])))) == []
+    assert _access_block(_console(collect_handles(_mf()))) == []
+
+
+def test_no_decoded_right_ever_reaches_the_record():
+    """#102 is a console projection. The record keeps the captured
+    integer and gains no field: v2.13's schema is frozen, and a consumer
+    that needs a stable machine value reads `granted_access`."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A",
+         "granted_access": 0x0012019F},
+    ]))
+    serialized = result.records[0].to_dict()
+
+    assert serialized["granted_access"] == 0x0012019F
+    assert isinstance(serialized["granted_access"], int)
+    assert set(serialized) == {
+        "handle", "type_name", "type_name_status", "object_name",
+        "object_name_status", "attributes", "granted_access",
+        "handle_count", "pointer_count"}
+    assert "ReadData" not in str(serialized)

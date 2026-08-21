@@ -546,7 +546,19 @@ def test_handles_complete_json_exits_zero(monkeypatch, tmp_path):
         assert doc["meta"]["schema_version"] == SCHEMA_VERSION
         assert doc["result"]["kind"] == "handles"
         assert doc["result"]["coverage"]["status"] == "complete"
-        assert doc["result"]["data"]["records"][0]["handle"] == "0x0000000000000010"
+        record = doc["result"]["data"]["records"][0]
+        assert record["handle"] == "0x0000000000000010"
+        # #102 decodes this mask for the CONSOLE. On the wire it stays the
+        # raw integer the descriptor carried, and the record gains no
+        # derived field -- v2.13's schema is frozen, and a consumer that
+        # needs a stable machine value reads `granted_access`.
+        assert record["granted_access"] == 0x0012019F
+        assert isinstance(record["granted_access"], int)
+        assert set(record) == {
+            "handle", "type_name", "type_name_status", "object_name",
+            "object_name_status", "attributes", "granted_access",
+            "handle_count", "pointer_count"}
+        assert "ReadData" not in json.dumps(doc)
     finally:
         os.remove(dump_path)
 
@@ -769,6 +781,61 @@ def test_handles_txt_writes_a_real_ansi_free_transcript(monkeypatch, tmp_path):
         text = open(out_txt, encoding="utf-8").read()
         assert text
         assert not _ANSI_ESCAPE_RE.search(text)
+        # #102: the transcript an analyst keeps carries BOTH the exact
+        # captured mask (in the Access column) and what it permitted for
+        # the recorded object type, with no ANSI in between.
+        assert "0x0012019f" in text
+        assert "Access rights" in text
+        assert "File 0x0012019f" in text
+        # Rejoining the wrap (which always breaks after a `|`) recovers
+        # the complete rights list -- nothing was truncated on the way to
+        # the file.
+        rejoined = text.replace("|\n      ", "|")
+        assert ("ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|"
+                "WriteAttributes|ReadControl|Synchronize") in rejoined
+    finally:
+        os.remove(dump_path)
+
+
+def test_handles_json_and_txt_together_keep_the_raw_mask_and_the_decode_apart(
+        monkeypatch, tmp_path):
+    """#102's acceptance in one run: the console/TXT projection decodes
+    the mask, the structured record does not, and the two describe the
+    same captured value.
+
+    There is no CSV surface to check alongside them -- `--csv` was
+    removed from this codebase before the recon redesign (contract §7.1),
+    and tests/unit/test_cli_args.py already pins that argparse rejects
+    it."""
+    from tests.fixtures.fakes import Handle
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.handles = FakeStream([
+            Handle(0x10, "File", r"\Device\HarddiskVolume1\notes.txt"),
+            # The same mask under a second type -- the one thing a raw
+            # hexadecimal column could never say.
+            Handle(0x20, "Process", r"\proc", access=0x0012019F),
+        ], "handles")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        out_txt = str(tmp_path / "out.txt")
+        monkeypatch.setattr(sys, "argv", ["dumpex", dump_path, "--handles",
+                                           "--json", out_json, "--txt", out_txt])
+        cli.main()
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert [r["granted_access"] for r in doc["result"]["data"]["records"]] == [
+            0x0012019F, 0x0012019F]
+
+        text = open(out_txt, encoding="utf-8").read()
+        assert "File 0x0012019f" in text
+        assert "Process 0x0012019f" in text
+        # File bit 0x0001 is ReadData; the same bit on a Process is
+        # Terminate, and both readings are in the same transcript.
+        assert "ReadData|WriteData|" in text
+        assert "Terminate|CreateThread|" in text
     finally:
         os.remove(dump_path)
 

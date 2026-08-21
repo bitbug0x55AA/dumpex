@@ -51,6 +51,33 @@ question turns on. A name like `\KnownDlls` is a real NT Object Manager
 **directory**, not a filesystem path; the descriptor records the
 directory's name, and the objects inside it are not in the dump.
 
+Under the table, an `Access rights` block says what each printed mask
+permits **for that row's recorded object type** — the same bit is
+`ReadData` on a `File`, `Terminate` on a `Process` and `AssignPrimary` on
+a `Token`, so a mask read against the wrong type is simply wrong:
+
+```text
+  Access rights
+    File 0x0012019f
+      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
+      ReadControl|Synchronize
+    Process 0x001fffff
+      AllAccess
+```
+
+The `Access` column keeps the exact captured mask, and `granted_access`
+stays that same raw integer in `--json` — the names are a reading of it,
+never a replacement. `(no rights)` means the dump captured a mask of
+zero; `(unknown)` means no mask was captured at all. A `+0x…` or `?0x…`
+tail is the part that was **not** decoded (an undocumented bit, or an
+object type dumpex has no right table for) shown at its raw value rather
+than guessed at.
+
+**A decoded right is an observation, not a verdict.** `AllAccess` on a
+`Process` handle is a lead worth pulling; it is not evidence that the
+handle was used, that any access succeeded, or that the process is
+malicious. Ordinary software holds powerful handles all day.
+
 `--process --verbose` prints the import table as
 `IAT Slot VA -> Resolved Target VA` — where the import pointer is
 stored, and what is stored there — followed by an `Identity

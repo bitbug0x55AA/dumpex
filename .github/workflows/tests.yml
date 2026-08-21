@@ -328,6 +328,15 @@ jobs:
           # recon command's console renderer above.
           coverage report --include="dumpex/commands/process.py" --fail-under=90
           coverage report --include="dumpex/commands/handles.py" --fail-under=90
+          # dumpex/ui/access_rights.py: #102's GrantedAccess decoder. A
+          # frozen lookup table with no I/O and no branching on host
+          # state, so every path is reachable from synthetic masks and
+          # the gate sits at what it measures. It is gated tightly for
+          # the same reason the record types are: a decoded right is
+          # read as what a captured handle permitted, so an untested
+          # path here does not skip a display branch -- it can put a
+          # wrong permission in front of an analyst.
+          coverage report --include="dumpex/ui/access_rights.py" --fail-under=95
           # dumpex/commands/profile.py: --profile's own collect/render/
           # command slice (issue #95, docs/recon_profile_contract.md).
           # Gated from day one like the block above, and for the same

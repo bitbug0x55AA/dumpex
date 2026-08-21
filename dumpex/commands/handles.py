@@ -34,6 +34,15 @@ types in `_RETAINED_ANONYMOUS_TYPES` and any row that LOST a name --
 into per-type counts, and says exactly how many it folded; `--verbose`
 renders every record. Nothing is ever removed from the records, the
 summary, or `by_type`.
+
+#102 adds the same kind of projection over the Access column: the column
+keeps the raw `0x%08x` mask, and an `Access rights` block under the table
+decodes it against each row's own recorded object type -- once per
+distinct (type, mask) pair -- so an analyst can read what a captured
+handle permitted without an external access-mask lookup. The decoder
+(`dumpex.ui.access_rights`) consumes the normalized record and nothing
+else, `granted_access` stays the raw integer in every structured output,
+and no decoded right is ever a verdict.
 """
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile
@@ -47,8 +56,11 @@ from dumpex.output.command_result import CommandResult
 from dumpex.output.records import (
     HandleRecord, handle_name_display, hex_address,
 )
+from dumpex.ui.access_rights import (
+    decode_access_mask, format_access_rights, wrap_rights,
+)
 from dumpex.ui.colors import BOLD, DIM, YELLOW, console_safe
-from dumpex.ui.console_layout import column_width
+from dumpex.ui.console_layout import column_width, resolve_width, wrap_text
 
 
 _HANDLE_STREAM = MINIDUMP_STREAM_TYPE.HandleDataStream
@@ -408,15 +420,23 @@ def _headline(records, coverage) -> str:
 
 def _access_display(record: HandleRecord) -> str:
     """§5.6: the mask is rendered `0x%08x` in the console while staying a
-    plain integer in JSON (§1.3). Raw and undecoded either way -- its
-    meaning is object-type-specific, and a wrong decode is worse than a
-    number.
+    plain integer in JSON (§1.3). Raw in the COLUMN either way -- it is
+    the authoritative captured value, and it is what a reader compares
+    against a reference or pastes into a ticket.
 
-    When §5.2's deferred type-specific decoding lands and this starts
-    returning names like "FILE_ALL_ACCESS", the table's column widths do
-    NOT need revisiting: the Access column is measured from the values
-    this function actually returns (see _column_width), and
-    tests/unit/test_handles_cmd.py::
+    #102's type-specific decoding is deliberately NOT applied here: it
+    reads the same mask against the row's recorded type and prints the
+    resulting rights in §5.6.4's block under the table, once per distinct
+    (type, mask) pair, because a decoded mask is far too wide for a
+    middle column that every other row has to line up with (see
+    _access_rights_entries). A null mask is `(unknown)` -- absent
+    evidence, which §1.4 keeps distinct from a captured mask granting
+    nothing.
+
+    Should a future feature nevertheless put a decoded value in this
+    column, the table's widths do not need revisiting: the Access column
+    is measured from the values this function actually returns (see
+    column_width), and tests/unit/test_handles_cmd.py::
     test_no_column_fuses_into_the_next_however_wide_its_value already
     parametrizes this function's output over decoded-width strings to
     keep that true."""
@@ -445,9 +465,10 @@ def _count_display(value) -> str:
 # object type name, so only a dump-crafted one ever reaches them.
 _TYPE_COLUMN_MIN_WIDTH = 14
 _TYPE_COLUMN_MAX_WIDTH = 40
-# _access_display() cannot exceed 10 characters today, but §5.2 defers
-# type-specific permission decoding to a later feature and a decoded
-# "FILE_ALL_ACCESS" would land here.
+# _access_display() cannot exceed 10 characters today: #102's decoded
+# rights are printed under the table (§5.6.4), not in this column. The
+# cap is kept anyway, so a future decoded value in the column cannot pad
+# every row to its own width.
 _ACCESS_COLUMN_MIN_WIDTH = 10
 _ACCESS_COLUMN_MAX_WIDTH = 32
 # `Cnt`/`Ptr` are right-aligned uint32 counters -- 10 digits at the very
@@ -630,6 +651,90 @@ def _namespace_notes(records) -> list:
     return lines
 
 
+# ── #102: type-specific decoding of the Access column ───────────────
+# The Access column keeps §5.6's raw `0x%08x` mask -- it is the
+# authoritative captured value, and it is what a reader compares against
+# a reference or pastes into a ticket. What it does NOT do is say what
+# the handle permits, which is the question an analyst actually has, so
+# the decoded rights are printed once per distinct (type, mask) pair
+# below the table instead.
+#
+# Below rather than inside the column, because the two are incompatible:
+# a fully decoded File mask is ~110 characters, and §5.6 sizes every
+# column to the widest value it holds. Without a cap that pads EVERY row
+# to 110 columns; with §5.6's cap of 32 every File row overflows and the
+# table goes ragged exactly where it is densest -- and truncating a right
+# name is forbidden outright. De-duplicating instead makes the block
+# proportional to the number of DISTINCT masks on screen rather than to
+# the number of rows: a real handle table repeats a handful of masks
+# (`0x00120089` on every File, `0x00020019` on every Key), so this is a
+# few lines where a per-row rendering would be hundreds, and it cannot
+# exceed one entry per printed row in the worst case.
+_ACCESS_RIGHTS_INTRO = (
+    "Decoded from each row's own recorded object type -- the same bit means different "
+    "things for a File, a Process and a Token. These are observations about what the "
+    "captured handle permitted, not evidence that anything was done with it.")
+
+# Printed only when one of the two markers is actually on screen (they
+# answer #102's "was any part left undecoded, and was it the type or the
+# bits?"), so the legend never explains something that is not there.
+_ACCESS_UNDECODED_LEGEND = (
+    "+0x... = bits with no documented right for that object type; "
+    "?0x... = the recorded type is not one dumpex decodes, so its type-specific bits "
+    "are shown exactly as captured.")
+
+# The rights text is indented six columns under its label line, matching
+# the Object name notes block.
+_ACCESS_RIGHTS_INDENT = 6
+
+
+def _access_rights_entries(records, width: int) -> list:
+    """-> [(label, [rights lines]), ...] for §5.6.4's block: one entry per
+    distinct (recorded type, mask) pair among the rows PASSED IN, ordered
+    by type label then mask ascending (§1.5).
+
+    Derived from the printed rows rather than from every collected record
+    -- unlike the object-name notes, which explain a name whether or not
+    its row is on screen. An entry here explains a value in the Access
+    column, so an entry for a row the view folded would describe a mask
+    the reader cannot see; `--verbose` prints those rows and gets their
+    entries with them. Either way this is a projection of the same
+    records: nothing is added to or removed from `--json`.
+
+    Keyed by `(type_name_status, type_name, mask)` rather than by the
+    DISPLAYED label, for the same reason summarize_handles_by_type() is:
+    console_safe() is not injective (two different names can escape to
+    the same text), and a decode filed under a colliding label would show
+    one handle's rights against another handle's type. The label is
+    projected afterwards, through the same handle_name_display() the Type
+    column uses, so a type can never read one way in the table and
+    another here."""
+    decoded_by_key = {}
+    for record in records:
+        decoded = decode_access_mask(record.granted_access, record.type_name)
+        if decoded is None:
+            # A null `granted_access` is absent evidence, not a mask with
+            # no bits: the row prints `(unknown)` and gets no entry at
+            # all, rather than an entry claiming no rights were granted.
+            continue
+        decoded_by_key.setdefault(
+            (record.type_name_status, record.type_name, decoded.mask), decoded)
+
+    entries = []
+    for key, decoded in decoded_by_key.items():
+        status, type_name, mask = key
+        label = f"{console_safe(handle_name_display(type_name, status))} 0x{mask:08x}"
+        entries.append((label, key, decoded))
+    # `key` breaks a tie between two entries whose labels escaped to the
+    # same text, so the order is total and deterministic even then; the
+    # null name in it is normalized to "" first, since None and str do
+    # not compare.
+    entries.sort(key=lambda e: (e[0], e[1][2], e[1][0], e[1][1] or ""))
+    return [(label, wrap_rights(format_access_rights(decoded),
+                                 max(1, width - _ACCESS_RIGHTS_INDENT)))
+            for label, _key, decoded in entries]
+
+
 def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     """Projects ONLY the collected records and CoverageReport -- it never
     re-reads `mf.handles`, so console and JSON can never describe two
@@ -648,7 +753,13 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     limitations, and the coverage reasons are identical either way. The
     default view folds the approved low-context anonymous rows into
     per-type counts and states, in the output itself, how many rows were
-    folded and how to see them; `--verbose` prints every record."""
+    folded and how to see them; `--verbose` prints every record.
+
+    #102's `Access rights` block decodes the masks of the rows this view
+    actually printed, with the same rules in both views (§5.6.4). It is
+    derived text: it cannot change which records exist, which rows print,
+    `by_type`, the limitations or the exit code, and it never states a
+    verdict about a handle."""
     print(f"\n{BOLD('═══ HANDLES ═══')}")
     print(f"  {_headline(records, coverage)}")
 
@@ -727,6 +838,31 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
         print(f"  {len(folded)} anonymous handle(s) not shown "
               f"(no object name recorded): {listed}")
         print(f"  {DIM(_FOLD_HINT)}")
+
+    # #102: what the printed masks permit, one entry per distinct
+    # (recorded type, mask) pair. Placed under the table because the
+    # Access column keeps the raw mask (see _access_rights_entries), and
+    # after the fold line so the rows it describes are the rows directly
+    # above it. Purely derived text -- it cannot change which records
+    # exist, which rows print, `by_type`, the limitations or the exit
+    # code.
+    width = resolve_width()
+    rights_entries = _access_rights_entries(shown, width)
+    if rights_entries:
+        print()
+        print(f"  {BOLD('Access rights')}")
+        for line in wrap_text(_ACCESS_RIGHTS_INTRO, width - 4):
+            print(f"    {DIM(line)}")
+        for label, rights_lines in rights_entries:
+            print(f"    {label}")
+            for line in rights_lines:
+                print(f"{' ' * _ACCESS_RIGHTS_INDENT}{line}")
+        # Neither marker is ever part of a right NAME, so the rendered
+        # lines are a faithful test for "something was left undecoded".
+        if any(("+0x" in line or "?0x" in line)
+                for _label, rights_lines in rights_entries for line in rights_lines):
+            for line in wrap_text(_ACCESS_UNDECODED_LEGEND, width - 4):
+                print(f"    {DIM(line)}")
 
     notes = _namespace_notes(records)
     if notes:

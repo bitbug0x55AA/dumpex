@@ -1,6 +1,6 @@
 # Recon `--process`/`--sysinfo`/`--handles` contract (issue #37)
 
-**Status: frozen decision record, revision 6 — self-contained.**
+**Status: frozen decision record, revision 7 — self-contained.**
 
 This document is the complete, normative contract for the v2.13 Recon
 redesign. Issues #38–#44 implement against **this file alone**: every
@@ -66,8 +66,11 @@ behavior can be re-checked rather than taken on trust.
   (§1.6).
 - Delay Import descriptors (`IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT`, index
   13) are **out of scope** for v2.13 (§3.5.1).
-- Type-specific decoding of `GrantedAccess` is out of scope for v2.13
-  (§5.2).
+- Type-specific decoding of `GrantedAccess` is out of scope for the
+  v2.13 **record**: `granted_access` is a raw integer on the wire and
+  stays one (§5.2). The console decodes it as a projection (§5.6.4), the
+  way it already projects a null name into `(unnamed)` — no record
+  field, schema, coverage meaning or exit code follows it.
 
 ### 0.3 Dependency order
 
@@ -132,7 +135,8 @@ applies unchanged, and is extended to the two new record types:
   `granted_access`, `handle_count`, `pointer_count`, all counts.
   `granted_access` in particular stays a raw integer on the wire even
   though analysts read masks in hex — console rendering formats it as
-  hex (§5.6); the record type does not.
+  hex (§5.6) and decodes it into readable rights beneath the table
+  (§5.6.4); the record type does neither.
 - Timestamps are strings formatted `"%Y-%m-%d %H:%M:%S UTC"`.
 
 ### 1.4 `null` versus `[]` versus `""`
@@ -2519,7 +2523,7 @@ One record per descriptor:
 | `object_name` | `string \| null` | same rule, resolved independently |
 | `object_name_status` | `"ok" \| "unnamed" \| "unreadable"` | never `null`; see §5.2.1 |
 | `attributes` | `integer \| null` | raw `OBJ_*` bitmask, undecoded |
-| `granted_access` | `integer \| null` | **raw mask, undecoded in v2.13.** Type-specific permission decoding is a later feature; a wrong decode is worse than a raw number |
+| `granted_access` | `integer \| null` | **raw mask, undecoded in every structured output.** The console decodes it against the recorded type for display only (§5.6.4); the record keeps the captured integer, because a decode is derived text and a wrong one is worse than a raw number |
 | `handle_count` | `integer \| null` | raw |
 | `pointer_count` | `integer \| null` | raw |
 
@@ -2711,7 +2715,10 @@ reduction path is introduced.
 ```
 
 - `Access` is rendered as `0x%08x` in the console while remaining a
-  plain integer in JSON (§1.3).
+  plain integer in JSON (§1.3). The column keeps the **raw** mask in
+  both views; what the mask permits for the row's recorded object type
+  is decoded once per distinct `(type, mask)` pair in §5.6.4's block
+  under the table.
 - **Names are attacker-controlled and are escaped on their way to the
   terminal.** `TypeName`/`ObjectName` are decoded out of the dump, so a
   raw `print()` of one is input to the terminal's parser, not just text
@@ -2765,8 +2772,11 @@ reduction path is introduced.
   behaviour, now confined to the pathological case instead of being the
   normal one. Both caps sit far above any real Windows object type name.
   `Access` is measured like the rest even though a raw 32-bit mask
-  cannot overflow it: §5.2's deferred type-specific permission decoding
-  would put a decoded name there.
+  cannot overflow it. §5.6.4's decoded rights are deliberately **not**
+  put in this column: a fully decoded `File` mask is ~110 characters, so
+  it would either pad every row to that width or (with the cap) push
+  every `File` row's remaining columns right, and truncating a right
+  name is forbidden outright.
 
   The single width rule is `column_width()` in
   `dumpex/ui/console_layout.py`, shared with §3.8.1's import table so the
@@ -2911,6 +2921,132 @@ enumerate evidence the dump does not carry:
   rows, so a note never disappears with a folded row.
 - The note label carries a dump-derived object name and is escaped with
   `console_safe()` like every other name on this block.
+
+#### 5.6.4 Decoded access rights
+
+The `Access` column is faithful to the dump and unreadable during triage:
+an investigator has to know that access bits are object-type-specific,
+identify the captured type, and look up the Windows access-right
+definitions before they can say what a captured handle permitted. The
+console therefore decodes each printed mask against **that row's own
+recorded type** and prints the result under the table:
+
+```
+  Handle              Type            Access      Cnt  Ptr  Object
+  0x0000000000000234  File            0x0012019f    1   32  \Device\NamedPipe\mypipe
+  0x0000000000000238  Key             0x00020019    1    3  \REGISTRY\MACHINE\SOFTWARE
+  0x0000000000000300  Process         0x001fffff    1    1  (unnamed)
+  0x000000000000030c  WaitCompletionPacket  0x0012019f  1  3  X
+
+  Access rights
+    Decoded from each row's own recorded object type -- the same bit means different
+    things for a File, a Process and a Token. These are observations about what the
+    captured handle permitted, not evidence that anything was done with it.
+    File 0x0012019f
+      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
+      ReadControl|Synchronize
+    Key 0x00020019
+      QueryValue|EnumerateSubKeys|Notify|ReadControl
+    Process 0x001fffff
+      AllAccess
+    WaitCompletionPacket 0x0012019f
+      ReadControl|Synchronize|?0x0000019f
+    +0x... = bits with no documented right for that object type; ?0x... = the recorded
+    type is not one dumpex decodes, so its type-specific bits are shown exactly as captured.
+```
+
+- **The decoder is a pure projection of the record.** It consumes the
+  already-normalized `granted_access` integer and `type_name`, and
+  nothing else: it never queries a live process, opens a handle, reads
+  the analysis host's ACLs, re-reads the dump, or infers a right from an
+  object **name**. `granted_access` remains the authoritative captured
+  value in every structured output (§5.2); the names are derived text.
+  Decoding cannot change which records exist, which rows print,
+  `summary`, `by_type`, `coverage`, the diagnostics, the ordering, the
+  exit code, or §5.6.1's folding.
+- **Rights are type-specific and are selected by a frozen registry.** Bit
+  `0x0001` is `FILE_READ_DATA` on a `File`, `THREAD_TERMINATE` on a
+  `Thread`, `TOKEN_ASSIGN_PRIMARY` on a `Token` and `SECTION_QUERY` on a
+  `Section` (and the terminate right on a `Process`). One global bit-to-name table would therefore be wrong for
+  every type but one, which is why §5.2 shipped the raw mask. The
+  registry covers `File`, `Process`, `Thread`, `Token`, `Section`, `Job`,
+  `Directory`, `SymbolicLink`, `Event`, `Mutant`, `Semaphore`, `Timer`
+  and `Key`, and is extended by adding a table and a key — no collector,
+  record or schema change.
+- **Names are the Windows constant with its object-type prefix dropped
+  and the remainder CamelCased** (`FILE_READ_DATA` → `ReadData`,
+  `THREAD_QUERY_LIMITED_INFORMATION` → `QueryLimitedInformation`): the
+  type is already in the row's Type column, and repeating it in each of
+  nine names costs the width that makes the rights readable at all. Each
+  table in `dumpex/ui/access_rights.py` carries the authoritative
+  constant next to the short name. Where one bit has two documented
+  spellings (`FILE_READ_DATA`/`FILE_LIST_DIRECTORY`), the file-semantics
+  name is used for both: the descriptor does not record whether the
+  object is a directory, and the two readings are the same captured bit.
+- **Order is frozen and deterministic**: composite aliases that fired,
+  then the type's specific rights by ascending bit value, then the
+  standard rights by ascending bit value (`Delete`, `ReadControl`,
+  `WriteDac`, `WriteOwner`, `Synchronize`, `AccessSystemSecurity`,
+  `MaximumAllowed`), then the generic bits. Ordering by bit value rather
+  than alphabetically keeps a right in the same position across every
+  type and every mask, so two rows can be compared by eye.
+- **An alias consumes its own bits, so nothing is reported twice.** The
+  only composite emitted is each type's own `*_ALL_ACCESS`, which fires
+  when the mask carries **all** of its bits; `AllAccess` and the fourteen
+  component names it stands for can never both appear. The
+  `FILE_GENERIC_READ`/`KEY_READ` family is deliberately not aliased: such
+  a name differs from the `GENERIC_*` bits by one word while meaning
+  something entirely different, and a reader who saw `Read` beside
+  `(0x00120089)` could not tell which of the two the dump captured.
+
+  An alias is the SDK constant as defined, never a tidied-up version of
+  it. `SYMBOLIC_LINK_ALL_ACCESS` is
+  `STANDARD_RIGHTS_REQUIRED | SYMBOLIC_LINK_QUERY` and predates
+  `SYMBOLIC_LINK_SET` (`0x0002`), which was never folded into it, so
+  `0x000f0003` decodes as `AllAccess|Set` — the honest decomposition.
+  Widening the alias to cover `Set` would claim `AllAccess` for a mask
+  that is not that constant and would swallow the `Set` bit on the way.
+- **Nothing is invented and nothing is dropped.** The names plus the
+  residual always reconstruct the captured mask exactly:
+  - bits with no documented right for a type the registry carries are
+    appended as `+0x%08x`, so an undocumented or future bit stays
+    auditable at its own raw value;
+  - every undecoded bit of a mask whose type the registry does **not**
+    carry — including a type that is `(unnamed)` or `(unreadable)` — is
+    appended as `?0x%08x` instead, which is a different fact: nothing is
+    wrong with the bit, dumpex simply has no type to read it against.
+    The type-**independent** bits are still decoded in that case, because
+    the standard and generic rights mean the same thing for every object
+    type.
+  - **generic bits are reported exactly as captured** and are never
+    expanded through an assumed `GENERIC_MAPPING`: the mapping lives in
+    the kernel object type, the dump does not record it, and a generic
+    bit still set in `GrantedAccess` is itself the fact worth showing.
+- **A zero mask is `(no rights)`**, stated positively. It is a captured
+  mask that granted nothing, and must not read like the `(unknown)` an
+  **absent** mask prints (§1.4). A null `granted_access` gets no entry at
+  all — absent evidence is never decoded into "no rights".
+- **The block is de-duplicated, bounded, and never truncated.** One entry
+  per distinct `(recorded type, mask)` pair among the rows actually
+  printed, ordered by type label then mask ascending (§1.5), so a table
+  whose 200 `File` rows share `0x00120089` gets one entry rather than
+  200. It cannot exceed one entry per printed row. A rights list wider
+  than the terminal wraps after a `|`, so no name is split and none is
+  dropped; the marker legend prints only when a marker is on screen.
+- Entries are keyed by `(type_name_status, type_name, mask)` and labelled
+  afterwards through the same `handle_name_display()` the Type column
+  uses — `console_safe()` is not injective, and a decode filed under a
+  colliding escaped label would show one handle's rights against another
+  handle's type. The label is escaped like every other dump-derived
+  string on the block.
+- Entries describe the rows the current view **printed**, so `--verbose`
+  gains the entries of the rows it un-folds. The decoding rules
+  themselves are identical in both views.
+- **A decoded right is an observation, never a verdict** (§1.6).
+  `AllAccess` on a `Process` handle is evidence worth reading; it is not
+  proof that anything was done with the handle, that any access
+  succeeded later, or that the handle is suspicious. No decoded right
+  produces a score, a confidence, a coverage limitation, or a diagnostic.
 
 #### 5.6.3 `--verbose` wiring
 
@@ -3449,7 +3585,23 @@ excuses anything in §0–§8.
   `datetime.fromtimestamp()` raising is a sufficient timestamp check (it
   is platform-dependent). Added `MAX_IAT_READ_OPERATIONS`,
   `name_matched_candidate`, and per-field IAT nullability.
-- **rev6 (this revision)** — the recon console projection, from an
+- **rev7 (this revision)** — the `--handles` Access column becomes
+  readable without an external access-mask lookup
+  ([issue #102](https://github.com/bitbug0x55AA/dumpex/issues/102)).
+  §5.6.4 freezes a presentation-layer decoder over the existing
+  `granted_access` integer: a per-object-type right registry, a frozen
+  canonical order, alias bits consumed exactly once, residual bits kept
+  visible at their raw value under two distinct markers (`+` for an
+  undocumented bit, `?` for a type dumpex does not decode), zero stated
+  as `(no rights)` and null still stated as `(unknown)`. Nothing else
+  moved: `granted_access` is the same raw integer in v2.13 JSON (§7.1's
+  “no CSV surface” is unchanged — `--csv` does not exist), the schema is
+  untouched, the Access column still prints the exact mask,
+  and §5.6.1's folding, the coverage meanings, the limitation codes, the
+  ordering rules and the exit codes are all unchanged. The decoded text
+  is an observation about what a captured handle permitted and never a
+  verdict (§1.6).
+- **rev6** — the recon console projection, from an
   investigator's report against the shipped v2.13 output
   ([issue #98](https://github.com/bitbug0x55AA/dumpex/issues/98)). Five
   presentation defects, no change to any record shape, coverage meaning,
