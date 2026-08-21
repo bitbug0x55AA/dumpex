@@ -2716,9 +2716,9 @@ reduction path is introduced.
 
 - `Access` is rendered as `0x%08x` in the console while remaining a
   plain integer in JSON (§1.3). The column keeps the **raw** mask in
-  both views; what the mask permits for the row's recorded object type
-  is decoded once per distinct `(type, mask)` pair in §5.6.4's block
-  under the table.
+  both views, and is the only place it is printed; what that mask permits
+  for the row's own recorded object type is named on the row's own
+  indented `Rights` line (§5.6.4).
 - **Names are attacker-controlled and are escaped on their way to the
   terminal.** `TypeName`/`ObjectName` are decoded out of the dump, so a
   raw `print()` of one is input to the terminal's parser, not just text
@@ -2773,10 +2773,11 @@ reduction path is introduced.
   normal one. Both caps sit far above any real Windows object type name.
   `Access` is measured like the rest even though a raw 32-bit mask
   cannot overflow it. §5.6.4's decoded rights are deliberately **not**
-  put in this column: a fully decoded `File` mask is ~110 characters, so
-  it would either pad every row to that width or (with the cap) push
-  every `File` row's remaining columns right, and truncating a right
-  name is forbidden outright.
+  put in this column but on a continuation line under the row: a fully
+  decoded `File` mask is ~110 characters, so inline it would either pad
+  every row to that width or (with the cap) push every `File` row's
+  remaining columns right, and truncating a right name is forbidden
+  outright.
 
   The single width rule is `column_width()` in
   `dumpex/ui/console_layout.py`, shared with §3.8.1's import table so the
@@ -2927,34 +2928,50 @@ enumerate evidence the dump does not carry:
 The `Access` column is faithful to the dump and unreadable during triage:
 an investigator has to know that access bits are object-type-specific,
 identify the captured type, and look up the Windows access-right
-definitions before they can say what a captured handle permitted. The
-console therefore decodes each printed mask against **that row's own
-recorded type** and prints the result under the table:
+definitions before they can say what a captured handle permitted. Every
+printed row therefore carries an indented `Rights` line naming what its
+mask permits **for that row's own recorded type**:
 
 ```
   Handle              Type            Access      Cnt  Ptr  Object
-  0x0000000000000234  File            0x0012019f    1   32  \Device\NamedPipe\mypipe
-  0x0000000000000238  Key             0x00020019    1    3  \REGISTRY\MACHINE\SOFTWARE
-  0x0000000000000300  Process         0x001fffff    1    1  (unnamed)
-  0x000000000000030c  WaitCompletionPacket  0x0012019f  1  3  X
-
-  Access rights
-    Decoded from each row's own recorded object type -- the same bit means different
-    things for a File, a Process and a Token. These are observations about what the
-    captured handle permitted, not evidence that anything was done with it.
-    File 0x0012019f
-      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
-      ReadControl|Synchronize
-    Key 0x00020019
-      QueryValue|EnumerateSubKeys|Notify|ReadControl
-    Process 0x001fffff
-      AllAccess
-    WaitCompletionPacket 0x0012019f
-      ReadControl|Synchronize|?0x0000019f
-    +0x... = bits with no documented right for that object type; ?0x... = the recorded
-    type is not one dumpex decodes, so its type-specific bits are shown exactly as captured.
+  0x000000000000005c  Key             0x00020019    2  65536  \REGISTRY\...\Versions
+      Rights  QueryValue | EnumerateSubKeys | Notify | ReadControl
+  0x00000000000001dc  Thread          0x001fffff    6  131062  (unnamed)
+      Rights  AllAccess
+  0x000000000000006c  TpWorkerFactory 0x000f037f    1    1  (unnamed)
+      Rights  Delete | ReadControl | WriteDac | WriteOwner |
+              TypeSpecificUnavailable(0x0000037f)
+  0x0000000000000070  Event           (unknown)     1    1  (unnamed)
+  Rights decode each row's own Access mask against its recorded object type -- the same
+  bit means different things for a File, a Process and a Token. They are an observation
+  about what the handle permitted, never evidence that it was used.
 ```
 
+- **The rights belong to the row, not to a table of their own.** The
+  line sits directly under the handle it decodes, so an investigator
+  reads one row and gets its answer, in the order §5.4 already put the
+  rows in. This is a correction of this feature's first cut, which
+  collected the decodes into a de-duplicated `(type, mask)` block under
+  the table: the block was shorter, but it made the reader carry a type
+  and a mask from a row down to a second, differently-ordered table and
+  look them up there — the manual lookup #102 exists to remove,
+  performed inside dumpex's own output. The cost of attaching is that
+  the printed table roughly doubles in height; the rows are already
+  folded to the ones carrying evidence (§5.6.1), and an indented line
+  under its row does not compete with it.
+- **Not in the `Access` column**, because a fully decoded `File` mask is
+  ~110 characters and §5.6 sizes each column to the widest value it
+  holds: inline, that would either pad every row to 110 columns or (with
+  §5.6's cap) push every `File` row's remaining columns right. The
+  continuation line wraps instead, and nothing is ever truncated.
+- **The captured mask is printed exactly once**, in the row's own
+  `Access` column, and the `Rights` line never repeats it. The column is
+  the evidence anchor: it is aligned for a column-wise scan, and it is
+  what a reader compares against a reference and copies into a ticket. A
+  second copy one line below adds nothing and costs the width the right
+  names need. The only hexadecimal value a `Rights` line may carry is an
+  undecoded remainder, which is a **part** of the mask that appears
+  nowhere else.
 - **The decoder is a pure projection of the record.** It consumes the
   already-normalized `granted_access` integer and `type_name`, and
   nothing else: it never queries a live process, opens a handle, reads
@@ -2963,26 +2980,43 @@ recorded type** and prints the result under the table:
   value in every structured output (§5.2); the names are derived text.
   Decoding cannot change which records exist, which rows print,
   `summary`, `by_type`, `coverage`, the diagnostics, the ordering, the
-  exit code, or §5.6.1's folding.
+  exit code, or §5.6.1's folding. A folded row takes its `Rights` line
+  with it, and `--verbose` gets both back together.
 - **Rights are type-specific and are selected by a frozen registry.** Bit
   `0x0001` is `FILE_READ_DATA` on a `File`, `THREAD_TERMINATE` on a
   `Thread`, `TOKEN_ASSIGN_PRIMARY` on a `Token` and `SECTION_QUERY` on a
-  `Section` (and the terminate right on a `Process`). One global bit-to-name table would therefore be wrong for
-  every type but one, which is why §5.2 shipped the raw mask. The
-  registry covers `File`, `Process`, `Thread`, `Token`, `Section`, `Job`,
-  `Directory`, `SymbolicLink`, `Event`, `Mutant`, `Semaphore`, `Timer`
-  and `Key`, and is extended by adding a table and a key — no collector,
-  record or schema change.
+  `Section` (and the terminate right on a `Process`). One global
+  bit-to-name table would therefore be wrong for every type but one,
+  which is why §5.2 shipped the raw mask. The registry covers `File`,
+  `Process`, `Thread`, `Token`, `Section`, `Job`, `Directory`,
+  `SymbolicLink`, `Event`, `Mutant`, `Semaphore`, `Timer`, `Key`,
+  `IoCompletion`, `Desktop` and `WindowStation`, and is extended by
+  adding a table and a key — no collector, record or schema change.
+
+  The last three are not in #102's own list and are there because a real
+  handle table is full of them. A `Desktop` or `WindowStation` handle is
+  how one session's process reaches another's input queue, clipboard and
+  screen, and a row that could only say "unknown type-specific bits" for
+  it answered nothing at all.
+
+  Types whose rights have **no authoritative public definition** —
+  `TpWorkerFactory`, `WaitCompletionPacket`, `ALPC Port`,
+  `EtwRegistration`, `IRTimer` — are deliberately absent, however common
+  they are. Their rights live in reverse-engineered headers, or the
+  object reuses another type's rights by convention only, and a guess
+  presented as a decoded permission is exactly what §5.2 refused to
+  ship.
 - **Names are the Windows constant with its object-type prefix dropped
   and the remainder CamelCased** (`FILE_READ_DATA` → `ReadData`,
   `THREAD_QUERY_LIMITED_INFORMATION` → `QueryLimitedInformation`): the
-  type is already in the row's Type column, and repeating it in each of
-  nine names costs the width that makes the rights readable at all. Each
-  table in `dumpex/ui/access_rights.py` carries the authoritative
-  constant next to the short name. Where one bit has two documented
-  spellings (`FILE_READ_DATA`/`FILE_LIST_DIRECTORY`), the file-semantics
-  name is used for both: the descriptor does not record whether the
-  object is a directory, and the two readings are the same captured bit.
+  type is already on the row the line sits under, and repeating it in
+  each of nine names costs the width that makes the rights readable at
+  all. Each table in `dumpex/ui/access_rights.py` carries the
+  authoritative constant next to the short name. Where one bit has two
+  documented spellings (`FILE_READ_DATA`/`FILE_LIST_DIRECTORY`), the
+  file-semantics name is used for both: the descriptor does not record
+  whether the object is a directory, and the two readings are the same
+  captured bit.
 - **Order is frozen and deterministic**: composite aliases that fired,
   then the type's specific rights by ascending bit value, then the
   standard rights by ascending bit value (`Delete`, `ReadControl`,
@@ -2991,8 +3025,8 @@ recorded type** and prints the result under the table:
   than alphabetically keeps a right in the same position across every
   type and every mask, so two rows can be compared by eye.
 - **An alias consumes its own bits, so nothing is reported twice.** The
-  only composite emitted is each type's own `*_ALL_ACCESS`, which fires
-  when the mask carries **all** of its bits; `AllAccess` and the fourteen
+  only composite emitted is a type's own `*_ALL_ACCESS`, which fires when
+  the mask carries **all** of its bits; `AllAccess` and the fourteen
   component names it stands for can never both appear. The
   `FILE_GENERIC_READ`/`KEY_READ` family is deliberately not aliased: such
   a name differs from the `GENERIC_*` bits by one word while meaning
@@ -3000,48 +3034,58 @@ recorded type** and prints the result under the table:
   `(0x00120089)` could not tell which of the two the dump captured.
 
   An alias is the SDK constant as defined, never a tidied-up version of
-  it. `SYMBOLIC_LINK_ALL_ACCESS` is
+  it, and a type without such a constant gets none. `WINSTA_ALL_ACCESS`
+  is the specific bits alone and winuser.h defines no
+  `DESKTOP_ALL_ACCESS`, so `WindowStation` and `Desktop` list their
+  rights instead — one name that meant "everything, standard rights
+  included" on a `File` and something narrower here would be worse than
+  the list. `SYMBOLIC_LINK_ALL_ACCESS` is
   `STANDARD_RIGHTS_REQUIRED | SYMBOLIC_LINK_QUERY` and predates
   `SYMBOLIC_LINK_SET` (`0x0002`), which was never folded into it, so
-  `0x000f0003` decodes as `AllAccess|Set` — the honest decomposition.
-  Widening the alias to cover `Set` would claim `AllAccess` for a mask
-  that is not that constant and would swallow the `Set` bit on the way.
+  `0x000f0003` decodes as `AllAccess | Set` — the honest decomposition.
+  Widening either alias would claim `AllAccess` for a mask that is not
+  that constant and would swallow the extra bit on the way.
 - **Nothing is invented and nothing is dropped.** The names plus the
-  residual always reconstruct the captured mask exactly:
+  remainder always reconstruct the captured mask exactly:
   - bits with no documented right for a type the registry carries are
-    appended as `+0x%08x`, so an undocumented or future bit stays
-    auditable at its own raw value;
+    reported as `UnknownBits(0x%08x)`, so an undocumented or future bit
+    stays auditable at its own raw value;
   - every undecoded bit of a mask whose type the registry does **not**
     carry — including a type that is `(unnamed)` or `(unreadable)` — is
-    appended as `?0x%08x` instead, which is a different fact: nothing is
-    wrong with the bit, dumpex simply has no type to read it against.
-    The type-**independent** bits are still decoded in that case, because
-    the standard and generic rights mean the same thing for every object
-    type.
+    reported as `TypeSpecificUnavailable(0x%08x)` instead, which is a
+    different fact: nothing is wrong with the bit, dumpex simply has no
+    type to read it against. The type-**independent** bits are still
+    decoded in that case, because the standard and generic rights mean
+    the same thing for every object type.
+  - each **names its own kind and carries its own value**, so a reader
+    tells an undocumented bit from an undecodable type without a legend
+    under the table; an earlier cut wrote them as bare `+0x…`/`?0x…`
+    markers and needed one. The value is the REMAINDER, never the whole
+    mask: `TypeSpecificUnavailable(0x000f037f)` on the example above
+    would claim the four standard rights it just named were undecodable
+    too.
   - **generic bits are reported exactly as captured** and are never
     expanded through an assumed `GENERIC_MAPPING`: the mapping lives in
     the kernel object type, the dump does not record it, and a generic
     bit still set in `GrantedAccess` is itself the fact worth showing.
-- **A zero mask is `(no rights)`**, stated positively. It is a captured
-  mask that granted nothing, and must not read like the `(unknown)` an
-  **absent** mask prints (§1.4). A null `granted_access` gets no entry at
-  all — absent evidence is never decoded into "no rights".
-- **The block is de-duplicated, bounded, and never truncated.** One entry
-  per distinct `(recorded type, mask)` pair among the rows actually
-  printed, ordered by type label then mask ascending (§1.5), so a table
-  whose 200 `File` rows share `0x00120089` gets one entry rather than
-  200. It cannot exceed one entry per printed row. A rights list wider
-  than the terminal wraps after a `|`, so no name is split and none is
-  dropped; the marker legend prints only when a marker is on screen.
-- Entries are keyed by `(type_name_status, type_name, mask)` and labelled
-  afterwards through the same `handle_name_display()` the Type column
-  uses — `console_safe()` is not injective, and a decode filed under a
-  colliding escaped label would show one handle's rights against another
-  handle's type. The label is escaped like every other dump-derived
-  string on the block.
-- Entries describe the rows the current view **printed**, so `--verbose`
-  gains the entries of the rows it un-folds. The decoding rules
-  themselves are identical in both views.
+- **A zero mask is `(no rights)`**, stated positively: the column shows
+  the captured `0x00000000` and the line says what it means. It must not
+  read like the `(unknown)` an **absent** mask prints (§1.4), which stays
+  the column's word alone — a null `granted_access` gets no `Rights` line
+  at all, because absent evidence is never decoded into "no rights".
+- **A wrapped line never loses a name.** Breaks fall only on the ` | `
+  separators this projection wrote itself, so a continued line ends in
+  ` |`, and neither a right name nor a remainder token is ever split in
+  half. A single piece wider than the console overflows rather than
+  being cut. Continuation lines are indented past the `Rights` label, so
+  they cannot be read as a new row.
+- **No dump-derived string reaches the line.** It is dumpex's own
+  vocabulary plus numbers derived from one integer, so unlike the Type
+  and Object columns it has nothing for a hostile name to ride in on.
+- **One shared caption** is printed under the table whenever at least one
+  `Rights` line was printed, and never otherwise. It states the two
+  things a reader needs in order to read those lines correctly: the
+  rights are type-dependent, and they are an observation.
 - **A decoded right is an observation, never a verdict** (§1.6).
   `AllAccess` on a `Process` handle is evidence worth reading; it is not
   proof that anything was done with the handle, that any access
@@ -3590,13 +3634,27 @@ excuses anything in §0–§8.
   ([issue #102](https://github.com/bitbug0x55AA/dumpex/issues/102)).
   §5.6.4 freezes a presentation-layer decoder over the existing
   `granted_access` integer: a per-object-type right registry, a frozen
-  canonical order, alias bits consumed exactly once, residual bits kept
-  visible at their raw value under two distinct markers (`+` for an
-  undocumented bit, `?` for a type dumpex does not decode), zero stated
-  as `(no rights)` and null still stated as `(unknown)`. Nothing else
-  moved: `granted_access` is the same raw integer in v2.13 JSON (§7.1's
-  “no CSV surface” is unchanged — `--csv` does not exist), the schema is
-  untouched, the Access column still prints the exact mask,
+  canonical order, alias bits consumed exactly once, remainders kept
+  visible at their raw value under two named tokens
+  (`UnknownBits(0x…)` for an undocumented bit,
+  `TypeSpecificUnavailable(0x…)` for a type dumpex does not decode), zero
+  stated as `(no rights)` and null still stated as `(unknown)` by the
+  Access column alone.
+
+  The decode is attached to **each printed row** as an indented `Rights`
+  line, and it never repeats the captured mask: the `Access` column is
+  the single printed copy of that value, kept as the aligned evidence
+  anchor a reader scans, compares and copies. A first cut collected it into a de-duplicated `(type, mask)`
+  block under the table; a review against a real sample found that this
+  only moved the lookup inside dumpex's own output — the reader still had
+  to carry a type and a mask to a second, differently-ordered table —
+  and that types a real handle table is full of (`Desktop`,
+  `WindowStation`, `IoCompletion`) were missing from the registry
+  entirely. Both are fixed here.
+
+  Nothing else moved: `granted_access` is the same raw integer in v2.13
+  JSON (§7.1's “no CSV surface” is unchanged — `--csv` does not exist),
+  the schema is untouched, the Access column still prints the exact mask,
   and §5.6.1's folding, the coverage meanings, the limitation codes, the
   ordering rules and the exit codes are all unchanged. The decoded text
   is an observation about what a captured handle permitted and never a

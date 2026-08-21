@@ -1535,47 +1535,78 @@ def test_column_widths_are_measured_on_the_escaped_text():
     _assert_columns_line_up(text)
 
 
-# ── #102 §5.6.4: the Access rights block ────────────────────────────────
+# ── #102 §5.6.4: the per-row Rights line ────────────────────────────────
 
-_ACCESS_LABEL_RE = re.compile(r"^ {4}(\S.*? 0x[0-9a-f]{8})$")
-
-
-def _access_block(text: str) -> list:
-    """The `Access rights` block's own lines, or [] when it was not
-    printed. Bounded by the blank line every following block starts
-    with."""
-    lines = text.splitlines()
-    start = next((i for i, line in enumerate(lines)
-                   if line.strip() == "Access rights"), None)
-    if start is None:
-        return []
-    body = []
-    for line in lines[start + 1:]:
-        if not line.strip():
-            break
-        body.append(line)
-    return body
+_RIGHTS_PREFIX = "      Rights  "
+_RIGHTS_HANG = " " * 14
 
 
-def _access_entries(text: str) -> list:
-    """-> [(label, rights text), ...] in the order printed, with each
-    entry's wrapped rights lines rejoined exactly as they were split."""
-    entries = []
-    for line in _access_block(text):
-        matched = _ACCESS_LABEL_RE.match(line)
-        if matched:
-            entries.append([matched.group(1), ""])
-        elif entries and line.startswith(" " * 6):
-            entries[-1][1] += line.strip()
-    return [(label, rights) for label, rights in entries]
+def _rights_lines(text: str) -> list:
+    """Every rendered `Rights` line, in the order printed, each one
+    rejoined with its own wrapped continuations (a continued line ends in
+    ` |`, so a single space puts it back together)."""
+    lines = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if line.startswith(_RIGHTS_PREFIX):
+            lines.append(stripped[len("Rights  "):])
+        elif lines and line.startswith(_RIGHTS_HANG) and stripped:
+            lines[-1] += " " + stripped
+    return lines
 
 
-def _access_prose(text: str) -> str:
-    """Everything in the block that is not an entry -- the intro and, when
-    a residual marker is on screen, the marker legend."""
-    return " ".join(line.strip() for line in _access_block(text)
-                     if not _ACCESS_LABEL_RE.match(line)
-                     and not line.startswith(" " * 6))
+def _row_and_rights_pairs(text: str) -> list:
+    """-> [(table row, its Rights text or None), ...] -- the pairing an
+    investigator actually reads, taken off the rendered output rather
+    than off the records."""
+    pairs = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("0x") and "  " in stripped:
+            pairs.append([line, None])
+        elif line.startswith(_RIGHTS_PREFIX) and pairs:
+            pairs[-1][1] = stripped[len("Rights  "):]
+        elif pairs and pairs[-1][1] is not None and line.startswith(_RIGHTS_HANG) and stripped:
+            pairs[-1][1] += " " + stripped
+    return [(row, rights) for row, rights in pairs]
+
+
+def test_every_printed_row_carries_its_own_decoded_rights():
+    """The whole point of #102: no investigator should have to hold a
+    `type + mask` in their head and go looking for it somewhere else on
+    the screen."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x5C, "type_name": "Key", "object_name": r"\REGISTRY\MACHINE\SOFTWARE",
+         "granted_access": 0x00020019, "handle_count": 2, "pointer_count": 65536},
+        {"handle": 0x1DC, "type_name": "Thread", "object_name": "T",
+         "granted_access": 0x001FFFFF},
+    ]))
+    pairs = _row_and_rights_pairs(_console(result))
+
+    assert len(pairs) == 2
+    assert "Key" in pairs[0][0] and "0x00020019" in pairs[0][0]
+    assert pairs[0][1] == "QueryValue | EnumerateSubKeys | Notify | ReadControl"
+    assert "Thread" in pairs[1][0] and "0x001fffff" in pairs[1][0]
+    assert pairs[1][1] == "AllAccess"
+
+
+def test_the_rights_lines_follow_the_table_s_own_order():
+    """§5.4 orders rows by handle value, and an investigation walks them
+    in that order. The rights are attached to the rows, so they cannot
+    drift into an order of their own."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x30, "type_name": "Key", "object_name": "C", "granted_access": 0x20019},
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 1},
+        {"handle": 0x20, "type_name": "Process", "object_name": "B", "granted_access": 1},
+    ]))
+    pairs = _row_and_rights_pairs(_console(result))
+
+    assert [row.split()[0] for row, _ in pairs] == [
+        "0x0000000000000010", "0x0000000000000020", "0x0000000000000030"]
+    assert [rights for _row, rights in pairs] == [
+        "ReadData",
+        "Terminate",
+        "QueryValue | EnumerateSubKeys | Notify | ReadControl"]
 
 
 def test_the_access_column_still_carries_the_exact_raw_mask():
@@ -1590,49 +1621,37 @@ def test_the_access_column_still_carries_the_exact_raw_mask():
 
     assert ("0x0000000000000234  File            0x0012019f    1   32  A") in text
     assert result.records[0].granted_access == 0x0012019F   # ... and the record is raw
-    assert _access_entries(text)[0][0] == "File 0x0012019f"
+    # ... and the column is the ONLY place that value is printed: the
+    # rights line beneath it carries the reading, not a second copy.
+    assert text.count("0x0012019f") == 1
+    assert "0x" not in _rights_lines(text)[0]
 
 
 def test_the_same_low_order_bit_decodes_by_each_row_s_recorded_type():
     """The cross-type case the raw-mask contract could not express: bit
     0x0001 is FILE_READ_DATA on a File, PROCESS_TERMINATE on a Process
-    and TOKEN_ASSIGN_PRIMARY on a Token, in one table."""
+    and TOKEN_ASSIGN_PRIMARY on a Token, on three adjacent rows."""
     result = collect_handles(_mf_with([
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 1},
         {"handle": 0x20, "type_name": "Process", "object_name": "B", "granted_access": 1},
         {"handle": 0x30, "type_name": "Token", "object_name": "C", "granted_access": 1},
     ]))
 
-    assert _access_entries(_console(result)) == [
-        ("File 0x00000001", "ReadData"),
-        ("Process 0x00000001", "Terminate"),
-        ("Token 0x00000001", "AssignPrimary"),
-    ]
+    assert _rights_lines(_console(result)) == [
+        "ReadData", "Terminate", "AssignPrimary"]
 
 
-def test_one_entry_per_distinct_type_and_mask_however_many_rows_share_it():
-    """A real handle table repeats a handful of masks across hundreds of
-    rows. De-duplicating is what keeps the block a few lines instead of a
-    second copy of the table."""
+def test_a_repeated_mask_is_decoded_on_every_row_that_carries_it():
+    """Twenty File rows sharing one mask get twenty answers, not one
+    shared entry the reader has to go and find."""
     result = collect_handles(_mf_with(
         [{"handle": 0x10 + i, "type_name": "File", "object_name": f"A{i}",
-          "granted_access": 0x00120089} for i in range(20)]
-        + [{"handle": 0x100, "type_name": "File", "object_name": "B",
-            "granted_access": 0x0012019F}]))
-    entries = _access_entries(_console(result))
+          "granted_access": 0x00120089} for i in range(20)]))
+    lines = _rights_lines(_console(result))
 
-    assert [label for label, _ in entries] == ["File 0x00120089", "File 0x0012019f"]
-
-
-def test_entries_are_ordered_by_type_then_mask():
-    result = collect_handles(_mf_with([
-        {"handle": 0x10, "type_name": "Key", "object_name": "A", "granted_access": 0x20019},
-        {"handle": 0x20, "type_name": "File", "object_name": "B", "granted_access": 0x120089},
-        {"handle": 0x30, "type_name": "File", "object_name": "C", "granted_access": 0x000F01FF},
-    ]))
-
-    assert [label for label, _ in _access_entries(_console(result))] == [
-        "File 0x000f01ff", "File 0x00120089", "Key 0x00020019"]
+    assert len(lines) == 20
+    assert set(lines) == {
+        "ReadData | ReadEa | ReadAttributes | ReadControl | Synchronize"}
 
 
 def test_a_zero_mask_reads_as_no_rights_rather_than_missing_evidence():
@@ -1641,35 +1660,55 @@ def test_a_zero_mask_reads_as_no_rights_rather_than_missing_evidence():
     ]))
     text = _console(result)
 
-    assert _access_entries(text) == [("Section 0x00000000", "(no rights)")]
+    assert _rights_lines(text) == ["(no rights)"]
+    # The column carries the captured zero, the line says what it means,
+    # and neither reads like the absent-mask case.
+    assert "0x00000000" in text
     assert "(unknown)" not in text
 
 
 def test_an_absent_mask_is_never_decoded_at_all():
-    """§5.2.2's null `granted_access` is absent evidence. It prints
-    `(unknown)` in the column and contributes no entry -- an entry saying
-    "(no rights)" would turn a missing value into a captured one."""
+    """§5.2.2's null `granted_access` is absent evidence. `(unknown)`
+    stays the Access column's word alone and the row gets no Rights line
+    -- a line saying "(no rights)" would turn a missing value into a
+    captured one."""
     result = collect_handles(_mf_from_descriptors(
         [_descriptor(0x10, granted_access=None, type_name="Process", type_name_rva=8)]))
     text = _console(result)
 
     assert "(unknown)" in text
-    assert _access_block(text) == []
+    assert _rights_lines(text) == []
+    assert "Rights" not in text
 
 
 def test_an_unsupported_type_keeps_the_mask_and_says_what_is_undecoded():
     """A type dumpex has no table for still decodes the type-INDEPENDENT
-    half of the mask; the type-specific half is shown exactly as captured
-    under the `?` marker, never read against some other type's rights."""
+    half of the mask; the type-specific half is named as unknown and
+    shown exactly as captured, never read against some other type's
+    rights."""
     result = collect_handles(_mf_with([
-        {"handle": 0x10, "type_name": "WaitCompletionPacket", "object_name": "A",
+        {"handle": 0x10, "type_name": "TpWorkerFactory", "object_name": "A",
          "granted_access": 0x0012019F},
     ]))
-    text = _console(result)
 
-    assert _access_entries(text) == [
-        ("WaitCompletionPacket 0x0012019f", "ReadControl|Synchronize|?0x0000019f")]
-    assert "?0x... = the recorded type is not one dumpex decodes" in _access_prose(text)
+    assert _rights_lines(_console(result)) == [
+        "ReadControl | Synchronize | TypeSpecificUnavailable(0x0000019f)"]
+
+
+def test_the_station_and_desktop_types_a_real_dump_is_full_of_are_decoded():
+    """The types that made the first cut of this feature useless on a
+    real sample: both used to render as unknown bits alone."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "WindowStation", "object_name": r"\Windows\WinSta0",
+         "granted_access": 0x00000024},
+        {"handle": 0x20, "type_name": "Desktop", "object_name": r"\Default",
+         "granted_access": 0x00000102},
+    ]))
+
+    assert _rights_lines(_console(result)) == [
+        "AccessClipboard | AccessGlobalAtoms",
+        "CreateWindow | SwitchDesktop",
+    ]
 
 
 def test_a_row_with_no_readable_type_is_decoded_the_same_way():
@@ -1680,18 +1719,16 @@ def test_a_row_with_no_readable_type_is_decoded_the_same_way():
         {"handle": 0x10, "type_name": BAD_RVA, "object_name": "A", "granted_access": 0x00100001},
     ]))
 
-    assert _access_entries(_console(result)) == [
-        ("(unreadable) 0x00100001", "Synchronize|?0x00000001")]
+    assert _rights_lines(_console(result)) == [
+        "Synchronize | TypeSpecificUnavailable(0x00000001)"]
 
 
 def test_bits_with_no_documented_right_stay_visible_at_their_raw_value():
     result = collect_handles(_mf_with([
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x00008001},
     ]))
-    text = _console(result)
 
-    assert _access_entries(text) == [("File 0x00008001", "ReadData|+0x00008000")]
-    assert "+0x... = bits with no documented right" in _access_prose(text)
+    assert _rights_lines(_console(result)) == ["ReadData | UnknownBits(0x00008000)"]
 
 
 def test_generic_bits_are_reported_as_captured_and_never_expanded():
@@ -1702,52 +1739,57 @@ def test_generic_bits_are_reported_as_captured_and_never_expanded():
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x80000000},
     ]))
 
-    assert _access_entries(_console(result)) == [("File 0x80000000", "GenericRead")]
+    assert _rights_lines(_console(result)) == ["GenericRead"]
 
 
-def test_the_marker_legend_is_printed_only_when_a_marker_is_on_screen():
-    clean = collect_handles(_mf_with([
-        {"handle": 0x10, "type_name": "Process", "object_name": "A",
-         "granted_access": 0x001FFFFF}]))
-    text = _console(clean)
-
-    assert _access_entries(text) == [("Process 0x001fffff", "AllAccess")]
-    assert "+0x..." not in _access_prose(text)
-    assert "?0x..." not in _access_prose(text)
-
-
-def test_long_rights_wrap_without_losing_a_name_or_the_mask():
+def test_long_rights_wrap_under_the_row_without_losing_a_name():
     """§5.6.4 must not truncate: a fully decoded File mask is wider than
-    any console, so it wraps -- and every name survives the wrap."""
+    the console, so it wraps under its own row -- every name survives and
+    the continuation is indented past the label so it cannot read as a
+    new row."""
     result = collect_handles(_mf_with([
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x0012019F},
     ]))
     text = _console(result)
-    (label, rights), = _access_entries(text)
 
-    assert label == "File 0x0012019f"
-    assert rights == ("ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|"
-                      "WriteAttributes|ReadControl|Synchronize")
-    # It really did wrap, and no line runs past the resolved width.
-    body = [line for line in _access_block(text) if line.startswith(" " * 6)]
-    assert len(body) > 1
-    assert all(len(line) <= resolve_width() for line in body)
+    assert _rights_lines(text) == [
+        "ReadData | WriteData | AppendData | ReadEa | WriteEa | ReadAttributes | "
+        "WriteAttributes | ReadControl | Synchronize"]
+    printed = [line for line in text.splitlines()
+                if line.startswith(_RIGHTS_PREFIX) or line.startswith(_RIGHTS_HANG)]
+    assert len(printed) > 1
+    assert all(len(line) <= resolve_width() for line in printed)
 
 
-def test_the_block_is_an_observation_and_never_a_verdict():
+def test_the_rights_lines_are_an_observation_and_never_a_verdict():
     """§1.6: a powerful permission is evidence worth reading, not a
-    finding. Nothing in this block may score, rank, or accuse."""
+    finding. Nothing here may score, rank, or accuse."""
     result = collect_handles(_mf_with([
         {"handle": 0x10, "type_name": "Process", "object_name": "A",
          "granted_access": 0x001FFFFF},
     ]))
     text = _console(result)
 
-    assert "not evidence that anything was done with it" in _access_prose(text)
-    lowered = "\n".join(_access_block(text)).lower()
+    assert "Rights decode each row's own Access mask against its recorded object type" in text
+    assert "never evidence that it was used" in text
+    lowered = text.lower()
     for word in ("suspicious", "malicious", "injection", "detected", "score",
                   "confidence", "threat"):
         assert word not in lowered
+
+
+def test_the_shared_caption_is_printed_once_and_only_with_the_lines():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 1},
+        {"handle": 0x20, "type_name": "File", "object_name": "B", "granted_access": 2},
+    ]))
+    text = _console(result)
+
+    assert text.count("Rights decode each row's own Access mask") == 1
+    # Nothing decoded at all -> no caption, because there is nothing for
+    # it to explain.
+    empty = _console(collect_handles(_mf_with([])))
+    assert "Rights decode each row's own Access mask" not in empty
 
 
 # ── #102 x #98: decoding changes nothing about which rows exist ─────────
@@ -1777,40 +1819,46 @@ def test_decoding_does_not_change_folding_retention_or_coverage():
     assert len(_rows(verbose_text)) == 3
 
 
-def test_an_entry_describes_a_row_the_reader_can_actually_see():
-    """The block explains the Access column, so it is derived from the
-    PRINTED rows: a folded row's mask would otherwise be explained
-    nowhere near a row carrying it. `--verbose` prints the row and gets
-    its entry with it."""
+def test_a_folded_row_takes_its_rights_line_with_it():
+    """The line belongs to a row, so a view that does not print the row
+    does not print the line -- and `--verbose` gets both back
+    together."""
     descriptors = [
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x120089},
         {"handle": 0x20, "type_name": "Event", "object_name": None, "granted_access": 0x1F0003},
     ]
-    default = _access_entries(_console(collect_handles(_mf_with(descriptors))))
-    verbose = _access_entries(_console(collect_handles(_mf_with(descriptors)), verbose=True))
+    default = _rights_lines(_console(collect_handles(_mf_with(descriptors))))
+    verbose = _rights_lines(_console(collect_handles(_mf_with(descriptors)), verbose=True))
 
-    assert [label for label, _ in default] == ["File 0x00120089"]
-    assert [label for label, _ in verbose] == ["Event 0x001f0003", "File 0x00120089"]
+    assert default == ["ReadData | ReadEa | ReadAttributes | ReadControl | Synchronize"]
+    assert verbose == default + ["AllAccess"]
 
 
-def test_a_hostile_type_name_cannot_forge_output_from_the_block():
-    """The entry label carries a dump-derived type name and is escaped
-    exactly like the Type column it mirrors."""
+def test_the_rights_always_belong_to_the_row_above_them():
+    """The pairing is what the whole redesign rests on: the line under a
+    row decodes THAT row's mask against THAT row's type."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x00000002},
+        {"handle": 0x20, "type_name": "Thread", "object_name": "B", "granted_access": 0x00000002},
+    ]))
+
+    for row, rights in _row_and_rights_pairs(_console(result)):
+        assert rights == ("WriteData" if " File " in row else "SuspendResume")
+
+
+def test_a_hostile_type_name_cannot_forge_output_through_the_rights_line():
+    """The Rights line is dumpex's own vocabulary plus numbers -- no
+    dump-derived string reaches it, so a hostile type name has nothing to
+    ride in on. The Type column escapes it as before."""
     result = collect_handles(_mf_with([
         {"handle": 0x10, "type_name": "A\x1bB\nHandle", "object_name": "X",
          "granted_access": 1},
     ]))
     text = _console(result)
 
-    assert "A\\x1bB\\x0aHandle 0x00000001" in text
+    assert "A\\x1bB\\x0aHandle" in text
+    assert _rights_lines(text) == ["TypeSpecificUnavailable(0x00000001)"]
     assert "\x1b[" not in text.replace("\x1b[0m", "")
-
-
-def test_the_block_is_absent_when_no_row_is_printed():
-    """Nothing to explain, and a header over an empty block would read as
-    a claim about handles that were not captured."""
-    assert _access_block(_console(collect_handles(_mf_with([])))) == []
-    assert _access_block(_console(collect_handles(_mf()))) == []
 
 
 def test_no_decoded_right_ever_reaches_the_record():

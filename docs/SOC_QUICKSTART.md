@@ -51,27 +51,26 @@ question turns on. A name like `\KnownDlls` is a real NT Object Manager
 **directory**, not a filesystem path; the descriptor records the
 directory's name, and the objects inside it are not in the dump.
 
-Under the table, an `Access rights` block says what each printed mask
+Every printed row carries its own `Rights` line saying what that mask
 permits **for that row's recorded object type** — the same bit is
 `ReadData` on a `File`, `Terminate` on a `Process` and `AssignPrimary` on
 a `Token`, so a mask read against the wrong type is simply wrong:
 
 ```text
-  Access rights
-    File 0x0012019f
-      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
-      ReadControl|Synchronize
-    Process 0x001fffff
-      AllAccess
+  0x000000000000005c  Key             0x00020019    2  65536  \REGISTRY\...\Versions
+      Rights  QueryValue | EnumerateSubKeys | Notify | ReadControl
+  0x00000000000001dc  Thread          0x001fffff    6  131062  (unnamed)
+      Rights  AllAccess
 ```
 
-The `Access` column keeps the exact captured mask, and `granted_access`
-stays that same raw integer in `--json` — the names are a reading of it,
-never a replacement. `(no rights)` means the dump captured a mask of
-zero; `(unknown)` means no mask was captured at all. A `+0x…` or `?0x…`
-tail is the part that was **not** decoded (an undocumented bit, or an
-object type dumpex has no right table for) shown at its raw value rather
-than guessed at.
+The `Access` column keeps the exact captured mask and is the only place
+it is printed, and `granted_access` stays that same raw integer in
+`--json` — the names are a reading of it, never a replacement.
+`(no rights)` means the dump captured a mask of zero; `(unknown)` means
+no mask was captured at all, and such a row has no `Rights` line. An
+`UnknownBits(0x…)` or `TypeSpecificUnavailable(0x…)` tail is the part
+that was **not** decoded (an undocumented bit, or an object type dumpex
+has no right table for) shown at its raw value rather than guessed at.
 
 **A decoded right is an observation, not a verdict.** `AllAccess` on a
 `Process` handle is a lead worth pulling; it is not evidence that the

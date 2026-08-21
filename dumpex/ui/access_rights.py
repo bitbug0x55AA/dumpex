@@ -21,11 +21,14 @@ which is exactly why §5.2 shipped the raw mask and deferred this.
 Three rules keep a decode honest:
 
   1. **Nothing is invented.** Bits with no documented right for the
-     recorded type stay visible as their own raw residual value
-     (`+0x0000c000`), and a type this registry does not carry decodes
-     only the type-INDEPENDENT bits, with the whole type-specific
-     remainder shown as captured (`?0x0000019f`). The exact mask is
-     printed alongside the names in every case.
+     recorded type stay visible at their own raw value
+     (`UnknownBits(0x0000c000)`), and a type this registry does not carry
+     decodes only the type-INDEPENDENT bits, with the whole type-specific
+     remainder shown as captured
+     (`TypeSpecificUnavailable(0x0000019f)`). The console prints this
+     text directly under the row whose `Access` column holds the exact
+     captured mask, so the derived reading and the evidence it came from
+     are always one line apart.
   2. **Nothing is double-reported.** A composite alias consumes its own
      bits, so `AllAccess` and the fourteen component names it stands for
      can never both appear for the same mask.
@@ -37,8 +40,9 @@ Three rules keep a decode honest:
 Names are the Windows constant with its object-type prefix dropped and
 the remainder CamelCased (`FILE_READ_DATA` -> `ReadData`,
 `PROCESS_QUERY_LIMITED_INFORMATION` -> `QueryLimitedInformation`): the
-type is already in the row's own Type column, and repeating it in every
-one of nine names costs the width that makes the rights readable at all.
+type is already on the row this text sits under, and repeating it in
+every one of nine names costs the width that makes the rights readable
+at all.
 Each table below carries the authoritative constant next to the short
 name so the mapping can be re-checked against the SDK headers rather than
 taken on trust.
@@ -55,10 +59,6 @@ __all__ = [
 
 
 _UINT32_MASK = 0xFFFFFFFF
-
-# Bits 0-15 of any access mask are the object type's OWN rights; every
-# bit above them means the same thing for every type (winnt.h).
-_SPECIFIC_RIGHTS_MASK = 0x0000FFFF
 
 # Standard rights (winnt.h), identical across every object type.
 _STANDARD_RIGHTS = (
@@ -85,6 +85,10 @@ _GENERIC_RIGHTS = (
 )
 
 # ── Per-type specific rights ────────────────────────────────────────────
+# Bits 0-15 of any access mask are the object type's OWN rights; every
+# bit above them means the same thing for every type (winnt.h), which is
+# why only this half of the mask needs a table per type.
+#
 # Keyed by the CASEFOLDED type name the dump recorded (§5.2's `type_name`
 # is the NT object type, e.g. "File", "SymbolicLink"). Each entry is
 # (specific-bit table, composite aliases).
@@ -223,6 +227,46 @@ _KEY_RIGHTS = (
     (0x0020, "CreateLink"),              # KEY_CREATE_LINK
 )
 
+# Three more types every real handle table carries. `Desktop` and
+# `WindowStation` in particular are why this list is not the issue's list
+# verbatim: a station/desktop handle is how one session's process reaches
+# another's input queue, clipboard and screen, and a row that could only
+# say "unknown type-specific bits" for it answered nothing at all.
+#
+# Neither has an `*_ALL_ACCESS` constant that includes the standard
+# rights (`WINSTA_ALL_ACCESS` is the specific bits alone, and winuser.h
+# defines no `DESKTOP_ALL_ACCESS`), so neither gets an alias: displaying
+# `AllAccess` for one and meaning something different by it than on a
+# File would be worse than listing what the mask actually grants.
+_DESKTOP_RIGHTS = (
+    (0x0001, "ReadObjects"),             # DESKTOP_READOBJECTS
+    (0x0002, "CreateWindow"),            # DESKTOP_CREATEWINDOW
+    (0x0004, "CreateMenu"),              # DESKTOP_CREATEMENU
+    (0x0008, "HookControl"),             # DESKTOP_HOOKCONTROL
+    (0x0010, "JournalRecord"),           # DESKTOP_JOURNALRECORD
+    (0x0020, "JournalPlayback"),         # DESKTOP_JOURNALPLAYBACK
+    (0x0040, "Enumerate"),               # DESKTOP_ENUMERATE
+    (0x0080, "WriteObjects"),            # DESKTOP_WRITEOBJECTS
+    (0x0100, "SwitchDesktop"),           # DESKTOP_SWITCHDESKTOP
+)
+
+_WINDOW_STATION_RIGHTS = (
+    (0x0001, "EnumDesktops"),            # WINSTA_ENUMDESKTOPS
+    (0x0002, "ReadAttributes"),          # WINSTA_READATTRIBUTES
+    (0x0004, "AccessClipboard"),         # WINSTA_ACCESSCLIPBOARD
+    (0x0008, "CreateDesktop"),           # WINSTA_CREATEDESKTOP
+    (0x0010, "WriteAttributes"),         # WINSTA_WRITEATTRIBUTES
+    (0x0020, "AccessGlobalAtoms"),       # WINSTA_ACCESSGLOBALATOMS
+    (0x0040, "ExitWindows"),             # WINSTA_EXITWINDOWS
+    (0x0100, "Enumerate"),               # WINSTA_ENUMERATE
+    (0x0200, "ReadScreen"),              # WINSTA_READSCREEN
+)
+
+_IO_COMPLETION_RIGHTS = (
+    (0x0001, "QueryState"),              # IO_COMPLETION_QUERY_STATE
+    (0x0002, "ModifyState"),             # IO_COMPLETION_MODIFY_STATE
+)
+
 # (specific rights, ((alias value, alias name), ...)) per casefolded NT
 # type name. Every alias value is the SDK's own `*_ALL_ACCESS` constant;
 # an alias fires only when the mask carries ALL of its bits.
@@ -251,14 +295,29 @@ _TYPE_REGISTRY = {
     "semaphore":    (_SEMAPHORE_RIGHTS,     ((0x001F0003, "AllAccess"),)),
     "timer":        (_TIMER_RIGHTS,         ((0x001F0003, "AllAccess"),)),
     "key":          (_KEY_RIGHTS,           ((0x000F003F, "AllAccess"),)),
+    "iocompletion": (_IO_COMPLETION_RIGHTS, ((0x001F0003, "AllAccess"),)),
+    # No alias -- see the two tables' own comment above.
+    "desktop":      (_DESKTOP_RIGHTS,       ()),
+    "windowstation": (_WINDOW_STATION_RIGHTS, ()),
 }
+
+# Types a real handle table also carries in quantity and this registry
+# deliberately does NOT decode: `TpWorkerFactory`, `WaitCompletionPacket`,
+# `ALPC Port`, `EtwRegistration`, `IRTimer`. Their access rights have no
+# authoritative public definition (they live in reverse-engineered
+# headers, or the object reuses another type's rights by convention
+# only), and a guess presented as a decoded permission is exactly what
+# §5.2 refused to ship. They decode their type-INDEPENDENT bits and
+# report the rest as unknown type-specific bits, which is the honest
+# answer and is visibly different from a decoded row.
 
 # The type names this module decodes, in the spelling a dump records
 # them with -- for documentation and tests, never for a lookup (lookups
 # go through _normalize_type(), which is case-insensitive).
 SUPPORTED_OBJECT_TYPES = frozenset({
-    "Directory", "Event", "File", "Job", "Key", "Mutant", "Process",
-    "Section", "Semaphore", "SymbolicLink", "Thread", "Timer", "Token",
+    "Desktop", "Directory", "Event", "File", "IoCompletion", "Job", "Key",
+    "Mutant", "Process", "Section", "Semaphore", "SymbolicLink", "Thread",
+    "Timer", "Token", "WindowStation",
 })
 
 # What a mask with no bits at all says, spelled out. A zero
@@ -266,6 +325,23 @@ SUPPORTED_OBJECT_TYPES = frozenset({
 # and it granted nothing -- and must not read like the `(unknown)` an
 # absent mask prints (§5.2's null rule).
 NO_RIGHTS_TEXT = "(no rights)"
+
+# The two undecoded remainders. Each names its own kind and carries its
+# own raw value, so a reader can tell an undocumented BIT from an
+# undecodable TYPE without a legend under the table -- an earlier cut
+# wrote them as bare `+0x...`/`?0x...` markers and needed one.
+#
+# They read as a single token on purpose: the surrounding text is a list
+# of right NAMES, and a remainder is one more item in that list rather
+# than a sentence interrupting it.
+_UNKNOWN_BITS_FORMAT = "UnknownBits(0x{:08x})"
+_UNAVAILABLE_TYPE_FORMAT = "TypeSpecificUnavailable(0x{:08x})"
+
+# Right names are separated by a padded pipe: the line is prose sitting
+# under a table row, not a column an `awk` reads, and ` | ` is what makes
+# a nine-name list scannable. It is also the ONLY place a `|` appears in
+# the text, which is what lets wrap_rights() find its break points.
+_SEPARATOR = " | "
 
 
 @dataclass(frozen=True)
@@ -350,54 +426,70 @@ def decode_access_mask(mask, type_name) -> "DecodedAccess | None":
 
 
 def format_access_rights(decoded: DecodedAccess) -> str:
-    """The `|`-joined display text for one decoded mask, residual token
-    included. Never truncated and never empty:
+    """The DERIVED text for one decoded mask -- the rights, then whatever
+    was left undecoded:
 
-      * a mask with no bits at all is NO_RIGHTS_TEXT, not "";
+        ReadData | WriteData | Synchronize
+        AllAccess
+        (no rights)
+        Delete | ReadControl | TypeSpecificUnavailable(0x0000037f)
+
+    The captured mask is deliberately NOT repeated here. It is printed
+    once, in the row's own `Access` column directly above this text,
+    which is the evidence anchor a reader scans, compares and copies; a
+    second copy one line below it says nothing new and costs the width
+    the right names need. The remainder tokens carry their own value
+    because that value is a PART of the mask, not the mask.
+
+    Three rules, none of them silent:
+
+      * a mask with no bits at all is NO_RIGHTS_TEXT, never "" -- a
+        captured mask granting nothing is a positive fact, and it is
+        different from the `(unknown)` an absent mask prints in the
+        column (§1.4);
       * bits with no documented right for a type this registry carries
-        are appended as `+0x%08x` -- an undocumented or future bit stays
-        auditable at its own raw value instead of being guessed at or
-        dropped;
+        are reported as `UnknownBits(0x%08x)`, so an undocumented or
+        future bit stays auditable at its own raw value instead of being
+        guessed at or dropped;
       * every undecoded bit of a mask whose type this registry does NOT
-        carry is appended as `?0x%08x` instead, which is a different fact
-        from the first: nothing is wrong with the bit, dumpex simply has
-        no type to read it against.
-
-    The two markers are distinct so the console can answer "was anything
-    left undecoded, and was it the type or the bits?" from the text
-    itself."""
-    names = list(decoded.names)
+        carry is reported as `TypeSpecificUnavailable(0x%08x)` instead,
+        which is a different fact: nothing is wrong with the bit, dumpex
+        simply has no type to read it against."""
+    parts = list(decoded.names)
     if decoded.undecoded_bits:
-        marker = "+" if decoded.type_supported else "?"
-        names.append(f"{marker}0x{decoded.undecoded_bits:08x}")
-    return "|".join(names) if names else NO_RIGHTS_TEXT
+        template = (_UNKNOWN_BITS_FORMAT if decoded.type_supported
+                     else _UNAVAILABLE_TYPE_FORMAT)
+        parts.append(template.format(decoded.undecoded_bits))
+    return _SEPARATOR.join(parts) if parts else NO_RIGHTS_TEXT
 
 
 def wrap_rights(text: str, width: int) -> list:
     """Wrap `format_access_rights()`'s output to `width` columns, always
-    breaking AFTER a `|` so no right name is ever split across two lines
-    and a continuation line can never be mistaken for a new name.
+    breaking AFTER a `|` so no right name is split across two lines and a
+    continuation line can never be mistaken for a new entry.
 
-    console_layout.wrap_text() cannot do this: it wraps on whitespace,
-    and the rights text is one unbroken token by construction (a space
-    inside it would let a column-wise read of the table split a single
-    Access value in two). A name longer than `width` is placed alone on
-    its own line and allowed to overflow rather than being cut -- the
-    same rule wrap_text() applies to an over-long word, and the reason
-    #102 forbids silent truncation."""
-    width = max(1, width)
-    names = text.split("|")
-    # The separator travels with the name BEFORE it, so a wrapped line
-    # ends in `|` and reads as "continues below" rather than as a
-    # complete list that happens to be followed by more names.
-    pieces = [name + "|" for name in names[:-1]] + names[-1:]
+    console_layout.wrap_text() cannot do this: it wraps on WHITESPACE,
+    and every name here is one token by construction, so its only break
+    points would be the separators -- which it would then drop, leaving
+    a continued line that reads as a finished list. Here the separators
+    are the break points and they stay on the line they continue.
+
+    A single piece wider than `width` is placed alone on its own line and
+    allowed to overflow rather than being cut -- the same rule
+    wrap_text() applies to an over-long word, and the reason #102 forbids
+    silent truncation."""
+    # Two columns are reserved so the ` |` that marks a continued line
+    # cannot itself push that line past `width`.
+    budget = max(1, width - 2)
     lines = []
     current = ""
-    for piece in pieces:
-        if current and len(current) + len(piece) > width:
-            lines.append(current)
+    for piece in text.split(_SEPARATOR):
+        if not current:
+            current = piece
+        elif len(current) + len(_SEPARATOR) + len(piece) > budget:
+            lines.append(current + " |")
             current = piece
         else:
-            current += piece
+            current += _SEPARATOR + piece
     lines.append(current)
     return lines
