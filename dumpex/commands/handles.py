@@ -469,9 +469,14 @@ _HANDLE_COLUMN_WIDTH = 18
 #      name should have been there and the bounded read failed) is a
 #      different fact from `"unnamed"` (the descriptor positively records
 #      none) -- §5.2.1 -- and so is an unreadable TYPE name. Folding
-#      either would hide the one row that says something was lost, so
-#      only a row whose type read cleanly AND whose object name is
-#      positively absent is ever a fold candidate.
+#      either would hide the one row that says something was lost.
+#
+#      Note what this does NOT require: that the type name READ. A
+#      descriptor with no type name at all (`TypeNameRva == 0`) is
+#      "unnamed", not a read failure, and a row with neither a type nor
+#      an object name is the lowest-context row the table can hold.
+#      Whole real handle streams are written that way, so demanding a
+#      captured type name here disables the fold on exactly those dumps.
 #   2. the type is on the retain list below.
 #
 # Condition 2 is why `object_name_status == "unnamed"` is not the sole
@@ -551,30 +556,49 @@ _NAME_STATUS_LEGEND = (
 def _is_foldable(record: HandleRecord) -> bool:
     """One record in, one bool out -- no cross-row state, so folding is
     deterministic and linear in the record count however the table is
-    ordered. Both name statuses are read as themselves (never as bare
-    truthiness of the name): "unnamed" and "unreadable" are different
-    facts (§5.2.1) and only the first is ever a fold candidate."""
-    return (record.object_name_status == "unnamed"
-            and record.type_name_status == "ok"
-            and record.type_name not in _RETAINED_ANONYMOUS_TYPES)
+    ordered.
+
+    Both name statuses are read as THEMSELVES, never as bare truthiness
+    of the name: "unnamed" and "unreadable" are different facts (§5.2.1),
+    and only the first is ever a fold candidate. The type is tested for
+    `!= "unreadable"` rather than `== "ok"`, and the difference is not
+    cosmetic -- requiring "ok" was the defect this predicate shipped
+    with. A descriptor whose `TypeNameRva` is 0 has NO type name and
+    therefore status "unnamed", which is not a read failure and not
+    evidence loss; it is the LOWEST-context row the table can hold (no
+    type, no object name, nothing left to investigate). Real dump writers
+    produce whole handle streams in exactly that shape, and requiring
+    "ok" pinned every one of those rows on screen -- i.e. it disabled the
+    fold precisely on the dumps that need it most, while the synthetic
+    fixtures (which all carry type names) kept passing.
+
+    An UNREADABLE name in either field still blocks folding, in both
+    directions: that is the one row an analyst needs in order to know
+    something was lost."""
+    if record.object_name_status != "unnamed":
+        return False
+    if record.type_name_status == "unreadable":
+        return False
+    # `type_name` is None for the no-type-name case above; `None` is not
+    # in the retain list, so such a row folds.
+    return record.type_name not in _RETAINED_ANONYMOUS_TYPES
 
 
-def _partition_for_console(records, verbose: bool) -> "tuple[list, dict]":
-    """-> (rows_to_print, {type_name: folded_count}).
+def _partition_for_console(records, verbose: bool) -> "tuple[list, list]":
+    """-> (rows_to_print, rows_folded). `verbose` folds nothing at all.
 
-    `verbose` folds nothing at all. The folded counts are ordered by
-    §1.5's frozen rule (count descending, then type name ascending) so
-    two runs over the same dump print the same line."""
+    Returns the folded RECORDS rather than a count per type name, so the
+    fold line can be built by summarize_handles_by_type() -- the same
+    projection `By type:` and `summary.by_type` use. Counting here
+    instead would key the line on the raw `type_name`, which merges a
+    null type into whatever a dump chose to call itself and loses §1.5's
+    ordering and handle_name_display()'s injective disambiguation."""
     if verbose:
-        return list(records), {}
-    shown = []
-    folded = {}
+        return list(records), []
+    shown, folded = [], []
     for record in records:
-        if _is_foldable(record):
-            folded[record.type_name] = folded.get(record.type_name, 0) + 1
-        else:
-            shown.append(record)
-    return shown, dict(sorted(folded.items(), key=lambda item: (-item[1], item[0])))
+        (folded if _is_foldable(record) else shown).append(record)
+    return shown, folded
 
 
 def _namespace_notes(records) -> list:
@@ -647,7 +671,6 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
         print(f"  {YELLOW(text)}")
 
     shown, folded = _partition_for_console(records, verbose)
-    folded_total = sum(folded.values())
 
     if shown:
         # Cells are built once, up front, so the column widths below are
@@ -693,10 +716,15 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     # collected record -- it is in `by_type` above, in `summary.count`,
     # and in --json -- so this line says "not shown", never "not
     # captured".
-    if folded_total:
-        listed = ", ".join(f"{console_safe(name)} {count}" for name, count in folded.items())
+    if folded:
+        # summarize_handles_by_type(), so the fold line names a type
+        # exactly as `By type:` and `summary.by_type` do -- including a
+        # folded row that has no type name at all, which buckets as
+        # "(unnamed)" rather than under some other type.
+        listed = ", ".join(f"{console_safe(name)} {count}"
+                            for name, count in summarize_handles_by_type(folded).items())
         print()
-        print(f"  {folded_total} anonymous handle(s) not shown "
+        print(f"  {len(folded)} anonymous handle(s) not shown "
               f"(no object name recorded): {listed}")
         print(f"  {DIM(_FOLD_HINT)}")
 

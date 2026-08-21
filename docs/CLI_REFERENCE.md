@@ -179,11 +179,16 @@ name the descriptor positively records as absent — into per-type counts:
 Those rows are still captured, still counted in the headline and the
 `By type:` line, and still in `--json`. `--verbose` prints all of them.
 
+Only the **object** name decides whether a row is anonymous, so a handle
+with a captured object name is never folded whatever its type says.
+
 Anonymous `Process`, `Thread`, `Token`, `Section` and `Job` handles are
 **never** folded — those are the ones a cross-process access question
-turns on — and neither is any row whose name could not be read. Every
-other anonymous type folds, and the fold line always names the type and
-its exact count, so nothing disappears unnamed.
+turns on — and neither is any row whose type or object name could not be
+**read**. Every other anonymous row folds, including one whose descriptor
+recorded no type name either (some dump writers record none for any
+handle); the fold line always names the type and its exact count, so
+nothing disappears unnamed.
 The two states are different facts and the console keeps them apart:
 
 - `(unnamed)` — the descriptor records no name. Nothing was lost.
