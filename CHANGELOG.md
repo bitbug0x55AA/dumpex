@@ -5,6 +5,58 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Added: `--handles` decodes Access masks into readable permissions
+
+The Access column was faithful to the dump and unreadable during triage
+([issue #102](https://github.com/bitbug0x55AA/dumpex/issues/102)):
+`0x0012019f` only says what a handle permits once you know that access
+bits are **object-type specific**, identify the captured type, and look
+up the Windows definitions. `--handles` now does that for you, under the
+table:
+
+```text
+  Access rights
+    File 0x0012019f
+      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
+      ReadControl|Synchronize
+    Key 0x00020019
+      QueryValue|EnumerateSubKeys|Notify|ReadControl
+    Process 0x001fffff
+      AllAccess
+```
+
+**The decode is per recorded object type.** Bit `0x0001` is `ReadData` on
+a `File`, `Terminate` on a `Process`, `AssignPrimary` on a `Token` and
+`Query` on a `Section`, so the same mask under two types produces two
+different readings — which is exactly why the raw mask shipped
+undecoded until now. `File`, `Process`, `Thread`, `Token`, `Section`,
+`Job`, `Directory`, `SymbolicLink`, `Event`, `Mutant`, `Semaphore`,
+`Timer` and `Key` are covered.
+
+**The captured evidence is untouched.** The Access column still prints
+the exact mask, `granted_access` is the same raw integer in `--json`
+and in every frozen schema, and this release changes no record shape,
+coverage meaning, limitation code, ordering rule or exit code —
+structured output is byte-identical. Console folding is unchanged too:
+the decode explains the rows a view prints and never decides which rows
+print.
+
+**Nothing is invented, dropped, or double-reported.** A zero mask reads
+`(no rights)` (a captured mask granting nothing) and an absent one still
+reads `(unknown)` (no mask captured). Undecoded bits stay visible at
+their raw value — `+0x…` for a bit with no documented right for that
+type, `?0x…` for an object type dumpex has no table for — and generic
+`GENERIC_*` bits are reported as captured rather than expanded through a
+mapping the dump does not contain. A composite such as `AllAccess`
+consumes its own bits, so it never appears alongside the component
+rights it stands for.
+
+**A decoded right is an observation, not a verdict.** `AllAccess` on a
+`Process` handle is a lead worth pulling. It is not evidence that the
+handle was used, that any access succeeded, or that anything is
+malicious, and it produces no score, confidence, coverage limitation or
+exit-code change.
+
 ## Changed: `--handles` and verbose `--process` output are now readable without the source
 
 Recon's console projection assumed the reader knew dumpex's internals

@@ -202,6 +202,32 @@ filesystem path and not a list of DLLs; the handle descriptor records
 its name only, and the objects inside it are not captured by it. dumpex
 never expands such a directory from the machine running the analysis.
 
+An `Access rights` block under the table decodes each printed mask
+against **that row's own recorded object type**, once per distinct
+`(type, mask)` pair:
+
+```text
+  Access rights
+    File 0x0012019f
+      ReadData|WriteData|AppendData|ReadEa|WriteEa|ReadAttributes|WriteAttributes|
+      ReadControl|Synchronize
+    Key 0x00020019
+      QueryValue|EnumerateSubKeys|Notify|ReadControl
+    Process 0x001fffff
+      AllAccess
+```
+
+The same bit means different things for different object types, so the
+decode is only valid for the type the descriptor recorded. The `Access`
+column still prints the exact captured mask and `granted_access` is
+unchanged in `--json` and in every historical schema — the names are
+derived text, nothing more. A zero mask reads `(no rights)`; an absent
+one still reads `(unknown)`. Bits that were not decoded are kept at
+their raw value, tagged `+0x…` (no documented right for that type) or
+`?0x…` (dumpex has no right table for that type), never guessed. Decoded
+rights are **observations** about what a captured handle permitted — not
+proof it was used, and not a maliciousness verdict.
+
 ### `--process`
 
 `--verbose` adds three blocks:
