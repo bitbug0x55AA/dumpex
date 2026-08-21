@@ -14,9 +14,14 @@ directly; nothing here is deprecated for existing callers.
 from dumpex.ui.console_layout import (   # noqa: F401
     MIN_WIDTH, MAX_WIDTH, FALLBACK_WIDTH,
     strip_ansi, visible_len, resolve_width, wrap_text, render_kv_block,
+    column_width,
 )
 
+# Mirrors dumpex.ui.console_layout.__all__ exactly -- a name added there
+# and not here makes this shim a partial view of the module it claims to
+# re-export, which tests/hunt/test_console_layout_shim.py rejects.
 __all__ = [
     "MIN_WIDTH", "MAX_WIDTH", "FALLBACK_WIDTH",
     "strip_ansi", "visible_len", "resolve_width", "wrap_text", "render_kv_block",
+    "column_width",
 ]

@@ -19,24 +19,26 @@ forwarded it, so passing it had no effect at all. It is now wired through
 the dispatch, the command boundary, the renderer, the help text and
 `meta.execution.options`.
 
-**The default `--handles` console folds routine anonymous rows.** Rows
-whose object name the descriptor positively records as absent, and whose
-type is a low-context synchronization primitive (`Event`, `Mutant`,
-`Semaphore`, `Timer`, `IoCompletion`, `WaitCompletionPacket`, and
-similar), collapse into per-type counts:
+**The default `--handles` console folds anonymous rows.** Every row whose
+object name the descriptor positively records as absent collapses into a
+per-type count:
 
 ```text
-  11 anonymous handle(s) of routine low-context type(s) not shown: Event 9, Mutant 2
+  13 anonymous handle(s) not shown (no object name recorded): Event 9, Semaphore 3, Key 1
   These rows are captured evidence and are complete in structured output -- use --verbose to show all.
 ```
 
 Folding is a **projection, never a filter**: the folded rows are still
 counted in the headline and the `By type:` line, still in `summary`, and
-still in `--json`. Anonymous `Process`, `Thread`, `Token`, `Section` and
-`Job` handles are never folded — an anonymous handle to one of those is
-exactly the evidence a cross-process access question turns on — and
-neither is any row whose name could not be read. The type list is an
-allow list, so an unclassified (or dump-invented) type stays visible.
+still in `--json`, and the fold line always names each type and its exact
+count, so nothing disappears unnamed.
+
+Two kinds of row never fold. Anonymous `Process`, `Thread`, `Token`,
+`Section` and `Job` handles stay visible however many a dump carries —
+an anonymous handle to one of those is exactly the evidence a
+cross-process access question turns on. Neither does any row whose type
+or object name could not be **read**: that is evidence loss, and hiding
+it would hide the one row saying something was lost.
 
 **`(unnamed)` versus `(unreadable)` is now explained inline**, and common
 NT Object Manager names get a bounded note. `\KnownDlls` reads as what it
@@ -44,6 +46,19 @@ is — an Object Manager directory whose name this descriptor recorded, not
 a filesystem path and not a list of DLLs — without claiming the objects
 inside it were captured. dumpex never expands such a directory from the
 analysis host.
+
+**Both console tables are now aligned, not merely separated.** A
+per-column width in a format string is a minimum, not a truncation, so a
+single 20-character type name (`WaitCompletionPacket`,
+`IoCompletionReserve`, …) or a long API-set DLL name pushed that one
+row's remaining columns right while every other row stayed put — the
+table read as ragged under its own header, and a column-wise read or a
+copy-paste into a report was worthless. Every column in the `--handles`
+table and in the verbose `--process` import table is now sized to the
+widest value it actually holds, so all rows line up with each other and
+with the header. Nothing is truncated, and a cap keeps one
+attacker-controlled 4,000-character name from padding every row in the
+table.
 
 **`--process --verbose` explains its own addresses.** The import table
 used to print `<address> -> <address>` with no header and no legend, so

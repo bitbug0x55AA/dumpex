@@ -726,7 +726,11 @@ def test_the_console_table_and_the_summary_project_names_the_same_way():
         {"handle": 0x10, "type_name": "(unnamed)", "object_name": None},
         {"handle": 0x20, "type_name": None, "object_name": None},
     ]))
-    rows = [l for l in _console(result).splitlines() if "0x00000000000000" in l]
+    # Rendered verbose: both rows are anonymous, so the DEFAULT console
+    # folds one of them (#98). The claim under test is that the Type
+    # column and by_type project a name the same way, which is a property
+    # of the projection, not of which rows a view chose to print.
+    rows = [l for l in _console(result, verbose=True).splitlines() if "0x00000000000000" in l]
     types = [l.split("  ")[2].strip() for l in rows]
 
     assert types[0] != types[1]                       # the two rows are distinguishable
@@ -764,7 +768,9 @@ def test_a_name_already_carrying_the_suffix_stays_distinct_everywhere():
         {"handle": 0x20, "type_name": "(unnamed) [captured name]", "object_name": None},
     ]))
 
-    rows = [l for l in _console(result).splitlines() if "0x00000000000000" in l]
+    # Verbose for the same reason as the case above: both rows are
+    # anonymous and the default view folds them.
+    rows = [l for l in _console(result, verbose=True).splitlines() if "0x00000000000000" in l]
     types = [l.split("  ")[2].strip() for l in rows]
     assert types[0] != types[1]
     assert set(types) == set(result.summary["by_type"])
@@ -787,7 +793,12 @@ def test_console_table_prints_each_null_name_by_its_own_status():
         {"handle": 0x23C, "type_name": BAD_RVA, "object_name": BAD_RVA,
          "granted_access": 1, "handle_count": 1, "pointer_count": 2},
     ]))
-    text = _console(result)
+    # Verbose: the anonymous Key row is folded out of the default view
+    # (#98), and this case is about how each null name PRINTS, not about
+    # which rows a view selects. The widths are unchanged either way --
+    # "(unreadable)" (12) is still narrower than the Type column's
+    # minimum, so §5.6's sample rows stay byte-identical.
+    text = _console(result, verbose=True)
 
     assert "0x0000000000000234  File            0x0012019f    1   32  \\Device\\NamedPipe\\mypipe" in text
     assert "0x0000000000000238  Key             0x00020019    1    3  (unnamed)" in text
@@ -1063,8 +1074,9 @@ def test_collect_handles_never_routes_through_the_narrow_get_handles_view(monkey
 # side: the records, the summary and by_type are what collect_handles()
 # produced, whatever the console chose to print.
 
-# One anonymous handle of each foldable type, plus the investigation-
-# relevant anonymous types that must survive folding, plus a named row.
+# Anonymous rows of two ordinary types (folded), the five
+# investigation-relevant types that must survive folding whatever their
+# count, and one named row.
 _FOLDING_FIXTURE = (
     [{"handle": 0x10 + i, "type_name": "Event", "object_name": None} for i in range(5)]
     + [{"handle": 0x30 + i, "type_name": "Mutant", "object_name": None} for i in range(2)]
@@ -1077,12 +1089,12 @@ _FOLDING_FIXTURE = (
 )
 
 
-def test_default_console_folds_only_approved_low_context_anonymous_rows():
+def test_default_console_folds_anonymous_rows_but_retains_the_approved_types():
     result = collect_handles(_mf_with(_FOLDING_FIXTURE))
     text = _console(result)
     shown = "\n".join(_rows(text))
 
-    # Folded: anonymous Event/Mutant.
+    # Folded: anonymous rows of any type not on the retain list.
     assert "Event" not in shown and "Mutant" not in shown
     # Never folded: the anonymous types an investigation turns on.
     for kept in ("Process", "Thread", "Token", "Section", "Job"):
@@ -1094,7 +1106,7 @@ def test_default_console_reports_the_exact_folded_count_per_type():
     text = _console(collect_handles(_mf_with(_FOLDING_FIXTURE)))
     line = next(l for l in text.splitlines() if "not shown" in l)
 
-    assert "7 anonymous handle(s)" in line       # 5 Event + 2 Mutant
+    assert "7 anonymous handle(s) not shown" in line   # 5 Event + 2 Mutant
     assert "Event 5" in line and "Mutant 2" in line
     assert "use --verbose to show all" in text
 
@@ -1108,7 +1120,7 @@ def test_folded_counts_are_ordered_count_desc_then_name_asc():
         + [{"handle": 0x80, "type_name": "Semaphore", "object_name": None}])
     line = next(l for l in _console(collect_handles(_mf_with(descriptors))).splitlines()
                 if "not shown" in l)
-    listed = line.split("not shown:")[1]
+    listed = line.split("recorded):")[1]
 
     assert listed.index("Event 3") < listed.index("Mutant 3") < listed.index("Semaphore 1")
 
@@ -1171,23 +1183,53 @@ def test_a_named_handle_of_a_foldable_type_is_never_folded():
     assert "0x0000000000000020" not in shown
 
 
-def test_an_unknown_type_stays_visible_by_default():
-    """The fold list is an ALLOW list: a type nobody has classified --
-    including one a dump invents -- must default to being shown."""
+def test_an_unclassified_anonymous_type_is_folded_but_never_lost():
+    """The type list is a RETAIN list, so an unclassified type -- a new
+    Windows object type, or one a dump invents -- folds like any other
+    anonymous row. It must still be NAMED and COUNTED, in the fold line
+    and in by_type, and reachable with --verbose."""
     result = collect_handles(_mf_with([
         {"handle": 0x10, "type_name": "SomeFutureObjectType", "object_name": None},
     ]))
-    assert "SomeFutureObjectType" in _console(result)
+    text = _console(result)
+
+    assert _rows(text) == []                                  # folded out of the table
+    assert "1 anonymous handle(s) not shown" in text
+    assert "SomeFutureObjectType 1" in text                   # named and counted
+    assert result.summary["by_type"] == {"SomeFutureObjectType": 1}
+    assert len(_rows(_console(result, verbose=True))) == 1     # reachable
+
+
+@pytest.mark.parametrize("type_name", ["Process", "Thread", "Token", "Section", "Job"])
+def test_the_retained_anonymous_types_are_never_folded(type_name):
+    """#98 forbids `object_name_status == "unnamed"` as the SOLE
+    suppression rule: an anonymous handle to one of these five is exactly
+    the evidence a cross-process-access question turns on."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": type_name, "object_name": None},
+    ]))
+    text = _console(result)
+    assert len(_rows(text)) == 1
+    assert "not shown" not in text
 
 
 def test_nothing_is_folded_when_no_row_qualifies():
-    result = collect_handles(_mf_with(_POPULATED))
-    assert "not shown" not in _console(result)
+    """Every row carries a captured object name, so none is a fold
+    candidate and the fold line must not appear at all."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "\\Device\\X"},
+        {"handle": 0x20, "type_name": "Event", "object_name": "\\BaseNamedObjects\\e"},
+    ]))
+    text = _console(result)
+    assert "not shown" not in text
+    assert len(_rows(text)) == 2
 
 
 def test_the_name_status_legend_explains_unnamed_versus_unreadable():
+    # A retained type, so the row survives the default projection and the
+    # legend describes a label that is actually on screen.
     result = collect_handles(_mf_with([
-        {"handle": 0x10, "type_name": "Key", "object_name": None},
+        {"handle": 0x10, "type_name": "Token", "object_name": None},
     ]))
     text = _console(result)
     assert "(unnamed) = the descriptor records no name" in text
@@ -1252,12 +1294,16 @@ def test_a_note_survives_its_row_being_folded():
     text = _console(result)
     assert "NT Object Manager directory" in text
 
-    original = handles_module._FOLDABLE_ANONYMOUS_TYPES
+    # Forced through the predicate rather than through the type list, so
+    # the case keeps holding whatever the fold RULE becomes.
+    original = handles_module._is_foldable
     try:
-        handles_module._FOLDABLE_ANONYMOUS_TYPES = frozenset(original | {"Directory"})
-        assert "NT Object Manager directory" in _console(result)
+        handles_module._is_foldable = lambda record: True
+        folded_text = _console(result)
+        assert _rows(folded_text) == []                    # the row is gone ...
+        assert "NT Object Manager directory" in folded_text  # ... the note is not
     finally:
-        handles_module._FOLDABLE_ANONYMOUS_TYPES = original
+        handles_module._is_foldable = original
 
 
 def test_the_notes_block_escapes_its_own_labels():
@@ -1298,3 +1344,116 @@ def test_cmd_handles_forwards_verbose_to_the_renderer_only():
     assert default_result.summary == verbose_result.summary
     assert default_result.coverage.status == verbose_result.coverage.status
     assert len(_rows(verbose_buf.getvalue())) > len(_rows(default_buf.getvalue()))
+
+
+def _table_block(text: str) -> list:
+    """The header line plus every row, as printed."""
+    lines = text.splitlines()
+    header_index = next(i for i, l in enumerate(lines)
+                        if "Handle" in l and "Access" in l and "Object" in l)
+    return [lines[header_index]] + _rows(text)
+
+
+# The table's left-aligned columns, and the right-aligned counters. A
+# left-aligned column is aligned when every row's value STARTS at the
+# header label's own offset; a right-aligned one when every row's value
+# ENDS at the header label's end. Checked against the header rather than
+# row-against-row, so a table that is internally consistent but shifted
+# out from under its own header still fails.
+_LEFT_ALIGNED_COLUMNS = ("Type", "Access", "Object")
+_RIGHT_ALIGNED_COLUMNS = ("Cnt", "Ptr")
+
+
+def _assert_columns_line_up(text: str) -> list:
+    block = _table_block(text)
+    header = block[0]
+    for row in block[1:]:
+        for label in _LEFT_ALIGNED_COLUMNS:
+            at = header.index(label)
+            assert row[at] != " " and row[at - 1] == " ", (
+                f"{label!r} does not start at column {at} in {row!r}")
+        for label in _RIGHT_ALIGNED_COLUMNS:
+            end = header.index(label) + len(label)
+            assert row[end - 1] != " " and row[end] == " ", (
+                f"{label!r} does not end at column {end} in {row!r}")
+    return block
+
+
+def test_every_row_lines_its_columns_up_with_the_header():
+    """A per-column MINIMUM width separates a table without aligning it:
+    one 20-character type name used to push that ONE row's Access/Cnt/
+    Ptr/Object right while every other row stayed put, leaving the table
+    ragged under its own header. Columns are now sized to the widest
+    value actually present, so every row lines up with the header and
+    with every other row."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 1},
+        # Real Windows type names, far wider than the column minimum.
+        {"handle": 0x20, "type_name": "WaitCompletionPacket", "object_name": "B",
+         "granted_access": 0x0012019F, "handle_count": 100, "pointer_count": 999},
+        {"handle": 0x30, "type_name": "IoCompletionReserve", "object_name": "C",
+         "granted_access": 2},
+    ]))
+    assert len(_assert_columns_line_up(_console(result))) == 4
+
+
+def test_a_short_table_still_lines_up():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "\\Device\\X"},
+        {"handle": 0x20, "type_name": "Key", "object_name": BAD_RVA},
+    ]))
+    _assert_columns_line_up(_console(result))
+
+
+def test_the_widest_value_sets_the_column_for_every_row():
+    """The same record renders wider once a wider type shares the table
+    -- the column grows, the value does not change."""
+    narrow = _console(collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A"}])))
+    wide = _console(collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A"},
+        {"handle": 0x20, "type_name": "WaitCompletionPacket", "object_name": "B"}])))
+
+    narrow_header = _table_block(narrow)[0]
+    wide_header = _table_block(wide)[0]
+    assert wide_header.index("Access") > narrow_header.index("Access")
+    # ... and the File row still reads exactly the same value.
+    assert _rows(narrow)[0].split()[1] == _rows(wide)[0].split()[1] == "File"
+    _assert_columns_line_up(wide)
+
+
+def test_a_hostile_type_name_cannot_set_the_layout_for_every_row():
+    """Type names are attacker-controlled. Without a ceiling, one absurd
+    name would pad EVERY row to its width and destroy the table for the
+    other handles -- so the column stops growing at the cap and only that
+    row overflows. Nothing is truncated."""
+    import dumpex.commands.handles as handles_module
+    over_cap = "T" * (handles_module._TYPE_COLUMN_MAX_WIDTH * 2)
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A"},
+        {"handle": 0x20, "type_name": over_cap, "object_name": "B"},
+    ]))
+    text = _console(result)
+
+    assert over_cap in text          # the value itself is never truncated
+    ordinary = next(l for l in _rows(text) if " File " in l)
+    hostile = next(l for l in _rows(text) if over_cap in l)
+    # The ordinary row is unaffected by its neighbour ...
+    assert len(ordinary) < handles_module._TYPE_COLUMN_MAX_WIDTH + 60
+    # ... both rows still start the Type column together ...
+    assert hostile.index(over_cap) == ordinary.index("File")
+    # ... and only the over-cap row runs past it.
+    assert len(hostile) > len(ordinary)
+
+
+def test_column_widths_are_measured_on_the_escaped_text():
+    """console_safe() EXPANDS a name (one control character becomes four
+    visible characters), so a column sized on the raw value would be too
+    narrow for its own row."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "A\x1bB", "object_name": "X", "granted_access": 1},
+        {"handle": 0x20, "type_name": "File", "object_name": "Y", "granted_access": 2},
+    ]))
+    text = _console(result)
+    assert "\\x1b" in text
+    _assert_columns_line_up(text)

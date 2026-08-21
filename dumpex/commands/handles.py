@@ -28,10 +28,12 @@ through to it.
 Console verbosity is a PROJECTION and nothing else (#98): the
 CommandResult `collect_handles()` returns is byte-identical whatever
 `verbose` is, so `--json` always carries the complete normalized
-inventory. The default console folds the low-context anonymous rows
-listed in `_FOLDABLE_ANONYMOUS_TYPES` into per-type counts and says
-exactly how many it folded; `--verbose` renders every record. Nothing is
-ever removed from the records, the summary, or `by_type`.
+inventory. The default console folds anonymous rows -- every row whose
+descriptor records no object name, except the investigation-relevant
+types in `_RETAINED_ANONYMOUS_TYPES` and any row that LOST a name --
+into per-type counts, and says exactly how many it folded; `--verbose`
+renders every record. Nothing is ever removed from the records, the
+summary, or `by_type`.
 """
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile
@@ -46,6 +48,7 @@ from dumpex.output.records import (
     HandleRecord, handle_name_display, hex_address,
 )
 from dumpex.ui.colors import BOLD, DIM, YELLOW, console_safe
+from dumpex.ui.console_layout import column_width
 
 
 _HANDLE_STREAM = MINIDUMP_STREAM_TYPE.HandleDataStream
@@ -411,8 +414,9 @@ def _access_display(record: HandleRecord) -> str:
 
     When §5.2's deferred type-specific decoding lands and this starts
     returning names like "FILE_ALL_ACCESS", the table's column widths do
-    NOT need revisiting: every column is followed by two literal spaces,
-    and tests/unit/test_handles_cmd.py::
+    NOT need revisiting: the Access column is measured from the values
+    this function actually returns (see _column_width), and
+    tests/unit/test_handles_cmd.py::
     test_no_column_fuses_into_the_next_however_wide_its_value already
     parametrizes this function's output over decoded-width strings to
     keep that true."""
@@ -425,63 +429,70 @@ def _count_display(value) -> str:
     return "?" if value is None else str(value)
 
 
-# Every column in §5.6's table is followed by two LITERAL spaces, so a
-# value that outgrows its column pushes the rest of the row right but
-# stays readable. A width alone does not do that: `{name:<16}` is a
-# MINIMUM width, not a truncation, so a 16-character type name left zero
-# separation and rendered as e.g. "ActivationObject0x00000002" -- one
-# unsplittable token in the exact place an analyst reads the granted-
-# access mask. Windows has many such types (WaitCompletionPacket,
-# FilterConnectionPort, DxgkSharedSyncObject, IoCompletionReserve, ...),
-# so that was ordinary output, not an edge case. Truncating a value would
-# destroy evidence; each column is narrowed by exactly its two spaces
-# instead, which keeps §5.6's sample rows byte-identical (their widest
-# values are "(unreadable)" and "0x0012019f") while making the separator
-# structural.
+# Every column in §5.6's table is followed by two LITERAL spaces, and
+# every column is sized to the WIDEST VALUE IT ACTUALLY HOLDS in this
+# render, floored at the minimum below and capped above.
 #
-# The Access column is included even though `_access_display()` cannot
-# exceed 10 characters today: §5.2 defers type-specific permission
-# decoding to a later feature, and a decoded "FILE_ALL_ACCESS" beside a
-# 3-digit handle count would otherwise reproduce the exact same fusion
-# one column over.
-_TYPE_COLUMN_WIDTH = 14
-_ACCESS_COLUMN_WIDTH = 10
+# See dumpex.ui.console_layout.column_width() for why a fixed width
+# separates a table without aligning it, and for what the cap protects
+# against. Windows carries plenty of 16-to-20-character type names
+# (WaitCompletionPacket, FilterConnectionPort, IoCompletionReserve, ...),
+# so a ragged Type column was ordinary output rather than an edge case.
+#
+# The minimums keep an ordinary table's shape stable across dumps -- a
+# dump whose type names are all short still renders at the familiar
+# width rather than collapsing. The caps sit far above any real Windows
+# object type name, so only a dump-crafted one ever reaches them.
+_TYPE_COLUMN_MIN_WIDTH = 14
+_TYPE_COLUMN_MAX_WIDTH = 40
+# _access_display() cannot exceed 10 characters today, but §5.2 defers
+# type-specific permission decoding to a later feature and a decoded
+# "FILE_ALL_ACCESS" would land here.
+_ACCESS_COLUMN_MIN_WIDTH = 10
+_ACCESS_COLUMN_MAX_WIDTH = 32
+# `Cnt`/`Ptr` are right-aligned uint32 counters -- 10 digits at the very
+# most, so they need no cap of their own.
+_COUNT_COLUMN_MIN_WIDTH = 3
+
+# A handle is always hex_address()'s fixed 18 characters (§1.3), so this
+# one is a constant rather than a measurement.
+_HANDLE_COLUMN_WIDTH = 18
 
 
-# ── #98: console folding, kept strictly a projection ────────────────────
-# The default console folds ONLY the anonymous rows of these types into
-# per-type counts. Two independent conditions have to hold before a row
-# is folded, and neither is sufficient alone:
+# ── #98: console folding, kept strictly a projection ────────────────
+# A real dump's handle table is dominated by rows whose Object column is
+# `(unnamed)`, and they bury the handles an investigation turns on. The
+# default console therefore folds an anonymous row into a per-type count
+# UNLESS one of two things holds:
 #
-#   1. `object_name_status == "unnamed"` -- the descriptor positively
-#      records no object name (§5.2.1). An "unreadable" name is EVIDENCE
-#      LOSS and is never folded: folding it would hide the one row an
-#      analyst needs to see to know something was lost.
-#   2. the captured type is on this explicitly approved list.
+#   1. the row lost evidence. `object_name_status == "unreadable"` (a
+#      name should have been there and the bounded read failed) is a
+#      different fact from `"unnamed"` (the descriptor positively records
+#      none) -- §5.2.1 -- and so is an unreadable TYPE name. Folding
+#      either would hide the one row that says something was lost, so
+#      only a row whose type read cleanly AND whose object name is
+#      positively absent is ever a fold candidate.
+#   2. the type is on the retain list below.
 #
-# Condition 2 exists because condition 1 alone is far too aggressive: an
-# anonymous Process, Thread, Token, Section, or Job handle is exactly the
-# kind of evidence a cross-process-access question turns on, and none of
-# those appear below. The list is an ALLOW list, so a type nobody has
-# considered (including a type name a dump invents) stays visible by
-# default -- the failure mode of a new Windows object type is a slightly
-# longer table, never a hidden handle.
+# Condition 2 is why `object_name_status == "unnamed"` is not the sole
+# suppression rule: an anonymous Process, Thread, Token, Section, or Job
+# handle is exactly the evidence a cross-process-access question turns
+# on. Those five stay visible however many of them a dump carries.
 #
-# Every type here is a synchronization/scheduling primitive whose
-# anonymous instances carry no name, no path, and no cross-process
-# reference: with no object name there is nothing left in the descriptor
-# to investigate beyond the per-type count the fold line prints.
-_FOLDABLE_ANONYMOUS_TYPES = frozenset({
-    "Event",
-    "EtwRegistration",
-    "IoCompletion",
-    "IoCompletionReserve",
-    "IRTimer",
-    "Mutant",
-    "Semaphore",
-    "Timer",
-    "TpWorkerFactory",
-    "WaitCompletionPacket",
+# This is a RETAIN list, not an allow-to-fold list. That direction is
+# deliberate and it is the opposite of the first cut of this feature: an
+# allow list left every unlisted type visible, so the default console
+# still printed the wall of anonymous rows it exists to collapse, and it
+# would have quietly regressed again with every new Windows object type.
+# The cost of the retain direction is that a new type is folded rather
+# than shown -- bounded, because the fold line names the type and its
+# exact count, `summary.by_type` counts it, and `--verbose` prints it.
+_RETAINED_ANONYMOUS_TYPES = frozenset({
+    "Job",
+    "Process",
+    "Section",
+    "Thread",
+    "Token",
 })
 
 # Frozen, per-name explanations for NT Object Manager names an analyst
@@ -542,10 +553,10 @@ def _is_foldable(record: HandleRecord) -> bool:
     deterministic and linear in the record count however the table is
     ordered. Both name statuses are read as themselves (never as bare
     truthiness of the name): "unnamed" and "unreadable" are different
-    facts (§5.2.1) and only the first is ever foldable."""
+    facts (§5.2.1) and only the first is ever a fold candidate."""
     return (record.object_name_status == "unnamed"
             and record.type_name_status == "ok"
-            and record.type_name in _FOLDABLE_ANONYMOUS_TYPES)
+            and record.type_name not in _RETAINED_ANONYMOUS_TYPES)
 
 
 def _partition_for_console(records, verbose: bool) -> "tuple[list, dict]":
@@ -639,19 +650,35 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     folded_total = sum(folded.values())
 
     if shown:
-        header = (f"{'Handle':<18}  {'Type':<{_TYPE_COLUMN_WIDTH}}  "
-                  f"{'Access':<{_ACCESS_COLUMN_WIDTH}}  {'Cnt':>3}  {'Ptr':>3}  Object")
+        # Cells are built once, up front, so the column widths below are
+        # measured on exactly the strings that get printed (escaped, and
+        # projected through handle_name_display()) rather than on the raw
+        # record values -- an escape expands a name, and a column sized
+        # on the unescaped value would be too narrow for its own row.
+        rows = [(record.handle,
+                 console_safe(handle_name_display(record.type_name, record.type_name_status)),
+                 _access_display(record),
+                 _count_display(record.handle_count),
+                 _count_display(record.pointer_count),
+                 console_safe(handle_name_display(record.object_name, record.object_name_status)))
+                for record in shown]
+        type_w = column_width("Type", [r[1] for r in rows],
+                                minimum=_TYPE_COLUMN_MIN_WIDTH, cap=_TYPE_COLUMN_MAX_WIDTH)
+        access_w = column_width("Access", [r[2] for r in rows],
+                                  minimum=_ACCESS_COLUMN_MIN_WIDTH, cap=_ACCESS_COLUMN_MAX_WIDTH)
+        cnt_w = column_width("Cnt", [r[3] for r in rows], minimum=_COUNT_COLUMN_MIN_WIDTH)
+        ptr_w = column_width("Ptr", [r[4] for r in rows], minimum=_COUNT_COLUMN_MIN_WIDTH)
+
+        # `Object` is the last column and is never padded: padding a
+        # trailing column only adds invisible trailing whitespace.
+        header = (f"{'Handle':<{_HANDLE_COLUMN_WIDTH}}  {'Type':<{type_w}}  "
+                  f"{'Access':<{access_w}}  {'Cnt':>{cnt_w}}  {'Ptr':>{ptr_w}}  Object")
         print()
         print(f"  {DIM(header)}")
-        for record in shown:
-            type_display = console_safe(
-                handle_name_display(record.type_name, record.type_name_status))
-            object_display = console_safe(
-                handle_name_display(record.object_name, record.object_name_status))
-            print(f"  {record.handle:<18}  {type_display:<{_TYPE_COLUMN_WIDTH}}  "
-                  f"{_access_display(record):<{_ACCESS_COLUMN_WIDTH}}  "
-                  f"{_count_display(record.handle_count):>3}  "
-                  f"{_count_display(record.pointer_count):>3}  {object_display}")
+        for handle, type_display, access, count, pointers, object_display in rows:
+            print(f"  {handle:<{_HANDLE_COLUMN_WIDTH}}  {type_display:<{type_w}}  "
+                  f"{access:<{access_w}}  {count:>{cnt_w}}  {pointers:>{ptr_w}}  "
+                  f"{object_display}")
 
     # The two null-name labels are dumpex's own vocabulary and mean two
     # different things (§5.2.1); printed only when one of them is
@@ -669,8 +696,8 @@ def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     if folded_total:
         listed = ", ".join(f"{console_safe(name)} {count}" for name, count in folded.items())
         print()
-        print(f"  {folded_total} anonymous handle(s) of routine low-context type(s) "
-              f"not shown: {listed}")
+        print(f"  {folded_total} anonymous handle(s) not shown "
+              f"(no object name recorded): {listed}")
         print(f"  {DIM(_FOLD_HINT)}")
 
     notes = _namespace_notes(records)

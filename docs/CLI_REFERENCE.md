@@ -168,14 +168,11 @@ always the complete, lossless evidence surface.
 
 ### `--handles`
 
-The default console folds routine **anonymous** handle rows — rows whose
-object name the descriptor positively records as absent, and whose type
-is a low-context synchronization primitive (`Event`, `Mutant`,
-`Semaphore`, `Timer`, `IoCompletion`, and similar) — into per-type
-counts:
+The default console folds **anonymous** handle rows — rows whose object
+name the descriptor positively records as absent — into per-type counts:
 
 ```text
-  11 anonymous handle(s) of routine low-context type(s) not shown: Event 9, Mutant 2
+  13 anonymous handle(s) not shown (no object name recorded): Event 9, Semaphore 3, Key 1
   These rows are captured evidence and are complete in structured output -- use --verbose to show all.
 ```
 
@@ -183,7 +180,10 @@ Those rows are still captured, still counted in the headline and the
 `By type:` line, and still in `--json`. `--verbose` prints all of them.
 
 Anonymous `Process`, `Thread`, `Token`, `Section` and `Job` handles are
-**never** folded, and neither is any row whose name could not be read.
+**never** folded — those are the ones a cross-process access question
+turns on — and neither is any row whose name could not be read. Every
+other anonymous type folds, and the fold line always names the type and
+its exact count, so nothing disappears unnamed.
 The two states are different facts and the console keeps them apart:
 
 - `(unnamed)` — the descriptor records no name. Nothing was lost.
