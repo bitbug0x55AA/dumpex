@@ -17,6 +17,15 @@ permissions:
 
 jobs:
   leak-scan:
+    # Gitleaks below scans `--log-opts=--all`, i.e. every commit reachable in
+    # the repository -- not the diff. For a branch in this repository the
+    # push event has therefore already scanned exactly what the matching
+    # pull_request event would scan, so running both was pure duplication.
+    # Fork pull requests are the one case where that is not true: their
+    # commits never produce a push event here, so they still get scanned.
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
