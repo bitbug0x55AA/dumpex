@@ -4,32 +4,79 @@ name: Sync main to all branches
 # urgent_patch, ...) drift the moment a pull request lands on main. The
 # cost of that drift is not paid here -- it is paid weeks later, as a
 # conflict in whichever branch merged second. So main is merged outward
-# automatically the moment it moves, not whenever someone remembers to
-# press a button.
+# automatically, rather than whenever someone remembers to press a button.
+#
+# Two invariants make that safe to automate, and both are enforced below
+# rather than assumed:
+#
+#   1. main must be GREEN first. This workflow keys off the completion of
+#      main's own CI, not off the push, because the two are otherwise
+#      concurrent: Tests takes ~4.7 minutes and a push-triggered sync
+#      finished in ~10 seconds, so a broken main was fanned out to every
+#      branch before its own suite had finished installing dependencies --
+#      turning one bad commit into four bad branches, each with a merge
+#      commit to unpick.
+#
+#   2. Every push must be a FAST-FORWARD. A branch with no commits of its
+#      own fast-forwards to main, which means its resulting tree is
+#      byte-identical to the main that just tested green -- there is
+#      nothing new that could be broken. A branch that is ahead would
+#      instead produce a genuinely new tree that no CI run has ever seen,
+#      so it is reported and left alone for a human. Because of this rule
+#      the workflow authors no content at all: it only moves branch
+#      pointers onto an already-verified commit.
 #
 # Note on CI: pushes made with GITHUB_TOKEN deliberately do not trigger
 # other workflows. Syncing therefore costs zero test runs -- but it also
 # means an open pull request's green checks still describe the tree from
-# BEFORE the sync. Push any commit (or re-run its checks) to re-validate.
+# BEFORE the sync.
 on:
-  push:
+  # Both of main's workflows are listed so that whichever finishes LAST
+  # drives the sync. The one that finishes first finds its sibling still
+  # running and exits quietly. This is self-converging and costs no runner
+  # time, unlike polling for green inside the job, which would idle for
+  # the length of the slowest workflow on every single merge.
+  #
+  # workflow_run only fires for workflow files that live on the default
+  # branch, so this file has no effect until it is merged to main.
+  workflow_run:
+    workflows: ["Tests", "Repository Leak Scan"]
+    types: [completed]
     branches: [main]
+
   workflow_dispatch:
+    inputs:
+      allow_unverified:
+        description: "Sync even if main's checks are not green (emergency only)"
+        type: boolean
+        default: false
+      allow_merge_commits:
+        description: "Allow real merge commits instead of fast-forward only (resolves a held branch)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
+  actions: read
 
 # Never let two syncs interleave; queue the second one instead of
-# cancelling it, so no push to main is silently dropped.
+# cancelling it, so no verified commit is silently skipped.
 concurrency:
   group: sync-main-to-all-branches
   cancel-in-progress: false
 
 jobs:
   sync:
-    name: Merge main into every branch
+    name: Fast-forward every branch to verified main
     runs-on: ubuntu-latest
     timeout-minutes: 15
+
+    # A failed, cancelled or skipped CI run never reaches the job at all.
+    # The preflight step below still re-checks every workflow for this
+    # commit, because this condition only sees the one that triggered us.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Check out main with full history
@@ -38,24 +85,115 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Merge main into every other branch, independently
+      - name: Preflight — is main verified, and still where CI left it?
+        id: gate
         shell: bash
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SELF_RUN_ID: ${{ github.run_id }}
+          EVENT_NAME: ${{ github.event_name }}
+          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          ALLOW_UNVERIFIED: ${{ inputs.allow_unverified }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
-          # No `set -e`: a branch that will not merge is an expected
-          # outcome to be reported, not a reason to abandon the branches
-          # that would have merged fine.
-          set -uo pipefail
+          set -euo pipefail
 
           if [[ "$DEFAULT_BRANCH" != "main" ]]; then
             echo "This workflow expects the repository default branch to be 'main', but it is '$DEFAULT_BRANCH'." >&2
             exit 1
           fi
 
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
+          main_tip="$(git rev-parse refs/remotes/origin/main)"
+
+          # Green exit: there is nothing to do, and nothing is wrong.
+          stop() {
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## Sync skipped"
+              echo
+              echo "$1"
+            } >> "$GITHUB_STEP_SUMMARY"
+            echo "$1"
+            exit 0
+          }
+
+          if [[ "$EVENT_NAME" == "workflow_dispatch" && "$ALLOW_UNVERIFIED" == "true" ]]; then
+            echo "Manual dispatch with allow_unverified: skipping every verification check."
+            {
+              echo "sha=$main_tip"
+              echo "proceed=true"
+              echo "unverified=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          sha="${TRIGGER_SHA:-$main_tip}"
+
+          # main moved on. That newer commit has its own CI run, whose
+          # completion will drive its own sync -- syncing the older commit
+          # now would only add a merge the newer one has to redo.
+          if [[ "$sha" != "$main_tip" ]]; then
+            stop "\`main\` has advanced to \`${main_tip:0:8}\` since \`${sha:0:8}\` was verified. That commit's own CI run will drive the sync."
+          fi
+
+          # Run-level state for this exact commit, across every workflow,
+          # excluding this run. `commits/$sha/status` is useless here: this
+          # repository posts no commit statuses, only check runs, so that
+          # endpoint reports "pending" forever.
+          # gh's built-in --jq keeps this off the standalone jq binary, and
+          # this run is excluded in awk below rather than inside the filter
+          # expression, so the run id is never interpolated into a query.
+          if ! runs="$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" \
+                --jq '.workflow_runs[] | "\(.id)\t\(.name)\t\(.status)\t\(.conclusion // "-")"' 2>/dev/null)"; then
+            echo "Could not read the CI state of $sha from the Actions API." >&2
+            exit 1
+          fi
+
+          rows="$(awk -F'\t' -v self="$SELF_RUN_ID" '$1 != self' <<<"$runs")"
+
+          if [[ -z "$rows" ]]; then
+            echo "No workflow runs at all are recorded for $sha; refusing to treat it as verified." >&2
+            echo "Re-run this workflow manually with allow_unverified if that is intentional." >&2
+            exit 1
+          fi
+
+          pending="$(awk -F'\t' '$3 != "completed" { print $2 }' <<<"$rows" | paste -sd', ' -)"
+          if [[ -n "$pending" ]]; then
+            stop "Still running for \`${sha:0:8}\`: $pending. Whichever workflow finishes last will drive the sync."
+          fi
+
+          failed="$(awk -F'\t' '$4 != "success" && $4 != "skipped" && $4 != "neutral" { print $2" ("$4")" }' <<<"$rows" | paste -sd', ' -)"
+          if [[ -n "$failed" ]]; then
+            # Deliberately a green exit. main being red is already reported
+            # by the workflow that went red; a second red badge here would
+            # be noise about a failure the first one already owns.
+            stop "\`main\` is not green at \`${sha:0:8}\` — $failed. Nothing was synced."
+          fi
+
+          echo "main is verified green at $sha across: $(cut -f2 <<<"$rows" | paste -sd', ' -)"
+          {
+            echo "sha=$sha"
+            echo "proceed=true"
+            echo "unverified=false"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fast-forward every other branch onto that commit
+        if: steps.gate.outputs.proceed == 'true'
+        shell: bash
+        env:
+          SHA: ${{ steps.gate.outputs.sha }}
+          UNVERIFIED: ${{ steps.gate.outputs.unverified }}
+          ALLOW_MERGE_COMMITS: ${{ inputs.allow_merge_commits }}
+        run: |
+          # No `set -e`: a branch that cannot be fast-forwarded is an
+          # expected outcome to be reported, not a reason to abandon the
+          # branches that can be.
+          set -uo pipefail
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git fetch origin '+refs/heads/*:refs/remotes/origin/*' --prune
 
           mapfile -t branches < <(
             git for-each-ref --format='%(refname:strip=3)' refs/remotes/origin |
@@ -64,7 +202,6 @@ jobs:
           )
 
           if (( ${#branches[@]} == 0 )); then
-            echo "No branches other than main were found."
             {
               echo "## Sync result"
               echo
@@ -75,53 +212,101 @@ jobs:
 
           synced=()
           already=()
+          held=()
+          merged=()
           conflicted=()
           rejected=()
 
-          # Each branch is merged and pushed on its own. The previous
-          # revision preflighted every merge and pushed atomically, which
-          # sounds safer but inverts the priority: one stale or abandoned
-          # branch then blocked the sync for every healthy branch, every
-          # time, until a human intervened. Independent pushes mean a
-          # conflict costs exactly the branch it is on.
           for branch in "${branches[@]}"; do
             echo "::group::main -> $branch"
+            ref="refs/remotes/origin/$branch"
 
-            if git merge-base --is-ancestor refs/remotes/origin/main "refs/remotes/origin/$branch"; then
-              echo "Already contains main; nothing to do."
+            # Already contains the verified commit -- including a branch
+            # that is ahead of it with work of its own. Nothing to do, and
+            # nothing to report: it is not drifting.
+            if git merge-base --is-ancestor "$SHA" "$ref"; then
+              echo "Already contains ${SHA:0:8}; nothing to do."
               already+=("$branch")
               echo "::endgroup::"
               continue
             fi
 
-            pushed=false
-            # Attempt twice: between fetch and push the branch may have
-            # received a commit, which the remote rejects as non-fast-
-            # forward. Re-fetching and rebuilding the merge on the new tip
-            # resolves the ordinary version of that race.
-            for attempt in 1 2; do
-              git switch --detach "refs/remotes/origin/$branch" --quiet
+            if ! git merge-base --is-ancestor "$ref" "$SHA"; then
+              # The branch has commits of its own, so fast-forwarding is
+              # impossible and a real merge would build a tree no CI run
+              # has ever seen -- exactly the call this workflow must not
+              # make on its own.
+              ahead="$(git rev-list --count "$SHA..$ref")"
+              behind="$(git rev-list --count "$ref..$SHA")"
 
-              if ! git merge --no-edit -m "Merge main into $branch" refs/remotes/origin/main; then
-                conflicts="$(git diff --name-only --diff-filter=U | paste -sd', ' -)"
-                git merge --abort || true
-                echo "Conflict in: ${conflicts:-<unknown>}" >&2
-                conflicted+=("$branch|${conflicts:-unknown}")
-                break
+              if [[ "$ALLOW_MERGE_COMMITS" == "true" ]]; then
+                echo "Ahead by $ahead; allow_merge_commits is set, attempting a real merge."
+
+                # --force, and the exit code is checked. A plain `git
+                # switch` refuses to move while the worktree is dirty, and
+                # an unchecked failure here is silent and dangerous: the
+                # merge would then run against whatever HEAD happened to
+                # be, report "Already up to date", and try to push main's
+                # own tip over the branch. The workspace is disposable, so
+                # discarding it is always the right recovery.
+                if ! git checkout --force --detach "$ref" --quiet; then
+                  echo "Could not check out '$branch'." >&2
+                  rejected+=("$branch")
+                  echo "::endgroup::"
+                  continue
+                fi
+
+                if git merge --no-edit -m "Merge main into $branch" "$SHA"; then
+                  if git push origin "HEAD:refs/heads/$branch"; then
+                    merged+=("$branch|$ahead")
+                  else
+                    rejected+=("$branch")
+                  fi
+                else
+                  conflicts="$(git diff --name-only --diff-filter=U | paste -sd', ' -)"
+                  git merge --abort || true
+                  conflicted+=("$branch|${conflicts:-unknown}")
+                fi
+                echo "::endgroup::"
+                continue
               fi
 
-              if git push origin "HEAD:refs/heads/$branch"; then
+              if git merge-tree --write-tree "$ref" "$SHA" >/dev/null 2>&1; then
+                verdict="would merge cleanly"
+              else
+                verdict="**would conflict**"
+              fi
+              echo "Ahead by $ahead, behind by $behind ($verdict). Held for a human." >&2
+              held+=("$branch|$ahead|$behind|$verdict")
+              echo "::endgroup::"
+              continue
+            fi
+
+            # Pure fast-forward: the resulting tree is byte-identical to the
+            # main that just tested green. Pushed WITHOUT --force, so the
+            # remote independently enforces the same fast-forward rule -- a
+            # branch that moved since the fetch is rejected, not overwritten.
+            pushed=false
+            for attempt in 1 2; do
+              if git push origin "$SHA:refs/heads/$branch"; then
                 pushed=true
                 break
               fi
 
               echo "Push to '$branch' was rejected (attempt $attempt); re-fetching." >&2
-              git fetch origin "+refs/heads/$branch:refs/remotes/origin/$branch"
+              git fetch origin "+refs/heads/$branch:$ref"
+
+              if git merge-base --is-ancestor "$SHA" "$ref"; then
+                already+=("$branch"); pushed=handled; break
+              fi
+              if ! git merge-base --is-ancestor "$ref" "$SHA"; then
+                held+=("$branch|?|?|moved mid-sync, no longer a fast-forward"); pushed=handled; break
+              fi
             done
 
             if [[ "$pushed" == true ]]; then
               synced+=("$branch")
-            elif [[ "${conflicted[*]-}" != *"$branch|"* ]]; then
+            elif [[ "$pushed" == false ]]; then
               rejected+=("$branch")
             fi
 
@@ -131,37 +316,61 @@ jobs:
           {
             echo "## Sync result"
             echo
+            if [[ "$UNVERIFIED" == "true" ]]; then
+              echo "> ⚠️ Manual run with \`allow_unverified\`: \`${SHA:0:8}\` was **not** checked for green CI."
+              echo
+            fi
+            echo "Verified commit: \`${SHA:0:8}\`"
+            echo
             echo "| Branch | Result |"
             echo "| --- | --- |"
-            for branch in "${synced[@]-}";  do [[ -n "$branch" ]] && echo "| \`$branch\` | ✅ merged and pushed |"; done
-            for branch in "${already[@]-}"; do [[ -n "$branch" ]] && echo "| \`$branch\` | ➖ already up to date |"; done
-            for entry in "${conflicted[@]-}"; do
-              [[ -n "$entry" ]] || continue
-              echo "| \`${entry%%|*}\` | ❌ conflict in ${entry#*|} — **not pushed** |"
+            for b in "${synced[@]-}";  do [[ -n "$b" ]] && echo "| \`$b\` | ✅ fast-forwarded |"; done
+            for b in "${already[@]-}"; do [[ -n "$b" ]] && echo "| \`$b\` | ➖ already contains it |"; done
+            for e in "${merged[@]-}"; do
+              [[ -n "$e" ]] || continue
+              echo "| \`${e%%|*}\` | 🔀 merged (was ahead by ${e#*|}) |"
             done
-            for branch in "${rejected[@]-}"; do [[ -n "$branch" ]] && echo "| \`$branch\` | ⚠️ push rejected (branch moved or protected) — **not pushed** |"; done
+            for e in "${held[@]-}"; do
+              [[ -n "$e" ]] || continue
+              IFS='|' read -r hb ha hbh hv <<< "$e"
+              echo "| \`$hb\` | ⛔ held — ahead by $ha, behind by $hbh; $hv |"
+            done
+            for e in "${conflicted[@]-}"; do
+              [[ -n "$e" ]] || continue
+              echo "| \`${e%%|*}\` | ❌ conflict in ${e#*|} — **not pushed** |"
+            done
+            for b in "${rejected[@]-}"; do [[ -n "$b" ]] && echo "| \`$b\` | ⚠️ push rejected — **not pushed** |"; done
           } >> "$GITHUB_STEP_SUMMARY"
 
-          failures=$(( ${#conflicted[@]} + ${#rejected[@]} ))
-          if (( failures > 0 )); then
+          if (( ${#held[@]} > 0 )); then
             {
               echo
-              echo "### Resolve manually"
+              echo "### Held branches"
+              echo
+              echo "A held branch has commits of its own, so merging \`main\` into it would build a tree"
+              echo "no CI run has ever seen. This workflow only fast-forwards onto a verified commit, so"
+              echo "it will not make that call. Land the branch's work, or resolve it yourself:"
               echo
               echo '```bash'
-              for entry in "${conflicted[@]-}"; do
-                [[ -n "$entry" ]] || continue
-                branch="${entry%%|*}"
-                echo "git switch $branch && git pull && git merge main   # then resolve, commit, push"
+              for e in "${held[@]-}"; do
+                [[ -n "$e" ]] || continue
+                echo "git switch ${e%%|*} && git pull && git merge main   # then resolve, commit, push"
               done
               echo '```'
+              echo
+              echo "Or re-run this workflow manually with **allow_merge_commits** to let it merge and push."
             } >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-            # Fail the job so the run goes red and GitHub sends its usual
-            # failed-workflow notification. Every branch that COULD sync
-            # already has -- this is a report, not a rollback.
-            echo "$failures branch(es) could not be synced; see the job summary." >&2
+          failures=$(( ${#held[@]} + ${#conflicted[@]} + ${#rejected[@]} ))
+          if (( failures > 0 )); then
+            # Red on purpose. Under the fast-forward rule a conflict is
+            # impossible, so "held" is the only signal this workflow has
+            # left; if it never went red there would be no reason to look
+            # at it at all. Every branch that COULD be synced already has
+            # been -- this is a report, not a rollback.
+            echo "$failures branch(es) were not synced; see the job summary." >&2
             exit 1
           fi
 
-          echo "All branches are in sync with main."
+          echo "Every branch is at ${SHA:0:8}."
