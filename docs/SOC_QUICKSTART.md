@@ -42,10 +42,10 @@ command's output:
   means a name should have been there and the bounded read failed —
   evidence was lost, and it is reported as a coverage limitation.
 
-`--handles` folds routine anonymous rows (anonymous `Event`, `Mutant`,
-`Semaphore`, and similar low-context types) into per-type counts and
-tells you how many it folded; run it again with `--verbose` for the full
-inventory. Anonymous `Process`, `Thread`, `Token`, `Section` and `Job`
+`--handles` folds anonymous rows — every row whose descriptor recorded no
+object name — into per-type counts, naming each type and its exact count,
+and tells you how many it folded; run it again with `--verbose` for the
+full inventory. Anonymous `Process`, `Thread`, `Token`, `Section` and `Job`
 handles are never folded — those are the ones a cross-process access
 question turns on. A name like `\KnownDlls` is a real NT Object Manager
 **directory**, not a filesystem path; the descriptor records the

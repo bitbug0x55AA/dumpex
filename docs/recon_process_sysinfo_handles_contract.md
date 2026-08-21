@@ -1646,7 +1646,13 @@ was which was recoverable only from the source. Frozen layout:
 ```
 
 - The four column headers are frozen: `DLL`, `Imported API`,
-  `IAT Slot VA`, `Resolved Target VA`.
+  `IAT Slot VA`, `Resolved Target VA`. Each is sized to the widest value
+  it actually holds in that render, floored at a minimum (24 / 28 / 20)
+  and capped above (48 / 64), by the same `column_width()` rule §5.6
+  applies to the handle table — a fixed minimum separates a table
+  without aligning it, and `dll`/`symbol` are dump-derived, so one long
+  API-set DLL name would otherwise leave every other row ragged and one
+  hostile name would set the layout for all of them.
 - §3.5.3's three import states stay distinct and are read from
   `import_by`, never inferred from a null `symbol`: a name, `ordinal
   #N`, and `(unavailable)` (the loader had already overwritten
@@ -2728,17 +2734,43 @@ reduction path is introduced.
   the distinction the record does (§5.2.1), so a reader scanning the
   table is never told a handle is anonymous when its name was lost, and
   a handle with one good name and one lost one shows both truthfully.
-- Every column width is a **minimum**, never a truncation: a value wider
-  than its column pushes the rest of the row right rather than losing
-  characters. Each column is therefore followed by two **literal**
-  spaces, so the separator survives an oversized value — a width alone
-  does not. Windows carries plenty of 16-to-20-character type names
-  (`WaitCompletionPacket`, `FilterConnectionPort`, `IoCompletionReserve`,
-  …), which a separator-less `Type` column fuses to the `Access` mask
-  into one unsplittable token. `Access` gets the same treatment even
-  though a raw 32-bit mask cannot overflow it: §5.2's deferred
-  type-specific permission decoding would put a decoded name there, and
-  the same fusion would reappear one column over.
+- **A value is never truncated, and the table is nevertheless aligned.**
+  Each column is sized to the widest value it actually holds in that
+  render, floored at a frozen minimum (`Type` 14, `Access` 10, the two
+  counters 3) and capped above (`Type` 40, `Access` 32). Every column is
+  still followed by two **literal** spaces, so two values can never fuse
+  into one unsplittable token.
+
+  A per-column minimum width **separates** a table without **aligning**
+  it, and that distinction is the whole point: a width in a format spec
+  is a minimum, not a truncation, so one 20-character type name — and
+  Windows carries plenty (`WaitCompletionPacket`,
+  `FilterConnectionPort`, `IoCompletionReserve`, …) — pushes that ONE
+  row's `Access`/`Cnt`/`Ptr`/`Object` right while every other row stays
+  put. The table then reads as ragged under its own header, and a
+  column-wise read (or `awk`, or a copy-paste into a report) is
+  worthless. Measuring the column instead lines every row up with every
+  other row and with the header, and still drops no characters.
+
+  Widths are measured on the **escaped, projected** strings that are
+  actually printed, never on the raw record values: `console_safe()`
+  expands a name, and a column sized on the unescaped value would be too
+  narrow for its own row.
+
+  The caps are the safety valve, because type and object names are
+  attacker-controlled: without a ceiling, one 4,000-character name would
+  pad **every** row to 4,000 columns and destroy the table for the other
+  handles. A value past the cap is still printed in full — its own row
+  overflows and pushes right, which is the ordinary fixed-width
+  behaviour, now confined to the pathological case instead of being the
+  normal one. Both caps sit far above any real Windows object type name.
+  `Access` is measured like the rest even though a raw 32-bit mask
+  cannot overflow it: §5.2's deferred type-specific permission decoding
+  would put a decoded name there.
+
+  The single width rule is `column_width()` in
+  `dumpex/ui/console_layout.py`, shared with §3.8.1's import table so the
+  two console tables cannot drift apart.
 - `summary = {"count": N, "by_type": {…}}`, with `by_type` keyed by
   `type_name`, ordered count-descending then name-ascending (§1.5).
   A `null` `type_name` is keyed `"(unnamed)"` or `"(unreadable)"`
@@ -2783,7 +2815,7 @@ per-type counts, and `--verbose` renders every record.
   0x0000000000000300  Process         0x001fffff    1    1  (unnamed)
   (unnamed) = the descriptor records no name; (unreadable) = a name was recorded but the bounded read failed
 
-  11 anonymous handle(s) of routine low-context type(s) not shown: Event 9, Mutant 2
+  13 anonymous handle(s) not shown (no object name recorded): Event 9, Semaphore 3, Key 1
   These rows are captured evidence and are complete in structured output -- use --verbose to show all.
 ```
 
@@ -2793,27 +2825,33 @@ per-type counts, and `--verbose` renders every record.
   identical in both views. A folded row remains captured, normalized,
   counted, and present in `--json`. The headline and the `By type:` line
   always describe the **complete** inventory.
-- A row is folded only when **both** hold:
-  1. `object_name_status == "unnamed"` — the descriptor positively
-     records no object name. `"unreadable"` is evidence **loss** and is
-     never folded, in either name field: folding it would hide the one
-     row that says something was lost.
-  2. its captured `type_name` is on an explicitly approved list of
-     low-context types (synchronization/scheduling primitives whose
-     anonymous instances carry no name, path, or cross-process
-     reference: `Event`, `EtwRegistration`, `IoCompletion`,
-     `IoCompletionReserve`, `IRTimer`, `Mutant`, `Semaphore`, `Timer`,
-     `TpWorkerFactory`, `WaitCompletionPacket`).
-- `object_name_status == "unnamed"` alone is **not** a sufficient
-  suppression rule. An anonymous `Process`, `Thread`, `Token`,
-  `Section`, or `Job` handle is exactly the evidence a cross-process
-  access question turns on, and none of them are foldable.
-- The list is an **allow** list: an unclassified type — including one a
-  dump invents — stays visible. The failure mode of a new Windows object
-  type is a slightly longer table, never a hidden handle.
-- The fold line states the exact total and the per-type counts, ordered
-  by §1.5 (count descending, then type name ascending), and names
-  `--verbose` as the way to see them. Folding is deterministic, bounded,
+- An anonymous row folds **unless** one of two things holds:
+  1. **the row lost evidence.** `object_name_status == "unreadable"` (a
+     name should have been there and the bounded read failed) is a
+     different fact from `"unnamed"` (the descriptor positively records
+     none), and so is an unreadable **type** name. Folding either would
+     hide the one row that says something was lost, so only a row whose
+     type read cleanly **and** whose object name is positively absent is
+     ever a fold candidate.
+  2. **its type is on the retain list**: `Job`, `Process`, `Section`,
+     `Thread`, `Token`.
+- `object_name_status == "unnamed"` alone is therefore **not** the
+  suppression rule: rule 2 is what keeps an anonymous `Process`,
+  `Thread`, `Token`, `Section`, or `Job` handle — exactly the evidence a
+  cross-process access question turns on — visible however many of them
+  a dump carries.
+- The type list is a **retain** list, not an allow-to-fold list, and the
+  direction is normative. An allow list leaves every unlisted type
+  visible, so the default console still prints the wall of anonymous
+  rows this section exists to collapse, and it silently regresses with
+  every new Windows object type. The cost of the retain direction is
+  that an unclassified type is folded rather than shown; that cost is
+  bounded, because the fold line **names the type and its exact count**,
+  `summary.by_type` counts it, and `--verbose` prints it.
+- The fold line states the exact total, says **why** those rows folded
+  (no object name recorded), lists the per-type counts ordered by §1.5
+  (count descending, then type name ascending), and names `--verbose` as
+  the way to see them. Folding is deterministic, bounded,
   and linear in the record count: it is decided per record with no
   cross-row state.
 - The two null-name labels are explained inline whenever one of them is
@@ -3394,24 +3432,36 @@ excuses anything in §0–§8.
   `name_matched_candidate`, and per-field IAT nullability.
 - **rev6 (this revision)** — the recon console projection, from an
   investigator's report against the shipped v2.13 output
-  ([issue #98](https://github.com/bitbug0x55AA/dumpex/issues/98)). Four
+  ([issue #98](https://github.com/bitbug0x55AA/dumpex/issues/98)). Five
   presentation defects, no change to any record shape, coverage meaning,
   limitation code, diagnostic, ordering rule, or exit code:
 
   1. **`--handles --verbose` was silently ignored** — the CLI dispatch
      never forwarded the flag. Now wired end-to-end (§5.6.3).
   2. **A full anonymous handle inventory buried the useful rows.** §5.6.1
-     freezes a deterministic fold of approved low-context anonymous rows
-     into per-type counts, with the exact omitted count and a
-     `use --verbose to show all` hint. Folding is a projection: the
-     records, summary, `by_type`, coverage and exit code are identical
-     in both views, and `unnamed`/`unreadable` stay distinct — an
-     unreadable name is never folded.
-  3. **Real NT namespace names read as parser noise.** §5.6.2 adds
+     freezes a deterministic fold of anonymous rows into per-type counts,
+     with the exact omitted count and a `use --verbose to show all` hint.
+     Folding is a projection: the records, summary, `by_type`, coverage
+     and exit code are identical in both views, and `unnamed`/
+     `unreadable` stay distinct — an unreadable name is never folded.
+     The type list is a **retain** list (`Job`, `Process`, `Section`,
+     `Thread`, `Token`), not an allow-to-fold list: the first cut of this
+     used the allow direction, which left every unlisted type visible and
+     so still printed the wall of anonymous rows the fold exists to
+     collapse.
+  3. **The tables were separated but not aligned.** A per-column
+     minimum width is not truncation, so one long type, DLL or API name
+     pushed that one row's remaining columns right and left both tables
+     ragged under their own headers. §5.6 and §3.8.1 now size every
+     column to the widest value actually present, floored at the old
+     minimum and capped so an attacker-controlled name cannot set the
+     layout for every row. The shared rule is `column_width()` in
+     `dumpex/ui/console_layout.py`.
+  4. **Real NT namespace names read as parser noise.** §5.6.2 adds
      bounded, type-keyed notes (`\KnownDlls` and friends) that describe
      only what the descriptor recorded and never enumerate a directory's
      contents from the analysis host.
-  4. **The verbose process block spoke dumpex's internal vocabulary.**
+  5. **The verbose process block spoke dumpex's internal vocabulary.**
      §3.8.1 gives the import table headers and a legend for the
      `IAT Slot VA -> Resolved Target VA` pair (and surfaces
      `slot_in_bounds` as an observation with a footnote); §3.8.2 replaces

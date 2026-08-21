@@ -42,6 +42,7 @@ from dumpex.output.records import (
     ProcessRecord, IatRecord, ImportEntryRecord, ProcessDiagnosticRecord, hex_address,
 )
 from dumpex.ui.colors import BOLD, console_safe
+from dumpex.ui.console_layout import column_width
 
 
 # ── §3.5.4/§6.1 -- IAT diagnostic `details` keys that carry addresses ────
@@ -535,9 +536,21 @@ def render_process_console(record: ProcessRecord, coverage, *, verbose: bool = F
 # does it point"). The headers and the one legend line below are the
 # whole fix; no new evidence is read, and the v2.13 record shape is
 # untouched.
-_IAT_DLL_COLUMN_WIDTH = 24
-_IAT_SYMBOL_COLUMN_WIDTH = 28
-_IAT_ADDRESS_COLUMN_WIDTH = 20
+# Sized to the widest value each column actually holds in this render,
+# floored at the minimum and capped above -- the same
+# dumpex.ui.console_layout.column_width() rule the --handles table uses,
+# for the same reason: a fixed minimum is not truncation, so one long DLL
+# or API name shifted that ONE row's remaining columns right and left the
+# table ragged below its own header. `dll` and `symbol` come out of the
+# dumped image and are attacker-controlled, so the caps stop one hostile
+# name from padding every row.
+_IAT_DLL_COLUMN_MIN_WIDTH = 24
+_IAT_DLL_COLUMN_MAX_WIDTH = 48
+_IAT_SYMBOL_COLUMN_MIN_WIDTH = 28
+_IAT_SYMBOL_COLUMN_MAX_WIDTH = 64
+# Slot/target are hex_address()'s fixed 18 characters (§1.3) or
+# "(unknown)"; the header itself is the widest thing in the column.
+_IAT_ADDRESS_COLUMN_MIN_WIDTH = 20
 
 # Pre-wrapped rather than wrapped at print time: dumpex's own text, at a
 # fixed width, so the block is byte-identical on every terminal.
@@ -553,9 +566,10 @@ _IAT_LEGEND_LINES = (
 # claim about hooking -- a target inside another module is ordinary for
 # forwarded exports and API-set resolution.
 _IAT_OUT_OF_BOUNDS_MARKER = " *"
-_IAT_OUT_OF_BOUNDS_NOTE = ("* the IAT slot lies outside the recorded import directory "
-                           "bounds -- an observation about this dump's directory "
-                           "framing, not a verdict about the import")
+_IAT_OUT_OF_BOUNDS_NOTE_LINES = (
+    "* the IAT slot lies outside the recorded import directory bounds -- an",
+    "  observation about this dump's directory framing, not a verdict about the import",
+)
 
 
 def _import_symbol_text(entry: ImportEntryRecord) -> str:
@@ -580,22 +594,35 @@ def _render_iat_entries(entries) -> None:
     for line in _IAT_LEGEND_LINES:
         print(f"    {line}")
     print()
-    header = (f"{'DLL':<{_IAT_DLL_COLUMN_WIDTH}}  {'Imported API':<{_IAT_SYMBOL_COLUMN_WIDTH}}  "
-              f"{'IAT Slot VA':<{_IAT_ADDRESS_COLUMN_WIDTH}}  Resolved Target VA")
-    print(f"    {header}")
-    any_out_of_bounds = False
-    for e in entries:
-        dll_text = console_safe(e.dll) or "(unknown)"
-        symbol_text = console_safe(_import_symbol_text(e))
-        marker = ""
-        if e.slot_in_bounds is False:
-            marker = _IAT_OUT_OF_BOUNDS_MARKER
-            any_out_of_bounds = True
-        print(f"    {dll_text:<{_IAT_DLL_COLUMN_WIDTH}}  {symbol_text:<{_IAT_SYMBOL_COLUMN_WIDTH}}  "
-              f"{(e.iat_slot_va or '(unknown)'):<{_IAT_ADDRESS_COLUMN_WIDTH}}  "
-              f"{e.resolved_target_va or '(unknown)'}{marker}")
-    if any_out_of_bounds:
-        print(f"    {_IAT_OUT_OF_BOUNDS_NOTE}")
+
+    # Cells first, widths second, printing third -- the widths are
+    # measured on the ESCAPED strings that actually reach the terminal,
+    # since console_safe() can expand a name past its raw length.
+    rows = [(console_safe(e.dll) or "(unknown)",
+             console_safe(_import_symbol_text(e)),
+             e.iat_slot_va or "(unknown)",
+             e.resolved_target_va or "(unknown)",
+             _IAT_OUT_OF_BOUNDS_MARKER if e.slot_in_bounds is False else "")
+            for e in entries]
+    dll_w = column_width("DLL", [r[0] for r in rows],
+                           minimum=_IAT_DLL_COLUMN_MIN_WIDTH, cap=_IAT_DLL_COLUMN_MAX_WIDTH)
+    symbol_w = column_width("Imported API", [r[1] for r in rows],
+                              minimum=_IAT_SYMBOL_COLUMN_MIN_WIDTH,
+                              cap=_IAT_SYMBOL_COLUMN_MAX_WIDTH)
+    slot_w = column_width("IAT Slot VA", [r[2] for r in rows],
+                            minimum=_IAT_ADDRESS_COLUMN_MIN_WIDTH)
+
+    # `Resolved Target VA` is the last column and is never padded --
+    # padding it would only add invisible trailing whitespace (and would
+    # separate the out-of-bounds marker from the value it marks).
+    print(f"    {'DLL':<{dll_w}}  {'Imported API':<{symbol_w}}  "
+          f"{'IAT Slot VA':<{slot_w}}  Resolved Target VA")
+    for dll_text, symbol_text, slot_va, target_va, marker in rows:
+        print(f"    {dll_text:<{dll_w}}  {symbol_text:<{symbol_w}}  "
+              f"{slot_va:<{slot_w}}  {target_va}{marker}")
+    if any(row[4] for row in rows):
+        for line in _IAT_OUT_OF_BOUNDS_NOTE_LINES:
+            print(f"    {line}")
 
 
 # ── #98: Identity Verification (was "Evidence Matrix") ──────────────────

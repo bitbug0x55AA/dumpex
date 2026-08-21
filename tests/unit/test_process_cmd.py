@@ -1601,6 +1601,108 @@ def test_verbose_iat_row_keeps_the_slot_and_target_in_their_own_columns():
     assert f"{entry.iat_slot_va}{entry.resolved_target_va}" not in row
 
 
+def _iat_block(text: str) -> list:
+    """The import table's header line plus its rows."""
+    lines = text.splitlines()
+    header_index = next(i for i, l in enumerate(lines)
+                        if "DLL" in l and "IAT Slot VA" in l)
+    header = lines[header_index]
+    rows = []
+    for line in lines[header_index + 1:]:
+        if not line.strip() or line.strip().startswith("*"):
+            break
+        rows.append(line)
+    return [header] + rows
+
+
+def _assert_iat_columns_line_up(text: str) -> list:
+    """Every column is left-aligned here, so each row's value must START
+    at its header label's own offset. Checked against the header, so a
+    table that is internally consistent but shifted out from under its
+    own header still fails."""
+    block = _iat_block(text)
+    header = block[0]
+    for row in block[1:]:
+        for label in ("DLL", "Imported API", "IAT Slot VA", "Resolved Target VA"):
+            at = header.index(label)
+            assert row[at] != " " and row[at - 1] == " ", (
+                f"{label!r} does not start at column {at} in {row!r}")
+    return block
+
+
+def test_verbose_iat_rows_line_their_columns_up_with_the_header():
+    """A fixed minimum column width separates the table without aligning
+    it: one long DLL or API name shifted that row's remaining columns
+    right while every other row stayed put."""
+    entries = [
+        records_module.ImportEntryRecord(
+            dll="KERNEL32.dll", import_by="name", symbol="CreateFileW", ordinal=None,
+            iat_slot_va="0x00007ff600021018", resolved_target_va="0x00007ffb12345678",
+            slot_in_bounds=True),
+        # A real API-set DLL name, far wider than the column minimum.
+        records_module.ImportEntryRecord(
+            dll="api-ms-win-core-synch-l1-2-0.dll", import_by="name",
+            symbol="WaitOnAddress", ordinal=None,
+            iat_slot_va="0x00007ff600021020", resolved_target_va="0x00007ffb12345690",
+            slot_in_bounds=True),
+        records_module.ImportEntryRecord(
+            dll="ADVAPI32.dll", import_by="ordinal", symbol=None, ordinal=12,
+            iat_slot_va="0x00007ff600021028", resolved_target_va="0x00007ffb123456a0",
+            slot_in_bounds=True),
+        records_module.ImportEntryRecord(
+            dll=None, import_by="unavailable", symbol=None, ordinal=None,
+            iat_slot_va="0x00007ff600021030", resolved_target_va=None,
+            slot_in_bounds=None),
+    ]
+    out = _rendered_record(_process_record_with_entries(entries), verbose=True)
+    assert len(_assert_iat_columns_line_up(out)) == 5
+
+
+def test_verbose_iat_column_grows_with_its_widest_value():
+    short = _rendered_record(_process_record_with_entries([
+        records_module.ImportEntryRecord(
+            dll="KERNEL32.dll", import_by="name", symbol="CreateFileW", ordinal=None,
+            iat_slot_va="0x00007ff600021018", resolved_target_va="0x00007ffb12345678",
+            slot_in_bounds=True)]), verbose=True)
+    long = _rendered_record(_process_record_with_entries([
+        records_module.ImportEntryRecord(
+            dll="KERNEL32.dll", import_by="name", symbol="CreateFileW", ordinal=None,
+            iat_slot_va="0x00007ff600021018", resolved_target_va="0x00007ffb12345678",
+            slot_in_bounds=True),
+        records_module.ImportEntryRecord(
+            dll="api-ms-win-core-synch-l1-2-0.dll", import_by="name",
+            symbol="WaitOnAddress", ordinal=None,
+            iat_slot_va="0x00007ff600021020", resolved_target_va="0x00007ffb12345690",
+            slot_in_bounds=True)]), verbose=True)
+
+    assert _iat_block(long)[0].index("Imported API") > _iat_block(short)[0].index("Imported API")
+    _assert_iat_columns_line_up(long)
+
+
+def test_a_hostile_dll_name_cannot_set_the_iat_layout_for_every_row():
+    """`dll`/`symbol` come out of the dumped image. The cap stops one
+    absurd name from padding every row; that row overflows instead, and
+    nothing is truncated."""
+    import dumpex.commands.process as process_module
+    over_cap = "D" * (process_module._IAT_DLL_COLUMN_MAX_WIDTH * 2)
+    out = _rendered_record(_process_record_with_entries([
+        records_module.ImportEntryRecord(
+            dll="KERNEL32.dll", import_by="name", symbol="CreateFileW", ordinal=None,
+            iat_slot_va="0x00007ff600021018", resolved_target_va="0x00007ffb12345678",
+            slot_in_bounds=True),
+        records_module.ImportEntryRecord(
+            dll=over_cap, import_by="name", symbol="Evil", ordinal=None,
+            iat_slot_va="0x00007ff600021020", resolved_target_va="0x00007ffb12345690",
+            slot_in_bounds=True)]), verbose=True)
+
+    assert over_cap in out                       # never truncated
+    rows = _iat_block(out)[1:]
+    ordinary = next(l for l in rows if "KERNEL32" in l)
+    hostile = next(l for l in rows if over_cap in l)
+    assert len(ordinary) < process_module._IAT_DLL_COLUMN_MAX_WIDTH + 80
+    assert hostile.index(over_cap) == ordinary.index("KERNEL32.dll")
+
+
 def test_verbose_iat_marks_an_out_of_bounds_slot_without_calling_it_a_verdict():
     """`slot_in_bounds is False` is an observation (§3.5.5 files it as a
     diagnostic, never a limitation). It must be visible in the table, and

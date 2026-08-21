@@ -23,6 +23,7 @@ import sys
 __all__ = [
     "MIN_WIDTH", "MAX_WIDTH", "FALLBACK_WIDTH",
     "strip_ansi", "visible_len", "resolve_width", "wrap_text", "render_kv_block",
+    "column_width",
 ]
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -117,3 +118,34 @@ def render_kv_block(pairs: list, indent: int = 2, label_width: "int | None" = No
         label_width = max((len(k) for k, _ in pairs), default=0)
     pad = " " * indent
     return [f"{pad}{label:<{label_width}}  {value}" for label, value in pairs]
+
+
+def column_width(header: str, cells, *, minimum: int = 0, cap: "int | None" = None) -> int:
+    """The width that lets every cell in ONE render of a table sit in its
+    own column: the widest value present, floored by the header text and
+    by `minimum`, and capped by `cap`.
+
+    Tables built from a fixed per-column width are not aligned, they are
+    merely separated. A width in a format spec (`{value:<14}`) is a
+    MINIMUM, never a truncation, so a single over-wide cell pushes the
+    rest of ITS OWN row right while every other row stays put -- the
+    table reads as ragged below its own header, and a column-wise read
+    (or `awk`, or a copy-paste into a report) is worthless. Sizing to the
+    data instead lines every row up with every other row and with the
+    header, without ever dropping a character.
+
+    `cap` is the safety valve for columns fed by dump-derived text, which
+    is attacker-controlled: without a ceiling, one 4,000-character name
+    would pad EVERY row to 4,000 columns and destroy the table for all
+    the other records. A cell wider than `cap` is still printed in full
+    -- its own row simply overflows and pushes right, which is the
+    ordinary fixed-width behaviour, now confined to the pathological case
+    instead of being the normal one.
+
+    Measured with visible_len(), so a cell that already carries ANSI
+    styling is sized by what it occupies on screen rather than by its
+    escape sequences. Linear in the number of cells, with no state
+    carried between renders."""
+    widest = max((visible_len(cell) for cell in cells), default=0)
+    width = max(minimum, visible_len(header), widest)
+    return width if cap is None else min(width, cap)
