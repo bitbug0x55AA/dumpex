@@ -278,22 +278,83 @@ def _case_sysinfo():
 # process_name/process_path/command_line come from the PEB (or, for the
 # name, the basename of a ModuleListStream path) -- §3.3's precedence
 # table. process_start_utc/image_base_address are dumpex-formatted.
+# The three top-level ProcessRecord strings hostile_record() can plant
+# directly. The verbose block's own dump-derived strings live inside
+# `iat`/`identity_evidence`/`peb_extended` (a tuple and two dicts, which
+# hostile_record() cannot fill field-by-field), so they are planted by
+# the builders below and checked by the whole-output sweep -- their
+# per-field reachability is asserted in tests/unit/test_process_cmd.py,
+# where the fixture can be the right shape.
 _PROCESS_FIELDS = ("process_name", "process_path", "command_line")
 
 
+def _hostile_iat() -> records_module.IatRecord:
+    """One import whose DLL and API names are dump strings (read out of
+    the image's import directory, #98's verbose table prints both)."""
+    entry = records_module.ImportEntryRecord(
+        dll=hostile_text_for("dll"), import_by="name", symbol=hostile_text_for("symbol"),
+        ordinal=None, iat_slot_va="0x0000000000401000",
+        resolved_target_va="0x00007ffb00001000", slot_in_bounds=False)
+    return records_module.IatRecord(
+        table_present=True, table_va="0x0000000000401000", table_size=8,
+        import_directory_present=True, import_directory_va="0x0000000000402000",
+        import_directory_size=40, has_entries=True, dll_count=1, entry_count=1,
+        entries=(entry,), diagnostics=())
+
+
+def _hostile_identity_evidence() -> dict:
+    """§3.4's claim block. Every string below is a PEB or
+    ModuleListStream value, and #98's `Identity Verification` block
+    prints all of them."""
+    return {
+        "misc_info_claim": {"pid": 1234, "process_create_time_utc": None,
+                            "raw_pid": 1234, "raw_process_create_time": None},
+        "peb_claim": {"image_base_address": "0x0000000000400000",
+                      "image_path": hostile_text_for("peb_image_path"),
+                      "name": hostile_text_for("peb_name"),
+                      "raw_image_base_address": None, "raw_image_path": None,
+                      "raw_command_line": None},
+        "module_claim": {"match_state": "unregistered", "base_address": None,
+                         "name": None, "path": None,
+                         "name_matched_candidate": {
+                             "base_address": "0x0000000000500000",
+                             "name": hostile_text_for("candidate_name"),
+                             "path": hostile_text_for("candidate_path")},
+                         "name_matched_candidate_ambiguous": False},
+        "main_image_pe": {"checked": True, "valid": False,
+                          "reason": hostile_text_for("pe_reason")},
+        "selected_path_source": "peb",
+        "diagnostics": [],
+    }
+
+
+def _hostile_peb_extended() -> dict:
+    """§3.6's verbose-only block: WindowTitle and DllPath are PEB
+    strings."""
+    return {"peb_address": "0x0000000000001000", "being_debugged": False,
+            "window_title": hostile_text_for("window_title"),
+            "dll_path": hostile_text_for("dll_path"),
+            "standard_input": None, "standard_output": None, "standard_error": None}
+
+
 def _case_process():
-    empty_iat = records_module.IatRecord(
-        table_present=False, table_va=None, table_size=None,
-        import_directory_present=False, import_directory_va=None,
-        import_directory_size=None, has_entries=False, dll_count=0,
-        entry_count=0, entries=(), diagnostics=())
+    """Rendered TWICE -- the default projection and `--verbose` -- and the
+    two outputs are swept together. The verbose block is the larger
+    surface by far (#98: the import table's DLL/API names, the identity
+    block's paths/names and PE rejection reason, and the Extended PEB's
+    window title and DLL path are all dump strings), and rendering only
+    the default view would leave every one of them unchecked."""
     record = hostile_record(records_module.ProcessRecord, dict(
         process_name="svchost.exe", pid=1234,
         process_path="C:\\Windows\\System32\\svchost.exe",
         command_line="svchost.exe -k netsvcs", process_start_utc="2024-01-01T00:00:00Z",
-        image_base_address="0x0000000000400000", iat=empty_iat,
-        identity_evidence={}), _PROCESS_FIELDS)
-    return _rendered(render_process_console, record, _coverage("process_identity"))
+        image_base_address="0x0000000000400000", iat=_hostile_iat(),
+        identity_evidence=_hostile_identity_evidence(),
+        peb_extended=_hostile_peb_extended()), _PROCESS_FIELDS)
+    coverage = _coverage("process_identity")
+    return (_rendered(render_process_console, record, coverage)
+            + _rendered(lambda rec, cov: render_process_console(rec, cov, verbose=True),
+                        record, coverage))
 
 
 # ModuleDiffRecord's name/full_path_* are ModuleListStream strings from

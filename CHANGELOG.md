@@ -5,6 +5,87 @@ and JSON Schema details, see [docs/OUTPUT_SCHEMA.md](docs/OUTPUT_SCHEMA.md);
 for how to read the new fields as a triage analyst, see
 [docs/SOC_QUICKSTART.md](docs/SOC_QUICKSTART.md).
 
+## Changed: `--handles` and verbose `--process` output are now readable without the source
+
+Recon's console projection assumed the reader knew dumpex's internals
+([issue #98](https://github.com/bitbug0x55AA/dumpex/issues/98)). Four
+changes, all to what is **printed**. No JSON record shape, coverage
+meaning, limitation code, diagnostic, ordering rule or exit code changed,
+and the v2.13 schema is untouched — `--json` output is byte-identical
+across this release.
+
+**`--handles --verbose` now works.** It parsed before, but the CLI never
+forwarded it, so passing it had no effect at all. It is now wired through
+the dispatch, the command boundary, the renderer, the help text and
+`meta.execution.options`.
+
+**The default `--handles` console folds routine anonymous rows.** Rows
+whose object name the descriptor positively records as absent, and whose
+type is a low-context synchronization primitive (`Event`, `Mutant`,
+`Semaphore`, `Timer`, `IoCompletion`, `WaitCompletionPacket`, and
+similar), collapse into per-type counts:
+
+```text
+  11 anonymous handle(s) of routine low-context type(s) not shown: Event 9, Mutant 2
+  These rows are captured evidence and are complete in structured output -- use --verbose to show all.
+```
+
+Folding is a **projection, never a filter**: the folded rows are still
+counted in the headline and the `By type:` line, still in `summary`, and
+still in `--json`. Anonymous `Process`, `Thread`, `Token`, `Section` and
+`Job` handles are never folded — an anonymous handle to one of those is
+exactly the evidence a cross-process access question turns on — and
+neither is any row whose name could not be read. The type list is an
+allow list, so an unclassified (or dump-invented) type stays visible.
+
+**`(unnamed)` versus `(unreadable)` is now explained inline**, and common
+NT Object Manager names get a bounded note. `\KnownDlls` reads as what it
+is — an Object Manager directory whose name this descriptor recorded, not
+a filesystem path and not a list of DLLs — without claiming the objects
+inside it were captured. dumpex never expands such a directory from the
+analysis host.
+
+**`--process --verbose` explains its own addresses.** The import table
+used to print `<address> -> <address>` with no header and no legend, so
+which address was the IAT slot and which the resolved target was
+recoverable only from the source. It now has `DLL`, `Imported API`,
+`IAT Slot VA` and `Resolved Target VA` columns plus a one-line legend, and
+an IAT slot outside the recorded import directory bounds is flagged with
+`*` and a footnote — an observation about the dump's directory framing,
+not a verdict about the import.
+
+**`Evidence Matrix` became `Identity Verification`.** The old block
+printed the internal claim vocabulary (`peb`, `resolved`, `unregistered`,
+`ambiguous=false`) in fixed-width columns, and printed the source name
+`peb` in a column headed `Selected`, where a reader expects the selected
+value. The new block leads with the selected path, name, source and image
+base, then states one conclusion per check:
+
+```text
+  Identity Verification                            [--verbose only]
+    Selected path    C:\Samples\malware.exe
+    Source           PEB (ProcessParameters.ImagePathName)
+
+    [OK] PEB image base is registered in ModuleList
+         0x00007ff600010000 -> malware.exe
+    [OK] PEB and ModuleList process names agree
+    [OK] a valid PE header was found at the PEB image base
+```
+
+Each check reports `[OK]`, `[!!]` for a conflict, or `[--]` when it could
+not be evaluated; names are compared case-insensitively, so a case
+difference alone is not reported as a conflict. The raw per-source claims
+are still printed underneath. **An identity disagreement stays an
+observation** — it does not become a maliciousness verdict, a
+`peb_trusted` boolean, a command failure, or a coverage/exit-code change.
+
+**Every dump-derived string the verbose process renderer prints is now
+escaped** — paths, process and module names, the PE rejection reason, the
+import table's DLL and API names, and the Extended PEB's window title and
+DLL path — so a hostile name cannot forge dumpex's own output lines,
+clear the terminal, or visually reorder itself. `--json` keeps the exact
+decoded bytes, which is where evidence is read byte-for-byte.
+
 ## Fixed: `--sysinfo`'s `Dump Time` was a 1970 date on every dump
 
 `--sysinfo`'s `Dump Time` (and `dump_time_utc` in `--json`/`--csv`)

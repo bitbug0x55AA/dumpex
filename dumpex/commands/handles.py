@@ -21,11 +21,17 @@ fewer handles with a `complete` verdict.
 and CoverageReport -- it never touches `mf` (its signature has no `mf`
 parameter), matching every other recon renderer's rule.
 
-Per #42's non-goals, `--handles` is not wired into argparse and
-CURRENT_SCHEMA is not touched here -- #43 owns that atomic cutover.
-`cmd_handles()` exists so a future CLI wiring (and this module's own
-tests) has one call that collects and renders in the usual command
-shape.
+`cmd_handles()` is the one call that collects and renders in the usual
+command shape; #43 wired it into argparse, and #98 wired `--verbose`
+through to it.
+
+Console verbosity is a PROJECTION and nothing else (#98): the
+CommandResult `collect_handles()` returns is byte-identical whatever
+`verbose` is, so `--json` always carries the complete normalized
+inventory. The default console folds the low-context anonymous rows
+listed in `_FOLDABLE_ANONYMOUS_TYPES` into per-type counts and says
+exactly how many it folded; `--verbose` renders every record. Nothing is
+ever removed from the records, the summary, or `by_type`.
 """
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile
@@ -442,7 +448,154 @@ _TYPE_COLUMN_WIDTH = 14
 _ACCESS_COLUMN_WIDTH = 10
 
 
-def render_handles_console(records, coverage) -> None:
+# ── #98: console folding, kept strictly a projection ────────────────────
+# The default console folds ONLY the anonymous rows of these types into
+# per-type counts. Two independent conditions have to hold before a row
+# is folded, and neither is sufficient alone:
+#
+#   1. `object_name_status == "unnamed"` -- the descriptor positively
+#      records no object name (§5.2.1). An "unreadable" name is EVIDENCE
+#      LOSS and is never folded: folding it would hide the one row an
+#      analyst needs to see to know something was lost.
+#   2. the captured type is on this explicitly approved list.
+#
+# Condition 2 exists because condition 1 alone is far too aggressive: an
+# anonymous Process, Thread, Token, Section, or Job handle is exactly the
+# kind of evidence a cross-process-access question turns on, and none of
+# those appear below. The list is an ALLOW list, so a type nobody has
+# considered (including a type name a dump invents) stays visible by
+# default -- the failure mode of a new Windows object type is a slightly
+# longer table, never a hidden handle.
+#
+# Every type here is a synchronization/scheduling primitive whose
+# anonymous instances carry no name, no path, and no cross-process
+# reference: with no object name there is nothing left in the descriptor
+# to investigate beyond the per-type count the fold line prints.
+_FOLDABLE_ANONYMOUS_TYPES = frozenset({
+    "Event",
+    "EtwRegistration",
+    "IoCompletion",
+    "IoCompletionReserve",
+    "IRTimer",
+    "Mutant",
+    "Semaphore",
+    "Timer",
+    "TpWorkerFactory",
+    "WaitCompletionPacket",
+})
+
+# Frozen, per-name explanations for NT Object Manager names an analyst
+# meets routinely and cannot tell from a filesystem path. Keyed by
+# (type_name, object_name) so a note is only attached to a handle whose
+# TYPE agrees with it -- a File handle a dump chooses to name
+# `\KnownDlls` gets no note at all rather than a false one.
+#
+# Every string is OBSERVATIONAL and describes only what THIS descriptor
+# recorded. None may claim the directory's contents were enumerated:
+# nothing in this command reads the Object Manager namespace, and #98's
+# resource rules forbid expanding a Directory handle from the analysis
+# host (which would describe the wrong machine anyway).
+_NT_NAMESPACE_NOTES = {
+    ("Directory", r"\KnownDlls"): (
+        "NT Object Manager directory of pre-mapped system DLL sections. This",
+        "descriptor records the directory name only -- the section objects inside",
+        "it are not captured by it.",
+    ),
+    ("Directory", r"\KnownDlls32"): (
+        "NT Object Manager directory of pre-mapped 32-bit system DLL sections on a",
+        "64-bit system. This descriptor records the directory name only.",
+    ),
+    ("Directory", r"\BaseNamedObjects"): (
+        "NT Object Manager directory holding session-wide named objects. This",
+        "descriptor records the directory name only -- the named objects inside it",
+        "are not captured by it.",
+    ),
+    ("Directory", r"\RPC Control"): (
+        "NT Object Manager directory holding RPC/ALPC endpoint names. This",
+        "descriptor records the directory name only.",
+    ),
+    ("Directory", r"\GLOBAL??"): (
+        "NT Object Manager directory of DOS device symbolic links (C:,",
+        "PhysicalDrive0, ...). This descriptor records the directory name only.",
+    ),
+}
+
+# The one note emitted for any OTHER captured Directory name, so an
+# unlisted directory is still explained without this table having to
+# enumerate a namespace. Bounded by construction: at most one such entry,
+# however many Directory handles a dump carries.
+_GENERIC_DIRECTORY_NOTE = (
+    "Directory handles name an NT Object Manager namespace directory. A",
+    "directory's child objects are not captured by its own descriptor.",
+)
+
+_FOLD_HINT = ("These rows are captured evidence and are complete in structured "
+              "output -- use --verbose to show all.")
+
+_NAME_STATUS_LEGEND = (
+    "(unnamed) = the descriptor records no name; "
+    "(unreadable) = a name was recorded but the bounded read failed")
+
+
+def _is_foldable(record: HandleRecord) -> bool:
+    """One record in, one bool out -- no cross-row state, so folding is
+    deterministic and linear in the record count however the table is
+    ordered. Both name statuses are read as themselves (never as bare
+    truthiness of the name): "unnamed" and "unreadable" are different
+    facts (§5.2.1) and only the first is ever foldable."""
+    return (record.object_name_status == "unnamed"
+            and record.type_name_status == "ok"
+            and record.type_name in _FOLDABLE_ANONYMOUS_TYPES)
+
+
+def _partition_for_console(records, verbose: bool) -> "tuple[list, dict]":
+    """-> (rows_to_print, {type_name: folded_count}).
+
+    `verbose` folds nothing at all. The folded counts are ordered by
+    §1.5's frozen rule (count descending, then type name ascending) so
+    two runs over the same dump print the same line."""
+    if verbose:
+        return list(records), {}
+    shown = []
+    folded = {}
+    for record in records:
+        if _is_foldable(record):
+            folded[record.type_name] = folded.get(record.type_name, 0) + 1
+        else:
+            shown.append(record)
+    return shown, dict(sorted(folded.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _namespace_notes(records) -> list:
+    """The bounded semantic notes for §5.6's Object column, derived from
+    ALL collected records (never only the printed ones -- a folded row is
+    still captured evidence, and its note would otherwise disappear with
+    it).
+
+    Bounded by `len(_NT_NAMESPACE_NOTES) + 1` regardless of how many
+    handles a dump carries: named entries are de-duplicated, and every
+    other captured Directory name contributes to ONE generic line rather
+    than a line of its own. A dump carrying 65,536 distinct Directory
+    names therefore cannot turn this block into the output."""
+    seen = {}
+    other_directory = False
+    for record in records:
+        if record.type_name_status != "ok" or record.object_name_status != "ok":
+            continue
+        key = (record.type_name, record.object_name)
+        note = _NT_NAMESPACE_NOTES.get(key)
+        if note is not None:
+            seen[key] = note
+        elif record.type_name == "Directory":
+            other_directory = True
+    lines = [(f"{name} ({type_name})", note)
+             for (type_name, name), note in sorted(seen.items(), key=lambda i: (i[0][1], i[0][0]))]
+    if other_directory:
+        lines.append(("Directory", _GENERIC_DIRECTORY_NOTE))
+    return lines
+
+
+def render_handles_console(records, coverage, *, verbose: bool = False) -> None:
     """Projects ONLY the collected records and CoverageReport -- it never
     re-reads `mf.handles`, so console and JSON can never describe two
     different reads of the same dump.
@@ -452,7 +605,15 @@ def render_handles_console(records, coverage) -> None:
     console_safe() on its way to the terminal (§5.7 is about not implying
     live state; this is about a name not being able to forge dumpex's own
     output at all). The records and the summary keep the exact decoded
-    values, so `--json` is unaffected."""
+    values, so `--json` is unaffected.
+
+    `verbose` (#98) selects between two PROJECTIONS of the same records
+    and changes nothing else: the headline, `By type:` (which always
+    counts the complete inventory, folded rows included), the
+    limitations, and the coverage reasons are identical either way. The
+    default view folds the approved low-context anonymous rows into
+    per-type counts and states, in the output itself, how many rows were
+    folded and how to see them; `--verbose` prints every record."""
     print(f"\n{BOLD('═══ HANDLES ═══')}")
     print(f"  {_headline(records, coverage)}")
 
@@ -474,12 +635,15 @@ def render_handles_console(records, coverage) -> None:
                 f"-- see coverage.limitations")
         print(f"  {YELLOW(text)}")
 
-    if records:
+    shown, folded = _partition_for_console(records, verbose)
+    folded_total = sum(folded.values())
+
+    if shown:
         header = (f"{'Handle':<18}  {'Type':<{_TYPE_COLUMN_WIDTH}}  "
                   f"{'Access':<{_ACCESS_COLUMN_WIDTH}}  {'Cnt':>3}  {'Ptr':>3}  Object")
         print()
         print(f"  {DIM(header)}")
-        for record in records:
+        for record in shown:
             type_display = console_safe(
                 handle_name_display(record.type_name, record.type_name_status))
             object_display = console_safe(
@@ -488,6 +652,35 @@ def render_handles_console(records, coverage) -> None:
                   f"{_access_display(record):<{_ACCESS_COLUMN_WIDTH}}  "
                   f"{_count_display(record.handle_count):>3}  "
                   f"{_count_display(record.pointer_count):>3}  {object_display}")
+
+    # The two null-name labels are dumpex's own vocabulary and mean two
+    # different things (§5.2.1); printed only when one of them is
+    # actually on screen, so the legend never describes rows that are not
+    # there. Read off the PRINTED rows, not the record list.
+    if any(record.type_name_status != "ok" or record.object_name_status != "ok"
+            for record in shown):
+        print(f"  {DIM(_NAME_STATUS_LEGEND)}")
+
+    # #98: exactly how many rows the default view folded, in per-type
+    # counts, with the way to see them. Every folded row is still a
+    # collected record -- it is in `by_type` above, in `summary.count`,
+    # and in --json -- so this line says "not shown", never "not
+    # captured".
+    if folded_total:
+        listed = ", ".join(f"{console_safe(name)} {count}" for name, count in folded.items())
+        print()
+        print(f"  {folded_total} anonymous handle(s) of routine low-context type(s) "
+              f"not shown: {listed}")
+        print(f"  {DIM(_FOLD_HINT)}")
+
+    notes = _namespace_notes(records)
+    if notes:
+        print()
+        print(f"  {BOLD('Object name notes')}")
+        for label, note_lines in notes:
+            print(f"    {console_safe(label)}")
+            for line in note_lines:
+                print(f"      {line}")
 
     for reason in coverage.reasons:
         # Frozen dumpex text in every case except SOURCE_FAILED's detail,
@@ -498,7 +691,11 @@ def render_handles_console(records, coverage) -> None:
     print()
 
 
-def cmd_handles(mf: MinidumpFile) -> CommandResult:
+def cmd_handles(mf: MinidumpFile, *, verbose: bool = False) -> CommandResult:
+    """`verbose` reaches the RENDERER only. `collect_handles()` takes no
+    verbosity at all, which is what makes "console filtering never
+    removes a record from --json" a structural property rather than a
+    rule someone has to remember (#98)."""
     result = collect_handles(mf)
-    render_handles_console(result.records, result.coverage)
+    render_handles_console(result.records, result.coverage, verbose=verbose)
     return result

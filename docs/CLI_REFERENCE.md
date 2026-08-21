@@ -58,7 +58,7 @@ for the named commands, not additional command entry points.
 | Option | Applies to | Description |
 |---|---|---|
 | `--diff-scope modules\|threads\|memory\|all` | diff | Optional evidence-type filter for `--diff`; default `all` |
-| `--verbose` | diff, hunt | Include routine regions or additional detail |
+| `--verbose` | process, handles, sysinfo, diff, hunt | Include routine regions or additional detail. Console only — `--json` always carries every record (see [Verbose recon output](#verbose-recon-output)) |
 
 ### Hunt options
 
@@ -159,6 +159,72 @@ none reached a conclusive result — instead of its old unconditional `0`.
 
 See [Output and Evidence Schema](OUTPUT_SCHEMA.md) for formats and metadata.
 
+## Verbose recon output
+
+`--verbose` changes what `--process` and `--handles` **print**. It never
+changes what they collect: the records, coverage, limitations, summary
+counts and exit code are identical with and without it, so `--json` is
+always the complete, lossless evidence surface.
+
+### `--handles`
+
+The default console folds routine **anonymous** handle rows — rows whose
+object name the descriptor positively records as absent, and whose type
+is a low-context synchronization primitive (`Event`, `Mutant`,
+`Semaphore`, `Timer`, `IoCompletion`, and similar) — into per-type
+counts:
+
+```text
+  11 anonymous handle(s) of routine low-context type(s) not shown: Event 9, Mutant 2
+  These rows are captured evidence and are complete in structured output -- use --verbose to show all.
+```
+
+Those rows are still captured, still counted in the headline and the
+`By type:` line, and still in `--json`. `--verbose` prints all of them.
+
+Anonymous `Process`, `Thread`, `Token`, `Section` and `Job` handles are
+**never** folded, and neither is any row whose name could not be read.
+The two states are different facts and the console keeps them apart:
+
+- `(unnamed)` — the descriptor records no name. Nothing was lost.
+- `(unreadable)` — a name should have been there and the bounded read
+  or decode failed. Evidence was lost, and the run reports it as a
+  coverage limitation.
+
+Common NT Object Manager names are explained under `Object name notes`.
+For example, `\KnownDlls` is an Object Manager **directory**, not a
+filesystem path and not a list of DLLs; the handle descriptor records
+its name only, and the objects inside it are not captured by it. dumpex
+never expands such a directory from the machine running the analysis.
+
+### `--process`
+
+`--verbose` adds three blocks:
+
+- **The import table**, with headers and a legend for its address pair.
+  Each row reads `IAT Slot VA -> Resolved Target VA`: the slot is the
+  address where the import pointer is stored, and the target is the
+  address stored in that slot in the captured process memory. A slot
+  outside the recorded import directory bounds is flagged with `*` — an
+  observation about the dump's directory framing, not a verdict about
+  the import.
+- **`Identity Verification`**, which shows the selected path and name,
+  the source they came from, and one line per independent check with an
+  explicit state: `[OK]`, `[!!]` (conflict), or `[--]` (could not be
+  evaluated). The checks are ModuleList registration of the PEB image
+  base, PEB/ModuleList process-name agreement, PE-header validity at the
+  image base, and whether another module competes for the same name. The
+  raw per-source claims follow underneath. A conflict is an
+  **observation**: it never becomes a maliciousness verdict, a command
+  failure, or a change to the exit code.
+- **`Extended PEB`**, the fields the retired `--peb` command used to
+  print, also published as `peb_extended` in `--json`.
+
+Every string in these blocks that came out of the dump — paths, names,
+DLL and API names, window title — is escaped before it reaches the
+terminal, so a hostile name cannot forge dumpex's own output. `--json`
+keeps the exact decoded bytes.
+
 ## Examples
 
 ### Recon
@@ -166,7 +232,9 @@ See [Output and Evidence Schema](OUTPUT_SCHEMA.md) for formats and metadata.
 ```bash
 dumpex sample.dmp --sysinfo
 dumpex sample.dmp --process
+dumpex sample.dmp --process --verbose
 dumpex sample.dmp --handles
+dumpex sample.dmp --handles --verbose
 dumpex sample.dmp --profile
 dumpex sample.dmp --modules
 dumpex sample.dmp --threads

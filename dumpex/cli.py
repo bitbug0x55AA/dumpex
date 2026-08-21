@@ -164,10 +164,13 @@ def main():
 
     display_group = parser.add_argument_group("display options")
     display_group.add_argument('--verbose', action='store_true',
-                               help='Show additional detail for --process, --sysinfo, --diff or '
-                                    '--hunt (--process: adds the retired --peb-only fields under '
-                                    'peb_extended; --sysinfo: prints environment variable values, '
-                                    'which may contain secrets)')
+                               help='Show additional detail for --process, --sysinfo, --handles, '
+                                    '--diff or --hunt (--process: adds the retired --peb-only '
+                                    'fields under peb_extended, plus the import table and the '
+                                    'identity checks; --handles: shows every captured handle row '
+                                    'instead of folding routine anonymous ones; --sysinfo: prints '
+                                    'environment variable values, which may contain secrets). '
+                                    'Console detail only -- --json always carries every record.')
 
     hunt_group = parser.add_argument_group("hunt options")
     hunt_group.add_argument('--yara-dir', metavar='DIR', default=None,
@@ -402,7 +405,10 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
     elif args.process:
         exit_code = _apply_command_result(cmd_process(mf, verbose=args.verbose))
     elif args.handles:
-        exit_code = _apply_command_result(cmd_handles(mf))
+        # #98: --verbose reaches the RENDERER only (see cmd_handles) --
+        # the collected records and the JSON they become are identical
+        # with and without it.
+        exit_code = _apply_command_result(cmd_handles(mf, verbose=args.verbose))
     elif args.profile:
         exit_code = _apply_command_result(cmd_profile(mf))
     elif args.sysinfo:

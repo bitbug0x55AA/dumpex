@@ -14,11 +14,16 @@ signature has no `mf` parameter), matching the contract's "rendering
 must use only the collected ProcessRecord, coverage, and diagnostics"
 rule (§3.8).
 
-Per #40's non-goals, `--process` is not wired into argparse and
-CURRENT_SCHEMA is not touched here -- #43 owns that atomic cutover.
-`cmd_process()` exists so a future CLI wiring (and this module's own
-tests) has one call that collects and renders in the usual command
-shape.
+`cmd_process()` is the one call that collects and renders in the usual
+command shape; #43 wired it into argparse.
+
+Issue #98 changed the VERBOSE CONSOLE PROJECTION only: the import table
+gained column headers and a legend for the slot/target address pair, and
+the old `Evidence Matrix` became an `Identity Verification` block that
+states one investigator-facing conclusion per identity check instead of
+printing the internal claim vocabulary. No record shape, coverage
+meaning, limitation code, diagnostic, or exit code moved with it -- the
+v2.13 JSON is byte-identical across that change.
 """
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile
@@ -511,52 +516,231 @@ def render_process_console(record: ProcessRecord, coverage, *, verbose: bool = F
     _print_diagnostics(d.to_dict() for d in record.iat.diagnostics)
 
     if verbose and record.iat.entries:
-        print()
-        for e in record.iat.entries:
-            if e.import_by == "name":
-                symbol_text = e.symbol or "(unknown)"
-            elif e.import_by == "ordinal":
-                symbol_text = f"ordinal #{e.ordinal}"
-            else:
-                symbol_text = "(unavailable)"
-            print(f"      {(e.dll or '(unknown)'):<24} {symbol_text:<28} "
-                  f"{(e.iat_slot_va or '(unknown)'):<20} -> {e.resolved_target_va or '(unknown)'}")
+        _render_iat_entries(record.iat.entries)
 
     print(f"\n  {BOLD('Identity')}")
     _print_diagnostics(record.identity_evidence.get("diagnostics") or [])
 
     if verbose:
-        _render_evidence_matrix(record)
+        _render_identity_verification(record)
         if record.peb_extended is not None:
             _render_extended_peb(record.peb_extended)
 
 
-def _render_evidence_matrix(record: ProcessRecord) -> None:
+# ── #98: verbose IAT table ──────────────────────────────────────────────
+# The pre-#98 rendering was `<address_1> -> <address_2>` with no headers
+# and no legend, which is ambiguous in exactly the way that matters: the
+# two addresses are not interchangeable, and reading them the wrong way
+# round inverts the question ("where is the pointer stored" vs "where
+# does it point"). The headers and the one legend line below are the
+# whole fix; no new evidence is read, and the v2.13 record shape is
+# untouched.
+_IAT_DLL_COLUMN_WIDTH = 24
+_IAT_SYMBOL_COLUMN_WIDTH = 28
+_IAT_ADDRESS_COLUMN_WIDTH = 20
+
+# Pre-wrapped rather than wrapped at print time: dumpex's own text, at a
+# fixed width, so the block is byte-identical on every terminal.
+_IAT_LEGEND_LINES = (
+    "Each row reads IAT Slot VA -> Resolved Target VA.",
+    "The slot is the address where the import pointer is stored; the target is the",
+    "address stored in that slot in the captured process memory.",
+)
+
+# `slot_in_bounds is False` is an OBSERVATION (§3.5.5 files it as a
+# diagnostic, never a limitation), so it is surfaced as a per-row marker
+# with a footnote rather than as a verdict, a coverage failure, or a
+# claim about hooking -- a target inside another module is ordinary for
+# forwarded exports and API-set resolution.
+_IAT_OUT_OF_BOUNDS_MARKER = " *"
+_IAT_OUT_OF_BOUNDS_NOTE = ("* the IAT slot lies outside the recorded import directory "
+                           "bounds -- an observation about this dump's directory "
+                           "framing, not a verdict about the import")
+
+
+def _import_symbol_text(entry: ImportEntryRecord) -> str:
+    """§3.5.3's three import states, each kept distinct: a named import,
+    an ordinal-only import, and one whose name/ordinal could not be
+    recovered at all (OriginalFirstThunk already overwritten). Read from
+    `import_by`, never inferred from whether `symbol` happens to be
+    null."""
+    if entry.import_by == "name":
+        return entry.symbol or "(unknown)"
+    if entry.import_by == "ordinal":
+        return f"ordinal #{entry.ordinal}"
+    return "(unavailable)"
+
+
+def _render_iat_entries(entries) -> None:
+    """`dll`/`symbol` are strings read out of the dumped image, so they
+    are attacker-controlled exactly like a handle's object name -- both
+    go through console_safe() here, while the record and --json keep the
+    exact decoded value."""
+    print()
+    for line in _IAT_LEGEND_LINES:
+        print(f"    {line}")
+    print()
+    header = (f"{'DLL':<{_IAT_DLL_COLUMN_WIDTH}}  {'Imported API':<{_IAT_SYMBOL_COLUMN_WIDTH}}  "
+              f"{'IAT Slot VA':<{_IAT_ADDRESS_COLUMN_WIDTH}}  Resolved Target VA")
+    print(f"    {header}")
+    any_out_of_bounds = False
+    for e in entries:
+        dll_text = console_safe(e.dll) or "(unknown)"
+        symbol_text = console_safe(_import_symbol_text(e))
+        marker = ""
+        if e.slot_in_bounds is False:
+            marker = _IAT_OUT_OF_BOUNDS_MARKER
+            any_out_of_bounds = True
+        print(f"    {dll_text:<{_IAT_DLL_COLUMN_WIDTH}}  {symbol_text:<{_IAT_SYMBOL_COLUMN_WIDTH}}  "
+              f"{(e.iat_slot_va or '(unknown)'):<{_IAT_ADDRESS_COLUMN_WIDTH}}  "
+              f"{e.resolved_target_va or '(unknown)'}{marker}")
+    if any_out_of_bounds:
+        print(f"    {_IAT_OUT_OF_BOUNDS_NOTE}")
+
+
+# ── #98: Identity Verification (was "Evidence Matrix") ──────────────────
+# The matrix printed the internal claim vocabulary (`peb`, `resolved`,
+# `unregistered`, `ambiguous=False`) in fixed-width columns and left the
+# reader to translate it. Worse, its `Selected` column printed the SOURCE
+# NAME ("peb") where a reader expects the selected VALUE. This block
+# leads with the selected value and its provenance, then states one
+# investigator-facing conclusion per check.
+#
+# Every check is an OBSERVATION. A conflict is rendered as a conflict and
+# never as a maliciousness verdict, never as a command failure, and never
+# as a `peb_trusted` boolean -- disagreement between the PEB and
+# ModuleListStream has ordinary benign causes, and the coverage status,
+# the limitation codes and the exit code are all unchanged by anything
+# printed here.
+_CHECK_OK = "[OK]"
+_CHECK_CONFLICT = "[!!]"
+_CHECK_UNAVAILABLE = "[--]"
+
+# Display names for §3.4's `selected_path_source`, so this block never
+# prints an internal source key at an analyst.
+_PATH_SOURCE_DISPLAY = {
+    "peb": "PEB (ProcessParameters.ImagePathName)",
+    "module": "ModuleListStream (module registered at the PEB image base)",
+}
+
+
+def _print_check(state: str, text: str, detail: "str | None" = None) -> None:
+    print(f"    {state} {text}")
+    if detail:
+        print(f"         {detail}")
+
+
+def _module_registration_check(mod_claim: dict) -> tuple:
+    """§3.4.3's three `match_state` values, each turned into the question
+    an analyst is actually asking: is the image the PEB points at
+    registered in the loader's own module list?"""
+    state = mod_claim["match_state"]
+    if state == "resolved":
+        return (_CHECK_OK, "PEB image base is registered in ModuleList",
+                f"{mod_claim['base_address']} -> "
+                f"{console_safe(mod_claim['name']) or '(unnamed)'}")
+    if state == "unregistered":
+        candidate = mod_claim["name_matched_candidate"]
+        detail = None
+        if candidate is not None:
+            detail = (f"a module named {console_safe(candidate['name']) or '(unnamed)'} is "
+                      f"registered at {candidate['base_address']} instead")
+        return (_CHECK_CONFLICT, "no module is registered at the PEB image base", detail)
+    return (_CHECK_UNAVAILABLE,
+            "PEB image base could not be compared with ModuleList",
+            "ModuleListStream is absent or failed, or no image base normalized")
+
+
+def _name_agreement_check(peb_claim: dict, mod_claim: dict) -> tuple:
+    """Compared case-insensitively: Windows filesystem and module names
+    are case-insensitive, so a case difference alone is not a conflict an
+    analyst should be sent to chase."""
+    peb_name, mod_name = peb_claim["name"], mod_claim["name"]
+    if peb_name is None or mod_name is None:
+        return (_CHECK_UNAVAILABLE,
+                "PEB and ModuleList process names could not be compared",
+                "one of the two names was not recovered")
+    if peb_name.casefold() == mod_name.casefold():
+        return (_CHECK_OK, "PEB and ModuleList process names agree", None)
+    return (_CHECK_CONFLICT, "PEB and ModuleList process names differ",
+            f"PEB: {console_safe(peb_name)} | ModuleList: {console_safe(mod_name)}")
+
+
+def _pe_header_check(main_pe: dict) -> tuple:
+    """`checked`/`valid`/`reason` exactly as §3.4.4 defines them --
+    `checked is False` is "the question could not be asked", which is a
+    different answer from "asked, and the header is not a PE"."""
+    if not main_pe["checked"]:
+        return (_CHECK_UNAVAILABLE,
+                "the PEB image base was not checked for a PE header",
+                "no image base normalized, or nothing was captured there")
+    if main_pe["valid"]:
+        return (_CHECK_OK, "a valid PE header was found at the PEB image base", None)
+    return (_CHECK_CONFLICT, "no valid PE header at the PEB image base",
+            console_safe(main_pe["reason"]) or "(no reason recorded)")
+
+
+def _corroboration_check(mod_claim: dict) -> tuple:
+    """The ambiguity leg of §3.4.3: more than one module sharing the
+    selected name means only the first was reported, which an analyst has
+    to know before treating either of the checks above as decisive."""
+    if mod_claim["name_matched_candidate_ambiguous"]:
+        return (_CHECK_CONFLICT,
+                "more than one module shares this process name; only the first is reported",
+                "compare --modules for every module carrying this name")
+    if mod_claim["match_state"] == "unavailable":
+        return (_CHECK_UNAVAILABLE,
+                "no ModuleList corroboration was available for this identity", None)
+    return (_CHECK_OK, "no competing module shares this process name", None)
+
+
+def _render_identity_verification(record: ProcessRecord) -> None:
+    """Leads with the selected values and where they came from, then one
+    line per independent check. The raw per-source claims stay available
+    underneath (bounded, three lines), so nothing the old matrix showed
+    is lost -- those values simply stop being the first thing a reader
+    has to decode.
+
+    Every dump-derived string here -- both paths, both names, and the PE
+    rejection reason -- goes through console_safe(), the same projection
+    the default block above already used for the same values."""
     ev = record.identity_evidence
     peb_claim = ev["peb_claim"]
     mod_claim = ev["module_claim"]
     main_pe = ev["main_image_pe"]
-    print(f"\n  {BOLD('Evidence Matrix')}                                     [--verbose only]")
-    print(f"    {'Claim':<12} {'Selected':<10} {'PEB':<20} {'ModuleList'}")
-    print(f"    {'path':<12} {(ev['selected_path_source'] or '(none)'):<10} "
-          f"{(peb_claim['image_path'] or '(none)'):<20} {(mod_claim['path'] or '(none)')}")
-    print(f"    {'image base':<12} {'peb':<10} "
-          f"{(peb_claim['image_base_address'] or '(none)'):<20} "
-          f"{(mod_claim['base_address'] or '(none)')} ({mod_claim['match_state']})")
-    print(f"    {'name':<12} {(ev['selected_path_source'] or '(none)'):<10} "
-          f"{(peb_claim['name'] or '(none)'):<20} {(mod_claim['name'] or '(none)')}")
-    checks = (f"main-image PE: {'valid' if main_pe['valid'] else main_pe['reason'] or '(not checked)'} | "
-              f"base match: {mod_claim['match_state']} | "
-              f"name candidate: ambiguous={mod_claim['name_matched_candidate_ambiguous']}")
-    print(f"    {'Checks':<12} {checks}")
+    source = ev["selected_path_source"]
+
+    print(f"\n  {BOLD('Identity Verification')}                            [--verbose only]")
+    print(f"    {'Selected path':<16} {console_safe(record.process_path) or '(unknown)'}")
+    print(f"    {'Selected name':<16} {console_safe(record.process_name) or '(unknown)'}")
+    print(f"    {'Source':<16} {_PATH_SOURCE_DISPLAY.get(source, '(no path source selected)')}")
+    print(f"    {'Image base':<16} {record.image_base_address or '(unknown)'} (source: PEB)")
+    print()
+    for check in (_module_registration_check(mod_claim),
+                  _name_agreement_check(peb_claim, mod_claim),
+                  _pe_header_check(main_pe),
+                  _corroboration_check(mod_claim)):
+        _print_check(*check)
+
+    print(f"\n    {'Raw claims':<16} {'PEB':<32} ModuleList")
+    print(f"    {'path':<16} {(console_safe(peb_claim['image_path']) or '(none)'):<32} "
+          f"{console_safe(mod_claim['path']) or '(none)'}")
+    print(f"    {'name':<16} {(console_safe(peb_claim['name']) or '(none)'):<32} "
+          f"{console_safe(mod_claim['name']) or '(none)'}")
+    print(f"    {'image base':<16} {(peb_claim['image_base_address'] or '(none)'):<32} "
+          f"{mod_claim['base_address'] or '(none)'} ({mod_claim['match_state']})")
 
 
 def _render_extended_peb(peb_extended: dict) -> None:
     print(f"\n  {BOLD('Extended PEB')}")
     print(f"    {'PEB Address':<18} {peb_extended['peb_address'] or '(unknown)'}")
     print(f"    {'BeingDebugged':<18} {peb_extended['being_debugged']}")
-    print(f"    {'WindowTitle':<18} {peb_extended['window_title'] or '(none)'}")
-    print(f"    {'DllPath':<18} {peb_extended['dll_path'] or '(none)'}")
+    # WindowTitle/DllPath are PEB strings -- dump bytes, therefore
+    # attacker-controlled, exactly like the path/command line the default
+    # block above already escapes (#98). The record and --json keep the
+    # exact decoded value.
+    print(f"    {'WindowTitle':<18} {console_safe(peb_extended['window_title']) or '(none)'}")
+    print(f"    {'DllPath':<18} {console_safe(peb_extended['dll_path']) or '(none)'}")
     print(f"    {'StandardInput':<18} {peb_extended['standard_input'] or '(unknown)'}")
     print(f"    {'StandardOutput':<18} {peb_extended['standard_output'] or '(unknown)'}")
     print(f"    {'StandardError':<18} {peb_extended['standard_error'] or '(unknown)'}")

@@ -1,6 +1,6 @@
 # Recon `--process`/`--sysinfo`/`--handles` contract (issue #37)
 
-**Status: frozen decision record, revision 5 — self-contained.**
+**Status: frozen decision record, revision 6 — self-contained.**
 
 This document is the complete, normative contract for the v2.13 Recon
 redesign. Issues #38–#44 implement against **this file alone**: every
@@ -1547,7 +1547,7 @@ Frozen semantics:
   Import Address Table
     <one of the four mutually exclusive branches below, checked in
      order -- the first match wins, and exactly one always matches>
-    <table of entries, --verbose only>
+    <legend + headed table of entries, --verbose only -- see below>
 
   Identity
     <one line per identity_evidence.diagnostics entry, "[!] " prefix for
@@ -1618,21 +1618,126 @@ Rules:
   blank or a guessed value.
 - The default console stays concise and surfaces **actionable
   conflicts** — the `Identity` block prints diagnostics and nothing
-  else. The complete check/provenance matrix (every claim, its source,
-  its raw value, every check that ran and passed) is `--verbose` only:
+  else. The complete provenance and the per-check conclusions are
+  `--verbose` only.
+
+#### 3.8.1 The `--verbose` import table
+
+The pre-rev6 rendering was one line per entry, `<address> -> <address>`,
+with no header and no legend. The two addresses are **not
+interchangeable** — the first is the IAT slot (where the import pointer
+is stored), the second is the value currently in that slot — and which
+was which was recoverable only from the source. Frozen layout:
 
 ```
-  Evidence Matrix                                     [--verbose only]
-    Claim          Selected      PEB              ModuleList
-    path           peb           C:\…\malware.exe C:\Windows\Temp\malware.exe
-    image base     peb           0x00007ff6…      0x00007ff6…  (unregistered)
-    name           peb           malware.exe      malware.exe
-    Checks         main-image PE: valid | base match: unregistered |
-                   name candidate: ambiguous=false
+  Import Address Table
+    42 import(s) across 3 DLL(s)
+
+    Each row reads IAT Slot VA -> Resolved Target VA.
+    The slot is the address where the import pointer is stored; the target is the
+    address stored in that slot in the captured process memory.
+
+    DLL                       Imported API                  IAT Slot VA           Resolved Target VA
+    KERNEL32.dll              CreateFileW                   0x00007ff600021018    0x00007ffb12345678
+    KERNEL32.dll              ordinal #12                   0x00007ff600021020    0x00007ffb12345690
+    ADVAPI32.dll              (unavailable)                 0x00007ff600021028    0x00007ffb123456a0 *
+    * the IAT slot lies outside the recorded import directory bounds -- an observation
+      about this dump's directory framing, not a verdict about the import
 ```
 
-- `--verbose` also prints the IAT entry table and the `peb_extended`
-  block under an `Extended PEB` header.
+- The four column headers are frozen: `DLL`, `Imported API`,
+  `IAT Slot VA`, `Resolved Target VA`.
+- §3.5.3's three import states stay distinct and are read from
+  `import_by`, never inferred from a null `symbol`: a name, `ordinal
+  #N`, and `(unavailable)` (the loader had already overwritten
+  `OriginalFirstThunk`, so neither is recoverable).
+- `slot_in_bounds is false` is surfaced as a trailing `*` plus one
+  footnote, printed only when at least one row carries it. It remains an
+  **observation** (§3.5.5 files it as a diagnostic, never a limitation):
+  it must not become a coverage failure, an exit-code change, or a claim
+  about hooking — a target inside another module is ordinary for
+  forwarded exports and API-set resolution.
+- `dll` and `symbol` are strings read out of the dumped image and are
+  therefore attacker-controlled. Both go through `console_safe()` on
+  their way to the terminal, exactly like a handle's object name
+  (§5.6); the record and `--json` keep the exact decoded value.
+- Target-module/section/protection attribution is **out of scope here**
+  and stays out until it can be published through a copied future
+  schema — nothing in this block adds a field to v2.13.
+
+#### 3.8.2 `Identity Verification` (`--verbose` only)
+
+Replaces rev5's `Evidence Matrix`, which had three problems an
+investigator paid for on every read: it printed the internal claim
+vocabulary (`peb`, `resolved`, `unregistered`,
+`ambiguous=false`) and left the reader to translate it; it printed the
+**source name** (`peb`) in a column headed `Selected`, where a reader
+expects the selected **value**; and it led with fixed-width raw values
+instead of answering which checks agreed, conflicted, or could not be
+evaluated.
+
+```
+  Identity Verification                            [--verbose only]
+    Selected path    C:\Samples\malware.exe
+    Selected name    malware.exe
+    Source           PEB (ProcessParameters.ImagePathName)
+    Image base       0x00007ff600010000 (source: PEB)
+
+    [OK] PEB image base is registered in ModuleList
+         0x00007ff600010000 -> malware.exe
+    [OK] PEB and ModuleList process names agree
+    [OK] a valid PE header was found at the PEB image base
+    [OK] no competing module shares this process name
+
+    Raw claims       PEB                              ModuleList
+    path             C:\Samples\malware.exe           C:\Samples\malware.exe
+    name             malware.exe                      malware.exe
+    image base       0x00007ff600010000               0x00007ff600010000 (resolved)
+```
+
+- The selected **value** and its **source** are separate lines. A source
+  name is never printed where a value belongs.
+- Exactly four checks, in this frozen order, each on one line with an
+  explicit state — `[OK]`, `[!!]` (conflict), or `[--]` (could not be
+  evaluated):
+
+  1. **PEB image-base registration in ModuleList**, from
+     `module_claim.match_state` (§3.4.3): `resolved` → `[OK]` with the
+     base and module name; `unregistered` → `[!!]`, naming
+     `name_matched_candidate`'s competing base when there is one;
+     `unavailable` → `[--]`.
+  2. **Process-name agreement** between `peb_claim.name` and
+     `module_claim.name`, compared **case-insensitively** (Windows
+     module and file names are case-insensitive, so a case difference
+     alone is not a conflict worth sending an analyst to chase).
+     Either name `null` → `[--]`, never agreement and never a conflict.
+  3. **PE-header validity** at the PEB image base, from `main_image_pe`
+     (§3.4.4). `checked is false` is `[--]` — "the question could not be
+     asked" is a different answer from "asked, and the header is not a
+     PE", which is `[!!]` plus `parse_pe_header()`'s own `reason`.
+  4. **Corroboration / ambiguity**, from
+     `name_matched_candidate_ambiguous`: `true` → `[!!]` (only the first
+     of several same-named modules is reported, which the reader has to
+     know before treating checks 1–2 as decisive); otherwise `[OK]`, or
+     `[--]` when `match_state == "unavailable"` left nothing to
+     corroborate with.
+
+- The raw per-source claims stay available underneath, bounded to three
+  lines, so nothing the matrix showed is lost — those values simply stop
+  being the first thing a reader has to decode.
+- **Every state here is an observation.** An identity disagreement is
+  rendered as a disagreement and never becomes a maliciousness verdict,
+  a command failure, a `peb_trusted` boolean, or a change to
+  `coverage.status`, the limitation set, the diagnostics, or the exit
+  code. PEB/ModuleList disagreement has ordinary benign causes.
+- Every dump-derived string in this block — both paths, both names, and
+  the PE rejection reason — goes through `console_safe()`, the same
+  projection the default field block already applies to the path, name
+  and command line.
+
+- `--verbose` also prints the `peb_extended` block under an
+  `Extended PEB` header. Its `WindowTitle` and `DllPath` are PEB strings
+  and are escaped the same way.
 
 ### 3.9 Summary
 
@@ -2665,6 +2770,100 @@ reduction path is introduced.
   captured names ascending), never by count or record order, and
   `by_type` is then emitted in §1.5's order **on the final keys**.
 
+#### 5.6.1 Default console folding and `--verbose`
+
+`--handles` commonly emits many rows whose `Object` column is
+`(unnamed)`, which buries the handles an investigation turns on. The
+default console therefore **folds** the routine anonymous rows into
+per-type counts, and `--verbose` renders every record.
+
+```
+  Handle              Type            Access      Cnt  Ptr  Object
+  0x0000000000000234  File            0x0012019f    1   32  \Device\NamedPipe\mypipe
+  0x0000000000000300  Process         0x001fffff    1    1  (unnamed)
+  (unnamed) = the descriptor records no name; (unreadable) = a name was recorded but the bounded read failed
+
+  11 anonymous handle(s) of routine low-context type(s) not shown: Event 9, Mutant 2
+  These rows are captured evidence and are complete in structured output -- use --verbose to show all.
+```
+
+- **Verbosity is a projection, never a filter.** `collect_handles()`
+  takes no verbosity parameter at all, so the records, `summary.count`,
+  `summary.by_type`, `coverage`, the limitations and the exit code are
+  identical in both views. A folded row remains captured, normalized,
+  counted, and present in `--json`. The headline and the `By type:` line
+  always describe the **complete** inventory.
+- A row is folded only when **both** hold:
+  1. `object_name_status == "unnamed"` — the descriptor positively
+     records no object name. `"unreadable"` is evidence **loss** and is
+     never folded, in either name field: folding it would hide the one
+     row that says something was lost.
+  2. its captured `type_name` is on an explicitly approved list of
+     low-context types (synchronization/scheduling primitives whose
+     anonymous instances carry no name, path, or cross-process
+     reference: `Event`, `EtwRegistration`, `IoCompletion`,
+     `IoCompletionReserve`, `IRTimer`, `Mutant`, `Semaphore`, `Timer`,
+     `TpWorkerFactory`, `WaitCompletionPacket`).
+- `object_name_status == "unnamed"` alone is **not** a sufficient
+  suppression rule. An anonymous `Process`, `Thread`, `Token`,
+  `Section`, or `Job` handle is exactly the evidence a cross-process
+  access question turns on, and none of them are foldable.
+- The list is an **allow** list: an unclassified type — including one a
+  dump invents — stays visible. The failure mode of a new Windows object
+  type is a slightly longer table, never a hidden handle.
+- The fold line states the exact total and the per-type counts, ordered
+  by §1.5 (count descending, then type name ascending), and names
+  `--verbose` as the way to see them. Folding is deterministic, bounded,
+  and linear in the record count: it is decided per record with no
+  cross-row state.
+- The two null-name labels are explained inline whenever one of them is
+  on screen, so `(unnamed)` versus `(unreadable)` never has to be looked
+  up in the source.
+
+#### 5.6.2 Object-name notes
+
+Captured NT Object Manager names are explained, without pretending to
+enumerate evidence the dump does not carry:
+
+```
+  Object name notes
+    \KnownDlls (Directory)
+      NT Object Manager directory of pre-mapped system DLL sections. This descriptor
+      records the directory name only -- the section objects inside it are not
+      captured by it.
+    Directory
+      Directory handles name an NT Object Manager namespace directory. A directory's
+      child objects are not captured by its own descriptor.
+```
+
+- Notes are keyed by `(type_name, object_name)`, so a note is only
+  attached to a handle whose **type** agrees with it — a `File` handle a
+  dump chooses to name `\KnownDlls` gets no note at all rather than a
+  false one.
+- A note states only what **this descriptor** recorded. It must never
+  claim a directory's child objects were enumerated, and nothing here
+  may read the analysis host's own Object Manager namespace: that would
+  mix live host state into dump-time evidence and may describe an
+  entirely different machine (§5.7).
+- The block is **bounded by construction**: the per-name table is
+  frozen and de-duplicated, and every other captured `Directory` name
+  contributes to one shared generic line rather than a line of its own,
+  so a dump carrying 65,536 distinct directory names cannot turn the
+  notes into the output.
+- Notes are derived from the **collected** records, not from the printed
+  rows, so a note never disappears with a folded row.
+- The note label carries a dump-derived object name and is escaped with
+  `console_safe()` like every other name on this block.
+
+#### 5.6.3 `--verbose` wiring
+
+`--handles --verbose` is wired end-to-end: argparse, the CLI dispatch,
+`cmd_handles(mf, *, verbose=...)`, and the renderer's own keyword-only
+`verbose`. `--verbose`'s help text names `--handles`, and
+`meta.execution.options.verbose` records the flag as it does for every
+other command. Before rev6 the flag parsed but was never forwarded, so
+passing it had no effect at all.
+
 ### 5.7 Framing
 
 Every user-facing string describes **captured** evidence. `--handles`
@@ -3193,7 +3392,43 @@ excuses anything in §0–§8.
   `datetime.fromtimestamp()` raising is a sufficient timestamp check (it
   is platform-dependent). Added `MAX_IAT_READ_OPERATIONS`,
   `name_matched_candidate`, and per-field IAT nullability.
-- **rev5 (this revision)** — `--sysinfo`'s console layout and dump
+- **rev6 (this revision)** — the recon console projection, from an
+  investigator's report against the shipped v2.13 output
+  ([issue #98](https://github.com/bitbug0x55AA/dumpex/issues/98)). Four
+  presentation defects, no change to any record shape, coverage meaning,
+  limitation code, diagnostic, ordering rule, or exit code:
+
+  1. **`--handles --verbose` was silently ignored** — the CLI dispatch
+     never forwarded the flag. Now wired end-to-end (§5.6.3).
+  2. **A full anonymous handle inventory buried the useful rows.** §5.6.1
+     freezes a deterministic fold of approved low-context anonymous rows
+     into per-type counts, with the exact omitted count and a
+     `use --verbose to show all` hint. Folding is a projection: the
+     records, summary, `by_type`, coverage and exit code are identical
+     in both views, and `unnamed`/`unreadable` stay distinct — an
+     unreadable name is never folded.
+  3. **Real NT namespace names read as parser noise.** §5.6.2 adds
+     bounded, type-keyed notes (`\KnownDlls` and friends) that describe
+     only what the descriptor recorded and never enumerate a directory's
+     contents from the analysis host.
+  4. **The verbose process block spoke dumpex's internal vocabulary.**
+     §3.8.1 gives the import table headers and a legend for the
+     `IAT Slot VA -> Resolved Target VA` pair (and surfaces
+     `slot_in_bounds` as an observation with a footnote); §3.8.2 replaces
+     the `Evidence Matrix` with `Identity Verification`, which separates
+     the selected value from its source and states one `[OK]`/`[!!]`/
+     `[--]` conclusion per identity check, keeping the raw claims
+     available underneath. Every dump-derived string the verbose renderer
+     prints — both paths, both names, the PE rejection reason, the import
+     table's DLL/API names, and the Extended PEB's window title and DLL
+     path — now goes through `console_safe()`.
+
+  Identity disagreement remains an observation throughout: no `peb_trusted`
+  boolean, no verdict, no command failure. This revision is
+  behaviour-compatible with everything already published — v2.13's JSON
+  is byte-identical across it, so no schema version moves and the frozen
+  historical schemas and fixtures are untouched.
+- **rev5** — `--sysinfo`'s console layout and dump
   identity, from an analyst's report against the shipped rev4 output.
   Three defects, all in §4:
 
