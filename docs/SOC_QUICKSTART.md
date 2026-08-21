@@ -58,10 +58,48 @@ a `Token`, so a mask read against the wrong type is simply wrong:
 
 ```text
   0x000000000000005c  Key             0x00020019    2  65536  \REGISTRY\...\Versions
-      Rights  QueryValue | EnumerateSubKeys | Notify | ReadControl
+      └─ Rights   KeyRead
   0x00000000000001dc  Thread          0x001fffff    6  131062  (unnamed)
-      Rights  AllAccess
+      └─ Rights   AllAccess
+  0x000000000000006c  WindowStation   0x000f037f    1    1  WinSta0
+      └─ Type     EnumDesktops · ReadAttributes · AccessClipboard · CreateDesktop ·
+                  WriteAttributes · AccessGlobalAtoms · ExitWindows · Enumerate · ReadScreen
+         Standard Delete · ReadControl · WriteDac · WriteOwner
 ```
+
+`KeyRead` is dumpex's display name for `KEY_READ` — where Windows
+documents a combination, you get that instead of its components repeated
+on every row. (The spelling is dumpex's; the constant behind it is
+Windows'. Which header defines it is tracked per constant: mostly
+`winnt.h`, `winuser.h` for `Desktop`/`WindowStation`, and the WDK's
+`ntifs.h` for `Directory` and for `EVENT_QUERY_STATE`, which the Win32
+SDK does not define at all. A few types mix the two — `IoCompletion`'s
+`AllAccess` and `ModifyState` are `winnt.h` constants even though its
+`QueryState` is not. A handful of names have no Microsoft source we could
+find; those are recorded as unconfirmed. A composite built on one is
+marked `[source unconfirmed]` where it is expanded, and a bare right
+name with the same problem — for example `QueryState` on a `Semaphore`,
+decoded from the unconfirmed `SEMAPHORE_QUERY_STATE` bit alone — is
+marked `[?]` right on the `Rights` line, so you never go looking for a
+header that will not have it either way.)
+
+One thing to know when you read an old dump: `AllAccess` on a `Process`
+or `Thread` means a different mask before Vista (`0x001f0fff` and
+`0x001f03ff`) than after it (`0x001fffff` for both). dumpex reads the
+dump's own Windows version and uses the matching one, so an XP capture
+still says `AllAccess` instead of listing twelve rights. When a list is too long for one line it splits into `Type` (rights
+that object type defines) and `Standard` (the rights every type shares).
+
+An `Aliases used` block under the table spells out every composite it
+printed, so a short name never hides what is inside it: `TokenWrite` is
+`AdjustPrivileges · AdjustGroups · AdjustDefault · ReadControl`, and
+searching a transcript for `AdjustPrivileges` finds it. An expansion
+ending in `UnknownBits(0x…)` means the constant covers those bits but
+names no right for them — not that the decode failed. Watch the object
+type on those lines — `AllAccess` names each type's own constant, so
+`AllAccess` on a `Process` (terminate it, write its memory, create
+threads in it) is a different capability from `AllAccess` on an
+`Event`.
 
 The `Access` column keeps the exact captured mask and is the only place
 it is printed, and `granted_access` stays that same raw integer in

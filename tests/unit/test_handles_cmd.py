@@ -12,6 +12,7 @@ entirely) are built directly, since §5.2.2's discard rule has to hold for
 them too.
 """
 import io
+import types
 import re
 import struct
 import contextlib
@@ -26,7 +27,7 @@ from dumpex.core.memory import parse_handle_stream, ParsedHandleDescriptor, Pars
 from dumpex.commands.handles import (
     collect_handles, cmd_handles, render_handles_console, summarize_handles_by_type,
 )
-from dumpex.ui.console_layout import resolve_width
+from dumpex.ui.console_layout import resolve_width, strip_ansi
 from dumpex.output.coverage import (
     CoverageStatus, LimitationCode, SourceState, exit_code_for, render_limitation,
 )
@@ -124,6 +125,16 @@ def _codes(coverage):
 
 def _limitation(coverage, code):
     return next((l for l in coverage.limitations if l.code == code), None)
+
+
+def _console_via_cmd(mf, *, verbose=False) -> str:
+    """The console for a whole dump, through cmd_handles() -- the path
+    that reads the dump's OS version. `_console()` renders already
+    collected records and cannot see it."""
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        cmd_handles(mf, verbose=verbose)
+    return buffer.getvalue()
 
 
 def _console(result, *, verbose=False) -> str:
@@ -1535,40 +1546,62 @@ def test_column_widths_are_measured_on_the_escaped_text():
     _assert_columns_line_up(text)
 
 
-# ── #102 §5.6.4: the per-row Rights line ────────────────────────────────
+# ── #102 §5.6.4: the per-row rights lines ───────────────────────────────
 
-_RIGHTS_PREFIX = "      Rights  "
-_RIGHTS_HANG = " " * 14
+# `  ` (the table's own indent) + the row indent + the branch, then the
+# label column; a wrapped line aligns under the names.
+_RIGHTS_HEAD_RE = re.compile(r"^ {6}(?:└─ |   )(Rights|Type|Standard) +(\S.*)$")
+_RIGHTS_CONT = " " * 18
 
 
-def _rights_lines(text: str) -> list:
-    """Every rendered `Rights` line, in the order printed, each one
-    rejoined with its own wrapped continuations (a continued line ends in
-    ` |`, so a single space puts it back together)."""
-    lines = []
+def _rights_groups(text: str) -> list:
+    """-> [(label, text), ...] for every rights group printed, in order,
+    with each group's wrapped continuations rejoined (a continued line
+    ends in ` ·`, so a single space puts it back together).
+
+    A continuation only counts while it immediately follows its own
+    group: the `Aliases used` block further down is indented past the
+    same column, and a rule that read any deep indent as a continuation
+    would splice that block onto the last row's rights."""
+    groups = []
+    open_group = None
     for line in text.splitlines():
-        stripped = line.strip()
-        if line.startswith(_RIGHTS_PREFIX):
-            lines.append(stripped[len("Rights  "):])
-        elif lines and line.startswith(_RIGHTS_HANG) and stripped:
-            lines[-1] += " " + stripped
-    return lines
+        head = _RIGHTS_HEAD_RE.match(line)
+        if head:
+            groups.append([head.group(1), head.group(2)])
+            open_group = groups[-1]
+        elif open_group is not None and line.startswith(_RIGHTS_CONT) and line.strip():
+            open_group[1] += " " + line.strip()
+        else:
+            open_group = None
+    return [(label, body) for label, body in groups]
+
+
+def _rights_texts(text: str) -> list:
+    """Just the decoded text of each group, in order."""
+    return [body for _label, body in _rights_groups(text)]
 
 
 def _row_and_rights_pairs(text: str) -> list:
-    """-> [(table row, its Rights text or None), ...] -- the pairing an
+    """-> [(table row, [(label, text), ...]), ...] -- the pairing an
     investigator actually reads, taken off the rendered output rather
     than off the records."""
     pairs = []
+    open_group = None
     for line in text.splitlines():
         stripped = line.strip()
-        if stripped.startswith("0x") and "  " in stripped:
-            pairs.append([line, None])
-        elif line.startswith(_RIGHTS_PREFIX) and pairs:
-            pairs[-1][1] = stripped[len("Rights  "):]
-        elif pairs and pairs[-1][1] is not None and line.startswith(_RIGHTS_HANG) and stripped:
-            pairs[-1][1] += " " + stripped
-    return [(row, rights) for row, rights in pairs]
+        head = _RIGHTS_HEAD_RE.match(line)
+        if head and pairs:
+            pairs[-1][1].append([head.group(1), head.group(2)])
+            open_group = pairs[-1][1][-1]
+        elif open_group is not None and line.startswith(_RIGHTS_CONT) and stripped:
+            open_group[1] += " " + stripped
+        elif stripped.startswith("0x") and "  " in stripped:
+            pairs.append([line, []])
+            open_group = None
+        else:
+            open_group = None
+    return [(row, [(label, body) for label, body in groups]) for row, groups in pairs]
 
 
 def test_every_printed_row_carries_its_own_decoded_rights():
@@ -1585,9 +1618,9 @@ def test_every_printed_row_carries_its_own_decoded_rights():
 
     assert len(pairs) == 2
     assert "Key" in pairs[0][0] and "0x00020019" in pairs[0][0]
-    assert pairs[0][1] == "QueryValue | EnumerateSubKeys | Notify | ReadControl"
+    assert pairs[0][1] == [("Rights", "KeyRead")]
     assert "Thread" in pairs[1][0] and "0x001fffff" in pairs[1][0]
-    assert pairs[1][1] == "AllAccess"
+    assert pairs[1][1] == [("Rights", "AllAccess")]
 
 
 def test_the_rights_lines_follow_the_table_s_own_order():
@@ -1603,10 +1636,19 @@ def test_the_rights_lines_follow_the_table_s_own_order():
 
     assert [row.split()[0] for row, _ in pairs] == [
         "0x0000000000000010", "0x0000000000000020", "0x0000000000000030"]
-    assert [rights for _row, rights in pairs] == [
-        "ReadData",
-        "Terminate",
-        "QueryValue | EnumerateSubKeys | Notify | ReadControl"]
+    assert [groups[0][1] for _row, groups in pairs] == ["ReadData", "Terminate", "KeyRead"]
+
+
+def test_the_rights_are_drawn_as_belonging_to_the_row_above_them():
+    """A branch, so a glance tells "this continues the handle above" from
+    "this is another handle" without reading either line."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "A", "granted_access": 0x20019},
+    ]))
+    lines = _console(result).splitlines()
+    row = next(i for i, line in enumerate(lines) if "0x0000000000000010" in line)
+
+    assert lines[row + 1] == "      └─ Rights   KeyRead"
 
 
 def test_the_access_column_still_carries_the_exact_raw_mask():
@@ -1622,9 +1664,9 @@ def test_the_access_column_still_carries_the_exact_raw_mask():
     assert ("0x0000000000000234  File            0x0012019f    1   32  A") in text
     assert result.records[0].granted_access == 0x0012019F   # ... and the record is raw
     # ... and the column is the ONLY place that value is printed: the
-    # rights line beneath it carries the reading, not a second copy.
+    # rights beneath it carry the reading, not a second copy.
     assert text.count("0x0012019f") == 1
-    assert "0x" not in _rights_lines(text)[0]
+    assert "0x" not in _rights_texts(text)[0]
 
 
 def test_the_same_low_order_bit_decodes_by_each_row_s_recorded_type():
@@ -1637,21 +1679,23 @@ def test_the_same_low_order_bit_decodes_by_each_row_s_recorded_type():
         {"handle": 0x30, "type_name": "Token", "object_name": "C", "granted_access": 1},
     ]))
 
-    assert _rights_lines(_console(result)) == [
-        "ReadData", "Terminate", "AssignPrimary"]
+    assert _rights_texts(_console(result)) == ["ReadData", "Terminate", "AssignPrimary"]
 
 
-def test_a_repeated_mask_is_decoded_on_every_row_that_carries_it():
-    """Twenty File rows sharing one mask get twenty answers, not one
-    shared entry the reader has to go and find."""
+def test_a_composite_alias_collapses_the_masks_a_dump_repeats():
+    """`0x00020019` is `KEY_READ`, and a dump carries it on every Key
+    handle it has. Printing its four components on each of those rows
+    fills the console with a run an analyst already recognises by name --
+    which is what a composite alias is for."""
     result = collect_handles(_mf_with(
-        [{"handle": 0x10 + i, "type_name": "File", "object_name": f"A{i}",
-          "granted_access": 0x00120089} for i in range(20)]))
-    lines = _rights_lines(_console(result))
+        [{"handle": 0x10 + i, "type_name": "Key", "object_name": f"K{i}",
+          "granted_access": 0x00020019} for i in range(20)]
+        + [{"handle": 0x100, "type_name": "File", "object_name": "F",
+            "granted_access": 0x0012019F}]))
+    texts = _rights_texts(_console(result))
 
-    assert len(lines) == 20
-    assert set(lines) == {
-        "ReadData | ReadEa | ReadAttributes | ReadControl | Synchronize"}
+    assert texts[:20] == ["KeyRead"] * 20
+    assert texts[20] == "FileGenericRead · FileGenericWrite"
 
 
 def test_a_zero_mask_reads_as_no_rights_rather_than_missing_evidence():
@@ -1660,7 +1704,7 @@ def test_a_zero_mask_reads_as_no_rights_rather_than_missing_evidence():
     ]))
     text = _console(result)
 
-    assert _rights_lines(text) == ["(no rights)"]
+    assert _rights_groups(text) == [("Rights", "(no rights)")]
     # The column carries the captured zero, the line says what it means,
     # and neither reads like the absent-mask case.
     assert "0x00000000" in text
@@ -1669,7 +1713,7 @@ def test_a_zero_mask_reads_as_no_rights_rather_than_missing_evidence():
 
 def test_an_absent_mask_is_never_decoded_at_all():
     """§5.2.2's null `granted_access` is absent evidence. `(unknown)`
-    stays the Access column's word alone and the row gets no Rights line
+    stays the Access column's word alone and the row gets no rights line
     -- a line saying "(no rights)" would turn a missing value into a
     captured one."""
     result = collect_handles(_mf_from_descriptors(
@@ -1677,13 +1721,13 @@ def test_an_absent_mask_is_never_decoded_at_all():
     text = _console(result)
 
     assert "(unknown)" in text
-    assert _rights_lines(text) == []
+    assert _rights_groups(text) == []
     assert "Rights" not in text
 
 
 def test_an_unsupported_type_keeps_the_mask_and_says_what_is_undecoded():
     """A type dumpex has no table for still decodes the type-INDEPENDENT
-    half of the mask; the type-specific half is named as unknown and
+    half of the mask; the type-specific half is named as unavailable and
     shown exactly as captured, never read against some other type's
     rights."""
     result = collect_handles(_mf_with([
@@ -1691,8 +1735,8 @@ def test_an_unsupported_type_keeps_the_mask_and_says_what_is_undecoded():
          "granted_access": 0x0012019F},
     ]))
 
-    assert _rights_lines(_console(result)) == [
-        "ReadControl | Synchronize | TypeSpecificUnavailable(0x0000019f)"]
+    assert _rights_groups(_console(result)) == [
+        ("Rights", "TypeSpecificUnavailable(0x0000019f) · ReadControl · Synchronize")]
 
 
 def test_the_station_and_desktop_types_a_real_dump_is_full_of_are_decoded():
@@ -1705,10 +1749,45 @@ def test_the_station_and_desktop_types_a_real_dump_is_full_of_are_decoded():
          "granted_access": 0x00000102},
     ]))
 
-    assert _rights_lines(_console(result)) == [
-        "AccessClipboard | AccessGlobalAtoms",
-        "CreateWindow | SwitchDesktop",
+    assert _rights_texts(_console(result)) == [
+        "AccessClipboard · AccessGlobalAtoms",
+        "CreateWindow · SwitchDesktop",
     ]
+
+
+def test_a_long_decode_splits_into_the_type_s_own_rights_and_the_shared_ones():
+    """A wrapped run of thirteen names mixes rights that mean something
+    only for THIS object type with rights that mean the same thing for
+    every type, and the reader cannot see where one ends and the other
+    begins. `WINSTA_ALL_ACCESS` plus the standard rights is exactly that
+    case."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "WindowStation", "object_name": "W",
+         "granted_access": 0x000F037F},
+    ]))
+    text = _console(result)
+
+    assert _rights_groups(text) == [
+        ("Type", "EnumDesktops · ReadAttributes · AccessClipboard · CreateDesktop · "
+                  "WriteAttributes · AccessGlobalAtoms · ExitWindows · Enumerate · ReadScreen"),
+        ("Standard", "Delete · ReadControl · WriteDac · WriteOwner"),
+    ]
+    # The second group belongs to the same handle, so it carries no
+    # branch of its own -- the branch marks a handle, not a line.
+    heads = [line for line in text.splitlines() if _RIGHTS_HEAD_RE.match(line)]
+    assert heads[0].startswith("      └─ Type     ")
+    assert heads[1].startswith("         Standard ")
+
+
+def test_a_short_decode_stays_one_labelled_line():
+    """The split is taken only when the whole decode does not fit and
+    both halves exist -- a `Rights` line that fits must not be broken up
+    into two."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "A", "granted_access": 0x0002001F},
+    ]))
+
+    assert _rights_groups(_console(result)) == [("Rights", "KeyRead · KeyWrite")]
 
 
 def test_a_row_with_no_readable_type_is_decoded_the_same_way():
@@ -1719,8 +1798,8 @@ def test_a_row_with_no_readable_type_is_decoded_the_same_way():
         {"handle": 0x10, "type_name": BAD_RVA, "object_name": "A", "granted_access": 0x00100001},
     ]))
 
-    assert _rights_lines(_console(result)) == [
-        "Synchronize | TypeSpecificUnavailable(0x00000001)"]
+    assert _rights_groups(_console(result)) == [
+        ("Rights", "TypeSpecificUnavailable(0x00000001) · Synchronize")]
 
 
 def test_bits_with_no_documented_right_stay_visible_at_their_raw_value():
@@ -1728,7 +1807,7 @@ def test_bits_with_no_documented_right_stay_visible_at_their_raw_value():
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x00008001},
     ]))
 
-    assert _rights_lines(_console(result)) == ["ReadData | UnknownBits(0x00008000)"]
+    assert _rights_texts(_console(result)) == ["ReadData · UnknownBits(0x00008000)"]
 
 
 def test_generic_bits_are_reported_as_captured_and_never_expanded():
@@ -1739,26 +1818,28 @@ def test_generic_bits_are_reported_as_captured_and_never_expanded():
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x80000000},
     ]))
 
-    assert _rights_lines(_console(result)) == ["GenericRead"]
+    assert _rights_texts(_console(result)) == ["GenericRead"]
 
 
 def test_long_rights_wrap_under_the_row_without_losing_a_name():
-    """§5.6.4 must not truncate: a fully decoded File mask is wider than
-    the console, so it wraps under its own row -- every name survives and
-    the continuation is indented past the label so it cannot read as a
-    new row."""
+    """§5.6.4 must not truncate: a decode wider than the console wraps
+    under its own row -- every name survives and the continuation is
+    indented under the names, so it cannot read as a new row."""
     result = collect_handles(_mf_with([
-        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x0012019F},
+        {"handle": 0x10, "type_name": "Thread", "object_name": "A", "granted_access": 0x0000143A},
     ]))
     text = _console(result)
 
-    assert _rights_lines(text) == [
-        "ReadData | WriteData | AppendData | ReadEa | WriteEa | ReadAttributes | "
-        "WriteAttributes | ReadControl | Synchronize"]
+    assert _rights_texts(text) == [
+        "SuspendResume · GetContext · SetContext · SetInformation · "
+        "SetLimitedInformation · Resume"]
     printed = [line for line in text.splitlines()
-                if line.startswith(_RIGHTS_PREFIX) or line.startswith(_RIGHTS_HANG)]
+                if _RIGHTS_HEAD_RE.match(line) or line.startswith(_RIGHTS_CONT)]
     assert len(printed) > 1
     assert all(len(line) <= resolve_width() for line in printed)
+    # A continued line says so, so a reader never takes a wrapped list
+    # for a finished one.
+    assert printed[0].endswith(" ·")
 
 
 def test_the_rights_lines_are_an_observation_and_never_a_verdict():
@@ -1771,7 +1852,7 @@ def test_the_rights_lines_are_an_observation_and_never_a_verdict():
     text = _console(result)
 
     assert "Rights decode each row's own Access mask against its recorded object type" in text
-    assert "never evidence that it was used" in text
+    assert "never" in text and "evidence that it was used" in text
     lowered = text.lower()
     for word in ("suspicious", "malicious", "injection", "detected", "score",
                   "confidence", "threat"):
@@ -1786,10 +1867,656 @@ def test_the_shared_caption_is_printed_once_and_only_with_the_lines():
     text = _console(result)
 
     assert text.count("Rights decode each row's own Access mask") == 1
+    # ... and it explains the two labels a split row uses. Read off the
+    # rejoined caption, which wraps to the console width like any other
+    # prose block.
+    caption = " ".join(line.strip() for line in text.splitlines())
+    assert "Type (rights that object type defines)" in caption
+    assert "Standard (the rights every type shares)" in caption
     # Nothing decoded at all -> no caption, because there is nothing for
     # it to explain.
     empty = _console(collect_handles(_mf_with([])))
     assert "Rights decode each row's own Access mask" not in empty
+
+
+# ── #102 §5.6.4: the `Aliases used` expansion block ─────────────────────
+
+_ALIAS_ENTRY_RE = re.compile(r"^ {6}(\S.*?) +(\S+) += (\S.*)$")
+
+
+def _alias_entries(text: str) -> list:
+    """-> [(type label, alias, expansion), ...] from the `Aliases used`
+    block, with each entry's wrapped continuations rejoined."""
+    lines = text.splitlines()
+    start = next((i for i, line in enumerate(lines)
+                   if line.strip() == "Aliases used"), None)
+    if start is None:
+        return []
+    entries = []
+    for line in lines[start + 1:]:
+        if not line.strip():
+            break
+        matched = _ALIAS_ENTRY_RE.match(line)
+        if matched:
+            entries.append([matched.group(1), matched.group(2), matched.group(3)])
+        elif entries and line.startswith(" " * 8) and line.strip():
+            # An expansion continuation is indented past the entry
+            # labels; the block's own notes sit to their left.
+            entries[-1][2] += " " + line.strip()
+    return [(type_label, alias, expansion) for type_label, alias, expansion in entries]
+
+
+def test_a_composite_says_once_what_it_stands_for():
+    """A composite is short and recognisable, which is what makes it
+    worth printing on every row -- but the capabilities inside it stop
+    being visible, and `TOKEN_WRITE` contains `AdjustPrivileges`. An
+    investigator scanning the transcript for that word has to be able to
+    find it."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Token", "object_name": "T",
+         "granted_access": 0x000200E0},
+    ]))
+    text = _console(result)
+
+    assert _rights_texts(text) == ["TokenWrite"]
+    assert _alias_entries(text) == [
+        ("Token", "TokenWrite",
+         "AdjustPrivileges · AdjustGroups · AdjustDefault · ReadControl")]
+    assert "AdjustPrivileges" in text
+
+
+def test_the_expansion_is_printed_once_however_many_rows_use_it():
+    """Repeating five component names on every row is the wall the
+    composites exist to collapse."""
+    result = collect_handles(_mf_with(
+        [{"handle": 0x10 + i, "type_name": "Key", "object_name": f"K{i}",
+          "granted_access": 0x00020019} for i in range(20)]))
+    text = _console(result)
+
+    assert _rights_texts(text) == ["KeyRead"] * 20
+    assert _alias_entries(text) == [
+        ("Key", "KeyRead", "QueryValue · EnumerateSubKeys · Notify · ReadControl")]
+
+
+def test_all_access_is_expanded_per_object_type_and_never_once_for_all():
+    """`AllAccess` names the recorded type's own `*_ALL_ACCESS` constant,
+    and what that contains is entirely type-dependent: terminating and
+    writing the memory of a Process, setting an Event. Reading the two as
+    the same capability is the cross-type mistake this whole decoder
+    exists to prevent, so the block labels every expansion with its
+    type."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Process", "object_name": "P",
+         "granted_access": 0x001FFFFF},
+        {"handle": 0x20, "type_name": "Event", "object_name": "E",
+         "granted_access": 0x001F0003},
+    ]))
+    entries = _alias_entries(_console(result))
+
+    assert [(type_label, alias) for type_label, alias, _ in entries] == [
+        ("Event", "AllAccess"), ("Process", "AllAccess")]
+    event = next(e for e in entries if e[0] == "Event")[2]
+    process = next(e for e in entries if e[0] == "Process")[2]
+    assert event == ("QueryState · ModifyState · Delete · ReadControl · WriteDac · "
+                      "WriteOwner · Synchronize")
+    assert "Terminate · CreateThread" in process
+    assert "VmWrite" in process and "VmWrite" not in event
+
+
+def test_an_expansion_names_the_bits_its_constant_covers_without_a_right():
+    """A `Process`'s own `*_ALL_ACCESS` is defined over the whole specific
+    range, two bits of which Windows documents no right for. The
+    expansion says so rather than quietly listing fourteen names for a
+    constant that covers sixteen bits -- and it says what that means
+    HERE, which is not what the same token means on a rights line: the
+    bits are not undecodable, they are covered by the constant and have
+    no documented name of their own."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Process", "object_name": "P",
+         "granted_access": 0x001FFFFF},
+    ]))
+    text = _console(result)
+    caption = " ".join(line.strip() for line in text.splitlines())
+
+    assert _alias_entries(text)[0][2].endswith("UnknownBits(0x0000c000)")
+    assert ("UnknownBits in an alias expansion are included by that Windows constant "
+            "but have no individually documented right name in this definition set."
+            ) in caption
+
+
+def test_the_unknown_bits_caveat_is_printed_only_when_an_expansion_has_one():
+    """Every composite whose constant covers only documented rights
+    expands cleanly, and the caveat would then explain something that is
+    not on screen."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "K",
+         "granted_access": 0x00020019},
+    ]))
+    text = _console(result)
+
+    assert _alias_entries(text) == [
+        ("Key", "KeyRead", "QueryValue · EnumerateSubKeys · Notify · ReadControl")]
+    assert "UnknownBits in an alias expansion" not in text
+
+
+# ── The Vista widening, end to end ──────────────────────────────────────
+# access_rights decides which `*_ALL_ACCESS` a Process or Thread mask is
+# read against; these check that the dump's own major version is what
+# reaches it, and that nothing else moves.
+
+def _mf_with_os_major(descriptors, major):
+    """A fake dump whose SYSTEM_INFO stream reports `major`, or that has
+    no usable one when `major` is None."""
+    mf = _mf_with(descriptors)
+    mf.sysinfo = types.SimpleNamespace(MajorVersion=major)
+    return mf
+
+
+_FULL_PROCESS_XP = [{"handle": 0x10, "type_name": "Process",
+                      "object_name": "P", "granted_access": 0x001F0FFF}]
+
+
+def test_a_pre_vista_dump_reads_its_full_process_handle_as_all_access():
+    """0x001f0fff IS `PROCESS_ALL_ACCESS` on XP and Server 2003 -- winnt.h
+    defines the constant that way under `#else` -- so the row should say
+    so instead of spelling out twelve rights."""
+    mf = _mf_with_os_major(_FULL_PROCESS_XP, 5)
+    text = _console_via_cmd(mf)
+
+    assert "Rights   AllAccess" in text
+
+
+def test_a_modern_dump_does_not_call_the_narrower_mask_all_access():
+    """The same mask on Vista and later is a PARTIAL handle -- the two
+    `*_LIMITED_INFORMATION` rights are absent -- and naming it
+    `AllAccess` would claim a capability the handle does not have."""
+    text = _console_via_cmd(_mf_with_os_major(_FULL_PROCESS_XP, 10))
+
+    assert "AllAccess" not in text
+    assert "Terminate" in text and "SuspendResume" in text
+
+
+def test_a_dump_with_no_readable_version_uses_the_modern_constants():
+    """The safe direction. Treating "version unknown" as "old" would
+    print `AllAccess` for genuinely partial masks on every dump whose
+    SYSTEM_INFO stream is missing or unparsable."""
+    for major in (None, "6", -1, True):
+        text = _console_via_cmd(_mf_with_os_major(_FULL_PROCESS_XP, major))
+        assert "AllAccess" not in text, f"major={major!r} selected the old value"
+
+
+def test_the_version_never_reaches_the_records_or_the_json():
+    """`granted_access` is the same integer whatever the dump's version
+    is: the version selects a display NAME and nothing else, which is
+    what keeps the v2.13 schema out of this entirely."""
+    old = collect_handles(_mf_with_os_major(_FULL_PROCESS_XP, 5))
+    new = collect_handles(_mf_with_os_major(_FULL_PROCESS_XP, 10))
+
+    assert [r.granted_access for r in old.records] == [0x001F0FFF]
+    assert ([r.to_dict() for r in old.records]
+            == [r.to_dict() for r in new.records])
+
+
+def test_the_alias_expansion_follows_the_version_the_row_was_decoded_with():
+    """The `Aliases used` block must expand the same constant the row
+    used, or it would list rights the handle never had."""
+    text = _console_via_cmd(_mf_with_os_major(_FULL_PROCESS_XP, 5))
+    entries = dict((alias, expansion)
+                   for _type, alias, expansion in _alias_entries(text))
+
+    assert "Terminate" in entries["AllAccess"]
+    assert "QueryLimitedInformation" not in entries["AllAccess"]
+
+
+def test_the_block_says_a_display_name_maps_to_a_constant_not_that_it_is_one():
+    """`AllAccess` and `KeyRead` are dumpex's display forms; no header
+    defines either spelling. Telling a reader they are "the SDK's own
+    name" sends them looking for a symbol that does not exist.
+
+    The caption also stops short of calling every constant "documented".
+    It once said "one documented Windows constant", which an investigator
+    reads as "I can go and check this" -- true of `KEY_READ`, false of
+    `SYMBOLIC_LINK_ALL_ACCESS`, for which no Microsoft header or
+    reference page could be found. The wording now spans the three kinds
+    the registry actually holds, and the unconfirmed ones are marked
+    individually on their own lines."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "K",
+         "granted_access": 0x00020019},
+    ]))
+    caption = " ".join(line.strip() for line in _console(result).splitlines())
+
+    assert ("Each display name maps to one Windows SDK, WDK or native constant"
+            in caption)
+    assert "the Windows SDK's own name" not in caption
+    assert "documented Windows constant" not in caption
+
+    # A confirmed composite carries no caveat of its own.
+    assert "[source unconfirmed]" not in caption
+
+
+def test_an_unconfirmed_composite_is_marked_and_a_confirmed_one_is_not():
+    """The P1 the caption change exists for. `SYMBOLIC_LINK_ALL_ACCESS`
+    has no confirmed Microsoft source; `KEY_READ` does. Printing both
+    with identical confidence tells the reader the first is checkable
+    when it is not, and the difference has to be visible on the line
+    rather than in a header the reader would have to go and fail to
+    find."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "K",
+         "granted_access": 0x00020019},
+        {"handle": 0x20, "type_name": "SymbolicLink", "object_name": "L",
+         "granted_access": 0x000F0001},
+    ]))
+    text = _console(result)
+    entries = dict((alias, expansion)
+                   for _type, alias, expansion in _alias_entries(text))
+
+    assert "[source unconfirmed]" in entries["AllAccess"]
+    assert "[source unconfirmed]" not in entries["KeyRead"]
+
+    # And the caveat is explained once, underneath.
+    caption = " ".join(line.strip() for line in text.splitlines())
+    assert ("Names marked [source unconfirmed] map to a constant no Microsoft "
+            "header or reference page could be found for") in caption
+
+
+def test_the_unconfirmed_caveat_is_absent_when_nothing_on_screen_is_marked():
+    """Same rule the UnknownBits note follows: a caveat never explains
+    something that is not there."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "K",
+         "granted_access": 0x00020019},
+    ]))
+    caption = " ".join(line.strip() for line in _console(result).splitlines())
+
+    assert "Names marked [source unconfirmed]" not in caption
+
+
+def test_a_directory_composite_is_confirmed_and_a_symbolic_link_one_is_not():
+    """The two look like one family and are not: Microsoft's
+    ZwOpenDirectoryObject page names `DIRECTORY_ALL_ACCESS` outright,
+    while no page names `SYMBOLIC_LINK_ALL_ACCESS`. Marking them
+    identically -- in either direction -- would be wrong about one."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Directory", "object_name": "D",
+         "granted_access": 0x000F000F},
+        {"handle": 0x20, "type_name": "SymbolicLink", "object_name": "L",
+         "granted_access": 0x000F0001},
+    ]))
+    marked = {type_display: "[source unconfirmed]" in expansion
+              for type_display, _alias, expansion
+              in _alias_entries(_console(result))}
+
+    assert marked == {"Directory": False, "SymbolicLink": True}
+
+
+# ── The Aliases-used block survives a hostile or malformed Type field ───
+# access_rights normalizes a type name case- and whitespace-insensitively
+# before looking it up, so `"Process"`, `"  process  "` and a
+# thousands-of-bytes-of-whitespace variant of it are ONE registry entry.
+# The block used to key its dedup on the RAW text instead, so each
+# spelling produced its own (redundant) expansion line, and it labelled
+# that line with the raw text too, so a single crafted or corrupted
+# `type_name` inflated the shared type column for every OTHER entry in
+# the block as well.
+
+def test_case_and_whitespace_variants_of_one_type_produce_one_alias_entry():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Process", "object_name": "A",
+         "granted_access": 0x001FFFFF},
+        {"handle": 0x20, "type_name": "  process  ", "object_name": "B",
+         "granted_access": 0x001FFFFF},
+        {"handle": 0x30, "type_name": "PROCESS", "object_name": "C",
+         "granted_access": 0x001FFFFF},
+    ]))
+    entries = _alias_entries(_console(result))
+
+    assert entries == [("Process", "AllAccess",
+                         "Terminate · CreateThread · SetSessionId · "
+                         "VmOperation · VmRead · VmWrite · DupHandle · "
+                         "CreateProcess · SetQuota · SetInformation · "
+                         "QueryInformation · SuspendResume · "
+                         "QueryLimitedInformation · SetLimitedInformation · "
+                         "Delete · ReadControl · WriteDac · WriteOwner · "
+                         "Synchronize · UnknownBits(0x0000c000)")]
+
+
+def test_a_wildly_padded_type_field_cannot_widen_the_aliases_block():
+    """The actual reported failure mode: a 400-character (or, in a real
+    dump, up to MAX_HANDLE_STRING_BYTES -- 4096 bytes, attacker-controlled
+    and read verbatim by the parser) `type_name` must not blow the shared
+    type column out for every entry in the block, including a perfectly
+    ordinary one on a different row."""
+    hostile = " " * 200 + "Process" + " " * 200
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": hostile, "object_name": "A",
+         "granted_access": 0x001FFFFF},
+        {"handle": 0x20, "type_name": "Key", "object_name": "B",
+         "granted_access": 0x00020019},
+    ]))
+    text = _console(result)
+    alias_block = text[text.index("Aliases used"):]
+
+    # Bounded, not merely shorter than the 462-char raw text would
+    # have produced: every line in this block wraps to the console
+    # width regardless of what the dump's Type field contained.
+    assert max(len(line) for line in alias_block.splitlines()) <= 100
+    assert "Process" in alias_block
+    # The point being tested is the ORIGINAL padded text, not its
+    # trimmed form (which is just "Process" and is supposed to appear).
+    assert hostile not in alias_block
+    entries = _alias_entries(text)
+    assert [type_label for type_label, _alias, _expansion in entries] == ["Key", "Process"]
+
+
+def test_the_aliases_block_label_is_the_registries_own_spelling():
+    """Not merely "not garbled" -- specifically the canonical spelling,
+    so the label matches what SUPPORTED_OBJECT_TYPES and every other
+    corner of this feature call the type, regardless of how the dump
+    happened to spell it."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "sYmBoLiClInK", "object_name": "A",
+         "granted_access": 0x000F0001},
+    ]))
+    entries = _alias_entries(_console(result))
+    assert entries[0][0] == "SymbolicLink"
+
+
+# ── Unconfirmed single-bit right names are marked on the Rights line ────
+# The provenance model already distinguished confirmed from unconfirmed
+# constants, but that distinction only reached composite aliases. A bare
+# single-bit name -- `QueryState` on a `Semaphore`, `Alert` on a `Thread`,
+# `Query`/`Set` on a `SymbolicLink` -- decoded and printed exactly like a
+# `winnt.h`-confirmed one, with nothing on the line to tell them apart.
+
+@pytest.mark.parametrize("type_name,mask,unconfirmed_name", [
+    ("Thread", 0x0004, "Alert"),
+    ("SymbolicLink", 0x0001, "Query"),
+    ("SymbolicLink", 0x0002, "Set"),
+    ("Semaphore", 0x0001, "QueryState"),
+    ("IoCompletion", 0x0001, "QueryState"),
+])
+def test_each_unconfirmed_single_bit_name_is_marked_on_its_own(type_name, mask,
+                                                                unconfirmed_name):
+    """Every constant this review named, checked individually rather than
+    only through SYMBOLIC_LINK_ALL_ACCESS."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": type_name, "object_name": "A",
+         "granted_access": mask},
+    ]))
+    text = _console(result)
+
+    assert f"{unconfirmed_name} [?]" in text
+    assert "Names marked [?] map to a constant no Microsoft header or reference "  \
+           "page could be found for" in " ".join(line.strip()
+                                                   for line in text.splitlines())
+
+
+# ── The same split, one level down: components INSIDE a composite ──────
+# An alias's own confirmation status (checked above) and the confirmation
+# status of the individual rights its expansion NAMES are two different
+# questions, and they disagree for four of this registry's aliases:
+# `IoCompletion`/`Thread`/`Semaphore AllAccess` are themselves confirmed
+# `winnt.h` constants, so their `Rights` line correctly prints a bare
+# `AllAccess` -- but expanding any of them lists a component
+# (`QueryState`, `Alert`) whose OWN constant has no confirmed source, and
+# that fact was invisible in the expansion until now. `SymbolicLink` is
+# the case where BOTH the alias and one of its components are
+# unconfirmed, and both marks must appear together rather than one
+# standing in for the other.
+
+@pytest.mark.parametrize("type_name,mask,alias,unconfirmed_component", [
+    ("IoCompletion", 0x001F0003, "AllAccess", "QueryState"),
+    ("Thread", 0x001FFFFF, "AllAccess", "Alert"),
+    ("Semaphore", 0x001F0003, "AllAccess", "QueryState"),
+    ("SymbolicLink", 0x000F0001, "AllAccess", "Query"),
+])
+def test_an_unconfirmed_component_is_marked_inside_a_confirmed_or_unconfirmed_alias(
+        type_name, mask, alias, unconfirmed_component):
+    """Every type this review named. The alias LABEL on the `Rights` line
+    is never touched by this -- only the expansion underneath it."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": type_name, "object_name": "A",
+         "granted_access": mask},
+    ]))
+    text = _console(result)
+    entries = _alias_entries(text)
+
+    [(_type, found_alias, expansion)] = entries
+    assert found_alias == alias
+    assert f"{unconfirmed_component} [?]" in expansion
+
+
+@pytest.mark.parametrize("type_name,mask,alias", [
+    ("IoCompletion", 0x001F0003, "AllAccess"),
+    ("Thread", 0x001FFFFF, "AllAccess"),
+])
+def test_the_alias_label_itself_stays_unmarked_when_only_a_component_is_unconfirmed(
+        type_name, mask, alias):
+    """The other half of the same fact: `IO_COMPLETION_ALL_ACCESS` and
+    `THREAD_ALL_ACCESS` are themselves confirmed winnt.h constants, so
+    neither the `Rights` line's `AllAccess` nor the alias LABEL in the
+    `Aliases used` block may carry a mark just because one of the rights
+    it expands to does."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": type_name, "object_name": "A",
+         "granted_access": mask},
+    ]))
+    text = _console(result)
+    rights_line = next(l for l in text.splitlines() if "Rights" in l)
+    assert "[?]" not in rights_line
+
+    entries = _alias_entries(text)
+    [(_type, found_alias, _expansion)] = entries
+    assert found_alias == alias        # the label carries no "[?]" suffix
+
+
+def test_symbolic_link_all_access_marks_both_the_alias_and_its_component():
+    """The one case where two independent facts are both true at once:
+    `SYMBOLIC_LINK_ALL_ACCESS` has no confirmed header (marked
+    `[source unconfirmed]`, per the earlier round), AND its `Query`
+    component -- `SYMBOLIC_LINK_QUERY` -- has no confirmed header either
+    (marked `[?]`). Neither mark substitutes for the other."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "SymbolicLink", "object_name": "A",
+         "granted_access": 0x000F0001},
+    ]))
+    entries = _alias_entries(_console(result))
+
+    [(_type, alias, expansion)] = entries
+    assert alias == "AllAccess"
+    assert "Query [?]" in expansion
+    assert "[source unconfirmed]" in expansion
+
+
+@pytest.mark.parametrize("type_name,mask,alias,confirmed_component", [
+    ("Event", 0x001F0003, "AllAccess", "QueryState"),   # ntifs.h-confirmed
+    ("Timer", 0x001F0003, "AllAccess", "QueryState"),   # winnt.h, not mixed
+])
+def test_a_confirmed_component_inside_a_confirmed_alias_carries_no_mark(
+        type_name, mask, alias, confirmed_component):
+    """The contrast case the parametrized test above needs: `Event` and
+    `Timer` look exactly like `Semaphore`/`IoCompletion` from the
+    outside -- same bit, same display name, same alias shape -- and
+    neither is mixed. Marking their `QueryState` here would be the same
+    over-eager mistake `EVENT_QUERY_STATE` was once filed under before
+    Microsoft's own reference page was checked."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": type_name, "object_name": "A",
+         "granted_access": mask},
+    ]))
+    entries = _alias_entries(_console(result))
+
+    [(_type, found_alias, expansion)] = entries
+    assert found_alias == alias
+    assert f"{confirmed_component} [?]" not in expansion
+    assert "[?]" not in expansion
+
+
+def test_a_confirmed_single_bit_name_is_never_marked():
+    """The contrast case in the same family: TIMER_QUERY_STATE IS a
+    winnt.h constant, unlike the SEMAPHORE/IO_COMPLETION lookalikes."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Timer", "object_name": "A",
+         "granted_access": 0x0001},
+    ]))
+    text = _console(result)
+
+    assert "QueryState [?]" not in text
+    assert "[?]" not in text
+
+
+def test_a_confirmed_and_an_unconfirmed_bit_on_one_row_are_told_apart():
+    """The clearest single demonstration: one Semaphore mask carrying
+    both bits must mark exactly one of the two names on the same line."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Semaphore", "object_name": "A",
+         "granted_access": 0x0003},
+    ]))
+    text = _console(result)
+
+    assert "QueryState [?] · ModifyState" in text
+    assert "ModifyState [?]" not in text
+
+
+def test_an_ioc_completion_all_access_row_is_not_marked_even_though_the_type_is_mixed():
+    """`IoCompletion` is mixed-source, but `AllAccess` itself is
+    `IO_COMPLETION_ALL_ACCESS` -- a confirmed winnt.h constant. The
+    `Rights` line must not inherit a mark that belongs to the type's
+    OTHER, unrelated bit.
+
+    That bit is not swept under the rug, though: `AllAccess` still
+    EXPANDS to `QueryState`, which comes from the unconfirmed
+    `IO_COMPLETION_QUERY_STATE`, and the `Aliases used` block marks that
+    one component on its own -- a fact this test pins alongside the
+    Rights line staying clean, rather than asserting `[?]` is absent from
+    the WHOLE output (which would have frozen the very gap this test
+    exists to close)."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "IoCompletion", "object_name": "A",
+         "granted_access": 0x001F0003},
+    ]))
+    text = _console(result)
+    rights_line = next(l for l in text.splitlines() if "Rights" in l)
+
+    assert "Rights   AllAccess" in rights_line
+    assert "[?]" not in rights_line
+
+    entries = _alias_entries(text)
+    assert entries == [("IoCompletion", "AllAccess",
+                         "QueryState [?] · ModifyState · Delete · ReadControl · "
+                         "WriteDac · WriteOwner · Synchronize")]
+
+
+def test_the_unconfirmed_rights_caveat_is_absent_when_nothing_is_marked():
+    """Same rule every other on-demand caveat in this block follows."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key", "object_name": "A",
+         "granted_access": 0x00020019},
+    ]))
+    text = _console(result)
+    assert "[?]" not in text
+    assert "Names marked [?]" not in text
+
+
+def test_an_unconfirmed_mark_is_never_split_across_a_wrapped_line():
+    """The mark is part of the piece wrap_rights() sees, so it can never
+    be separated from its name -- the same guarantee every right name
+    already has."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "SymbolicLink", "object_name": "A",
+         "granted_access": 0x0003},
+    ]))
+    text = _console(result)
+    for line in text.splitlines():
+        if "Query" in line and "[?" in line and "]" not in line:
+            pytest.fail(f"mark split across a wrap boundary: {line!r}")
+
+
+def test_the_block_lists_only_the_composites_actually_on_screen():
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A",
+         "granted_access": 0x00120089},
+    ]))
+    entries = _alias_entries(_console(result))
+
+    assert [alias for _type, alias, _expansion in entries] == ["FileGenericRead"]
+    # A row that used no composite contributes none.
+    plain = _console(collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 1}])))
+    assert _alias_entries(plain) == []
+    assert "Aliases used" not in plain
+
+
+def test_a_folded_row_takes_its_alias_expansion_with_it():
+    """The block explains names that are on screen, so it follows the
+    same rows the rights lines do."""
+    descriptors = [
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x120089},
+        {"handle": 0x20, "type_name": "Event", "object_name": None, "granted_access": 0x1F0003},
+    ]
+    default = _alias_entries(_console(collect_handles(_mf_with(descriptors))))
+    verbose = _alias_entries(_console(collect_handles(_mf_with(descriptors)), verbose=True))
+
+    assert [alias for _t, alias, _e in default] == ["FileGenericRead"]
+    assert [alias for _t, alias, _e in verbose] == ["AllAccess", "FileGenericRead"]
+
+
+def test_the_expansion_block_escapes_a_dump_derived_type_name():
+    """The alias name and its rights are dumpex's own vocabulary, but the
+    label carries the recorded TYPE, which is attacker-controlled."""
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "Key\x1bX", "object_name": "A",
+         "granted_access": 0x00020019},
+    ]))
+    text = _console(result)
+
+    # Not a type this registry carries once the escape is part of the
+    # name -- so no composite, and nothing to expand.
+    assert _alias_entries(text) == []
+    assert "Key\\x1bX" in text
+    assert "\x1b[" not in text.replace("\x1b[0m", "")
+
+
+# ── #102: colour is a projection of the same text ───────────────────────
+
+def test_colour_separates_the_names_from_the_scaffolding(monkeypatch):
+    """On a terminal the names are what the eye should land on, so the
+    branch, the label and the separators are dimmed and a remainder --
+    the one piece saying something was NOT read -- is yellow. The text
+    itself is identical either way."""
+    import dumpex.ui.colors as colors
+    monkeypatch.setattr(colors, "USE_COLOR", True)
+
+    result = collect_handles(_mf_with([
+        {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x00008001},
+    ]))
+    line = next(l for l in _console(result).splitlines() if "UnknownBits" in l)
+
+    assert "\x1b[2m└─ \x1b[0m" in line                     # branch, dimmed
+    assert "\x1b[2mRights  \x1b[0m" in line                # label, dimmed
+    assert "\x1b[2m · \x1b[0m" in line                     # separator, dimmed
+    assert "\x1b[93mUnknownBits(0x00008000)\x1b[0m" in line  # remainder, yellow
+    assert "\x1b[" not in "ReadData"                       # ... but not the names
+    assert strip_ansi(line).strip() == "└─ Rights   ReadData · UnknownBits(0x00008000)"
+
+
+def test_widths_are_measured_on_the_text_and_not_on_the_escape_codes(monkeypatch):
+    """Colouring before wrapping would spend the line's width budget on
+    escape sequences and wrap the rights early. The wrap is identical
+    with colour on and off."""
+    import dumpex.ui.colors as colors
+    descriptors = [{"handle": 0x10, "type_name": "Thread", "object_name": "A",
+                     "granted_access": 0x0000143A}]
+
+    monkeypatch.setattr(colors, "USE_COLOR", False)
+    plain = _console(collect_handles(_mf_with(descriptors)))
+    monkeypatch.setattr(colors, "USE_COLOR", True)
+    coloured = _console(collect_handles(_mf_with(descriptors)))
+
+    assert _rights_texts(plain) == _rights_texts(
+        "\n".join(strip_ansi(line) for line in coloured.splitlines()))
 
 
 # ── #102 x #98: decoding changes nothing about which rows exist ─────────
@@ -1827,10 +2554,10 @@ def test_a_folded_row_takes_its_rights_line_with_it():
         {"handle": 0x10, "type_name": "File", "object_name": "A", "granted_access": 0x120089},
         {"handle": 0x20, "type_name": "Event", "object_name": None, "granted_access": 0x1F0003},
     ]
-    default = _rights_lines(_console(collect_handles(_mf_with(descriptors))))
-    verbose = _rights_lines(_console(collect_handles(_mf_with(descriptors)), verbose=True))
+    default = _rights_texts(_console(collect_handles(_mf_with(descriptors))))
+    verbose = _rights_texts(_console(collect_handles(_mf_with(descriptors)), verbose=True))
 
-    assert default == ["ReadData | ReadEa | ReadAttributes | ReadControl | Synchronize"]
+    assert default == ["FileGenericRead"]
     assert verbose == default + ["AllAccess"]
 
 
@@ -1842,12 +2569,13 @@ def test_the_rights_always_belong_to_the_row_above_them():
         {"handle": 0x20, "type_name": "Thread", "object_name": "B", "granted_access": 0x00000002},
     ]))
 
-    for row, rights in _row_and_rights_pairs(_console(result)):
-        assert rights == ("WriteData" if " File " in row else "SuspendResume")
+    for row, groups in _row_and_rights_pairs(_console(result)):
+        expected = "WriteData" if " File " in row else "SuspendResume"
+        assert groups == [("Rights", expected)]
 
 
 def test_a_hostile_type_name_cannot_forge_output_through_the_rights_line():
-    """The Rights line is dumpex's own vocabulary plus numbers -- no
+    """The rights line is dumpex's own vocabulary plus numbers -- no
     dump-derived string reaches it, so a hostile type name has nothing to
     ride in on. The Type column escapes it as before."""
     result = collect_handles(_mf_with([
@@ -1857,7 +2585,7 @@ def test_a_hostile_type_name_cannot_forge_output_through_the_rights_line():
     text = _console(result)
 
     assert "A\\x1bB\\x0aHandle" in text
-    assert _rights_lines(text) == ["TypeSpecificUnavailable(0x00000001)"]
+    assert _rights_texts(text) == ["TypeSpecificUnavailable(0x00000001)"]
     assert "\x1b[" not in text.replace("\x1b[0m", "")
 
 

@@ -75,6 +75,13 @@ _CODE_TOKEN_RE = re.compile(
     r"`((?:%s)_[A-Z0-9_]+)`" % "|".join(_CODE_PREFIXES))
 _NOT_A_CODE = ("MAX_",)
 
+# Windows ACCESS_MASK constants share the `PROCESS_` prefix with dumpex's
+# frozen codes and are not codes: §5.6.4 names `PROCESS_ALL_ACCESS` (and
+# would name any other `*_ALL_ACCESS`) because the decoder maps it, not
+# because dumpex emits it. Matched by suffix so the exclusion cannot
+# quietly swallow a real code, which never ends this way.
+_NOT_A_CODE_SUFFIX = ("_ALL_ACCESS",)
+
 _LIMITATION_ROW_RE = re.compile(r"^\| `([A-Z][A-Z0-9_]+)` \|")
 _DIAGNOSTIC_ROW_RE = re.compile(r"^\| \d+ \| `([A-Z][A-Z0-9_]+)` \|")
 
@@ -171,6 +178,53 @@ def test_no_normative_reference_to_an_unpublished_draft(normative_body):
         f"normative sections reference an unpublished draft: {sorted(set(offenders))}")
 
 
+# Phrasing that overstates how well-sourced an access-rights constant is.
+# Each of these shipped at some point and was wrong once the provenance
+# model (§5.6) shipped a `SYMBOLIC_LINK_ALL_ACCESS`, a `THREAD_ALERT`, a
+# `SEMAPHORE_QUERY_STATE` and an `IO_COMPLETION_QUERY_STATE` with no
+# confirmed defining header: a document that calls "every" composite or
+# "every" display name "documented" is making a claim its own §5.6 table
+# contradicts two paragraphs later.
+_OVERCLAIMS_EVERY_NAME_IS_DOCUMENTED = (
+    "one documented constant",
+    "one documented windows constant",
+    "one documented sdk constant",
+    "maps precisely to one documented",
+    "every composite is a documented sdk constant",
+    "publicly documented combination constant",
+)
+
+
+def test_the_contract_never_claims_every_access_rights_name_is_documented(
+        normative_body):
+    """A specific, previously-shipped defect, pinned by its own wording
+    so it cannot quietly return under a rephrasing that still means the
+    same absolute claim. §5.6's own provenance table two paragraphs later
+    lists constants with NO confirmed header; a document that also
+    ASSERTS "every ... is documented" is contradicting itself, not just
+    being imprecise.
+
+    Narrating the OLD, wrong wording in past tense -- 'the caption said
+    "one documented Windows constant", which was wrong' -- is exactly how
+    §5.6 explains its own fix and must stay legal; only a live assertion
+    of the same claim is the regression this pins against. A quoted
+    phrase immediately preceded by `said "` is that narration, not a
+    renewed claim, and is excluded."""
+    lowered = " ".join(normative_body.lower().split())
+    offenders = []
+    for phrase in _OVERCLAIMS_EVERY_NAME_IS_DOCUMENTED:
+        needle = " ".join(phrase.lower().split())
+        for match in re.finditer(re.escape(needle), lowered):
+            preceding = lowered[max(0, match.start() - 20):match.start()]
+            if 'said "' not in preceding and "said '" not in preceding:
+                offenders.append(phrase)
+                break
+    assert not offenders, (
+        f"the contract re-introduced an absolute 'documented' claim about "
+        f"access-rights names/composites, which §5.6's own unconfirmed "
+        f"entries contradict: {offenders}")
+
+
 def test_every_frozen_code_mentioned_anywhere_is_declared_in_a_registry_table(
         doc, limitation_codes, diagnostic_codes):
     """A code named in prose but missing from §6 has no frozen message
@@ -178,7 +232,8 @@ def test_every_frozen_code_mentioned_anywhere_is_declared_in_a_registry_table(
     have to invent one."""
     declared = set(limitation_codes) | set(diagnostic_codes)
     mentioned = {t for t in _CODE_TOKEN_RE.findall(doc)
-                 if not t.startswith(_NOT_A_CODE)}
+                 if not t.startswith(_NOT_A_CODE)
+                 and not t.endswith(_NOT_A_CODE_SUFFIX)}
     undeclared = sorted(mentioned - declared)
     assert not undeclared, (
         f"codes used in the contract but not declared in §6.1/§6.2: {undeclared}")
