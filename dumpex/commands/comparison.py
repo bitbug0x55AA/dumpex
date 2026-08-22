@@ -20,10 +20,12 @@ collect_*_diff()'s own FAILED-gate comment for why the diff-building step
 must never run when a side is FAILED.
 
 Source naming is dotted and entity-namespaced (e.g. "baseline.modules"/
-"target.modules") rather than the bare names the six single-dump commands
-use, so a comparison's two sides never collide as coverage facts about a
-same-named source, and dumpex.output.coverage._display_name() renders
-them as "baseline ModuleListStream"/"target ModuleListStream" accordingly.
+"target.modules") rather than the bare names the seven single-dump
+commands (--list/--modules/--threads/--sysinfo/--process/--handles/
+--profile) use, so a comparison's two sides never collide as coverage
+facts about a same-named source, and dumpex.output.coverage._display_name()
+renders them as "baseline ModuleListStream"/"target ModuleListStream"
+accordingly.
 
 Per-entity coverage uses build_coverage_report()'s evaluation_groups (two
 independent single-source groups, one per side) rather than a single

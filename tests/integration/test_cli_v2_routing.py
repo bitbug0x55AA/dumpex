@@ -1,7 +1,8 @@
 """
 Integration tests for cli.py's v2 routing: the pre-flight rejection of
 --json on not-yet-migrated commands (before the dump is even
-opened), the six recon commands actually writing a v2-shaped document,
+opened), the seven recon commands (--list/--modules/--threads/--sysinfo/
+--process/--handles/--profile) actually writing a v2-shaped document,
 --hunt now also writing a v2.4-shaped document (PR4 -- see
 dumpex.hunt.cmd_hunt()'s own collect_records= docstring), and the
 exit-code contract (0 complete / 3 partial / 4 not_evaluated) for the
@@ -1284,5 +1285,118 @@ def test_modules_stream_missing_exits_not_evaluated(monkeypatch):
         with pytest.raises(SystemExit) as exc:
             cli.main()
         assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+    finally:
+        os.remove(dump_path)
+
+
+# ── --redact-paths for --process/--handles/--profile (issue #44: the      ─
+#    mechanism itself is command-agnostic (StructuredOutput redacts        │
+#    meta.evidence[].path regardless of which command produced the         │
+#    document -- already proven for modules/hunt_stomping/hunt_yara in     │
+#    tests/integration/test_json_metadata.py) -- these prove it isn't      │
+#    accidentally bypassed for the three v2.13 commands specifically. ──────
+
+def test_process_redact_paths_hides_absolute_dump_path(monkeypatch, tmp_path):
+    from tests.unit.test_process_cmd import _complete_mf
+    dump_path = _make_dump_file()
+    try:
+        mf = _complete_mf()
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--process", "--redact-paths",
+                              "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "process"
+        assert "path" not in doc["meta"]["evidence"][0]
+        assert doc["meta"]["evidence"][0]["file_name"] == os.path.basename(dump_path)
+        assert os.path.dirname(dump_path) not in json.dumps(doc)
+    finally:
+        os.remove(dump_path)
+
+
+def test_handles_redact_paths_hides_absolute_dump_path(monkeypatch, tmp_path):
+    from tests.fixtures.fakes import Handle
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.handles = FakeStream(
+            [Handle(0x10, "File", r"\Device\HarddiskVolume1\notes.txt")], "handles")
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--handles", "--redact-paths",
+                              "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "handles"
+        assert "path" not in doc["meta"]["evidence"][0]
+        assert doc["meta"]["evidence"][0]["file_name"] == os.path.basename(dump_path)
+        assert os.path.dirname(dump_path) not in json.dumps(doc)
+    finally:
+        os.remove(dump_path)
+
+
+def test_profile_redact_paths_hides_absolute_dump_path(monkeypatch, tmp_path):
+    dump_path = _make_dump_file()
+    try:
+        mf = FakeMF()
+        mf.header = _FakeMinidumpHeader(0)
+        mf.sysinfo = SysInfo()
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--profile", "--redact-paths",
+                              "--json", out_json])
+        cli.main()   # no SystemExit -- coverage is complete, exit code 0
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "profile"
+        assert "path" not in doc["meta"]["evidence"][0]
+        assert doc["meta"]["evidence"][0]["file_name"] == os.path.basename(dump_path)
+        assert os.path.dirname(dump_path) not in json.dumps(doc)
+    finally:
+        os.remove(dump_path)
+
+
+# ── --handles: SourceState.FAILED (stream present but unparseable) through ─
+#    the real CLI, with --verbose --txt engaged -- tests/unit/            │
+#    test_handles_cmd.py already covers this state at the collect_handles()│
+#    level (test_parse_failure_is_never_a_clean_zero_handle_result); this  │
+#    proves the same state also renders cleanly (no crash, no ANSI) through│
+#    the verbose console/--txt path, not only the default one. ────────────
+
+def test_handles_failed_stream_verbose_txt_renders_without_crashing(monkeypatch, tmp_path):
+    from tests.unit.test_handles_cmd import _mf as _handles_mf
+    detail = "HandleStreamFramingError: HandleDataStream SizeOfDescriptor 33 is neither 32 nor 40"
+    dump_path = _make_dump_file()
+    try:
+        mf = _handles_mf(failure=detail)
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        out_txt = str(tmp_path / "out.txt")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--handles", "--verbose",
+                              "--json", out_json, "--txt", out_txt])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == cli.EXIT_NOT_EVALUATED == 4
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["kind"] == "handles"
+        assert doc["result"]["coverage"]["status"] == "not_evaluated"
+        assert doc["result"]["coverage"]["sources"]["handles"]["state"] == "failed"
+        assert detail in doc["result"]["coverage"]["sources"]["handles"]["detail"]
+
+        text = open(out_txt, encoding="utf-8").read()
+        assert not _ANSI_ESCAPE_RE.search(text)
+        assert "HandleDataStream present but could not be read" in text
     finally:
         os.remove(dump_path)

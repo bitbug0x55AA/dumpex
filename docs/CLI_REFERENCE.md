@@ -168,6 +168,11 @@ always the complete, lossless evidence surface.
 
 ### `--handles`
 
+Handle records are populated only when the dump captured
+`HandleDataStream`; a dump without that stream reports `--handles` as
+`not_evaluated` rather than an empty inventory (see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md#v2-structured-output)).
+
 The default console folds **anonymous** handle rows — rows whose object
 name the descriptor positively records as absent — into per-type counts:
 
@@ -312,7 +317,11 @@ maliciousness verdict.
   address stored in that slot in the captured process memory. A slot
   outside the recorded import directory bounds is flagged with `*` — an
   observation about the dump's directory framing, not a verdict about
-  the import.
+  the import. The table covers the standard Import Address Table
+  (`IMAGE_DIRECTORY_ENTRY_IMPORT`) only; Delay Import descriptors
+  (`IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT`) are out of scope for v2.13 —
+  they are not walked, not reported, and their absence from the table
+  is not a coverage limitation.
 - **`Identity Verification`**, which shows the selected path and name,
   the source they came from, and one line per independent check with an
   explicit state: `[OK]`, `[!!]` (conflict), or `[--]` (could not be
@@ -329,6 +338,181 @@ Every string in these blocks that came out of the dump — paths, names,
 DLL and API names, window title — is escaped before it reaches the
 terminal, so a hostile name cannot forge dumpex's own output. `--json`
 keeps the exact decoded bytes.
+
+### `--sysinfo`
+
+Environment variables routinely carry tokens, session identifiers, user
+names, and full user paths. `--sysinfo --json` output can contain these
+secrets and should be handled at the same sensitivity as the dump
+itself. dumpex never silently redacts environment evidence — the
+console prints only a count by default (values require `--verbose` or
+`--json`), which is a don't-shoulder-surf default, not a security
+control; `--redact-paths` reduces path-shaped output to basenames but
+adds no redaction for environment values themselves.
+
+## `--profile`
+
+`--profile` (issue #95) answers a different question than the other
+recon commands: not "what did the process do", but "what can this dump
+actually support analyzing, and why". `--verbose` is accepted (it is
+recorded in `meta.execution.options` like every other command) but has
+no effect on `--profile`'s own console or JSON output — the report is
+always complete either way, unlike `--process`/`--handles` where it
+gates real projection differences. It reports two things, kept
+structurally separate and never mixed into a verdict:
+
+**The dump's own stream inventory** — one row per entry in the dump's
+own `MINIDUMP_DIRECTORY` table, in directory order (never sorted,
+deduplicated, or merged). Each row carries its raw numeric stream-type
+ID — kept even when this build's `minidump` library doesn't recognize
+it, so an unrecognized type is a row of its own, never dropped — and a
+`parser_state`:
+
+| `parser_state` | Meaning |
+|---|---|
+| `parsed` | Present, and dumpex parsed it (a real count, or none for a singular stream). |
+| `present_empty` | Present, parsed, and verified to hold zero items. |
+| `unparsed` | Present, but dumpex has no parser registered for this stream type. |
+| `failed` | Present, and the parse attempt raised — the error text is carried alongside. |
+| `indeterminate` | Two or more directory entries share this same stream type, so the one surviving parsed-or-failed state can't be attributed to any one of them with confidence. |
+
+**The analysis-capability map** — a frozen, ordered registry of six
+capability IDs (`memory_region_analysis`, `module_analysis`,
+`injection_artifact_analysis`, `thread_analysis`, `handle_analysis`,
+`injector_handle_assessment`), always reported in that same order. Each
+is `available`, `limited`, or `unavailable`, derived deterministically
+from whether the streams that capability needs are present and parsed —
+never from anything resembling a hunt result. A capability reads
+`unavailable` because required evidence is missing, never because
+`--profile` looked and found nothing suspicious; it carries no score,
+confidence, or ATT&CK mapping.
+
+**Command coverage and capability availability are deliberately
+independent axes.** A small, cleanly-captured dump can be `--profile`
+complete — the command itself read everything it needed, exit code `0`
+— while several capabilities are `unavailable`, because the dump itself
+never captured what *those* capabilities need. An unavailable capability
+is an evidence boundary, not a clean or malicious finding, and never
+lowers `--profile`'s own coverage status.
+
+The example below is a complete, valid v2.13 document — it validates
+as-is against `dumpex-output-v2.13.schema.json`
+(`tests/integration/test_cli_reference_json_examples.py` extracts this
+exact fenced block and validates it in CI, the same way
+[docs/SOC_QUICKSTART.md](SOC_QUICKSTART.md)'s own "Sanitized `--json`
+examples" are kept honest). It is `--profile --verbose` on a dump that
+captured system info, modules, threads, and memory evidence but no
+`HandleDataStream` — all six capabilities are present, in the registry's
+fixed order, with a genuine mix of `available` and `unavailable`:
+
+```json
+{
+  "meta": {
+    "schema_version": "2.13",
+    "tool": { "name": "dumpex", "version": "<installed version>" },
+    "execution": {
+      "started_at": "2026-03-14T09:12:01Z", "finished_at": "2026-03-14T09:12:02Z",
+      "duration_seconds": 1.0, "command": "profile",
+      "options": { "verbose": true }, "case_id": null, "analyst": null
+    },
+    "evidence": [
+      { "id": "primary", "role": "primary", "file_name": "sample.dmp",
+        "size_bytes": 22, "sha256": "11bc45c81995f224b81b8e4de5a9607e4b028fa2475499bfa10545ab69cd6aab" }
+    ],
+    "runtime": { "python_version": "3.12.13", "minidump_version": "0.0.24",
+      "yara_version": "4.5.4", "pyyaml_version": "6.0.3" }
+  },
+  "result": {
+    "kind": "profile",
+    "execution_status": "completed",
+    "coverage": {
+      "status": "complete", "reasons": [],
+      "sources": {
+        "sysinfo": { "state": "present", "record_count": 1, "detail": null },
+        "modules": { "state": "present", "record_count": 1, "detail": null },
+        "threads": { "state": "present", "record_count": 1, "detail": null },
+        "thread_info": { "state": "present", "record_count": 1, "detail": null },
+        "memory_info": { "state": "present", "record_count": 1, "detail": null },
+        "handles": { "state": "absent", "record_count": null, "detail": null },
+        "memory_content": { "state": "present", "record_count": 1, "detail": null },
+        "profile_directory": { "state": "present", "record_count": 1, "detail": null }
+      },
+      "limitations": []
+    },
+    "summary": { "stream_count": 6, "capability_summary": { "available": 4, "limited": 0, "unavailable": 2 } },
+    "data": {
+      "records": [
+        {
+          "architecture": "AMD64",
+          "raw_flags": 2,
+          "recognized_flags": ["MiniDumpWithFullMemory"],
+          "unrecognized_flag_bits": 0,
+          "memory_capture": {
+            "full_memory_flag_set": true,
+            "memory64_list_present": true,
+            "memory_list_present": false,
+            "captured_segment_count": 1,
+            "captured_bytes_total": 4096
+          },
+          "streams": [
+            { "directory_index": 0, "stream_type_id": 7, "stream_type_name": "SystemInfoStream",
+              "parser_state": "parsed", "record_count": null, "detail": null },
+            { "directory_index": 1, "stream_type_id": 4, "stream_type_name": "ModuleListStream",
+              "parser_state": "parsed", "record_count": 1, "detail": null },
+            { "directory_index": 2, "stream_type_id": 3, "stream_type_name": "ThreadListStream",
+              "parser_state": "parsed", "record_count": 1, "detail": null },
+            { "directory_index": 3, "stream_type_id": 17, "stream_type_name": "ThreadInfoListStream",
+              "parser_state": "parsed", "record_count": 1, "detail": null },
+            { "directory_index": 4, "stream_type_id": 16, "stream_type_name": "MemoryInfoListStream",
+              "parser_state": "parsed", "record_count": 1, "detail": null },
+            { "directory_index": 5, "stream_type_id": 9, "stream_type_name": "Memory64ListStream",
+              "parser_state": "parsed", "record_count": 1, "detail": null }
+          ],
+          "capabilities": [
+            { "capability_id": "memory_region_analysis", "status": "available",
+              "required_source_groups": [["memory_info"]], "required_sources": ["memory_info"],
+              "optional_sources": [], "limitations": [] },
+            { "capability_id": "module_analysis", "status": "available",
+              "required_source_groups": [["modules"]], "required_sources": ["modules"],
+              "optional_sources": [], "limitations": [] },
+            { "capability_id": "injection_artifact_analysis", "status": "available",
+              "required_source_groups": [["memory_info", "thread_info"]],
+              "required_sources": ["memory_info", "thread_info"],
+              "optional_sources": ["modules", "threads", "memory_content"], "limitations": [] },
+            { "capability_id": "thread_analysis", "status": "available",
+              "required_source_groups": [["threads", "thread_info"]],
+              "required_sources": ["threads", "thread_info"],
+              "optional_sources": ["modules"], "limitations": [] },
+            { "capability_id": "handle_analysis", "status": "unavailable",
+              "required_source_groups": [["handles"]], "required_sources": ["handles"],
+              "optional_sources": [],
+              "limitations": [{ "code": "REQUIRED_SOURCE_ABSENT", "source": "handles",
+                "detail": "HandleDataStream is not present in this dump" }] },
+            { "capability_id": "injector_handle_assessment", "status": "unavailable",
+              "required_source_groups": [["handles"]], "required_sources": ["handles"],
+              "optional_sources": ["threads"],
+              "limitations": [{ "code": "REQUIRED_SOURCE_ABSENT", "source": "handles",
+                "detail": "HandleDataStream is not present in this dump" }] }
+          ]
+        }
+      ]
+    }
+  },
+  "artifacts": [],
+  "diagnostics": { "warnings": [], "errors": [] }
+}
+```
+
+`full_memory_flag_set` (the header's own `MiniDumpWithFullMemory` flag)
+and `memory64_list_present`/`captured_segment_count` (what was actually
+captured) are read independently and never inferred from each other — a
+dump whose flag says `MiniDumpNormal` can still carry a real, positive
+`captured_segment_count`, and the two facts are reported side by side
+rather than collapsed into one boolean.
+
+See [docs/recon_profile_contract.md](recon_profile_contract.md) for the
+complete field-by-field contract, the full closed limitation-code
+registry, and the per-capability required/optional source rules.
 
 ## Examples
 

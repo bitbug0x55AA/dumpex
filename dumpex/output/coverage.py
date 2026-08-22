@@ -99,17 +99,20 @@ class SourceState(str, Enum):
 
     # FAILED is a real, first-class state this model supports (see
     # build_coverage_report's not_evaluated branch and render_limitation's
-    # SOURCE_FAILED template) -- but is currently N/A for all six of
-    # dumpex's original recon commands (list/modules/threads/peb/pid/
-    # sysinfo): none of their mf.<stream> attribute accesses are wrapped
-    # in a try/except, so a parsing error there propagates as a fatal,
-    # uncaught exception (crashing before open_dump even returns) rather
-    # than becoming a SOURCE_FAILED SourceObservation. FAILED is reserved
-    # for a future command whose source access can genuinely raise and
-    # recover (e.g. comparison/diff reading two dumps, where one side
-    # failing shouldn't abort the other) -- a caller must construct
-    # SourceObservation(state=FAILED, ...) itself (see observe_source's
-    # own docstring); nothing here does it automatically.
+    # SOURCE_FAILED template) -- but is N/A for the single primary
+    # mf.<stream> attribute --list/--modules/--threads each read
+    # (memory_info/modules/threads+thread_info): none of those direct
+    # accesses are wrapped in a try/except, so a parsing error there
+    # propagates as a fatal, uncaught exception (crashing before
+    # open_dump even returns) rather than becoming a SOURCE_FAILED
+    # SourceObservation. Every other current source DOES construct one
+    # directly, since that read can genuinely raise and be recovered
+    # from: --sysinfo's own dump_file/environment_block sources (issue
+    # #41), --handles' handles source, --profile's per-stream/
+    # memory_content sources, and --diff/comparison's per-side reads (see
+    # dumpex.commands.sysinfo/handles/profile/comparison respectively). A
+    # caller must still construct it itself (see observe_source's own
+    # docstring); nothing here does it automatically.
 
 
 SOURCE_ABSENT        = SourceState.ABSENT
@@ -1343,15 +1346,17 @@ _SOURCE_DISPLAY_NAMES = {
 
 def _display_name(source: str) -> str:
     """A bare source name (e.g. "modules") looks up directly. A dotted,
-    entity-namespaced name (e.g. "baseline.modules", introduced for a
-    future comparison command -- see EvaluationRequirement/
-    combine_coverage_reports below) renders as "baseline ModuleListStream"
-    by re-deriving the display name from the suffix after the LAST dot,
-    via rpartition rather than a blanket dot-to-space replacement -- an
-    unrecognized suffix (e.g. "baseline.custom_source") falls through to
-    the raw string unchanged rather than being guessed at. None of
-    today's six recon commands' source names contain a literal ".", so
-    this is a pure extension for them."""
+    entity-namespaced name (e.g. "baseline.modules", used by --diff's own
+    two-sided comparison -- see EvaluationRequirement/
+    combine_coverage_reports below and dumpex.commands.comparison) renders
+    as "baseline ModuleListStream" by re-deriving the display name from
+    the suffix after the LAST dot, via rpartition rather than a blanket
+    dot-to-space replacement -- an unrecognized suffix (e.g.
+    "baseline.custom_source") falls through to the raw string unchanged
+    rather than being guessed at. None of the seven single-dump recon
+    commands' (--list/--modules/--threads/--sysinfo/--process/--handles/
+    --profile) own source names contain a literal ".", so this is a pure
+    extension for --diff alone."""
     direct = _SOURCE_DISPLAY_NAMES.get(source)
     if direct is not None:
         return direct
@@ -3286,7 +3291,7 @@ def _derive_required_source_limitation(obs: SourceObservation, req: "SourceRequi
             # scope stays whatever the caller passed (None if omitted,
             # rendering as the generic "item" default) -- unlike the
             # plain-absence branch below, nothing here forces a "dump"
-            # default: none of today's six commands' counterpart_source
+            # default: none of today's recon commands' counterpart_source
             # call sites rely on it (all three pass an explicit entity
             # scope, e.g. threads.py's scope="thread").
             limitation = CoverageLimitation(code=req.absent_code, source=obs.name,
