@@ -2,7 +2,7 @@
 report_facts.py, report_legacy.py, report_record.py, report_console.py) --
 everything that turns a hand-built `InjectionReport` (2A's canonical
 domain model, dumpex.hunt.injection.domain) into the legacy v1.1 dict, the
-current-schema (v2.12) `HunterRecord`, and the verdict-first console.
+current-schema (v2.13) `HunterRecord`, and the verdict-first console.
 
 Distinct from its neighbours: tests/hunt/test_injection_domain.py covers
 the domain model's OWN construction-time contracts (immutability, poison-

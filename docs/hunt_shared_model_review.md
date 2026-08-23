@@ -5,7 +5,8 @@
 CS Beacon, and YARA have all since migrated, and #12 (the cleanup issue
 this document told each of them to re-read before starting) is the one
 closing it out. `CURRENT_SCHEMA` has since moved past the v2.10 this
-review was planned against (now v2.12; see `dumpex/schemas/__init__.py`).
+review was planned against (now v2.13, after issue #43's own v2.12 →
+v2.13 cutover; see `dumpex/schemas/__init__.py`).
 This document is kept as a **historical audit trail** of the pilot review
 that shaped every later hunter's migration, not a live reference or
 roadmap — §1–§4's architectural record (shared presentation primitives,

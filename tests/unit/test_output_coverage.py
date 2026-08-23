@@ -1522,10 +1522,9 @@ def test_coverage_report_normalizes_bare_string_status():
 
 
 # ── _display_name: dotted entity-namespaced source names (Phase C, PR2) ──
-# Introduced for a future comparison command's "baseline.modules"/
-# "target.modules"-style source names -- none of today's six recon
-# commands' source names contain a literal ".", so this is a pure
-# extension for them.
+# Used by --diff's own "baseline.modules"/"target.modules"-style source
+# names -- none of the seven single-dump recon commands' source names
+# contain a literal ".", so this is a pure extension for --diff alone.
 
 def test_display_name_bare_source_unchanged():
     assert _display_name("modules") == "ModuleListStream"

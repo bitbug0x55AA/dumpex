@@ -12,8 +12,10 @@ encoded/obfuscated payloads.
 
 ## What it does
 
-- **Recon** — inspect system information, PID, PEB, modules, threads, and
-  captured memory regions.
+- **Recon** — inspect system information (`--sysinfo`), consolidated process
+  identity and imports (`--process`), captured handle descriptors
+  (`--handles`), dump evidence and analysis-capability coverage
+  (`--profile`), modules, threads, and captured memory regions.
 - **TTP hunting** — run focused or complete hunts with explicit evidence,
   confidence, verdict, and coverage semantics.
 - **Alert triage** — build a report around a thread ID, address, or string.
@@ -66,8 +68,18 @@ The install exposes both `dumpex` and `python -m dumpex` entry points.
 ## Quick start
 
 ```bash
-# Identify the process and capture environment
+# Identify the dump and capture environment
 dumpex sample.dmp --sysinfo
+
+# Consolidated process identity, IAT, and identity verification
+dumpex sample.dmp --process
+dumpex sample.dmp --process --verbose
+
+# Captured handle descriptors (folded by default; --verbose shows all)
+dumpex sample.dmp --handles --verbose
+
+# Dump evidence and analysis-capability coverage
+dumpex sample.dmp --profile
 
 # Review memory, modules, and threads
 dumpex sample.dmp --list

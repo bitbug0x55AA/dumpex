@@ -304,7 +304,7 @@ basenames.
 ## Hunt result semantics (v1.1 field names — historical)
 
 Each hunter reported its findings and decision fields inside the v1.1
-`hunt` object using the field names below. Under the current v2.12
+`hunt` object using the field names below. Under the current v2.13
 contract these same concepts live on `HunterRecord` — see "Hunt records"
 below for the `status`/`coverage.status`/`verdict_level`/`confidence`
 mapping `--hunt` now uses. The important decision fields were:
@@ -341,7 +341,7 @@ still validates each hunter's internal result dict (all seven hunters, both
 typical and edge-case verdicts) against this file on every test run,
 including the negative cases it must reject — this is legacy-compatibility
 coverage for the v1.1 shape itself, independent of the CLI's own
-`--hunt --json` output, which is now v2.12 (see "Hunt records" below).
+`--hunt --json` output, which is now v2.13 (see "Hunt records" below).
 
 Each entry under `hunt` is validated as one of three shapes: `findingHunterResult`
 (injection, hollowing, stomping, pipe, cs-beacon — and any future/renamed
@@ -366,14 +366,14 @@ tool validates its own output — only the test suite and external `--json`
 consumers do), so none of them are collected into the frozen executable.
 They are instead uploaded as separate `dumpex-output-v*.schema.json`
 files alongside `dumpex.exe` in the release ZIP — every version currently
-packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`, `v2.10`, `v2.11`, `v2.12`), the same
+packaged (`v1.1`, `v2.0`, `v2.1`, `v2.2`, `v2.3`, `v2.4`, `v2.5`, `v2.6`, `v2.7`, `v2.8`, `v2.9`, `v2.10`, `v2.11`, `v2.12`, `v2.13`), the same
 set `pip install dumpex` already ships (see "Reproducing a run" below for
 how an installed package reaches these via `importlib.resources`) — so an
 EXE-only install (no `pip install dumpex`, no source checkout) still has
 a way to get the schema for whatever output it's holding. Current CLI
 output (from any command, including `--hunt`) always validates against
-`dumpex-output-v2.12.schema.json`, the current contract — this section's
-own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.11` are
+`dumpex-output-v2.13.schema.json`, the current contract — this section's
+own subject, `dumpex-output-v1.1.schema.json`, and `v2.0`–`v2.12` are
 shipped only to validate output produced by an older dumpex version, not
 anything a current install can produce.
 
@@ -555,9 +555,9 @@ version bump, per the versioning rule above.
 `result.data.records` is always an array of one canonical record type per
 `kind` (`memory_regions` → `MemoryRegionRecord`, `modules` →
 `ModuleRecord`, `threads` → `ThreadRecord`, `sysinfo` → `SysInfoRecord`,
-`pid` → `PidRecord`, `peb` → `PebRecord`, `hunt` → `HunterRecord`) — a
-single-record result (`sysinfo`/`pid`/`peb`) is still a one-element array,
-not a bare object,
+`process` → `ProcessRecord`, `handles` → `HandleRecord`, `profile` →
+`ProfileRecord`, `hunt` → `HunterRecord`) — a single-record result
+(`sysinfo`/`process`/`profile`) is still a one-element array, not a bare object,
 so a consumer never needs to special-case array-vs-object by `kind`. Each
 record type is fully typed per `kind` in the JSON Schema itself
 (`additionalProperties: false`, every field's exact type, hex-address
@@ -1018,6 +1018,160 @@ coverage limitation, and validated hits found but not retained raise
 targets" below). `dumpex-output-v2.10.schema.json` stays byte-frozen (its
 own `huntPeHeaderHit` rejects these three properties) and remains
 shipped/installable for validating output produced before this change.
+
+### Process, handle, and profile records (v2.13)
+
+`schema_version 2.13` (issue #43) is the atomic cutover: `--pid`/`--peb`
+and their record types are removed with no hidden alias, and
+`result.kind` gains three new values in their place — `"process"`,
+`"handles"`, and `"profile"` — each with its own record type. The
+"Verbose recon output" section of
+[docs/CLI_REFERENCE.md](CLI_REFERENCE.md#verbose-recon-output) documents
+the console-only projection layered on top of the process/handles shapes
+below (#98's handle folding and Identity Verification block, #102's
+Access-mask decoding); none of that projection changes any field
+described here — `--verbose` never changes `result.data.records`,
+`coverage`, or the exit code for either command.
+
+#### Process records (`result.kind == "process"`)
+
+`--process` (replacing `--pid`/`--peb`) always returns exactly one
+`processRecord`, even when every field is null — there is no "zero
+records" state the way `--modules`/`--threads` have; a defensible
+identity picture either exists (however partial) or the whole result is
+`not_evaluated`. See
+[docs/recon_process_sysinfo_handles_contract.md](recon_process_sysinfo_handles_contract.md)
+for the full contract this record implements.
+
+| Field | Type | Notes |
+|---|---|---|
+| `process_name` | string or null | |
+| `pid` | integer or null | |
+| `process_path` | string or null | |
+| `command_line` | string or null | |
+| `process_start_utc` | string or null | |
+| `image_base_address` | hexAddress or null | |
+| `iat` | object | Always an object, never null — see "IAT metadata" below. |
+| `identity_evidence` | object | The Identity Verification/Provenance block's underlying data — selected path/name/source, per-source claims, and a `diagnostics` array of `processDiagnosticRecord` (see below). Console-only presentation (`[OK]`/`[!!]`/`[--]`) is #98's own projection over this same object, under `--verbose`. |
+| `peb_extended` | object or null | Present only under `--verbose` — the fields the retired `--peb` command used to print. The KEY's presence depends only on the flag, never on the data. |
+
+**IAT metadata** (`iat`): `table_present`/`import_directory_present` are
+each a genuine three-state `true`/`false`/`null` — `null` means dumpex
+could not determine presence at all, distinct from a confirmed `false`.
+`table_va`/`table_size` and `import_directory_va`/`import_directory_size`
+are null unless their own `*_present` is `true`. `entries` is an
+`entry_count`-length array of import entries in walk order:
+
+| Field | Type | Notes |
+|---|---|---|
+| `dll` | string or null | |
+| `import_by` | `"name"` \| `"ordinal"` | |
+| `symbol` | string or null | Set only when `import_by == "name"`. |
+| `ordinal` | integer or null | Set only when `import_by == "ordinal"` — always present in that case (decoded directly from the thunk, never a failed read). |
+| `iat_slot_va` | hexAddress or null | Where the import pointer is stored. |
+| `resolved_target_va` | hexAddress or null | The pointer value captured at that slot. |
+| `slot_in_bounds` | bool or null | `false` flags a slot outside the recorded import directory bounds — an observation about the dump's directory framing, never an IAT-hook verdict. |
+
+`diagnostics` (on both `identity_evidence` and `iat`) is a
+`processDiagnosticRecord` array — `{"code", "severity", "message",
+"affected_count", "details"}`, `severity` always `"info"`/`"warning"`,
+never a verdict. `code` is closed to seven frozen values
+(`PROCESS_MODULE_BASE_UNMATCHED`, `PROCESS_MODULE_BASE_CONFLICT`,
+`PROCESS_MODULE_NAME_AMBIGUOUS`, `PROCESS_MODULE_IDENTITY_MISMATCH`,
+`PROCESS_PATH_SOURCE_FALLBACK`, `IAT_BOUNDS_CHECK_UNAVAILABLE`,
+`IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS`), each with its own closed `details`
+key set — see
+[`dumpex/output/records.py`](../dumpex/output/records.py)'s
+`_PROCESS_DIAGNOSTIC_DETAILS_SCHEMA` for the exact per-code shapes.
+
+#### Handle records (`result.kind == "handles"`)
+
+`--handles` returns one `handleRecord` per `HandleDataStream` descriptor
+whose `handle` value is usable (the one normalization failure that
+discards a descriptor entirely); every other field degrades to `null` in
+place rather than dropping the record. See
+[docs/recon_process_sysinfo_handles_contract.md](recon_process_sysinfo_handles_contract.md)
+§5 for the full contract.
+
+| Field | Type | Notes |
+|---|---|---|
+| `handle` | hexAddress | Never null — the record's only identity and sort key. |
+| `type_name` | string or null | |
+| `type_name_status` | `"ok"` \| `"unnamed"` \| `"unreadable"` | Independent of `object_name_status` — a value is non-null if and only if its own status is `"ok"`. |
+| `object_name` | string or null | |
+| `object_name_status` | `"ok"` \| `"unnamed"` \| `"unreadable"` | `"unnamed"`: the descriptor positively recorded no name (nothing lost). `"unreadable"`: a name should have been there and the bounded read/decode failed (evidence lost, and reported as a coverage limitation). |
+| `attributes` | integer or null | Raw, undecoded. |
+| `granted_access` | integer or null | Raw, undecoded mask — #102's per-row `ReadData`/`FileGenericRead`/etc. decoding is a **console/`--txt`-only presentation**, computed from this same field plus `type_name`; the wire value never gains a derived field, and stays byte-identical whether or not `--verbose` was given. |
+| `handle_count` | integer or null | |
+| `pointer_count` | integer or null | |
+
+`--verbose` changes only what the console/`--txt` renderer **prints**
+(every folded low-context row, per #98's default folding, plus #102's
+per-row Access decode) — `result.data.records` is always the complete,
+lossless set regardless of `--verbose`.
+
+#### Profile records (`result.kind == "profile"`)
+
+`--profile` (issue #95) always returns exactly one `profileRecord` when
+the dump has a directory table dumpex could read, or zero records
+(`coverage.status: "not_evaluated"`, exit `4`) when it doesn't. It
+reports two independent axes — the dump's own stream inventory, and a
+frozen analysis-capability map — and carries no verdict, confidence, or
+ATT&CK semantics anywhere in its shape. See
+[docs/recon_profile_contract.md](recon_profile_contract.md) for the full
+contract, and [docs/CLI_REFERENCE.md](CLI_REFERENCE.md#--profile) for a
+worked console/JSON example.
+
+| Field | Type | Notes |
+|---|---|---|
+| `architecture` | string or null | e.g. `"AMD64"`; null when `SystemInfoStream` is absent. |
+| `raw_flags` | integer or null | The header's own 64-bit `MINIDUMP_TYPE` union value, verbatim. |
+| `recognized_flags` | array of string | `MINIDUMP_TYPE` member names set in `raw_flags`, in declaration order (not alphabetical). Always `[]` when `raw_flags` is null. |
+| `unrecognized_flag_bits` | integer or null | Bits set in `raw_flags` no known `MINIDUMP_TYPE` member covers; `0` when every set bit is recognized. |
+| `memory_capture` | object | `{"full_memory_flag_set", "memory64_list_present", "memory_list_present", "captured_segment_count", "captured_bytes_total"}` — `full_memory_flag_set` (from the header flags alone) and the observed-stream fields (from the directory table/parsed segments alone) are never derived from each other and can legitimately disagree; a genuinely `MiniDumpNormal` dump can still carry a real, positive `captured_segment_count`. |
+| `streams` | array | One `profileStreamEntry` per row of the dump's own `MINIDUMP_DIRECTORY` table, in directory order (never sorted/deduplicated) — see "Stream entries" below. |
+| `capabilities` | array | Exactly six `profileCapabilityEntry` objects, in a fixed registry order — see "Capabilities" below. |
+
+**Stream entries** (`streams[]`):
+`{"directory_index", "stream_type_id", "stream_type_name",
+"parser_state", "record_count", "detail"}`. `stream_type_id` is always
+present, even for a numeric type this build's `minidump` library has
+never heard of; `stream_type_name` is `null` exactly when the id is
+unrecognized — a separate axis from `parser_state`, which is one of five
+states:
+
+| `parser_state` | Meaning | `record_count` |
+|---|---|---|
+| `parsed` | Present; dumpex parsed it (a real collection with ≥1 item, or a singular non-collection stream). | A real count, or `null` for a singular stream. |
+| `present_empty` | Present; dumpex parsed it and verified zero items. | Always `0`. |
+| `unparsed` | Present; dumpex has no parser registered for this stream type (covers every recognized-but-unimplemented type and every unrecognized numeric type alike). | `null`. |
+| `failed` | Present; dumpex attempted to parse it and the attempt raised. | `null` — `detail` carries the parser's error text. |
+| `indeterminate` | ≥2 directory entries share this same stream type, and `open_dump()`'s single per-type slot cannot be attributed back to any one of them. | `null` — `detail` names the conflicting entries. |
+
+**Capabilities** (`capabilities[]`): the frozen, ordered six-entry
+registry — `memory_region_analysis`, `module_analysis`,
+`injection_artifact_analysis`, `thread_analysis`, `handle_analysis`,
+`injector_handle_assessment`
+([`dumpex/output/records.py`](../dumpex/output/records.py)'s
+`CAPABILITY_REGISTRY`). Each entry is `{"capability_id", "status",
+"required_source_groups", "required_sources", "optional_sources",
+"limitations"}` — `status` is `"available"` / `"limited"` /
+`"unavailable"`, derived deterministically from whether each required
+OR-group has a usable member. `limitations[]` entries are `{"code",
+"source", "detail"}`, `code` one of eleven closed values distinguishing
+an absent/failed/ambiguous **required** source, an unsatisfied member of
+a required OR-**group** whose sibling already satisfies it, a purely
+**optional** source gap, or a **truncated** (present but short-read)
+source — never conflated with `dumpex.output.coverage`'s command-level
+`coverage.limitations` (a different axis: whether `--profile` itself
+completed, not whether one downstream capability has its evidence).
+
+A capability being `unavailable` is a fact about the dump's evidence,
+never a verdict — and is independent of `--profile`'s own command-level
+`coverage.status`: a small, cleanly-captured dump can be `--profile`
+**complete** (the command read everything it needed) while several
+capabilities are `unavailable` (the dump itself never captured what
+those capabilities need).
 
 ### Coverage limitations and skipped scan targets
 

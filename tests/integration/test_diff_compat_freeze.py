@@ -1,6 +1,6 @@
 """
 Compatibility-freeze suite for `--diff`, the two-dump counterpart to
-tests/integration/test_compat_freeze.py's six single-dump commands.
+tests/integration/test_compat_freeze.py's seven single-dump commands.
 
 Every scenario runs the real `cli.main()` end to end (two FakeMF-backed
 dumps opened via a PATH-AWARE `open_dump` fake -- unlike every other
@@ -24,9 +24,10 @@ Two buckets, per Phase D's plan:
     deliberately-changed behavior, not frozen from old output -- each
     scenario's comment says why.
 
-FAILED is genuinely reachable for --diff (unlike the six single-dump
-commands, which never wrap their stream reads in try/except -- see
-test_compat_freeze.py's own module docstring) because comparing two
+FAILED is genuinely reachable for --diff, same as it now is for
+--sysinfo/--handles/--profile (unlike --list/--modules/--threads, which
+never wrap their own single primary stream read in try/except -- see
+dumpex.output.coverage.SourceState's own comment) because comparing two
 independently-read dumps means one side's read can raise without the
 other side being at fault at all.
 """

@@ -4122,10 +4122,17 @@ excuses anything in §0–§8.
 
 ## Appendix B — sources read (non-normative)
 
-Direct reads behind the claims above, so each can be re-checked:
+Direct reads behind the claims above, so each can be re-checked. This
+list was compiled before §7's v2.13 cutover (issue #43) and was not
+revised afterward -- several paths/symbols below (`dumpex/commands/
+peb.py`, `PidRecord`/`PebRecord`, `dumpex-output-v2.12.schema.json`) name
+things v2.13 removed or renamed; treat this appendix as a historical
+citation trail for how the claims above were originally verified, not a
+current file/symbol index.
 
-- `dumpex/output/coverage.py` — `SourceState` (incl. the "FAILED is
-  currently N/A for all six recon commands" note), `observe_source()`,
+- `dumpex/output/coverage.py` — `SourceState` (incl. the note on which
+  sources FAILED is/isn't reachable for -- see that enum's own comment
+  for the current, post-v2.13 list), `observe_source()`,
   `_CODE_SPECS`/`_CodeSpec` (`absent_capable`/`group_capable`/
   `caller_buildable`/`allowed_fields`), `_SOURCE_DISPLAY_NAMES`,
   `_render_source_failed()`, `_render_budget_clause()`,

@@ -230,6 +230,73 @@ DLL path — so a hostile name cannot forge dumpex's own output lines,
 clear the terminal, or visually reorder itself. `--json` keeps the exact
 decoded bytes, which is where evidence is read byte-for-byte.
 
+## Changed: Recon cut over to `--process`/`--handles`/`--profile` and schema v2.13 (breaking)
+
+One atomic release ([issue #43](https://github.com/bitbug0x55AA/dumpex/issues/43))
+retires `--pid` and `--peb` and exposes `--process`, `--handles`, and
+`--profile` in their place. There is no hidden alias between the old and
+new flags — a script still passing `--pid`/`--peb` now gets an argument
+error, not silently different output. `--process` replaces both: it is
+the consolidated process identity (PID, path, command line, start time,
+image base, IAT) that `--pid`/`--peb` used to split across two commands,
+plus the [Identity Verification](docs/CLI_REFERENCE.md#verbose-recon-output)
+block. `--handles` and `--profile` (below) are new.
+
+`meta.schema_version` moves from `"2.12"` to `"2.13"`. The new schema is a
+copy — `dumpex-output-v2.12.schema.json` is untouched and still validates
+historical `"pid"`/`"peb"`-kind documents; v2.13 rejects both kinds
+outright, and is mechanically distinguishable by `schema_version` alone.
+v2.13 adds closed record definitions for `result.kind == "process"`,
+`"handles"`, and `"profile"`, and updates `sysInfoRecord` to a reduced
+shape that adds environment evidence (see `--sysinfo`'s own entries
+below). Every other v2.12 result kind, and all hunt/report/coverage/action
+constraints, are unchanged in v2.13.
+
+All twelve commands now route through the same `0`/`3`/`4` coverage-derived
+exit-code contract: `0` for complete coverage, `3` for partial, `4` when
+the one stream a command needed is entirely absent. `--profile` follows
+its own version of that rule — see below.
+
+## Added: `--profile` describes dump evidence and analysis-capability coverage
+
+`--profile` ([issue #95](https://github.com/bitbug0x55AA/dumpex/issues/95))
+answers a question the other recon commands don't: not "what did the
+process do", but "what can this dump actually support analyzing, and
+why". It reports two things, kept structurally separate:
+
+- **The dump's own directory table** — every `MINIDUMP_DIRECTORY` entry,
+  in directory order, each carrying its raw numeric stream-type ID (kept
+  even when this build's `minidump` library doesn't recognize it — an
+  unrecognized type is a row of its own, never dropped) and a
+  `parser_state` of `parsed` / `present_empty` / `unparsed` (a real
+  stream dumpex has no parser registered for) / `failed` (present, and
+  the parse attempt raised) / `indeterminate` (two or more directory
+  entries share the same stream type, so the surviving parsed-or-failed
+  state can't be attributed to any one of them with confidence).
+  Duplicate stream types are reported `indeterminate` rather than
+  silently picking one copy.
+- **The analysis-capability map** — a frozen, ordered registry of what
+  downstream recon/hunt capabilities this dump can support (e.g.
+  `handle_analysis`, `thread_analysis`), each `available`, `limited`, or
+  `unavailable` from its own required/optional source rules. A capability
+  reads `unavailable` because required evidence is missing, never because
+  `--profile` looked and found nothing suspicious — this is an evidence
+  boundary, not a verdict, and it carries no score, confidence, or
+  ATT&CK mapping.
+
+Command-level coverage and per-capability availability are deliberately
+independent: a small, cleanly-captured dump can be `--profile` complete
+(the command read everything it needed) while several capabilities are
+`unavailable` (the dump itself never captured what those capabilities
+need) — a successfully profiled sparse dump can still exit `0`.
+`MiniDumpWithFullMemory` is never inferred from `Memory64ListStream`
+alone; the raw flag and the observed captured-segment count are reported
+as separate facts so the two can legitimately disagree.
+
+`--profile` performs no deep parsing, no hunter execution, and no
+full-memory scan — it is a bounded, metadata-level pass over the same
+evidence the other recon commands already collect.
+
 ## Fixed: `--sysinfo`'s `Dump Time` was a 1970 date on every dump
 
 `--sysinfo`'s `Dump Time` (and `dump_time_utc` in `--json`/`--csv`)

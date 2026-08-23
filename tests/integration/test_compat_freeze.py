@@ -1,11 +1,24 @@
 """
 Table-driven compatibility-freeze suite for four of dumpex's recon
-commands (--list/--modules/--threads/--sysinfo). `--pid`/`--peb` were
-removed in issue #43's atomic v2.13 cutover (see
+commands (--list/--modules/--threads/--sysinfo), plus a second table
+(RECON_V213_SCENARIOS, near the bottom of this file) doing the same
+full-console/full-JSON freeze for --process/--handles/--profile: complete/
+partial/not_evaluated coverage for all three; default vs. --verbose;
+#98's handle folding and Identity Verification block (agreement,
+conflict, ambiguous-candidate, and unavailable-checks states); #102's
+Access-mask decode over both a decodable and a genuinely unreadable
+(evidence-lost) object name; the \\KnownDlls note; named/ordinal/
+unavailable verbose IAT entries; and --profile's full stream-state
+vocabulary (parsed/present_empty/unparsed/failed/indeterminate, including
+an unrecognized numeric stream type) with a genuine available/limited/
+unavailable capability mix. `--pid`/`--peb`
+were removed in issue #43's atomic v2.13 cutover (see
 docs/recon_process_sysinfo_handles_contract.md §7.2) -- their golden
-scenarios were removed from this suite in the same change, and #44 owns
-adding fresh compatibility fixtures for their replacements (--process/
---handles/--profile).
+scenarios were removed from this suite in the same change. The three
+replacements also get broader CLI-level compatibility coverage (every
+exit code, --txt, --redact-paths, more source-state combinations) in
+tests/integration/test_cli_v2_routing.py, which this second table does
+not attempt to duplicate.
 
 For every legal source-state scenario (absent / present_empty / present --
 SourceState.FAILED is explicitly N/A for all four of these commands, see
@@ -72,7 +85,8 @@ DUMP_SIZE = len(DUMP_BYTES)
 _FIXED_RUNTIME_KEYS = {"python_version", "minidump_version", "yara_version", "pyyaml_version"}
 
 _CMD_LABEL = {"--list": "list", "--modules": "modules", "--threads": "threads",
-              "--sysinfo": "sysinfo"}
+              "--sysinfo": "sysinfo", "--process": "process", "--handles": "handles",
+              "--profile": "profile"}
 _CMD_OPTIONS = {"--list": {"verbose": False, "filter": None}}   # every other command: {"verbose": False}
 
 
@@ -970,3 +984,315 @@ def test_compat_freeze_corrupted_dump_exits_1_writes_no_structured_output(
     assert f"[!] Could not parse {dump_path} as a minidump file:" in console
     assert ("The file may be corrupted, truncated, or not a Windows minidump "
             "(.dmp) at all.") in console
+
+
+# ── --process/--handles/--profile compatibility-freeze suite ──────────────
+# The three v2.13 replacements for --pid/--peb (issue #43) get their own
+# golden table here, at the same full-console/full-JSON rigor as the four
+# commands above -- this file's own top-of-module docstring used to say
+# their compatibility fixtures were still owed to #44; this closes that gap
+# for the states that most exercise table layout, folding counts, and help
+# text: complete/partial/not_evaluated coverage for all three commands;
+# default vs. --verbose console projections; #98's handle folding, #98's
+# Identity Verification block (agreement, conflict, and unavailable-checks
+# states); #102's Access-mask decode; the \KnownDlls explanatory note;
+# named/ordinal/unavailable verbose IAT entries; and #95's full stream-
+# state vocabulary (parsed/present_empty/unparsed/failed/indeterminate,
+# including an unrecognized numeric type) with a genuine available/
+# limited/unavailable capability mix; and, for --handles, a genuinely
+# unreadable (not merely unnamed) object name driving partial coverage.
+# Every state above is exercised through the exact same real mf-level
+# fixture builders tests/unit/test_process_cmd.py,
+# test_process_identity_snapshot.py, and test_handles_cmd.py already use
+# at the unit level, reused here rather than re-derived, so this suite's
+# job is only to freeze the exact rendered text they produce, not to
+# re-establish correctness from scratch.
+#
+# Reuses this module's own _run()/_normalize_console()/_normalize_doc()/
+# _FrozenDateTimeModule harness. Unlike SCENARIOS above, each entry's
+# `result` dict already includes `coverage.sources`/`coverage.limitations`
+# verbatim (captured from a real run, not hand-derived) -- there is no
+# separate _COVERAGE_SOURCES_AND_LIMITATIONS split to keep in sync.
+
+from minidump.constants import MINIDUMP_STREAM_TYPE as _MINIDUMP_STREAM_TYPE
+from tests.fixtures.fakes import Handle as _Handle, build_pe_header as _build_pe_header, \
+    TEXT_SECTION_RX as _TEXT_SECTION_RX
+from tests.unit.test_process_cmd import (
+    _complete_mf as _process_complete_mf, _mf as _process_mf_builder,
+    _patch_data_directories as _process_patch_data_directories,
+    _descriptor as _process_descriptor, _TERMINATOR as _PROCESS_IAT_TERMINATOR,
+    _cstr as _process_cstr, _pad as _process_pad, _thunk64 as _process_thunk64,
+    IMAGE_BASE as _PROCESS_IMAGE_BASE,
+)
+from tests.unit.test_handles_cmd import _mf_with as _handles_mf_with, BAD_RVA as _HANDLES_BAD_RVA
+
+
+def _process_not_evaluated(): return FakeMF()
+
+def _process_complete(): return _process_complete_mf()
+
+def _handles_absent(): return FakeMF()
+
+def _handles_present_empty():
+    mf = FakeMF(); mf.handles = FakeStream([], "handles"); return mf
+
+def _handles_fold():
+    # Two anonymous Event handles (object_name RVA genuinely 0, not a
+    # failed read) plus one named File -- goes through the real byte-level
+    # parser (test_handles_cmd.py's own _mf_with), not the simplified
+    # Handle() fake: a bare `Handle(h, t, None)` has no ObjectNameRva at
+    # all, which collect_handles() reads as "unreadable" (evidence lost),
+    # not "unnamed" (positively no name) -- see dumpex/commands/handles.py
+    # §5.2.1. Only the real parser distinguishes the two, and only
+    # "unnamed" rows are foldable.
+    return _handles_mf_with([
+        {"handle": 0x10, "type_name": "Event", "object_name": None},
+        {"handle": 0x11, "type_name": "Event", "object_name": None},
+        {"handle": 0x20, "type_name": "File",
+         "object_name": r"\Device\HarddiskVolume1\notes.txt", "granted_access": 0x0012019F},
+    ])
+
+def _handles_known_dlls():
+    mf = FakeMF()
+    mf.handles = FakeStream([_Handle(0x30, "Directory", r"\KnownDlls")], "handles")
+    return mf
+
+def _profile_not_evaluated(): return FakeMF()
+
+class _FakeMinidumpHeader:
+    """Minimal stand-in for the dump's own header -- only `.Flags`
+    (MINIDUMP_TYPE), the one field collect_profile() reads from it."""
+    def __init__(self, flags=0):
+        self.Flags = flags
+
+def _profile_complete_sparse():
+    mf = FakeMF()
+    mf.header = _FakeMinidumpHeader(0)
+    mf.sysinfo = SysInfo()
+    return mf
+
+def _process_partial():
+    mf = FakeMF()
+    mf.misc_info = MiscInfo(process_id=100, process_create_time=1786670105)
+    mf.peb = Peb(None, r"C:\test.exe")   # image_base_address=None, command_line=None
+    return mf
+
+def _process_unavailable_checks():
+    # PEB/MiscInfo present with a structurally valid, import-free image at
+    # the PEB base, but ModuleListStream entirely absent -- every
+    # ModuleList-dependent Identity Verification check must read "[--]
+    # could not be evaluated", never an agreement or a conflict.
+    misc = MiscInfo(process_id=4242, process_create_time=1786670105)
+    peb = Peb(_PROCESS_IMAGE_BASE, r"C:\Samples\malware.exe",
+              command_line=r"C:\Samples\malware.exe")
+    header = _build_pe_header([_TEXT_SECTION_RX], image_base=_PROCESS_IMAGE_BASE, size_of_image=0x6000)
+    header = _process_patch_data_directories(header, {1: (0, 0), 12: (0, 0)})   # no imports
+    memory = {_PROCESS_IMAGE_BASE: header}
+    return _process_mf_builder(misc_info=misc, peb=peb, memory=memory)   # modules=None -> absent
+
+def _process_conflict_and_iat():
+    # A module registered at a DIFFERENT base than the PEB's own image
+    # base (an identity conflict, [!!]) plus a two-entry IAT: one ordinal
+    # import and one OriginalFirstThunk==0 "unavailable" import -- the two
+    # verbose-only IAT entry shapes not otherwise exercised in this suite.
+    misc = MiscInfo(process_id=4242, process_create_time=1786670105)
+    peb = Peb(_PROCESS_IMAGE_BASE, r"C:\Samples\malware.exe",
+              command_line=r"C:\Samples\malware.exe")
+    other_base = 0x00007ff700000000
+    conflicting_mod = Module(other_base, 0x6000, r"C:\Windows\Temp\malware.exe")
+
+    import_dir_rva, dll_name_rva1, int_rva1 = 0x2000, 0x4000, 0x5000
+    first_thunk_rva1, first_thunk_rva2 = 0x3000, 0x3010
+
+    header = _build_pe_header([_TEXT_SECTION_RX], image_base=_PROCESS_IMAGE_BASE, size_of_image=0x7000)
+    header = _process_patch_data_directories(header, {1: (import_dir_rva, 60), 12: (0x3000, 32)})
+
+    descr_ordinal = _process_descriptor(int_rva1, dll_name_rva1, first_thunk_rva1)
+    descr_unavailable = _process_descriptor(0, 0, first_thunk_rva2)   # OriginalFirstThunk == 0
+
+    memory = {
+        _PROCESS_IMAGE_BASE: header,
+        _PROCESS_IMAGE_BASE + import_dir_rva:
+            descr_ordinal + descr_unavailable + _PROCESS_IAT_TERMINATOR,
+        _PROCESS_IMAGE_BASE + dll_name_rva1: _process_pad(_process_cstr("ADVAPI32.dll")),
+        # IMAGE_ORDINAL_FLAG64 | ordinal 12 -- imported by ordinal, no name.
+        _PROCESS_IMAGE_BASE + int_rva1: _process_thunk64(0x8000000000000000 | 12) + _process_thunk64(0),
+        _PROCESS_IMAGE_BASE + first_thunk_rva1: _process_thunk64(0x00007ffb0000000C) + _process_thunk64(0),
+        _PROCESS_IMAGE_BASE + first_thunk_rva2: _process_thunk64(0x00007ffb00000099) + _process_thunk64(0),
+    }
+    return _process_mf_builder(misc_info=misc, peb=peb, modules=[conflicting_mod], memory=memory)
+
+
+class _ProfileDirLocation:
+    def __init__(self, rva=0, data_size=0):
+        self.Rva = rva
+        self.DataSize = data_size
+
+class _ProfileDirectory:
+    def __init__(self, stream_type, rva=0, data_size=0):
+        self.StreamType = stream_type
+        self.Location = _ProfileDirLocation(rva, data_size)
+
+def _profile_mixed():
+    # One dump exercising every stream-inventory state at once (parsed,
+    # present_empty, unparsed x2 -- a recognized-but-undispatched type and
+    # an unrecognized numeric type, failed, and a duplicate/indeterminate
+    # pair) plus a genuine mix of capability statuses (available, limited,
+    # unavailable) -- #95's own "every new profile state" surface in one
+    # coherent, plausible dump rather than eight near-identical scenarios.
+    mf = FakeMF()
+    mf.header = _FakeMinidumpHeader(0)
+    mf.directories = [
+        _ProfileDirectory(_MINIDUMP_STREAM_TYPE.SystemInfoStream),
+        _ProfileDirectory(_MINIDUMP_STREAM_TYPE.ThreadListStream),
+        _ProfileDirectory(_MINIDUMP_STREAM_TYPE.ModuleListStream),
+        _ProfileDirectory(_MINIDUMP_STREAM_TYPE.ModuleListStream),   # duplicate -> indeterminate
+        _ProfileDirectory(_MINIDUMP_STREAM_TYPE.FunctionTableStream),   # recognized, undispatched
+        _ProfileDirectory(9999),   # unrecognized numeric type
+        _ProfileDirectory(_MINIDUMP_STREAM_TYPE.HandleDataStream),
+        _ProfileDirectory(_MINIDUMP_STREAM_TYPE.MemoryInfoListStream),
+    ]
+    mf.sysinfo = SysInfo()
+    mf.threads = FakeStream([Thread(1, Ctx(0x1000))], "threads")   # thread_info absent -> limited
+    mf.handles = FakeStream([], "handles")   # present_empty -> handle capabilities available
+    mf._dumpex_stream_failures = {
+        _MINIDUMP_STREAM_TYPE.MemoryInfoListStream: "ValueError: layout drift",
+    }
+    return mf
+
+def _handles_partial():
+    # A descriptor whose ObjectNameRva points past the end of the captured
+    # stream body -- a genuinely UNREADABLE name (evidence lost), not
+    # merely unnamed -- drives object_name_status="unreadable" and the
+    # command's own partial coverage in one real, parser-level fixture.
+    return _handles_mf_with([{"handle": 0x10, "type_name": "File", "object_name": _HANDLES_BAD_RVA}])
+
+def _process_identity_ambiguous():
+    # Two modules share the process name, neither registered at the PEB's
+    # own image base -- module_claim.name_matched_candidate_ambiguous, the
+    # one identity state the rest of this table doesn't reach.
+    misc = MiscInfo(process_id=4242, process_create_time=1786670105)
+    peb = Peb(_PROCESS_IMAGE_BASE, r"C:\Samples\malware.exe",
+              command_line=r"C:\Samples\malware.exe")
+    mod1 = Module(0x00007ff700000000, 0x2000, r"C:\Windows\Temp\malware.exe")
+    mod2 = Module(0x00007ff800000000, 0x2000, r"C:\ProgramData\malware.exe")
+
+    header = _build_pe_header([_TEXT_SECTION_RX], image_base=_PROCESS_IMAGE_BASE, size_of_image=0x6000)
+    header = _process_patch_data_directories(header, {1: (0, 0), 12: (0, 0)})   # no imports
+    memory = {_PROCESS_IMAGE_BASE: header}
+    return _process_mf_builder(misc_info=misc, peb=peb, modules=[mod1, mod2], memory=memory)
+
+
+# (name, argv, mf_builder, exit_code, console, result) -- console excludes
+# the trailing "JSON written" line, appended by the test itself (same
+# convention as SCENARIOS above); result is the COMPLETE result dict
+# (coverage.sources/limitations included), captured from a real run.
+RECON_V213_SCENARIOS = [
+    (
+        'process_not_evaluated', ['--process'], _process_not_evaluated, 4,
+        '\n═══ PROCESS ═══\n  [~] no usable process identity evidence available (MiscInfo and the PEB supplied no usable PID, start time, path, command line, or image base)\n\n  Process Name           (unknown)\n  PID                    (unknown)\n  Path                   (unknown)\n  Command Line           (unknown)\n  Start Time (UTC)       (unknown)\n  Image Base             (unknown)\n\n  Import Address Table\n    (unavailable -- see coverage below)\n\n  Identity\n',
+        {'kind': 'process', 'execution_status': 'completed', 'coverage': {'status': 'not_evaluated', 'reasons': ['no usable process identity evidence available (MiscInfo and the PEB supplied no usable PID, start time, path, command line, or image base)'], 'sources': {'process_identity': {'state': 'absent', 'record_count': None, 'detail': None}, 'misc_info': {'state': 'absent', 'record_count': None, 'detail': None}, 'peb': {'state': 'absent', 'record_count': None, 'detail': None}, 'modules': {'state': 'absent', 'record_count': None, 'detail': None}, 'main_image': {'state': 'absent', 'record_count': None, 'detail': None}, 'iat': {'state': 'absent', 'record_count': None, 'detail': None}}, 'limitations': [{'code': 'PROCESS_SOURCES_ABSENT', 'source': 'process_identity', 'scope': 'dump', 'affected_count': None, 'unavailable_fields': [], 'available_fields': [], 'counterpart_source': None, 'related_sources': [], 'related_tids': [], 'thread_id': None, 'detail': None, 'targets': [], 'budget_limit': None, 'budget_consumed': None}]}, 'summary': {'count': 1}, 'data': {'records': [{'process_name': None, 'pid': None, 'process_path': None, 'command_line': None, 'process_start_utc': None, 'image_base_address': None, 'iat': {'table_present': None, 'table_va': None, 'table_size': None, 'import_directory_present': None, 'import_directory_va': None, 'import_directory_size': None, 'has_entries': False, 'dll_count': 0, 'entry_count': 0, 'entries': [], 'diagnostics': []}, 'identity_evidence': {'misc_info_claim': {'pid': None, 'process_create_time_utc': None, 'raw_pid': None, 'raw_process_create_time': None}, 'peb_claim': {'image_base_address': None, 'image_path': None, 'name': None, 'raw_image_base_address': None, 'raw_image_path': None, 'raw_command_line': None}, 'module_claim': {'match_state': 'unavailable', 'base_address': None, 'name': None, 'path': None, 'name_matched_candidate': None, 'name_matched_candidate_ambiguous': False}, 'main_image_pe': {'checked': False, 'valid': None, 'reason': None}, 'selected_path_source': None, 'diagnostics': []}}]}},
+    ),
+    (
+        'process_complete', ['--process'], _process_complete, 0,
+        '\n═══ PROCESS ═══\n\n  Process Name           malware.exe\n  PID                    4242 (0x1092)\n  Path                   C:\\Samples\\malware.exe\n  Command Line           "C:\\Samples\\malware.exe" -k\n  Start Time (UTC)       2026-08-14 01:15:05 UTC\n  Image Base             0x00007ff600010000\n\n  Import Address Table\n    1 import(s) across 1 DLL(s)\n\n  Identity\n',
+        {'kind': 'process', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'process_identity': {'state': 'present', 'record_count': 5, 'detail': None}, 'misc_info': {'state': 'present', 'record_count': 1, 'detail': None}, 'peb': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'present', 'record_count': 1, 'detail': None}, 'main_image': {'state': 'present', 'record_count': 1, 'detail': None}, 'iat': {'state': 'present', 'record_count': 1, 'detail': None}}, 'limitations': []}, 'summary': {'count': 1}, 'data': {'records': [{'process_name': 'malware.exe', 'pid': 4242, 'process_path': 'C:\\Samples\\malware.exe', 'command_line': '"C:\\Samples\\malware.exe" -k', 'process_start_utc': '2026-08-14 01:15:05 UTC', 'image_base_address': '0x00007ff600010000', 'iat': {'table_present': True, 'table_va': '0x00007ff600013000', 'table_size': 16, 'import_directory_present': True, 'import_directory_va': '0x00007ff600012000', 'import_directory_size': 40, 'has_entries': True, 'dll_count': 1, 'entry_count': 1, 'entries': [{'dll': 'KERNEL32.dll', 'import_by': 'name', 'symbol': 'CreateFileW', 'ordinal': None, 'iat_slot_va': '0x00007ff600013000', 'resolved_target_va': '0x00007ffb12345678', 'slot_in_bounds': True}], 'diagnostics': []}, 'identity_evidence': {'misc_info_claim': {'pid': 4242, 'process_create_time_utc': '2026-08-14 01:15:05 UTC', 'raw_pid': None, 'raw_process_create_time': None}, 'peb_claim': {'image_base_address': '0x00007ff600010000', 'image_path': 'C:\\Samples\\malware.exe', 'name': 'malware.exe', 'raw_image_base_address': None, 'raw_image_path': None, 'raw_command_line': None}, 'module_claim': {'match_state': 'resolved', 'base_address': '0x00007ff600010000', 'name': 'malware.exe', 'path': 'C:\\Samples\\malware.exe', 'name_matched_candidate': None, 'name_matched_candidate_ambiguous': False}, 'main_image_pe': {'checked': True, 'valid': True, 'reason': None}, 'selected_path_source': 'peb', 'diagnostics': []}}]}},
+    ),
+    (
+        'process_complete_verbose', ['--process', '--verbose'], _process_complete, 0,
+        '\n═══ PROCESS ═══\n\n  Process Name           malware.exe\n  PID                    4242 (0x1092)\n  Path                   C:\\Samples\\malware.exe\n  Command Line           "C:\\Samples\\malware.exe" -k\n  Start Time (UTC)       2026-08-14 01:15:05 UTC\n  Image Base             0x00007ff600010000\n\n  Import Address Table\n    1 import(s) across 1 DLL(s)\n\n    Each row reads IAT Slot VA -> Resolved Target VA.\n    The slot is the address where the import pointer is stored; the target is the\n    address stored in that slot in the captured process memory.\n\n    DLL                       Imported API                  IAT Slot VA           Resolved Target VA\n    KERNEL32.dll              CreateFileW                   0x00007ff600013000    0x00007ffb12345678\n\n  Identity\n\n  Identity Verification                            [--verbose only]\n    Selected path    C:\\Samples\\malware.exe\n    Selected name    malware.exe\n    Source           PEB (ProcessParameters.ImagePathName)\n    Image base       0x00007ff600010000 (source: PEB)\n\n    [OK] PEB image base is registered in ModuleList\n         0x00007ff600010000 -> malware.exe\n    [OK] PEB and ModuleList process names agree\n    [OK] a valid PE header was found at the PEB image base\n    [OK] no competing module shares this process name\n\n    Raw claims       PEB                              ModuleList\n    path             C:\\Samples\\malware.exe           C:\\Samples\\malware.exe\n    name             malware.exe                      malware.exe\n    image base       0x00007ff600010000               0x00007ff600010000 (resolved)\n\n  Extended PEB\n    PEB Address        0x0000000000000000\n    BeingDebugged      False\n    WindowTitle        (none)\n    DllPath            (none)\n    StandardInput      (unknown)\n    StandardOutput     (unknown)\n    StandardError      (unknown)\n',
+        {'kind': 'process', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'process_identity': {'state': 'present', 'record_count': 5, 'detail': None}, 'misc_info': {'state': 'present', 'record_count': 1, 'detail': None}, 'peb': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'present', 'record_count': 1, 'detail': None}, 'main_image': {'state': 'present', 'record_count': 1, 'detail': None}, 'iat': {'state': 'present', 'record_count': 1, 'detail': None}}, 'limitations': []}, 'summary': {'count': 1}, 'data': {'records': [{'process_name': 'malware.exe', 'pid': 4242, 'process_path': 'C:\\Samples\\malware.exe', 'command_line': '"C:\\Samples\\malware.exe" -k', 'process_start_utc': '2026-08-14 01:15:05 UTC', 'image_base_address': '0x00007ff600010000', 'iat': {'table_present': True, 'table_va': '0x00007ff600013000', 'table_size': 16, 'import_directory_present': True, 'import_directory_va': '0x00007ff600012000', 'import_directory_size': 40, 'has_entries': True, 'dll_count': 1, 'entry_count': 1, 'entries': [{'dll': 'KERNEL32.dll', 'import_by': 'name', 'symbol': 'CreateFileW', 'ordinal': None, 'iat_slot_va': '0x00007ff600013000', 'resolved_target_va': '0x00007ffb12345678', 'slot_in_bounds': True}], 'diagnostics': []}, 'identity_evidence': {'misc_info_claim': {'pid': 4242, 'process_create_time_utc': '2026-08-14 01:15:05 UTC', 'raw_pid': None, 'raw_process_create_time': None}, 'peb_claim': {'image_base_address': '0x00007ff600010000', 'image_path': 'C:\\Samples\\malware.exe', 'name': 'malware.exe', 'raw_image_base_address': None, 'raw_image_path': None, 'raw_command_line': None}, 'module_claim': {'match_state': 'resolved', 'base_address': '0x00007ff600010000', 'name': 'malware.exe', 'path': 'C:\\Samples\\malware.exe', 'name_matched_candidate': None, 'name_matched_candidate_ambiguous': False}, 'main_image_pe': {'checked': True, 'valid': True, 'reason': None}, 'selected_path_source': 'peb', 'diagnostics': []}, 'peb_extended': {'peb_address': '0x0000000000000000', 'being_debugged': False, 'window_title': None, 'dll_path': None, 'standard_input': None, 'standard_output': None, 'standard_error': None}}]}},
+    ),
+    (
+        'handles_absent', ['--handles'], _handles_absent, 4,
+        '\n═══ HANDLES ═══\n  HandleDataStream not present in this dump\n\n  [~] HandleDataStream not present in this dump (not captured with handle data)\n\n',
+        {'kind': 'handles', 'execution_status': 'completed', 'coverage': {'status': 'not_evaluated', 'reasons': ['HandleDataStream not present in this dump (not captured with handle data)'], 'sources': {'handles': {'state': 'absent', 'record_count': None, 'detail': None}, 'handle_records': {'state': 'absent', 'record_count': None, 'detail': None}}, 'limitations': [{'code': 'HANDLES_UNAVAILABLE', 'source': 'handle_records', 'scope': 'dump', 'affected_count': None, 'unavailable_fields': [], 'available_fields': [], 'counterpart_source': None, 'related_sources': [], 'related_tids': [], 'thread_id': None, 'detail': None, 'targets': [], 'budget_limit': None, 'budget_consumed': None}]}, 'summary': {'count': 0, 'by_type': {}}, 'data': {'records': []}},
+    ),
+    (
+        'handles_present_empty', ['--handles'], _handles_present_empty, 0,
+        '\n═══ HANDLES ═══\n  0 handle(s) captured\n\n',
+        {'kind': 'handles', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'handles': {'state': 'present_empty', 'record_count': 0, 'detail': None}, 'handle_records': {'state': 'present_empty', 'record_count': 0, 'detail': None}}, 'limitations': []}, 'summary': {'count': 0, 'by_type': {}}, 'data': {'records': []}},
+    ),
+    (
+        'handles_default_folds', ['--handles'], _handles_fold, 0,
+        "\n═══ HANDLES ═══\n  3 handle(s) captured\n  By type: Event 2, File 1\n\n  Handle              Type            Access      Cnt  Ptr  Object\n  0x0000000000000020  File            0x0012019f    1    1  \\Device\\HarddiskVolume1\\notes.txt\n      └─ Rights   FileGenericRead · FileGenericWrite\n  Rights decode each row's own Access mask against its recorded object type -- the same bit means\n  different things for a File, a Process and a Token. A long list splits into Type (rights that\n  object type defines) and Standard (the rights every type shares). They are an observation about\n  what the handle permitted, never evidence that it was used.\n\n  Aliases used\n    Each display name maps to one Windows SDK, WDK or native constant, and what that constant\n    contains depends on the object type it was read against.\n      File  FileGenericRead  = ReadData · ReadEa · ReadAttributes · ReadControl · Synchronize\n      File  FileGenericWrite = WriteData · AppendData · WriteEa · WriteAttributes · ReadControl ·\n                               Synchronize\n\n  2 anonymous handle(s) not shown (no object name recorded): Event 2\n  These rows are captured evidence and are complete in structured output -- use --verbose to show all.\n\n",
+        {'kind': 'handles', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'handles': {'state': 'present', 'record_count': 3, 'detail': None}, 'handle_records': {'state': 'present', 'record_count': 3, 'detail': None}}, 'limitations': []}, 'summary': {'count': 3, 'by_type': {'Event': 2, 'File': 1}}, 'data': {'records': [{'handle': '0x0000000000000010', 'type_name': 'Event', 'type_name_status': 'ok', 'object_name': None, 'object_name_status': 'unnamed', 'attributes': 0, 'granted_access': 0, 'handle_count': 1, 'pointer_count': 1}, {'handle': '0x0000000000000011', 'type_name': 'Event', 'type_name_status': 'ok', 'object_name': None, 'object_name_status': 'unnamed', 'attributes': 0, 'granted_access': 0, 'handle_count': 1, 'pointer_count': 1}, {'handle': '0x0000000000000020', 'type_name': 'File', 'type_name_status': 'ok', 'object_name': '\\Device\\HarddiskVolume1\\notes.txt', 'object_name_status': 'ok', 'attributes': 0, 'granted_access': 1180063, 'handle_count': 1, 'pointer_count': 1}]}},
+    ),
+    (
+        'handles_verbose_shows_all', ['--handles', '--verbose'], _handles_fold, 0,
+        "\n═══ HANDLES ═══\n  3 handle(s) captured\n  By type: Event 2, File 1\n\n  Handle              Type            Access      Cnt  Ptr  Object\n  0x0000000000000010  Event           0x00000000    1    1  (unnamed)\n      └─ Rights   (no rights)\n  0x0000000000000011  Event           0x00000000    1    1  (unnamed)\n      └─ Rights   (no rights)\n  0x0000000000000020  File            0x0012019f    1    1  \\Device\\HarddiskVolume1\\notes.txt\n      └─ Rights   FileGenericRead · FileGenericWrite\n  (unnamed) = the descriptor records no name; (unreadable) = a name was recorded but the bounded read failed\n  Rights decode each row's own Access mask against its recorded object type -- the same bit means\n  different things for a File, a Process and a Token. A long list splits into Type (rights that\n  object type defines) and Standard (the rights every type shares). They are an observation about\n  what the handle permitted, never evidence that it was used.\n\n  Aliases used\n    Each display name maps to one Windows SDK, WDK or native constant, and what that constant\n    contains depends on the object type it was read against.\n      File  FileGenericRead  = ReadData · ReadEa · ReadAttributes · ReadControl · Synchronize\n      File  FileGenericWrite = WriteData · AppendData · WriteEa · WriteAttributes · ReadControl ·\n                               Synchronize\n\n",
+        {'kind': 'handles', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'handles': {'state': 'present', 'record_count': 3, 'detail': None}, 'handle_records': {'state': 'present', 'record_count': 3, 'detail': None}}, 'limitations': []}, 'summary': {'count': 3, 'by_type': {'Event': 2, 'File': 1}}, 'data': {'records': [{'handle': '0x0000000000000010', 'type_name': 'Event', 'type_name_status': 'ok', 'object_name': None, 'object_name_status': 'unnamed', 'attributes': 0, 'granted_access': 0, 'handle_count': 1, 'pointer_count': 1}, {'handle': '0x0000000000000011', 'type_name': 'Event', 'type_name_status': 'ok', 'object_name': None, 'object_name_status': 'unnamed', 'attributes': 0, 'granted_access': 0, 'handle_count': 1, 'pointer_count': 1}, {'handle': '0x0000000000000020', 'type_name': 'File', 'type_name_status': 'ok', 'object_name': '\\Device\\HarddiskVolume1\\notes.txt', 'object_name_status': 'ok', 'attributes': 0, 'granted_access': 1180063, 'handle_count': 1, 'pointer_count': 1}]}},
+    ),
+    (
+        'handles_known_dlls', ['--handles', '--verbose'], _handles_known_dlls, 0,
+        "\n═══ HANDLES ═══\n  1 handle(s) captured\n  By type: Directory 1\n\n  Handle              Type            Access      Cnt  Ptr  Object\n  0x0000000000000030  Directory       0x0012019f    1    1  \\KnownDlls\n      └─ Type     Query · Traverse · CreateObject · CreateSubdirectory · UnknownBits(0x00000190)\n         Standard ReadControl · Synchronize\n  Rights decode each row's own Access mask against its recorded object type -- the same bit means\n  different things for a File, a Process and a Token. A long list splits into Type (rights that\n  object type defines) and Standard (the rights every type shares). They are an observation about\n  what the handle permitted, never evidence that it was used.\n\n  Object name notes\n    \\KnownDlls (Directory)\n      NT Object Manager directory of pre-mapped system DLL sections. This\n      descriptor records the directory name only -- the section objects inside\n      it are not captured by it.\n\n",
+        {'kind': 'handles', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'handles': {'state': 'present', 'record_count': 1, 'detail': None}, 'handle_records': {'state': 'present', 'record_count': 1, 'detail': None}}, 'limitations': []}, 'summary': {'count': 1, 'by_type': {'Directory': 1}}, 'data': {'records': [{'handle': '0x0000000000000030', 'type_name': 'Directory', 'type_name_status': 'ok', 'object_name': '\\KnownDlls', 'object_name_status': 'ok', 'attributes': None, 'granted_access': 1180063, 'handle_count': 1, 'pointer_count': 1}]}},
+    ),
+    (
+        'profile_not_evaluated', ['--profile'], _profile_not_evaluated, 4,
+        '\n═══ PROFILE ═══\n  no defensible capability profile could be constructed\n\n  [~] dump header/directory table could not be established; no defensible capability profile can be constructed\n\n',
+        {'kind': 'profile', 'execution_status': 'completed', 'coverage': {'status': 'not_evaluated', 'reasons': ['dump header/directory table could not be established; no defensible capability profile can be constructed'], 'sources': {'profile_directory': {'state': 'absent', 'record_count': None, 'detail': None}}, 'limitations': [{'code': 'PROFILE_DIRECTORY_UNAVAILABLE', 'source': 'profile_directory', 'scope': 'dump', 'affected_count': None, 'unavailable_fields': [], 'available_fields': [], 'counterpart_source': None, 'related_sources': [], 'related_tids': [], 'thread_id': None, 'detail': None, 'targets': [], 'budget_limit': None, 'budget_consumed': None}]}, 'summary': {'stream_count': 0, 'capability_summary': {'available': 0, 'limited': 0, 'unavailable': 0}}, 'data': {'records': []}},
+    ),
+    (
+        'profile_complete_sparse', ['--profile'], _profile_complete_sparse, 0,
+        '\n═══ PROFILE ═══\n  0 directory entries inventoried\n\n  Basic\n    Architecture             AMD64\n    Full memory (flag)       no\n    Captured memory content  (unknown)\n    Raw MINIDUMP_TYPE flags  0x0\n    Recognized flags         (none)\n\n  Streams\n\n  Analysis capabilities\n    Memory-region analysis           unavailable\n        - MemoryInfoListStream is not present in this dump\n    Module analysis                  unavailable\n        - ModuleListStream is not present in this dump\n    Injection-artifact analysis      unavailable\n        - MemoryInfoListStream is not present in this dump\n        - ThreadInfoListStream is not present in this dump\n    Thread analysis                  unavailable\n        - ThreadListStream is not present in this dump\n        - ThreadInfoListStream is not present in this dump\n    Handle analysis                  unavailable\n        - HandleDataStream is not present in this dump\n    Injector-handle assessment       unavailable\n        - HandleDataStream is not present in this dump\n\n',
+        {'kind': 'profile', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'sysinfo': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'absent', 'record_count': None, 'detail': None}, 'threads': {'state': 'absent', 'record_count': None, 'detail': None}, 'thread_info': {'state': 'absent', 'record_count': None, 'detail': None}, 'memory_info': {'state': 'absent', 'record_count': None, 'detail': None}, 'handles': {'state': 'absent', 'record_count': None, 'detail': None}, 'memory_content': {'state': 'absent', 'record_count': None, 'detail': None}, 'profile_directory': {'state': 'present', 'record_count': 1, 'detail': None}}, 'limitations': []}, 'summary': {'stream_count': 0, 'capability_summary': {'available': 0, 'limited': 0, 'unavailable': 6}}, 'data': {'records': [{'architecture': 'AMD64', 'raw_flags': 0, 'recognized_flags': [], 'unrecognized_flag_bits': 0, 'memory_capture': {'full_memory_flag_set': False, 'memory64_list_present': False, 'memory_list_present': False, 'captured_segment_count': None, 'captured_bytes_total': None}, 'streams': [], 'capabilities': [{'capability_id': 'memory_region_analysis', 'status': 'unavailable', 'required_source_groups': [['memory_info']], 'required_sources': ['memory_info'], 'optional_sources': [], 'limitations': [{'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'memory_info', 'detail': 'MemoryInfoListStream is not present in this dump'}]}, {'capability_id': 'module_analysis', 'status': 'unavailable', 'required_source_groups': [['modules']], 'required_sources': ['modules'], 'optional_sources': [], 'limitations': [{'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'modules', 'detail': 'ModuleListStream is not present in this dump'}]}, {'capability_id': 'injection_artifact_analysis', 'status': 'unavailable', 'required_source_groups': [['memory_info', 'thread_info']], 'required_sources': ['memory_info', 'thread_info'], 'optional_sources': ['modules', 'threads', 'memory_content'], 'limitations': [{'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'memory_info', 'detail': 'MemoryInfoListStream is not present in this dump'}, {'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'thread_info', 'detail': 'ThreadInfoListStream is not present in this dump'}]}, {'capability_id': 'thread_analysis', 'status': 'unavailable', 'required_source_groups': [['threads', 'thread_info']], 'required_sources': ['threads', 'thread_info'], 'optional_sources': ['modules'], 'limitations': [{'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'threads', 'detail': 'ThreadListStream is not present in this dump'}, {'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'thread_info', 'detail': 'ThreadInfoListStream is not present in this dump'}]}, {'capability_id': 'handle_analysis', 'status': 'unavailable', 'required_source_groups': [['handles']], 'required_sources': ['handles'], 'optional_sources': [], 'limitations': [{'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'handles', 'detail': 'HandleDataStream is not present in this dump'}]}, {'capability_id': 'injector_handle_assessment', 'status': 'unavailable', 'required_source_groups': [['handles']], 'required_sources': ['handles'], 'optional_sources': ['threads'], 'limitations': [{'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'handles', 'detail': 'HandleDataStream is not present in this dump'}]}]}]}},
+    ),
+    (
+        'process_partial', ['--process'], _process_partial, 3,
+        '\n═══ PROCESS ═══\n  [~] PEB present but CommandLine is empty\n  [~] PEB present but ImageBaseAddress is not set\n\n  Process Name           test.exe\n  PID                    100 (0x64)\n  Path                   C:\\test.exe\n  Command Line           (unknown)\n  Start Time (UTC)       2026-08-14 01:15:05 UTC\n  Image Base             (unknown)\n\n  Import Address Table\n    (unavailable -- see coverage below)\n\n  Identity\n',
+        {'kind': 'process', 'execution_status': 'completed', 'coverage': {'status': 'partial', 'reasons': ['PEB present but CommandLine is empty', 'PEB present but ImageBaseAddress is not set'], 'sources': {'process_identity': {'state': 'present', 'record_count': 3, 'detail': None}, 'misc_info': {'state': 'present', 'record_count': 1, 'detail': None}, 'peb': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'absent', 'record_count': None, 'detail': None}, 'main_image': {'state': 'absent', 'record_count': None, 'detail': None}, 'iat': {'state': 'absent', 'record_count': None, 'detail': None}}, 'limitations': [{'code': 'PROCESS_COMMAND_LINE_UNAVAILABLE', 'source': 'peb', 'scope': None, 'affected_count': None, 'unavailable_fields': [], 'available_fields': [], 'counterpart_source': None, 'related_sources': [], 'related_tids': [], 'thread_id': None, 'detail': None, 'targets': [], 'budget_limit': None, 'budget_consumed': None}, {'code': 'PROCESS_IMAGE_BASE_UNAVAILABLE', 'source': 'peb', 'scope': None, 'affected_count': None, 'unavailable_fields': [], 'available_fields': [], 'counterpart_source': None, 'related_sources': [], 'related_tids': [], 'thread_id': None, 'detail': None, 'targets': [], 'budget_limit': None, 'budget_consumed': None}]}, 'summary': {'count': 1}, 'data': {'records': [{'process_name': 'test.exe', 'pid': 100, 'process_path': 'C:\\test.exe', 'command_line': None, 'process_start_utc': '2026-08-14 01:15:05 UTC', 'image_base_address': None, 'iat': {'table_present': None, 'table_va': None, 'table_size': None, 'import_directory_present': None, 'import_directory_va': None, 'import_directory_size': None, 'has_entries': False, 'dll_count': 0, 'entry_count': 0, 'entries': [], 'diagnostics': []}, 'identity_evidence': {'misc_info_claim': {'pid': 100, 'process_create_time_utc': '2026-08-14 01:15:05 UTC', 'raw_pid': None, 'raw_process_create_time': None}, 'peb_claim': {'image_base_address': None, 'image_path': 'C:\\test.exe', 'name': 'test.exe', 'raw_image_base_address': None, 'raw_image_path': None, 'raw_command_line': None}, 'module_claim': {'match_state': 'unavailable', 'base_address': None, 'name': None, 'path': None, 'name_matched_candidate': None, 'name_matched_candidate_ambiguous': False}, 'main_image_pe': {'checked': False, 'valid': None, 'reason': None}, 'selected_path_source': 'peb', 'diagnostics': []}}]}},
+    ),
+    (
+        'process_verbose_unavailable_identity_checks', ['--process', '--verbose'], _process_unavailable_checks, 0,
+        '\n═══ PROCESS ═══\n\n  Process Name           malware.exe\n  PID                    4242 (0x1092)\n  Path                   C:\\Samples\\malware.exe\n  Command Line           C:\\Samples\\malware.exe\n  Start Time (UTC)       2026-08-14 01:15:05 UTC\n  Image Base             0x00007ff600010000\n\n  Import Address Table\n    (none -- this image declares no imports)\n\n  Identity\n\n  Identity Verification                            [--verbose only]\n    Selected path    C:\\Samples\\malware.exe\n    Selected name    malware.exe\n    Source           PEB (ProcessParameters.ImagePathName)\n    Image base       0x00007ff600010000 (source: PEB)\n\n    [--] PEB image base could not be compared with ModuleList\n         ModuleListStream is absent or failed, or no image base normalized\n    [--] PEB and ModuleList process names could not be compared\n         one of the two names was not recovered\n    [OK] a valid PE header was found at the PEB image base\n    [--] no ModuleList corroboration was available for this identity\n\n    Raw claims       PEB                              ModuleList\n    path             C:\\Samples\\malware.exe           (none)\n    name             malware.exe                      (none)\n    image base       0x00007ff600010000               (none) (unavailable)\n\n  Extended PEB\n    PEB Address        0x0000000000000000\n    BeingDebugged      False\n    WindowTitle        (none)\n    DllPath            (none)\n    StandardInput      (unknown)\n    StandardOutput     (unknown)\n    StandardError      (unknown)\n',
+        {'kind': 'process', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'process_identity': {'state': 'present', 'record_count': 5, 'detail': None}, 'misc_info': {'state': 'present', 'record_count': 1, 'detail': None}, 'peb': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'absent', 'record_count': None, 'detail': None}, 'main_image': {'state': 'present', 'record_count': 1, 'detail': None}, 'iat': {'state': 'present_empty', 'record_count': 0, 'detail': None}}, 'limitations': []}, 'summary': {'count': 1}, 'data': {'records': [{'process_name': 'malware.exe', 'pid': 4242, 'process_path': 'C:\\Samples\\malware.exe', 'command_line': 'C:\\Samples\\malware.exe', 'process_start_utc': '2026-08-14 01:15:05 UTC', 'image_base_address': '0x00007ff600010000', 'iat': {'table_present': False, 'table_va': None, 'table_size': None, 'import_directory_present': False, 'import_directory_va': None, 'import_directory_size': None, 'has_entries': False, 'dll_count': 0, 'entry_count': 0, 'entries': [], 'diagnostics': []}, 'identity_evidence': {'misc_info_claim': {'pid': 4242, 'process_create_time_utc': '2026-08-14 01:15:05 UTC', 'raw_pid': None, 'raw_process_create_time': None}, 'peb_claim': {'image_base_address': '0x00007ff600010000', 'image_path': 'C:\\Samples\\malware.exe', 'name': 'malware.exe', 'raw_image_base_address': None, 'raw_image_path': None, 'raw_command_line': None}, 'module_claim': {'match_state': 'unavailable', 'base_address': None, 'name': None, 'path': None, 'name_matched_candidate': None, 'name_matched_candidate_ambiguous': False}, 'main_image_pe': {'checked': True, 'valid': True, 'reason': None}, 'selected_path_source': 'peb', 'diagnostics': []}, 'peb_extended': {'peb_address': '0x0000000000000000', 'being_debugged': False, 'window_title': None, 'dll_path': None, 'standard_input': None, 'standard_output': None, 'standard_error': None}}]}},
+    ),
+    (
+        'process_verbose_conflict_and_iat_variety', ['--process', '--verbose'], _process_conflict_and_iat, 0,
+        '\n═══ PROCESS ═══\n\n  Process Name           malware.exe\n  PID                    4242 (0x1092)\n  Path                   C:\\Samples\\malware.exe\n  Command Line           C:\\Samples\\malware.exe\n  Start Time (UTC)       2026-08-14 01:15:05 UTC\n  Image Base             0x00007ff600010000\n\n  Import Address Table\n    2 import(s) across 2 DLL(s)\n\n    Each row reads IAT Slot VA -> Resolved Target VA.\n    The slot is the address where the import pointer is stored; the target is the\n    address stored in that slot in the captured process memory.\n\n    DLL                       Imported API                  IAT Slot VA           Resolved Target VA\n    ADVAPI32.dll              ordinal #12                   0x00007ff600013000    0x00007ffb0000000c\n    (unknown)                 (unavailable)                 0x00007ff600013010    0x00007ffb00000099\n\n  Identity\n    [!] a module named malware.exe is loaded at 0x00007ff700000000, not the PEB-reported image base 0x00007ff600010000\n\n  Identity Verification                            [--verbose only]\n    Selected path    C:\\Samples\\malware.exe\n    Selected name    malware.exe\n    Source           PEB (ProcessParameters.ImagePathName)\n    Image base       0x00007ff600010000 (source: PEB)\n\n    [!!] no module is registered at the PEB image base\n         a module named malware.exe is registered at 0x00007ff700000000 instead\n    [--] PEB and ModuleList process names could not be compared\n         one of the two names was not recovered\n    [OK] a valid PE header was found at the PEB image base\n    [OK] no competing module shares this process name\n\n    Raw claims       PEB                              ModuleList\n    path             C:\\Samples\\malware.exe           (none)\n    name             malware.exe                      (none)\n    image base       0x00007ff600010000               (none) (unregistered)\n\n  Extended PEB\n    PEB Address        0x0000000000000000\n    BeingDebugged      False\n    WindowTitle        (none)\n    DllPath            (none)\n    StandardInput      (unknown)\n    StandardOutput     (unknown)\n    StandardError      (unknown)\n',
+        {'kind': 'process', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'process_identity': {'state': 'present', 'record_count': 5, 'detail': None}, 'misc_info': {'state': 'present', 'record_count': 1, 'detail': None}, 'peb': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'present', 'record_count': 1, 'detail': None}, 'main_image': {'state': 'present', 'record_count': 1, 'detail': None}, 'iat': {'state': 'present', 'record_count': 2, 'detail': None}}, 'limitations': []}, 'summary': {'count': 1}, 'data': {'records': [{'process_name': 'malware.exe', 'pid': 4242, 'process_path': 'C:\\Samples\\malware.exe', 'command_line': 'C:\\Samples\\malware.exe', 'process_start_utc': '2026-08-14 01:15:05 UTC', 'image_base_address': '0x00007ff600010000', 'iat': {'table_present': True, 'table_va': '0x00007ff600013000', 'table_size': 32, 'import_directory_present': True, 'import_directory_va': '0x00007ff600012000', 'import_directory_size': 60, 'has_entries': True, 'dll_count': 2, 'entry_count': 2, 'entries': [{'dll': 'ADVAPI32.dll', 'import_by': 'ordinal', 'symbol': None, 'ordinal': 12, 'iat_slot_va': '0x00007ff600013000', 'resolved_target_va': '0x00007ffb0000000c', 'slot_in_bounds': True}, {'dll': None, 'import_by': 'unavailable', 'symbol': None, 'ordinal': None, 'iat_slot_va': '0x00007ff600013010', 'resolved_target_va': '0x00007ffb00000099', 'slot_in_bounds': True}], 'diagnostics': []}, 'identity_evidence': {'misc_info_claim': {'pid': 4242, 'process_create_time_utc': '2026-08-14 01:15:05 UTC', 'raw_pid': None, 'raw_process_create_time': None}, 'peb_claim': {'image_base_address': '0x00007ff600010000', 'image_path': 'C:\\Samples\\malware.exe', 'name': 'malware.exe', 'raw_image_base_address': None, 'raw_image_path': None, 'raw_command_line': None}, 'module_claim': {'match_state': 'unregistered', 'base_address': None, 'name': None, 'path': None, 'name_matched_candidate': {'base_address': '0x00007ff700000000', 'name': 'malware.exe', 'path': 'C:\\Windows\\Temp\\malware.exe'}, 'name_matched_candidate_ambiguous': False}, 'main_image_pe': {'checked': True, 'valid': True, 'reason': None}, 'selected_path_source': 'peb', 'diagnostics': [{'code': 'PROCESS_MODULE_BASE_CONFLICT', 'severity': 'warning', 'message': 'a module named malware.exe is loaded at 0x00007ff700000000, not the PEB-reported image base 0x00007ff600010000', 'affected_count': None, 'details': {'name': 'malware.exe', 'module_base': '0x00007ff700000000', 'peb_base': '0x00007ff600010000'}}]}, 'peb_extended': {'peb_address': '0x0000000000000000', 'being_debugged': False, 'window_title': None, 'dll_path': None, 'standard_input': None, 'standard_output': None, 'standard_error': None}}]}},
+    ),
+    (
+        'profile_mixed_states', ['--profile'], _profile_mixed, 3,
+        '\n═══ PROFILE ═══\n  8 directory entries inventoried\n\n  Basic\n    Architecture             AMD64\n    Full memory (flag)       no\n    Captured memory content  (unknown)\n    Raw MINIDUMP_TYPE flags  0x0\n    Recognized flags         (none)\n\n  Streams\n    SystemInfoStream             parsed\n    ThreadListStream             parsed [1]\n    ModuleListStream             present (ambiguous -- duplicate entry)\n        stream type 4 appears at 2 directory index(es): [2, 3]; dumpex retains only one shared parse outcome per stream type, so which entry it reflects cannot be determined\n    ModuleListStream             present (ambiguous -- duplicate entry)\n        stream type 4 appears at 2 directory index(es): [2, 3]; dumpex retains only one shared parse outcome per stream type, so which entry it reflects cannot be determined\n    FunctionTableStream          present (not parsed by dumpex)\n    (unknown type 9999)          present (not parsed by dumpex)\n    HandleDataStream             present (empty) [0]\n    MemoryInfoListStream         present (parse failed)\n        ValueError: layout drift\n\n  Analysis capabilities\n    Memory-region analysis           unavailable\n        - MemoryInfoListStream is present in this dump but could not be parsed\n    Module analysis                  unavailable\n        - ModuleListStream has duplicate directory entries; its parse outcome cannot be attributed to one entry with confidence\n    Injection-artifact analysis      unavailable\n        - MemoryInfoListStream is present in this dump but could not be parsed\n        - ThreadInfoListStream is not present in this dump\n    Thread analysis                  limited\n        - ThreadInfoListStream is not present in this dump, but a different required-group member for this capability already is -- treated as a degraded (not blocking) gap\n        - ModuleListStream has duplicate directory entries; its parse outcome cannot be attributed to one entry with confidence (optional corroborating evidence)\n    Handle analysis                  available\n    Injector-handle assessment       available\n\n  [~] 1 stream type has duplicate directory entries whose individual parser state could not be attributed with confidence -- see the affected entries\' own "indeterminate" state\n\n',
+        {'kind': 'profile', 'execution_status': 'completed', 'coverage': {'status': 'partial', 'reasons': ['1 stream type has duplicate directory entries whose individual parser state could not be attributed with confidence -- see the affected entries\' own "indeterminate" state'], 'sources': {'sysinfo': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'failed', 'record_count': None, 'detail': 'this stream type has duplicate directory entries; its parse outcome cannot be attributed with confidence -- see the stream inventory\'s own "indeterminate" entries'}, 'threads': {'state': 'present', 'record_count': 1, 'detail': None}, 'thread_info': {'state': 'absent', 'record_count': None, 'detail': None}, 'memory_info': {'state': 'failed', 'record_count': None, 'detail': 'ValueError: layout drift'}, 'handles': {'state': 'present_empty', 'record_count': 0, 'detail': None}, 'memory_content': {'state': 'absent', 'record_count': None, 'detail': None}, 'profile_directory': {'state': 'present', 'record_count': 1, 'detail': None}}, 'limitations': [{'code': 'PROFILE_STREAM_STATE_AMBIGUOUS', 'source': 'profile_directory', 'scope': None, 'affected_count': 1, 'unavailable_fields': [], 'available_fields': [], 'counterpart_source': None, 'related_sources': [], 'related_tids': [], 'thread_id': None, 'detail': None, 'targets': [], 'budget_limit': None, 'budget_consumed': None}]}, 'summary': {'stream_count': 8, 'capability_summary': {'available': 2, 'limited': 1, 'unavailable': 3}}, 'data': {'records': [{'architecture': 'AMD64', 'raw_flags': 0, 'recognized_flags': [], 'unrecognized_flag_bits': 0, 'memory_capture': {'full_memory_flag_set': False, 'memory64_list_present': False, 'memory_list_present': False, 'captured_segment_count': None, 'captured_bytes_total': None}, 'streams': [{'directory_index': 0, 'stream_type_id': 7, 'stream_type_name': 'SystemInfoStream', 'parser_state': 'parsed', 'record_count': None, 'detail': None}, {'directory_index': 1, 'stream_type_id': 3, 'stream_type_name': 'ThreadListStream', 'parser_state': 'parsed', 'record_count': 1, 'detail': None}, {'directory_index': 2, 'stream_type_id': 4, 'stream_type_name': 'ModuleListStream', 'parser_state': 'indeterminate', 'record_count': None, 'detail': 'stream type 4 appears at 2 directory index(es): [2, 3]; dumpex retains only one shared parse outcome per stream type, so which entry it reflects cannot be determined'}, {'directory_index': 3, 'stream_type_id': 4, 'stream_type_name': 'ModuleListStream', 'parser_state': 'indeterminate', 'record_count': None, 'detail': 'stream type 4 appears at 2 directory index(es): [2, 3]; dumpex retains only one shared parse outcome per stream type, so which entry it reflects cannot be determined'}, {'directory_index': 4, 'stream_type_id': 13, 'stream_type_name': 'FunctionTableStream', 'parser_state': 'unparsed', 'record_count': None, 'detail': None}, {'directory_index': 5, 'stream_type_id': 9999, 'stream_type_name': None, 'parser_state': 'unparsed', 'record_count': None, 'detail': None}, {'directory_index': 6, 'stream_type_id': 12, 'stream_type_name': 'HandleDataStream', 'parser_state': 'present_empty', 'record_count': 0, 'detail': None}, {'directory_index': 7, 'stream_type_id': 16, 'stream_type_name': 'MemoryInfoListStream', 'parser_state': 'failed', 'record_count': None, 'detail': 'ValueError: layout drift'}], 'capabilities': [{'capability_id': 'memory_region_analysis', 'status': 'unavailable', 'required_source_groups': [['memory_info']], 'required_sources': ['memory_info'], 'optional_sources': [], 'limitations': [{'code': 'REQUIRED_SOURCE_FAILED', 'source': 'memory_info', 'detail': 'MemoryInfoListStream is present in this dump but could not be parsed'}]}, {'capability_id': 'module_analysis', 'status': 'unavailable', 'required_source_groups': [['modules']], 'required_sources': ['modules'], 'optional_sources': [], 'limitations': [{'code': 'REQUIRED_SOURCE_INDETERMINATE', 'source': 'modules', 'detail': 'ModuleListStream has duplicate directory entries; its parse outcome cannot be attributed to one entry with confidence'}]}, {'capability_id': 'injection_artifact_analysis', 'status': 'unavailable', 'required_source_groups': [['memory_info', 'thread_info']], 'required_sources': ['memory_info', 'thread_info'], 'optional_sources': ['modules', 'threads', 'memory_content'], 'limitations': [{'code': 'REQUIRED_SOURCE_FAILED', 'source': 'memory_info', 'detail': 'MemoryInfoListStream is present in this dump but could not be parsed'}, {'code': 'REQUIRED_SOURCE_ABSENT', 'source': 'thread_info', 'detail': 'ThreadInfoListStream is not present in this dump'}]}, {'capability_id': 'thread_analysis', 'status': 'limited', 'required_source_groups': [['threads', 'thread_info']], 'required_sources': ['threads', 'thread_info'], 'optional_sources': ['modules'], 'limitations': [{'code': 'REQUIRED_GROUP_MEMBER_ABSENT', 'source': 'thread_info', 'detail': 'ThreadInfoListStream is not present in this dump, but a different required-group member for this capability already is -- treated as a degraded (not blocking) gap'}, {'code': 'OPTIONAL_SOURCE_INDETERMINATE', 'source': 'modules', 'detail': 'ModuleListStream has duplicate directory entries; its parse outcome cannot be attributed to one entry with confidence (optional corroborating evidence)'}]}, {'capability_id': 'handle_analysis', 'status': 'available', 'required_source_groups': [['handles']], 'required_sources': ['handles'], 'optional_sources': [], 'limitations': []}, {'capability_id': 'injector_handle_assessment', 'status': 'available', 'required_source_groups': [['handles']], 'required_sources': ['handles'], 'optional_sources': ['threads'], 'limitations': []}]}]}},
+    ),
+    (
+        'handles_partial', ['--handles'], _handles_partial, 3,
+        "\n═══ HANDLES ═══\n  1 handle(s) captured\n  By type: File 1\n\n  Handle              Type            Access      Cnt  Ptr  Object\n  0x0000000000000010  File            0x00000000    1    1  (unreadable)\n      └─ Rights   (no rights)\n  (unnamed) = the descriptor records no name; (unreadable) = a name was recorded but the bounded read failed\n  Rights decode each row's own Access mask against its recorded object type -- the same bit means\n  different things for a File, a Process and a Token. A long list splits into Type (rights that\n  object type defines) and Standard (the rights every type shares). They are an observation about\n  what the handle permitted, never evidence that it was used.\n\n  [~] 1 handle(s) have a type or object name that could not be read or decoded\n\n",
+        {'kind': 'handles', 'execution_status': 'completed', 'coverage': {'status': 'partial', 'reasons': ['1 handle(s) have a type or object name that could not be read or decoded'], 'sources': {'handles': {'state': 'present', 'record_count': 1, 'detail': None}, 'handle_records': {'state': 'present', 'record_count': 1, 'detail': None}}, 'limitations': [{'code': 'HANDLE_STRING_READ_FAILED', 'source': 'handles', 'scope': None, 'affected_count': 1, 'unavailable_fields': [], 'available_fields': [], 'counterpart_source': None, 'related_sources': [], 'related_tids': [], 'thread_id': None, 'detail': None, 'targets': [], 'budget_limit': None, 'budget_consumed': None}]}, 'summary': {'count': 1, 'by_type': {'File': 1}}, 'data': {'records': [{'handle': '0x0000000000000010', 'type_name': 'File', 'type_name_status': 'ok', 'object_name': None, 'object_name_status': 'unreadable', 'attributes': 0, 'granted_access': 0, 'handle_count': 1, 'pointer_count': 1}]}},
+    ),
+    (
+        'process_identity_ambiguous', ['--process', '--verbose'], _process_identity_ambiguous, 0,
+        '\n═══ PROCESS ═══\n\n  Process Name           malware.exe\n  PID                    4242 (0x1092)\n  Path                   C:\\Samples\\malware.exe\n  Command Line           C:\\Samples\\malware.exe\n  Start Time (UTC)       2026-08-14 01:15:05 UTC\n  Image Base             0x00007ff600010000\n\n  Import Address Table\n    (none -- this image declares no imports)\n\n  Identity\n    [!] a module named malware.exe is loaded at 0x00007ff700000000, not the PEB-reported image base 0x00007ff600010000\n    [i] 2 modules share the name malware.exe; only the first is reported\n\n  Identity Verification                            [--verbose only]\n    Selected path    C:\\Samples\\malware.exe\n    Selected name    malware.exe\n    Source           PEB (ProcessParameters.ImagePathName)\n    Image base       0x00007ff600010000 (source: PEB)\n\n    [!!] no module is registered at the PEB image base\n         a module named malware.exe is registered at 0x00007ff700000000 instead\n    [--] PEB and ModuleList process names could not be compared\n         one of the two names was not recovered\n    [OK] a valid PE header was found at the PEB image base\n    [!!] more than one module shares this process name; only the first is reported\n         compare --modules for every module carrying this name\n\n    Raw claims       PEB                              ModuleList\n    path             C:\\Samples\\malware.exe           (none)\n    name             malware.exe                      (none)\n    image base       0x00007ff600010000               (none) (unregistered)\n\n  Extended PEB\n    PEB Address        0x0000000000000000\n    BeingDebugged      False\n    WindowTitle        (none)\n    DllPath            (none)\n    StandardInput      (unknown)\n    StandardOutput     (unknown)\n    StandardError      (unknown)\n',
+        {'kind': 'process', 'execution_status': 'completed', 'coverage': {'status': 'complete', 'reasons': [], 'sources': {'process_identity': {'state': 'present', 'record_count': 5, 'detail': None}, 'misc_info': {'state': 'present', 'record_count': 1, 'detail': None}, 'peb': {'state': 'present', 'record_count': 1, 'detail': None}, 'modules': {'state': 'present', 'record_count': 2, 'detail': None}, 'main_image': {'state': 'present', 'record_count': 1, 'detail': None}, 'iat': {'state': 'present_empty', 'record_count': 0, 'detail': None}}, 'limitations': []}, 'summary': {'count': 1}, 'data': {'records': [{'process_name': 'malware.exe', 'pid': 4242, 'process_path': 'C:\\Samples\\malware.exe', 'command_line': 'C:\\Samples\\malware.exe', 'process_start_utc': '2026-08-14 01:15:05 UTC', 'image_base_address': '0x00007ff600010000', 'iat': {'table_present': False, 'table_va': None, 'table_size': None, 'import_directory_present': False, 'import_directory_va': None, 'import_directory_size': None, 'has_entries': False, 'dll_count': 0, 'entry_count': 0, 'entries': [], 'diagnostics': []}, 'identity_evidence': {'misc_info_claim': {'pid': 4242, 'process_create_time_utc': '2026-08-14 01:15:05 UTC', 'raw_pid': None, 'raw_process_create_time': None}, 'peb_claim': {'image_base_address': '0x00007ff600010000', 'image_path': 'C:\\Samples\\malware.exe', 'name': 'malware.exe', 'raw_image_base_address': None, 'raw_image_path': None, 'raw_command_line': None}, 'module_claim': {'match_state': 'unregistered', 'base_address': None, 'name': None, 'path': None, 'name_matched_candidate': {'base_address': '0x00007ff700000000', 'name': 'malware.exe', 'path': 'C:\\Windows\\Temp\\malware.exe'}, 'name_matched_candidate_ambiguous': True}, 'main_image_pe': {'checked': True, 'valid': True, 'reason': None}, 'selected_path_source': 'peb', 'diagnostics': [{'code': 'PROCESS_MODULE_BASE_CONFLICT', 'severity': 'warning', 'message': 'a module named malware.exe is loaded at 0x00007ff700000000, not the PEB-reported image base 0x00007ff600010000', 'affected_count': None, 'details': {'name': 'malware.exe', 'module_base': '0x00007ff700000000', 'peb_base': '0x00007ff600010000'}}, {'code': 'PROCESS_MODULE_NAME_AMBIGUOUS', 'severity': 'info', 'message': '2 modules share the name malware.exe; only the first is reported', 'affected_count': None, 'details': {'name': 'malware.exe', 'count': 2}}]}, 'peb_extended': {'peb_address': '0x0000000000000000', 'being_debugged': False, 'window_title': None, 'dll_path': None, 'standard_input': None, 'standard_output': None, 'standard_error': None}}]}},
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "name,argv,mf_builder,exit_code,console,result",
+    RECON_V213_SCENARIOS, ids=[s[0] for s in RECON_V213_SCENARIOS],
+)
+def test_recon_v213_compat_freeze(monkeypatch, tmp_path, capsys, name, argv, mf_builder,
+                                   exit_code, console, result):
+    mf = mf_builder()
+    actual_exit, doc, dump_path_abs = _run(monkeypatch, tmp_path, argv, mf)
+    actual_console = _normalize_console(capsys.readouterr().out, str(tmp_path))
+    _normalize_doc(doc, dump_path_abs)
+
+    expected_meta = _expected_meta(argv[0])
+    # _CMD_OPTIONS' shared default assumes verbose=False -- true for every
+    # OTHER scenario in this suite, but several of this file's own recon
+    # scenarios genuinely pass --verbose and must see it reflected here.
+    if "--verbose" in argv:
+        expected_meta["execution"]["options"]["verbose"] = True
+    expected_doc = {"meta": expected_meta, "result": result,
+                     "artifacts": [], "diagnostics": {"warnings": [], "errors": []}}
+    expected_console = console + "  [·] JSON written → <TMP_DIR>" + os.sep \
+        + "out.json  (<SIZE> bytes  sha256=<HASH>)\n"
+
+    assert actual_exit == exit_code, f"{name}: exit code drifted"
+    assert doc == expected_doc, f"{name}: JSON document drifted"
+    assert actual_console == expected_console, f"{name}: console drifted"
