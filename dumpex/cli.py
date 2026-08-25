@@ -26,7 +26,7 @@ from dumpex.commands.report   import cmd_report
 from dumpex.commands.diff     import cmd_diff
 from dumpex.hunt              import cmd_hunt
 from dumpex.hunt.summary      import build_hunt_summary
-from dumpex.hunt              import _hunt_coverage_report
+from dumpex.hunt              import _hunt_coverage_report, full_scope_hunters
 from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
@@ -442,7 +442,8 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
         # rule provenance to this command's own meta.yara_rules.
         if out:
             out.set_yara_provenance(yara_provenance)
-        hunt_summary = build_hunt_summary(hunt_records, selected=args.hunt)
+        hunt_summary = build_hunt_summary(hunt_records, selected=args.hunt,
+                                           full_scope_hunters=full_scope_hunters())
         hunt_summary["investigation_actions"] = [a.to_dict() for a in investigation_actions]
         exit_code = _apply_command_result(
             CommandResult(kind="hunt", records=hunt_records,

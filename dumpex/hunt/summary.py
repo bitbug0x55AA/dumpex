@@ -38,14 +38,33 @@ from dumpex.output.records import HUNTERS, HunterRecord
 _DETECTED_VERDICT_ORDER = ("possible", "likely", "high")
 
 
-def build_hunt_summary(records: "list[HunterRecord]", selected: str) -> dict:
+def build_hunt_summary(records: "list[HunterRecord]", selected: str, *,
+                        full_scope_hunters: "tuple | None" = None) -> dict:
     """
     `selected` is the `--hunt` argument: `"all"` or one of `HUNTERS`.
 
     `records` must be exactly:
-      - one `HunterRecord` per hunter in `HUNTERS`' own fixed order, when
-        `selected == "all"`; or
+      - one `HunterRecord` per hunter in `full_scope_hunters`' own fixed
+        order, when `selected == "all"`; or
       - exactly one `HunterRecord` whose `.hunter == selected`, otherwise.
+
+    `full_scope_hunters` (keyword-only) is the exact, capability-filtered
+    identity set a `selected == "all"` call's own `records` must match --
+    defaults to the full, unfiltered `HUNTERS` tuple when omitted (every
+    existing caller before this parameter existed, and every one of this
+    module's own historical tests, get the identical behavior they always
+    had, since every registered analyzer stays `full_scope_capable=True`
+    today; see dumpex.hunt.full_scope_hunters(), which callers that DO
+    know the real, capability-filtered roster -- dumpex/hunt/__init__.py,
+    dumpex/cli.py -- pass explicitly). Finding, #73: an earlier version
+    of this function hard-coded the unfiltered `HUNTERS` unconditionally,
+    which crashed every `--hunt all` invocation with a `ValueError` the
+    moment a `full_scope_capable=False` analyzer was ever registered
+    (contract `docs/hunt_analyzer_registry_contract.md` §2's own "the
+    filter belongs on the `HUNTERS` side" invariant governed `AnalyzerRegistry.
+    select("all")`'s own return value correctly, but this function never
+    read it) -- this parameter is what makes that invariant actually
+    reach `--hunt all`'s real output, not merely `select("all")`'s own.
 
     Raises `ValueError`/`TypeError` on any shape violation -- the same
     "fail loudly on a shape the caller got wrong" precedent every other
@@ -75,7 +94,7 @@ def build_hunt_summary(records: "list[HunterRecord]", selected: str) -> dict:
     `overall_status` exactly.
     """
     if selected == "all":
-        expected_hunters = tuple(HUNTERS)
+        expected_hunters = tuple(full_scope_hunters) if full_scope_hunters is not None else tuple(HUNTERS)
     elif selected in HUNTERS:
         expected_hunters = (selected,)
     else:

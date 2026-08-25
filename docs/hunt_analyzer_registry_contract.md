@@ -320,6 +320,43 @@ registration sequence, not to `select("all")`'s filtered result — order
 and completeness are checked against every registered spec, never only
 the full-scope subset.
 
+**Revision note (finding, closed by #73 — this invariant used to govern
+`select("all")` alone, not `--hunt all`'s actual output; it now governs
+both):** the filtered-`HUNTERS` formula above is a statement about
+`AnalyzerRegistry.select("all")`'s own return value, and was always
+correct as that statement — but `dumpex.hunt.summary.build_hunt_summary
+(selected="all")` (`dumpex/hunt/summary.py`) independently asserted the
+**unfiltered** `tuple(HUNTERS)` against `records` unconditionally, never
+`registry.select("all")`'s own filtered set this section defines, so
+registering the first `full_scope_capable=False` spec used to crash every
+`--hunt all` invocation with a bare `ValueError` — and not as a cheap
+fail-fast: the crash fired only where `collect_hunt()`/`cmd_hunt()` call
+`build_hunt_summary()`, strictly AFTER `_execute_full_scope()` had
+already run every one of `select("all")`'s surviving real builders to
+completion (YARA's full segment scan and obfuscation's per-region decode
+included), throwing away a full round of real evidence collection on
+every single invocation. **This is now fixed**, not merely documented:
+`build_hunt_summary()` takes an explicit `full_scope_hunters` keyword
+(defaulting to the historical unfiltered `HUNTERS` for every pre-existing
+caller that never passes it), and `dumpex.hunt.full_scope_hunters()` --
+`tuple(spec.identity for spec in REGISTRY.select("all"))`, i.e. exactly
+this section's own filtered formula, computed once and threaded through
+-- is what `collect_hunt()`, `cmd_hunt()`, and `dumpex/cli.py`'s own
+second, redundant `build_hunt_summary()` call (which re-derives the same
+summary a second time solely to attach `investigation_actions`) now all
+pass. `select("all")`'s own filtered set and `build_hunt_summary`'s own
+`expected_hunters` can no longer disagree, because the latter is now
+LITERALLY the former, not a second, independently-hard-coded roster.
+Proven end to end -- `collect_hunt(mf, "all")`/`cmd_hunt(mf, "all", ...)`
+now SUCCEED for a genuinely valid `full_scope_capable=False`
+registration, excluding that identity's own builder from running at all
+-- by `tests/integration/test_registry_extension_and_failure_gate.py`'s
+`test_hunt_all_succeeds_and_excludes_a_targeted_only_registration` and
+`test_cmd_hunt_all_also_succeeds_and_excludes_a_targeted_only_
+registration`. §13's own "call-time failures fail before any analyzer
+runs" line no longer needs the exception an earlier version of this note
+carved out for it.
+
 `HunterRuntime` (`dumpex/hunt/_runtime.py`) remains what it already is — a
 per-call dependency snapshot threaded into a single hunter's submodules —
 and is not superseded or duplicated by `AnalyzerRegistry`, which is a
@@ -473,7 +510,16 @@ Its field set is **exactly** the ten matrix columns of §3, no more:
    the builder accepts (empty for five of seven), validated **both
    directions** against the builder's own signature (§7.1 failure #7):
    every name in `option_names` must be a real builder keyword, and every
-   non-`mf` builder keyword must be in `option_names`.
+   non-`mf` builder keyword must be in `option_names`. **Also validated
+   (revision note, finding closed by #73) against `_registry.
+   KNOWN_OPTION_NAMES = frozenset({"ref_dir", "rules_dir"})** — the
+   separate set of names `_execute_full_scope()`
+   (`dumpex/hunt/__init__.py`) actually knows how to supply a value for.
+   The builder-signature check above says nothing about THAT set; a spec
+   could previously declare a real, correctly-defaulted builder keyword
+   outside it and only fail with a bare `KeyError` mid-execution, after
+   earlier-selected analyzers' builders had already run (§7.1 failure
+   #7's own revision note has the full finding).
 8. `provenance_hook: Callable[[Report], dict | None] | None` — `None` for
    six of seven. `yara`'s is
    `lambda r: (r.coverage.rules.provenance.to_dict() if r.coverage.rules.provenance is not None else None)`
@@ -1019,6 +1065,80 @@ never from investigator input, dump content, or any other runtime value:
    same-instance invariant already requires one `Report` per fixture
    scenario) and needs no new `mf`/dump beyond what those fixtures
    already build.
+
+   **Revision note (finding, closed by #73):** everything above validates
+   `option_names` against the BUILDER's own signature, in both
+   directions — it never validated `option_names` against what
+   `_execute_full_scope()` (`dumpex/hunt/__init__.py`) itself actually
+   knows how to supply a value for (its own hard-coded `{"ref_dir":
+   ref_dir, "rules_dir": yara_dir}` view). A spec declaring a real,
+   correctly-defaulted builder keyword outside that pair used to pass
+   every check this failure lists and construct successfully — direct
+   reproduction shows it then failed only with a bare `KeyError` partway
+   through `_execute_full_scope()`'s own selection loop, AFTER every
+   earlier-selected analyzer's builder had already run (six real
+   builders, for a registration spliced in seventh) — a direct violation
+   of the "before any analyzer work begins" guarantee this whole section
+   exists to provide, and of #73's own "malformed specs must not invoke
+   analyzer code" constraint. `dumpex/hunt/_registry.py`'s new
+   `KNOWN_OPTION_NAMES = frozenset({"ref_dir", "rules_dir"})` constant
+   and `AnalyzerSpec.__post_init__`'s `option_names <= KNOWN_OPTION_NAMES`
+   check close this as a genuine third construction-time check, alongside
+   (not replacing) the two-directional builder-signature check above.
+   Pinned at the unit level
+   (`test_analyzer_registry.py`'s
+   `test_analyzer_spec_rejects_an_option_name_unknown_to_the_executor`)
+   and by direct proof that no construction path — not even the
+   test-only `AnalyzerRegistry._construct_unvalidated()` escape hatch,
+   which only ever skips `AnalyzerRegistry`'s own validation, never
+   `AnalyzerSpec.__init__` — can produce a live spec carrying this defect
+   any more
+   (`tests/integration/test_registry_extension_and_failure_gate.py`'s
+   `test_option_name_unknown_to_the_executor_cannot_be_constructed_at_
+   all`).
+
+   **Second revision note (finding, closed by #73 — the first attempt to
+   surface this check at IMPORT time reopened the exact regression it
+   existed to close):** an intermediate version of this fix moved the
+   `dumpex/hunt/__init__.py`-side half of this check to import time by
+   comparing TWO independently hand-maintained frozensets — a local
+   `_OPTION_NAMES` constant there against `_registry.KNOWN_OPTION_NAMES`
+   here — rather than against the real `options` dict `_execute_full_
+   scope()` actually builds. Neither constant was DERIVED from that real
+   dict, so an edit that kept both constants in lockstep (exactly what
+   this checklist item's own §10 item 3 revision note instructs an
+   implementer to do) could still leave the real dict itself out of
+   sync — reproduced directly: both constants updated to add a name, the
+   real dict literal left untouched, the import-time guard passed, and
+   `collect_hunt("all")` crashed with a bare `KeyError` after six real
+   builders had already run, the identical failure shape this whole
+   finding exists to close. Corrected by extracting the real dict-
+   building code into one function, `_option_view(ref_dir, yara_dir)`
+   (`dumpex/hunt/__init__.py`), that BOTH `_execute_full_scope()` and the
+   import-time guard call — eliminating the second literal entirely —
+   AND restoring a real, unconditional PER-CALL preflight inside
+   `_execute_full_scope()` itself (checking every selected spec's
+   `option_names` against THIS call's own real `options` dict, for every
+   spec, before the builder loop starts) alongside the import-time guard,
+   since import-time validation is inherently a boot-time invariant —
+   correct for catching a genuine source-level edit at the next process
+   start, but structurally unable to catch a mismatch introduced after
+   this process has already imported `dumpex.hunt` (a global-state
+   mutation mid-session). Both checks now raise `_registry.
+   InvalidAnalyzerSpec` — the same named exception family every other
+   §7.1 failure raises — never a bare `AssertionError` a caller could
+   only recognize by pattern-matching message text. Pinned by
+   `tests/integration/test_registry_extension_and_failure_gate.py`'s
+   `test_check_option_names_in_sync_is_actually_called_at_import_time_
+   against_the_real_option_view` (an AST test strengthened to inspect
+   the call's own ARGUMENTS, not merely that a same-named call exists —
+   the earlier, weaker version of this same test could not have caught
+   the regression) and
+   `test_a_registry_declaring_a_new_known_option_name_without_updating_
+   option_view_fails_with_zero_builder_calls` (the exact reproduction
+   above, replayed end to end through the real `cmd_hunt()`/
+   `collect_hunt()` entry points, now failing with zero real builder
+   invocations).
 8. **Retained mutable state** — any field holds a dump handle, a raw scan
    buffer, or any other mutable/live parser object rather than a callable
    or an immutable value (#69's own Resource and safety constraint: "Do
@@ -1342,6 +1462,21 @@ analyzer's shape by default:
    registry module.
 3. **One complete `AnalyzerSpec` registration** — every field in §5,
    with no partial/placeholder capability.
+
+   **Revision note (finding, #73):** if the new analyzer's own
+   `option_names` (§5 field 7) is non-empty, `_registry.
+   KNOWN_OPTION_NAMES` (`dumpex/hunt/_registry.py`) — the separate,
+   registry-owned set of option names `_execute_full_scope()`
+   (`dumpex/hunt/__init__.py`) actually knows how to supply a value for —
+   must ALSO gain an entry for each new name, in the same change, along
+   with a real value for it threaded through `_execute_full_scope()`'s
+   own `options` dict AND `collect_hunt()`'s/`cmd_hunt()`'s own public
+   keyword parameters (mirroring `ref_dir`/`rules_dir`'s existing
+   plumbing). Declaring a genuinely new option name in `option_names`
+   alone, without this second-artifact update, fails construction
+   immediately (§7.1 failure #7's own third, executor-membership
+   direction) — a fail-closed outcome, not a silent gap, but one this
+   checklist item did not previously name explicitly.
 4. **`full_scope_capable` stated explicitly.** This release's seven are
    all `True`; a future analyzer that is genuinely full-scope-incapable
    (targeted-only, `full_scope_capable=False` with a non-`None`
@@ -1362,30 +1497,87 @@ analyzer's shape by default:
    notion of "listed but not directly selectable"). This contract does
    not choose between (a) and (b) — it requires the future issue to.
 
-   **The same decision has an `--hunt all` side this contract also does
-   not resolve on the future issue's behalf, but does require it to
-   address explicitly.** §6's `select("all")` already excludes any
-   `full_scope_capable=False` spec from a full-scope run (§2's corrected
-   invariant) — so a targeted-only analyzer's registration, by itself,
-   silently changes nothing about `--hunt all`'s *record count*. But that
-   silence is exactly the problem: a registered, schema-listed,
-   `HUNTERS`-listed analyzer that never appears in a "complete"
-   `--hunt all` run, with nothing in `records`, `summary`, or console
-   output saying why, is an undisclosed coverage gap — indistinguishable
-   from that analyzer having simply been forgotten. This contract
+   **The same decision has an `--hunt all` side, and a single-identity
+   `--hunt <identity>` message side, this contract originally left to a
+   future issue -- both are now CLOSED by #73 itself for the crash/
+   traceback half; the remaining disclosure-mechanism DESIGN is still
+   deferred, per the revision notes below.** §6's `select("all")` already
+   excludes any `full_scope_capable=False` spec from a full-scope run
+   (§2's corrected invariant) — so a targeted-only analyzer's
+   registration, by itself, changes nothing about `--hunt all`'s *record
+   count* beyond the one entry it excludes. A registered, schema-listed,
+   `HUNTERS`-listed analyzer that never appears in a "complete" `--hunt
+   all` run, with nothing in `records`, `summary`, or console output
+   saying why, is still an undisclosed coverage gap — indistinguishable
+   from that analyzer having simply been forgotten. This contract still
    requires, but does not itself design, a disclosure mechanism: the
    future issue registering the first `full_scope_capable=False` analyzer
    must make `select("all")` excluding a spec **visible** somewhere in
    `--hunt all`'s own output (a `CoverageReport` limitation, a
    `Diagnostic`, a dedicated `summary` field — the concrete carrier is
    that issue's to choose, "must be visible" is what this contract
-   freezes). That same issue must also explicitly update every fixture
-   §12/item 7 name — item 7's own full-scope-vs-targeted-only fixture
-   table is the single, authoritative list of exactly what changes for
-   this case (not repeated or re-derived here, to avoid the "one fact,
-   two places" problem §5 itself warns against for `coverage_status`) —
-   as part of the same review, not as a follow-up discovered by a failing
-   test.
+   freezes) — that part of item 4 remains open. That same issue must also
+   explicitly update every fixture §12/item 7 name — item 7's own
+   full-scope-vs-targeted-only fixture table is the single, authoritative
+   list of exactly what changes for this case (not repeated or re-derived
+   here, to avoid the "one fact, two places" problem §5 itself warns
+   against for `coverage_status`) — as part of the same review, not as a
+   follow-up discovered by a failing test.
+
+   **Revision note (finding, closed by #73):** an earlier version of this
+   item's own text ("silently changes nothing about `--hunt all`'s record
+   count") overstated what happened to `--hunt all` as a whole — direct
+   reproduction showed the registration never actually reached a state
+   where a record count could be observed: `dumpex.hunt.summary.
+   build_hunt_summary(selected="all")` used to assert `records` matched
+   the **unfiltered** `HUNTERS` unconditionally, so the very six-of-seven
+   `records` list `select("all")`'s own filtering correctly produced
+   failed that assertion instead, with a bare `ValueError`, AFTER
+   `_execute_full_scope()` had already run all six surviving real
+   builders — including YARA's full segment scan and obfuscation's
+   per-region decode — to completion. This is now fixed:
+   `build_hunt_summary()` takes an explicit `full_scope_hunters` keyword,
+   and `dumpex.hunt.full_scope_hunters()` (`tuple(spec.identity for spec
+   in REGISTRY.select("all"))` — exactly this item's own "the filter
+   belongs on the `HUNTERS` side" formula from §2) is what
+   `collect_hunt()`/`cmd_hunt()`/`dumpex/cli.py`'s own second, redundant
+   `build_hunt_summary()` call now pass, so `select("all")`'s own filtered
+   roster and `build_hunt_summary`'s own expectation can no longer
+   disagree. "Changes nothing about `--hunt all`'s record count [beyond
+   the excluded entry]" is now actually true end to end, not merely of
+   `select("all")` in isolation. Proven by
+   `tests/integration/test_registry_extension_and_failure_gate.py`'s
+   `test_hunt_all_succeeds_and_excludes_a_targeted_only_registration` and
+   `test_cmd_hunt_all_also_succeeds_and_excludes_a_targeted_only_
+   registration`, which replaced this file's own earlier characterization
+   tests that had pinned the crash. **What remains open, unchanged by
+   this fix**: the disclosure-mechanism DESIGN two paragraphs above --
+   making the exclusion *visible* in `--hunt all`'s own output -- is not
+   implemented; only the crash that used to make the record-count claim
+   false is fixed.
+
+   **A second, separate revision note (finding, closed by #73) on option
+   (a) itself:** option (a)'s own text above, "fail with a clear ...
+   message (failure #11's own job)," describes the intended landing point
+   for a single-identity `--hunt <identity>` request against a
+   targeted-only analyzer — `cmd_hunt()` used to have no `except` clause
+   around the call that raises `UnsupportedFullScopeRequest`, so the
+   exception propagated all the way to `dumpex.cli.main()`'s own `except
+   BaseException: ... raise` as a bare Python traceback, not a directed
+   message. This is now fixed: `cmd_hunt()` catches `_registry.
+   UnsupportedFullScopeRequest` around that call and translates it into
+   the same directed-message-then-`sys.exit(1)` shape its own unknown-TTP
+   branch, a few lines earlier in the same function, already used —
+   proven against USER-VISIBLE behavior (the printed message and the
+   process exit code, not merely the exception type) by
+   `tests/integration/test_registry_extension_and_failure_gate.py`'s
+   `test_cmd_hunt_translates_a_targeted_only_request_into_a_clear_user_
+   facing_message`. Option (a)'s message landing point is now
+   implemented; `collect_hunt()` (the JSON-only, non-console API) is
+   deliberately left raising the plain, well-named
+   `UnsupportedFullScopeRequest` for a programmatic caller, consistent
+   with its own existing precedent of raising (never printing) for every
+   other invalid-input case (e.g. an unknown `selected` value).
 5. **`targeted_capability` defaults to `None` (unsupported) and must be
    actively opted into** with a real `TargetedCapability` value — never
    inherited "because it's similar to an existing targeted-capable
@@ -1442,13 +1634,25 @@ analyzer's shape by default:
    - **Targeted-only (`full_scope_capable=False`)**: **no** `--hunt
      <identity>` console/JSON golden — that path is a `select()` capability
      failure (§7.2 failure #11) by design, so the correct fixture is a
-     negative assertion (the specific exception/exit behavior, not a
-     successful-run golden); `all_console.txt`/`all_hunt_dict.json` may
+     negative assertion (the specific behavior a user actually sees: a
+     directed `RED(...)` message and `sys.exit(1)`, per option (a)'s own
+     landing point closed by #73 — never a bare exception type, and never
+     a successful-run golden); `all_console.txt`/`all_hunt_dict.json` may
      still change, but only because of item 4's own disclosure
-     requirement (a visible "excluded, targeted-only" signal), never
-     because of a record-count change — `--hunt all`'s record count is
-     unaffected by a `full_scope_capable=False` registration (§6's
-     `select("all")` filtering, §2). `test_hunt_all_seven_collectors.py`'s
+     requirement (a visible "excluded, targeted-only" signal, still open
+     — see item 4's own revision note), never because of a record-count
+     change — `--hunt all`'s record count is unaffected by a
+     `full_scope_capable=False` registration (§6's `select("all")`
+     filtering, §2). **Revision note, finding closed by #73:** an earlier
+     version of this item required, as separate future work, that
+     `dumpex.hunt.summary.build_hunt_summary`'s own `selected == "all"`
+     branch be updated to filter its `expected_hunters` by
+     `full_scope_capable` — that half is DONE, in #73 itself, via the
+     `full_scope_hunters` keyword and `dumpex.hunt.full_scope_hunters()`
+     (see item 4's own revision note for the full finding and fix); only
+     the disclosure-mechanism DESIGN (making the exclusion visible in
+     `--hunt all`'s own output) remains open for the future issue this
+     item still assigns it to. `test_hunt_all_seven_collectors.py`'s
      **two hard-coded lists ARE still extended to eight, `== HUNTERS`
      unchanged** — an earlier draft of this item said otherwise ("that
      file proves the full-scope collector set, which this identity is not
@@ -1889,7 +2093,74 @@ names:
     proving the issue's own "registry failures occur before evidence
     collection and must not be reported as a clean analyzer result"
     constraint at the layer an investigator actually calls, not only at
-    the registry's own internal seam.
+    the registry's own internal seam. Its sentinel table is itself
+    guarded (`test_builder_attr_table_covers_exactly_hunters`, mirroring
+    `test_analyzer_registry.py`'s own `_ADAPTER_ATTR` guard) so a missing
+    entry fails loudly rather than silently under-guarding a future
+    eighth identity. A generic simulated exception proves only that SOME
+    `select()` failure reaches the caller before any builder runs; a
+    SEPARATE case proves a real, named §7.2 exception
+    (`UnsupportedFullScopeRequest`, failure #11) does the same, through a
+    genuinely valid registry (one real spec downgraded to
+    `full_scope_capable=False`, built through the real validating
+    `AnalyzerRegistry(...)` constructor) reached the same way `cmd_hunt()`
+    would reach it in production.
+  - **Three production findings this module surfaced, ALL closed in
+    production code** (all outside the two guarantees above, discovered
+    while building the targeted-only-registration scenario the second
+    guarantee's own real-exception case needed): `option_names`'s missing
+    third validation direction against `_registry.KNOWN_OPTION_NAMES`
+    (§5 field 7's and §7.1 failure #7's own revision notes have the full
+    finding, including the second-pass fix below) is closed at TWO
+    layers, neither one a second independently-drifting literal:
+    `dumpex/hunt/__init__.py`'s `_option_view(ref_dir, yara_dir)` is the
+    ONE real function both `_execute_full_scope()` and the import-time
+    guard call to build/read the executor's real options view, checked
+    at IMPORT time against `_registry.KNOWN_OPTION_NAMES` (matching
+    every other §7.1 invariant's whole-CLI blast radius) by
+    `_check_option_names_in_sync()` — proven to compare the REAL
+    `_option_view()` output, not two independently-declared constants, by
+    `test_check_option_names_in_sync_is_actually_called_at_import_time_
+    against_the_real_option_view` (an AST test that inspects the call's
+    own arguments, not merely that a same-named call exists — the
+    earlier, weaker version of this test could not have caught the exact
+    regression it now guards against) — AND a second, PER-CALL preflight
+    inside `_execute_full_scope()` itself, checking every selected spec's
+    `option_names` against THAT call's own real `options` dict before any
+    builder runs, closing the residual gap import-time-only validation
+    cannot by construction close (a global mutation after this process
+    already imported `dumpex.hunt`), proven end to end through the real
+    `cmd_hunt()`/`collect_hunt()` entry points with zero real builder
+    invocations by `test_a_registry_declaring_a_new_known_option_name_
+    without_updating_option_view_fails_with_zero_builder_calls`. Both
+    layers raise `_registry.InvalidAnalyzerSpec` — never a bare
+    `AssertionError` a caller could only recognize by matching message
+    text. `build_hunt_summary(selected="all")`'s unfiltered `HUNTERS`
+    assertion, which used to crash `--hunt all` the moment a
+    `full_scope_capable=False` spec was registered (§2's and §10 item
+    4/7's own revision notes have the full finding — including that the
+    crash was not a cheap fail-fast: all six surviving real builders ran
+    to completion first, a full scan's worth of evidence discarded, not
+    skipped, before the crash), is now CLOSED via `build_hunt_summary`'s
+    own `full_scope_hunters` keyword and `dumpex.hunt.full_scope_
+    hunters()`, proven by `test_hunt_all_succeeds_and_excludes_a_
+    targeted_only_registration` and `test_cmd_hunt_all_also_succeeds_and_
+    excludes_a_targeted_only_registration` (which replaced this module's
+    own earlier characterization tests that had pinned the crash). A
+    third finding surfaced the same way is also closed — §10 item 4's own
+    recommended option (a) had no implemented message/exit-code landing
+    point in `cmd_hunt()`, so its own `UnsupportedFullScopeRequest`
+    propagated as a bare traceback — `cmd_hunt()` now catches it and
+    translates it into the same directed-message-then-`sys.exit(1)` shape
+    its own unknown-TTP branch already used, proven against user-visible
+    behavior (not merely the exception type) by
+    `test_cmd_hunt_translates_a_targeted_only_request_into_a_clear_user_
+    facing_message`; documented in item 4's own second revision note.
+    **What remains open, for all three findings' shared root cause**: the
+    disclosure-mechanism DESIGN (making a targeted-only exclusion visible
+    in `--hunt all`'s own output) is still deferred to the future issue
+    that registers the first genuine one — only the crash/traceback that
+    used to make the surrounding claims false is fixed here.
 
 #71 extends this set (adds registry-level unit tests for §5–§7's
 construction/call-time failure modes, plus the roster cross-check above)
@@ -1897,8 +2168,17 @@ rather than replacing any of it; #72 re-points these fixtures' target
 call path at `AnalyzerRegistry.select()` only once it can prove
 byte-identical behavior against every one of them, golden files included;
 #73 adds the future-analyzer extension fixture and the entry-point-level
-failure gate above, closing the two guarantees no prior issue's own test
-set covered end to end.
+failure gate above, and closes all three production findings above in
+production code (the `option_names`/`KNOWN_OPTION_NAMES` finding at both
+the import-time and per-call layers, after an intermediate single-layer
+fix reopened the same regression it was meant to close — see §7.1
+failure #7's own second revision note; the `build_hunt_summary`/
+targeted-only crash and the `cmd_hunt()` bare-traceback finding both via
+the fixes and tests above) — closing the two guarantees no prior issue's
+own test set covered end to end, and closing three more findings that
+neither #71 nor #72 had reason to find, with only the disclosure-
+mechanism DESIGN (not a bug, a genuinely undesigned future feature) still
+left open.
 
 ---
 
@@ -1921,15 +2201,36 @@ suggested acceptance criteria:
   registration metadata alone (§9's two closing invariants).
 - Every invalid registry/capability state (§7) has a named, deterministic,
   fail-closed outcome — construction-time failures crash import;
-  call-time failures fail before any analyzer runs; the two-directional
-  option-name check (§7.1 failure #7), the corrected, non-contradictory
-  capability check with its `TargetedGrant` shape validation bound to the
-  correct public source vocabulary rather than `CoverageSnapshot`'s
-  internal fields (§7.1 failure #5), the single-identity full-scope gate
-  (§7.2 failure #11, symmetric with failure #10's targeted-scan gate), and
-  the fail-closed-on-empty-grant gate (§7.2 failure #12 — `grants =
+  call-time failures fail before any analyzer runs; the (now
+  three-directional, revision note below) option-name check (§7.1
+  failure #7), the corrected, non-contradictory capability check with its
+  `TargetedGrant` shape validation bound to the correct public source
+  vocabulary rather than `CoverageSnapshot`'s internal fields (§7.1
+  failure #5), the single-identity full-scope gate (§7.2 failure #11,
+  symmetric with failure #10's targeted-scan gate), and the
+  fail-closed-on-empty-grant gate (§7.2 failure #12 — `grants =
   frozenset()` means "not yet granted," never "unrestricted") close the
   gaps earlier drafts of this contract left open.
+
+  **Revision note (finding, closed by #73):** an earlier version of this
+  contract's own draft found one exception to "call-time failures fail
+  before any analyzer runs" that this bullet did not itself carve out:
+  the `--hunt all` path for a registered `full_scope_capable=False`
+  analyzer used to fail only AFTER `_execute_full_scope()` had already
+  run every surviving real builder to completion — the crash was inside
+  `build_hunt_summary()`, strictly downstream of a full round of real
+  evidence collection, not before it (§2's and §10 item 4/7's own
+  revision notes have the full finding). That exception is now closed —
+  `--hunt all` no longer crashes for this registration at all, so this
+  bullet's claim holds unconditionally, for every call-time failure this
+  contract names, with no carve-out remaining. **`§7.1 failure #7`'s own
+  check is now three-directional, not two**:
+  `option_names` is validated against the builder's own signature, in
+  both directions, AND against `_registry.KNOWN_OPTION_NAMES` (the set
+  `_execute_full_scope()` actually knows how to supply a value for) — a
+  finding this issue closed in production code, not merely documented
+  (§5 field 7's and §7.1 failure #7's own revision notes have the full
+  finding).
 - The existing monkeypatchability seam, extended uniformly to all three
   adapters (§8), the one-build/two-consumer call-count invariant, and the
   same-report-instance invariant between `renderer` and `record_projector`

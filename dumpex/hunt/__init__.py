@@ -52,6 +52,76 @@ from dumpex.output.records import HUNTERS
 from dumpex.hunt import _registry
 
 
+def _option_view(ref_dir: "str | None", yara_dir: "str | None") -> dict:
+    """The ONE, real mapping from `_execute_full_scope()`'s own public
+    keyword parameters to the internal option names `AnalyzerSpec.
+    option_names` values are drawn from -- `_execute_full_scope()` below
+    and the import-time drift guard immediately below THIS function both
+    call this same function, rather than each maintaining its own
+    hand-written `{"ref_dir": ..., "rules_dir": ...}` literal.
+
+    Finding, #73: an earlier version of this guard compared TWO
+    independently hand-maintained frozensets (a local `_OPTION_NAMES`
+    constant here against `_registry.KNOWN_OPTION_NAMES`) -- neither one
+    was actually derived from the real dict `_execute_full_scope()`
+    builds, so a future edit could keep both constants in lockstep and
+    still leave THIS dict's own keys out of sync with them, reopening the
+    exact bare-`KeyError`-after-six-real-builders regression this whole
+    guard exists to close (reproduced directly: `KNOWN_OPTION_NAMES` and
+    the old `_OPTION_NAMES` both updated to add a name, `_execute_full_
+    scope()`'s own dict literal left untouched -- the import-time guard
+    passed, and `collect_hunt("all")` still crashed with a bare
+    `KeyError` after every other selected builder had already run).
+    Making this function the one place either an import-time OR a
+    per-call check reads means there is no second literal left to drift."""
+    return {"ref_dir": ref_dir, "rules_dir": yara_dir}
+
+
+def _check_option_names_in_sync(local_names: frozenset, registry_names: frozenset) -> None:
+    """A real function (never a bare module-level `if`/`raise` alone),
+    independently unit-testable against synthetic frozensets without
+    needing to reload this module -- the same "extract into a named,
+    directly-testable function" pattern `_registry.py`'s own
+    `_validate_scoped_sources()` already establishes for its own
+    import-time invariants. Raises `_registry.InvalidAnalyzerSpec` --
+    the same named exception family every other §7.1 construction-time
+    failure raises -- never a bare `AssertionError`, so a caller (or a
+    test) can catch exactly this gate rather than pattern-matching
+    message text (the same rule `_registry.py`'s own module docstring
+    states for its own exceptions)."""
+    if local_names != registry_names:
+        raise _registry.InvalidAnalyzerSpec(
+            "dumpex.hunt._execute_full_scope()'s own options view has drifted "
+            "from _registry.KNOWN_OPTION_NAMES -- update both together")
+
+
+# Checked once, right here, at IMPORT time -- matching every other §7.1
+# construction-time invariant's whole-CLI blast radius (`dumpex.cli`
+# imports `dumpex.hunt` at module scope, so a mismatch here fails import,
+# not merely the first `--hunt` invocation that happens to reach it).
+# `_option_view(None, None)`'s own KEYS are what matter here, not the
+# `None` values passed to build them -- no request context exists yet at
+# import time.
+_check_option_names_in_sync(frozenset(_option_view(None, None)), _registry.KNOWN_OPTION_NAMES)
+
+
+def full_scope_hunters() -> tuple:
+    """The exact, capability-filtered identity set `--hunt all` actually
+    selects, in `HUNTERS` order (contract §6's own `AnalyzerRegistry.
+    select("all")`) -- what `dumpex.hunt.summary.build_hunt_summary
+    (selected="all")`'s own `full_scope_hunters` keyword must be told, so
+    its internal roster check matches what `_execute_full_scope()` (below)
+    actually built `records` from, rather than the unfiltered `HUNTERS`
+    tuple it silently assumed before (finding, #73 -- see
+    `build_hunt_summary`'s own docstring for the full finding). Public
+    (no leading underscore) so `dumpex/cli.py`'s own second, redundant
+    `build_hunt_summary()` call -- which attaches `investigation_actions`
+    to the summary `cmd_hunt()` already computed once internally, rather
+    than importing `_registry` directly -- can pass the identical value
+    `cmd_hunt()` itself used for the same invocation."""
+    return tuple(spec.identity for spec in _registry.REGISTRY.select("all"))
+
+
 def _hunt_coverage_report(records: "list", summary: dict) -> CoverageReport:
     """The single, document-level `CommandResult.coverage` for `--hunt`
     -- required to be ONE CoverageReport instance, unlike the real
@@ -167,8 +237,34 @@ def _execute_full_scope(mf: MinidumpFile, selected: str, *, ref_dir: str = None,
     provenance today, a future analyzer's own hook tomorrow) reads
     `execution.provenance.get(identity)` instead of a growing set of
     per-analyzer `if identity == "yara":` branches."""
-    options = {"ref_dir": ref_dir, "rules_dir": yara_dir}
+    options = _option_view(ref_dir, yara_dir)
     specs = _registry.REGISTRY.select(selected)
+
+    # `options`' own keys are checked against `_registry.KNOWN_OPTION_
+    # NAMES` once already, at IMPORT time (this module's own top-level
+    # `_check_option_names_in_sync(...)` call, above `_option_view()`) --
+    # that guard alone catches a genuine SOURCE-level drift (an edit that
+    # leaves `_option_view()` and `KNOWN_OPTION_NAMES` disagreeing) the
+    # moment `dumpex.cli` next imports `dumpex.hunt`, before any `--hunt`
+    # invocation ever runs. It cannot, by construction, catch a mismatch
+    # introduced AFTER this process already imported `dumpex.hunt` (a
+    # test monkeypatching `_registry.KNOWN_OPTION_NAMES` mid-session, for
+    # instance) -- import-time validation is a boot-time invariant, not a
+    # continuously-re-checked one. This second, PER-CALL preflight closes
+    # that residual gap unconditionally, for every invocation regardless
+    # of what happened to global state in between: every selected spec's
+    # `option_names` is validated against THIS call's own real `options`
+    # dict, for every spec, BEFORE the loop below calls a single builder
+    # -- not discovered one `KeyError` at a time, mid-loop, after
+    # whichever earlier-selected analyzers' builders already ran.
+    known = frozenset(options)
+    for spec in specs:
+        if not spec.option_names <= known:
+            raise _registry.InvalidAnalyzerSpec(
+                f"{spec.identity}: option_names "
+                f"{sorted(spec.option_names - known)} are not in this call's own "
+                f"options view {sorted(known)} -- _option_view() and "
+                f"_registry.KNOWN_OPTION_NAMES have drifted apart")
 
     records = []
     results = {}
@@ -223,7 +319,7 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
     execution = _execute_full_scope(mf, selected, ref_dir=ref_dir, yara_dir=yara_dir)
     records = execution.records
 
-    summary = build_hunt_summary(records, selected=selected)
+    summary = build_hunt_summary(records, selected=selected, full_scope_hunters=full_scope_hunters())
     summary["investigation_actions"] = _investigation_actions_json(records, selected, mf)
     return CommandResult(kind="hunt", records=records,
                           coverage=_hunt_coverage_report(records, summary), summary=summary)
@@ -319,8 +415,21 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # Report already built above (never a re-scan), so computing this
     # even for a caller that ignores the second return value costs
     # nothing worth gating.
-    execution = _execute_full_scope(mf, ttp, ref_dir=ref_dir, yara_dir=yara_dir,
-                                     verbose=verbose, render=True)
+    # §7.2 failure #11 (contract §10 item 4, option (a)) -- `ttp` is a
+    # real `HUNTERS` member but its own spec is `full_scope_capable=False`
+    # (targeted-scan only, unreachable this release since all seven real
+    # specs are `full_scope_capable=True`, but a real, named exception
+    # `_registry.REGISTRY.select()` already raises for it, contract §6).
+    # Caught here and translated into the same clear-message-then-exit(1)
+    # shape the unknown-TTP branch above already uses, rather than
+    # letting it propagate as a bare traceback out of `cli.main()`.
+    try:
+        execution = _execute_full_scope(mf, ttp, ref_dir=ref_dir, yara_dir=yara_dir,
+                                         verbose=verbose, render=True)
+    except _registry.UnsupportedFullScopeRequest:
+        print(RED(f"[!] '{ttp}' is a targeted-scan-only analyzer and cannot be run via "
+                   f"full-scope --hunt (neither directly, nor as part of --hunt all)."))
+        sys.exit(1)
     results = execution.results
     records = execution.records
     yara_provenance = execution.provenance.get("yara")   # this call's own YARA rule
@@ -336,7 +445,7 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     # dumpex.hunt.summary.build_hunt_summary()'s own docstring. Computed
     # unconditionally (cheap: pure aggregation over already-built
     # records, no re-scan) even for a single-TTP run that never reads it.
-    summary = build_hunt_summary(records, selected=ttp)
+    summary = build_hunt_summary(records, selected=ttp, full_scope_hunters=full_scope_hunters())
 
     # Rule provenance (path + sha256 of the rules.yaml that actually
     # produced these verdicts) is surfaced once, in --json meta.rules
