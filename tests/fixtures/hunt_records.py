@@ -2,7 +2,7 @@
 Synthetic HunterRecord fixtures for the v2.4 hunt migration's PR3 tests
 (schema validation, structured-output checks) -- no real dump, no real memory
 content, same "fully synthetic, checked-in fixture" rule
-docs/hunt_migration_field_matrix.md's own revision note establishes for
+docs/developer/hunt_migration_field_matrix.md's own revision note establishes for
 tests/fixtures/hunt_cases.py. These build dumpex.output.records.HunterRecord
 instances directly (the same way tests/unit/test_hunt_records.py does) --
 NOT through any hunter's real collect_*() pipeline (every hunter has one

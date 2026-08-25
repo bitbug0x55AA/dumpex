@@ -6,7 +6,7 @@ stamps into `meta.schema_version`. Bumping it is never a one-line change:
 a new `dumpex/schemas/dumpex-output-v<X>.schema.json` has to ship with it,
 `dumpex.schemas.CURRENT_SCHEMA` has to name that file, the file's own
 `$id`/`title`/`meta.schema_version.const` have to claim the same version,
-docs/OUTPUT_SCHEMA.md's contract table has to move `(current)` onto it,
+docs/user/OUTPUT_MIGRATION.md's contract table has to move `(current)` onto it,
 and every previous schema has to stay installed and untouched so
 already-collected output remains validatable.
 
@@ -104,10 +104,10 @@ def test_no_gaps_in_the_packaged_v2_version_history():
     assert minors == list(range(0, _version_tuple(SCHEMA_VERSION)[1] + 1))
 
 
-# ── docs/OUTPUT_SCHEMA.md's contract table ───────────────────────────────
+# ── docs/user/OUTPUT_MIGRATION.md's contract table ──────────────────────
 
 def _contract_table_rows():
-    doc = (_REPO_ROOT / "docs" / "OUTPUT_SCHEMA.md").read_text(encoding="utf-8")
+    doc = (_REPO_ROOT / "docs" / "user" / "OUTPUT_MIGRATION.md").read_text(encoding="utf-8")
     table = doc.split("| Commands | Contract | Schema file |", 1)[1].split("\n\n", 1)[0]
     return [line for line in table.splitlines() if line.startswith("| ") and "schema.json" in line]
 

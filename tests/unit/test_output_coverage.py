@@ -2304,7 +2304,7 @@ def test_oversized_skipped_unknown_source_is_not_kind_or_scope_constrained():
     assert render_limitation(limitation)
 
 
-# ── --process (issue #40 / docs/recon_process_sysinfo_handles_contract.md
+# ── --process (issue #40 / docs/developer/recon_process_sysinfo_handles_contract.md
 # §6.1) -- PROCESS_*/IAT_* limitation codes ──────────────────────────────
 
 def test_process_sources_absent_is_absent_capable_single_source():
@@ -2457,7 +2457,7 @@ def test_process_and_iat_codes_are_all_registered_and_render():
         assert code in _CODE_SPECS
 
 
-# ── --sysinfo (issue #41 / docs/recon_process_sysinfo_handles_contract.md
+# ── --sysinfo (issue #41 / docs/developer/recon_process_sysinfo_handles_contract.md
 # §6.1) -- ENVIRONMENT_* limitation codes ─────────────────────────────────
 
 @pytest.mark.parametrize("code", [
@@ -2615,7 +2615,7 @@ def test_sysinfo_dump_file_source_has_a_display_name():
     assert _display_name("dump_file") == "Dump file"
 
 
-# ── --handles (issue #42 / docs/recon_process_sysinfo_handles_contract.md
+# ── --handles (issue #42 / docs/developer/recon_process_sysinfo_handles_contract.md
 # §5.5/§6.1) -- HANDLE*/HANDLES_* limitation codes ────────────────────────
 
 _HANDLE_GROUP_CODES = (

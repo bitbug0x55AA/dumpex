@@ -60,7 +60,7 @@ Hunters distinguish three things that are easy to conflate:
 `DETECTED` with partial coverage is still a positive finding. Conversely,
 `NOT_DETECTED_IN_SCANNED_SCOPE` is not proof that the behavior was absent from
 the process or host. Exact disposition rules and per-hunter limits are in the
-[SOC guide](SOC_QUICKSTART.md#the-four-fields-that-matter).
+[SOC guide](SOC_QUICKSTART.md#disposition-matrix).
 
 ## Process injection
 
@@ -197,4 +197,4 @@ do not turn a finding into proof that an ATT&CK technique occurred.
 
 Some Beacon parsing and memory signatures build on public defensive research.
 The complete source, license, and nature-of-use record is maintained in
-[`CREDITS`](../CREDITS).
+[`CREDITS`](../../CREDITS).

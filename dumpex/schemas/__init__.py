@@ -5,12 +5,12 @@ directory next to the source checkout is never installed into a wheel
 (setuptools only packages files under packages it discovers, see
 pyproject.toml's [tool.setuptools.packages.find]), so a consumer with
 only the installed distribution had no way to fetch these files at all.
-See docs/OUTPUT_SCHEMA.md for the versioning policy.
+See docs/user/OUTPUT_MIGRATION.md for the versioning policy.
 """
 from importlib import resources
 
 # The schema every command -- including --hunt -- now produces (see
-# docs/OUTPUT_SCHEMA.md's "One JSON contract" section). Use this (or
+# docs/user/OUTPUT_SCHEMA.md's "Current contract" section). Use this (or
 # current_schema_path() below) in new code instead of hardcoding the
 # version string; schema_path()'s own default stays pinned to v1.1 for
 # backward compatibility with existing callers (see its own docstring) --

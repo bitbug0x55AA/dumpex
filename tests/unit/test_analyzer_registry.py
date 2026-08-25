@@ -1,6 +1,6 @@
 """
 Unit tests for `dumpex.hunt._registry` (issue #71, implementing the
-contract frozen in `docs/hunt_analyzer_registry_contract.md`, issue #70).
+contract frozen in `docs/developer/hunt_analyzer_registry_contract.md`, issue #70).
 
 Covers: the real, shipped `REGISTRY`'s roster/order/capability shape; the
 call-time failure modes `AnalyzerRegistry.get()`/`select()`/

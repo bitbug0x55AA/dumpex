@@ -1,6 +1,6 @@
 """Type-specific decoding of a captured `GrantedAccess` mask into
 investigator-readable right names -- issue #102, deferred out of #42/#98
-by docs/recon_process_sysinfo_handles_contract.md §5.2.
+by docs/developer/recon_process_sysinfo_handles_contract.md §5.2.
 
 A PRESENTATION projection and nothing else. `HandleRecord.granted_access`
 stays the raw integer it has always been on the wire (§1.3), the v2.13

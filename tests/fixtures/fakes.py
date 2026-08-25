@@ -259,7 +259,7 @@ def empty_mf() -> "FakeMF":
     `_empty_mf()` independently duplicated in tests/integration/
     test_collect_hunt_single_scan.py, test_hunt_all_seven_collectors.py,
     and test_collect_hunt_is_silent.py into one shared definition
-    (docs/hunt_analyzer_registry_contract.md §12)."""
+    (docs/developer/hunt_analyzer_registry_contract.md §12)."""
     class MF(FakeMF):
         memory_segments_64 = None
         memory_segments = None

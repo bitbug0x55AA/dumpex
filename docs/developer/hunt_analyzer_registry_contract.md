@@ -2,13 +2,18 @@
 
 **Status: frozen decision record — self-contained.**
 
+> **Documentation class:** implemented engineering decision record. The
+> analyzer registry and registry-driven full-scope execution are present in the
+> current codebase. Dependency and “blocks” language below records the original
+> delivery sequence, not current CLI guidance.
+
 Parent: #69 (analyzer registry and registry-driven hunt orchestration).
 Blocked by: #44. Blocks #71 (immutable `AnalyzerSpec`/`AnalyzerRegistry`
 implementation) and, transitively, #72 (routing `collect_hunt()`/
 `cmd_hunt()` through the registry) and #73 (full-scope compatibility
 freeze). This document **adds no production registry code** — it is the
 matrix and the rule set #71 implements against and #72/#73 verify against,
-exactly as `docs/recon_profile_contract.md` was for #43. Every fact below
+exactly as `docs/developer/recon_profile_contract.md` was for #43. Every fact below
 is read off the current tree (`dumpex/output/records.py`,
 `dumpex/hunt/__init__.py`, and each hunter package), not invented — where
 a decision genuinely belongs to a later issue (#59/#60's targeted-scan
@@ -175,7 +180,7 @@ read §9 alone to know exactly what it is *not* allowed to duplicate.
   (`tests/unit/test_hunter_roster_alignment.py:111-157`) checks by
   actually running `cli.main()`/parsing the files: `--hunt`'s own CLI
   help text (`test_cli_hunt_help_lists_exactly_the_roster_in_order`),
-  `docs/CLI_REFERENCE.md`'s `--hunt TTP` table row
+  `docs/user/CLI_REFERENCE.md`'s `--hunt TTP` table row
   (`test_cli_reference_doc_lists_exactly_the_roster_in_order`), and
   `README.md`'s "Hunt overview" table
   (`test_readme_hunt_overview_table_covers_exactly_the_roster_in_order`,
@@ -190,7 +195,7 @@ read §9 alone to know exactly what it is *not* allowed to duplicate.
   **region** (a `MemoryInfo` range), **segment** (a contiguous scanned
   byte run, YARA's/CS Beacon's own vocabulary — see
   `coverage.rule_files_compiled`/`segments_read` in
-  `docs/hunt_migration_field_matrix.md`'s yara section and
+  `docs/developer/hunt_migration_field_matrix.md`'s yara section and
   `scanner.scan_segments` in `dumpex/hunt/cs_beacon/domain.py:294`), or
   **region+layer** (obfuscation's own three-tier decode model, see its
   `report_console.py` verbose-only `_scan_layers_lines()`).
@@ -549,7 +554,7 @@ index in the registry's own frozen registration sequence, validated
 against `HUNTERS.index(identity)` at construction (§7, failure #4) — never
 a second, independently-settable ordinal, for the same reason
 `coverage_status` was retired rather than kept alongside
-`coverage.status` (`docs/hunt_migration_field_matrix.md`'s cross-cutting
+`coverage.status` (`docs/developer/hunt_migration_field_matrix.md`'s cross-cutting
 finding #2): one fact, one place, never two sources of truth that could
 silently disagree.
 
@@ -1425,7 +1430,7 @@ analyzer's shape by default:
    down by hand in **ten** other places today (§1's "roster artifact"
    entry), and `tests/unit/test_hunter_roster_alignment.py` enforces
    **all ten already** — including the three human-facing ones (`--hunt`'s
-   CLI help text, `docs/CLI_REFERENCE.md`'s `--hunt TTP` row, and
+   CLI help text, `docs/user/CLI_REFERENCE.md`'s `--hunt TTP` row, and
    `README.md`'s "Hunt overview" table), each checked by that test module
    actually running `cli.main()` or parsing the file, not merely by
    convention. The four schema enums (`hunterRecord.hunter`,
@@ -2016,7 +2021,7 @@ names:
   cannot-fail-alone assertion.
 - **`tests/fixtures/hunt_cases.py`** — the synthetic, `FakeMF`-backed
   fixture source every scenario above is built from; never real
-  corpus-derived output (see `docs/hunt_migration_field_matrix.md`'s own
+  corpus-derived output (see `docs/developer/hunt_migration_field_matrix.md`'s own
   revision note on why `tests/corpus/` output must never be committed).
 - **(new, #73-owned)**
   `tests/integration/test_registry_extension_and_failure_gate.py` — the

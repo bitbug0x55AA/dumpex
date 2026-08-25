@@ -1,5 +1,5 @@
 """Closed, immutable analyzer catalog for `--hunt` (issue #71, implementing
-the frozen contract in `docs/hunt_analyzer_registry_contract.md`, issue
+the frozen contract in `docs/developer/hunt_analyzer_registry_contract.md`, issue
 #70).
 
 `AnalyzerSpec` is a frozen, validated value object -- one per `HUNTERS`

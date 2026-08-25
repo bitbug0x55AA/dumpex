@@ -1,6 +1,6 @@
 """
 Shared, side-effect-free process-metadata layer -- issue #37's frozen
-contract (docs/recon_process_sysinfo_handles_contract.md), §3.2/§3.3/§3.4/
+contract (docs/developer/recon_process_sysinfo_handles_contract.md), §3.2/§3.3/§3.4/
 §4.2/§4.4, built by issue #38 so `--process` and `--sysinfo` (issues
 #40/#41) can both consume it without composing each other's command
 collectors or duplicating PEB/MiscInfo policy.

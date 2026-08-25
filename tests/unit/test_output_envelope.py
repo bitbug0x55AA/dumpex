@@ -34,7 +34,7 @@ def test_meta_evidence_is_a_single_element_array(tmp_path):
     meta = _meta(tmp_path)
     # The stamped value must be SCHEMA_VERSION -- what SCHEMA_VERSION
     # itself has to agree with (the packaged schema file, its own const,
-    # docs/OUTPUT_SCHEMA.md's contract table) is pinned in
+    # docs/user/OUTPUT_MIGRATION.md's contract table) is pinned in
     # tests/unit/test_schema_version_wiring.py, not re-typed here.
     assert meta["schema_version"] == SCHEMA_VERSION
     assert isinstance(meta["evidence"], list)

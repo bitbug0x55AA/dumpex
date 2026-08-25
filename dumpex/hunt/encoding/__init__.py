@@ -74,7 +74,7 @@ breaking change to those specific fields -- most notably, sleep_mask's
 rotation moved to a new `key_offset` field, matching what `offset` means
 for every other layer (byte offset within the region). See
 dumpex/schemas/dumpex-output-v1.1.schema.json (which formally types these
-fields for the first time) and docs/OUTPUT_SCHEMA.md's versioning policy
+fields for the first time) and docs/user/OUTPUT_MIGRATION.md's versioning policy
 for the full breaking-change writeup. Tunable constants (B64_MIN_LEN, XOR_*,
 ENTROPY_*, SLEEP_MASK_*, ENCODING_BUDGET_*, DECODE_SCAN_MAX,
 DECOMPRESS_MAX_OUTPUT) and `read_region` are re-exported here and remain

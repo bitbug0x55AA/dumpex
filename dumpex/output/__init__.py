@@ -2,7 +2,7 @@
 
 Kept entirely separate from dumpex/ui/structured.py (the v1.1 contract,
 which --hunt still uses unchanged) so migrating a command onto v2 never
-risks the existing hunt JSON shape. See docs/OUTPUT_SCHEMA.md for the
+risks the existing hunt JSON shape. See docs/user/OUTPUT_SCHEMA.md for the
 envelope layout and dumpex/schemas/dumpex-output-v2.2.schema.json for the
 formal schema.
 

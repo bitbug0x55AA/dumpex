@@ -1,7 +1,7 @@
 """
 Issue #73's own two-part compatibility/extension gate, on top of the
 per-gate unit coverage `tests/unit/test_analyzer_registry.py` already has
-(contract `docs/hunt_analyzer_registry_contract.md` §7/§10/§12/§13).
+(contract `docs/developer/hunt_analyzer_registry_contract.md` §7/§10/§12/§13).
 
 1. **The future-analyzer extension fixture** (§10). Every existing
    negative-construction test in `test_analyzer_registry.py` exercises one

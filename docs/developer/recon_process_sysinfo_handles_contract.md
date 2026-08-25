@@ -2,6 +2,10 @@
 
 **Status: frozen decision record, revision 7 — self-contained.**
 
+> **Documentation class:** implemented engineering decision record. Current
+> user-facing behavior lives under `docs/user/`; the revision history,
+> acceptance gates, and issue sequencing below are retained for maintainers.
+
 This document is the complete, normative contract for the v2.13 Recon
 redesign. Issues #38–#44 implement against **this file alone**: every
 rule needed to build the three commands is written out here in full.
@@ -3732,7 +3736,7 @@ implementing child, but their expected outcome is frozen here so the
 child cannot re-decide it.
 
 1. **The contract is independently readable.** A test over
-   `docs/recon_process_sysinfo_handles_contract.md` asserts: no
+   `docs/developer/recon_process_sysinfo_handles_contract.md` asserts: no
    normative back-reference to an unpublished earlier draft (matched as
    "rev"/"revision" followed by a lower revision number) outside
    Appendix A; every §6.1

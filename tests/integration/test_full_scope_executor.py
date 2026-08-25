@@ -7,7 +7,7 @@ and provenance test (`test_yara_provenance_attribution.py`) all prove the
 CUTOVER produced byte-identical *output* -- none of them calls
 `_execute_full_scope()` directly or asserts on the registry seam itself, so
 none of them can fail if a future edit reintroduces a two-build regression
-(contract `docs/hunt_analyzer_registry_contract.md` §8's own "same-instance
+(contract `docs/developer/hunt_analyzer_registry_contract.md` §8's own "same-instance
 invariant" warning: `spec.renderer(spec.builder(mf))` followed by
 `spec.record_projector(spec.builder(mf))` still satisfies every call-count
 fixture -- each *symbol* is still called once per statement -- while

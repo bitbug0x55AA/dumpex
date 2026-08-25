@@ -11,7 +11,7 @@ survives the dispatcher unchanged.
 
 `test_report_fields_survive_the_dispatcher()` below generalizes this to
 all seven `HUNTERS`, and to both `cmd_hunt()` and `collect_hunt()` (issue
-#72's own cutover, per `docs/hunt_analyzer_registry_contract.md` §12's
+#72's own cutover, per `docs/developer/hunt_analyzer_registry_contract.md` §12's
 note that #72 "should extend this file to a HUNTERS-parametrized
 field-survives-the-dispatcher check ... covering both cmd_hunt() and
 collect_hunt()" -- registry-driven dispatch removes the per-hunter

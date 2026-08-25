@@ -14,6 +14,9 @@ Report/CheckResult boundary decisions) remains accurate; §5 and
 "Follow-up changes" below describe a roadmap that has since fully played
 out.
 
+> **Documentation class:** superseded engineering review. It is retained as
+> architecture history and is not current implementation guidance.
+
 Planning baseline: `d9a3605` (v3.2.1), schema v2.10, after the completed
 Injection (#2/#3/#4) and Encoding (#5) pilots. This is the mandatory
 post-pilot review issue #1 required before migrating Stomping/Pipe/
@@ -244,7 +247,7 @@ Confirmed unchanged: **#8 → #7 → #10 → #9 → #11 → #12**. Nothing in
 either pilot's evidence argues for reordering — Stomping (#8) and Pipe
 (#7) are the two remaining hunters closest in shape to Injection (typed
 raw-object evidence, `CoverageTracker`-shaped gaps per
-`docs/hunt_migration_field_matrix.md`), Hollowing (#10) needs a genuine
+`docs/developer/hunt_migration_field_matrix.md`), Hollowing (#10) needs a genuine
 JSON-surface addition (no raw-detail fields exist pre-migration), CS
 Beacon (#9) is schema-sensitive (bounded config presentation, v2.10
 freeze), and YARA (#11) is the one hunter needing its own boundary rather

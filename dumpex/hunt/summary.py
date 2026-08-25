@@ -2,7 +2,7 @@
 Cross-hunter `result.summary` reducer for `result.kind == "hunt"`.
 
 The single function JSON and console rendering must both call for
-the same set of `HunterRecord`s -- see docs/hunt_migration_field_matrix.md's
+the same set of `HunterRecord`s -- see docs/developer/hunt_migration_field_matrix.md's
 own "summary rules" section and the v2.4 migration plan's requirement
 that this reducer never be re-derived independently by more than one
 output surface. Pure aggregation over already-computed per-hunter
@@ -60,7 +60,7 @@ def build_hunt_summary(records: "list[HunterRecord]", selected: str, *,
     of this function hard-coded the unfiltered `HUNTERS` unconditionally,
     which crashed every `--hunt all` invocation with a `ValueError` the
     moment a `full_scope_capable=False` analyzer was ever registered
-    (contract `docs/hunt_analyzer_registry_contract.md` §2's own "the
+    (contract `docs/developer/hunt_analyzer_registry_contract.md` §2's own "the
     filter belongs on the `HUNTERS` side" invariant governed `AnalyzerRegistry.
     select("all")`'s own return value correctly, but this function never
     read it) -- this parameter is what makes that invariant actually

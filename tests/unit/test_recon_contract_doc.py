@@ -1,5 +1,5 @@
 """
-Contract-DOCUMENT tests for docs/recon_process_sysinfo_handles_contract.md
+Contract-DOCUMENT tests for docs/developer/recon_process_sysinfo_handles_contract.md
 (issue #37's completion gate, items 1 and 2).
 
 This file checks the things that are true of the contract AS A DOCUMENT
@@ -62,7 +62,7 @@ from dumpex.output.records import HANDLE_NAME_STATUSES
 
 _DOC_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "docs", "recon_process_sysinfo_handles_contract.md")
+    "docs", "developer", "recon_process_sysinfo_handles_contract.md")
 
 # Codes the contract introduces all start with one of these prefixes
 # (followed by an underscore). Deliberately anchored that way so the

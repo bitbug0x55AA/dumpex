@@ -2,7 +2,7 @@
 Unit tests for the v2.4 hunt record types (dumpex.output.records:
 HunterRecord, HuntRegionRef, HuntThreadRef, HuntPeHeaderHit,
 InjectionDetails, and the 6 shape-only *Details stubs). See
-docs/hunt_migration_field_matrix.md for the field-by-field rationale these
+docs/developer/hunt_migration_field_matrix.md for the field-by-field rationale these
 types implement.
 """
 import pytest

@@ -2,7 +2,7 @@
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
 v2 envelopes built around them) against dumpex-output-v2.12.schema.json
 (the current schema) -- originally the PR3 "Schema v2.4" hunt migration
-step (see docs/hunt_migration_field_matrix.md and the migration plan's own
+step (see docs/developer/hunt_migration_field_matrix.md and the migration plan's own
 PR3 description), carried forward onto v2.5's extended `finding` $def
 (id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version -- see
 dumpex/hunt/_finding.py), v2.6's `csBeaconDetails.configs[*].fields[*]`

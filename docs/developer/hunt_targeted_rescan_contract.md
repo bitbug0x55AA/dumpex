@@ -2,6 +2,10 @@
 
 **Status: frozen decision record — self-contained.**
 
+> **Documentation class:** planned engineering contract. The targeted-rescan
+> CLI described here, including `--hunt-addr`, is not implemented in the current
+> release. Do not use this document as a command reference.
+
 Parent: #58 (targeted-rescan delivery tracker). Blocked by: #44 (closed).
 Blocks #60 (neutral virtual-address/capture-range primitives) and,
 transitively, #61 (`HuntRequest`/`HuntExecutionContext`/
@@ -9,8 +13,8 @@ transitively, #61 (`HuntRequest`/`HuntExecutionContext`/
 (atomic CLI/schema cutover), and #66 (investigation-action wiring and
 final QA). This document **adds no production code** — it is the matrix
 and rule set those six issues implement against and verify against,
-exactly as `docs/hunt_analyzer_registry_contract.md` (issue #70) is for
-#71/#72/#73, and as `docs/recon_profile_contract.md` (issue #95) was for
+exactly as `docs/developer/hunt_analyzer_registry_contract.md` (issue #70) is for
+#71/#72/#73, and as `docs/developer/recon_profile_contract.md` (issue #95) was for
 #43. Every fact below is read off the current tree (`dumpex/cli.py`,
 `dumpex/hunt/*/report_facts.py`, `dumpex/hunt/*/config.py`,
 `dumpex/hunt/_investigation.py`, `dumpex/output/coverage.py`,
@@ -2468,7 +2472,7 @@ hunter's own existing console body (unchanged — §0.2):
     exactly this three-value reduction, retired from the current v2
     `HunterRecord.to_dict()` shape and folded into `coverage.status`
     specifically to avoid "two sources of truth that could silently
-    disagree" (`records.py:1711`'s own comment; `docs/hunt_analyzer_registry_contract.md`
+    disagree" (`records.py:1711`'s own comment; `docs/developer/hunt_analyzer_registry_contract.md`
     §5 cites the identical principle for execution order). Reusing the
     name here is not a regression of that migration: this field has no
     existing v2 counterpart to duplicate — it names a genuinely new,

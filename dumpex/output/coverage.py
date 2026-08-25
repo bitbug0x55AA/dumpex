@@ -944,7 +944,7 @@ class LimitationCode(str, Enum):
     # discards nothing that was actually read. source fixed to "handles";
     # caller_buildable.
 
-    # ── --profile (issue #95 / docs/recon_profile_contract.md) ────────────
+    # ── --profile (issue #95 / docs/developer/recon_profile_contract.md) ────────────
     # These four describe whether PROFILING ITSELF completed -- the
     # command-level CoverageReport dumpex.commands.profile.collect_profile()
     # returns -- never a specific capability's own AVAILABILITY (whether

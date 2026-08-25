@@ -1,5 +1,5 @@
 """
-Registry conformance for docs/recon_process_sysinfo_handles_contract.md §6.1.
+Registry conformance for docs/developer/recon_process_sysinfo_handles_contract.md §6.1.
 
 test_recon_contract_doc.py checks the document's STRUCTURE and
 test_recon_contract_semantics.py checks its ALGORITHMS. Neither one
@@ -49,7 +49,7 @@ from dumpex.output.coverage import (
 
 _DOC_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "docs", "recon_process_sysinfo_handles_contract.md")
+    "docs", "developer", "recon_process_sysinfo_handles_contract.md")
 
 # §6.1's row shape: | `CODE` | `source` | fields | rendered template |
 _ROW_RE = re.compile(r"^\| `([A-Z][A-Z0-9_]+)` \| (.*?) \| (.*?) \| (.*) \|$")

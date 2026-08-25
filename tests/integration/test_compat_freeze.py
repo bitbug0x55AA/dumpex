@@ -13,7 +13,7 @@ vocabulary (parsed/present_empty/unparsed/failed/indeterminate, including
 an unrecognized numeric stream type) with a genuine available/limited/
 unavailable capability mix. `--pid`/`--peb`
 were removed in issue #43's atomic v2.13 cutover (see
-docs/recon_process_sysinfo_handles_contract.md §7.2) -- their golden
+docs/developer/recon_process_sysinfo_handles_contract.md §7.2) -- their golden
 scenarios were removed from this suite in the same change. The three
 replacements also get broader CLI-level compatibility coverage (every
 exit code, --txt, --redact-paths, more source-state combinations) in
@@ -225,7 +225,7 @@ def _assert_peb_reachable_via_open_dump(mf):
     same sysinfo+threads precondition the installed library's own
     __parse_peb() needs -- a scenario builder that leaves mf.peb present
     while either is absent describes a state a real open_dump() can never
-    actually produce (see docs/recon_process_sysinfo_handles_contract.md
+    actually produce (see docs/developer/recon_process_sysinfo_handles_contract.md
     §4.3.3's duplicate-absence-suppression rule, which relies on exactly
     this invariant)."""
     if mf.peb is not None:
