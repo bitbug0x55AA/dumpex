@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from tests.fixtures.fakes import FakeMF, FakeStream
+from tests.fixtures.fakes import FakeStream, empty_mf as _empty_mf
 
 from dumpex.hunt.injection.collect import collect_injection_record
 from dumpex.hunt.hollowing.collect import collect_hollowing_record
@@ -38,16 +38,6 @@ def validator():
         schema = json.load(fh)
     jsonschema.Draft202012Validator.check_schema(schema)
     return jsonschema.Draft202012Validator(schema)
-
-
-def _empty_mf():
-    """A minimal MinidumpFile with every optional stream absent/empty --
-    each of the 7 hunters' own NOT_EVALUATED/INCONCLUSIVE/clean early
-    paths, never a crash, on a dump with essentially nothing captured."""
-    class MF(FakeMF):
-        memory_segments_64 = None
-        memory_segments      = None
-    return MF()
 
 
 def test_all_seven_collectors_agree_with_hunters_own_fixed_order():

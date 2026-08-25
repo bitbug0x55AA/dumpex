@@ -31,6 +31,16 @@ from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport
 from dumpex.output.records import HUNTERS
 
+# Imported last, after every facade builder/renderer/collect import above:
+# _registry.py's own top-level registration code resolves each
+# dispatcher-facing name (e.g. `_build_injection_report`) off this module,
+# so those names must already exist as attributes here first (see
+# _registry.py's own module docstring and
+# docs/hunt_analyzer_registry_contract.md §6's "Module layout and import
+# timing"). #71 registers AnalyzerRegistry here but does not yet route
+# collect_hunt()/cmd_hunt() through it -- that is #72's cutover.
+from dumpex.hunt import _registry
+
 
 def _hunt_coverage_report(records: "list", summary: dict) -> CoverageReport:
     """The single, document-level `CommandResult.coverage` for `--hunt`

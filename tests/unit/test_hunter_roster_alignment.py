@@ -36,6 +36,7 @@ import pytest
 import dumpex.cli as cli
 import dumpex.hunt as hunt
 from dumpex.hunt import region_correlation, summary_presentation
+from dumpex.hunt._registry import REGISTRY
 from dumpex.output.records import HUNTERS
 from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
@@ -87,6 +88,26 @@ def test_summary_presentation_maps_cover_exactly_hunters(mapping_name):
 
 def test_region_correlation_collectors_cover_exactly_hunters():
     assert set(region_correlation._COLLECTORS) == set(HUNTERS)
+
+
+# ── AnalyzerRegistry (issue #71) -- the eleventh/twelfth roster artifacts ─
+# `REGISTRY._all_specs()` (unfiltered by capability -- never `select("all")`,
+# which is deliberately NOT the full roster once a targeted-only analyzer
+# exists) and `EXPECTED_REPORT_TYPES` (checked at import time already, but
+# pinned here too so a registry/roster drift shows up alongside the other
+# ten artifacts in one place).
+
+def test_analyzer_registry_all_specs_covers_exactly_hunters():
+    # NOTE: a companion "every _COLLECTORS/display-map key has a matching
+    # spec in REGISTRY._all_specs()" assertion was deliberately NOT added
+    # here as a separate test: with this test and
+    # test_region_correlation_collectors_cover_exactly_hunters()/
+    # test_summary_presentation_maps_cover_exactly_hunters() (above) each
+    # already pinning their own set to `== set(HUNTERS)`, a `<=` between
+    # any two of those sets is implied by transitivity and can never fail
+    # independently of the other two -- it would be a test that cannot
+    # fail on its own, which is not a real regression guard.
+    assert set(spec.identity for spec in REGISTRY._all_specs()) == set(HUNTERS)
 
 
 # ── cmd_hunt()'s accepted-TTP set ────────────────────────────────────────

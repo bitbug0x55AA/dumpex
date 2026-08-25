@@ -23,6 +23,18 @@ from dumpex.output.coverage import (
     SourceRequirement, build_coverage_report, observe_source,
 )
 
+# This hunter's public coverage-source vocabulary -- the exact `sources`
+# dict keys `project_coverage_report()` below builds. Extracted into a
+# named constant (rather than left as inline dict-literal keys only) so
+# `dumpex.hunt._registry.AnalyzerSpec` can validate a future
+# `TargetedGrant.source` against a real, closed, importable vocabulary
+# instead of an unenforced convention (docs/hunt_analyzer_registry_contract.md
+# §7.1 failure #5).
+COVERAGE_SOURCE_NAMES = frozenset({
+    "memory_info", "modules", "module_headers", "reference_files",
+    "section_content_diff", "ioc_string_scan",
+})
+
 # How many differing byte ranges one verified-change fact enumerates
 # inline before it says how many more were kept -- a rendering cap on top
 # of `config.MAX_DIFF_RANGES` (the display cap correlation.py already

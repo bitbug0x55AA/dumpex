@@ -32,7 +32,7 @@ from dumpex.hunt.pipe.collect import collect_pipe_record
 from dumpex.hunt.encoding.collect import collect_obfuscation_record
 from dumpex.output.records import HUNTERS
 
-from tests.fixtures.fakes import FakeMF
+from tests.fixtures.fakes import empty_mf as _empty_mf
 
 
 def _reset_rules_cache(monkeypatch):
@@ -40,13 +40,6 @@ def _reset_rules_cache(monkeypatch):
     monkeypatch.setattr(rules_loader, "_EXPLICIT_RULES_PATH", None)
     monkeypatch.setattr(rules_loader, "_LAST_SOURCE_INFO", None)
     monkeypatch.setattr(yara_hunt_mod, "_LAST_YARA_PROVENANCE", None)
-
-
-def _empty_mf():
-    class MF(FakeMF):
-        memory_segments_64 = None
-        memory_segments = None
-    return MF()
 
 
 # Only these four hunters' own _build_*_report() calls dumpex.rules_pkg.

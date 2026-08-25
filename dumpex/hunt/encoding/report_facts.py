@@ -18,6 +18,15 @@ from dumpex.output.coverage import (
     build_coverage_report, format_scan_target_preview, observe_source, scan_target_noun,
 )
 
+# This hunter's public coverage-source vocabulary -- the exact `sources`
+# dict keys `project_coverage_report()` below builds. Extracted into a
+# named constant (rather than left as inline dict-literal keys only) so
+# `dumpex.hunt._registry.AnalyzerSpec` can validate a future
+# `TargetedGrant.source` against a real, closed, importable vocabulary
+# instead of an unenforced convention (docs/hunt_analyzer_registry_contract.md
+# §7.1 failure #5).
+COVERAGE_SOURCE_NAMES = frozenset({"memory_info", "encoding_scan"})
+
 
 # ── Fact-string builders -- byte-identical to the pre-migration aggregate.py ──
 

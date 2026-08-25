@@ -17,7 +17,7 @@ builder calls instead of one.
 """
 import pytest
 
-from tests.fixtures.fakes import FakeMF
+from tests.fixtures.fakes import empty_mf as _empty_mf
 
 import dumpex.hunt as hunt_pkg
 from dumpex.output.records import HUNTERS
@@ -31,16 +31,6 @@ _BUILDER_ATTR = {
     "yara": "_build_yara_report",
     "obfuscation": "_build_encoding_report",
 }
-
-
-def _empty_mf():
-    """No memory segments at all -- every hunter's own NOT_EVALUATED
-    early path, never a crash, so this exercises collect_hunt() without
-    needing a realistic dump."""
-    class MF(FakeMF):
-        memory_segments_64 = None
-        memory_segments = None
-    return MF()
 
 
 def _patch_counters(monkeypatch) -> dict:
