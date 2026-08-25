@@ -82,7 +82,7 @@ class StructuredOutput:
                               # new `key_offset` field) and is formally defined
                               # in the schema for the first time -- see
                               # dumpex/schemas/dumpex-output-v1.1.schema.json
-                              # and docs/OUTPUT_SCHEMA.md's versioning policy.
+                              # and docs/user/OUTPUT_MIGRATION.md's versioning policy.
 
     def __init__(self, dump_path: str, mf=None, *, command: str = None,
                  options: dict = None, case_id: str = None, analyst: str = None,

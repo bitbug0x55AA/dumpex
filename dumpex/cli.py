@@ -40,7 +40,7 @@ from dumpex.output.command_result import CommandResult
 # nine produce their usual single-dump kinds. v2.13 (issue #43) is the
 # single atomic cutover that replaces --pid/--peb (kinds "pid"/"peb")
 # with --process/--handles/--profile (kinds "process"/"handles"/
-# "profile") -- see docs/recon_process_sysinfo_handles_contract.md §7.2
+# "profile") -- see docs/developer/recon_process_sysinfo_handles_contract.md §7.2
 # for why there is no hidden alias between the two.
 _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "process", "sysinfo", "handles",
                                     "profile", "diff", "extract", "strings", "report", "hunt"})
@@ -94,7 +94,7 @@ def main():
     started_at = datetime.datetime.now(datetime.timezone.utc)
 
     # v2.13 (issue #43) removed --pid/--peb immediately, with no hidden
-    # alias -- docs/recon_process_sysinfo_handles_contract.md §7.2 requires
+    # alias -- docs/developer/recon_process_sysinfo_handles_contract.md §7.2 requires
     # this one-line redirect in the help epilogue instead, so a user of the
     # old flags is pointed at their replacement rather than left guessing
     # from argparse's own "unrecognized arguments" error alone.

@@ -1,6 +1,6 @@
 """`--process` command -- issue #40's collect/render/command vertical
 slice over the frozen contract in
-docs/recon_process_sysinfo_handles_contract.md §3.
+docs/developer/recon_process_sysinfo_handles_contract.md §3.
 
 `collect_process()` runs exactly one collection pass: it builds the
 shared process-identity snapshot (dumpex.core.process_info, issue #38),

@@ -1,6 +1,6 @@
 """`--handles` command -- issue #42's collect/render/command vertical
 slice over the frozen contract in
-docs/recon_process_sysinfo_handles_contract.md §5.
+docs/developer/recon_process_sysinfo_handles_contract.md §5.
 
 Reports the handles a dump RECORDED AT CAPTURE TIME, read from its
 `HandleDataStream`. Nothing here opens a process, queries a PID, or

@@ -236,7 +236,7 @@ def test_record_to_dict_keys_match_the_schema_def_exactly(def_name):
 
 # processRecord is the ONE $def in the whole schema with an optional
 # property (`peb_extended`, present only under `--process --verbose` --
-# see docs/recon_process_sysinfo_handles_contract.md §3.6/§7.3) -- every
+# see docs/developer/recon_process_sysinfo_handles_contract.md §3.6/§7.3) -- every
 # other record $def keeps `required == properties`, enforced below.
 _OPTIONAL_PROPERTIES = {"processRecord": {"peb_extended"}}
 

@@ -1,5 +1,5 @@
 """`--profile` command -- issue #95's collect/render/command vertical
-slice over docs/recon_profile_contract.md.
+slice over docs/developer/recon_profile_contract.md.
 
 Reports what evidence a process minidump CONTAINS and what kinds of
 analysis that captured evidence can support -- an evidence-capability
@@ -550,7 +550,7 @@ def _stream_source_observation(mf: MinidumpFile, name: str, stream_type, obj,
     self-contradiction this function's very existence prevents for the
     directory-present-object-None case above. Both fold into the SAME
     FAILED state here (there is no dedicated "ambiguous" capability
-    status/limitation code -- see docs/recon_profile_contract.md §4.5):
+    status/limitation code -- see docs/developer/recon_profile_contract.md §4.5):
     FAILED is the conservative, fail-closed choice matching every other
     "evidence exists but cannot be trusted" case this module already
     treats as required-source-failed."""

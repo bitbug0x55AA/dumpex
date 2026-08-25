@@ -32,7 +32,7 @@ from dumpex.output.coverage import (
 # named constant so `dumpex.hunt._registry.AnalyzerSpec` can validate a
 # future `TargetedGrant.source` against a real, closed, importable
 # vocabulary instead of an unenforced convention
-# (docs/hunt_analyzer_registry_contract.md §7.1 failure #5).
+# (docs/developer/hunt_analyzer_registry_contract.md §7.1 failure #5).
 COVERAGE_SOURCE_NAMES = frozenset({"memory_info", "segment_scan", "thread_context"})
 
 

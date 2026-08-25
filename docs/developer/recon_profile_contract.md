@@ -2,6 +2,11 @@
 
 **Status: frozen decision record — self-contained.**
 
+> **Documentation class:** implemented engineering decision record. `--profile`
+> is exposed in the current CLI. Statements below that this contract itself does
+> not expose the command describe its original delivery boundary before the
+> later v2.13 integration, not current product availability.
+
 This document is the complete, normative contract for `--profile`, the
 evidence-capability-map command proposed in discussion #94 and specified
 in issue #95. `dumpex/commands/profile.py`, `dumpex/output/records.py`'s

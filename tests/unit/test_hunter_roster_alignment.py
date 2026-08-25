@@ -158,7 +158,7 @@ def test_cli_hunt_help_lists_exactly_the_roster_in_order():
 
 def test_cli_reference_doc_lists_exactly_the_roster_in_order():
     line = next(
-        line for line in (_REPO_ROOT / "docs" / "CLI_REFERENCE.md")
+        line for line in (_REPO_ROOT / "docs" / "user" / "CLI_REFERENCE.md")
         .read_text(encoding="utf-8").splitlines()
         if line.startswith("| `--hunt TTP`")
     )

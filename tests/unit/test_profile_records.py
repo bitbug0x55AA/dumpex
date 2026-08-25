@@ -10,7 +10,7 @@ __post_init__ enforces on a record handed to it directly. That split
 matters because the whole point of validating in __post_init__ (rather
 than in dumpex.commands.profile) is that NO caller -- collector, future
 hunter, or test -- can construct a record that contradicts
-docs/recon_profile_contract.md. A rule only the collector happens to
+docs/developer/recon_profile_contract.md. A rule only the collector happens to
 respect is caller discipline, not enforcement, and the difference stays
 invisible until something else builds one of these records.
 """

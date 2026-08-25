@@ -1,5 +1,5 @@
 """Unit tests for dumpex.commands.profile -- issue #95's collect/render/
-command vertical slice over docs/recon_profile_contract.md.
+command vertical slice over docs/developer/recon_profile_contract.md.
 
 --profile consumes ALREADY-PARSED mf.<attr> objects (the same ones every
 other recon command reads) rather than parsing its own stream bytes, so

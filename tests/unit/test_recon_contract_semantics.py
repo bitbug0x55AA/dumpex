@@ -1,5 +1,5 @@
 """
-Executable semantic checks for docs/recon_process_sysinfo_handles_contract.md
+Executable semantic checks for docs/developer/recon_process_sysinfo_handles_contract.md
 (issue #37's second repair pass).
 
 test_recon_contract_doc.py checks the document's WORDING (required
@@ -94,7 +94,7 @@ from dumpex.output.coverage import (
 
 _DOC_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-    "docs", "recon_process_sysinfo_handles_contract.md")
+    "docs", "developer", "recon_process_sysinfo_handles_contract.md")
 
 
 @pytest.fixture(scope="module")

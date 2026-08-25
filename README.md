@@ -6,7 +6,7 @@ state, and hunts for evidence of injection, hollowing, module stomping,
 named-pipe C2, Cobalt Strike Beacon artifacts, YARA matches, and
 encoded/obfuscated payloads.
 
-> Start with the [SOC / DFIR Quick Start](docs/SOC_QUICKSTART.md) when
+> Start with the [SOC / DFIR Quick Start](docs/user/SOC_QUICKSTART.md) when
 > interpreting hunt output. `DETECTED` with partial coverage, `INCONCLUSIVE`,
 > `NOT_EVALUATED`, and a scoped non-detection require different dispositions.
 
@@ -108,11 +108,14 @@ dumpex sample.dmp --report --report-addr 0x7ff600001000
 # Extract a memory region
 dumpex sample.dmp --extract 0x7ff600001000 --size 0x1000 --output region.bin
 
+# Search captured memory for analyst-readable strings
+dumpex sample.dmp --strings --min-length 8 --encoding auto
+
 # Compare a suspicious capture against a known reference
 dumpex suspect.dmp --diff clean-reference.dmp --diff-scope all
 ```
 
-See the [CLI Reference](docs/CLI_REFERENCE.md) for every mode, option, and
+See the [CLI Reference](docs/user/CLI_REFERENCE.md) for every mode, option, and
 example.
 
 ## Hunt overview
@@ -129,7 +132,7 @@ example.
 
 The detailed validation, relocation, scoring, rule-selection, and ATT&CK
 mapping rationale is in
-[Detection Methodology and Coverage](docs/DETECTION_METHODOLOGY.md).
+[Detection Methodology and Coverage](docs/user/DETECTION_METHODOLOGY.md).
 
 ## Reading results
 
@@ -148,7 +151,7 @@ Two rules matter most:
 2. `NOT_DETECTED_IN_SCANNED_SCOPE` does not prove the behavior was absent from
    the process or host.
 
-Use the [SOC disposition guide](docs/SOC_QUICKSTART.md) for the decision matrix,
+Use the [SOC disposition guide](docs/user/SOC_QUICKSTART.md) for the decision matrix,
 recommended pivots, and per-hunter evidence requirements.
 
 ## Rules and reproducibility
@@ -165,17 +168,19 @@ dumpex does not automatically load a rules file from the current working
 directory. JSON output records evidence identity, execution options,
 dependency versions, and the hashes of rules actually used.
 
-See [Output and Evidence Schema](docs/OUTPUT_SCHEMA.md) before building an
+See [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md) before building an
 integration or archiving a result.
 
 ## Documentation
 
 | Document | Use it for |
 |---|---|
-| [SOC / DFIR Quick Start](docs/SOC_QUICKSTART.md) | Triage, disposition, evidence requirements, and next actions |
-| [CLI Reference](docs/CLI_REFERENCE.md) | Complete modes, options, and examples |
-| [Detection Methodology](docs/DETECTION_METHODOLOGY.md) | Validation logic, limitations, scoring, and ATT&CK mapping |
-| [Output and Evidence Schema](docs/OUTPUT_SCHEMA.md) | JSON metadata, provenance, formats, and reproducibility |
+| [Documentation index](docs/README.md) | User/developer document map and lifecycle labels |
+| [SOC / DFIR Quick Start](docs/user/SOC_QUICKSTART.md) | Triage, disposition, evidence requirements, and next actions |
+| [CLI Reference](docs/user/CLI_REFERENCE.md) | Complete modes, options, and examples |
+| [Detection Methodology](docs/user/DETECTION_METHODOLOGY.md) | Validation logic, limitations, scoring, and ATT&CK mapping |
+| [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md) | Current JSON metadata, coverage, records, and provenance |
+| [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) | Historical schemas and parser upgrade notes |
 | [Changelog](CHANGELOG.md) | User-facing changes between releases, including output-contract migrations |
 | [Contributing](CONTRIBUTING.md) | Development setup, tests, CI, and contribution expectations |
 | [CREDITS](CREDITS) | Research attribution, licenses, and nature of use |

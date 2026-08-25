@@ -7,7 +7,7 @@ oversized scan targets" entries and issue #19. Like
 MemoryInfoListStream -- it never re-scans, never opens the dump's memory
 content, and performs no read whose cost scales with a skipped target's
 size. `TriageInfo.bytes_examined` is always `0` in this module, the
-schema-enforced witness of that invariant (see docs/OUTPUT_SCHEMA.md's
+schema-enforced witness of that invariant (see docs/user/OUTPUT_SCHEMA.md's
 v2.9 entry).
 
 One physical region/segment can be skipped by several different hunters

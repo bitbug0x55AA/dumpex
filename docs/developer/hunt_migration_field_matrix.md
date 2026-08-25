@@ -2,8 +2,9 @@
 
 **Status: migration complete.** `--hunt` shipped onto the v2.4 envelope in
 PR4 — all eleven commands, including `--hunt`, now produce
-`dumpex-output-v2.4.schema.json` (see docs/OUTPUT_SCHEMA.md's "One JSON
-contract" section), and no command produces the v1.1 contract anymore.
+`dumpex-output-v2.4.schema.json` (see
+`docs/user/OUTPUT_MIGRATION.md`), and no command produces the v1.1 contract
+anymore.
 This document is kept as a **historical audit trail**, not a live
 reference: it records the pre-migration (v1.1) field inventory frozen
 before PR2's work started, and is what each PR2/PR2b/PR4 change was
@@ -14,6 +15,9 @@ its own "Update" notes) — but the field-by-field inventory above it is
 intentionally left as originally frozen, not rewritten to describe the
 final shape; read dumpex/output/records.py and
 dumpex-output-v2.4.schema.json for that.
+
+> **Documentation class:** historical engineering audit. It is retained for
+> compatibility rationale and is not a current output reference.
 
 Frozen against commit `5c2ef8e87dc17b8eda9f9fe3e2c3af2c6438f7f2` (main), before
 any output-shape change. This is an **inventory document**: it records what
@@ -37,8 +41,8 @@ this machine's real absolute path and a real sample's sha256. Every field
 list and every frozen assertion below now comes from either direct source
 reading (cited by file/line) or a fully synthetic, checked-in fixture built
 from `tests/fixtures/fakes.py` (no real dump, no real memory content) — see
-[tests/fixtures/hunt_cases.py](../tests/fixtures/hunt_cases.py) and
-[tests/integration/test_hunt_compat_freeze.py](../tests/integration/test_hunt_compat_freeze.py),
+[tests/fixtures/hunt_cases.py](../../tests/fixtures/hunt_cases.py) and
+[tests/integration/test_hunt_compat_freeze.py](../../tests/integration/test_hunt_compat_freeze.py),
 which is a real, CI-executed pytest module, not an inert reference file: it
 fails the moment a later PR changes a judgment field or console verdict
 without updating the corresponding assertion.

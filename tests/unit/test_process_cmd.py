@@ -1,5 +1,5 @@
 """Unit tests for dumpex.commands.process -- issue #40's collect/render/
-command vertical slice over docs/recon_process_sysinfo_handles_contract.md
+command vertical slice over docs/developer/recon_process_sysinfo_handles_contract.md
 §3.
 
 Builds on the same fixture style tests/unit/test_process_identity_snapshot.py

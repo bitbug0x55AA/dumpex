@@ -148,7 +148,7 @@ class ThreadRecord:
 
 @dataclass
 class SysInfoRecord:
-    """`--sysinfo`'s record -- docs/recon_process_sysinfo_handles_contract.md
+    """`--sysinfo`'s record -- docs/developer/recon_process_sysinfo_handles_contract.md
     §4.2's 18-field shape (issue #41): the process identity/runtime fields
     now owned by `--process` (pid, process_start_utc, image_path,
     command_line, process_user_time_seconds, process_kernel_time_seconds)
@@ -215,7 +215,7 @@ class SysInfoRecord:
 # PidRecord/PebRecord (--pid/--peb's own records) were removed here in
 # issue #43's atomic v2.13 cutover, which replaces both commands with
 # --process (see ProcessRecord below) -- see
-# docs/recon_process_sysinfo_handles_contract.md §7.2 for why there is no
+# docs/developer/recon_process_sysinfo_handles_contract.md §7.2 for why there is no
 # hidden alias. dumpex/schemas/dumpex-output-v2.12.schema.json (and
 # earlier) still define $defs/pidRecord and $defs/pebRecord, frozen, so
 # historical output produced by those commands stays validatable.
@@ -1259,7 +1259,7 @@ class TriageCardRecord:
 # ── Hunt records (v2.4 migration, PR2a -- injection only) ───────────────
 # One HunterRecord per hunter -- `--hunt all` produces exactly 7, in a
 # fixed order; a single `--hunt <ttp>` produces exactly 1. See
-# docs/hunt_migration_field_matrix.md for the full field-by-field audit
+# docs/developer/hunt_migration_field_matrix.md for the full field-by-field audit
 # this section implements. `hunter`/`status`/`score`/`max_score`/
 # `verdict_level`/`confidence`/`lead_count`/`review_priority` are the 7
 # common judgment fields (8 minus coverage_status, which is NOT a judgment
@@ -1295,7 +1295,7 @@ def _require_list_of(value, cls, field_name: str) -> None:
 class HuntRegionRef:
     """A memory region reference inside a hunter's `details` -- replaces
     every raw Region object a hunter's aggregate.py builds today, which
-    (per docs/hunt_migration_field_matrix.md's cross-cutting finding #1)
+    (per docs/developer/hunt_migration_field_matrix.md's cross-cutting finding #1)
     reaches JSON via dumpex.ui.structured._json_safe()'s str(obj) fallback
     and embeds the interpreter's own live heap address, non-reproducible
     across runs."""
@@ -1517,7 +1517,7 @@ class InjectionDetails:
 
 
 # The remaining 6 *Details classes below are SHAPE ONLY (field names/types
-# straight from docs/hunt_migration_field_matrix.md's own per-hunter
+# straight from docs/developer/hunt_migration_field_matrix.md's own per-hunter
 # tables, empirically verified there against running code) -- no
 # collect_*() function constructs any of these yet, and their fields are
 # NOT guaranteed free of the raw-object str(obj) non-reproducibility
@@ -1642,7 +1642,7 @@ class CsBeaconDetails:
 @dataclass
 class YaraDetails:
     """`--hunt yara`'s hunter-specific evidence. YARA deliberately stays
-    off the shared Finding model -- see docs/hunt_migration_field_matrix.md's
+    off the shared Finding model -- see docs/developer/hunt_migration_field_matrix.md's
     legend for why `matches` must not be reclassified as `finding`."""
     matches:    list   # list[dict]
     rules_hit:  list   # list[str]
@@ -1800,7 +1800,7 @@ class HunterRecord:
 
 
 # ── --process records (issue #40) ───────────────────────────────────────
-# See docs/recon_process_sysinfo_handles_contract.md §3.1/§3.4/§3.5 for the
+# See docs/developer/recon_process_sysinfo_handles_contract.md §3.1/§3.4/§3.5 for the
 # frozen JSON shape. identity_evidence's misc_info_claim/peb_claim/
 # module_claim/main_image_pe sub-objects are built as plain dicts by
 # dumpex.commands.process: a direct, fixed translation of
@@ -1877,7 +1877,7 @@ class ImportEntryRecord:
 
 
 # The closed, frozen seven-code registry from
-# docs/recon_process_sysinfo_handles_contract.md §6.2 -- code -> the exact
+# docs/developer/recon_process_sysinfo_handles_contract.md §6.2 -- code -> the exact
 # `details` key set that code carries. Mirrors dumpex-output-v2.13.
 # schema.json's own processDiagnosticRecord allOf (code -> per-code
 # closed `details` shape) so the two can never drift silently: a code or
@@ -1957,7 +1957,7 @@ class IatRecord:
     """`--process`'s `iat` object -- §3.5. Always present as an object,
     never null. `table_present`/`import_directory_present` are each
     `true | false | null` (§3.5.2's three-state presence, never a bare
-    bool) -- see docs/recon_process_sysinfo_handles_contract.md for what
+    bool) -- see docs/developer/recon_process_sysinfo_handles_contract.md for what
     each state means; this record only enforces shape, not that policy."""
     table_present:              "bool | None"
     table_va:                   "str | None"
@@ -2120,7 +2120,7 @@ class ProcessRecord:
 
 
 # ── --handles records (issue #42) ───────────────────────────────────────
-# See docs/recon_process_sysinfo_handles_contract.md §5.2 for the frozen
+# See docs/developer/recon_process_sysinfo_handles_contract.md §5.2 for the frozen
 # JSON shape. One record per HandleDataStream descriptor whose Handle
 # value is usable (§5.2.2 -- the ONE normalization failure that discards
 # a descriptor); every other field degrades to null in place rather than
@@ -2263,7 +2263,7 @@ class HandleRecord:
 
 
 # ── --profile records (issue #95) ───────────────────────────────────────
-# See docs/recon_profile_contract.md for the frozen shape. --profile is a
+# See docs/developer/recon_profile_contract.md for the frozen shape. --profile is a
 # capability MAP, never a verdict: nothing here may carry malicious/clean,
 # confidence, ATT&CK, or hunter-score semantics (that is a hard non-goal
 # of #95) -- every closed-vocabulary field below spells out an EVIDENCE
@@ -2385,7 +2385,7 @@ def _require_optional_str(value, field_name: str) -> None:
 @dataclass(frozen=True)
 class ProfileMemoryCapture:
     """Explicit memory-capture facts, kept independent per §5.3.2 of
-    docs/recon_profile_contract.md: "Do not infer MiniDumpWithFullMemory
+    docs/developer/recon_profile_contract.md: "Do not infer MiniDumpWithFullMemory
     from Memory64ListStream alone. Report the raw flag and observed memory
     evidence independently." `full_memory_flag_set` is read ONLY from the
     header's own MINIDUMP_TYPE flags (None whenever `ProfileRecord.
@@ -2450,7 +2450,7 @@ class CapabilityDefinition:
     type enforces, but factually wrong for that capability id).
 
     `required_source_groups` is a tuple of OR-groups (see
-    docs/recon_profile_contract.md §4.2): each group is one or more
+    docs/developer/recon_profile_contract.md §4.2): each group is one or more
     alternative source names where at least one must be usable; a
     single-member group is an ordinary hard requirement. `label` is the
     console's own display name (dumpex.commands.profile.
@@ -2562,7 +2562,7 @@ class CapabilityLimitationCode(str, Enum):
     REQUIRED_SOURCE_INDETERMINATE = "REQUIRED_SOURCE_INDETERMINATE"
     # ^ a required source's own stream type has 2+ directory entries
     # (dumpex.output.records.StreamParserState.INDETERMINATE, §2.4 of
-    # docs/recon_profile_contract.md) -- open_dump() keeps only ONE
+    # docs/developer/recon_profile_contract.md) -- open_dump() keeps only ONE
     # mf.<attr>/failure pair per stream TYPE, so whether that surviving
     # state reflects a clean parse or a failure cannot be attributed to
     # any one physical entry. Deliberately NOT REQUIRED_SOURCE_FAILED:
@@ -2583,7 +2583,7 @@ class CapabilityLimitationCode(str, Enum):
     # ^ REQUIRED_SOURCE_INDETERMINATE's companion for a PURELY optional source.
     REQUIRED_GROUP_MEMBER_ABSENT = "REQUIRED_GROUP_MEMBER_ABSENT"
     # ^ This source IS a member of one of the capability's own required
-    # OR-groups (§4.2 of docs/recon_profile_contract.md -- e.g.
+    # OR-groups (§4.2 of docs/developer/recon_profile_contract.md -- e.g.
     # thread_analysis's ("threads", "thread_info") group), but a
     # DIFFERENT member of that SAME group already satisfies the
     # requirement, so the group as a whole is met and this member's own
@@ -2726,7 +2726,7 @@ class ProfileCapabilityEntry:
     """One row of the closed analysis-capability matrix.
     `required_source_groups`/`optional_sources` are this capability's OWN
     frozen requirement rule (mirrors the real collector/hunter that
-    capability describes -- see docs/recon_profile_contract.md §4.2),
+    capability describes -- see docs/developer/recon_profile_contract.md §4.2),
     carried on the record itself so a consumer never has to re-derive
     "why" from the registry module out of band.
 

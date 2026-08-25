@@ -1,6 +1,6 @@
 """
 Cross-artifact alignment for the closed, frozen `ProcessDiagnosticRecord`
-registry (docs/recon_process_sysinfo_handles_contract.md §6.2).
+registry (docs/developer/recon_process_sysinfo_handles_contract.md §6.2).
 
 `dumpex.output.records._PROCESS_DIAGNOSTIC_DETAILS_SCHEMA` is the single
 runtime source of truth for which diagnostic codes exist and what

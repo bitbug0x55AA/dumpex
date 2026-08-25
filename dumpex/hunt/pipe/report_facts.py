@@ -31,7 +31,7 @@ from dumpex.output.coverage import (
 # named constant (rather than left as inline dict-literal keys only) so
 # `dumpex.hunt._registry.AnalyzerSpec` can validate a future
 # `TargetedGrant.source` against a real, closed, importable vocabulary
-# instead of an unenforced convention (docs/hunt_analyzer_registry_contract.md
+# instead of an unenforced convention (docs/developer/hunt_analyzer_registry_contract.md
 # §7.1 failure #5).
 COVERAGE_SOURCE_NAMES = frozenset({"memory_info", "handle_data", "pipe_name_scan"})
 
@@ -215,7 +215,7 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a pipe
     run -- built at each gap site `project_coverage_v1` above already
     derives coverage_status/coverage_reasons from (never parsed back out of
-    that free text; see docs/hunt_migration_field_matrix.md's own migration
+    that free text; see docs/developer/hunt_migration_field_matrix.md's own migration
     rule). Replaces the pre-migration `dumpex/hunt/pipe/__init__.py`'s
     `_pipe_coverage_report()`, which had to be called from OUTSIDE the
     aggregator and assigned onto the Report as a mutable attribute.

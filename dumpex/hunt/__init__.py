@@ -37,7 +37,7 @@ from dumpex.output.records import HUNTERS
 # dispatcher-facing name (e.g. `_build_injection_report`) off this module,
 # so those names must already exist as attributes here first (see
 # _registry.py's own module docstring and
-# docs/hunt_analyzer_registry_contract.md §6's "Module layout and import
+# docs/developer/hunt_analyzer_registry_contract.md §6's "Module layout and import
 # timing"). Those per-analyzer imports stay -- even after #72's cutover
 # below -- because they are not merely how THIS module used to call each
 # builder/renderer/projector directly: they are the second binding

@@ -709,7 +709,7 @@ def test_variable_width_hex_address_is_rejected(validator):
 
 # ── profile capability status/limitations cross-field rules ──────────────
 # Mirrors dumpex.output.records.ProfileCapabilityEntry.__post_init__'s own
-# status<->limitations cross-checks (§4.3 of docs/recon_profile_contract.md)
+# status<->limitations cross-checks (§4.3 of docs/developer/recon_profile_contract.md)
 # in the schema itself, not just in the Python model that happens to be the
 # only current producer -- a hand-built or third-party document making the
 # same claim must be rejected too.
@@ -1003,7 +1003,7 @@ def test_raw_flags_set_with_all_fields_consistent_validates(profile_record_schem
 
 def test_unknown_stream_type_and_duplicate_stream_type_entries_validate_and_survive(
         profile_record_schema):
-    # docs/recon_profile_contract.md: an unrecognized numeric stream type
+    # docs/developer/recon_profile_contract.md: an unrecognized numeric stream type
     # gets its own row (stream_type_name null) rather than being dropped,
     # and a stream type with 2+ directory entries stays INDETERMINATE
     # rather than being merged/deduplicated -- both must reach the schema
@@ -2207,7 +2207,7 @@ def test_a_genuine_v2_9_era_document_still_validates_against_the_v2_9_schema(val
 
 # ── v2.12-era pid/peb: frozen and still validatable, and rejected by ─────
 #    v2.13 -- #43's own "immediate removal, no hidden deprecation alias"
-#    decision (docs/recon_process_sysinfo_handles_contract.md §7.2) means
+#    decision (docs/developer/recon_process_sysinfo_handles_contract.md §7.2) means
 #    a genuine pre-#43 document must still validate against ITS OWN frozen
 #    v2.12 schema, and result.kind == "pid"/"peb" must be rejected by the
 #    new v2.13 file that replaced them with "process"/"handles". These

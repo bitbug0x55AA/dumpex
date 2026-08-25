@@ -161,7 +161,7 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a
     hollowing run -- built at each gap site `project_coverage_v1` above
     already derives coverage_status/coverage_reasons from (never parsed back
-    out of that free text; see docs/hunt_migration_field_matrix.md's own
+    out of that free text; see docs/developer/hunt_migration_field_matrix.md's own
     migration rule). Replaces the pre-migration module-level
     `_hollowing_not_evaluated_coverage_report()`/
     `_hollowing_evaluated_coverage_report()` pair, which had to be called

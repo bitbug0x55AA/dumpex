@@ -22,7 +22,7 @@ from dumpex.output.records import hex_address
 # since nothing was evaluated in that case). Extracted into a named
 # constant so `dumpex.hunt._registry.AnalyzerSpec` can validate a future
 # `TargetedGrant.source` against a real, closed, importable vocabulary
-# instead of an unenforced convention (docs/hunt_analyzer_registry_contract.md
+# instead of an unenforced convention (docs/developer/hunt_analyzer_registry_contract.md
 # §7.1 failure #5).
 COVERAGE_SOURCE_NAMES = frozenset({"yara_rules", "segment_scan", "yara_context"})
 

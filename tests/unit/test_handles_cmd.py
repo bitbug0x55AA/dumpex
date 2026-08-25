@@ -1,5 +1,5 @@
 """Unit tests for dumpex.commands.handles -- issue #42's collect/render/
-command vertical slice over docs/recon_process_sysinfo_handles_contract.md
+command vertical slice over docs/developer/recon_process_sysinfo_handles_contract.md
 §5.
 
 Most cases go through the REAL parser

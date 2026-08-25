@@ -1,7 +1,7 @@
 """Unit tests for dumpex.commands.sysinfo's collect/render split
 (cmd_sysinfo).
 
---sysinfo (issue #41 / docs/recon_process_sysinfo_handles_contract.md §4):
+--sysinfo (issue #41 / docs/developer/recon_process_sysinfo_handles_contract.md §4):
 SysInfoRecord no longer carries the process identity/runtime fields owned
 by --process, and instead reports current_directory/environment_variables
 via the independent, bounded environment-block walk (dumpex.core.

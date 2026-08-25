@@ -37,7 +37,7 @@ def _build_minidump(stream_types: "list[int]", flags: int = 0,
     declare MORE entries than the file's directory table actually backs
     -- the exact "attacker-controlled NumberOfStreams vs. the file's real
     size" mismatch dumpex.core.memory.open_dump()'s own file-size bound
-    (§2.5 of docs/recon_profile_contract.md) exists to guard against."""
+    (§2.5 of docs/developer/recon_profile_contract.md) exists to guard against."""
     n = len(stream_types)
     header_size = 32
     dir_rva = header_size
