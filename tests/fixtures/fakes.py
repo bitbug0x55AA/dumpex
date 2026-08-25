@@ -252,6 +252,20 @@ class FakeMF:
         return self._reader
 
 
+def empty_mf() -> "FakeMF":
+    """A `FakeMF` with every memory-segment stream absent -- every
+    hunter's own NOT_EVALUATED early-exit path, so exercising a real
+    builder/spec costs nothing and needs no realistic dump. Promotes the
+    `_empty_mf()` independently duplicated in tests/integration/
+    test_collect_hunt_single_scan.py, test_hunt_all_seven_collectors.py,
+    and test_collect_hunt_is_silent.py into one shared definition
+    (docs/hunt_analyzer_registry_contract.md §12)."""
+    class MF(FakeMF):
+        memory_segments_64 = None
+        memory_segments = None
+    return MF()
+
+
 class FakeHeader:
     """MinidumpHeader stand-in carrying only TimeDateStamp — the one
     header field any command reads (--sysinfo's dump_time_utc)."""

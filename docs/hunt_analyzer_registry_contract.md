@@ -246,11 +246,19 @@ read §9 alone to know exactly what it is *not* allowed to duplicate.
   — a bare `source="encoding_scan"` with no `scopes` could not express
   "targeted rescan may run the `sleep_mask` decode layer but not
   `entropy`." For the other four targeted-capable analyzers, `scopes` is
-  expected to stay empty (no sub-source distinction exists in their own
-  `report_facts.py` today) — `TargetedGrant.scopes = frozenset()` is a
-  normal, legal, "this grant has no finer subdivision" state, not the
-  same "ungranted" meaning `TargetedCapability.grants = frozenset()`
-  carries at the outer level (§7.2 failure #12).
+  expected to stay empty — **not**, as an earlier draft of this bullet
+  claimed, because "no sub-source distinction exists in their own
+  `report_facts.py` today" (false: `pipe`/`yara`/`cs-beacon` each already
+  emit a non-`None` `scope` on some `CoverageLimitation`, see §7.1 failure
+  #5's own revision note for the direct-read evidence and the corrected,
+  narrower true claim) — but because none of the three has a *closed,
+  statically-importable* scope vocabulary the way `obfuscation`'s
+  `OVERSIZE_SCAN_LAYERS` already is, so `AnalyzerSpec` has nothing yet to
+  validate a populated `TargetedGrant.scopes` value against for any of
+  them. `TargetedGrant.scopes = frozenset()` is a normal, legal, "this
+  grant has no finer subdivision" state, not the same "ungranted" meaning
+  `TargetedCapability.grants = frozenset()` carries at the outer level
+  (§7.2 failure #12).
 
   **This release does not populate any analyzer's `grants`** — deciding
   which public source(s)/scope(s) each of the five may legitimately be
@@ -789,6 +797,48 @@ never from investigator input, dump content, or any other runtime value:
    code-review-time obligation for whoever writes the first real grant —
    but landing it is now a stated precondition of that work, not an
    optional nicety left to "consider."
+
+   **Revision note (closed by #71):** all five `COVERAGE_SOURCE_NAMES`
+   constants landed with #71's own registry module
+   (`dumpex/hunt/{pipe,stomping,cs_beacon,yara_hunt,encoding}/
+   report_facts.py`), each imported into `dumpex/hunt/_registry.py` and
+   checked against every `TargetedGrant.source` at `AnalyzerSpec`
+   construction time — the gap this paragraph describes is closed, not
+   merely planned. A future reader should not re-derive it as still open.
+
+   **Revision note (`.scope` premise corrected by #71):** the "for the
+   other four targeted-capable identities (`pipe`/`stomping`/`yara`/
+   `cs-beacon`, none of which emit a `scope` on their own
+   `CoverageLimitation`s, §1)" clause above (and the earlier "only
+   `obfuscation` emits a `scope` on any `CoverageLimitation` today"
+   restatement of it, also above), plus the parallel claim in §1's own
+   `TargetedGrant`/`TargetedCapability` bullet ("For the other four
+   targeted-capable analyzers, `scopes` is expected to stay empty (no
+   sub-source distinction exists in their own `report_facts.py` today)"),
+   are **both false as written** — a direct read of the tree #71 actually
+   did (not merely "considered") shows `pipe` (`pipe_name_scan`,
+   `scope="c2_context"`/`"pipe_name"`), `yara` (`segment_scan`,
+   `scope="max_total_hits"`/a budget-exhaustion kind), and `cs-beacon`
+   (`segment_scan`, `scope=`a budget-exhaustion kind) each already emit a
+   non-`None` `scope` on some `CoverageLimitation` today. What both
+   clauses were actually reaching for, and what remains true, is narrower:
+   only `obfuscation`'s `encoding_scan` source has a **closed,
+   statically-importable** scope vocabulary (`OVERSIZE_SCAN_LAYERS`) —
+   the other three's `scope` values are dynamic budget-kind/sub-signal
+   tags with no fixed constant to validate a `TargetedGrant.scopes` value
+   against yet, not an absence of `scope` altogether. `dumpex/hunt/
+   _registry.py`'s own `_SCOPED_TARGETED_SOURCES` mapping (each entry
+   carrying its own `(source, scopes)` pair, not merely a source name
+   validated against a shared hard-wired constant — a second, later
+   correction within the same #71 change) and its five
+   `test_*_scope_emitting_branches_*` tests in
+   `tests/unit/test_analyzer_registry.py` are the corrected, CI-enforced
+   statement of this fact — extending that mapping to `pipe`'s own
+   `"c2_context"`/`"pipe_name"` distinction (a real, reasonable future
+   candidate) is a `#59` capability-matrix decision, exactly as this
+   document's own extension rule (§7.1 failure #5, above) already
+   describes for any such addition, not a forgotten update to either
+   clause above.
 
    **Not** a failure: `full_scope_capable=False` paired
    with a non-`None` `targeted_capability` — that combination is a
@@ -1744,6 +1794,22 @@ names:
   `AnalyzerRegistry` but forgotten in
   `_COLLECTORS` fails CI instead of silently dropping correlation signals
   (§10 item 2).
+
+  **Revision note:** #71 added the first (unfiltered) assertion exactly as
+  specified, but deliberately did NOT add a second, separate `<=`
+  assertion for the reverse direction: with `test_region_correlation_
+  collectors_cover_exactly_hunters`/`test_summary_presentation_maps_
+  cover_exactly_hunters` (both already `== set(HUNTERS)`) and the new
+  `test_analyzer_registry_all_specs_covers_exactly_hunters` (also `==
+  set(HUNTERS)`) all three already asserted as equalities against the
+  same `set(HUNTERS)`, a fourth `_COLLECTORS <= registry._all_specs()`
+  assertion is implied by transitivity of the three `==`s and cannot fail
+  independently of them — it is a test with no way to catch a regression
+  the other three would not already catch, not a second, independent
+  guard. `tests/unit/test_hunter_roster_alignment.py`'s own
+  `test_analyzer_registry_all_specs_covers_exactly_hunters` docstring
+  records this reasoning inline rather than duplicating a
+  cannot-fail-alone assertion.
 - **`tests/fixtures/hunt_cases.py`** — the synthetic, `FakeMF`-backed
   fixture source every scenario above is built from; never real
   corpus-derived output (see `docs/hunt_migration_field_matrix.md`'s own
