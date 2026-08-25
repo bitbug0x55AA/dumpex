@@ -394,6 +394,29 @@ def _validate_scoped_sources(mapping: dict) -> None:
 _validate_scoped_sources(_SCOPED_TARGETED_SOURCES)
 
 
+# The full set of option keyword names `_execute_full_scope()`
+# (`dumpex/hunt/__init__.py`) actually knows how to supply a value for --
+# the single source of truth `AnalyzerSpec.option_names` (§5 field 7) must
+# be a subset of. Finding (closed by #73): §7.1 failure #7's own
+# `option_names`/builder-signature check only validates `option_names`
+# against the BUILDER's own signature, in both directions -- it never
+# validates `option_names` against what `_execute_full_scope()` itself
+# can actually pass, since that dict (`{"ref_dir": ref_dir, "rules_dir":
+# yara_dir}`) lives entirely inside `dumpex/hunt/__init__.py`, outside
+# this module. A spec whose `option_names` names a real, correctly-
+# defaulted builder keyword that is NOT one of these two names used to
+# construct successfully -- passing every existing check -- and would
+# only fail with a bare `KeyError` partway through `_execute_full_scope`'s
+# own selection loop, AFTER every earlier-selected analyzer's builder had
+# already run (see `dumpex/hunt/__init__.py`'s own `options[name] for name
+# in spec.option_names` line), directly violating the "before any
+# analyzer work begins" guarantee this whole section exists to provide.
+# `dumpex/hunt/__init__.py` imports this constant rather than
+# independently re-deriving its own `options` dict's key set, so the two
+# can never silently drift apart again.
+KNOWN_OPTION_NAMES = frozenset({"ref_dir", "rules_dir"})
+
+
 # ── AnalyzerSpec (contract §5) ─────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -459,6 +482,12 @@ class AnalyzerSpec:
             raise InvalidAnalyzerSpec(
                 f"AnalyzerSpec.option_names must be a frozenset[str], got "
                 f"{self.option_names!r}")
+        if not self.option_names <= KNOWN_OPTION_NAMES:
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: option_names "
+                f"{sorted(self.option_names - KNOWN_OPTION_NAMES)} are not known "
+                f"to _execute_full_scope() -- must be a subset of "
+                f"{sorted(KNOWN_OPTION_NAMES)}")
         if not isinstance(self.full_scope_capable, bool):
             raise InvalidAnalyzerSpec(
                 f"AnalyzerSpec.full_scope_capable must be a bool, got "

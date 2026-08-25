@@ -557,6 +557,25 @@ def test_analyzer_spec_rejects_non_frozenset_option_names():
         AnalyzerSpec(**_valid_kwargs(option_names=["ref_dir"]))
 
 
+def test_analyzer_spec_rejects_an_option_name_unknown_to_the_executor():
+    # Finding (closed by #73): §7.1 failure #7's own option_names check
+    # only validates against the BUILDER's own signature, in both
+    # directions -- never against what `_execute_full_scope()`
+    # (dumpex/hunt/__init__.py) actually knows how to supply a value for
+    # (`_registry.KNOWN_OPTION_NAMES`). A spec declaring a real, correctly
+    # -defaulted builder keyword outside that set used to construct
+    # successfully and only fail with a bare KeyError partway through
+    # _execute_full_scope()'s own selection loop -- after every
+    # earlier-selected analyzer's builder had already run. `"ref_dir"` is
+    # a real, valid `KNOWN_OPTION_NAMES` member (used by the shape test
+    # immediately above) -- `"depth"` is not, and is otherwise a
+    # perfectly well-formed option name (a non-empty str), so this proves
+    # the new gate is checking membership in `KNOWN_OPTION_NAMES`, not
+    # merely re-triggering the frozenset-shape check above.
+    with pytest.raises(InvalidAnalyzerSpec, match="not known to _execute_full_scope"):
+        AnalyzerSpec(**_valid_kwargs(option_names=frozenset({"depth"})))
+
+
 def test_analyzer_spec_rejects_non_bool_full_scope_capable():
     with pytest.raises(InvalidAnalyzerSpec):
         AnalyzerSpec(**_valid_kwargs(full_scope_capable="yes"))
