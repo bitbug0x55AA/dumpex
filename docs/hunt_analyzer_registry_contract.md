@@ -1814,12 +1814,91 @@ names:
   fixture source every scenario above is built from; never real
   corpus-derived output (see `docs/hunt_migration_field_matrix.md`'s own
   revision note on why `tests/corpus/` output must never be committed).
+- **(new, #73-owned)**
+  `tests/integration/test_registry_extension_and_failure_gate.py` — the
+  two guarantees this issue's own suggested acceptance criteria name that
+  no per-gate unit test above proves on its own. Both halves' scope is
+  stated precisely in the module's own docstring, since each proves a
+  narrower (but still real) claim than its headline sentence alone might
+  suggest:
+  - **The §10 future-analyzer extension fixture — the registry module's
+    own half of item 2, not all twelve roster artifacts.** Every
+    negative-construction test in `test_analyzer_registry.py` exercises
+    one gate at a time against one of the seven REAL identities. This
+    fixture instead tells §10's own coherent story once, against a
+    synthetic identity ("memscan") that is never one of the seven real
+    `HUNTERS` members, patched only into `_registry.py`'s own
+    `HUNTERS`/mapping bindings, never the real
+    `dumpex.output.records.HUNTERS` — so it deliberately does **not**
+    exercise the other ten roster artifacts item 2 names (the four
+    schema enums, the two console display maps, `region_correlation.
+    _COLLECTORS`, and the three human-facing CLI-help/`CLI_REFERENCE.md`/
+    `README.md` artifacts), which remain `test_hunter_roster_alignment.
+    py`'s own job, independent of `AnalyzerRegistry`, exactly as before.
+    It likewise does **not** exercise item 6's late-binding/signature-
+    closure/monkeypatchability half (the synthetic identity's builder/
+    renderer/record_projector are plain, directly-captured functions,
+    never resolved through `_register()`'s own `_resolve_and_validate_
+    builder`/`_late_bound()` machinery) — only the `AnalyzerSpec`-level
+    "adapters must be callable" gate, with item 6's monkeypatchability/
+    closed-signature half left to `test_analyzer_registry.py`'s own
+    existing per-identity coverage. What it does prove, in one coherent
+    sequence rather than isolated per-gate cases: unlisted in `HUNTERS`
+    (item 1) → a non-callable adapter (the `AnalyzerSpec`-level half of
+    item 6) → declaring neither full-scope nor targeted
+    capability (item 4) → constructing cleanly in isolation but rejected
+    by `AnalyzerRegistry` for a missing `EXPECTED_REPORT_TYPES` entry
+    (the registry module's own roster artifact, §7.1 failure #6) →
+    accepted once that entry exists → rejected again when spliced into
+    the wrong `HUNTERS` position (item 1's order requirement) → a
+    `targeted_capability` opt-in (item 5) rejected by each of THREE
+    separate mapping gates in three separate, isolated test cases (one
+    missing mapping at a time, the other two present, each asserted
+    against that one gate's own distinct message text — not one combined
+    case that would still pass if two of the three silently stopped
+    firing): a missing `_EXPECTED_TARGETED_SCAN_UNITS` entry (spec-level),
+    a missing `_COVERAGE_SOURCE_NAMES_BY_IDENTITY` entry (spec-level), and
+    a missing `_APPROVED_TARGETED_IDENTITIES` entry (a strictly later,
+    registry-level exact-set check a lone `AnalyzerSpec(...)` never
+    reaches) → accepted with an empty `grants` (this release's own
+    sanctioned, temporary shape), built and checked through the REAL,
+    validating `AnalyzerRegistry(...)` constructor alongside all seven
+    real specs (never the test-only `_construct_unvalidated()` escape
+    hatch, and never a lone-spec registry) → still fails closed at
+    `select_targeted()` (§7.2 failure #12) exactly as the five real
+    targeted-capable identities do, proving that gate is generic over
+    identity, not a hard-coded five-name allowlist → finally succeeds,
+    through that same real constructor and full seven-plus-one
+    registration set, once a real, populated grant is registered.
+  - **Registry failures fail closed before any real analyzer runs — the
+    one broken-registry shape reachable through these entry points, not a
+    stand-in for every construction-time malformed shape.**
+    `AnalyzerRegistry.__init__` validates unconditionally (§6), so no
+    duplicate/missing/reordered/wrong-report-type/... construction-time
+    state (§7.1, already exhaustively unit-tested in
+    `test_analyzer_registry.py`) can ever become a live `REGISTRY`
+    reachable from `cmd_hunt()`/`collect_hunt()` in the first place — the
+    only state that CAN reach these entry points in production is a
+    `REGISTRY.select()` call-time failure (§7.2, each already unit-tested
+    in isolation). A `REGISTRY` swapped for one whose `select()` always
+    raises is proven, with a sentinel that fails the test immediately and
+    loudly the moment a real builder is ever invoked (never a counter
+    checked only after the real function already ran underneath it), to
+    reach the caller with zero real builder invocations — for every
+    `HUNTERS` member and `"all"`, through both entry points — directly
+    proving the issue's own "registry failures occur before evidence
+    collection and must not be reported as a clean analyzer result"
+    constraint at the layer an investigator actually calls, not only at
+    the registry's own internal seam.
 
 #71 extends this set (adds registry-level unit tests for §5–§7's
 construction/call-time failure modes, plus the roster cross-check above)
 rather than replacing any of it; #72 re-points these fixtures' target
 call path at `AnalyzerRegistry.select()` only once it can prove
-byte-identical behavior against every one of them, golden files included.
+byte-identical behavior against every one of them, golden files included;
+#73 adds the future-analyzer extension fixture and the entry-point-level
+failure gate above, closing the two guarantees no prior issue's own test
+set covered end to end.
 
 ---
 
