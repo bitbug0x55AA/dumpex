@@ -1,6 +1,7 @@
 """Hunt command dispatcher."""
 import os
 import sys
+from dataclasses import dataclass, field
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import RED
 from dumpex.core.memory import va_to_file_offset, prot_str, get_memory_regions
@@ -37,8 +38,17 @@ from dumpex.output.records import HUNTERS
 # so those names must already exist as attributes here first (see
 # _registry.py's own module docstring and
 # docs/hunt_analyzer_registry_contract.md §6's "Module layout and import
-# timing"). #71 registers AnalyzerRegistry here but does not yet route
-# collect_hunt()/cmd_hunt() through it -- that is #72's cutover.
+# timing"). Those per-analyzer imports stay -- even after #72's cutover
+# below -- because they are not merely how THIS module used to call each
+# builder/renderer/projector directly: they are the second binding
+# `_registry.py`'s own `_late_bound()` resolves off `sys.modules
+# ["dumpex.hunt"]` on every call (contract §8), which is also what keeps
+# `monkeypatch.setattr(dumpex.hunt, "_build_injection_report", fake)`
+# working. #71 registered AnalyzerRegistry here; #72 (this cutover) routes
+# `_execute_full_scope()` -- and therefore both `collect_hunt()` and
+# `cmd_hunt()` -- through `_registry.REGISTRY.select()` instead of the old
+# hard-coded `if _wanted(hunter):`/`if run_<hunter>:` branches, which are
+# removed below.
 from dumpex.hunt import _registry
 
 
@@ -95,6 +105,85 @@ def _investigation_actions_json(records: "list", selected: str, mf: MinidumpFile
     return [a.to_dict() for a in actions]
 
 
+@dataclass
+class _FullScopeExecution:
+    """The result of one `_execute_full_scope()` call -- everything
+    `collect_hunt()`/`cmd_hunt()` need, computed exactly once (issue #72).
+    `records`/`provenance` are keyed/ordered the same way regardless of
+    `render`; `results` stays `{}` when `render=False` (`collect_hunt()`'s
+    own silence guarantee -- see `_execute_full_scope()`'s own docstring
+    on why `render=False` never calls a spec's `renderer` at all, not
+    merely "discards its return value")."""
+    records: list
+    results: dict = field(default_factory=dict)
+    provenance: dict = field(default_factory=dict)
+
+
+def _execute_full_scope(mf: MinidumpFile, selected: str, *, ref_dir: str = None,
+                         yara_dir: str = None, verbose: bool = False,
+                         render: bool = False) -> _FullScopeExecution:
+    """The one internal full-scope executor issue #72 routes both
+    `collect_hunt()` and `cmd_hunt()` through -- replacing the two
+    separate hard-coded `if _wanted(hunter):`/`if run_<hunter>:` selection
+    chains those functions used to maintain independently.
+
+    Selects `AnalyzerSpec`s via `_registry.REGISTRY.select(selected)`,
+    which returns them in fixed `HUNTERS` order (`_registry.py`'s own
+    `AnalyzerRegistry.select()` docstring) -- the same order the old
+    per-hunter `if` chains already produced, so `records`/`results` here
+    come out in exactly the order every existing golden fixture and
+    call-count test already expects. `selected` is passed through
+    unchanged; the caller is responsible for its own "all" vs. one-of-
+    `HUNTERS` validation BEFORE calling this (see `collect_hunt()`/
+    `cmd_hunt()` below) -- `select()` would raise its own
+    `UnknownAnalyzerIdentity` for a bad value, but that exception's
+    message text does not match either caller's own long-frozen
+    error text (contract §7.2 failure #9), so neither caller may let an
+    invalid `selected` reach this function in the first place.
+
+    Each selected spec's own `builder` is called exactly once, with only
+    the option keyword(s) that spec actually declares (`spec.option_names`
+    -- e.g. only `ref_dir` reaches `stomping`'s builder, only `rules_dir`
+    reaches `yara`'s), never the full `{ref_dir, rules_dir}` normalized
+    option view unfiltered -- a builder with a closed option set (contract
+    §7.1 failure #7) would raise `TypeError` on an unexpected keyword
+    otherwise. `rules_dir` is `cmd_hunt()`/`cli.py`'s own `yara_dir`
+    parameter renamed at this boundary (contract §9's own `HuntRequest`
+    row makes the same rename) -- both this function's own `yara_dir`
+    parameter and `cmd_hunt()`'s/`collect_hunt()`'s public `yara_dir`
+    keyword keep that external name unchanged; only the internal option
+    key handed to `spec.builder` is `rules_dir`.
+
+    The one already-built `Report` instance feeds every consumer for that
+    spec: `spec.record_projector(report)` always (both callers need a
+    `HunterRecord`), `spec.renderer(report, verbose)` only when
+    `render=True` (`collect_hunt()`'s own console-silence guarantee --
+    contract §8's "`collect_hunt()` never calls `renderer`" -- passes
+    `render=False`, `cmd_hunt()` passes `render=True`), and
+    `spec.provenance_hook(report)` whenever that spec declares one
+    (`yara` today; contract §5 field 8) -- collected into `provenance` by
+    identity rather than a `yara`-name conditional, so a caller that wants
+    a given identity's own invocation-specific metadata (YARA rule
+    provenance today, a future analyzer's own hook tomorrow) reads
+    `execution.provenance.get(identity)` instead of a growing set of
+    per-analyzer `if identity == "yara":` branches."""
+    options = {"ref_dir": ref_dir, "rules_dir": yara_dir}
+    specs = _registry.REGISTRY.select(selected)
+
+    records = []
+    results = {}
+    provenance = {}
+    for spec in specs:
+        kwargs = {name: options[name] for name in spec.option_names}
+        report = spec.builder(mf, **kwargs)
+        records.append(spec.record_projector(report))
+        if render:
+            results[spec.identity] = spec.renderer(report, verbose)
+        if spec.provenance_hook is not None:
+            provenance[spec.identity] = spec.provenance_hook(report)
+    return _FullScopeExecution(records=records, results=results, provenance=provenance)
+
+
 def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
                   ref_dir: str = None) -> CommandResult:
     """
@@ -115,6 +204,15 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
     documents). Console rendering (the printed `--hunt` summary/detail)
     remains `cmd_hunt()`'s own separate concern in this module -- this
     function produces only the v2.4 JSON/CSV side and prints nothing.
+
+    Routed through `_execute_full_scope(..., render=False)` (issue #72),
+    which selects specs via `_registry.REGISTRY.select(selected)` in fixed
+    `HUNTERS` order rather than this function's own hard-coded
+    `if _wanted(hunter):` chain -- see that function's own docstring for
+    why `render=False` is what keeps this function's own console-silence
+    guarantee (`tests/integration/test_collect_hunt_is_silent.py`) intact:
+    no selected spec's `renderer` is ever called, not merely "its return
+    value is discarded."
     """
     valid = set(HUNTERS) | {"all"}
     if selected not in valid:
@@ -122,24 +220,8 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
             f"collect_hunt() got unknown selected={selected!r} -- must be 'all' or "
             f"one of {HUNTERS}")
 
-    def _wanted(hunter: str) -> bool:
-        return selected in (hunter, "all")
-
-    records = []
-    if _wanted("injection"):
-        records.append(_record_from_injection_report(_build_injection_report(mf)))
-    if _wanted("hollowing"):
-        records.append(_record_from_hollowing_report(_build_hollowing_report(mf)))
-    if _wanted("stomping"):
-        records.append(_record_from_stomping_report(_build_stomping_report(mf, ref_dir=ref_dir)))
-    if _wanted("pipe"):
-        records.append(_record_from_pipe_report(_build_pipe_report(mf)))
-    if _wanted("cs-beacon"):
-        records.append(_record_from_cs_beacon_report(_build_cs_beacon_report(mf)))
-    if _wanted("yara"):
-        records.append(_record_from_yara_report(_build_yara_report(mf, rules_dir=yara_dir)))
-    if _wanted("obfuscation"):
-        records.append(_record_from_encoding_report(_build_encoding_report(mf)))
+    execution = _execute_full_scope(mf, selected, ref_dir=ref_dir, yara_dir=yara_dir)
+    records = execution.records
 
     summary = build_hunt_summary(records, selected=selected)
     summary["investigation_actions"] = _investigation_actions_json(records, selected, mf)
@@ -202,7 +284,23 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
     side's rule were ever updated. Per-hunter DISPLAY formatting (name/
     verdict color/score suffix/lead count) still reads from `results`,
     since that's each hunter's own presentation choice, not a
-    cross-hunter reduction."""
+    cross-hunter reduction.
+
+    Routed through `_execute_full_scope(..., render=True)` (issue #72),
+    which selects specs via `_registry.REGISTRY.select(ttp)` in fixed
+    `HUNTERS` order rather than this function's own former hard-coded
+    `run_injection`/`run_hollowing`/... flags and `if run_<hunter>:`
+    chain -- --hunt all always runs the full memory scan for every
+    selected analyzer this way (in particular cs-beacon: skipping it
+    when prior TTPs scored 0 used to mean a beacon could be present in a
+    dump with no injection/hollowing/stomping/pipe indicators and
+    --hunt all would still report "No TTP indicators found" without ever
+    having looked -- the registry-driven executor has no such
+    short-circuit to begin with, for any analyzer). `yara_provenance` is
+    now `execution.provenance.get("yara")` -- `_registry.py`'s own
+    `_yara_provenance_hook` performs the exact `RulesProvenance.to_dict()`
+    conversion this function used to hand-roll inline, reading
+    `report.coverage.rules.provenance` off the same `Report` instance."""
     # Derived from HUNTERS (already imported above for the record order)
     # rather than repeated as a second literal: a hunter added to /
     # renamed in HUNTERS but forgotten here used to be accepted-or-
@@ -212,65 +310,24 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         print(RED(f"[!] Unknown TTP '{ttp}'. Choose from: {', '.join(sorted(valid))}"))
         sys.exit(1)
 
-    run_injection  = ttp in ("injection",  "all")
-    run_hollowing  = ttp in ("hollowing",  "all")
-    run_stomping   = ttp in ("stomping",   "all")
-    run_pipe       = ttp in ("pipe",       "all")
-    run_cs_beacon  = ttp in ("cs-beacon",  "all")
-    run_yara       = ttp in ("yara",       "all")
-    run_obfuscation   = ttp in ("obfuscation",   "all")
-
-    results = {}
     # Built unconditionally (not gated by collect_records): the console
     # "--hunt all" summary card below needs the real HunterRecords too --
     # see this function's own docstring update on why the Overall line is
     # now derived from dumpex.hunt.summary.build_hunt_summary() rather
     # than a second, independently-computed reduction over `results`.
-    # Each _record_from_*_report() call is a pure, cheap conversion of a
+    # Each spec.record_projector() call is a pure, cheap conversion of a
     # Report already built above (never a re-scan), so computing this
     # even for a caller that ignores the second return value costs
     # nothing worth gating.
-    records = []
-    yara_provenance = None   # this call's own YARA rule provenance, if run_yara fires --
-                              # see this function's own docstring on why this is threaded
+    execution = _execute_full_scope(mf, ttp, ref_dir=ref_dir, yara_dir=yara_dir,
+                                     verbose=verbose, render=True)
+    results = execution.results
+    records = execution.records
+    yara_provenance = execution.provenance.get("yara")   # this call's own YARA rule
+                              # provenance, if ttp selected "yara" -- see this
+                              # function's own docstring on why this is threaded
                               # through explicitly rather than read back from
                               # dumpex.hunt.yara_hunt.get_yara_provenance()'s global
-
-    if run_injection:
-        report = _build_injection_report(mf)
-        results["injection"] = _render_injection_console(report, verbose)
-        records.append(_record_from_injection_report(report))
-    if run_hollowing:
-        report = _build_hollowing_report(mf)
-        results["hollowing"] = _render_hollowing_console(report, verbose)
-        records.append(_record_from_hollowing_report(report))
-    if run_stomping:
-        report = _build_stomping_report(mf, ref_dir=ref_dir)
-        results["stomping"] = _render_stomping_console(report, verbose)
-        records.append(_record_from_stomping_report(report))
-    if run_pipe:
-        report = _build_pipe_report(mf)
-        results["pipe"] = _render_pipe_console(report, verbose)
-        records.append(_record_from_pipe_report(report))
-    if run_cs_beacon:
-        # --hunt all always runs the full memory scan now — skipping it when
-        # prior TTPs scored 0 meant a beacon could be present in a dump with
-        # no injection/hollowing/stomping/pipe indicators (e.g. a beacon
-        # sitting in ordinary-looking memory) and --hunt all would still
-        # report "No TTP indicators found" without ever having looked.
-        report = _build_cs_beacon_report(mf)
-        results["cs-beacon"] = _render_cs_beacon_console(report, verbose)
-        records.append(_record_from_cs_beacon_report(report))
-    if run_yara:
-        report = _build_yara_report(mf, rules_dir=yara_dir)
-        results["yara"] = _render_yara_console(report, verbose)
-        records.append(_record_from_yara_report(report))
-        provenance = report.coverage.rules.provenance
-        yara_provenance = provenance.to_dict() if provenance is not None else None
-    if run_obfuscation:
-        report = _build_encoding_report(mf)
-        results["obfuscation"] = _render_encoding_console(report, verbose)
-        records.append(_record_from_encoding_report(report))
 
     # The single cross-hunter reducer JSON (dumpex.hunt.cmd_hunt(...,
     # collect_records=True) -> cli.py), CSV, and this function's own

@@ -102,9 +102,11 @@ def test_renderer_and_projector_produce_the_expected_shapes(identity):
     # to both consumers below only proves this TEST called them with the
     # same object, which is tautological -- it says nothing about whether
     # a real dispatch path threads one already-built Report into both
-    # (contract §8's own "same-instance invariant"). That invariant
-    # belongs to #72's dispatch path, which does not exist yet inside this
-    # module; this test's real and only claim is about RETURN SHAPE.
+    # (contract §8's own "same-instance invariant"). That invariant is
+    # proven against the real dispatch path in
+    # tests/integration/test_full_scope_executor.py (issue #72's own
+    # `_execute_full_scope()`), not here; this test's real and only claim
+    # is about RETURN SHAPE.
     from dumpex.output.records import HunterRecord
 
     spec = REGISTRY.get(identity)
