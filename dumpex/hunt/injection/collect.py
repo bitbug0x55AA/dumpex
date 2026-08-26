@@ -1,20 +1,4 @@
-"""
-`collect_injection_record()` -- the `HunterRecord`-producing entry point
-for the injection hunter, alongside the console-oriented
-`_hunt_injection()` in `dumpex/hunt/injection/__init__.py`. Both call the
-exact same `_build_injection_report()` pipeline (see that module's own
-docstring), so this module only RESHAPES the resulting canonical
-`InjectionReport` into a `HunterRecord` -- via
-`dumpex.hunt.injection.report_record.project_hunter_record`, the same pure
-projector `report_console.py`/`report_legacy.py` build their own
-projections from. That is what guarantees the console path and this v2.4+
-path can never silently disagree about the same input.
-
-This module is read by `dumpex/hunt/__init__.py`'s `collect_hunt()`
-orchestrator, which `cli.py`'s `--hunt` branch calls for `--json` output --
-the console dispatcher itself still builds its own bare-dict `results` for
-rendering, unchanged (see `collect_hunt()`'s own docstring).
-"""
+"""Build an injection report and project it into a ``HunterRecord``."""
 from dumpex.hunt.injection import _build_injection_report
 from dumpex.hunt.injection.report_record import project_hunter_record
 from dumpex.output.records import HunterRecord

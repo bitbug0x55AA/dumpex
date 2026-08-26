@@ -1,46 +1,9 @@
-"""
-Immutable Evidence value objects for the module-stomping scan pipeline --
-built ONCE, at the scan boundary (memory_scan.py / disk_reference.py /
-correlation.py, the only modules that still touch `mf`/raw minidump
-`Module`/`MinidumpMemoryInfo` objects/`parse_pe_header()` dicts), and read
-by aggregate.py and the report_* projectors without ever needing `mf`, a
-raw minidump object, a PE-header dict, or a live `prot_str()`/basename
-lookup.
+"""Immutable module-stomping evidence values.
 
-This is the "one canonical evidence representation" half of the stomping
-hunter's output-source migration (see dumpex/hunt/stomping/domain.py for
-the Report/Evidence container these feed). Not the public JSON shape --
-report_legacy.py and report_record.py project these into the v1.1
-`findings` dict / the current-schema `StompingDetails`; report_console.py
-projects them into console text. All three read the SAME evidence, so they
-can never disagree about what a module/section/region/hit actually was.
-
-Every address-formatting/`prot_str()`/basename decision is made HERE, once,
-at construction time (see `module_ref`/`section_ref`/`region_ref` below) --
-never re-derived at aggregate or render time, which is exactly how the
-pre-migration `protection_leads` dicts ended up carrying a live `Module`
-and a live `MinidumpMemoryInfo` all the way into
-`dumpex.hunt.stomping.collect`'s own JSON projection.
-
-A scan-layer function itself makes NO decision about score/status/verdict
-and prints nothing -- it returns typed evidence. That decision-making
-lives entirely in aggregate.py; rendering lives entirely in
-report_console.py.
-
-Dump-file offsets are carried as a plain `file_offset: int | None`
-(resolved once, at scan time, via `dumpex.core.memory.va_to_file_offset`)
-rather than through `dumpex.hunt._location.Location`. `Location` requires
-its `va` to sit at or above the containing region's own `region_base`, and
-a stomping section legitimately starts BELOW the MemoryInfo region that
-covers it (`check_section_protection` walks every region OVERLAPPING the
-section's VA range, including one that began earlier) -- so the section's
-own start address cannot be expressed as a Location against that region at
-all. See `_location.py`'s own docstring: evidence that does not fit its
-geometry "must not be forced through this type".
-
-`None` means "these bytes were never written to the .dmp", which is NOT
-the same claim as "offset zero" -- 0 is an ordinary, valid offset (the very
-first byte of the file), so no projector may write `file_offset or 0`.
+Module, section, region, reference identity, relocation, byte-difference, thread,
+and IOC facts are snapshotted by value. The model preserves the distinction
+between verified content change, protection-only leads, and incomplete
+comparison coverage.
 """
 import ntpath
 from dataclasses import dataclass, field

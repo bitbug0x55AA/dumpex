@@ -1,10 +1,4 @@
-"""`collect_yara_record()` -- the `HunterRecord`-producing entry point for
-the yara hunter, alongside the console-oriented `_hunt_yara()` in
-`dumpex/hunt/yara_hunt/__init__.py`. Both call the exact same
-`_build_yara_report()` pipeline; this module only projects the resulting
-`domain.YaraReport` via `report_record.project_hunter_record()` -- it never
-recomputes score, status, verdict, or coverage itself.
-"""
+"""Build a YARA report and project it into a ``HunterRecord``."""
 from dumpex.hunt.yara_hunt import _build_yara_report
 from dumpex.hunt.yara_hunt.report_record import project_hunter_record as _record_from_yara_report
 from dumpex.output.records import HunterRecord

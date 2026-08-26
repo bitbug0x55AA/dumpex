@@ -1,43 +1,9 @@
-"""The canonical, recursively immutable domain model for the injection
-hunter -- `InjectionReport` plus the coverage snapshot and evidence
-container it is built from.
+"""Immutable domain model for process-injection analysis.
 
-This is the "one canonical result representation" side of the hunt
-output-source migration. Before the Injection 2C cutover,
-`dumpex.hunt.injection.aggregate.Report` kept the same facts several times
-over: `findings` (a dict whose `"findings"` key held already-rendered
-Finding dicts, alongside Evidence tuples under other keys), `findings_list`
-(the same findings a second time as Finding objects), and then
-`rwx`/`validated_pe_hits`/`mz_only_hits`/`suspicious_pe_hits`/
-`informational_pe_hits`/`start_threads` as a third copy of the evidence
-those findings were rendered from. Nothing structural kept those three in
-agreement.
-
-`InjectionReport` stores each fact exactly once:
-
-  score      -- the hunter's own 0..3 decision, the only judgment value
-                 that is genuinely chosen rather than derived.
-  results    -- the checks this hunter produced, as typed
-                 `dumpex.hunt._domain.CheckResult`s carrying typed
-                 evidence (not rendered facts text).
-  evidence   -- the observed items, in their hunter-meaningful buckets;
-                 the SAME objects `results` reference, never a copy.
-  coverage   -- the immutable snapshot of what this run could and could
-                 not see.
-
-and DERIVES everything else -- `status`, `verdict_level`, `confidence`,
-`lead_count`, `review_priority`, `max_score` -- as properties, through the
-same shared reducers (`dumpex.hunt._coverage`, `dumpex.hunt._finding`)
-`aggregate.py` calls. A derived property cannot drift from the
-score/coverage/results it is derived from, which is the failure mode
-storing all seven judgment fields side by side in a dict invites.
-
-Production-live as of the Injection 2C cutover: `dumpex.hunt.injection.
-aggregate.build_report()` is the ONE place that constructs an
-`InjectionReport`, and the legacy v1.1 dict, the current-schema
-`HunterRecord`, and the console renderer (`dumpex.hunt.injection.
-report_legacy`/`report_record`/`report_console`) are pure projections of
-it -- no other representation of a hunt result exists in this package.
+Evidence buckets, allocation correlations, check results, and coverage are
+validated together. Candidate membership and scoring relationships are explicit;
+partial scans, capped evidence, and unavailable sources cannot be represented as
+complete clean coverage.
 """
 from dataclasses import dataclass, field
 

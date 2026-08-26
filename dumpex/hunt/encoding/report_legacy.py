@@ -1,8 +1,4 @@
-"""`EncodingReport` -> the v1.1 legacy `findings` dict -- a pure
-projection, independent of `report_record.py`/`report_console.py`.
-Mirrors `dumpex.hunt.injection.report_legacy` (the completed reference
-pilot).
-"""
+"""Project an ``EncodingReport`` into the legacy v1.1 findings shape."""
 from dumpex.hunt.encoding.domain import EncodingReport
 from dumpex.hunt.encoding.report_facts import finding_from_check_result, project_coverage_v1
 

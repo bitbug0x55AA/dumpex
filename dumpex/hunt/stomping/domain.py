@@ -1,38 +1,8 @@
-"""The canonical, recursively immutable domain model for the module-
-stomping hunter -- `StompingReport` plus the coverage snapshot and evidence
-container it is built from. Mirrors `dumpex.hunt.injection.domain` and
-`dumpex.hunt.encoding.domain` (the two completed reference pilots): see
-those modules' own docstrings for the general "one canonical result
-representation" rationale this module applies to the stomping hunter.
+"""Immutable domain model for module-stomping analysis.
 
-Before this migration, `dumpex.hunt.stomping.aggregate.Report` kept the
-same facts several times over: a `findings` dict (JSON-facing, holding
-rendered `Finding.to_dict()` entries), a `findings_list` (the same findings
-a second time, as `Finding` objects), a `verified_changes` list ALSO held
-under `findings["verified_changes"]`, a `score`/`status`/`coverage_status`/
-`coverage_reasons` field that each duplicated the identically-named
-`findings` key, plus `ioc_scan` (the whole raw scan result, holding live
-`MinidumpMemoryInfo`/`Module` objects), `ioc_coverage_reasons`, `ref_dir`
-(a live filesystem path), and a `coverage_report` attribute assigned from
-OUTSIDE the aggregator entirely. Nothing structural kept any of those in
-agreement.
-
-`StompingReport` stores each fact exactly once:
-
-  score      -- 0..2, this hunter's own decision (a verified, relocation-
-                normalized content diff, optionally corroborated by a
-                thread's live RIP/EIP inside the changed bytes).
-  results    -- the checks this hunter produced, as typed
-                `dumpex.hunt._domain.CheckResult`s carrying typed evidence.
-  evidence   -- the observed items, in their hunter-meaningful buckets;
-                the SAME objects `results` reference, never a copy.
-  coverage   -- the immutable snapshot of what this run could and could
-                not see.
-
-and DERIVES everything else -- `status`, `verdict_level`, `confidence`,
-`lead_count`, `review_priority`, `max_score` -- as properties, through the
-same shared reducers (`dumpex.hunt._coverage`, `dumpex.hunt._finding`)
-`aggregate.py` calls.
+Verified content changes, protection and IOC leads, thread correlations, check
+results, and comparison coverage are validated together. A score-zero result is
+clean only when every required comparison completed.
 """
 from dataclasses import dataclass, field
 

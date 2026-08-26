@@ -1,13 +1,4 @@
-"""Shared projection logic for `domain.YaraReport` -- everything
-`report_legacy.py`, `report_record.py`, and `report_console.py` all three
-need, so it is built exactly once. Mirrors `dumpex.hunt.cs_beacon.
-report_facts` (and, through it, the other completed reference pilots).
-
-This module owns no dependency on `dumpex.hunt.yara_hunt.aggregate`:
-`build_report()`/`build_not_evaluated_report()` are the only places a
-`YaraReport` is constructed, and this module stays a pure function of an
-already-built Report.
-"""
+"""Shared match and coverage projections for an immutable ``YaraReport``."""
 from dumpex.hunt.yara_hunt.domain import CoverageSnapshot, ScanDiagnostics, YaraReport
 from dumpex.hunt.yara_hunt.models import RuleMatchEvidence
 from dumpex.output.coverage import (

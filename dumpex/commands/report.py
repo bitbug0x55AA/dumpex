@@ -58,45 +58,17 @@ def _module_context_for(mod, modules_available: bool) -> str:
 
 
 class ContentScanResult(NamedTuple):
-    """Region-INDEPENDENT content-read result: strings, IOC-pattern hits
-    (with bounded ±128-byte network-pattern context), notable strings, and
-    the MZ-header/injected-PE tri-state. Shared by `_collect_triage_card`'s
-    own Section 4 (called with a resolved MemoryInfo region's own
-    `BaseAddress`) and `dumpex.hunt._deep_triage` (called with a
-    `ScanTarget`'s own `base_address` directly -- a `ScanTargetKind.
-    MEMORY_SEGMENT` target legitimately has NO corresponding MemoryInfo
-    entry at all, see `dumpex.output.coverage.ScanTarget`'s own docstring,
-    and even a `MEMORY_REGION` target must be read from its OWN
-    base_address, not a resolved region's `BaseAddress` that could differ
-    if the target only coincides with part of a larger region). Extracted
-    from what used to be `_collect_triage_card`'s own inline Section 4 so
-    --report and deep triage can never independently drift on what counts
-    as an IOC pattern, a network pattern, or an injected PE header.
+    """Region-independent result of a bounded content read and scan.
 
-    `string_scan` carries `requested_bytes`/`bytes_read`/`truncated`/
-    `total`/`ascii_count`/`utf16_count` only -- deliberately NOT `clamped`
-    (whether the caller's own `requested_size` was already smaller than
-    some larger whole it could have asked for, e.g. --report's own
-    `region.RegionSize`), since that's a REGION-relative fact this
-    region-independent function has no basis to compute; each caller adds
-    its own `clamped` key afterward from whatever it knows `requested_size`
-    was capped against.
+    The caller supplies the exact target base, which may be a memory segment with
+    no MemoryInfo entry. Results keep string counts, IOC context, notable strings,
+    and the MZ/injected-PE tri-state. Caller-relative clamping is intentionally
+    excluded.
 
-    Never raises for a failed READ -- captured in `.string_scan_error`
-    instead, exactly as `_collect_triage_card`'s own former inline
-    `try/except Exception` did. That catch is now scoped to ONLY the
-    `read_region()` call itself, deliberately -- an exception from the
-    analysis logic that runs on the bytes it returns (string extraction,
-    IOC/MZ pattern matching, `ContentScanResult` construction) is a real
-    programming bug, not an evidence gap, and is allowed to propagate so
-    it surfaces as the test/CLI failure it actually is rather than a
-    misleading `string_scan_error` that reads exactly like an ordinary
-    unreadable region (see issue #19 Phase 2 review, item 6). Callers that
-    want to distinguish "the read failed" from "something else broke"
-    should check `.string_scan_error is not None` rather than wrapping
-    this function in their own try/except (see
-    dumpex.hunt._deep_triage._deep_read_triage()'s own docstring for why
-    it deliberately does NOT catch broadly around this call)."""
+    A read exception is captured as string_scan_error. Exceptions in analysis of
+    successfully returned bytes propagate as programming failures rather than
+    being mislabeled as unreadable evidence.
+    """
     mz_header_detected: "bool | None"
     has_injected_pe: "bool | None"
     ioc_strings: tuple

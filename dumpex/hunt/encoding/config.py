@@ -1,27 +1,9 @@
-"""
-Single canonical home for every dumpex.hunt.encoding tunable constant, and
-the EncodingConfig bundle built from them.
+"""Resource bounds for encoded-payload scanning.
 
-Why constants live HERE and not beside the code that uses them: the
-original P2-03 split put each layer's tunables next to that layer's own
-implementation (entropy.py owned ENTROPY_*, decoders.py owned
-B64_MIN_LEN, etc.), then re-exported them into encoding.py for backward
-compatibility. That meant TWO bindings of the same name existed
-(encoding.B64_MIN_LEN and decoders.B64_MIN_LEN) -- monkeypatching the
-re-exported copy silently stopped affecting the real one, since Python
-name rebinding doesn't propagate across modules. Defining every constant
-exactly once, here, removes that class of bug structurally: there is no
-second copy to fall out of sync.
-
-`dumpex/hunt/encoding/__init__.py` re-exports these (so
-`encoding.B64_MIN_LEN = 999` before calling `_hunt_encoding()` still
-works -- this IS still a supported override mechanism, unlike private
-helper functions' call signatures, which this refactor makes no
-compatibility promise about at all). Every layer function takes an
-`EncodingConfig` parameter instead of reading a bare module constant
-inside its own body; the constants below are used only as those
-functions' default parameter values, so they remain directly callable
-standalone (as existing unit tests do) without constructing a config.
+Per-region limits bound individual reads and decodes; whole-hunt budgets bound
+attacker-controlled cumulative bytes, candidates, work, and retained evidence.
+Independent limits represent different resources and must report exhaustion as
+partial coverage rather than being silently combined.
 """
 from dataclasses import dataclass
 

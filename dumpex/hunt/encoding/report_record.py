@@ -1,10 +1,7 @@
-"""`EncodingReport` -> `HunterRecord` (v2.10 typed record) -- a pure
-projection, independent of `report_legacy.py`/`report_console.py`.
-Mirrors `dumpex.hunt.injection.report_record` (the completed reference
-pilot): builds the SAME `ObfuscationDetails` shape the pre-migration
-`dumpex/hunt/encoding/collect.py` built, directly from the typed evidence
-buckets rather than from an already-JSON-shaped `findings` dict -- no
-public schema/wire-shape change.
+"""Project an ``EncodingReport`` into the current ``HunterRecord``.
+
+Typed evidence is reshaped directly while preserving ``ObfuscationDetails``
+wire semantics.
 """
 from dumpex.hunt.encoding.domain import EncodingReport
 from dumpex.hunt.encoding.report_facts import finding_from_check_result, project_coverage_report

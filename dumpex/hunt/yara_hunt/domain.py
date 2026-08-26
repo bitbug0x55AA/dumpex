@@ -1,35 +1,8 @@
-"""The canonical, recursively immutable domain model for the YARA hunter --
-`YaraReport` plus the coverage/rules/scan-diagnostics snapshots and evidence
-container it is built from. Mirrors `dumpex.hunt.cs_beacon.domain` (and,
-through it, the five completed reference pilots) for the general "one
-canonical result representation" shape -- but YARA deliberately does NOT
-build on `dumpex.hunt._domain.CheckResult`/`dumpex.hunt._finding.Finding`
-(issue #6's decision, issue #11's Goal: "without forcing YARA matches into
-the Finding model"). `HunterRecord.findings` stays permanently `[]` for
-`hunter="yara"` (dumpex/output/records.py's own yara-only-null rule), so
-nothing here may build a Finding-shaped object at all.
+"""Immutable YARA report and coverage snapshots.
 
-Before this migration, `dumpex.hunt.yara_hunt.aggregate.Report` mixed the
-public `findings` dict together with console-progress STATE that has
-nothing to do with the scan's own result: `render_kind` (which of five
-early-return branches fired), `scan_note` (a pre-rendered progress-line
-suffix), raw `rules_dir`/`rule_file_count`/`segment_count` duplicating facts
-`coverage_report` already carried, and a raw `modules` list kept alive
-purely so `presentation.py` could resolve `addr_to_module()` at RENDER TIME
-for every hit. `YaraReport` stores each fact exactly once:
-
-  coverage  -- the immutable snapshot of what this run could and could not
-               see, INCLUDING whether it ran at all (CoverageSnapshot).
-  evidence  -- every individual rule match this run observed, with module/
-               region context already resolved (YaraEvidence).
-
-and DERIVES everything else -- `score`, `status`, `coverage_status`,
-`verdict_level`, `triggered_rules`, `unverified_rules`, `has_hits` -- as
-properties. There is no `render_kind`: which of the four "prerequisite
-missing" cases (no yara-python, no rules directory, no usable rule files, no
-memory segments) applies is always derivable from `coverage.rules`/
-`coverage.scan` alone (see `CoverageSnapshot.evaluated`), the same way CS
-Beacon's own `build_not_evaluated_report()` needs no stored reason string.
+Rules, diagnostics, segment-scan evidence, suppression context, and derived
+status are kept together without using the shared Finding model. Score counts
+distinct triggered rules and incomplete scanning remains visible in coverage.
 """
 from dataclasses import dataclass, field
 

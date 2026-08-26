@@ -1,34 +1,8 @@
-"""
-The scan/enrichment layer for the process-hollowing hunter: the only
-module that still touches `mf`, a raw `MinidumpMemoryInfo`, a raw `Module`,
-or the live `mf.peb` object.
+"""Resolve image-base context and collect hollowing signals.
 
-Two responsibilities, in order:
-
-  `resolve_image_base_context()` -- RESOLVE, once, everything about the
-      PEB's own image base that any later layer could need: the base VA and
-      its .dmp file offset, the "(unknown)"-coerced display path alongside
-      the genuinely-nullable raw one, the MemoryInfo region covering that
-      base (as an immutable `RegionRef`, `prot_str()` already applied), the
-      .dmp offset of that region, the module the module list attributes the
-      base to (as a `ModuleRef`, basename already applied), and the outcome
-      of the single MZ/DOS-header read there. This is the boundary the
-      issue's "resolve Location/file offset, PEB/module identity,
-      image-base memory context, and required display evidence once before
-      aggregation" requirement names -- after it returns, nothing
-      downstream needs `mf` again, which is exactly what lets
-      `report_console.render_console_lines` take only a Report.
-
-  `collect_signals()` -- OBSERVE which of the four anchors/corroborators
-      actually fired, as typed evidence. Takes the already-resolved context
-      plus the rules-supplied suspicious-protection list; it reads no dump
-      and makes NO decision about score/status/verdict (that is
-      aggregate.py's, via correlation.py) and prints nothing.
-
-Both are pure functions of their arguments. `read_region` arrives as an
-explicit parameter rather than an import, so the facade's own
-still-monkeypatchable global stays authoritative -- see
-dumpex/hunt/_runtime.py and this package's own docstring.
+The scan distinguishes an uncaptured image-base region from a failed or short
+header read and from a confirmed missing MZ signature. Module-list availability
+is recorded independently because it affects only name comparison.
 """
 from dumpex.core.memory import addr_to_module, va_to_file_offset
 

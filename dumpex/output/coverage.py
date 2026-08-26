@@ -1,73 +1,14 @@
-"""
-First-class coverage/provenance model, extracted from the ad hoc
-bool(mf.X)-check-plus-hand-written-reason-string pattern every recon
-command previously hand-rolled independently (see dumpex/commands/
-list_cmd.py, modules.py, threads.py, sysinfo.py, process.py, handles.py,
-profile.py -- --pid/--peb, which sysinfo.py and a since-deleted peb.py
-used to hold, were retired in issue #43's v2.13 cutover). Every recon
-command is migrated onto this model.
+"""First-class evidence coverage and execution-state model.
 
-Layered as: SourceObservation (what state was ONE underlying minidump
-stream in) -> CoverageLimitation (one specific, machine-readable way
-coverage fell short, with human text rendered from its code -- never a
-hand-written string at the call site) -> CoverageReport (the reduction of
-all of a command's sources + limitations into one status) -> a single
-exit_code_for() mapping, so "which status becomes which process exit
-code" is defined exactly once. A limitation whose subject is a specific
-thing that went unexamined also carries typed ScanTarget references
-identifying it (CoverageLimitation.targets), rather than leaving the
-count as the only machine-readable fact.
+SourceObservation records whether underlying evidence was absent, present empty,
+parsed, failed, or otherwise limited. CoverageLimitation records a specific
+machine-readable gap and optional targets. CoverageReport reduces those facts to
+one status while execution status remains separate.
 
-The reducer (build_coverage_report) is the single place that turns a
-SourceObservation's state into a CoverageLimitation for a source a
-command requires for completeness -- a command supplies WHICH sources it
-requires (as a plain source name or a SourceRequirement, when it needs a
-specific wording variant) via `completeness_checks`, never a hand-built
-SOURCE_ABSENT/SOURCE_FAILED CoverageLimitation itself. This is what
-prevents the "two sources of truth" bug this module exists to close: a
-caller cannot forget to keep a hand-written limitations list in sync with
-its own SourceObservations, because the caller never builds that
-particular kind of limitation at all -- only the reducer does, reading
-the SAME SourceObservation the caller already had to construct. The
-limitation kinds a caller still builds directly are the ones marked
-caller_buildable in _CODE_SPECS (SOURCE_KEY_MISMATCH and the PID_*
-fallback codes) -- genuine cross-source business facts (e.g. two streams
-describing the same entities disagreeing on which keys exist, or a
-weaker fallback source substituting for one that yielded nothing usable)
-that the reducer cannot infer from source state alone.
-
-There is deliberately no free-text escape hatch (no "detail string a
-command composes itself and the model renders verbatim"): every
-CoverageLimitation's text is produced by a specific, hardcoded branch of
-render_limitation() selected by its `code`, parametrized only by
-structured fields (source names, field-name tuples, counts). A command
-whose existing wording doesn't fit an existing code's template gets a
-new, purpose-built code and template here, in this module, reviewable
-and testable alongside every other one -- never a caller-composed string
-smuggled through an opaque field. See threads.py for how a command with
-several bespoke reason strings (a field-impact SOURCE_ABSENT variant, a
-two-way SOURCE_KEY_MISMATCH, a dedicated MODULE_CLASSIFICATION_UNAVAILABLE
-template) is expressed entirely through structured parameters.
-
-This is also the neutral vocabulary home for EXECUTION_* (execution
-status: completed/partial/failed, independent of coverage status) --
-dumpex.output.envelope imports it from here, not the reverse, and this
-module imports nothing from dumpex.output.envelope or dumpex.hunt.*: the
-dependency direction is command/domain model -> output adapter ->
-envelope/serializer, never backwards. It happens to share its three
-coverage-status strings with dumpex.hunt._coverage by design (detection
-findings and recon coverage should read the same way), but does not
-import from it.
-
-Enum classes below are `str, Enum` (not `enum.StrEnum`, 3.11+ only) so a
-member is interchangeable with the plain string constants kept alongside
-for import-compatible call sites (`SOURCE_ABSENT == "absent"` is True
-either way, and `from ... import SOURCE_ABSENT` still works). Only the
-small closed sets this module's own logic branches on -- source state,
-coverage status, execution status, limitation code -- are validated at
-construction time; `source`/`SourceObservation.name` stay open string
-vocabularies since new minidump streams can be added without touching
-this module.
+Required-source gaps are derived from the same observations by
+build_coverage_report. Callers create only cross-source or scan-specific gaps the
+reducer cannot infer. Human text is selected by limitation code; there is no
+free-text escape hatch that can drift from structured meaning.
 """
 from dataclasses import dataclass, field
 from enum import Enum
@@ -3365,8 +3306,8 @@ def build_coverage_report(
 
       - `evaluation_groups`: a list of EvaluationRequirement, each
         evaluated as its OWN independent group -- for a command whose
-        coverage depends on more than one such group at once (e.g. a
-        future comparison command checking "baseline.modules" and
+        coverage depends on more than one such group at once (e.g. ``--diff``
+        checking "baseline.modules" and
         "target.modules" separately: baseline missing alone must render
         (and be coded) differently from both sides missing, which a
         single merged group could not distinguish). Mutually exclusive
@@ -3527,8 +3468,9 @@ def build_coverage_report(
 
 
 def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
-    """Pure cross-entity reduction -- e.g. a future comparison command's
-    `--diff-scope all`, which runs collect_module_diff/collect_thread_diff/
+    """Combine coverage across comparison entity collectors.
+
+    ``--diff-scope all`` runs collect_module_diff/collect_thread_diff/
     collect_memory_diff independently (each producing its own
     build_coverage_report() call over its own namespaced sources, such as
     "baseline.modules"/"target.modules") and needs one overall

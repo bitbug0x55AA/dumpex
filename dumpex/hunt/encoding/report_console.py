@@ -1,27 +1,7 @@
-"""`EncodingReport` -> console lines pure projector -- the ONE console
-renderer for the encoding (obfuscation) hunter, replacing the pre-
-migration `dumpex.hunt.encoding.presentation.render()` (which printed a
-long per-layer CLEAN/OBSERVATION/LEAD/DETECTION inventory with the
-verdict last). This module never prints (returns the exact lines a
-caller would print) and never returns a legacy-dict projection (see
-`report_legacy.py` for that, an independent pure function of the SAME
-`EncodingReport`).
+"""Render an ``EncodingReport`` as verdict-first console lines.
 
-Implements the verdict-first structure approved in issue #1 (verdict
-block -> KEY SIGNALS -> WHY THIS VERDICT (normal only) -> unified
-COVERAGE -> verbose hint), mirroring `dumpex.hunt.injection.
-report_console` (the completed reference pilot). Legacy console byte
-parity is intentionally NOT preserved (see this hunter's own migration
-issue) -- reviewed goldens in tests/fixtures/hunt_cli_golden/
-obfuscation_console.txt/obfuscation_verbose_console.txt are the new
-target.
-
-This is also the one place this hunter's normal/verbose CONSOLE detail
-POLICY lives: `report_facts.finding_from_check_result` builds a compat
-`Finding` carrying only wire-shaped `facts` (never `verbose_facts`);
-`_console_finding` below is what augments it with `verbose_facts`,
-entirely locally, so `report_legacy.py`/`report_record.py` never execute
-this policy at all.
+Verbose evidence is a console-only projection; wire-shaped facts remain
+stable for legacy and structured output.
 """
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, _status_text

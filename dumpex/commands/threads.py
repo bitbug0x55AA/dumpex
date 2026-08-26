@@ -80,41 +80,13 @@ def thread_records_have_times(records) -> bool:
 
 
 def collect_threads(mf) -> CommandResult:
-    """
-    Pure data, no printing. Returns a CommandResult[ThreadRecord].
-    `degraded`/`has_times` -- extra rendering context specific to this
-    command (whether ThreadInfoListStream was present, and whether any
-    thread reports timing fields at all), consumed only by
-    render_threads_console -- are derived from the result via
-    thread_info_is_degraded()/thread_records_have_times() rather than
-    returned separately (see cmd_threads below).
+    """Collect thread records and evidence coverage without rendering.
 
-    ThreadListStream and ThreadInfoListStream are two independent,
-    independently-optional streams describing the same threads. Neither
-    stream's mere PRESENCE tells you the two actually agree on which
-    TIDs exist -- a dump can have both streams and still have a TID in
-    one that's absent from the other (a stream that's present but
-    reports fewer threads than the other, or a genuinely inconsistent
-    capture). Building the record set from ONE stream's TID list alone
-    would silently drop threads the other stream knows about, and would
-    report 'complete' coverage for a dump where the two streams actually
-    disagree. Records are built from the UNION of both streams' TIDs;
-    whichever stream is missing a given TID has its own fields filled in
-    via _RawThreadInfo's None placeholders for that thread specifically,
-    and the mismatch count is a coverage reason -- not silently absorbed
-    into either "complete" or a single all-or-nothing 'degraded' flag.
-
-    Every non-mismatch reason here (thread_info absent, modules absent,
-    both thread streams absent) is auto-derived by build_coverage_report()
-    from the SourceObservations above via `evaluation_sources`/
-    `completeness_checks` -- this command never hand-builds a
-    SOURCE_ABSENT/SOURCE_GROUP_ABSENT/MODULE_CLASSIFICATION_UNAVAILABLE
-    CoverageLimitation itself, so a future edit here can't accidentally
-    drop one of those checks and silently report "complete". Only the
-    TID-level SOURCE_KEY_MISMATCH limitations (missing_from_info/
-    missing_from_base below) are hand-built, since a cross-source key
-    mismatch is business logic the reducer cannot infer from source
-    state alone.
+    ThreadListStream and ThreadInfoListStream are independent. Records use the
+    union of their TIDs so a stream mismatch cannot silently drop a thread.
+    Missing per-stream fields remain None, and key mismatches become explicit
+    cross-source limitations. Other absent-source limitations are derived from
+    SourceObservations by the shared coverage reducer.
     """
     base_threads_present = bool(mf.threads)
     info_stream_present  = bool(mf.thread_info)

@@ -1,32 +1,8 @@
-"""Shared projection logic for `InjectionReport` (dumpex/hunt/injection/
-domain.py) -- everything `report_legacy.py`, `report_record.py`, and
-`report_console.py` all three need, so it is built exactly once:
+"""Shared fact and coverage projections for ``InjectionReport``.
 
-  * a transient compatibility `Finding` for one `CheckResult`, carrying
-    only the WIRE-shaped `facts` (capped at `evidence_limit`) -- never
-    `verbose_facts`. `verbose_facts` is console/--txt-only detail (see
-    `dumpex.hunt._finding.Finding`'s own docstring: it is excluded from
-    `to_dict()` and from `id`'s hash basis), so populating it here would
-    make the legacy dict and `HunterRecord` projectors execute the same
-    normal/verbose detail POLICY the verdict-first console owns -- that
-    policy belongs to `report_console.py` alone (see the Injection 2B
-    issue's own scope bullet: "normal/verbose detail policy" is to be
-    "centralized in the console projector"). `report_console.py` augments
-    the Finding this module returns with `verbose_facts` itself, locally,
-    only for its own rendering;
-  * the coverage snapshot projected into the v1.1 `(coverage dict,
-    coverage_status, coverage_reasons)` shape;
-  * the coverage snapshot projected into the structured v2.4
-    `dumpex.output.coverage.CoverageReport` shape.
-
-This module owns no dependency on `dumpex.hunt.injection.aggregate` or
-`collect` -- since the Injection 2C cutover, `aggregate.build_report()` is
-itself the ONE place an `InjectionReport` is constructed, and this module
-stays a pure function of that already-built Report rather than reaching
-into `aggregate.py`'s own construction internals. Every fact string below
-is written to match `aggregate.py`'s inference/rationale/facts text
-byte-for-byte for the same evidence, verified by
-tests/hunt/test_injection_projectors.py's golden-scenario parity test.
+Wire facts retain their established text, order, and evidence caps because
+they feed legacy output, typed records, and finding identifiers. Richer
+verbose facts are a console-only projection.
 """
 from dumpex.hunt._finding import Finding
 from dumpex.hunt._coverage import derive_coverage_status

@@ -1,26 +1,10 @@
-"""Canonical v2 record types.
+"""Canonical v2 record types and their explicit wire projections.
 
-Same house style as dumpex.hunt._finding.Finding: plain dataclasses, an
-explicit to_dict() (never dataclasses.asdict()/str() fallback), defensive
-list(...) copies for mutable fields, snake_case fields throughout.
-
-Type rule (resolves "addresses as hex, numbers as int, missing as null"
-into one consistent policy applied to every record below): a field is a
-normalized lowercase hex string (`f"0x{n:x}"`) ONLY when it is a real
-memory address or pointer -- base_address, end_address, teb,
-peb_address, image_base_address, and the three PEB standard-handle
-fields. Every other numeric field -- pid, tid, exc_tid, size, checksum,
-durations, counts, exit_status, suspend_count, priority -- is a plain
-JSON integer, never a hex string. Missing values are always None, never
-"". Console rendering (dumpex/commands/*.py's render_*_console functions)
-is free to format any of these ints as hex text for display -- that is a
-presentation choice independent of the record's own field type.
-
-StringRecord is populated by --strings and reused as-is by --report's own
-"notable strings" section (see TriageCardRecord below). Artifact is
-populated by --extract and by --report's own optional extract-to-file
-side effect (under a different `kind` string -- see Artifact's own
-docstring).
+Memory addresses and pointers are normalized lowercase hex strings;
+other numeric values, including dump-file offsets and bitfields, remain
+JSON integers. Missing values are ``None``, never an empty string.
+Mutable fields are copied when projected so callers cannot mutate records
+through a serialized result.
 """
 import copy
 import re
@@ -148,16 +132,12 @@ class ThreadRecord:
 
 @dataclass
 class SysInfoRecord:
-    """`--sysinfo`'s record -- docs/developer/recon_process_sysinfo_handles_contract.md
-    §4.2's 18-field shape (issue #41): the process identity/runtime fields
-    now owned by `--process` (pid, process_start_utc, image_path,
-    command_line, process_user_time_seconds, process_kernel_time_seconds)
-    are gone; `current_directory`/`environment_variables` are added.
-    Split out from a single shared "process info" record (an earlier
-    iteration bundled sysinfo/pid/peb into one type with dozens of
-    nulled-out fields per command) so each kind's schema can be fully and
-    tightly typed -- see ProcessRecord below (--pid/--peb's own
-    PidRecord/PebRecord were retired in issue #43's v2.13 cutover)."""
+    """The fixed ``--sysinfo`` record shape.
+
+    Environment entries preserve source order and duplicate or ``=``-prefixed
+    names. ``None`` means the block was unavailable; an empty tuple means it
+    was observed and contained no entries.
+    """
     dump_file:          "str | None" = None
     # The dump's own identity, reported together in the console's DUMP
     # section. size/sha256 come from re-reading the file (None together,
@@ -212,25 +192,16 @@ class SysInfoRecord:
         }
 
 
-# PidRecord/PebRecord (--pid/--peb's own records) were removed here in
-# issue #43's atomic v2.13 cutover, which replaces both commands with
-# --process (see ProcessRecord below) -- see
-# docs/developer/recon_process_sysinfo_handles_contract.md §7.2 for why there is no
-# hidden alias. dumpex/schemas/dumpex-output-v2.12.schema.json (and
-# earlier) still define $defs/pidRecord and $defs/pebRecord, frozen, so
-# historical output produced by those commands stays validatable.
+# Historical schemas retain ``pidRecord`` and ``pebRecord`` definitions so
+# output produced by older schema versions remains validatable.
 
 
-# ── Extraction records (Phase E) ────────────────────────────────────────
-# Validators below mirror v2.2's extractRecord/stringRecord $defs (P2-1
-# remediation) -- before this, neither record had a __post_init__ at all,
-# so Python happily constructed (and .to_dict()'d) shapes the schema
-# itself rejects (negative offsets, a bogus `encoding`, bytes_read >
-# requested_size, bool-typed ints, ...). `_HEX_ADDRESS_RE` and the
-# `_require_optional_*` family a little further below (shared with the
-# comparison records) are referenced here by name -- plain top-level
-# functions looked up at __post_init__ CALL time, not at class-definition
-# time, so their physical position later in this module (kept together
+# ── Extraction records ─────────────────────────────────────────────────
+# Validators mirror the corresponding schema constraints: offsets and sizes
+# are non-negative plain integers, encodings are closed vocabulary, and a
+# read cannot exceed its request. `_HEX_ADDRESS_RE` and the
+# `_require_optional_*` family below are resolved when __post_init__ runs,
+# so their physical position later in this module (kept together
 # with their other comparison-record callers) doesn't matter.
 
 def _require_nonneg_int(value, field_name: str) -> None:
@@ -351,16 +322,10 @@ class StringRecord:
         }
 
 
-# ── Comparison records (Phase C) ────────────────────────────────────────
-# Three tagged-union members for a future comparison command's
-# result.data.records array (kind="comparison") -- entity_type is the
-# discriminator. Fields are grounded directly in dumpex.commands.diff's
-# existing (console-only) diff_modules/diff_threads/diff_memory business
-# logic, not invented: each change_type only carries the before/after
-# values that function's own set-difference logic actually produces for
-# it (e.g. an "added" module has no full_path_before -- there is no
-# baseline-side module to report one from). No command constructs these
-# yet; see dumpex/commands/comparison.py.
+# ── Comparison records ─────────────────────────────────────────────────
+# Tagged-union members for result.data.records (kind="comparison").
+# `entity_type` is the discriminator. Each `change_type` carries only the
+# before/after values that exist for that side of the comparison.
 #
 # Field-shape validators shared by all three -- kept local to this
 # section (not shared with, say, dumpex.output.coverage's own similarly-
@@ -406,15 +371,11 @@ _MODULE_DIFF_CHANGE_TYPES = (MODULE_DIFF_ADDED, MODULE_DIFF_REMOVED, MODULE_DIFF
 
 @dataclass(frozen=True)
 class ModuleDiffRecord:
-    """One added/removed/rebased module between two dumps -- ported from
-    diff_modules' own module-name-keyed added/removed/rebased set logic
-    (see dumpex.commands.comparison._module_match_key for how the actual
-    match key differs from `name` for an anonymous module). Frozen, with
-    __post_init__ enforcing the same before/after null-pairing per
-    change_type the v2.1 schema's moduleDiffRecord allOf already
-    enforces on the wire -- catches a construction bug at the Python
-    layer instead of only at schema-validation time, and stops a valid
-    instance from being mutated into an invalid one after the fact."""
+    """An added, removed, or rebased module between two evidence inputs.
+
+    Before/after null pairing follows ``change_type``. ``name`` is a display
+    name and may differ from the internal anonymous-module match key.
+    """
     change_type:         str   # MODULE_DIFF_ADDED / _REMOVED / _REBASED
     name:                 str   # display name -- "(unnamed)" for an anonymous module,
                                   # never the raw (possibly colliding) match key
@@ -483,22 +444,12 @@ _MODULE_CONTEXTS = (MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE
 
 @dataclass(frozen=True)
 class ThreadDiffRecord:
-    """One added/removed thread between two dumps -- ported from
-    diff_threads' own TID-keyed added/removed set logic. diff_threads has
-    no "changed" category (a TID either exists in both, one, or the
-    other), so change_type is added/removed only. backing_module_after/
-    backing_module_context are populated for "added" only, resolved
-    against the TARGET's module list exactly like diff_threads' own
-    addr_to_module(sa, modules_b) call -- diff_threads never attempts
-    baseline-side module resolution for a removed thread, so there is no
-    backing_module_before field. backing_module_context reuses
-    ThreadRecord's own MODULE_CONTEXT_RESOLVED/_UNREGISTERED/_UNAVAILABLE
-    vocabulary (see above) so a comparison result distinguishes
-    "confirmed not backed by any module" (a real signal) from "target's
-    ModuleListStream itself wasn't available to check against" (not a
-    confirmed anomaly), the same way --threads already does. Frozen, with
-    __post_init__ enforcing the same invariants the v2.1 schema's
-    threadDiffRecord allOf already enforces on the wire."""
+    """An added or removed thread between two evidence inputs.
+
+    Module context is resolved only for an added thread with a known target
+    start address. ``unregistered`` and ``unavailable`` remain distinct so
+    missing module evidence is not reported as a confirmed anomaly.
+    """
     change_type:             str   # THREAD_DIFF_ADDED / THREAD_DIFF_REMOVED
     tid:                      int
     start_address_before:     "str | None"
@@ -579,17 +530,11 @@ _MEMORY_DIFF_CHANGE_TYPES = (MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF
 
 @dataclass(frozen=True)
 class MemoryDiffRecord:
-    """One added/removed/protection-changed memory region between two
-    dumps -- ported from diff_memory's own BaseAddress-keyed added/
-    removed/changed set logic. suspicious_before/_after reuse
-    MemoryRegionRecord.suspicious's own precedent (True iff `protect` is
-    one of dumpex.rules_pkg.loader.SUSPICIOUS_PROTS) rather than
-    diff_memory's own 4-tier rwx/exec/notable/noise console
-    categorization, which stays a future console-renderer concern -- the
-    same line MemoryRegionRecord.suspicious already draws between
-    structured data and presentation. Frozen, with __post_init__
-    enforcing the same invariants the v2.1 schema's memoryDiffRecord
-    allOf already enforces on the wire."""
+    """An added, removed, or protection-changed memory region.
+
+    ``suspicious_before`` and ``suspicious_after`` use the structured
+    ``MemoryRegionRecord`` policy, independent of console categorization.
+    """
     change_type:         str   # MEMORY_DIFF_ADDED / _REMOVED / _PROTECTION_CHANGED
     base_address:         str   # BaseAddress -- the match key
     size_before:           "int | None"
@@ -746,7 +691,7 @@ class Artifact:
                 "description": self.description}
 
 
-# ── Report records (Phase E, PR3) ───────────────────────────────────────
+# ── Report records ─────────────────────────────────────────────────────
 # One TriageCardRecord per triage card -- see dumpex.commands.report's own
 # module docstring for why this is NOT a --diff-style tagged union of
 # independent thread/region/string entities: a card's thread/region/
@@ -837,41 +782,17 @@ class ReportThreadInfo:
 
 @dataclass
 class ReportRegionInfo:
-    """The memory region resolved at a triage card's target address
-    (report.py's Section 2). `file_offset` is a plain int -- a byte
-    offset inside the .dmp file, not a process address -- so it does NOT
-    go through hex_address() despite the name similarity to this module's
-    other `*_address` fields (see this module's own docstring's hex-vs-int
-    type rule). `is_rwx_private` is a MECE dimension report.py can always
-    determine from the region's own protection bits alone, independent of
-    module evidence.
+    """Resolved memory-region evidence for a triage-card target.
 
-    `module_context`/`mz_header_detected`/`has_injected_pe` together
-    replace what used to be a single boolean `has_injected_pe` computed as
-    `header[:2] == b'MZ' and not rmod` -- that conflated "confirmed not
-    backed by any module" with "ModuleListStream itself was absent, so we
-    simply could not check," producing a false-positive injected-PE
-    finding whenever modules were unavailable (rmod is unconditionally
-    None/falsy in that case too). `module_context` mirrors ReportThreadInfo's
-    own resolved/unregistered/unavailable vocabulary but is never null here
-    (unlike the thread field): a target region, once resolved at all,
-    always has SOME module-context answer, whereas a thread's own
-    module_context is null only when start_address itself is unknown.
-    `mz_header_detected` is null when the small header-peek read itself
-    failed (a distinct, rare failure from the main Section 4 content
-    read) -- an unconfirmed header must not silently read as "no PE
-    header found" (false negative) any more than a missing module list
-    should silently read as "confirmed unregistered" (false positive).
-    `has_injected_pe` is the MECE-dimension-ready derived fact: True only
-    when an MZ header WAS found AND module_context is confirmed
-    'unregistered'; False when no MZ header was found, or one was found
-    in a module confirmed 'resolved' (known, expected); null whenever the
-    evidence needed to decide either way is itself missing (mz_header_
-    detected is null, or an MZ header was found but module_context is
-    'unavailable' -- found something suspicious-shaped but can't confirm
-    it actually is). TriageCardRecord.findings may only ever contain
-    'injected_pe' when this is True -- never on a null (unconfirmed) or
-    False value."""
+    file_offset is an integer dump offset, not a process address.
+    module_context distinguishes resolved, confirmed unregistered, and unavailable
+    module evidence. mz_header_detected is None when the header read failed.
+
+    has_injected_pe is true only for a confirmed MZ header in a confirmed
+    unregistered region; it is None whenever required header or module evidence
+    is unavailable. This prevents missing module data from becoming a false
+    positive and failed reads from becoming a false negative.
+    """
     base_address:     str
     size:             int
     protect:          str
@@ -1256,7 +1177,7 @@ class TriageCardRecord:
         }
 
 
-# ── Hunt records (v2.4 migration, PR2a -- injection only) ───────────────
+# ── Hunt records ───────────────────────────────────────────────────────
 # One HunterRecord per hunter -- `--hunt all` produces exactly 7, in a
 # fixed order; a single `--hunt <ttp>` produces exactly 1. See
 # docs/developer/hunt_architecture.md for the typed projection boundary
@@ -1270,14 +1191,7 @@ class TriageCardRecord:
 # `details` is one of the 7 *Details types below, discriminated by
 # `hunter`.
 #
-# All 7 *Details classes below are fully wired to a real collect_*()
-# (dumpex.hunt.injection.collect.collect_injection_record() first, PR2a;
-# the other 6 -- hollowing/stomping/pipe/cs-beacon/yara/obfuscation --
-# followed in PR2b, each fixing the same confirmed non-reproducible
-# str(obj) defect InjectionDetails was built to fix; see each hunter's
-# own collect.py module), and every one of them is reachable from the
-# CLI as of PR4 via `dumpex.hunt.collect_hunt()`/`dumpex.hunt.cmd_hunt(
-# ..., collect_records=True)`.
+# All seven detail types are produced by the hunt collection path.
 
 HUNTERS = ("injection", "hollowing", "stomping", "pipe", "cs-beacon", "yara", "obfuscation")
 _HUNT_STATUSES = ("DETECTED", "NOT_DETECTED_IN_SCANNED_SCOPE", "INCONCLUSIVE", "NOT_EVALUATED")
@@ -1293,12 +1207,11 @@ def _require_list_of(value, cls, field_name: str) -> None:
 
 @dataclass
 class HuntRegionRef:
-    """A memory region reference inside a hunter's `details` -- replaces
-    every raw Region object a hunter's aggregate.py builds today, which
-    (forbidden by docs/developer/hunt_architecture.md's deterministic-output rule)
-    reaches JSON via dumpex.ui.structured._json_safe()'s str(obj) fallback
-    and embeds the interpreter's own live heap address, non-reproducible
-    across runs."""
+    """A deterministic, value-based memory-region reference in hunt details.
+
+    Raw parser objects must not reach JSON because their string form can
+    contain analysis-host heap addresses.
+    """
     base_address:    str
     allocation_base: "str | None"
     size:            int
@@ -1516,31 +1429,13 @@ class InjectionDetails:
         }
 
 
-# The remaining 6 *Details classes below are SHAPE ONLY (field names/types
-# aligned with the per-hunter typed conversion boundary documented in
-# docs/developer/hunt_architecture.md) -- no
-# collect_*() function constructs any of these yet, and their fields are
-# NOT guaranteed free of the raw-object str(obj) non-reproducibility
-# defect InjectionDetails above was built specifically to fix. Real
-# per-hunter collect_*() wiring (the same treatment injection got) is
-# explicit follow-up work.
-
 @dataclass
 class HollowingDetails:
-    """New JSON surface for `--hunt hollowing` (today's v1.1 output has NO
-    detail fields at all -- see the field matrix's hollowing section for
-    why). Mirrors the four checks the hollowing hunter already computes
-    but never persisted: memory type / MZ header / RWX protection at the
-    image base, and the PEB-vs-module-list name compare.
-    `image_base` is `None` exactly when the PEB itself is missing (the
-    hunter's own NOT_EVALUATED case, confirmed by
-    dumpex.hunt.hollowing._build_hollowing_report()'s early return, and
-    structurally guaranteed since the canonical-Report migration by
-    dumpex.hunt.hollowing.domain.HollowingReport's own context/peb_present
-    invariant) --
-    there is no image base to report at all in that case, unlike every
-    other hunter's `HunterRecord`, which always has SOME evidence to
-    convert even when coverage is incomplete."""
+    """Image-base evidence for ``--hunt hollowing``.
+
+    ``image_base`` is ``None`` when the PEB is unavailable. Each tri-state
+    check is ``None`` when it could not run, not a clean ``False`` result.
+    """
     image_base:           "str | None"
     mem_private_at_base:  "bool | None"   # None if the image-base region wasn't found at all
     mz_header_present:    "bool | None"   # None if the header read itself failed
@@ -1572,9 +1467,7 @@ class HollowingDetails:
 
 @dataclass
 class StompingDetails:
-    """`--hunt stomping`'s hunter-specific evidence. `verified_changes[*]`
-    is already close to this final shape in today's v1.1 output (a flat
-    dict, not a raw object) -- see the field matrix's stomping section."""
+    """Protection leads and verified changes for ``--hunt stomping``."""
     protection_leads: list   # list[dict]
     verified_changes: list   # list[dict]
 
@@ -1619,10 +1512,11 @@ class PipeDetails:
 
 @dataclass
 class CsBeaconDetails:
-    """`--hunt cs-beacon`'s hunter-specific evidence. `configs[*]`'s
-    `va`/`file_offset`/`region_base` are plain JSON ints in today's v1.1
-    output -- confirmed by the field matrix as a real shape change (not
-    just a container move) once this hunter's collect_*() is wired."""
+    """Decoded configuration evidence for ``--hunt cs-beacon``.
+
+    Process addresses use normalized hex strings in this typed shape;
+    dump-file offsets remain integers.
+    """
     configs:      list   # list[dict]
     config_count: int
 
@@ -1701,17 +1595,13 @@ _HUNTER_DETAILS_TYPES = {
 
 @dataclass
 class HunterRecord:
-    """One hunter's complete v2.4 result -- `result.data.records[*]` for
-    `result.kind == "hunt"`. `hunter` discriminates which of the 7
-    `*Details` types `details` must be. `max_score`/`confidence`/
-    `lead_count`/`review_priority` are `None` for every hunter except
-    `hunter == "yara"`, where they must ALL be `None` (yara has none of
-    these today -- see the field matrix) -- never a mix of some set, some
-    not. `coverage` is a real CoverageReport, not a bare status string:
-    this hunter's coverage_status/coverage_reasons/coverage dict from
-    today's v1.1 output are migration SOURCES the reducer that built this
-    CoverageReport consumed, never carried forward as a second field
-    alongside it (see the field matrix's own cross-cutting finding #2)."""
+    """One hunter result in ``result.data.records``.
+
+    ``hunter`` discriminates the seven detail types. YARA has no shared
+    max-score, confidence, lead-count, or review-priority semantics, so all
+    four fields are ``None`` together. Coverage is a ``CoverageReport``,
+    not a second bare status/reasons representation.
+    """
     hunter:          str
     status:          str
     score:           int

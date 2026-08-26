@@ -227,73 +227,16 @@ class BudgetTargetGroup:
 
 @dataclass(frozen=True)
 class HiddenPeScan:
-    """Result of memory_scan._hunt_hidden_pe(): every MZ candidate found
-    anywhere in an eligible region as a HiddenPeEvidence, plus how many
-    regions could not be fully examined, by reason -- `read_failed` (a
-    read raised), `short_reads` (a read came back with fewer bytes than
-    requested, leaving candidate offsets or a candidate's own header
-    unexamined), `scan_truncated` (this region's OWN search got PART of it
-    before the read budget ran out -- an unfinished remainder),
-    `scan_not_started` (issue #28: a LATER region the whole-hunt budget
-    was already exhausted before this call's own search ever issued a
-    single read for -- nothing here was examined at all, a materially
-    different fact from a partially-searched region). Each counts
-    REGIONS, never reads: one region whose search needed many reads
-    contributes at most 1 to each.
+    """Hidden-PE candidates and coverage of their bounded search.
 
-    All three exist so a negative result can state what it actually
-    covered: "no hidden PE found in the parts of memory that were
-    searched" is a different claim from "no hidden PE in this process",
-    and only the counters make the difference visible (see
-    dumpex.hunt.injection.domain.CoverageSnapshot.complete).
+    read_failed and short_reads count regions with unreadable or incomplete
+    bytes. scan_truncated groups partly examined regions; scan_not_started groups
+    regions for which no read began. Groups retain distinct budget attribution.
 
-    `read_failed_targets`/`short_read_targets` (issue #28) are the region
-    identity behind their own counters above -- one ScanTarget per region
-    where that gap happened, built at memory_scan._hunt_hidden_pe's own
-    region loop (where the raw MemoryInfo region is still in scope)
-    rather than reduced to a count before it ever reaches
-    CoverageLimitation. `size_limit` stays None on every one of these:
-    none of the four gaps is "the region was too big", so there is no cap
-    to record (see ScanTarget's own docstring).
-
-    `scan_truncated_groups`/`scan_not_started_groups` (issue #28 P5
-    follow-up, replacing a prior flat-targets-plus-single-attribution
-    shape) are `tuple[BudgetTargetGroup, ...]` -- see that class's own
-    docstring for why grouping by budget_kind, rather than one
-    first-occurrence attribution for the whole scan, is required for
-    correctness once a hunt run's regions can stop on more than one
-    distinct budget. `scan_truncated`/`scan_not_started` above still
-    count every affected region (the sum of every group's own
-    `len(targets)`), independent of how many distinct budget kinds
-    stopped them.
-
-    `validated_dropped`/`unvalidated_dropped` are a DIFFERENT kind of
-    fact: those candidates WERE read, found, and structurally validated --
-    they simply exceeded the scan's evidence cap (see
-    memory_scan._ScanBudget) and are therefore not listed. Both are stated
-    as an explicit count on the check they belong to (aggregate.py), and
-    the two are treated differently beyond that, because they are not
-    equally consequential:
-
-      validated_dropped   -- a validated hidden PE header that is not in
-                             the report is detection-relevant, so it also
-                             counts against coverage completeness
-                             (CoverageSnapshot.pe_evidence_capped). It
-                             takes hundreds of structurally-valid PE
-                             headers in unbacked memory to reach the cap
-                             at all, which is not something a benign dump
-                             does, so this cannot become routine noise.
-      unvalidated_dropped -- an 'MZ' that failed validation is
-                             informational only and occurs ~16 times per
-                             MB in ordinary memory, so counting it against
-                             coverage would mark essentially every dump
-                             partial and tell an analyst nothing.
-
-    `hits` is normalized to a tuple in __post_init__ (accepts list OR
-    tuple on construction, same defensive-copy reasoning as
-    dumpex.hunt._finding.Finding's own list fields) so a caller can never
-    mutate this Report-bound scan result in place after construction by
-    holding onto the list it passed in."""
+    Dropped validated candidates reduce completeness because detection-relevant
+    evidence is omitted. Dropped unvalidated MZ candidates are informational and
+    do not make ordinary noisy dumps partial. Hits are copied to a tuple.
+    """
     hits: tuple              # tuple[HiddenPeEvidence, ...] once constructed
     read_failed: int = 0
     read_failed_targets: tuple = ()      # tuple[ScanTarget, ...] -- issue #28

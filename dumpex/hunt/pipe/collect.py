@@ -1,29 +1,4 @@
-"""
-`collect_pipe_record()` -- the `HunterRecord`-producing entry point for
-the pipe hunter, alongside the console-oriented `_hunt_pipe()` in
-`dumpex/hunt/pipe/__init__.py`. Both call the exact same
-`_build_pipe_report()` pipeline, so this module only RESHAPES the
-resulting canonical `PipeReport` into a `HunterRecord` -- via
-`dumpex.hunt.pipe.report_record.project_hunter_record`, the same pure
-projector `report_console.py`/`report_legacy.py` build their own
-projections from. That is what guarantees the console path and this typed-
-record path can never silently disagree about the same input. Mirrors
-`dumpex.hunt.stomping.collect`/`dumpex.hunt.encoding.collect`/
-`dumpex.hunt.injection.collect` (the three completed reference pilots).
-
-The pre-migration version of this module owned the whole dict-building
-projection itself: it converted raw `Handle`/`MinidumpMemoryInfo`/
-`ThreadInfo` objects (embedded in the legacy `findings` dict's own
-`handle_pipes`/`private_pipes`/`c2_context`/`framework_pipes`/
-`unbacked_in_rgn` entries) into JSON-safe dicts here, re-deriving
-`prot_str()` a second time. All of that now lives in report_record.py,
-reading typed evidence whose identity was resolved once at scan time
-(dumpex.hunt.pipe.models), and this module no longer reads the legacy dict
-at all.
-
-This module is read by `dumpex/hunt/__init__.py`'s `collect_hunt()`
-orchestrator, which `cli.py`'s `--hunt` branch calls for `--json` output.
-"""
+"""Build a pipe report and project it into a ``HunterRecord``."""
 from dumpex.hunt.pipe import _build_pipe_report
 from dumpex.hunt.pipe.report_record import project_hunter_record
 from dumpex.output.records import HunterRecord

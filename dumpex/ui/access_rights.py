@@ -1,129 +1,14 @@
-"""Type-specific decoding of a captured `GrantedAccess` mask into
-investigator-readable right names -- issue #102, deferred out of #42/#98
-by docs/developer/recon_process_sysinfo_handles_contract.md §5.2.
+"""Decode captured access masks using object-type-specific Windows rights.
 
-A PRESENTATION projection and nothing else. `HandleRecord.granted_access`
-stays the raw integer it has always been on the wire (§1.3), the v2.13
-schema is untouched, and every name produced here is derived from that
-one already-normalized integer plus the record's own recorded type name.
-Nothing in this module opens a handle, queries a live process, reads the
-analysis host's ACLs, re-reads the dump, or infers a right from an object
-NAME -- the low 16 bits of an access mask mean different things for
-different object TYPES, and nothing else decides them.
+Low access-mask bits are type-specific, so decoding depends on the recorded
+object type. Unknown bits stay explicit; unsupported types retain their raw
+type-specific remainder. Composite aliases consume component bits to avoid
+double reporting. Names are presentation only and never alter GrantedAccess or
+imply a verdict.
 
-Why a type registry rather than one global bit table: bit 0x0001 is
-`FILE_READ_DATA` on a File, `PROCESS_TERMINATE` on a Process,
-`THREAD_TERMINATE` on a Thread, `TOKEN_ASSIGN_PRIMARY` on a Token and
-`SECTION_QUERY` on a Section. A single table would therefore be wrong for
-every type but one, and confidently wrong is worse than a raw number --
-which is exactly why §5.2 shipped the raw mask and deferred this.
-
-Three rules keep a decode honest:
-
-  1. **Nothing is invented.** Bits with no documented right for the
-     recorded type stay visible at their own raw value
-     (`UnknownBits(0x0000c000)`), and a type this registry does not carry
-     decodes only the type-INDEPENDENT bits, with the whole type-specific
-     remainder shown as captured
-     (`TypeSpecificUnavailable(0x0000019f)`). The console prints this
-     text directly under the row whose `Access` column holds the exact
-     captured mask, so the derived reading and the evidence it came from
-     are always one line apart.
-  2. **Nothing is double-reported.** A composite alias claims its own
-     bits, so `AllAccess` and the fourteen component names it stands for
-     can never both appear for the same mask, and no later name repeats
-     what an earlier one already accounted for.
-  3. **Nothing is a verdict.** `AllAccess` on a Process handle is
-     evidence worth reading, not proof that anything was done with it.
-     No name here scores, ranks, or accuses; §1.6's observation rule
-     covers the derived text exactly as it covers the record.
-
-Every name printed here is a dumpex DISPLAY FORM that maps precisely to
-one Windows SDK, WDK or native constant -- it is not the constant's own
-spelling, and "maps to a constant" is not the same claim as "maps to a
-constant Microsoft documents": `Provenance` (below) records which of the
-two is true for each one, and a handful -- `SYMBOLIC_LINK_*`,
-`THREAD_ALERT`, `SEMAPHORE_QUERY_STATE`, `IO_COMPLETION_QUERY_STATE` --
-have no confirmed header at all. The mapping drops the object-type
-prefix and CamelCases the remainder
-(`FILE_READ_DATA` -> `ReadData`, `THREAD_QUERY_LIMITED_INFORMATION` ->
-`QueryLimitedInformation`, `KEY_READ` -> `KeyRead`, each type's
-`*_ALL_ACCESS` -> `AllAccess`), because the type is already on the row
-this text sits under and repeating it in every one of nine names costs
-the width that makes the rights readable at all.
-
-Source tracking here is PER CONSTANT, never per object type. An object
-type is not a header, and treating it as one is how this module got a
-fact wrong: `IoCompletion` was filed whole under the WDK, when in truth
-`winnt.h` defines `IO_COMPLETION_MODIFY_STATE` and
-`IO_COMPLETION_ALL_ACCESS` and only `IO_COMPLETION_QUERY_STATE` comes
-from outside the Win32 SDK. `Thread` has the same shape (every right but
-`THREAD_ALERT` is `winnt.h`), and so do `Event` and `Semaphore`. So every
-entry below carries its OWN source, a type's sources are DERIVED from the
-constants it actually uses (`object_type_sources`), and a type with more
-than one is mixed-source and says so rather than being rounded to
-whichever header most of it came from.
-
-Per-constant means per constant CHECKED, not per constant listed. The
-first pass at this fix moved three `*_QUERY_STATE` bits into "no
-Microsoft header names it" as a group, because they have the same value,
-the same display name and the same relationship to their type's
-`*_ALL_ACCESS`. Microsoft documents one of the three
-(`EVENT_QUERY_STATE`, `ntifs.h`), so grouping by resemblance had simply
-reproduced the original defect at a smaller scale. Every source below is
-established for that constant alone.
-
-The provenances in use, each established for the specific constants it
-covers rather than for an object family. A source is recorded together
-with its EVIDENCE, and `Provenance.header` -- the only thing
-`constant_source()` will return -- stays None until something confirms
-one, so a lead can never be handed back as a fact:
-
-  * `PROV_WINNT_H` -- Win32 SDK `winnt.h`, verified by grepping an
-    installed SDK: the standard and generic rights, and the great
-    majority of the per-type ones;
-  * `PROV_WINUSER_H` -- Win32 SDK `winuser.h`, likewise verified:
-    `DESKTOP_*` and `WINSTA_*`;
-  * `PROV_NTIFS_H` -- WDK `ntifs.h`, named in a Microsoft reference page:
-    `EVENT_QUERY_STATE` (the `ZwCreateEvent` reference) and the whole
-    `DIRECTORY_*` set including `DIRECTORY_ALL_ACCESS` (the
-    `ZwOpenDirectoryObject` reference). Both pages state `ntifs.h` under
-    Requirements. These two sets share a HEADER, not an object family --
-    an Event is not an Object Manager object -- so this must never be
-    widened to "the Object Manager headers";
-  * `PROV_WDM_H_ROUTINE_ONLY` -- **no confirmed header**, attributed to
-    WDK `wdm.h`: `SYMBOLIC_LINK_*`. Microsoft documents the ROUTINE
-    `ZwOpenSymbolicLinkObject` under `wdm.h`, but that page names no
-    `SYMBOLIC_LINK_*` constant at all, so the header is a lead;
-  * `PROV_NTDDK_H_ATTRIBUTED` -- **no confirmed header**, attributed to
-    WDK `ntddk.h`: `THREAD_ALERT`, inherited from the original table
-    rather than confirmed against a Microsoft page;
-  * `PROV_NATIVE_UNCONFIRMED` -- **no confirmed header** and no
-    attribution worth recording: `SEMAPHORE_QUERY_STATE` and
-    `IO_COMPLETION_QUERY_STATE`, each checked on its OWN.
-    `EVENT_QUERY_STATE` was briefly filed here too, purely because the
-    three bits look alike, and Microsoft documents it. Grouping by
-    resemblance is the mistake.
-
-Every entry carries the authoritative constant AND its provenance beside
-the display name, so a mapping is re-checked against the right header
-rather than taken on trust, and `CONSTANT_PROVENANCE` exposes the same
-fact keyed by constant for anything that needs to ask -- including the
-console, which marks an unconfirmed composite rather than describing it
-in the same words as `KEY_READ`. tests/unit/test_access_rights.py pins
-every composite -- display name, value and full expansion -- against a
-hand-written table that is not derived from this file, pins every
-non-`winnt.h` provenance with the evidence for it, and re-greps the real
-`winnt.h`/`winuser.h` on any machine that has a Windows SDK installed.
-
-One constant PAIR has two values rather than two sources.
-`PROCESS_ALL_ACCESS` and `THREAD_ALL_ACCESS` were widened by Vista, and
-`winnt.h` still carries both definitions behind an `NTDDI_VERSION`
-guard. `decode_access_mask()` takes an optional `os_major` for that and
-nothing else; see `_registry_for`.
-
-Kept a leaf module -- it imports nothing from dumpex -- so the renderer
-that needs it cannot pull a command package into `dumpex.ui`.
+Each constant retains per-constant Windows SDK, WDK, or explicitly unconfirmed
+native provenance. Unconfirmed headers are not promoted by resemblance.
+Process and thread ALL_ACCESS account for the Vista-era width change.
 """
 from dataclasses import dataclass
 

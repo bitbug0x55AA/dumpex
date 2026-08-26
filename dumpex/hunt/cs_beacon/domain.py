@@ -1,36 +1,8 @@
-"""The canonical, recursively immutable domain model for the CS Beacon
-hunter -- `CSBeaconReport` plus the coverage/scan-diagnostics snapshots and
-evidence container it is built from. Mirrors `dumpex.hunt.hollowing.domain`/
-`dumpex.hunt.injection.domain`/`dumpex.hunt.encoding.domain`/
-`dumpex.hunt.stomping.domain`/`dumpex.hunt.pipe.domain` (the five completed
-reference pilots): see those modules' own docstrings for the general "one
-canonical result representation" rationale this module applies to the CS
-Beacon hunter.
+"""Immutable domain model for Cobalt Strike configuration analysis.
 
-Before this migration, `dumpex.hunt.cs_beacon.aggregate.Report` kept the
-same facts several times over: a `findings` dict (JSON-facing) and a
-`findings_list` (the same findings a second time, as `Finding` objects), a
-`hit_records` list of mutable `CorroboratedHit`/`Candidate` objects (each
-carrying a parser-owned `fields` dict and a raw `MemoryInfo` region kept
-alive purely for the console renderer), a `coverage_report` object mutated
-onto the Report from OUTSIDE its own constructor
-(`dumpex/hunt/cs_beacon/__init__.py`), and a `scan_note` string carrying
-console progress-line state that has nothing to do with the scan's own
-result. `CSBeaconReport` stores each fact exactly once:
-
-  score      -- 0, 1, or 2 (see MAX_SCORE / VERDICT_LEVEL_BY_SCORE).
-  coverage   -- the immutable snapshot of what this run could and could
-                not see (dumpex.hunt.cs_beacon.domain.CoverageSnapshot).
-  results    -- the checks this hunter produced, as typed
-                `dumpex.hunt._domain.CheckResult`s carrying typed evidence.
-  evidence   -- the observed items, in their hunter-meaningful buckets
-                (CSBeaconEvidence) -- the SAME objects `results` reference,
-                never a copy.
-
-and DERIVES everything else -- `status`, `verdict_level`, `confidence`,
-`lead_count`, `review_priority`, `max_score`, `config_count`,
-`any_corroborated` -- as properties, through the same shared reducers
-(`dumpex.hunt._coverage`, `dumpex.hunt._finding`) `aggregate.py` calls.
+Structurally valid configs, independent memory context, scan coverage, and
+derived verdict fields are validated together. Static evidence does not encode a
+live or dormant activity claim.
 """
 from dataclasses import dataclass, field
 

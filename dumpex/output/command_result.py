@@ -1,23 +1,8 @@
-"""
-CommandResult[T] -- what a migrated command's collect_*() function
-returns, replacing the ad hoc 3-to-6-element positional tuple every
-recon command used to return (see dumpex/commands/list_cmd.py,
-modules.py, threads.py, sysinfo.py, process.py, handles.py, profile.py).
-Every recon command returns this type now.
+"""Immutable command result passed from collection to output adapters.
 
-Deliberately separate from dumpex.output.envelope's Result/Envelope
-(the wire-format dataclasses the serializer/schema actually consume):
-CommandResult is a pre-serialization, richer intermediate a command
-builds and cli.py hands to dumpex.output.collector.V2Output.
-set_command_result(), which consumes every field here (including
-execution_status/diagnostics/artifacts -- see that method's docstring
-for why a narrower adapter used to silently drop them) before it becomes
-wire-format JSON.
-
-Imports EXECUTION_COMPLETED from dumpex.output.coverage, not
-dumpex.output.envelope, on purpose: this is a command/domain-layer type,
-and the dependency direction is command/domain model -> output adapter
-(collector.py) -> envelope/serializer, never the reverse.
+Records, coverage, execution state, diagnostics, artifacts, and summaries remain
+separate so rendering cannot infer evidence semantics from presentation text.
+Mutable caller containers are defensively copied.
 """
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar

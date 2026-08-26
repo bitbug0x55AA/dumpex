@@ -1,18 +1,4 @@
-"""
-`collect_obfuscation_record()` -- the `HunterRecord`-producing entry point
-for the obfuscation hunter, alongside the console-oriented
-`_hunt_encoding()` in `dumpex/hunt/encoding/__init__.py`. Both call the
-exact same `_build_encoding_report()` pipeline, so this module only
-RESHAPES the resulting canonical `EncodingReport` into a `HunterRecord` --
-via `dumpex.hunt.encoding.report_record.project_hunter_record`, the same
-pure projector `report_console.py`/`report_legacy.py` build their own
-projections from. That is what guarantees the console path and this
-v2.4+ path can never silently disagree about the same input. Mirrors
-`dumpex.hunt.injection.collect` (the completed reference pilot).
-
-This module is read by `dumpex/hunt/__init__.py`'s `collect_hunt()`
-orchestrator, which `cli.py`'s `--hunt` branch calls for `--json` output.
-"""
+"""Build an encoding report and project it into a ``HunterRecord``."""
 from dumpex.hunt.encoding import _build_encoding_report
 from dumpex.hunt.encoding.report_record import project_hunter_record
 from dumpex.output.records import HunterRecord

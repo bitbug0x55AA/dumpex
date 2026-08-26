@@ -1,25 +1,8 @@
-"""`HollowingReport` -> `HunterRecord` (the current typed record) -- a pure
-projection, independent of `report_legacy.py`/`report_console.py`. Mirrors
-`dumpex.hunt.stomping.report_record`/`dumpex.hunt.pipe.report_record` (the
-completed reference pilots): builds the SAME `HollowingDetails` shape the
-pre-migration `_record_from_hollowing_report()` built -- no public
-schema/wire-shape change.
+"""Project a ``HollowingReport`` into the current ``HunterRecord``.
 
-The pre-migration version derived each of `HollowingDetails`' tri-state
-fields from a DIFFERENT loose field on the mutable Report (`base_region is
-not None`, `mz_outcome is None or mz_read_failed`, `module_list_unavailable`
-...), several of which restated something a raw minidump object it also
-carried already said. Every one of them now comes from the ONE resolved
-`ImageBaseContext` plus the evidence buckets, so "the check ran and was
-clean" (False) and "the check never ran" (None) are decided in a single
-place each.
-
-The tri-state rule itself is unchanged and is the whole point of this
-projection: each field is `None` exactly when the corresponding check never
-actually ran -- the region wasn't captured, the header read failed, or the
-module list was unavailable -- rather than a default `False`, which would
-report an unexamined image base as a clean one. See `HollowingDetails`' own
-field comments in dumpex/output/records.py.
+Each detail is ``None`` when its check could not run, rather than ``False``;
+unavailable regions, failed header reads, and missing module data must not
+be represented as clean observations.
 """
 from dumpex.hunt.hollowing.domain import HollowingReport
 from dumpex.hunt.hollowing.report_facts import finding_from_check_result, project_coverage_report

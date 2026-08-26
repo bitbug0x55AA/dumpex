@@ -1,48 +1,9 @@
-"""
-Immutable Evidence value objects for the named-pipe scan pipeline -- built
-ONCE, at the scan boundary (handle_scan.py / memory_scan.py /
-correlation.py, the only modules that still touch a raw minidump
-`MinidumpHandleDescriptor`/`MinidumpMemoryInfo`/`MinidumpThreadInfo`/
-thread-context dict), and read by aggregate.py and the report_*
-projectors without ever needing `mf`, a raw minidump object, or a live
-`prot_str()`/`va_to_file_offset()` lookup.
+"""Immutable named-pipe evidence values.
 
-This is the "one canonical evidence representation" half of the pipe
-hunter's output-source migration (see dumpex/hunt/pipe/domain.py for the
-Report/Evidence container these feed), mirroring
-`dumpex.hunt.stomping.models`/`dumpex.hunt.injection.models`/
-`dumpex.hunt.encoding.models` (the three completed pilots). Not the public
-JSON shape -- report_legacy.py and report_record.py project these into the
-v1.1 `findings` dict / the current-schema `PipeDetails`; report_console.py
-projects them into console text. All three read the SAME evidence, so they
-can never disagree about what a handle/string/region/thread actually was.
-
-Every address-formatting/`prot_str()`/`va_to_file_offset()` decision is
-made HERE, once, at construction time (see `handle_ref`/`region_ref`/
-`thread_hit_ref`/`thread_start_ref` below) -- never re-derived at aggregate
-or render time, which is exactly how the pre-migration `handle_classified`
-/`private_pipes`/`c2_hits`/`unbacked_in_pipe_rgn` dicts and tuples ended up
-carrying live minidump `Handle`/`MinidumpMemoryInfo`/`ThreadInfo` objects
-all the way into `dumpex.hunt.pipe.collect`'s own JSON projection (and,
-through `_hunt_pipe()`'s returned v1.1 dict, into `dumpex.ui.structured.
-_json_safe`'s `str(obj)` fallback, which embedded the analysis host's own
-Python heap addresses in --json output).
-
-A scan-layer function itself makes NO decision about score/status/verdict
-and prints nothing -- it returns typed evidence. That decision-making
-lives entirely in aggregate.py; rendering lives entirely in
-report_console.py.
-
-Dump-file offsets are carried as a plain `file_offset: int | None`
-(resolved once, at scan time, via `dumpex.core.memory.va_to_file_offset`)
-rather than through `dumpex.hunt._location.Location`: the pre-migration
-`pipe.string_scan_lead` fact already renders `file_offset=...` next to a
-bare `VA=...`, with no region/section geometry attached, and `Location`
-would add a containment invariant this evidence has no use for.
-
-`None` means "these bytes were never written to the .dmp", which is NOT
-the same claim as "offset zero" -- 0 is an ordinary, valid offset (the
-very first byte of the file), so no projector may write `file_offset or 0`.
+Raw handle, region, thread, and context objects are converted to deterministic
+plain-value references at collection time. Handle-confirmed pipes remain
+separate from string leads, while scan coverage records independent pipe-name and
+C2-context limitations.
 """
 from dataclasses import dataclass, field
 

@@ -1,24 +1,8 @@
-"""Shared scan-resource budget.
+"""Shared immutable budget-attribution values.
 
-A hunt module's per-region/per-signature caps (e.g. "≤200 decompress
-attempts per signature per region") bound a single region in isolation, but
-say nothing about the sum across an entire dump: a crafted or merely large
-dump with many qualifying regions can still turn "≤200 per region" into an
-unbounded amount of total work and retained memory. ScanBudget tracks
-consumption across the WHOLE hunt call (all regions, all signatures) so a
-single limit actually caps the worst case, not just each region's slice
-of it.
-
-Design note: registering a hit goes through take_hit() and ONLY take_hit()
-— there is no separate "note" method whose boolean result a caller could
-compute and then not act on. A prior version split hit-counting
-(note_hit()) from retained-bytes accounting (note_retained()), and a caller
-that checked one but not the other (or checked neither) could still append
-an item after the budget was exhausted — e.g. max_hits=1 ended up retaining
-2 results because the note_hit() return value was never inspected at the
-call site. take_hit()'s return value is the ONLY signal a caller has for
-whether an item was actually admitted, which makes that class of bug
-impossible to reproduce: nothing else confirms the hit was accepted.
+Budget kinds identify independently exhausted resources and keep their limits,
+consumption, and affected targets together. Validation prevents mixed or
+ambiguous attribution from being reduced into one misleading limitation.
 """
 import time
 import hashlib

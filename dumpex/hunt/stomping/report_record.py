@@ -1,17 +1,7 @@
-"""`StompingReport` -> `HunterRecord` (the current typed record) -- a pure
-projection, independent of `report_legacy.py`/`report_console.py`. Mirrors
-`dumpex.hunt.injection.report_record`/`dumpex.hunt.encoding.report_record`
-(the completed reference pilots): builds the SAME `StompingDetails` shape
-the pre-migration `dumpex/hunt/stomping/collect.py` built, directly from
-the typed evidence buckets rather than from an already-JSON-shaped
-`findings` dict -- no public schema/wire-shape change.
+"""Project a ``StompingReport`` into the current ``HunterRecord``.
 
-The pre-migration `collect.py` had to convert a live `Module` and a live
-`MinidumpMemoryInfo` (both embedded in the `protection_leads`/
-`verified_changes` dicts) into JSON-safe dicts here, calling `prot_str()`
-a second time at projection time. Both are now resolved once, at scan time
-(dumpex.hunt.stomping.models), so this module only reshapes already-typed
-facts.
+Module, region, and section identities are taken from resolved typed
+evidence; the established wire shape is preserved.
 """
 from dumpex.hunt.stomping.domain import StompingReport
 from dumpex.hunt.stomping.report_facts import finding_from_check_result, project_coverage_report

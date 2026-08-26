@@ -1,18 +1,7 @@
-"""`domain.YaraReport` -> the v1.1 legacy `findings` dict -- a pure
-projection, independent of `report_record.py`/`report_console.py`. Mirrors
-`dumpex.hunt.cs_beacon.report_legacy` (and, through it, the other completed
-reference pilots).
+"""Project a ``YaraReport`` into the legacy v1.1 findings shape.
 
-The dict's KEY SET and `matches[*]` shape are unchanged by this migration
-(issue #11's "Compatibility" section) -- `seg_va`/`va` (real process
-addresses) stay plain JSON ints in this v1.1 shape (unlike the v2.4
-`HunterRecord` shape, which hex-encodes them -- see `report_facts.
-match_dict`'s own `hex_va` parameter), `seg_fo`/`fo` (.dmp byte offsets,
-never addresses) stay plain ints either way, and `strings[*].data` becomes
-a hex string HERE, once, as part of building the legacy dict itself -- the
-CLI dispatcher's own post-render bytes->hex pass
-(`dumpex/hunt/__init__.py`) is now redundant, the same way issue #9 made
-the CS-beacon-equivalent pass redundant.
+Process addresses and dump offsets remain integers in v1.1 output, while
+matched string bytes are hex encoded. The key and match shapes are stable.
 """
 from dumpex.hunt.yara_hunt.domain import YaraReport
 from dumpex.hunt.yara_hunt.report_facts import legacy_coverage_dict, match_dict

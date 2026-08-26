@@ -1,41 +1,8 @@
-"""The canonical, recursively immutable domain model for the named-pipe
-C2 / lateral-movement hunter -- `PipeReport` plus the coverage snapshot and
-evidence container it is built from. Mirrors
-`dumpex.hunt.injection.domain`, `dumpex.hunt.encoding.domain`, and
-`dumpex.hunt.stomping.domain` (the three completed reference pilots): see
-those modules' own docstrings for the general "one canonical result
-representation" rationale this module applies to the pipe hunter.
+"""Immutable domain model for the named-pipe hunter.
 
-Before this migration, `dumpex.hunt.pipe.aggregate.Report` kept the same
-facts several times over: a `findings` dict (JSON-facing, holding rendered
-`Finding.to_dict()` entries AND the raw evidence lists), a `findings_list`
-(the same findings a second time, as `Finding` objects), a `score`/
-`status`/`coverage_status`/`coverage_reasons` field that each duplicated
-the identically-named `findings` key, an `evaluated`/
-`handle_stream_available` pair, a pre-rendered `verdict_reason` string, the
-whole `handle_scan`/`pipe_name_scan`/`correlation` scan results (holding
-live minidump `Handle`/`MinidumpMemoryInfo`/`ThreadInfo` objects, a live
-`CoverageTracker`, and both live `ScanBudget`s), and a `coverage_report`
-attribute assigned from OUTSIDE the aggregator entirely. Nothing
-structural kept any of those in agreement.
-
-`PipeReport` stores each fact exactly once:
-
-  score      -- 0..3, this hunter's own decision (an OS-confirmed open
-                pipe handle matching a known framework naming convention,
-                and/or a handle-confirmed pipe corroborated by nearby C2
-                context and/or live RIP/EIP execution).
-  results    -- the checks this hunter produced, as typed
-                `dumpex.hunt._domain.CheckResult`s carrying typed evidence.
-  evidence   -- the observed items, in their hunter-meaningful buckets;
-                the SAME objects `results` reference, never a copy.
-  coverage   -- the immutable snapshot of what this run could and could
-                not see.
-
-and DERIVES everything else -- `status`, `verdict_level`, `confidence`,
-`lead_count`, `review_priority`, `max_score` -- as properties, through the
-same shared reducers (`dumpex.hunt._coverage`, `dumpex.hunt._finding`)
-`aggregate.py` calls.
+Handle evidence, string leads, correlations, results, and coverage are validated
+as one report. Missing HandleDataStream and incomplete region scans remain
+separate facts; neither turns an unscored string into handle evidence.
 """
 from dataclasses import dataclass, field
 

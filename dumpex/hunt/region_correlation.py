@@ -1,91 +1,9 @@
-"""Cross-hunter region correlation for `--hunt all`'s `HUNT SUMMARY` card --
-console/`--txt`-only, presentation-layer aggregation. Never touches JSON,
-never changes a `HunterRecord`'s own score/verdict/confidence/coverage/
-finding IDs, and never rescans the dump: every fact this module reads
-already lives on the already-built `HunterRecord`s (`--hunt all`'s own
-`records`) and the already-parsed `MemoryInfoListStream` entries
-(`dumpex.core.memory.get_memory_regions()`).
+"""Correlate evidence from multiple hunter records by physical memory range.
 
-A "region" here is always a normalized MemoryInfo region -- the
-`(BaseAddress, RegionSize)` pair, half-open `[BaseAddress, BaseAddress +
-RegionSize)` containment, exactly `dumpex.core.memory._get_region_at()`'s
-own semantics (see `_RegionIndex.containing()` below). `AllocationBase` is
-carried along purely as supplementary display context -- it is NEVER part
-of the correlation key, so two MemoryInfo sub-regions of the same
-allocation (a routine VirtualProtect split) stay two distinct regions here,
-never silently merged.
-
-Two tiers of evidence-to-region resolution, per hunter, matching each
-hunter's own `HunterRecord.details` shape (see
-`docs/developer/hunt_architecture.md` and each hunter's own `collect.py`):
-
-  - "Embedded" evidence already carries a complete region reference
-    (`HuntRegionRef`, or an equivalent dict with base_address/size/
-    allocation_base) captured AT SCAN TIME from a real MinidumpMemoryInfo
-    entry -- injection's rwx/hidden_pe/rip_hits/start_hits, stomping's
-    protection_leads, pipe's private_pipes/c2_context/unbacked_in_rgn,
-    obfuscation's seven decode-layer hits, and (as a MemoryInfo-absent
-    fallback only) cs-beacon's configs. Even though this reference was
-    already a real MemoryInfo region AT SCAN TIME, it is always
-    re-confirmed against the CURRENT MemoryInfo list via
-    `_canonicalize()` before use -- an embedded (base, size) that no
-    longer has a unique EXACT match in the current list (stale, or the
-    dump's own MemoryInfo list has since changed shape) never produces a
-    correlation. Only when the current MemoryInfo list is itself absent
-    is the embedded reference trusted as-is (nothing to confirm it
-    against).
-  - "VA-only" evidence carries nothing but a virtual address (or a byte
-    range) -- hollowing's `image_base`, stomping's `verified_changes[*]`
-    diff-range changed bytes, yara's `matches[*].strings[*].va` -- and MUST
-    be resolved against the CURRENT MemoryInfoListStream. When that stream
-    is absent (empty `memory_regions`) or an address/range maps
-    ambiguously, the evidence is silently skipped (never guessed, never a
-    fatal error).
-
-`_RegionIndex` exposes exactly three lookups, deliberately kept separate
-so point, span-permitted range, and single-region range semantics never
-blur into one another:
-
-  - `containing(address)` -- one POINT. Ambiguous (two overlapping regions
-    claim it) or unmatched: `None`.
-  - `unambiguous_overlaps(start, end)` -- a byte RANGE that MAY legitimately
-    span several ADJACENT regions (a stomping diff range crossing a
-    VirtualProtect split), returning every region it truly touches; `[]`
-    when the touched regions overlap EACH OTHER, since no byte may belong
-    to two rival regions.
-  - `uniquely_contains_range(start, end)` -- a byte RANGE that must belong
-    ENTIRELY to ONE region, with no second region intersecting it anywhere
-    (yara's own segment-level fallback); `None` otherwise.
-
-Only hunters worth investigating contribute signals at all: `status ==
-"DETECTED"` or `(lead_count or 0) > 0` (see `build_region_correlations()`).
-A region only becomes a `RegionCorrelation` when at least two DIFFERENT
-hunters contributed a signal there -- one hunter with many signals in one
-region is not a correlation.
-
-Every address-like value that reaches this module (hex strings on
-`HunterRecord.details`, real ints on `MinidumpMemoryInfo`) goes through
-`_safe_hex_int()`/`_safe_nonneg_int()` first -- both reject `None`, `bool`,
-and malformed input by returning `None` rather than raising, so one
-malformed record degrades to "this piece of evidence contributes no
-signal", never an exception that would take down the rest of `--hunt all`.
-
-`RegionSignal.address` is always the REAL, most-specific address this
-piece of evidence actually names -- a live RIP, a thread start address, a
-pipe string's own offset-resolved VA, a verified-change's own changed-byte
-address -- never silently collapsed to the region's own base address
-unless the evidence genuinely IS region-scoped (an RWX-protection
-observation, a whole-region entropy score, a yara per-region rule
-roll-up). This keeps the `(hunter, region_base, kind, address)`
-de-duplication key honest: two different real hits in the same region, of
-the same kind, are two signals, not one.
-
-`address` is additionally guaranteed to fall INSIDE its own signal's
-`[region_base, region_base + region_size)` -- for evidence describing a
-byte range that spans a region boundary, each region's signal carries that
-range's own intersection start with THAT region (see `_collect_stomping()`),
-never the range's overall start, which lies outside every region after the
-first.
+Correlation consumes only typed, already-built records. Exact region identities
+are merged directly; overlapping ranges are linked without pretending they are
+identical. Output ordering is deterministic and does not rescan dump content or
+change any hunter's score, verdict, or coverage.
 """
 from dataclasses import dataclass
 

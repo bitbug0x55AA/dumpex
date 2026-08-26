@@ -1,18 +1,7 @@
-"""`PipeReport` -> `HunterRecord` (the current typed record) -- a pure
-projection, independent of `report_legacy.py`/`report_console.py`. Mirrors
-`dumpex.hunt.stomping.report_record`/`dumpex.hunt.injection.report_record`/
-`dumpex.hunt.encoding.report_record` (the three completed reference
-pilots): builds the SAME `PipeDetails` shape the pre-migration
-`dumpex/hunt/pipe/collect.py` built, directly from the typed evidence
-buckets rather than from an already-JSON-shaped `findings` dict -- no
-public schema/wire-shape change.
+"""Project a ``PipeReport`` into the current ``HunterRecord``.
 
-The pre-migration `collect.py` had to convert a live `Handle`, a live
-`MinidumpMemoryInfo`, and a live `MinidumpThreadInfo` (all embedded in the
-legacy `findings` dict's own entries) into JSON-safe dicts here, calling
-`prot_str()` a second time at projection time. All of them are now
-resolved once, at scan time (dumpex.hunt.pipe.models), so this module only
-reshapes already-typed facts.
+Handle, region, and thread identities come from resolved typed evidence;
+the established ``PipeDetails`` wire shape is preserved.
 """
 from dumpex.hunt.pipe.domain import PipeReport
 from dumpex.hunt.pipe.report_facts import finding_from_check_result, project_coverage_report

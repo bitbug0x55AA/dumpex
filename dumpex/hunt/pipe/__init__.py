@@ -1,101 +1,13 @@
-"""Named pipe C2 hunter.
+"""Named-pipe C2 hunter centered on captured handle evidence.
 
-Phase-two detection model
-──────────────────────────
-The primary, scored signal is **handle objects**, not string scanning.
-HandleDataStream (when the dump was captured with MiniDumpWithHandleData)
-records the OS's own account of every open handle the process held,
-including .TypeName ("File" for a pipe handle) and .ObjectName (the actual
-kernel object name, e.g. "\\Device\\NamedPipe\\mypipe") — proof the process
-actually opened that pipe, not just that the bytes "\\pipe\\mypipe" happen
-to sit somewhere in its memory (which could be freed heap, a copy-pasted
-string, a decoy, or data belonging to something else entirely).
+A HandleDataStream pipe object proves the process held the pipe at dump time and
+is the primary scored signal. Memory strings are unscored leads: they can locate
+names and nearby context but may be stale, copied, or decoy data. Framework
+naming on a string does not convert it into handle evidence. Thread StartAddress
+proximity is also a lead because it does not show current execution.
 
-The original memory-string scan for "\\pipe\\" occurrences is still run
-— it is the only way to find a pipe name in a dump with no
-HandleDataStream, and it is genuinely useful for locating nearby C2
-context (URLs/IPs) and correlating execution — but per phase-two policy
-it is explicitly demoted: a bare string match, on its own, is reported as
-a `tag="lead"` / LOW-confidence check and does NOT contribute to `score`.
-A bare pipe string never becomes scored handle evidence, no matter what
-naming convention it matches: `FrameworkStringHitEvidence` (attribution on
-a STRING) is a deliberately different evidence type from
-`PipeHandleEvidence.framework` (a match on an OS-CONFIRMED handle), and
-only the latter scores. Only a handle-object match — optionally
-corroborated by a same-named string hit's surrounding C2 context or by a
-thread's live RIP/EIP near that string's own address — can raise the
-verdict.
-
-A thread's StartAddress near a handle-confirmed pipe is likewise a LEAD
-only: it records where a thread BEGAN, not where it is executing now.
-
-This is a package, not a single file, and since the canonical-Report
-migration (issue #7) it has the same shape as dumpex/hunt/injection/,
-dumpex/hunt/encoding/, and dumpex/hunt/stomping/ (the three completed
-reference pilots):
-
-  models.py         — the immutable Evidence value objects every layer
-                       below produces; the ONE place a raw `Handle`/
-                       `MinidumpMemoryInfo`/`ThreadInfo`/thread-context
-                       dict is snapshotted, and the ONE place a string
-                       hit's absolute VA and .dmp file offset get
-                       resolved.
-  handle_scan.py    — HandleDataStream facts (the scored path's raw
-                       material).
-  memory_scan.py    — the '\\pipe\\' string scan and the C2-context
-                       records gathered from the same regions (see its own
-                       docstring for why the two whole-hunt budgets it
-                       applies, pipe-name and C2-context, must stay
-                       independent).
-  correlation.py    — handle/string/thread/proximity relationships, and
-                       the last place a raw thread-context dict is
-                       touched.
-  patterns.py       — the shared canonicalization/regex/streaming-match
-                       helpers (pure functions, no dump/resolver state).
-  domain.py         — `PipeReport`/`PipeEvidence`/`CoverageSnapshot`: the
-                       canonical, recursively immutable result.
-  aggregate.py      — the ONE place score/coverage/the five CheckResults
-                       get computed. Takes typed evidence + scalars only.
-  report_console.py — the ONE place console output is rendered, as a pure
-                       post-hoc projection of an already-built Report.
-  report_facts.py   — the fact strings + coverage projections the other
-                       three projectors share.
-  report_legacy.py  — `PipeReport` -> the v1.1 findings dict.
-  report_record.py  — `PipeReport` -> the typed `HunterRecord`.
-  collect.py        — the thin `collect_pipe_record()` compat wrapper.
-
-This __init__.py is the thin entry point: it holds the process
-ORCHESTRATION (load rules, build the two independent budgets, run the
-handle scan and the region scan, correlate, aggregate once, project), then
-hands the one built Report to whichever projector the caller wants.
-
-Nothing prints before the Report exists any more. The pre-migration
-`_print_pipe_pre_build_console()` (a hunt header, preceded by an
-announcing `get_rules()` call purely to order its one-time "Rules loaded
-from ..." line before that header) is gone entirely, following
-dumpex.hunt.stomping's and dumpex.hunt.encoding's own resolution of the
-identical problem: `report_console.render_console_lines` emits the header
-itself via `dumpex.hunt._report_console.header_lines()`, and the builder's
-own `get_rules(announce=False)` call is now the only one this hunter
-makes -- so a `--hunt pipe` run no longer prints a "Rules loaded from ..."
-line at all (nor does `--hunt all` any more: hollowing's own pre-build
-console, the last remaining announcer, went the same way with issue #10).
-Rule PROVENANCE is unaffected --
-it is reported in --json `meta.rules` from
-`dumpex.rules_pkg.loader.get_rules_source_info()`, which
-`get_rules(announce=False)` populates exactly the same way.
-
-The stable contract is `_hunt_pipe` itself (imported by
-dumpex/hunt/__init__.py): same signature, same fields, same score/status/
-coverage/JSON shape. `read_region`/`get_thread_contexts` are re-exported
-here and remain monkeypatchable (`pipe.read_region = fake` before calling
-`_hunt_pipe()` still changes its behavior — see dumpex/hunt/_runtime.py)
-because they are threaded explicitly/looked up fresh at call time rather
-than each submodule importing its own separate copy. Private per-step
-helper functions (`_is_pipe_handle`, `_extract_pipe_name`, etc.) are NOT
-re-exported here and make no compatibility promise at all — import them
-from their actual module (dumpex.hunt.pipe.handle_scan/.memory_scan/...)
-if you need them directly.
+Pipe-name and C2-context scans have independent whole-hunt budgets; exhaustion,
+failed reads, and short reads produce partial coverage.
 """
 import time
 from minidump.minidumpfile import MinidumpFile

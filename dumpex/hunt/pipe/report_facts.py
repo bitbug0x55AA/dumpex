@@ -1,22 +1,7 @@
-"""Shared projection logic for `PipeReport` (dumpex/hunt/pipe/domain.py) --
-everything `report_legacy.py`, `report_record.py`, and `report_console.py`
-all three need, so it is built exactly once. Mirrors
-`dumpex.hunt.stomping.report_facts`/`dumpex.hunt.injection.report_facts`/
-`dumpex.hunt.encoding.report_facts` (the three completed reference
-pilots): see those modules' own docstrings for why `verbose_facts` is
-deliberately never populated here (that policy belongs to
-`report_console.py` alone).
+"""Shared fact and coverage projections for ``PipeReport``.
 
-Every fact string below is written to match the pre-migration
-`aggregate.py`'s facts text byte-for-byte for the same evidence -- these
-arrays are embedded verbatim in BOTH the v1.1 findings dict and the typed
-`HunterRecord`, and tests/fixtures/hunt_cli_golden/pipe_hunt_dict.json is
-frozen against them. Verified by
-tests/hunt/test_pipe_projectors.py's golden-scenario parity test.
-
-This module owns no dependency on `dumpex.hunt.pipe.aggregate`:
-`build_report()` is the ONE place a `PipeReport` is constructed, and this
-module stays a pure function of that already-built Report.
+Fact text, ordering, and evidence caps are wire contracts shared by legacy
+and typed output. Richer verbose facts are console-only.
 """
 from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.hunt._finding import Finding

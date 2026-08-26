@@ -1,39 +1,8 @@
-"""Renderer for `--hunt all`'s closing `HUNT SUMMARY` -- Step 1.5, console
-presentation patch. Reads ONLY `HunterRecord`/`build_hunt_summary()`
-output (dumpex.hunt.summary's own cross-hunter reducer) plus the
-already-built document-level coverage status string and (optionally) the
-already-built `RegionCorrelation` list (dumpex.hunt.region_correlation's
-own display-only cross-hunter co-location reducer); never touches the
-legacy per-hunter `results` dict `cmd_hunt()` still builds for its own
-return value and cs-beacon/yara byte-sanitization -- this function's own
-signature has no parameter for it at all, so there is nothing to read
-even by accident (see tests/integration/test_hunt_all_summary_source.py
-for the end-to-end proof that a poisoned console-dict value cannot
-influence this output).
+"""Render deterministic cross-hunter summaries.
 
-Five sections, in order:
-  REVIEW FIRST       -- DETECTED hunters, ranked by how urgently they need
-                        a look: verdict_level, then review_priority, then
-                        confidence, all descending; HUNTERS' own fixed
-                        order is the final, deterministic tie-break.
-  NEEDS ATTENTION     -- INCONCLUSIVE / NOT_EVALUATED hunters, plus any
-                        NOT_DETECTED_IN_SCANNED_SCOPE hunter that still
-                        carries unscored leads or partial coverage -- a
-                        clean verdict there is real, but not the whole
-                        story.
-  OTHER HUNTERS       -- everything else: clean, complete coverage, no
-                        leads.
-  CORRELATED REGIONS  -- only shown when `region_correlations` is
-                        non-empty: two or more different hunters whose
-                        evidence resolved to the SAME normalized MemoryInfo
-                        region. Co-location only -- never a causal or
-                        scoring claim, see dumpex.hunt.region_correlation's
-                        own module docstring.
-  NEXT INVESTIGATION  -- 1-3 deterministic, structurally-derived action
-                        lines, drawn only from the fields above. Never
-                        names a malware family, ATT&CK technique, or any
-                        other inference not already present on a
-                        Finding/HunterRecord.
+Presentation consumes the already-reduced HuntSummary and hunter records. It
+does not rescore findings, change coverage, or read dump content. Console, CSV,
+and structured views retain the same overall-status and ordering semantics.
 """
 from dumpex.ui.colors import RED, YELLOW, GREEN, DIM, BOLD
 from dumpex.hunt._console import resolve_width, wrap_text, render_kv_block

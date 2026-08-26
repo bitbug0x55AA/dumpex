@@ -1,53 +1,7 @@
-"""`CSBeaconReport` -> console lines pure projector -- the ONE console
-renderer for the CS Beacon hunter, replacing the pre-migration
-`presentation.render(report, verbose)` (which printed a per-config header
-table, then that config's Finding narrative, then a large ad-hoc field
-breakdown -- C2/Identity/Transport, Process Injection, Malleable C2/GET/
-POST transforms, SSH transport, DNS transport, and, under --verbose, the
-full field table -- BEFORE the verdict, with progress lines printed
-separately in `dumpex/hunt/cs_beacon/__init__.py` around the scan itself).
+"""Render a ``CSBeaconReport`` as verdict-first console lines.
 
-This module never prints (returns the exact lines a caller would print),
-and never receives `mf`: every VA, file offset, region protection, and
-field value it renders was resolved once, at scan time, onto
-`report.evidence` (dumpex.hunt.cs_beacon.models.ConfigEvidence).
-
-Implements the verdict-first structure approved in issue #1 (verdict block
--> KEY SIGNALS -> WHY THIS VERDICT (normal only) -> bounded evidence detail
--> unified COVERAGE -> verbose hint), mirroring
-`dumpex.hunt.hollowing.report_console`/`dumpex.hunt.stomping.report_console`/
-`dumpex.hunt.pipe.report_console`/`dumpex.hunt.injection.report_console`/
-`dumpex.hunt.encoding.report_console` (the five completed reference
-pilots). Legacy console byte parity is intentionally NOT preserved (see
-issue #9's own console scope).
-
-What moved, and where (issue #9's console scope, point by point):
-
-  * the hunt header is emitted HERE, via
-    `dumpex.hunt._report_console.header_lines()`, instead of by a separate
-    pre-build console function. The normal-mode "Scanning N segment(s)
-    ..."/"Scan complete..." progress lines are gone entirely -- they
-    carried console-progress STATE on the Report itself (`scan_note`,
-    issue #9's own "confirmed current gap"), and nothing prints before the
-    Report exists any more, the same resolution every other migrated
-    hunter applied;
-  * the verdict, confidence, score, coverage status, and review priority
-    are the FIRST thing rendered, as a key/value block;
-  * each structurally-valid config becomes ONE compact KEY SIGNAL entry
-    (context-corroborated configs sorted first for display -- a DISPLAY
-    reorder only; `report.results`/`report.evidence.hits` construction
-    order, and therefore the frozen v1.1/typed-record `configs[]` array
-    order, is never touched);
-  * WHY THIS VERDICT explains the single driving config only -- the first
-    corroborated hit if any, else the first hit;
-  * the large per-config field breakdown is now BEACON CONFIGS, a bounded
-    (issue #9: "explicit truncation counts"), VERBOSE-mostly section:
-    normal mode shows each shown config's resolved location, estimated
-    version, and BeaconType/core transport identity; verbose additionally
-    expands the complete field table, Malleable C2, and Process Injection
-    transforms;
-  * coverage reasons/impacts render exactly once, in the unified COVERAGE
-    section, instead of a separate "[~] ..." progress-style line.
+Resolved locations and decoded fields come from immutable config evidence.
+Display ordering may prioritize corroborated hits without changing record order.
 """
 import dataclasses
 

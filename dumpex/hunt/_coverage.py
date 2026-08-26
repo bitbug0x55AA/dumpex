@@ -1,35 +1,8 @@
-"""
-Shared coverage/status reduction for hunt modules.
+"""Coverage primitives shared by hunt analyzers.
 
-Every phase-two hunter (injection/stomping/pipe/obfuscation) needs to
-answer the same two questions at the end of a scan:
-
-  1. coverage_status — did this hunter have what it needed to run, and
-     did it get through everything it was supposed to look at?
-     ("not_evaluated" / "partial" / "complete")
-  2. status — the top-level DETECTED / NOT_DETECTED_IN_SCANNED_SCOPE /
-     INCONCLUSIVE / NOT_EVALUATED a console/JSON consumer reads.
-
-Before this module existed, each hunter hand-rolled the same two
-if/elif chains separately (stomping.py, pipe.py, encoding.py each wrote
-an near-identical copy; injection.py used a similarly-shaped but
-differently-named helper — this history predates the injection.py ->
-dumpex/hunt/injection/, stomping.py -> dumpex/hunt/stomping/, and
-pipe.py -> dumpex/hunt/pipe/ package splits). That duplication is exactly how the four
-hunters' coverage semantics could quietly drift apart from each other —
-`derive_coverage_status()` and `derive_status()` are the single place
-this reduction happens now; every hunter calls these two functions
-rather than re-deriving the rule locally.
-
-The reduction rule (the same for every hunter):
-
-    no necessary data source / never actually ran  -> NOT_EVALUATED
-    score > 0                                       -> DETECTED
-                                                        (coverage_status
-                                                        can still be
-                                                        "partial")
-    score == 0 and coverage incomplete              -> INCONCLUSIVE
-    score == 0 and coverage complete                -> NOT_DETECTED_IN_SCANNED_SCOPE
+Trackers record source presence and scan gaps without conflating absent,
+present-empty, failed, short, or truncated states. Status reduction preserves the
+rule that incomplete observation cannot produce a clean negative verdict.
 """
 from dataclasses import dataclass, field
 

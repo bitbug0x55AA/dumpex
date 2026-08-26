@@ -330,44 +330,15 @@ class _BudgetedReader:
 
 
 class _ScanGaps:
-    """The three ways one region's search can leave part of that region
-    unexamined, each recorded as a fact about the REGION (not about the
-    individual read that hit it) -- `_hunt_hidden_pe` counts regions, so a
-    single region whose search needed many reads contributes at most one
-    to each count.
+    """Per-region facts describing unexamined search bytes.
 
-    `not_started` (issue #28) further distinguishes truncated's two very
-    different cases: a region whose search read SOME of it before running
-    out of budget (an unfinished remainder -- the ordinary `truncated`
-    case) versus a LATER region the whole-hunt budget was already
-    exhausted before this region's own scan ever issued a single read for
-    (nothing here was examined at all). Set only by `_stop_on_budget`,
-    only when its own `pos == 0` and it obtained zero bytes -- see that
-    function's own docstring for why that combination is the reliable
-    signal.
+    read_failed, short_read, truncated, and not_started count regions, not read
+    calls. examined_until marks the first unexamined byte; validation-budget
+    exhaustion stops it at the unvalidated candidate rather than the buffer end.
 
-    `examined_until` (issue #28 P2/P3 follow-up) is how far into the
-    region (byte offset from its own base) the search actually finished
-    examining before stopping -- advanced only past a byte once the
-    search for (and, for anything found, validation of) 'MZ' candidates
-    in it is actually done (see `_scan_region_for_pe`'s own `_on_bytes`),
-    regardless of which gap eventually ends the region's scan. A window
-    handed to `_on_bytes` whose validation budget runs out partway
-    through only advances this as far as the still-unvalidated
-    candidate's own offset -- NOT to the end of that window -- since
-    everything from there on genuinely was never checked. For a
-    `truncated` (not `not_started`) region this is what turns the
-    reported target from "the whole region, vaguely partial" into
-    "specifically the UNEXAMINED remainder starting here" -- see
-    `_hunt_hidden_pe`'s own `_remainder_scan_target()`.
-
-    `budget_kind`/`budget_limit`/`budget_consumed` (issue #28 P4
-    follow-up) are set alongside `truncated`/`not_started` -- never on
-    their own -- from `_ScanBudget.exhausted_budget_info()`, naming
-    WHICH of the scan's four independent budgets stopped THIS region's
-    own search and that budget's own configured limit. `None` for a
-    region whose gap was a plain read failure/short read, or that never
-    stopped on a budget at all."""
+    Budget attribution is present only for truncated or not-started gaps and
+    records which independent resource stopped that region.
+    """
 
     def __init__(self):
         self.read_failed = False
@@ -667,69 +638,18 @@ def _remainder_scan_target(mf: MinidumpFile, region, examined_until: int) -> Sca
 
 def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool = True,
                      budget: "_ScanBudget | None" = None) -> HiddenPeScan:
-    """
-    Return a HiddenPeScan(hits, read_failed, short_reads, scan_truncated,
-    scan_not_started).
+    """Search eligible regions for hidden-PE candidates under one hunt budget.
 
-    If ModuleListStream isn't present, module_list_available is False and
-    this returns an empty scan rather than flagging every MZ header as
-    "hidden": an empty modules list doesn't mean "nothing here is a known
-    module" — it means we have no way to tell. Producing a hit for every
-    legitimate loaded PE header would be pure false-positive noise, not a
-    finding.
+    Without ModuleListStream, return no hits because an empty module view cannot
+    distinguish legitimate images from hidden ones. Search every byte offset,
+    retain each candidate's own VA and dump offset, and return validated and
+    MZ-only evidence separately.
 
-    Every eligible region is SEARCHED for 'MZ' at EVERY byte offset (see
-    `_scan_region_for_pe`), not just probed at its own BaseAddress. A
-    structurally valid PE mapped at a nonzero offset inside a private or
-    unbacked allocation — loader metadata ahead of the image, several
-    objects in one allocation, a manual map aligned to nothing in
-    particular — used to be invisible to this hunter no matter how
-    obviously injected it was (issue #26), because a clean 2 bytes at the
-    region base ended the check for the whole region.
-
-    A region whose reads fail (raise) is not the same as a region that was
-    read and doesn't contain 'MZ' — those bytes were never actually looked
-    at, so they're tracked separately (read_failed) rather than silently
-    dropped. A read that SUCCEEDS but returns fewer bytes than requested (a
-    short read — the capture ends inside the region, or a candidate's
-    validation read returns only its 'MZ' marker instead of up to
-    PE_VALIDATE_READ_MAX bytes) is likewise not "read fine, nothing here" /
-    "read fine, structurally invalid", so it's tracked separately too
-    (short_reads), distinct from an exception. A region whose search stops
-    on one of the `_ScanBudget` bounds — reads, bytes, or validations — is
-    tracked as scan_truncated: the remainder is unsearched, not clean.
-    scan_truncated further splits into two facts (issue #28): a region
-    this call's own search got PART of before running out of budget keeps
-    the plain scan_truncated name (an unfinished remainder); a LATER
-    region the whole-hunt budget was already exhausted before this call's
-    own search even issued its first read for is scan_not_started instead
-    (nothing here was examined at all) — see `_stop_on_budget`'s own
-    docstring for exactly how that distinction is detected.
-
-    `budget` is that `_ScanBudget`, ONE instance for the whole call rather
-    than one per region, so a dump cannot multiply its total cost by
-    declaring its pathological memory as many small regions. Callers
-    normally let this function build it; tests pass a small one. Evidence
-    it refuses to retain (see `_ScanBudget.take_evidence_slot`) is counted
-    on the returned scan (validated_dropped/unvalidated_dropped) — those
-    candidates WERE examined, so they are reported as an evidence cap, not
-    as a coverage gap.
-
-    `read_region` is threaded explicitly (not imported directly from
-    dumpex.core.memory in this module) so a caller/test can substitute a
-    fake reader without needing the facade's own `read_region` name to be
-    monkeypatched and separately re-imported here — see
-    dumpex/hunt/_runtime.py.
-
-    Each hit is a HiddenPeEvidence(region, pe, in_module_list, location) --
-    callers decide what "valid" means for their purposes (see
-    split_hidden_pe_hits) rather than this function silently only
-    returning validated hits. `location` is the CANDIDATE's own address
-    (`location.va`, with `location.region_offset` telling you where inside
-    the region it sits and `location.file_offset` where in the .dmp), not
-    the region's base address; `region` stays the containing MemoryInfo
-    region, which is what allocation correlation is keyed on. File offset
-    is resolved here too, at scan time, same reasoning as `_hunt_rwx`.
+    Read exceptions, short reads, partly scanned regions, and regions never
+    started are distinct coverage facts. Read, byte, validation, and evidence
+    limits apply across the whole call so splitting attacker-controlled memory
+    into regions cannot multiply work. Examined-but-dropped candidates are
+    counted as evidence caps rather than unread coverage.
     """
     if not module_list_available:
         return HiddenPeScan(hits=(), read_failed=0, short_reads=0, scan_truncated=0)

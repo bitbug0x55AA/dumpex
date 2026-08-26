@@ -1,24 +1,9 @@
-"""v2 meta/result/envelope construction.
+"""Build the versioned structured-output envelope.
 
-Mirrors dumpex/ui/structured.py's StructuredOutput._tool_meta/
-_execution_meta/_runtime_meta/_evidence_meta (same failure-isolation
-style: a failure computing one piece of meta must never take down the
-rest, or the actual result), but meta.evidence is a LIST here, not a
-single object -- so a comparison command (baseline + target dumps)
-doesn't force a second breaking meta change. Every one of the six
-original recon commands still emits a single-element evidence array
-(build_meta_v2's dump_path_abs/dump_file_name form); build_meta_v2's
-evidence= parameter is the multi-entry form Phase C adds for that
-future comparison command -- see EvidenceInput below.
-
-execution_status ("completed"/"partial"/"failed") and coverage.status
-("complete"/"partial"/"not_evaluated") are kept as two independent axes
--- a command can finish (execution_status="completed") while still
-reporting incomplete evidence (coverage.status="partial").
-EXECUTION_COMPLETED/PARTIAL/FAILED are imported from
-dumpex.output.coverage (the neutral command/domain-layer vocabulary
-module), not defined here, so this wire-format layer depends on the
-domain model rather than the other way around.
+Evidence inputs are normalized to stable absolute identities, metadata records
+capture provenance, and result data remains separate from diagnostics and
+artifacts. Redaction affects exposed paths without weakening input/output
+collision protection.
 """
 import os
 import platform

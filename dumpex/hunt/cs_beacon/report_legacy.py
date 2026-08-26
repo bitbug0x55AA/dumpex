@@ -1,17 +1,8 @@
-"""`CSBeaconReport` -> the v1.1 legacy `findings` dict -- a pure projection,
-independent of `report_record.py`/`report_console.py`. Mirrors
-`dumpex.hunt.hollowing.report_legacy`/`dumpex.hunt.stomping.report_legacy`/
-`dumpex.hunt.pipe.report_legacy` (the completed reference pilots).
+"""Project a ``CSBeaconReport`` into the legacy v1.1 findings shape.
 
-The dict's KEY SET and `configs[*]` shape are unchanged by this migration
-(issue #9's "current-contract freeze": `va`/`file_offset`/`region_base` stay
-plain JSON ints, `fields` stays keyed by the field ID's decimal STRING with
-`name`/`type`/`raw`/`value`) -- this is the SAME shape
-`dumpex/hunt/__init__.py`'s dispatcher used to hand-assemble from
-`results["cs-beacon"]["configs"]` AFTER rendering (the "orchestration-layer
-CS config byte-sanitization pass" issue #9 asks to remove). That
-sanitization is now done HERE, once, as part of building the legacy dict
-itself -- the dispatcher's own pass is now redundant and has been deleted.
+Configuration fields remain keyed by decimal field-id strings and retain
+``name``, ``type``, ``raw``, and ``value``. Addresses and offsets remain
+plain integers in this compatibility shape.
 """
 from dumpex.hunt.cs_beacon.domain import CSBeaconReport
 from dumpex.hunt.cs_beacon.report_facts import finding_from_check_result, project_coverage_v1

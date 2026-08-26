@@ -1,52 +1,8 @@
-"""`domain.YaraReport` -> console lines pure projector -- the ONE console
-renderer for the YARA hunter, replacing the pre-migration
-`presentation.py` (which printed progress lines interleaved with the scan
-itself, then a per-rule compact/verbose detail block in alphabetical rule-
-name order, then the verdict LAST).
+"""Render a ``YaraReport`` as verdict-first console lines.
 
-This module never prints (returns the exact lines a caller would print),
-and never receives `mf`/a raw `modules` list: every region and string this
-module renders was resolved once, at scan time, onto
-`report.evidence.matches` (dumpex.hunt.yara_hunt.models.RuleMatchEvidence).
-
-Implements the verdict-first structure approved in issue #1 (verdict block
--> KEY SIGNALS -> WHY THIS VERDICT (normal only) -> unified COVERAGE ->
-verbose hint), mirroring `dumpex.hunt.cs_beacon.report_console` (and,
-through it, the other completed reference pilots) -- but YARA builds its
-own compact/verbose block renderers directly against `RuleMatchEvidence`
-rather than `dumpex.hunt._finding.Finding` (there is no Finding here at
-all -- see domain.py's own docstring on why). YARA has neither a
-Confidence, a max score, nor a Review concept
-(`HunterRecord.confidence`/`max_score`/`review_priority` are always
-`None` for `hunter="yara"`), but the verdict card still carries those
-rows, rendered as an explicit "—" -- the same card SHAPE as every other
-hunter, per issue #11's own console scope.
-
-Legacy console byte parity is intentionally NOT preserved (see issue #11's
-own console scope) -- reviewed goldens are the target.
-
-What moved, and where (issue #11's console scope, point by point):
-
-  * the hunt header is emitted HERE, via
-    `dumpex.hunt._report_console.header_lines()`, instead of a separate
-    pre-scan print. The "Loaded N rule file(s)..."/"Scanning N
-    segment(s)..."/"Scan complete..." progress lines are gone entirely --
-    nothing prints before the Report exists any more;
-  * the verdict, score, and coverage status are the FIRST thing rendered,
-    as a key/value block;
-  * each rule becomes ONE KEY SIGNALS entry (grouped by rule name -- every
-    individual match stays in the group, undiscarded; only the REGION
-    list shown is deduplicated for display, see `_distinct_regions`),
-    ordered confidently-classified (DETECTION) before
-    context_unverified-only (CONTEXT) -- a DISPLAY reorder only;
-    `report.evidence.matches` construction order (scan order) is never
-    touched;
-  * WHY THIS VERDICT explains the single alphabetically-first triggered
-    rule only, normal mode only;
-  * suppressed-match and rule-compile-failure detail render exactly once,
-    post-hoc, from the already-built Report -- never printed during
-    loading/scanning (issue #11's confirmed gap: "prints rule compilation
-    failures from the rule loader while the builder claims to be silent").
+Matches retain scan order in the report; display grouping and prioritization
+are presentation-only. Suppression, compile failures, and coverage gaps are
+rendered from the completed report rather than during scanning.
 """
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import DETECTED, NOT_EVALUATED, INCONCLUSIVE, _status_text

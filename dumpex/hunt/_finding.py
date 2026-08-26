@@ -1,32 +1,9 @@
-"""
-Shared finding schema for hunt modules (phase-two detection logic).
+"""Structured findings and verdict presentation for hunt analyzers.
 
-Every finding a hunt module reports carries five things, kept
-deliberately separate so a consumer (analyst or downstream tooling) can
-tell "what was observed" apart from "what we think it means":
-
-  facts        — objective, directly-observed data: addresses, sizes,
-                 hashes, protection flags, register values. No judgment
-                 calls belong here.
-  inference    — the human-readable claim this finding supports (e.g.
-                 "thread's current RIP executes inside an allocation that
-                 also carries a structurally-valid hidden PE header").
-  confidence   — "low" | "medium" | "high" — how much weight the
-                 inference should get. Independent of how alarming the
-                 wording sounds.
-  rationale    — WHY this confidence level and not another: what
-                 corroborates it, or what's missing that would raise it.
-  limitations  — known gaps/caveats: coverage limits, assumptions, or
-                 conditions that would invalidate the inference.
-
-Design intent (phase two): raw signals that are cheap to fake or that
-occur naturally in benign memory (Shannon entropy, a Base64-looking run,
-a GZIP magic byte, a bare "\\pipe\\" string) must never by themselves
-produce a "malicious" verdict. They are reported as `tag="observation"`,
-confidence LOW, and hunt modules must gate their scored/verdict logic on
-confidence, not on presence. Only structurally corroborated findings
-(matching PE headers, live register state, handle objects, cross-checked
-page/section metadata) reach MEDIUM/HIGH and move a verdict.
+A Finding separates facts, inference, confidence, rationale, limitations,
+provenance, and console-only verbose detail. Construction normalizes immutable
+fields and derives deterministic identifiers and severity. Verdict helpers keep
+detection status separate from coverage completeness.
 """
 import enum
 import hashlib
@@ -161,155 +138,20 @@ def _require_optional_nonempty_str(value, field_name: str) -> None:
 
 @dataclass(frozen=True)
 class Finding:
-    """Frozen (immutable) value object -- a review found that even with
-    id/severity marked init=False, a plain mutable dataclass still let a
-    caller mutate `tag`/`confidence`/etc. AFTER construction (invalidating
-    the already-derived id/severity without either being recomputed), or
-    mutate a `facts`/`limitations`/`technique_ids`/`evidence_refs`/`iocs`
-    list in place after passing it in (since a dataclass field only holds
-    a reference to the caller's own list, not a copy) -- either one lets
-    `to_dict()` later emit a shape that no longer matches its own id/
-    severity, or that no longer validates against the schema at all.
-    frozen=True raises dataclasses.FrozenInstanceError on any attribute
-    assignment after __init__ returns (`__post_init__` itself uses
-    object.__setattr__ to set derived fields, the documented way to
-    assign inside a frozen dataclass's own __post_init__). Every
-    list-typed field (facts/limitations/technique_ids/evidence_refs/
-    iocs/verbose_facts) is additionally normalized to a tuple in
-    __post_init__ -- both a defensive copy (mutating the caller's
-    original list after construction can no longer affect this instance)
-    and, since tuples are themselves immutable, a second, independent
-    barrier against exactly the in-place-mutation gap frozen=True alone
-    does not close. `to_dict()` converts the wire-contract ones back to
-    `list` for JSON (verbose_facts is never part of `to_dict()` -- see
-    its own entry below).
+    """Immutable structured finding.
 
-    See this module's own top-of-file docstring for facts/inference/
-    confidence/rationale/limitations. The fields below extend the same
-    judgment with a normalized-SIEM-alert shape (id/severity for triage
-    and dedup, technique_ids/evidence_refs/iocs/rule_id/rule_version for
-    correlation and provenance) plus verbose_facts (console-only, not
-    part of the wire contract):
+    Sequence fields are copied to tuples so frozen construction also prevents
+    in-place mutation. Wire fields are converted back to lists by to_dict;
+    verbose_facts is console-only and is excluded from equality and the id.
 
-      verbose_facts — OPTIONAL, console/--txt-only enumerable detail this
-                       Finding's own `facts` doesn't carry -- typically
-                       because `facts` is capped (some hunters cap at
-                       10/15/20 entries for --json) or omits a field
-                       --json consumers were never meant to need
-                       (e.g. a raw file offset into the .dmp). NOT part of
-                       `to_dict()` (--json never see it) and NOT
-                       part of the `id` hash basis -- it exists purely so
-                       Finding.print() can be the ONE place that decides
-                       what --verbose shows for THIS finding, instead of
-                       a hunter's own presentation.py separately re-
-                       walking raw scan-result lists (report.rwx,
-                       report.sleep_mask_hits, ...) to reconstruct
-                       equivalent detail from scratch. Deliberately
-                       excluded from the `id` hash basis AND from
-                       `__eq__`/`__hash__` (field(compare=False), see
-                       below): it never carries information `facts`/
-                       `inference` don't already assert at a coarser
-                       grain (an item present in `verbose_facts` but not
-                       summarized by `facts`/`inference` in some form is
-                       a hunter bug, not a legitimate use of this field)
-                       -- see Finding.print()'s own docstring for the
-                       corollary this implies about what belongs in
-                       `facts` vs. `verbose_facts`.
+    The deterministic id hashes material alert fields using canonical JSON.
+    Set-like fields are sorted, while fact order is preserved. It is stable for
+    identical content but not globally unique across evidence; cross-case
+    consumers must combine it with the evidence hash.
 
-      id            — NOT settable by a caller (init=False): always
-                       computed in __post_init__ from an unambiguous JSON
-                       encoding of EVERY field that makes one Finding a
-                       materially different alert from another --
-                       check, rule_id, rule_version, tag, confidence,
-                       technique_ids, evidence_refs, iocs, and facts --
-                       encoded as a sort_keys=True JSON object (never a
-                       "|".join() of raw strings, which lets two
-                       DIFFERENT fact lists collide onto the same joined
-                       text -- e.g. facts=["a|b"] vs facts=["a","b"]),
-                       truncated to 128 bits (32 hex chars) of SHA-256.
-                       technique_ids/evidence_refs/iocs are sorted before
-                       hashing (their own order carries no meaning, and
-                       two calls that build the same set in a different
-                       order must still produce the same id); facts is
-                       NOT sorted (its order is meaningful/deterministic
-                       per hunter). Including rule_version and tag is
-                       deliberate: a rules.yaml update that changes what a
-                       check detects, or a hunter that later upgrades the
-                       same underlying evidence from a lead to a
-                       detection, must NOT collide onto the id of the
-                       stale finding it superseded -- an id collision
-                       there would make a SIEM silently dedup away a
-                       materially different alert.
-                       This id has 128-bit (SHA-256-derived) collision
-                       resistance for genuinely different content, not an
-                       absolute "never collides" guarantee -- collisions
-                       are only expected between two Findings whose
-                       hashed fields are byte-for-byte identical.
-                       Stable across repeated `--hunt` runs against the
-                       SAME evidence, so it is safe to use as a re-scan
-                       idempotency/dedup key for THAT dump. It is NOT a
-                       globally unique cross-dump/cross-host identifier:
-                       two structurally identical findings from two
-                       different dumps (same check, same facts -- e.g.
-                       the same malware family hitting the same address
-                       on two different hosts) intentionally produce the
-                       SAME id, because id is a pure function of the
-                       finding's own content, not of which evidence it
-                       came from. A consumer that needs a globally unique
-                       key (e.g. a SIEM correlating across cases) MUST
-                       combine this id with the evidence identity already
-                       present in the same document (`meta.evidence[].
-                       sha256`) -- e.g. `sha256(evidence_sha256 + ":" +
-                       finding.id)` -- rather than treating `id` alone as
-                       globally unique.
-      technique_ids — list[str] of MITRE ATT&CK technique/sub-technique
-                       IDs (e.g. "T1055", "T1559.001" -- validated against
-                       that shape, deduplicated). Empty unless the hunter
-                       that built this Finding actually has a real
-                       mapping to attach (e.g. dumpex.hunt.pipe's own
-                       rules.yaml framework_pipes entries, which already
-                       carry a `mitre` field) — never invented per check.
-      severity      — NOT settable by a caller (init=False): always
-                       computed from (tag, confidence) via severity_for()
-                       — see that function. A caller cannot construct a
-                       Finding whose severity contradicts its own tag/
-                       confidence (previously this field silently
-                       accepted any recognized severity string regardless
-                       of tag/confidence, letting e.g. tag="observation"
-                       carry severity="critical").
-      evidence_refs — list[str] of structured pointers (e.g.
-                       "region:0x...", "tid:1234") a consumer can use to
-                       cross-reference this finding against the hunter's
-                       own `details` object, distinct from `facts`
-                       (free-text) and `iocs` (indicator values).
-      iocs          — list[str] of indicator-of-compromise values this
-                       finding's facts embed (an IP, a beacon pipe name,
-                       a hash) — empty unless the hunter explicitly
-                       extracted one; never parsed back out of `facts`
-                       here, to avoid silently mis-extracting a false
-                       positive from free text.
-      rule_id       — defaults to `check` when not given: in this
-                       codebase `check` already IS the stable detection-
-                       logic identifier (e.g.
-                       "hollowing.mem_private_at_image_base") every other
-                       reducer in this module keys off of, so this is a
-                       real value, not a placeholder.
-      rule_version  — None unless a real versioned rule source produced
-                       this finding. Where a rule DOES come from
-                       rules.yaml (e.g. pipe's framework_pipes matches),
-                       this must be the loaded ruleset's own CONTENT hash
-                       (dumpex.rules_pkg.loader.get_rules_source_info()
-                       ["sha256"]), never rules.yaml's own top-level
-                       `version:` field -- that field is an explicit
-                       FORMAT/schema version ("bump when schema changes",
-                       per rules.yaml's own comment), not a content
-                       version: editing a pipe pattern or a MITRE mapping
-                       does not change it, so using it here would silently
-                       report the same rule_version for materially
-                       different detection content. Deliberately NOT
-                       defaulted to a fabricated per-check version number
-                       for hunters whose detection logic isn't externally
-                       versioned at all.
+    Severity is derived from tag and confidence. Technique ids, evidence
+    references, and IOCs are explicit rather than parsed from prose. A rule
+    version is used only when supplied by a real versioned source.
     """
     # facts/limitations/technique_ids/evidence_refs/iocs: accept list OR
     # tuple on construction (see _require_str_list/_require_list_of_str's
@@ -419,52 +261,16 @@ class Finding:
 
     def print(self, indent: int = 2, level: "DetailLevel" = DetailLevel.NORMAL,
               width: "int | None" = None, title: "str | None" = None):
-        """Console rendering — the ONE place that decides what a hunter's
-        presentation.py shows for this Finding; a caller never needs (and
-        must not) go back to raw scan-result lists (report.rwx,
-        report.sleep_mask_hits, ...) to reconstruct equivalent detail --
-        everything console/--txt can show about this Finding already
-        lives on it. Deliberately unchanged by the v2.5 SIEM-alert fields
-        (id/severity/technique_ids/evidence_refs/iocs/rule_id/
-        rule_version): those are a --json concern, not something an
-        analyst reading the console transcript needs repeated inline.
+        """Render this finding for console output.
 
-        `level` controls only how the evidence section renders — the data
-        itself (this instance, and what --json see via to_dict())
-        never changes:
+        Normal mode reports evidence availability without deriving a count from a
+        possibly capped facts list. Verbose mode prints verbose_facts when
+        present, otherwise facts, but never both. Rendering does not change the
+        finding or its structured representation.
 
-          DetailLevel.NORMAL (default) — the evidence section collapses
-              to a plain "available" notice, no count (len(facts) is NOT
-              a trustworthy observed-item count for every hunter: some
-              cap facts at 10/15/20 with a synthetic "... and N more"
-              entry that is itself counted; printing that as if it were a
-              real total would report a wrong number on the one line
-              normal-mode output relies on for a headcount).
-          DetailLevel.VERBOSE — every item in the evidence section is
-              printed.
-
-        The evidence section is `verbose_facts` when this Finding has any
-        (the richer, uncapped, console-only detail -- see that field's
-        own docstring), else `facts` (the same list --json see).
-        Never both: a Finding with `verbose_facts` set is asserting "this
-        supersedes `facts` for a human reader", so printing both would
-        show the same VA/handle/token twice under --verbose.
-
-        `width`/`title` are optional and both default to today's exact
-        behavior when omitted: `width=None` auto-resolves via
-        dumpex.hunt._console.resolve_width() (a fixed, deterministic 100
-        columns under pytest/non-TTY output — see that function's own
-        docstring); `title=None` keeps the classic `{check}  [{CONF}]
-        {TAG}` header every existing caller already produces. A caller
-        that DOES pass `title` (currently only injection's own
-        presentation.py) gets a human-readable heading with `check` kept
-        alongside it, dim, so the machine check id never becomes
-        untraceable. Long inference/confidence-rationale/limitation/fact
-        lines wrap at `width` with a hanging indent aligned under their
-        own label column -- this is the one behavior change every
-        existing caller of Finding.print() gets for free, since long
-        strings that used to run unbounded off the right edge of the
-        terminal are exactly what this is for."""
+        Width controls deterministic wrapping. An optional title adds a readable
+        heading while retaining the stable check id.
+        """
         for line in render_finding_lines(self, level=level, indent=indent,
                                           width=width, title=title):
             print(line)

@@ -1,35 +1,8 @@
-"""
-Aggregation layer for dumpex.hunt.hollowing: the ONLY place score,
-coverage, and the five `CheckResult`s (mem_private_at_image_base /
-mz_header_missing / rwx_at_image_base / peb_module_name_mismatch /
-structural_correlation) are computed for this hunter. Takes the typed
-evidence the scan/correlation layers (memory_scan, correlation) produced --
-with image-base identity, region/module snapshots, and the header read
-already resolved once, at scan time -- and turns it into an immutable
-`HollowingReport` (dumpex.hunt.hollowing.domain).
+"""Aggregate hollowing evidence into one immutable report.
 
-Nothing here prints, nothing here reads memory, and nothing here builds
-rendered `facts`/`verbose_facts` text: `CheckResult.evidence` carries the
-typed value objects; report_facts.py/report_legacy.py/report_record.py/
-report_console.py are the pure projections that render them (see domain.py's
-own docstring for why this split removes the parallel-representation drift
-the pre-migration `Report` had).
-
-Takes ONLY typed evidence tuples plus an `ImageBaseContext` and bool
-scalars -- no `mf`, no `verbose`, no raw `regions`/`modules` lists, no
-`peb` object, and no rules/suspicious-protection list (whether the image
-base's protection matched one is already settled, at scan time, by the
-existence of an `RwxProtectionEvidence`). `dumpex/hunt/hollowing/__init__.py`
-is where those raw inputs still live; it converts them into the typed
-evidence and scalars this module consumes.
-
-The check ORDER below is part of the frozen output contract: the v1.1
-`findings` array and the typed `HunterRecord.findings` both carry these in
-construction order (mem_private, mz_header_missing, rwx,
-peb_module_name_mismatch, structural_correlation), and
-tests/fixtures/hunt_cli_golden/hollowing_hunt_dict.json is frozen against
-it. Console DISPLAY order is a separate, presentation-owned decision --
-see report_console.py's own `_DISPLAY_RANK`.
+Scoring requires the defined structural correlation, while isolated signals and
+name mismatch remain leads. Coverage and findings are derived from typed
+evidence without reading memory or rendering output.
 """
 from dumpex.hunt._domain import CheckResult
 from dumpex.hunt._finding import (

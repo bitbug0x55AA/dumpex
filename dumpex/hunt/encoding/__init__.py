@@ -1,93 +1,15 @@
-"""
-Encoded / obfuscated payload hunter.
+"""Encoded and obfuscated payload hunter.
 
-Detection layers (applied per memory region):
+Layers cover Cobalt Strike sleep-mask XOR recovery, entropy, Base64, single-byte
+XOR, and bounded GZIP/ZLIB decompression. Sleep-mask analysis is adapted from
+Didier Stevens' public-domain cs-analyze-processdump.py. Decoded content is
+classified as PE, shellcode bootstrap, printable IOC-bearing data, or a hex
+preview.
 
-  Layer 0: CS Sleep Mask XOR decode  — frequency-analysis key recovery for
-                                       Cobalt Strike beacon memory encoded by
-                                       the sleep mask (PAGE_READWRITE private
-                                       regions). Adapted from cs-analyze-
-                                       processdump.py by Didier Stevens
-                                       (public domain, https://DidierStevens.com).
-                                       See dumpex/hunt/encoding/sleep_mask.py.
-
-  Layer 1: Shannon entropy scan  — catches all encoding schemes including custom
-                                   crypto, RC4, AES blobs, multi-byte XOR, etc.
-                                   See dumpex/hunt/encoding/entropy.py.
-
-  Layer 2: Base64 detection      — standard + URL-safe; minimum 80 chars (60
-                                   decoded bytes) — see B64_MIN_LEN
-
-  Layer 3: XOR single-byte BF    — MEM_PRIVATE regions ≤ 512 KB only; two
-                                   independent candidate-selection strategies:
-                                   a sample+printable/keyword heuristic over
-                                   the region prefix (text/IOC content), and
-                                   an offset-independent structural search
-                                   that derives the key directly from the
-                                   MZ/PE\x00\x00 or shellcode-bootstrap byte
-                                   patterns themselves, anywhere in the
-                                   region -- see dumpex/hunt/encoding/
-                                   decoding.py's _scan_xor_structural() and
-                                   issue #27 for why the prefix heuristic
-                                   alone cannot reach a binary structural
-                                   payload.
-
-  Layer 4: GZIP / ZLIB           — magic-byte scan + decompress attempt
-
-  (Layers 2-4 share one per-region read pass — see
-  dumpex/hunt/encoding/decoding.py's scan_decode_layers.)
-
-All decoded/decompressed content goes through a shared classifier
-(dumpex/hunt/encoding/classification.py):
-  - MZ + PE\\x00\\x00     → PE payload
-  - call-$+5 bootstrap    → likely shellcode
-  - printable > 85 %      → IOC string scan (IP / URL / pipe names)
-  - else                  → hex prefix reported
-
-Address semantics: every hit reports VA (process) + .dmp file offset,
-consistent with the rest of Dumpex.
-
-This is a package, not a single file: each scan layer (sleep_mask,
-entropy, decoding) returns standardized, immutable evidence (models.py)
-and decides neither score/status/verdict nor prints anything;
-aggregate.py is the ONE place score/coverage/the seven CheckResults get
-computed, building the immutable `EncodingReport` (domain.py);
-report_console.py is the ONE place anything gets printed to the console.
-This __init__.py is the thin entry point: build config, call the three
-scan layers, aggregate into one Report, then project it to console/
-legacy-dict/typed-record (report_console.py/report_legacy.py/
-report_record.py) -- see dumpex/hunt/injection/ for the completed
-reference pilot this package's architecture mirrors.
-
-The stable contract is `_hunt_encoding` itself (imported by
-dumpex/hunt/__init__.py): same signature, and the SAME meaning for every
-field this hunter has ever guaranteed (status/coverage_status/
-verdict_level/confidence/findings/lead_count/review_priority/score).
-This is NOT the same claim as "identical JSON output, byte for byte" —
-it explicitly is not, as of schema_version 1.1: `hidden_pe`/
-`hidden_shellcode`/`sleep_mask`/`entropy`/`base64`/`xor`/`compressed` now
-hold a single standardized dict shape (Hit.to_dict()/EntropyHit.to_dict(),
-see models.py) instead of the ad hoc, differently-shaped tuples/dicts
-each layer used to produce independently. That is a real, intentional
-breaking change to those specific fields -- most notably, sleep_mask's
-`offset` used to BE the XOR key rotation value; it is now always 0, with
-rotation moved to a new `key_offset` field, matching what `offset` means
-for every other layer (byte offset within the region). See
-dumpex/schemas/dumpex-output-v1.1.schema.json (which formally types these
-fields for the first time) and docs/user/OUTPUT_MIGRATION.md's versioning policy
-for the full breaking-change writeup. Tunable constants (B64_MIN_LEN, XOR_*,
-ENTROPY_*, SLEEP_MASK_*, ENCODING_BUDGET_*, DECODE_SCAN_MAX,
-DECOMPRESS_MAX_OUTPUT) and `read_region` are re-exported here and remain
-monkeypatchable (`encoding.B64_MIN_LEN = 999` before calling
-`_hunt_encoding()` still changes its behavior — see
-dumpex/hunt/encoding/config.py for why that requires a config object
-threaded through every layer rather than each layer reading its own
-separate copy of the same-named constant). Private per-layer helper
-functions (`_scan_sleep_mask`, `_classify_decoded`, `_bounded_decompress`,
-etc.) are NOT re-exported here and make no compatibility promise at all
-— import them from their actual module
-(dumpex.hunt.encoding.sleep_mask/.decoding/.classification/...) if you
-need them directly, as this package's own tests do.
+Single-byte XOR uses text heuristics and offset-independent structural search so
+binary payloads outside a printable prefix are not missed. Independent layer and
+whole-hunt budgets report incomplete scans as partial coverage. Hits retain both
+process VA and dump-file offset.
 """
 import time
 from minidump.minidumpfile import MinidumpFile

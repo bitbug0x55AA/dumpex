@@ -1,45 +1,12 @@
-"""
-Shared, side-effect-free process-metadata layer -- issue #37's frozen
-contract (docs/developer/recon_process_sysinfo_handles_contract.md), §3.2/§3.3/§3.4/
-§4.2/§4.4, built by issue #38 so `--process` and `--sysinfo` (issues
-#40/#41) can both consume it without composing each other's command
-collectors or duplicating PEB/MiscInfo policy.
+"""Normalize and attribute process metadata from minidump sources.
 
-Every function here is pure: no console output, no mutation of `mf` or of
-any list/object passed in, and no raw minidump parser object is ever
-retained past this module's own boundary -- only frozen dataclasses of
-plain scalars/`None`/nested frozen dataclasses are handed back. This is
-true even for module resolution: resolve_module_by_base() (an internal
-primitive whose exact signature and "return the module itself" semantics
-are frozen verbatim by §3.3.3, for composing INSIDE this module) is never
-handed to a caller directly by build_process_identity_snapshot() --
-_module_reference() converts its result into a ModuleReference (three
-scalars) before it ever leaves this file.
+Raw MiscInfo, PEB, module, and environment evidence becomes immutable
+plain-value snapshots. Invalid raw values do not count as evaluated evidence.
+Source precedence never erases independent claims or typed mismatch diagnostics.
 
-Three families live here:
-
-  - normalize_*() / format_process_create_time_utc(): raw
-    MINIDUMP_MISC_INFO/PEB field -> a validated scalar or None. Coverage
-    is always derived from these normalized results, never from raw
-    truthiness (§3.2) -- a truthy-but-invalid raw value (PID 0, an
-    unaligned image base, a ProcessCreateTime past UINT32 range) must not
-    count as evaluated identity evidence.
-  - resolve_module_by_base() / walk_environment_block() /
-    parse_environment_entries(): read or normalize evidence not exposed
-    anywhere else today -- an exact-base module match, an independent,
-    bounded re-walk of the PEB's environment block that never depends on
-    (or can be defeated by) the library's own PEB.from_minidump() build,
-    and the `=`-prefixed-entry-aware name/value reconstruction over that
-    walk's raw strings.
-  - build_process_identity_snapshot() and the frozen dataclasses it
-    returns (MiscInfoClaim, PebClaim, ModuleClaim, ModuleReference,
-    ProcessDiagnostic, ProcessIdentitySnapshot): the shared boundary
-    itself -- one function that applies the §3.3 source-precedence rules
-    across MiscInfo/PEB/ModuleList, keeps every source's claim
-    independently attributable (a fallback never overwrites or erases a
-    preferred source's own claim -- §3.3.4), and represents PEB/module
-    base or name disagreement as typed, non-coverage-affecting
-    diagnostics (§3.4.4/§6.2) rather than silently picking one side.
+Environment walking is bounded and independent of the upstream PEB object's
+decoded environment. Entries preserve order, duplicates, and equals-prefixed
+names because those are forensic evidence.
 """
 import ntpath
 from collections.abc import Mapping

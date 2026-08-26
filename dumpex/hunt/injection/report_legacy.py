@@ -1,18 +1,7 @@
-"""`InjectionReport` -> legacy v1.1 findings-dict pure projector -- since
-the Injection 2C cutover, this is the ONE place that dict gets built (the
-pre-cutover `dumpex.hunt.injection.aggregate.build_report`'s own `findings`
-dict, and `dumpex.hunt.injection.legacy.legacy_findings_dict`'s
-Evidence-dataclass -> plain-dict conversion that ran on top of it, have
-both been deleted; this module replaces both as ONE pure function of an
-already-built, already-frozen `InjectionReport`).
+"""Project an ``InjectionReport`` into the legacy v1.1 findings shape.
 
-Deliberately does not import `dumpex.hunt.injection.aggregate`: this
-module (and the sibling `report_record.py`/`report_console.py` projectors)
-depends only on the canonical `InjectionReport`/typed evidence, never on
-`aggregate.py`'s own construction internals -- the six small dict-builder
-helpers below are pure functions of `dumpex.hunt.injection.models` types,
-independently verified against production output by
-tests/hunt/test_injection_projectors.py's golden-scenario parity test.
+The projection rebuilds raw legacy dictionaries from immutable typed
+evidence without changing their public keys or value semantics.
 """
 from dumpex.hunt.injection.domain import InjectionReport
 from dumpex.hunt.injection.report_facts import finding_from_check_result, project_coverage_v1
@@ -60,10 +49,7 @@ def _start_hit_dict(hit) -> dict:
 
 
 def project_legacy_dict(report: InjectionReport) -> dict:
-    """Pure `InjectionReport -> dict` projection -- a NEW dict on every
-    call, no shared mutable state, and no dependency on call order
-    relative to `report_record.project_hunter_record`/`report_console.
-    render_console_lines` for the SAME `report`."""
+    """Return a new legacy findings dictionary for ``report``."""
     evidence = report.evidence
     coverage_dict, coverage_status, coverage_reasons = project_coverage_v1(report.coverage)
 
