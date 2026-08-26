@@ -161,11 +161,9 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a
     hollowing run -- built at each gap site `project_coverage_v1` above
     already derives coverage_status/coverage_reasons from (never parsed back
-    out of that free text; see docs/developer/hunt_migration_field_matrix.md's own
-    migration rule). Replaces the pre-migration module-level
-    `_hollowing_not_evaluated_coverage_report()`/
-    `_hollowing_evaluated_coverage_report()` pair, which had to be called
-    from inside the builder and stored on the Report as a `coverage_report`
+    out of that free text; see docs/developer/hunt_architecture.md's
+    structured-facts ownership rule). The returned report is the authoritative
+    coverage value consumed by structured and console projectors
     attribute.
 
     The two branches are genuinely different reports, not one report with

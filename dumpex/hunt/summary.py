@@ -2,10 +2,9 @@
 Cross-hunter `result.summary` reducer for `result.kind == "hunt"`.
 
 The single function JSON and console rendering must both call for
-the same set of `HunterRecord`s -- see docs/developer/hunt_migration_field_matrix.md's
-own "summary rules" section and the v2.4 migration plan's requirement
-that this reducer never be re-derived independently by more than one
-output surface. Pure aggregation over already-computed per-hunter
+the same set of `HunterRecord`s -- see docs/developer/hunt_architecture.md.
+This reducer is never re-derived independently by an output surface. Pure
+aggregation over already-computed per-hunter
 judgments: this never re-derives a HunterRecord's own score/verdict/
 coverage, it only combines the 7 (or 1) already-final records into one
 result.summary dict.
@@ -71,8 +70,7 @@ def build_hunt_summary(records: "list[HunterRecord]", selected: str, *,
     cross-record reducer in this codebase follows (see e.g.
     dumpex.output.coverage.combine_coverage_reports).
 
-    Status-to-overall-status reduction (see the migration plan's own
-    "整体 Summary 规则" section):
+    Status-to-overall-status reduction (ordering is part of public behavior):
 
         any hunter DETECTED                                  -> DETECTED
         no DETECTED, any INCONCLUSIVE or some-but-not-all

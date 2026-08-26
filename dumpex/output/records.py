@@ -1259,7 +1259,7 @@ class TriageCardRecord:
 # ── Hunt records (v2.4 migration, PR2a -- injection only) ───────────────
 # One HunterRecord per hunter -- `--hunt all` produces exactly 7, in a
 # fixed order; a single `--hunt <ttp>` produces exactly 1. See
-# docs/developer/hunt_migration_field_matrix.md for the full field-by-field audit
+# docs/developer/hunt_architecture.md for the typed projection boundary
 # this section implements. `hunter`/`status`/`score`/`max_score`/
 # `verdict_level`/`confidence`/`lead_count`/`review_priority` are the 7
 # common judgment fields (8 minus coverage_status, which is NOT a judgment
@@ -1295,7 +1295,7 @@ def _require_list_of(value, cls, field_name: str) -> None:
 class HuntRegionRef:
     """A memory region reference inside a hunter's `details` -- replaces
     every raw Region object a hunter's aggregate.py builds today, which
-    (per docs/developer/hunt_migration_field_matrix.md's cross-cutting finding #1)
+    (forbidden by docs/developer/hunt_architecture.md's deterministic-output rule)
     reaches JSON via dumpex.ui.structured._json_safe()'s str(obj) fallback
     and embeds the interpreter's own live heap address, non-reproducible
     across runs."""
@@ -1517,8 +1517,8 @@ class InjectionDetails:
 
 
 # The remaining 6 *Details classes below are SHAPE ONLY (field names/types
-# straight from docs/developer/hunt_migration_field_matrix.md's own per-hunter
-# tables, empirically verified there against running code) -- no
+# aligned with the per-hunter typed conversion boundary documented in
+# docs/developer/hunt_architecture.md) -- no
 # collect_*() function constructs any of these yet, and their fields are
 # NOT guaranteed free of the raw-object str(obj) non-reproducibility
 # defect InjectionDetails above was built specifically to fix. Real
@@ -1642,8 +1642,8 @@ class CsBeaconDetails:
 @dataclass
 class YaraDetails:
     """`--hunt yara`'s hunter-specific evidence. YARA deliberately stays
-    off the shared Finding model -- see docs/developer/hunt_migration_field_matrix.md's
-    legend for why `matches` must not be reclassified as `finding`."""
+    off the shared Finding model -- see docs/developer/hunt_architecture.md
+    for why `matches` must not be reclassified as `finding`."""
     matches:    list   # list[dict]
     rules_hit:  list   # list[str]
 

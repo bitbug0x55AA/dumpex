@@ -1,31 +1,14 @@
-# Recon `--process`/`--sysinfo`/`--handles` contract (issue #37)
+# Recon `--process`/`--sysinfo`/`--handles` contract
 
-**Status: frozen decision record, revision 7 — self-contained.**
+Status: **implemented** in the released CLI and schema v2.13.
 
-> **Documentation class:** implemented engineering decision record. Current
-> user-facing behavior lives under `docs/user/`; the revision history,
-> acceptance gates, and issue sequencing below are retained for maintainers.
-
-This document is the complete, normative contract for the v2.13 Recon
-redesign. Issues #38–#44 implement against **this file alone**: every
-rule needed to build the three commands is written out here in full.
-There are no back-references to an earlier draft ("unchanged from the
-previous revision", "as in the earlier draft") anywhere in the normative
-body — those drafts were never published and must not be consulted. Appendix A keeps a non-normative record of what each
-revision corrected, purely so a reader can see why a rule is worded the
-way it is; nothing in Appendix A adds, removes, or qualifies a
-requirement.
-
-Everything below is grounded in the tree as it exists at the time of
-writing. Appendix B lists every file (and the specific construct) that
-was read directly to write this contract, so each claim about current
-behavior can be re-checked rather than taken on trust.
+This document is the current normative contract for the v2.13 Recon redesign. It defines the three commands' record shapes, evidence precedence, bounded parsing, coverage, diagnostics, console behavior, and compatibility boundaries. Tests verify the implementation; the document explains the contract.
 
 ---
 
 ## Table of contents
 
-- §0 Scope, non-goals, and how the pieces fit
+- §0 Scope and boundaries
 - §1 Shared vocabulary, formatting, and ordering rules
 - §2 Loader contract: `open_dump()` with per-stream isolation
 - §3 `--process`
@@ -33,13 +16,10 @@ behavior can be re-checked rather than taken on trust.
 - §5 `--handles`
 - §6 Complete code registry (limitations and diagnostics)
 - §7 CSV, compatibility/cutover, and schema v2.13
-- §8 Acceptance gate: verification matrix and required tests
-- Appendix A — revision history (non-normative)
-- Appendix B — sources read (non-normative)
 
 ---
 
-## §0 Scope, non-goals, and how the pieces fit
+## §0 Scope and boundaries
 
 ### 0.1 What this contract covers
 
@@ -53,17 +33,12 @@ behavior can be re-checked rather than taken on trust.
 3. `--sysinfo` (§4): process-identity fields removed, environment
    evidence added.
 4. `--handles` (§5): a new command over `HandleDataStream`.
-5. The complete code registry (§6), compatibility decision (§7), and the
-   acceptance gate every later child is checked against (§8).
+5. The complete code registry (§6) and compatibility decision (§7).
 
-### 0.2 Non-goals (frozen)
+### 0.2 Non-goals
 
-- **No production code changes are made by this document.** Every code
-  block below is a frozen specification for #38–#42 to implement, not a
-  patch applied here.
 - No raw TEB↔PEB consensus, `PEB.Ldr` walk, loader-graph validation,
-  main-image reconstruction, or second full-memory scan. Those belong to
-  #47/#48 and are downstream of #44.
+  main-image reconstruction, or second full-memory scan.
 - No `peb_trusted` boolean, no confidence score, no verdict, no
   `DETECTED` semantics, no ATT&CK mapping, and no hunter score anywhere
   in the three commands' output. Recon diagnostics are **observations**
@@ -75,26 +50,6 @@ behavior can be re-checked rather than taken on trust.
   stays one (§5.2). The console decodes it as a projection (§5.6.4), the
   way it already projects a null name into `(unnamed)` — no record
   field, schema, coverage meaning or exit code follows it.
-
-### 0.3 Dependency order
-
-```
-#37 (this contract)
-  └─ #38  shared layer: open_dump() isolation (§2), resolve_module_by_base()
-  │        (§3.3), normalization helpers (§3.2), walk_environment_block() (§4.2),
-  │        parse_handle_stream() (§5.1), and build_coverage_report()'s
-  │        retain_completeness_checks_when_not_evaluated opt-in (§3.7.3)
-  ├─ #39  bounded IAT parser (§3.5), plus parse_pe_header()'s additive
-  │        declared_directory_count/directories_complete fields (§3.5.2)
-  ├─ #40  --process wiring (§3)
-  ├─ #41  --sysinfo wiring (§4)
-  ├─ #42  --handles wiring (§5)
-  ├─ #43  atomic CLI/schema v2.13 cutover (§7)
-  └─ #44  docs, CHANGELOG, end-to-end validation (§8)
-```
-
-§2 is claimed by #38 and must land before #42, because `--handles`'
-`HANDLES_PARSE_FAILED` state (§5.5 case 2) is unreachable without it.
 
 ---
 
@@ -333,7 +288,7 @@ def open_dump(path: str) -> MinidumpFile:
     mf.filename = path
 
     # Phase 1 -- header + directory table. Identical to
-    # MinidumpFile.__parse_header() (minidumpfile.py:90-101): reads only
+    # MinidumpFile.__parse_header() reads only
     # each directory entry's StreamType/Rva/DataSize, so no per-stream
     # parser runs here. A failure in this phase means the file is not a
     # usable minidump AT ALL -- there is no per-stream evidence to
@@ -348,7 +303,7 @@ def open_dump(path: str) -> MinidumpFile:
             if d:
                 mf.directories.append(d)
             # A falsy directory entry is an unknown UserStream -- the
-            # library logs and skips it (minidumpfile.py:98-101); so do we.
+            # library logs and skips it; so do we.
     except Exception as e:
         print(RED(f"[!] Could not parse {path} as a minidump file: "
                   f"{type(e).__name__}: {e}"))
@@ -366,7 +321,7 @@ def open_dump(path: str) -> MinidumpFile:
             continue              # unrecognized / not-yet-implemented stream
                                   # type -- the same silent skip
                                   # __parse_directories()'s own unhandled
-                                  # branches take (minidumpfile.py:165-208),
+                                  # branches take,
                                   # not a failure.
         attr_name, parse = entry
         try:
@@ -377,7 +332,7 @@ def open_dump(path: str) -> MinidumpFile:
             # (None) -- isolated; every OTHER branch still runs.
 
     # Phase 3a -- thread contexts. REQUIRED: reproduces
-    # MinidumpFile.__parse_thread_context() (minidumpfile.py:220-229)
+    # MinidumpFile.__parse_thread_context()
     # exactly, including its guard, so thread.ContextObject consumers
     # (dumpex.core.memory.get_thread_contexts, and through it the
     # stomping/pipe/cs-beacon hunters) do not regress.
@@ -393,7 +348,7 @@ def open_dump(path: str) -> MinidumpFile:
         pass   # same swallow-and-continue as the library's own guard
 
     # Phase 3b -- PEB. Same precondition and same swallow as
-    # __parse_peb()/_parse() (minidumpfile.py:85-88, 231-235).
+    # __parse_peb()/_parse().
     try:
         if mf.sysinfo and mf.threads:
             mf.peb = PEB.from_minidump(mf)
@@ -421,7 +376,7 @@ any of them would be a silent regression:
 `mf._dumpex_stream_failures` is a `dict[MINIDUMP_STREAM_TYPE, str]`. It
 is **always** set (empty dict when nothing failed), so no consumer needs
 `getattr(..., {})` defensiveness against an `mf` that came from
-`open_dump()`. Consumers never read the dict directly; #38 adds one
+`open_dump()`. Consumers never read the dict directly; the shared layer exposes one
 helper next to `open_dump()`:
 
 ```python
@@ -489,7 +444,7 @@ Rules:
     `not bool(mf.threads) and not bool(mf.thread_info)`, would return
     `complete`/exit 0 with zero records when both streams are `failed`,
     because it builds a coverage report with no completeness checks at
-    all. #38 **must** re-gate that branch on both sources being
+    all. The branch is gated on both sources being
     `SourceState.ABSENT` specifically; a `failed` stream falls through to
     the normal path, which produces `SOURCE_FAILED` and exit 3.
 - **A derived source never has a `failed` state.** `process_identity`,
@@ -543,68 +498,7 @@ Rules:
   which `SourceState` is computed for them changes, and `failed` was
   always a legal state for every one of those declarations.
 
-### 2.5 Required loader tests (#38)
-
-These are gate items, not suggestions. They need a byte-level minidump
-builder; #38 adds `tests/fixtures/minidump_bytes.py`, which emits a
-valid header plus a directory table and per-stream payloads, so no real
-`.dmp` is required (the suite's no-external-fixtures rule in
-`tests/conftest.py` stands).
-
-**Parity, valid dumps** — for a synthetic dump exercising
-`SystemInfoStream`, `ThreadListStream`, `ModuleListStream`,
-`Memory64ListStream`, `MiscInfoStream`, and `MemoryInfoListStream`,
-`open_dump(path)` must produce, versus `MinidumpFile.parse(path)`:
-
-1. the same set of populated stream attributes, with equal record counts
-   per stream;
-2. the same `thread.ContextObject` presence per thread, and equal
-   `Rip`/`Eip` values — asserted through
-   `get_thread_contexts()` so the hunters' actual consumption path is
-   covered, not just the attribute;
-3. the same `mf.peb` availability and equal `image_path`,
-   `command_line`, `image_base_address`, and `address`;
-4. an equivalent reader: `mf.get_reader().get_buffered_reader()` reads
-   the same bytes at the same VAs;
-5. `mf._dumpex_stream_failures == {}`.
-
-**Isolation, malformed dumps** — for a dump whose `HandleDataStream`
-payload is deliberately corrupt while every other stream is valid:
-
-6. `open_dump()` returns an `mf` (no `SystemExit`, no propagated
-   exception);
-7. `mf.handles is None` and
-   `stream_failure(mf, MINIDUMP_STREAM_TYPE.HandleDataStream)` is a
-   non-empty string;
-8. every other stream is populated exactly as in the valid case, thread
-   contexts included;
-9. `--modules`/`--threads`/`--sysinfo`/`--list` on that dump exit 0, not
-   1 — none of them consumes `HandleDataStream`, so their evidence is
-   untouched;
-10. `--handles` on that dump exits 4 with `HANDLES_PARSE_FAILED`, not
-    `HANDLES_UNAVAILABLE` (§5.5).
-
-**Malformed non-handle stream** — corrupt `ModuleListStream` only:
-
-11. `--modules` exits **3** with a `SOURCE_FAILED` limitation naming
-    `ModuleListStream` and zero records; `--threads` also exits **3**,
-    with the same `SOURCE_FAILED` limitation (it declares `modules` as a
-    completeness source), every thread record still present, and each
-    record's `module_context == "unavailable"`. `--threads` exiting 0
-    here would be a contract violation, not a nicety: its module
-    classification genuinely did not run.
-12. corrupt `ThreadListStream` **and** absent `ThreadInfoListStream`:
-    `--threads` exits 3 with `SOURCE_FAILED`, **not** 0 — the
-    re-gated early return (§2.4) must not treat a failed stream as an
-    absent one.
-
-**Unchanged failure modes**:
-
-13. missing file → exit 1, `"File not found"`;
-14. non-minidump/garbage and empty file → exit 1, `"Could not parse"` —
-    i.e. `tests/unit/test_open_dump.py` continues to pass unmodified.
-
-### 2.6 Residual risks explicitly not solved in v2.13
+### 2.5 Residual safety limits
 
 - A stream parser that **hangs** rather than raising is not caught by a
   `try/except`. The one known instance,
@@ -824,7 +718,7 @@ enforced structurally by giving `--process` exactly one PID source. When
 
 #### 3.3.3 The module fallback, and `resolve_module_by_base()`
 
-#38 adds:
+Normalization rules:
 
 ```python
 def resolve_module_by_base(base_address, modules):
@@ -1027,7 +921,7 @@ reported as **"this image imports nothing," complete, exit 0** — a false
 claim about the evidence, which is exactly what this contract exists to
 prevent.
 
-#39 therefore extends `parse_pe_header()`'s result with two additive
+`parse_pe_header()` exposes two additional internal
 fields (no existing key changes meaning, so the stomping hunter's own
 `data_directories[5]` use is unaffected):
 
@@ -1456,7 +1350,7 @@ and they were computed from evidence that really was examined. Dropping
 them would leave an analyst with an exit code and a single sentence, and
 would contradict §8.3 item 5.
 
-#38 therefore adds one **opt-in** keyword to `build_coverage_report()`:
+`build_coverage_report()` exposes one **opt-in** keyword:
 
 ```python
 build_coverage_report(sources, *, evaluation_sources=None,
@@ -1782,7 +1676,7 @@ The console `Process` section is removed entirely.
 `cpu_current_mhz`/`cpu_max_mhz` are **not** removed — they are sourced
 from `MINIDUMP_MISC_INFO`'s `ProcessorCurrentMhz`/`ProcessorMaxMhz`,
 which is why `misc_info` remains a required `--sysinfo` source and
-`SYSINFO_MISC_INFO_UNAVAILABLE` remains meaningful. #41 does not
+`SYSINFO_MISC_INFO_UNAVAILABLE` remains meaningful. The current command does not
 re-decide this.
 
 **Added**: `current_directory`, `environment_variables`,
@@ -1934,7 +1828,7 @@ evidence therefore masquerades as a total PEB absence.
 
 #### 4.3.2 The frozen walk
 
-#38 adds `walk_environment_block(mf)`, which **never reads `mf.peb`**.
+`walk_environment_block(mf)` **never reads `mf.peb`**.
 It re-derives every pointer itself, so it works even when the library's
 PEB build was lost:
 
@@ -2167,7 +2061,7 @@ names, and full user paths. The contract's position, frozen:
 - The existing `--redact-paths` option continues to apply to path-shaped
   output where it already applies; this contract adds no new redaction
   mode and no new opt-out.
-- Documentation (#44) must state that `--sysinfo --json` output can
+- Documentation states that `--sysinfo --json` output can
   contain secrets and should be handled at the same sensitivity as the
   dump itself.
 
@@ -2391,7 +2285,7 @@ New command. `result.kind` is `"handles"`.
 ### 5.1 Source: a dumpex-owned bounded parse
 
 `--handles` reports `HandleDataStream` descriptors. The stream is parsed
-by dumpex's own `parse_handle_stream(directory, file_handle)` (#38),
+by dumpex's own `parse_handle_stream(directory, file_handle)`,
 registered in `_STREAM_DISPATCH` (§2.2) in place of the library's
 `MinidumpHandleDataStream.parse`. Three reasons, each grounded in the
 installed library's code:
@@ -2563,8 +2457,8 @@ non-`null` value and nothing was actually lost here. Classifying it as
 
 `type_name_status` and `object_name_status` are set independently, so all
 nine combinations are representable and none is ambiguous — including
-`("unnamed", "unreadable")`, which the earlier single-field design
-rendered as if both names were unreadable.
+`("unnamed", "unreadable")`; the two results must not be collapsed into
+a single status that renders both names as unreadable.
 
 An `"unnamed"` field is normal and never drives `partial`. An
 `"unreadable"` field drives `partial` (exit 3) through one **field-level**
@@ -2592,7 +2486,7 @@ Everything else is preserved in place:
   implementation invents a discard path for them).
 
 This keeps "one record per `HandleDataStream` descriptor" true for every
-descriptor whose handle value is readable, which is what #37 requires.
+descriptor whose handle value is readable, as this contract requires.
 
 ### 5.3 `ObjectInfos` — omitted in every mode
 
@@ -2612,8 +2506,8 @@ order. Not sorted by type or name; not re-ordered by `--verbose`.
 
 ### 5.5 Coverage: five distinguishable states
 
-All four states #37 requires — absent stream, present-empty stream,
-partially normalized descriptors, present-but-failed parse — stay
+Absent stream, present-empty stream, partially normalized descriptors,
+and present-but-failed parse stay
 distinguishable, plus the fully clean case.
 
 1. **No `HandleDataStream` directory entry in `mf.directories`** →
@@ -3003,7 +2897,7 @@ mask permits **for that row's own recorded type**:
   `FILE_GENERIC_WRITE` both carry `READ_CONTROL|SYNCHRONIZE`, and
   `0x0012019f` is exactly their union, so claiming greedily would let the
   first swallow the shared bits and disqualify the second. What is
-  forbidden is a name that accounts for no bit an earlier name did not —
+  forbidden is a name that accounts for no additional bit —
   which is also what keeps `AllAccess` from appearing beside the rights
   it contains. Aliases are listed widest-first for the same reason.
 - **A long list is split into `Type` and `Standard`.** A wrapped run of
@@ -3355,8 +3249,7 @@ mask permits **for that row's own recorded type**:
     the same thing for every object type.
   - each **names its own kind and carries its own value**, so a reader
     tells an undocumented bit from an undecodable type without a legend
-    under the table; an earlier cut wrote them as bare `+0x…`/`?0x…`
-    markers and needed one. The value is the REMAINDER, never the whole
+    under the table. The value is the REMAINDER, never the whole
     mask: `TypeSpecificUnavailable(0x000f037f)` on the example above
     would claim the four standard rights it just named were undecodable
     too.
@@ -3417,13 +3310,12 @@ entry (the mechanical `set(_CODE_SPECS) == set(LimitationCode)` test in
 `partial` or `not_evaluated`. The rendered template is frozen text: no
 call site composes it.
 
-**Maintenance note.** This table is the single normative registry #43
-and #44 build the v2.13 schema and public docs from. Any change to a
+**Maintenance note.** This table is the single normative registry for
+the v2.13 schema and public docs. Any change to a
 code's `_CodeSpec.allowed_fields`, its render function, or which call
 sites construct it (`dumpex/output/coverage.py`) must update this row in
 the same change — a code whose trigger conditions or optional fields
-drift out of sync with this table has shipped three times already in
-this contract's own revision history.
+drift out of sync with this table is a contract defect.
 
 | code | source | fields | rendered template |
 |---|---|---|---|
@@ -3594,12 +3486,12 @@ benefit.
 argparse with `"unrecognized arguments"`, and no CSV writer remains
 under `dumpex/output/`. There is therefore no CSV surface to freeze for
 these three commands. This is a statement of current fact, not a new
-decision, and #44 must not "restore parity" by adding one.
+decision, and a documentation change must not "restore parity" by adding one.
 
 ### 7.2 Compatibility: immediate removal, no hidden deprecation alias
 
-`--pid` and `--peb` are removed **immediately**, in the single v2.13
-cutover (#43). There is no hidden alias, no deprecation release, and no
+`--pid` and `--peb` were removed **immediately** in the v2.13 cutover.
+There is no hidden alias, no deprecation release, and no
 `--pid`-forwards-to-`--process` shim. Reasons, frozen:
 
 - The evidence semantics change, not just the name: `--pid`'s
@@ -3611,8 +3503,8 @@ cutover (#43). There is no hidden alias, no deprecation release, and no
 - `argparse` already gives a precise, actionable failure for a removed
   flag.
 
-`#43` must additionally print a one-line pointer for the two removed
-flags in the CLI help epilogue (`"--pid and --peb were replaced by
+The CLI help epilogue prints a one-line pointer for the two removed flags
+(`"--pid and --peb were replaced by
 --process in v2.13"`), so a user of the old flags is redirected rather
 than left guessing. That is help text, not a working alias.
 
@@ -3645,533 +3537,3 @@ own schema version.
   vocabulary can appear there.
 
 ---
-
-## §8 Acceptance gate
-
-### 8.1 Requirement → section map
-
-| #37 acceptance criterion | frozen in |
-|---|---|
-| Exact console, JSON, ordering, nullability, address formatting, coverage, diagnostics, exit-code contracts | §1, §3.1/3.8, §4.2/4.6, §5.2/5.6, §6 |
-| Process field-to-source precedence and mismatch behavior unambiguous | §3.3, §3.4 |
-| Standard-IAT vs delay-import scope explicit | §3.5.1 |
-| Former PEB-only field retention/removal explicit | §3.6, §4.1 |
-| Environment sensitivity and null-vs-empty semantics explicit | §1.4, §4.3.3, §4.5 |
-| Typed diagnostics for PEB/module disagreement, invalid PE, bounded read failures | §6.1 (`PROCESS_MAIN_IMAGE_*`), §6.2 |
-| PEB and module claims preserved side by side; fallback never overwrites | §3.3.4, §3.4.3 |
-| No `peb_trusted`, no verdict semantics | §0.2, §1.6, §6.2, §7.3 |
-| Concise default console; full matrix under verbose | §3.8 |
-| Field coverage separated from optional consistency checks | §1.6, §3.7 |
-| TID never emitted as PID | §3.3.2 |
-| Present-empty handle stream is complete | §5.5 case 4 |
-| Every later child implements without inventing public behavior | this document in full |
-
-### 8.2 Follow-up review items → resolution
-
-| review item | resolution |
-|---|---|
-| Make the contract self-contained | This revision. No normative rule references an unpublished draft; Appendix A is explicitly non-normative. |
-| Freeze complete JSON and console shapes in one place | §3.1, §3.5.2–§3.5.3, §3.6, §3.8; §4.2, §4.6; §5.2, §5.6 |
-| Preserve thread-context parsing in the new loader | §2.2 phase 3a (required, with its guard and ordering) |
-| Parity/regression coverage for the loader change | §2.5 items 1–14 |
-| Freeze global FAILED-stream behavior | §2.4 (table, wording, exit-code change, compatibility tests) |
-| Retain the four handle states | §5.5 (five states; `HANDLES_PARSE_FAILED` explicitly never conflated with `HANDLES_UNAVAILABLE`) |
-| Coverage from normalized values, not raw truthiness | §3.2, §3.7.1 |
-| Fallback-aware path coverage | §3.7.2 (`PROCESS_PATH_UNAVAILABLE` only when both sources fail) |
-| Preserve the complete ModuleList claim | §3.4.3 (`path` on both `module_claim` and `name_matched_candidate`) |
-| Decouple the environment walk from `PEB.from_minidump()` | §4.3.2 (walk never reads `mf.peb`; re-derives TEB→PEB→ProcessParameters→Environment) |
-| Freeze environment architecture and read semantics | §4.3.2 (pointer widths, offsets, failure/short-read/null rules, UTF-16 alignment, even-offset double-NUL termination, budgets) and §4.3.3 (state→JSON/limitation/exit) |
-| Avoid duplicate absence limitations | §4.3.3 (no sixth `SourceRequirement`; explicit suppression rules) |
-| Legal structured location for diagnostic-only IAT observations | §3.5.5 (`iat.diagnostics[]`; not a `LimitationCode` at all) |
-| Truncation wording matches the triggering budget | §3.5.4 (five IAT `scope` values), §4.3.3 (four environment `scope` values) |
-
-### 8.2.1 Second-pass review items → resolution
-
-| review item | resolution |
-|---|---|
-| FAILED-stream exit semantics contradicted `--threads`' own `modules` requirement | §2.4's per-command/per-source matrix; §2.5 item 11 now requires `--threads` exit **3**, and item 12 covers the early-return re-gating |
-| Invalid PID/start time had nowhere to be preserved | §3.2's raw-preservation table and §3.4.1's `misc_info_claim.raw_pid`/`raw_process_create_time` |
-| Unsupported architecture could exit 0 with a silently missing environment | §4.3.2's `architecture_unsupported` state and §6.1's `ENVIRONMENT_ARCHITECTURE_UNSUPPORTED`, which is never suppressed |
-| Handle string failure conflicted with one-record-per-descriptor, and `null` conflated unnamed with unreadable | §5.2.1's per-field `type_name_status`/`object_name_status` discriminators + `HANDLE_STRING_READ_FAILED`; §5.2.2 limits record discard to an unusable `Handle` value |
-| `iat.present` could not express table presence, and `slot_in_bounds` had no value for a missing index 12 | §3.5.2's three booleans (`table_present`, `import_directory_present`, `has_entries`), `slot_in_bounds: null`, and `IAT_BOUNDS_CHECK_UNAVAILABLE` |
-| Environment termination confused a UTF-16 NUL code unit with the block terminator | §4.3.2's code-unit walk, zero-length-entry terminator, and four-captured-zero-bytes rule for `present_empty` |
-| `HandleDataStream` framing was not fully frozen | §5.1.1 (header size, descriptor offset, 32/40-byte descriptors only, `usable` formula, parse-failure vs truncation) |
-| `PROCESS_SOURCES_ABSENT` wording was inaccurate | §6.1 — now "no usable process identity evidence available …" |
-
-### 8.2.2 Third-pass review items → resolution
-
-| review item | resolution |
-|---|---|
-| `not_evaluated` short-circuit would swallow the field-level limitations that explain *why* | §3.7.3's opt-in `retain_completeness_checks_when_not_evaluated`, used by `--process` and `--handles` only; §8.3 item 5 now asserts both the aggregate code and the per-field codes |
-| One `name_status` could not describe two independently-failing name fields | §5.2.1's `type_name_status` + `object_name_status`, with all nine combinations representable; console and `by_type` rules updated |
-| Suppressing `ENVIRONMENT_BLOCK_UNREADABLE` re-created the generic-PEB-absence masking the walk exists to prevent | §4.3.3 — it is now **never** suppressed; only `unsupported` (where the walk never started) stays suppressed |
-| A generalized "sole failed evidence → exit 4" rule contradicted the matrix, and §3.7.2 conflated `absent` with `failed` | §2.4 — the generalized rule is deleted and the matrix declared normative; §3.7.2 now states `absent` → `PROCESS_MISC_INFO_UNAVAILABLE`, `failed` → `SOURCE_FAILED` |
-| JSON examples drifted from the field tables | §5.2 (`type_name_status`/`object_name_status`), §3.4.2 (`raw_command_line`), §3.4.3 (`name_matched_candidate_ambiguous` is `false`, never `null`) |
-| §3.5.5 still called every non-`IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS` `IAT_*` code a limitation | §3.5.5 — now excludes both IAT diagnostics |
-
-### 8.2.3 Fourth-pass review items → resolution
-
-| review item | resolution |
-|---|---|
-| An undeclared data directory and an uncaptured one were both read as "no directory", so a truncated header could report "imports nothing", complete | §3.5.2 — `parse_pe_header()` gains `declared_directory_count`/`directories_complete`; `*_present` becomes three-state, and the undetermined state fires `IAT_DIRECTORY_TABLE_INCOMPLETE` (§6.1) |
-| `PROCESS_PATH_UNAVAILABLE` asserted "no module registered at the image base" in cases where that check never ran | §6.1 — neutral fixed wording; §3.7.2 adds a per-state attribution table and the conditional `SourceRequirement("modules", …)` with the new `PROCESS_MODULE_FALLBACK_UNAVAILABLE` |
-| A non-zero RVA with `Length == 0` decodes to `""`, which §1.4 forbids, leaving `"ok"` with a `null` value | §5.2.1 — a successful read of an empty string is `"unnamed"`, not `"ok"` and not `"unreadable"` |
-| §4.3.3 and §4.7 specified opposite orderings for the environment limitation | §4.7 — one frozen sequence, environment inserted immediately before the `peb` requirement |
-| Loader-test count references were stale | §8.2/§8.3 — both now say items 1–14 |
-
-### 8.2.4 Fifth-pass review items → resolution
-
-| review item | resolution |
-|---|---|
-| An uncaptured `NumberOfRvaAndSizes` became `declared_directory_count = 0`, i.e. a positive "declares no directories" claim, reproducing the false "no imports"/exit 0 one level up | §3.5.2 — the field is now `int \| None`; `None` forces both `*_present` to `null`, and `IAT_DIRECTORY_TABLE_INCOMPLETE` carries an optional `affected_count` with a count-free rendering |
-| `PROCESS_MODULE_FALLBACK_UNAVAILABLE` was used as a `SourceRequirement.absent_code` while being declared caller-buildable-only, which `SourceRequirement.__post_init__` rejects at construction | §6.1 — declared `absent_capable` with `fixed_source="modules"`, and added to the doc test's `_ABSENT_CAPABLE` tuple |
-| The conditional `modules` requirement fired even when an invalid image base made the fallback impossible, blaming `ModuleListStream` for a lookup never attempted | §3.7.2 — condition narrowed to PEB path unavailable **and** image base normalized |
-| §8.3's IAT example asserted `import_directory_present: null` for a capture that had already passed index 1 | §8.3 item 6b — replaced with four cases keyed to where truncation actually stops |
-
-### 8.3 Tests required before #37 closes
-
-These are the completion-gate assertions. Items 1–2 are contract-document
-tests and land with this revision; 3–6 are behavioral and land with the
-implementing child, but their expected outcome is frozen here so the
-child cannot re-decide it.
-
-1. **The contract is independently readable.** A test over
-   `docs/developer/recon_process_sysinfo_handles_contract.md` asserts: no
-   normative back-reference to an unpublished earlier draft (matched as
-   "rev"/"revision" followed by a lower revision number) outside
-   Appendix A; every §6.1
-   code appears in the message-template table exactly once; every §6.2
-   diagnostic code is absent from the §6.1 limitation table (and vice
-   versa); every required top-level section is present.
-   *(Lands with this revision: `tests/unit/test_recon_contract_doc.py`.)*
-2. **Diagnostic codes cannot become limitations.** The same test asserts
-   that no §6.2 code appears in `dumpex.output.coverage.LimitationCode`
-   — mechanically, against the live enum, so a later child that adds one
-   there fails immediately. *(Lands with this revision.)*
-3. **Loader isolation preserves thread contexts and unaffected
-   streams.** §2.5 items 1–14 (13–14 are the unchanged exit-1 paths).
-   *(#38.)*
-4. **Malformed environment evidence cannot become a false captured-empty
-   result.** Four cases, each with a distinct outcome:
-   `00 00 00 00` at the block start → `[]` + `complete`; only two
-   captured zero bytes → `null` + `ENVIRONMENT_BLOCK_UNPARSEABLE` +
-   exit 3; a block terminator split across two read chunks → found
-   normally, `present`, exit 0; two zero bytes at an odd offset inside a
-   real entry → **not** treated as a terminator, so the entry after it
-   is still returned. *(#38/#41.)*
-4b. **An unsupported architecture cannot exit 0 with a silently missing
-   environment.** An ARM64 dump — for which the library still builds a
-   non-`None` `mf.peb`, so `SYSINFO_PEB_UNAVAILABLE` never fires —
-   yields `environment_variables: null`,
-   `ENVIRONMENT_ARCHITECTURE_UNSUPPORTED`, and exit **3**. *(#38/#41.)*
-5. **Invalid raw process values cannot count as evaluated evidence.** A
-   `ProcessCreateTime` of `0x1_0000_0000`, a `ProcessId` of `0`, and an
-   unaligned `image_base_address` each yield `null` on the public field,
-   the matching `*_INVALID`/`*_UNAVAILABLE` limitation, a preserved raw
-   value at its §3.2 location (`misc_info_claim.raw_pid`,
-   `misc_info_claim.raw_process_create_time`,
-   `peb_claim.raw_image_base_address`), and do **not** count toward the
-   five availability flags. A dump where all five are invalid exits
-   **4** with `PROCESS_SOURCES_ABSENT`, even though both source objects
-   exist — **and** `coverage.limitations` still contains the per-field
-   codes (`PROCESS_PID_UNAVAILABLE`, `PROCESS_START_TIME_INVALID`,
-   `PROCESS_IMAGE_BASE_INVALID`, …) in declaration order after the
-   aggregate one, per §3.7.3. An exit-4 result whose only limitation is
-   the aggregate code is a contract violation: the analyst is told
-   nothing was usable but never why. *(#38/#40.)*
-5b. **A handle whose name is unreadable is still reported.** A
-   descriptor with a non-zero `ObjectNameRva` that fails to decode
-   yields a record with `object_name: null`, `object_name_status:
-   "unreadable"`, every other field intact, one
-   `HANDLE_STRING_READ_FAILED`, and exit 3. Three further shapes must be
-   distinguishable in the same run: `TypeNameRva == ObjectNameRva == 0`
-   → both statuses `"unnamed"`, exit 0; `TypeNameRva == 0` with a
-   readable object name → `("unnamed", "ok")`, exit 0, and the console
-   Type column prints `(unnamed)`; a readable type name with an
-   unreadable object name → `("ok", "unreadable")`, counted **once** by
-   `affected_count`. No descriptor is ever dropped for a name failure.
-   *(#38/#42.)*
-6. **Fallbacks never erase preferred-source claims, and diagnostic-only
-   observations never downgrade coverage.** A dump whose PEB image base
-   has no registered module but whose ModuleListStream contains a
-   same-named module at a different base yields `image_base_address`
-   still equal to the PEB value, a populated `name_matched_candidate`
-   with its `path`, a `PROCESS_MODULE_BASE_CONFLICT` diagnostic — and
-   `coverage.status == "complete"`, exit 0, with an empty
-   `coverage.limitations`. Likewise, an out-of-bounds IAT slot produces
-   an `iat.diagnostics` entry and exit 0; and an image with an import
-   directory but no IAT directory yields `table_present: false`,
-   `slot_in_bounds: null` on every entry, one
-   `IAT_BOUNDS_CHECK_UNAVAILABLE` diagnostic, and exit 0 with the
-   entries still fully reported. *(#40.)*
-6b. **Truncated directory capture must preserve determined versus
-   undetermined presence.** An uncaptured index 1 (import presence
-   itself undetermined) must **never** be reported as "no imports" — but
-   a *captured* index 1 whose RVA is zero **is** a determined "no
-   imports" answer, and stays one even when a *different*, uncaptured
-   index (12) leaves an unrelated gap open. The two must not be
-   conflated:
-   - index 1 **uncaptured** → `import_directory_present` is `null` →
-     forbidden from claiming "no imports"; the console must print
-     `"(unavailable -- see coverage below)"`, never
-     `"(none -- this image declares no imports)"`.
-   - index 1 **captured** with a zero RVA → `import_directory_present`
-     is `false` → a determined answer; `"(none -- this image declares no
-     imports)"` is correct and required, **even if** index 12 is
-     uncaptured.
-   - index 12 uncaptured contributes only its own, independent
-     `IAT_DIRECTORY_TABLE_INCOMPLETE` limitation (driving
-     `coverage.status` to `partial`) — it never revokes an
-     already-determined import-absence conclusion from index 1.
-
-   Five images, each with a distinct outcome and a fully-specified input
-   (`declared_directory_count`, `len(data_directories)`, and — whenever
-   index 1's presence needs to be determined rather than merely
-   uncaptured — its exact `(rva, size)` pair) so that every expected
-   result below is uniquely derivable, never just plausible. Truncation
-   is prefix-ordered, so *which* index is lost depends on where the
-   capture stops:
-   - `declared_directory_count = 16`, `len(data_directories) = 6`,
-     `data_directories[1] = (nonzero_import_rva, nonzero_or_valid_size)`:
-     `import_directory_present` is **determined `true`** (index 1 was
-     captured and its RVA is non-zero) and entries are walked;
-     `table_present: null` (index 12 was not captured), so
-     `slot_in_bounds` is `null` on every entry, `table_va`/`table_size`
-     are `null`, plus `IAT_DIRECTORY_TABLE_INCOMPLETE` with
-     `affected_count == 10` and exit **3**;
-   - `declared_directory_count = 16`, `len(data_directories) = 6`,
-     `data_directories[1] = (0, 0)`: `import_directory_present` is
-     **determined `false`** (index 1 was captured and its pair is
-     `(0, 0)`); `table_present: null` (index 12 was not captured) — no
-     descriptors walked, `entries: []`, `has_entries: false`,
-     `dll_count`/`entry_count == 0`, `table_va`/`table_size: null`, `iat`
-     coverage source is `present_empty` (§3.7.4 — imports are a
-     determined answer even though the table gap remains), plus
-     `IAT_DIRECTORY_TABLE_INCOMPLETE` with `affected_count == 10`,
-     `coverage.status == "partial"`, exit **3**, **and the console (§3.8)
-     still prints `"(none -- this image declares no imports)"`** — branch
-     2 fires on `import_directory_present is false` alone, unconditional
-     on `table_present`, so this is not the `"(unavailable -- see
-     coverage below)"` text;
-   - `declared_directory_count = 16`, `len(data_directories) = 1`
-     (capture stops after index 0, so neither index 1 nor index 12 was
-     captured): both `import_directory_present` and `table_present` are
-     `null`, no descriptors are walked, `IAT_DIRECTORY_TABLE_INCOMPLETE`
-     with `affected_count == 15`, exit **3**;
-   - `NumberOfRvaAndSizes` itself uncaptured: `declared_directory_count
-     is None`, both flags `null`, `IAT_DIRECTORY_TABLE_INCOMPLETE` with
-     `affected_count: null` and the count-free wording, exit **3**;
-   - `declared_directory_count = 2`, `len(data_directories) = 2`,
-     `data_directories[1] = (0, 0)`: `import_directory_present` is
-     **determined `false`** (index 1 captured, pair is `(0, 0)`);
-     `table_present` is **determined `false`** too — not `null` — because
-     index 12 is `>= declared_directory_count`, i.e. the image positively
-     declares no such directory rather than merely omitting its bytes
-     from capture. `entries: []`, `coverage.status == "complete"`,
-     exit **0**.
-
-   No case emits `IAT_BOUNDS_CHECK_UNAVAILABLE`: that diagnostic asserts
-   the image declares no IAT directory, which none of the first four
-   established (and the fifth found `table_present: false` without ever
-   attempting a slot check, since no entries exist to check). *(#39/#40.)*
-6b2. **`Size` is never a second presence discriminator; presence is RVA
-   alone.** Four images, each capturing enough of the directory table to
-   reach the index under test, isolating `Size` from `RVA`:
-   - `declared_directory_count = 16`, `len(data_directories) = 6`,
-     `data_directories[1] = (0, 0x100)`: `import_directory_present` is
-     **determined `false`** — the RVA is zero; the non-zero `Size` does
-     not make it present. Same outcome as `(0, 0)`.
-   - `declared_directory_count = 16`, `len(data_directories) = 13`,
-     `data_directories[1] = (nonzero_rva, 0)`, `data_directories[12] =
-     (0, 0x40)`: `table_present` is **determined `false`** — the RVA is
-     zero even though `Size` is non-zero, same rule applied to index 12.
-   - `declared_directory_count = 16`, `len(data_directories) = 6`,
-     `data_directories[1] = (0x2000, 0)`: `import_directory_present` is
-     **determined `true`** — presence is defined by RVA alone (§3.5.1's
-     field table); a `Size` of `0` does not suppress it, and entries are
-     walked from that RVA.
-   - `declared_directory_count = 16`, `len(data_directories) = 13`,
-     `data_directories[1] = (nonzero_rva, nonzero_size)`,
-     `data_directories[12] = (0x3000, 0)`: `table_present` is
-     **determined `true`**, same rule applied to index 12; `slot_in_bounds`
-     is a real boolean on every entry despite `table_size == 0`.
-
-   *(#39/#40.)*
-6c. **A handle name that is present-but-empty is not a read failure.**
-   A descriptor with `ObjectNameRva != 0` whose `MINIDUMP_STRING.Length`
-   is `0` yields `object_name: null`, `object_name_status: "unnamed"`,
-   **no** `HANDLE_STRING_READ_FAILED`, and exit 0 — asserted for both
-   the type and object fields independently. *(#38/#42.)*
-
----
-
-## Appendix A — revision history (non-normative)
-
-Kept only so a reader can see why a rule is worded as it is. **No
-requirement lives here.** Nothing in this appendix qualifies, extends, or
-excuses anything in §0–§8.
-
-- **rev1** — first draft of the field/coverage model.
-- **rev2** — fixed two P0 defects: IAT directory attribution (Import
-  directory index 1 vs IAT directory index 12 had been conflated), and
-  module resolution by exact base rather than `addr_to_module()`
-  containment.
-- **rev3** — corrected four things rev2 got wrong: that a
-  `HandleDataStream` parse exception is caught by the library (it is
-  not — it aborts the whole dump open); that `misc_info` no longer backs
-  any `--sysinfo` field (it backs both CPU-speed fields); that
-  `peb.environment_variables == []` unambiguously means captured-empty
-  (it collapses verified-empty with never-terminated); and that
-  `datetime.fromtimestamp()` raising is a sufficient timestamp check (it
-  is platform-dependent). Added `MAX_IAT_READ_OPERATIONS`,
-  `name_matched_candidate`, and per-field IAT nullability.
-- **rev7 (this revision)** — the `--handles` Access column becomes
-  readable without an external access-mask lookup
-  ([issue #102](https://github.com/bitbug0x55AA/dumpex/issues/102)).
-  §5.6.4 freezes a presentation-layer decoder over the existing
-  `granted_access` integer: a per-object-type right registry, a frozen
-  canonical order, alias bits consumed exactly once, remainders kept
-  visible at their raw value under two named tokens
-  (`UnknownBits(0x…)` for an undocumented bit,
-  `TypeSpecificUnavailable(0x…)` for a type dumpex does not decode), zero
-  stated as `(no rights)` and null still stated as `(unknown)` by the
-  Access column alone.
-
-  The decode is attached to **each printed row** as an indented `Rights`
-  line behind a `└─` branch, and it never repeats the captured mask: the
-  `Access` column is the single printed copy of that value, kept as the
-  aligned evidence anchor a reader scans, compares and copies. Composite
-  aliases (`KeyRead`, `FileGenericRead`, each type's `AllAccess`) carry
-  the masks a dump repeats, names are separated by a dimmed ` · `, and a
-  list too long for one line splits into `Type` and `Standard` — a
-  reviewer of the first row-attached cut called the unsplit `|`-joined
-  run "debug output", and the three changes are that review's answer.
-
-  A review of the composites then found three more, all fixed here: this
-  section still carried the pre-composite rule ("the only composite
-  emitted is a type's own `*_ALL_ACCESS`"), which contradicted the
-  section above it and would have licensed a later maintainer to "fix"
-  the implementation back; `AllAccess` was described as meaning the same
-  thing on every type, which is false and is the cross-type reading the
-  whole decoder exists to prevent; and a composite hid the capabilities
-  inside it, so `AdjustPrivileges` could not be found in a transcript at
-  all. The permitted composite set is now a table, `AllAccess` is stated
-  as type-dependent, and every composite the printed rows used is
-  expanded once under the table. A first cut collected it into a de-duplicated `(type, mask)`
-  block under the table; a review against a real sample found that this
-  only moved the lookup inside dumpex's own output — the reader still had
-  to carry a type and a mask to a second, differently-ordered table —
-  and that types a real handle table is full of (`Desktop`,
-  `WindowStation`, `IoCompletion`) were missing from the registry
-  entirely. Both are fixed here.
-
-  Nothing else moved: `granted_access` is the same raw integer in v2.13
-  JSON (§7.1's “no CSV surface” is unchanged — `--csv` does not exist),
-  the schema is untouched, the Access column still prints the exact mask,
-  and §5.6.1's folding, the coverage meanings, the limitation codes, the
-  ordering rules and the exit codes are all unchanged. The decoded text
-  is an observation about what a captured handle permitted and never a
-  verdict (§1.6).
-- **rev6** — the recon console projection, from an
-  investigator's report against the shipped v2.13 output
-  ([issue #98](https://github.com/bitbug0x55AA/dumpex/issues/98)). Five
-  presentation defects, no change to any record shape, coverage meaning,
-  limitation code, diagnostic, ordering rule, or exit code:
-
-  1. **`--handles --verbose` was silently ignored** — the CLI dispatch
-     never forwarded the flag. Now wired end-to-end (§5.6.3).
-  2. **A full anonymous handle inventory buried the useful rows.** §5.6.1
-     freezes a deterministic fold of anonymous rows into per-type counts,
-     with the exact omitted count and a `use --verbose to show all` hint.
-     Folding is a projection: the records, summary, `by_type`, coverage
-     and exit code are identical in both views, and `unnamed`/
-     `unreadable` stay distinct — an unreadable name is never folded.
-     The type list is a **retain** list (`Job`, `Process`, `Section`,
-     `Thread`, `Token`), not an allow-to-fold list: the first cut of this
-     used the allow direction, which left every unlisted type visible and
-     so still printed the wall of anonymous rows the fold exists to
-     collapse. The second cut then gated folding on the type name having
-     been *captured* (`status == "ok"`), which pinned every row of a dump
-     whose writer left `TypeNameRva` 0 — the typeless, nameless rows that
-     are the least informative in the table — so the rule is now stated
-     as `!= "unreadable"`, i.e. only genuine evidence loss blocks a
-     fold.
-  3. **The tables were separated but not aligned.** A per-column
-     minimum width is not truncation, so one long type, DLL or API name
-     pushed that one row's remaining columns right and left both tables
-     ragged under their own headers. §5.6 and §3.8.1 now size every
-     column to the widest value actually present, floored at the old
-     minimum and capped so an attacker-controlled name cannot set the
-     layout for every row. The shared rule is `column_width()` in
-     `dumpex/ui/console_layout.py`.
-  4. **Real NT namespace names read as parser noise.** §5.6.2 adds
-     bounded, type-keyed notes (`\KnownDlls` and friends) that describe
-     only what the descriptor recorded and never enumerate a directory's
-     contents from the analysis host.
-  5. **The verbose process block spoke dumpex's internal vocabulary.**
-     §3.8.1 gives the import table headers and a legend for the
-     `IAT Slot VA -> Resolved Target VA` pair (and surfaces
-     `slot_in_bounds` as an observation with a footnote); §3.8.2 replaces
-     the `Evidence Matrix` with `Identity Verification`, which separates
-     the selected value from its source and states one `[OK]`/`[!!]`/
-     `[--]` conclusion per identity check, keeping the raw claims
-     available underneath. Every dump-derived string the verbose renderer
-     prints — both paths, both names, the PE rejection reason, the import
-     table's DLL/API names, and the Extended PEB's window title and DLL
-     path — now goes through `console_safe()`.
-
-  Identity disagreement remains an observation throughout: no `peb_trusted`
-  boolean, no verdict, no command failure. This revision is
-  behaviour-compatible with everything already published — v2.13's JSON
-  is byte-identical across it, so no schema version moves and the frozen
-  historical schemas and fixtures are untouched.
-- **rev5** — `--sysinfo`'s console layout and dump
-  identity, from an analyst's report against the shipped rev4 output.
-  Three defects, all in §4:
-
-  1. **`ENVIRONMENT` was a banner inside another section's body.** rev4's
-     §4.6 placed `  ═══ ENVIRONMENT ═══` between `SYSTEM INFO`'s own
-     `Host` and `CPU` subsections, distinguished from the top-level
-     `═══ SYSTEM INFO ═══` banner only by two spaces of indent. Readers
-     segment terminal output by banners, not by indentation, so `CPU` and
-     the dump-file fields printed after it read as ENVIRONMENT data even
-     though they were never structurally nested. §4.6 now freezes three
-     **peer** top-level sections — `DUMP`, `SYSTEM INFO`, `ENVIRONMENT` —
-     with `CPU` explicitly a `SYSTEM INFO` subsection.
-  2. **Dump-file facts trailed the output.** They now lead it, as the
-     `DUMP` section: it answers which artifact is being read, which
-     qualifies everything else. `ENVIRONMENT` moves last, because
-     `--verbose` can make it hundreds of lines and anything after it is
-     invisible.
-  3. **The dump had no identity beyond a basename.** §4.2 adds
-     `dump_file_size_bytes`, `dump_sha256` (§4.2.1) and `dump_time_utc`
-     (§4.2.2), taking the 15-field record to 18.
-  4. **The `--verbose` environment listing was a wall of text.** A flat
-     `name=value` per line gives ~40 variables no column to scan, and the
-     `;`-joined list values (`Path`, `PSModulePath`) overran the terminal
-     and hard-wrapped at column 0. New §4.6.1 freezes an aligned
-     two-column block with lossless, separator-aware soft wrapping.
-
-  Consequent rule changes, both stated in full at their own sections:
-  §4.7's frozen limitation order is now §4.6's **section** order
-  (`dump_file, threads, modules, sysinfo, misc_info, environment, peb`),
-  which keeps `coverage.limitations` and the console's `[~]` lines one
-  sequence while preserving the environment-before-PEB guarantee
-  verbatim; and `coverage.sources` grows a seventh key, `dump_file`,
-  which — like `environment_block` — carries no `SourceRequirement`, its
-  gap arriving as the new `SYSINFO_DUMP_FILE_UNREADABLE` (§6.1) instead.
-
-  This revision is behaviour-compatible with everything already
-  published: `--sysinfo`'s post-#41 record shape has never shipped in any
-  schema (`CURRENT_SCHEMA` is still v2.12, whose `sysInfoRecord` freezes
-  the pre-#41 shape), so #43's pending v2.13 cutover absorbs all of it
-  without a second version bump.
-- **rev4** — made the document self-contained (every
-  "unchanged from rev2/rev3" replaced with the complete rule); moved the
-  loader contract to its own section and completed it (thread-context
-  preservation, exit-1 preservation for header/directory failures,
-  global FAILED-stream behavior, parity tests); made process coverage
-  normalization-first with preserved raw claims; made path coverage
-  fallback-aware; added `path` to the ModuleList claims; decoupled the
-  environment walk from `PEB.from_minidump()` and froze its architecture
-  and read semantics; removed the duplicate environment-absence
-  limitation; moved `IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS` out of
-  `LimitationCode` into `iat.diagnostics[]`; gave both truncation codes
-  budget attribution; replaced the library's handle parse with a bounded
-  dumpex-owned one; and added the §8 acceptance gate.
-- **rev4, fifth review pass** — three defects introduced by the fourth
-  pass plus one wrong test example, mapped in §8.2.4: an uncaptured
-  directory-count field still collapsed into a positive "declares
-  nothing" claim; the new fallback code was used in a position its own
-  capability declaration forbade; the conditional `modules` requirement
-  fired in a case where the fallback could not run at all; and §8.3's
-  worked example contradicted the prefix-ordered truncation it was
-  meant to illustrate.
-- **rev4, fourth review pass** — four defects and one stale count,
-  mapped in §8.2.3: an undeclared data directory and an uncaptured one
-  were both read as "no directory", so a truncated PE header could be
-  reported as "this image imports nothing", complete;
-  `PROCESS_PATH_UNAVAILABLE` asserted a module check that had not run;
-  a non-zero name RVA with `Length == 0` had no legal status; §4.3.3 and
-  §4.7 specified opposite orderings for the same limitation; and the
-  loader-test count references were stale.
-- **rev4, third review pass** — six further defects, all introduced or
-  left behind by the second pass and mapped in §8.2.2: the
-  `process_identity` short-circuit would have discarded the field-level
-  limitations that explain an exit-4 result; one `name_status` could not
-  describe two independently-failing handle name fields; suppressing
-  `ENVIRONMENT_BLOCK_UNREADABLE` behind a PEB absence re-created the
-  masking the independent walk exists to prevent; a generalized
-  failed-stream exit rule contradicted the per-command matrix, and
-  §3.7.2 still conflated `absent` with `failed`; three JSON examples had
-  drifted from their own field tables; and one sentence still classified
-  every non-`IAT_SLOT_OUT_OF_DIRECTORY_BOUNDS` `IAT_*` code as a
-  limitation.
-- **rev4, second review pass** — eight defects found by review of the
-  above and fixed in place (§8.2.1 maps each to its section): the
-  FAILED-stream exit table contradicted `--threads`' own `modules`
-  requirement; invalid PID/start-time raw values had nowhere to live; an
-  unsupported architecture could exit 0 with the environment silently
-  missing; handle string failures contradicted one-record-per-descriptor
-  and conflated "unnamed" with "unreadable"; `iat.present` could not
-  express table presence and left `slot_in_bounds` untypeable when the
-  IAT directory is missing; the environment terminator rule confused a
-  UTF-16 NUL code unit with the block terminator; `HandleDataStream`
-  framing was underspecified; and `PROCESS_SOURCES_ABSENT`'s wording
-  claimed absence for a present-but-unusable source. Two further
-  defects surfaced while fixing those: `--threads`' early return would
-  have reported `complete` for two failed streams, and three
-  group-derived codes interpolated fields that derivation path cannot
-  set.
-
-## Appendix B — sources read (non-normative)
-
-Direct reads behind the claims above, so each can be re-checked. This
-list was compiled before §7's v2.13 cutover (issue #43) and was not
-revised afterward -- several paths/symbols below (`dumpex/commands/
-peb.py`, `PidRecord`/`PebRecord`, `dumpex-output-v2.12.schema.json`) name
-things v2.13 removed or renamed; treat this appendix as a historical
-citation trail for how the claims above were originally verified, not a
-current file/symbol index.
-
-- `dumpex/output/coverage.py` — `SourceState` (incl. the note on which
-  sources FAILED is/isn't reachable for -- see that enum's own comment
-  for the current, post-v2.13 list), `observe_source()`,
-  `_CODE_SPECS`/`_CodeSpec` (`absent_capable`/`group_capable`/
-  `caller_buildable`/`allowed_fields`), `_SOURCE_DISPLAY_NAMES`,
-  `_render_source_failed()`, `_render_budget_clause()`,
-  `_validate_optional_budget_fields()`, `SourceRequirement`,
-  `EvaluationRequirement`, `build_coverage_report()`, `exit_code_for()`.
-- `dumpex/output/records.py` — the address-vs-integer type rule,
-  `hex_address()`, `SysInfoRecord`, `PidRecord`, `PebRecord`.
-- `dumpex/commands/sysinfo.py` — which fields `mi`/`peb`/`si` actually
-  back today, the five existing `SourceRequirement`s, console layout.
-- `dumpex/commands/peb.py` — the `--peb` field set and its
-  `PEB_UNAVAILABLE` not_evaluated path.
-- `dumpex/core/memory.py` — `open_dump()`'s current behavior,
-  `get_thread_contexts()`, `get_handles()`, `module_name_only()`,
-  `addr_to_module()`.
-- `dumpex/core/pe_utils.py` — `parse_pe_header()`'s `data_directories`
-  (capped at 16, truncatable) and `reason` strings.
-- `dumpex/output/envelope.py` — `SCHEMA_VERSION = "2.12"`.
-- `dumpex/schemas/dumpex-output-v2.12.schema.json` — `result.kind` enum,
-  `sourceObservation`, `coverageLimitation`, `pebRecord`.
-- `tests/unit/test_open_dump.py` — the exit-1 behaviors §2.2 preserves.
-- `tests/unit/test_cli_args.py` — `--csv` is rejected by argparse.
-- `tests/conftest.py` — the no-external-fixtures rule §2.5 works within.
-- `.venv/Lib/site-packages/minidump/minidumpfile.py` — `_parse()`,
-  `__parse_header()`, `__parse_directories()` (unguarded per-stream
-  parses), `__parse_thread_context()`, `__parse_peb()`.
-- `.venv/Lib/site-packages/minidump/structures/peb.py` — `PEB_OFFSETS`,
-  `read_unicode_string_property()`, `from_minidump()` (incl. the
-  never-assigned `peb.process_parameters` and the environment loop's
-  exact termination condition).
-- `.venv/Lib/site-packages/minidump/streams/HandleDataStream.py` —
-  descriptor v1/v2 layouts, `MinidumpHandleDescriptor.parse()`,
-  `walk_objectinfo()`'s cycle-detection-free chain.
-- `.venv/Lib/site-packages/minidump/common_structs.py` —
-  `MINIDUMP_STRING.parse()`'s unbounded `read(Length)` and
-  `get_from_rva()`'s `'<STRING_DECODE_FAILED>'` placeholder.
-- `.venv/Lib/site-packages/minidump/minidumpreader.py` — the buffered
-  reader's `move()`/`read()` exceptions ("not in process memory space",
-  "Would read over segment boundaries!").

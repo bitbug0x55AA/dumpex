@@ -17,7 +17,7 @@ never silently merged.
 
 Two tiers of evidence-to-region resolution, per hunter, matching each
 hunter's own `HunterRecord.details` shape (see
-`docs/developer/hunt_migration_field_matrix.md` and each hunter's own `collect.py`):
+`docs/developer/hunt_architecture.md` and each hunter's own `collect.py`):
 
   - "Embedded" evidence already carries a complete region reference
     (`HuntRegionRef`, or an equivalent dict with base_address/size/

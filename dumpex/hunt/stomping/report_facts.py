@@ -223,10 +223,9 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a stomping
     run -- built at each gap site `project_coverage_v1` above already
     derives coverage_status/coverage_reasons from (never parsed back out of
-    that free text; see docs/developer/hunt_migration_field_matrix.md's own migration
-    rule). Replaces the pre-migration `dumpex/hunt/stomping/__init__.py`'s
-    `_stomping_coverage_report()`, which had to be called from OUTSIDE the
-    aggregator and assigned onto the Report as a mutable attribute.
+    that free text; see docs/developer/hunt_architecture.md's structured-facts
+    ownership rule). The returned report is the authoritative coverage value
+    consumed by structured and console projectors.
 
     `memory_info`/`modules` are each their OWN independent
     evaluation_groups entry (not one combined group) because stomping's
