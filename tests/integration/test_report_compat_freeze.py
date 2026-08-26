@@ -98,7 +98,7 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
     body = _split_console_body(capsys.readouterr().out)
     assert body == (
         "  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  "
-        "(sha256_prefix=f4b1140fc4606821…)\n"
+        "(sha256_prefix=b1e78e29b51cf439…)\n"
         "\n══════════════════════════════════════════\n"
         "  dumpex TRIAGE REPORT\n"
         "══════════════════════════════════════════\n"
@@ -130,7 +130,7 @@ def test_addr_not_found(monkeypatch, tmp_path, capsys):
     body = _split_console_body(capsys.readouterr().out)
     assert body == (
         "  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  "
-        "(sha256_prefix=f4b1140fc4606821…)\n"
+        "(sha256_prefix=b1e78e29b51cf439…)\n"
         "\n══════════════════════════════════════════\n"
         "  dumpex TRIAGE REPORT\n"
         "══════════════════════════════════════════\n"

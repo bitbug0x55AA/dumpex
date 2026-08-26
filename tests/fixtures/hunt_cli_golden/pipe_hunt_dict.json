@@ -184,7 +184,7 @@
       "facts": [
         "Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 framework=Cobalt Strike technique=SMB Beacon peer-to-peer pipe \u2014 default msagent pipe name mitre=T1090.001"
       ],
-      "id": "finding-9deaac53d8f1c37de8fd2fe88d35b8db",
+      "id": "finding-fd08decbd1b48fec8d8242434219da3a",
       "inference": "1 open pipe handle(s) match a known C2/lateral-movement framework naming convention.",
       "iocs": [],
       "limitations": [
@@ -192,7 +192,7 @@
       ],
       "rationale": "An OS-confirmed open handle (not just a string sitting in memory) whose name matches a specific, narrow framework convention (e.g. Cobalt Strike's msagent_/postex_ or PsExec's psexesvc) is meaningfully unlikely to be coincidental \u2014 raised to HIGH only when further corroborated (see pipe.corroboration below).",
       "rule_id": "pipe.handle_framework_match",
-      "rule_version": "f4b1140fc46068211ab4090daf19f62dd7e135507b0730cc294c0ca0ce32b7dd",
+      "rule_version": "b1e78e29b51cf439f8a1e1f5add4714175ecac3e5b35386159c233d639206343",
       "severity": "high",
       "tag": "detection",
       "technique_ids": [
