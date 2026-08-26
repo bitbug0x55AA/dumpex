@@ -1,23 +1,8 @@
-"""Segment × rule-file YARA match loop: reads each memory segment, runs
-every compiled rule file against it, normalizes matches, resolves each
-hit's module/region context ONCE (rather than leaving `presentation.py` to
-re-resolve `addr_to_module()` per hit at render time -- issue #11's
-confirmed gap: "retains raw module objects in Report.modules"), and applies
-the whole-scan budgets (deadline, total bytes, hit cap). Only collects
-facts -- never scores, never prints.
+"""Budgeted YARA matching over captured memory segments.
 
-Returns a frozen `ScanResult(matches, diagnostics)`: `matches` is every
-individual (segment, rule_file) match, ONE `models.RuleMatchEvidence` each,
-in scan order -- NOT deduplicated by `(rule, seg_va)`. Two different rule
-FILES (or namespaces) that each define a same-named rule matching the same
-region are two distinct pieces of evidence (different `file`/`namespace`,
-different provenance) and must both survive into the Report; collapsing
-them at this layer would silently drop a legitimate match from `matches`/
-`YaraDetails` (the wire contract) and from `triggered_rules`' own
-transparency, not just from console display. A console projector may still
-GROUP entries that share a rule name for display purposes -- that is a
-`report_console.py` concern, not a fact this module is allowed to discard.
-`diagnostics` is a frozen `domain.ScanDiagnostics`.
+The scanner compiles no policy verdicts and prints nothing. It retains resolved
+match, string, module, and region evidence while candidate, byte, timeout, and
+retention limits produce explicit partial coverage.
 """
 import dataclasses
 import math

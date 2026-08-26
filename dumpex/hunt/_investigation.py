@@ -1,66 +1,12 @@
-"""Cross-hunter skipped-target investigation queue for `--hunt all`'s
-default (metadata-only) triage pass -- see docs/CHANGELOG.md's "skipped
-oversized scan targets" entries and issue #19. Like
-`dumpex.hunt.region_correlation`, this reads only already-built
-`HunterRecord`s (each hunter's own `coverage.limitations[].targets`, see
-`dumpex.output.coverage.ScanTarget`) plus the dump's already-parsed
-MemoryInfoListStream -- it never re-scans, never opens the dump's memory
-content, and performs no read whose cost scales with a skipped target's
-size. `TriageInfo.bytes_examined` is always `0` in this module, the
-schema-enforced witness of that invariant (see docs/user/OUTPUT_SCHEMA.md's
-v2.9 entry).
+"""Build a metadata-only queue for scan targets skipped by hunters.
 
-One physical region/segment can be skipped by several different hunters
-(e.g. pipe's `pipe_name_scan` and stomping's `ioc_string_scan` both giving
-up on the same oversized MEM_PRIVATE region) AND/OR by several scan layers
-of the SAME hunter (obfuscation's sleep_mask/entropy/decode layers, each
-its own `CoverageLimitation` -- see #16's fix). Neither case exists as a
-single actionable item anywhere today: each hunter's own
-`dumpex.hunt._coverage.CoverageTracker` is scoped to that one hunter's one
-scan call. `build_investigation_queue()` is the one place that dedup
-happens, keyed on `(base_address, size)` -- the physical identity of the
-thing that was skipped, independent of who skipped it, under which cap,
-or which `ScanTarget.kind` they happened to describe it with (a
-`memory_region` target from one hunter and a `memory_segment` target
-from another, naming the same range, merge into ONE action -- see
-`_dedup_key()`/`_merge_target_group()`).
+Actions are deduplicated by physical base address and size across hunters,
+sources, scopes, and region or segment target kinds. Priority combines
+execution-like memory facts with cross-hunter correlation; evidence availability
+is separate and never treated as suspiciousness.
 
-Priority is derived from exactly two independent boolean facts, each
-itself derived from data already on the records (never a fresh read):
-
-  has_exec_signal        -- the skipped target's own MemoryInfo facts
-                             already look suspicious on their own, with no
-                             other hunter's evidence needed: PRIVATE
-                             memory that is ALSO executable (ordinary
-                             MEM_PRIVATE heap/data with no execute
-                             permission does NOT count), or true RWX
-                             (PAGE_EXECUTE_READWRITE specifically -- an
-                             ordinary read+execute code mapping does NOT
-                             count as RWX). See `_is_private_executable()`/
-                             `_is_rwx()`.
-  has_correlation_signal -- either >1 distinct (hunter, source, scope)
-                             skipped the SAME physical target, or this
-                             target's region coincides with an existing
-                             multi-hunter `RegionCorrelation` (built by
-                             `dumpex.hunt.region_correlation`, which
-                             itself only reads DETECTED/lead-bearing
-                             evidence already on the records).
-
-neither -> low, exactly one -> medium, both -> high (see
-`_derive_priority()`). `evidence_availability` is a SEPARATE axis (whether
-the dump's bytes are on disk at all, from `ScanTarget.file_offset`) --
-never folded into priority: a missing file offset means "may need
-recollection," not "more malicious" (explicit issue #19 non-goal).
-
-This module implements the default, always-on metadata pass AND the
-closed vocabulary/validation `TriageInfo`/`InvestigationAction` share with
-the opt-in `--triage-skipped` budgeted deep-content triage pass (issue
-#19's second, independently-scoped piece) -- see `dumpex.hunt._deep_triage`
-for the engine that actually performs those budgeted reads and constructs
-`TriageInfo(mode="deep", ...)` instances. Nothing in THIS module ever
-reads region content or constructs `mode="deep"` itself; it only defines
-the shape deep triage must produce and validates it (`TriageInfo.
-__post_init__`'s mode=="deep" branch below).
+This pass reads existing records and MemoryInfo metadata only. It performs no
+content reads, so bytes_examined is zero.
 """
 from dataclasses import dataclass, field
 from enum import Enum
@@ -170,20 +116,16 @@ class InvestigationPriority(str, Enum):
 
 class TriageMode(str, Enum):
     METADATA = "metadata"
-    # Reserved for the future opt-in --triage-skipped budgeted
-    # deep-content triage phase -- never constructed by this phase, kept
-    # here (and in the JSON schema) purely so that phase does not require
-    # a schema break to add it.
+    # Produced by the opt-in --triage-skipped content pass.
     DEEP = "deep"
 
 
 class TriageStatus(str, Enum):
-    """Closed vocabulary spanning both this phase's own single reachable
-    value (`COMPLETED`, `mode == "metadata"` always uses it) and the
-    future deep-content triage phase's outcomes -- see the original
-    issue's own "explicit states for completed, partial/clamped,
-    unreadable/not captured, and deferred because of budget" requirement.
-    Reserved now so v2.9 need not be revisited when that phase lands."""
+    """Closed status vocabulary shared by metadata and deep triage.
+
+    Metadata triage is always completed. Deep triage distinguishes complete,
+    partial, clamped, unreadable, uncaptured, and budget-deferred targets.
+    """
     COMPLETED       = "completed"
     PARTIAL         = "partial"
     CLAMPED         = "clamped"
@@ -330,8 +272,7 @@ class InvestigationActionType(str, Enum):
     TARGETED_HUNTER_RESCAN = "targeted_hunter_rescan"
     RECOLLECT_DUMP         = "recollect_dump"
     PRESERVE_ARTIFACT      = "preserve_artifact"
-    # Reserved for the future --triage-skipped phase (needs a deep-triage
-    # byte limit that does not exist yet) -- never emitted by this module.
+    # Emitted by deep triage when a target was not fully examined.
     CHUNKED_ANALYSIS        = "chunked_analysis"
 
 

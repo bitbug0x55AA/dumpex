@@ -551,54 +551,14 @@ def _correct_header_union(header, file_handle) -> None:
 
 
 def _parse_directory_entry(file_handle):
-    """`MINIDUMP_DIRECTORY.parse()`, made tolerant of a `StreamType` value
-    the installed minidump library cannot decode -- issue #95's --profile
-    inventory needs every directory entry, "preserving unknown stream-type
-    IDs rather than silently dropping them", and this closes the two gaps
-    that would otherwise make an unrecognized entry unreachable, crash the
-    whole dump open, or be silently omitted from the inventory entirely.
+    """Parse one directory entry while preserving unknown stream ids.
 
-    The upstream parser (minidump.directory.MINIDUMP_DIRECTORY.parse)
-    special-cases exactly one unrecognized-StreamType shape: a raw value
-    greater than MINIDUMP_STREAM_TYPE.LastReservedStream (0xFFFF) is a
-    real Microsoft MINIDUMP_USER_STREAM, and the library silently DROPS it
-    (returns None, never even reading its own Location bytes), matching
-    Microsoft's own "tools that don't understand a user stream should
-    ignore it" documented guidance -- but #95's own acceptance criteria
-    make no such exception ("Every directory entry is represented,
-    including unknown and duplicate stream types" / "preserve unknown
-    stream-type IDs rather than silently dropping them"), so this function
-    does NOT reproduce that drop: a >0xFFFF value is treated exactly like
-    any other unrecognized StreamType below, preserved as its own
-    inventory row rather than vanishing without a trace.
-
-    Any raw value that isn't one of MINIDUMP_STREAM_TYPE's ~30 named
-    members -- whether >0xFFFF or a reserved-but-unassigned ID in the gap
-    between two named values, and whether a genuine vendor/tool extension,
-    a newer stream type this installed library version has never heard
-    of, or fuzzed/corrupted bytes -- previously fell through to
-    `MINIDUMP_STREAM_TYPE(raw_stream_type_value)`, which RAISES ValueError
-    for anything the upstream library's own special case didn't already
-    return None for. Nothing inside MINIDUMP_DIRECTORY.parse() catches
-    that, so it propagated straight out of open_dump()'s Phase 1
-    try/except and aborted the ENTIRE dump open with exit(1) -- for a dump
-    that may otherwise be perfectly readable, and for every dumpex
-    command, not just --profile. Phase 2 below already established the
-    principle that one malformed/unrecognized stream must never take the
-    rest of the dump down with it; this closes the one gap in that
-    principle that sits BEFORE Phase 2 even runs, in the directory WALK
-    itself.
-
-    Returns a MINIDUMP_DIRECTORY whose `.StreamType` is either the real
-    MINIDUMP_STREAM_TYPE member (unchanged from today for every recognized
-    value) or the raw int itself for any unrecognized value -- `.Location`
-    is always parsed too, so Rva/DataSize survive for an unknown entry.
-    `_STREAM_DISPATCH.get(d.StreamType)` (an int key matches no dict key
-    there) and `has_stream_directory()`'s `==` comparison (a plain int
-    never equals a MINIDUMP_STREAM_TYPE enum member) already treat an
-    unrecognized StreamType exactly like any other stream dumpex has no
-    parser for -- no other Phase 1/2 code needs to change. Never returns
-    None any more."""
+    Recognized stream ids remain enum members. Unrecognized and user-stream ids
+    remain raw integers, and their Location descriptor is still parsed, so
+    inventory commands retain RVA and DataSize instead of dropping the entry.
+    Unknown ids therefore bypass stream dispatch without aborting an otherwise
+    readable dump. This function never returns None.
+    """
     raw_value = MINIDUMP_DIRECTORY.get_stream_type_value(file_handle)
     is_recognized = raw_value in MINIDUMP_STREAM_TYPE._value2member_map_
     d = MINIDUMP_DIRECTORY()

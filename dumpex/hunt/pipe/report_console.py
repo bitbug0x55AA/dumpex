@@ -1,59 +1,7 @@
-"""`PipeReport` -> console lines pure projector -- the ONE console
-renderer for the named-pipe C2 hunter, replacing the pre-migration
-`dumpex.hunt.pipe.presentation.render()` (which printed five ad-hoc
-`_print_check` blocks and three hand-rolled DIM detail blobs, THEN every
-Finding in construction order, THEN the verdict last, and additionally
-returned the legacy findings dict from the same call). This module never
-prints (returns the exact lines a caller would print) and never returns a
-legacy-dict projection (see `report_legacy.py` for that, an independent
-pure function of the SAME `PipeReport`).
+"""Render a ``PipeReport`` as verdict-first console lines.
 
-Implements the verdict-first structure approved in issue #1 (verdict block
--> KEY SIGNALS -> WHY THIS VERDICT (normal only) -> bounded evidence
-detail (verbose only) -> unified COVERAGE -> verbose hint), mirroring
-`dumpex.hunt.stomping.report_console`/`dumpex.hunt.injection.report_console`
-/`dumpex.hunt.encoding.report_console` (the three completed reference
-pilots). Legacy console byte parity is intentionally NOT preserved (see
-issue #7's own console scope) -- reviewed goldens in
-tests/fixtures/hunt_cli_golden/pipe_console.txt/pipe_verbose_console.txt
-are the new target.
-
-What moved, and where (issue #7's console scope, point by point):
-
-  * the hunt header is emitted HERE, via
-    `dumpex.hunt._report_console.header_lines()`, instead of by a separate
-    `_print_pipe_pre_build_console()` that ran before the scan -- nothing
-    prints before the Report exists any more (the same resolution
-    dumpex.hunt.stomping and dumpex.hunt.encoding applied);
-  * the "[·] N pipe reference(s) in system DLLs ... — expected, skipped"
-    note is now `_scan_detail_lines()`, a VERBOSE-only block: it is scan
-    progress, not triage output;
-  * the two "[~] ... scan budget exhausted" warnings are now COVERAGE
-    reasons (already carried by `project_coverage_v1`) plus a COVERAGE
-    *impact*, so the same claim is made once, in the section that owns
-    coverage, instead of twice ahead of the verdict;
-  * the "NOT AVAILABLE — dump was not captured with MiniDumpWithHandleData"
-    check line is likewise a COVERAGE reason plus an impact -- and that
-    impact is where the "only unscored string leads are available" clause
-    the old verdict line carried now lives;
-  * the framework-attribution-on-string-leads block, the string-lead
-    C2-context block, and the unbacked-thread block are now
-    `_evidence_detail_lines()`, the bounded VERBOSE-only hunter-specific
-    evidence section (issue #1's hierarchy, item 5). None of the three is
-    a check this hunter scores or judges on; they are attribution/context
-    detail, and issue #7 asks for exactly this material to live in
-    "bounded evidence/verbose output". Handle correlation for each entry
-    is determined HERE, at projection time (see `_has_open_handle` in
-    `_evidence_detail_lines`), not at collection time -- correlation.py
-    collects every string lead's C2 context/framework attribution
-    regardless of whether that same canonical name also has a handle.
-
-This is also the one place this hunter's normal/verbose CONSOLE detail
-POLICY lives: `report_facts.finding_from_check_result` builds a compat
-`Finding` carrying only wire-shaped `facts` (never `verbose_facts`);
-`_console_finding` below is what augments it with `verbose_facts`,
-entirely locally, so `report_legacy.py`/`report_record.py` never execute
-this policy at all.
+Coverage gaps remain distinct from unscored string leads. Verbose output
+adds bounded attribution and correlation detail without altering wire facts.
 """
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import (

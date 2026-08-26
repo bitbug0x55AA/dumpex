@@ -1,58 +1,9 @@
-"""The canonical, recursively immutable domain model for the process-
-hollowing hunter -- `HollowingReport` plus the coverage snapshot and
-evidence container it is built from. Mirrors `dumpex.hunt.injection.domain`,
-`dumpex.hunt.encoding.domain`, `dumpex.hunt.stomping.domain`, and
-`dumpex.hunt.pipe.domain` (the four completed reference pilots): see those
-modules' own docstrings for the general "one canonical result
-representation" rationale this module applies to the hollowing hunter.
+"""Immutable domain model for process-hollowing analysis.
 
-Before this migration, `dumpex.hunt.hollowing.Report` kept the same facts
-several times over: a `findings` list (JSON-facing, holding rendered
-`Finding.to_dict()` entries), a `findings_list` (the same findings a second
-time, as `Finding` objects), a `score`/`status`/`coverage_status`/
-`coverage_reasons`/`confidence`/`verdict_level`/`lead_count`/
-`review_priority` field that each stored a value the shared reducers in
-`dumpex.hunt._coverage`/`dumpex.hunt._finding` had already derived, a
-`coverage_report` object built by a helper OUTSIDE the builder, a live
-`MinidumpMemoryInfo` (`base_region`) and a live `Module` (`main_mod`) kept
-"ONLY for console formatting", and SIX loose booleans (`mem_private`,
-`mz_read_failed`, `mz_wiped`, `is_rwx`, `module_list_unavailable`,
-`name_mismatch`) restating what those objects and the header read already
-said. Nothing structural kept any of those in agreement -- and because the
-renderer could not get protection/type/file-offset text out of the Report
-without them, `_render_hollowing_console()` had to take `mf` as its first
-parameter and re-run `prot_str()`/`va_to_file_offset()` at render time.
-
-`HollowingReport` stores each fact exactly once:
-
-  score      -- 0..2, this hunter's own decision (MEM_PRIVATE at the image
-                base correlated with a wiped MZ header and/or RWX
-                protection at that same address).
-  coverage   -- the immutable snapshot of what this run could and could
-                not see.
-  context    -- the image base's resolved identity/memory/module facts
-                (dumpex.hunt.hollowing.models.ImageBaseContext), or None
-                when the PEB itself was missing and there was no image base
-                to resolve at all.
-  results    -- the checks this hunter produced, as typed
-                `dumpex.hunt._domain.CheckResult`s carrying typed evidence.
-  evidence   -- the observed items, in their hunter-meaningful buckets;
-                the SAME objects `results` reference, never a copy.
-
-and DERIVES everything else -- `status`, `verdict_level`, `confidence`,
-`lead_count`, `review_priority`, `max_score` -- as properties, through the
-same shared reducers (`dumpex.hunt._coverage`, `dumpex.hunt._finding`)
-`aggregate.py` calls.
-
-`context` is the one field here that has no counterpart on the other
-migrated hunters' Reports, and it is deliberate rather than a leftover:
-this hunter's whole scope is a SINGLE address, so "what the image base
-looked like" is a fact about the run itself (like `coverage`), not a
-per-item observation that belongs in an evidence bucket. It is what lets
-`report_record.py` distinguish `mem_private_at_base: false` (checked,
-clean) from `null` (the region was never captured) without the Report
-keeping a parallel set of booleans, and what lets `report_console.py`
-render VA/file-offset/protection/header detail without ever seeing `mf`.
+The report keeps resolved image-base evidence, check results, and per-check
+coverage distinct. Tri-state observations preserve the difference between clean
+and unable to evaluate. Construction validates score, verdict, evidence, and
+coverage relationships before any output projection.
 """
 from dataclasses import dataclass, field
 

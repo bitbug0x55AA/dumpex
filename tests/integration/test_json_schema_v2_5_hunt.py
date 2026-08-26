@@ -1,9 +1,9 @@
 """
 Validates dumpex.output.records.HunterRecord/*Details instances (and full
-v2 envelopes built around them) against dumpex-output-v2.12.schema.json
-(the current schema) -- originally the PR3 "Schema v2.4" hunt migration
-step (see docs/developer/hunt_migration_field_matrix.md and the migration plan's own
-PR3 description), carried forward onto v2.5's extended `finding` $def
+v2 envelopes built around them) against the frozen
+dumpex-output-v2.12.schema.json compatibility schema, following
+docs/developer/hunt_architecture.md's typed, deterministic projection boundary
+and v2.5's extended `finding` $def
 (id/severity/technique_ids/evidence_refs/iocs/rule_id/rule_version -- see
 dumpex/hunt/_finding.py), v2.6's `csBeaconDetails.configs[*].fields[*]`
 `raw`-removal, v2.7's re-keying of that same `fields` by field NAME
@@ -1013,10 +1013,9 @@ def test_findings_value_rejects_over_256_characters(validator):
 # ── frozen historical schemas stay frozen ───────────────────────────────────
 #
 # Hardcoded sha256 of each file as of the commit introducing v2.4 --
-# these two files must never change as PART of a hunt-migration step (see
-# the migration plan's own "v1.1/v2.3 schema 文件保持冻结" acceptance
-# criterion). A deliberate, separately-reviewed future change to either
-# file is expected to update these constants explicitly, not have this
+# these two files are frozen by the hardcoded hashes below. A deliberate,
+# separately reviewed change to either file is expected to update these
+# constants explicitly, not have this
 # test silently pass through it.
 _FROZEN_SHA256 = {
     "dumpex-output-v1.1.schema.json":

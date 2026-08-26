@@ -1,24 +1,7 @@
-"""
-Aggregation layer for dumpex.hunt.encoding: the ONLY place score,
-coverage, and the seven `CheckResult`s (sleep_mask/entropy/base64/xor/
-compressed/structural_payload/shellcode_bootstrap_lead) are computed for
-this hunter. Takes the typed evidence the scan layers (sleep_mask,
-entropy, decoding) produced -- with `Location`/`RegionRef` already
-resolved once at scan time -- and turns them into an immutable
-`EncodingReport` (dumpex.hunt.encoding.domain).
+"""Aggregate encoding-layer evidence into one immutable report.
 
-Nothing here prints, and nothing here builds rendered `facts`/
-`verbose_facts` text: `CheckResult.evidence` carries the typed value
-objects; report_facts.py/report_legacy.py/report_record.py/
-report_console.py are the pure projections that render them (see
-domain.py's own docstring for why this split removes the parallel-
-representation drift the pre-migration `EncodingReport` had).
-
-Takes ONLY typed evidence tuples plus int/bool/str scalars -- no `mf`, no
-`modules`, no raw `regions` list, no `susp_prots`, no live `ScanBudget`
-object. `dumpex/hunt/encoding/__init__.py` is where those raw inputs
-still live; it converts them into the typed evidence and scalars this
-module consumes.
+Scoring, findings, and coverage are derived from typed scan results. Per-layer
+gaps and evidence caps remain visible; aggregation performs no reads or output.
 """
 from dumpex.hunt._domain import CheckResult
 from dumpex.hunt._finding import CONFIDENCE_LOW, CONFIDENCE_MEDIUM, CONFIDENCE_HIGH, \

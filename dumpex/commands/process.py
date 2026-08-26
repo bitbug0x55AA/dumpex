@@ -1,29 +1,9 @@
-"""`--process` command -- issue #40's collect/render/command vertical
-slice over the frozen contract in
-docs/developer/recon_process_sysinfo_handles_contract.md §3.
+"""Collect and render process identity evidence from the minidump.
 
-`collect_process()` runs exactly one collection pass: it builds the
-shared process-identity snapshot (dumpex.core.process_info, issue #38),
-which itself reads the PEB-reported main image's PE header exactly once
--- this module reuses that same `MainImagePeClaim.pe_facts` for the
-standard Import Address Table walk (dumpex.core.pe_utils.parse_iat,
-issue #39) rather than re-reading/re-parsing the header a second time.
-`render_process_console()` projects only the already-collected
-ProcessRecord/CoverageReport -- it never touches `mf` at all (its
-signature has no `mf` parameter), matching the contract's "rendering
-must use only the collected ProcessRecord, coverage, and diagnostics"
-rule (§3.8).
-
-`cmd_process()` is the one call that collects and renders in the usual
-command shape; #43 wired it into argparse.
-
-Issue #98 changed the VERBOSE CONSOLE PROJECTION only: the import table
-gained column headers and a legend for the slot/target address pair, and
-the old `Evidence Matrix` became an `Identity Verification` block that
-states one investigator-facing conclusion per identity check instead of
-printing the internal claim vocabulary. No record shape, coverage
-meaning, limitation code, diagnostic, or exit code moved with it -- the
-v2.13 JSON is byte-identical across that change.
+Collection builds one attributed identity snapshot and reuses its main-image PE
+facts for Import Address Table analysis. Conflicting MiscInfo, PEB, and module
+claims remain independently visible. Rendering consumes only the collected
+record, coverage, and diagnostics.
 """
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile

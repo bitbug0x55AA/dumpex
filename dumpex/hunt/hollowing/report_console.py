@@ -1,65 +1,7 @@
-"""`HollowingReport` -> console lines pure projector -- the ONE console
-renderer for the process-hollowing hunter, replacing the pre-migration
-`_render_hollowing_console(mf, report, verbose)` (which took the DUMP as
-its first parameter, printed a three-line image-base header, then four
-ad-hoc `_print_check` blocks re-deriving `prot_str()`/`va_to_file_offset()`
-off raw minidump objects the Report was carrying purely for that purpose,
-then every Finding in construction order -- restating the same four checks
-a second time in full narrative form -- then the verdict last, and
-additionally returned the legacy findings dict from the same call).
+"""Render a ``HollowingReport`` as verdict-first console lines.
 
-This module never prints (returns the exact lines a caller would print),
-never returns a legacy-dict projection (see `report_legacy.py` for that, an
-independent pure function of the SAME `HollowingReport`), and never
-receives `mf`: every VA, file offset, protection string, header byte, and
-module name it renders was resolved once, at scan time, onto
-`report.context` (dumpex.hunt.hollowing.models.ImageBaseContext).
-
-Implements the verdict-first structure approved in issue #1 (verdict block
--> KEY SIGNALS -> WHY THIS VERDICT (normal only) -> bounded evidence detail
-(verbose only) -> unified COVERAGE -> verbose hint), mirroring
-`dumpex.hunt.stomping.report_console`/`dumpex.hunt.pipe.report_console`/
-`dumpex.hunt.injection.report_console`/`dumpex.hunt.encoding.report_console`
-(the four completed reference pilots). Legacy console byte parity is
-intentionally NOT preserved (see issue #10's own console scope) -- reviewed
-goldens in tests/fixtures/hunt_cli_golden/hollowing_console.txt/
-hollowing_verbose_console.txt are the new target.
-
-What moved, and where (issue #10's console scope, point by point):
-
-  * the hunt header is emitted HERE, via
-    `dumpex.hunt._report_console.header_lines()`, instead of by
-    `_print_hollowing_pre_build_console()` -- a separate function that ran
-    an ANNOUNCING `get_rules()` call before the builder purely to order the
-    one-time "Rules loaded from ..." line ahead of the header this renderer
-    printed after it. Nothing prints before the Report exists any more (the
-    same resolution dumpex.hunt.stomping and dumpex.hunt.pipe applied);
-  * the verdict, confidence, score, coverage status, and review priority
-    are the FIRST thing rendered, as a key/value block, instead of the
-    verdict being the last line of the transcript;
-  * the four `_print_check` blocks are gone. Their status lines duplicated
-    what the corresponding Finding's own inference already said (each check
-    was rendered twice, in two different vocabularies), and their `Detail:`
-    text -- PEB image path, image-base VA and .dmp offset, memory type and
-    protection, header bytes, and the module-name comparison -- is now
-    `_image_base_lines()`, the bounded VERBOSE-only hunter-specific
-    evidence section (issue #1's hierarchy, item 5);
-  * the "[~] ..." partial-coverage line that used to print between the
-    findings and the verdict is now a COVERAGE reason (already carried by
-    `project_coverage_v1`) plus a COVERAGE *impact*, so each gap and its
-    judgment consequence are stated once, in the section that owns
-    coverage, rather than inlined into the verdict text as well;
-  * the PEB-missing case's "[!] PEB not available — cannot run hollowing
-    check." line is likewise a COVERAGE reason plus an impact -- and, being
-    a projection of the same Report as every other state, it no longer
-    needs its own hand-written early-return dict (see report_legacy.py).
-
-This is also the one place this hunter's normal/verbose CONSOLE detail
-POLICY lives: `report_facts.finding_from_check_result` builds a compat
-`Finding` carrying only wire-shaped `facts` (never `verbose_facts`);
-`_console_finding` below is what augments it with `verbose_facts`, entirely
-locally, so `report_legacy.py`/`report_record.py` never execute this policy
-at all.
+All displayed locations and image metadata come from the report's resolved
+``ImageBaseContext``. Verbose evidence remains a console-only projection.
 """
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import (

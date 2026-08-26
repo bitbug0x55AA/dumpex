@@ -1,8 +1,8 @@
 # Documentation
 
 Documentation is separated by audience. Start in `user/` when operating dumpex
-or integrating its output. Use `developer/` for frozen design decisions,
-compatibility rationale, and implementation history.
+or integrating its output. Use `developer/` for current architecture decisions,
+behavior contracts, and final designs for work that has not shipped yet.
 
 ## User documentation
 
@@ -23,24 +23,29 @@ workflow/reference pages.
 
 | Document | Lifecycle | Purpose |
 |---|---|---|
-| [Analyzer registry contract](developer/hunt_analyzer_registry_contract.md) | Implemented | Frozen analyzer catalog/orchestration decisions |
-| [Targeted rescan contract](developer/hunt_targeted_rescan_contract.md) | Planned; not in current CLI | Proposed targeted hunter range-rescan contract |
-| [Recon process/sysinfo/handles contract](developer/recon_process_sysinfo_handles_contract.md) | Implemented | Normative design and acceptance history for recon redesign |
-| [Recon profile contract](developer/recon_profile_contract.md) | Implemented | Frozen `--profile` record and capability-map design |
-| [Hunt migration field matrix](developer/hunt_migration_field_matrix.md) | Historical | Pre-v2.4 field inventory and compatibility audit |
-| [Hunt shared-model review](developer/hunt_shared_model_review.md) | Superseded | Pilot architecture review retained for history |
+| [Hunt architecture](developer/hunt_architecture.md) | Implemented | Domain ownership, projection, and deterministic-output boundaries |
+| [Analyzer registry contract](developer/hunt_analyzer_registry_contract.md) | Implemented | Built-in analyzer identity, selection, capability, and execution contract |
+| [Targeted rescan contract](developer/hunt_targeted_rescan_contract.md) | Planned; not in current CLI | Final targeted hunter range-rescan design |
+| [Recon process/sysinfo/handles contract](developer/recon_process_sysinfo_handles_contract.md) | Implemented | Current recon records, evidence, coverage, and compatibility contract |
+| [Recon profile contract](developer/recon_profile_contract.md) | Implemented | Current `--profile` record and capability-map contract |
 
-Developer documents intentionally contain issue sequencing, implementation
-paths, acceptance gates, and historical decisions. Their lifecycle banner takes
-precedence over statements describing an earlier delivery phase.
+Live developer documents keep only current architecture decisions, current
+behavior contracts, non-obvious safety and compatibility invariants, and final
+designs for work that has not shipped. Superseded planning documents do not
+participate in current navigation.
 
 ## Maintenance rules
 
 - Keep current user behavior under `docs/user/`.
-- Put implementation plans and frozen decisions under `docs/developer/`.
-- Label developer documents as planned, implemented, historical, or superseded.
+- Keep current implementation contracts and final unimplemented designs under
+  `docs/developer/`.
+- Keep issue sequencing, implementation history, review history, and acceptance
+  progress in GitHub issues and pull requests; Git history is the archive for
+  superseded document text.
+- Let tests verify behavior and let documents explain the contract. Do not keep
+  revision history merely so a test can parse it.
 - Link to current user documentation from README and analyst-facing output.
 - Keep release summaries concise; move field-level compatibility detail to the
   migration guide.
-- After moving or renaming a document, update code comments/tests that use its
-  path and run the repository link checks.
+- After modifying, moving, or deleting a document, update every repository
+  reference and run the relevant link, documentation, and behavior checks.

@@ -1,35 +1,8 @@
-"""The canonical, recursively immutable domain model for the encoding
-(obfuscation) hunter -- `EncodingReport` plus the coverage snapshot and
-evidence container it is built from. Mirrors
-`dumpex.hunt.injection.domain` (the completed reference pilot): see that
-module's own docstring for the general "one canonical result
-representation" rationale this module applies to the encoding hunter.
+"""Immutable domain model for encoded-payload analysis.
 
-Before this migration, `dumpex.hunt.encoding.aggregate.EncodingReport`
-kept the same facts several times over: a `findings` dict (JSON-facing,
-holding rendered `Finding.to_dict()` entries) and a `findings_list` (the
-same findings a second time, as `Finding` objects) -- plus a further set
-of raw `sleep_mask_hits`/`entropy_hits`/`base64_hits`/`xor_hits`/
-`compressed_hits`/`all_pe_hits`/`all_shellcode_hits` lists presentation.py
-read directly for its own per-layer status lines. Nothing structural kept
-those in agreement, and the raw hits held a live minidump region object
-by reference all the way through to render time.
-
-`EncodingReport` stores each fact exactly once:
-
-  score      -- 0..2, this hunter's own decision (confirmed sleep-mask
-                decode and/or a validated PE payload found via any layer).
-  results    -- the checks this hunter produced, as typed
-                `dumpex.hunt._domain.CheckResult`s carrying typed evidence.
-  evidence   -- the observed items, in their hunter-meaningful buckets;
-                the SAME objects `results` reference, never a copy.
-  coverage   -- the immutable snapshot of what this run could and could
-                not see.
-
-and DERIVES everything else -- `status`, `verdict_level`, `confidence`,
-`lead_count`, `review_priority`, `max_score` -- as properties, through the
-same shared reducers (`dumpex.hunt._coverage`, `dumpex.hunt._finding`)
-`aggregate.py` calls.
+Layer evidence, check results, scan budgets, and coverage are validated together.
+Per-layer limitations remain distinct and capped evidence cannot be represented
+as complete coverage.
 """
 from dataclasses import dataclass, field
 

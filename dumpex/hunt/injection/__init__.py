@@ -1,97 +1,15 @@
-"""Process injection hunter (RWX / hidden PE / unbacked threads).
+"""Process-injection hunter for RWX memory, hidden PE images, and unbacked threads.
 
-Phase-two correlation model
-────────────────────────────
-Signals are grouped and correlated by **AllocationBase** — the address a
-single VirtualAlloc/VirtualAllocEx call originally reserved — rather than
-by the BaseAddress of whichever individual MemoryInfo sub-region happened
-to carry each signal. A single allocation routinely gets split into
-several MemoryInfo entries with different protections after
-VirtualProtect calls (header page, RW-then-reprotected-to-RX code page,
-guard page, ...): an RWX signal on one sub-region and a hidden-PE header
-on a different sub-region of the SAME allocation are one suspicious
-allocation, not two unrelated observations that happen to be near each
-other.
+Signals correlate by allocation base because one allocation may be split into
+regions with different protections. Current RIP/EIP captured in thread context
+is stronger execution evidence than StartAddress, which records only where a
+thread began.
 
-Thread execution correlation now prefers each thread's CURRENT
-RIP/EIP — read from ThreadListStream's per-thread CONTEXT at the moment
-the dump was captured (see core.memory.get_thread_contexts) — over
-ThreadInfoListStream.StartAddress. StartAddress only tells you where a
-thread BEGAN; RIP/EIP tells you where it IS, which is what actually
-matters for "is this allocation being executed right now". Both are
-still reported (StartAddress correlation is kept as a secondary,
-lower-confidence signal), but only a live RIP/EIP landing inside a
-suspicious allocation can reach HIGH confidence.
-
-A "hidden PE" is not just a region beginning with the two bytes 'MZ' --
-and it is no longer only looked for AT each region's base address either.
-Every eligible (committed, not-inside-a-known-module) region is searched
-for candidate 'MZ' headers at EVERY byte offset, so an image mapped
-partway into a private or unbacked allocation -- behind loader metadata,
-as one of several objects in the same allocation, or aligned to nothing in
-particular -- is examined instead of being invisible because the region's
-first two bytes were clean (issue #26). Each candidate keeps its OWN
-address and file offset (see models.HiddenPeEvidence), which the current
-schema's `huntPeHeaderHit` carries too, while correlation stays keyed on
-the containing allocation's identity.
-
-Searching everything makes the dump's own contents decide how much work
-this hunter does, so that search runs under explicit budgets -- bytes
-read, structural validations performed, evidence retained (see
-config.py's PE_SCAN_* family and memory_scan._ScanBudget). What a budget
-cut short is never silent: a region whose search stopped early is counted
-in coverage (alongside failed and short reads) rather than reported as
-clean, and candidates that were examined but not retained are stated,
-with their count, on the check that would have listed them.
-
-dumpex.core.pe_utils.parse_pe_header() structurally validates the
-DOS header, PE signature, COFF file header (Machine/NumberOfSections),
-optional header (PE32/PE32+ Magic), and the full section table before a
-region counts as a validated hidden PE. A region with an 'MZ' prefix that
-fails structural validation (truncated header, garbage Machine field,
-implausible section count) is reported separately as a low-confidence
-observation, not folded into the same bucket as a confirmed module.
-
-Every reported item is a dumpex.hunt._finding.Finding — facts, inference,
-confidence, rationale, limitations — so the distinction between "this
-allocation shows page-type + PE-header + live-execution convergence"
-(high confidence) and "an MZ-prefixed region exists somewhere, unrelated
-to anything else" (low confidence) is explicit, not implied by wording.
-
-This is a package, not a single file: memory_scan.py/thread_scan.py only
-collect facts (RWX regions, hidden-PE candidates, unbacked threads,
-resolved thread contexts) and never score or print; correlation.py
-establishes AllocationBase/RIP/StartAddress relationships between those
-facts; aggregate.py is the ONE place score/coverage/CheckResult get
-computed, returning the canonical, immutable `dumpex.hunt.injection.
-domain.InjectionReport`; report_console.py is the ONE place anything gets
-printed to the console, as a pure projection of that Report (see
-report_facts.py/report_legacy.py/report_record.py for the other
-projections). This __init__.py is the thin entry point: run the scans,
-correlate, aggregate, render, return the legacy findings dict.
-
-The stable contract is `_hunt_injection` itself (imported by
-dumpex/hunt/__init__.py): same signature, same fields, same score/status/
-coverage/JSON shape as this package has always had -- internally, every
-fact flows through one immutable `InjectionReport` rather than a
-dict-keyed `Report` carrying parallel `findings`/`findings_list`
-representations. `report_console.render_console_lines()`/`print_console()`
-never hand a typed Evidence dataclass back to a caller:
-`dumpex.hunt.injection.report_legacy.project_legacy_dict()` projects every
-one of them into a plain, JSON-safe dict (stable field names --
-base_address/allocation_base/size/type/protect for a region, etc. -- see
-that module's own docstring) before `_hunt_injection()`/`cmd_hunt()`'s
-bare `results["injection"]` return. `read_region` is re-exported here and
-remains monkeypatchable (`injection.read_region = fake` before calling
-`_hunt_injection()` still changes its behavior — see
-dumpex/hunt/_runtime.py) because it is threaded explicitly into
-memory_scan._hunt_hidden_pe rather than that module importing its own
-separate copy. Private per-step helper functions (`_hunt_rwx`,
-`_hunt_hidden_pe`, `_hunt_unbacked_threads`, `_region_for_addr`, etc.) are
-NOT re-exported here and make no compatibility promise at all — import
-them from their actual module (dumpex.hunt.injection.memory_scan/
-.thread_scan/.correlation/...) if you need them directly, as this
-package's own tests do.
+Eligible non-module regions are searched throughout for MZ candidates. Each
+candidate keeps its own VA and dump offset, then undergoes bounded structural PE
+validation. MZ-only observations remain lower confidence than validated images.
+Scan budgets cover bytes, validations, and retained evidence; any incomplete
+search is reported as partial coverage rather than a clean result.
 """
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import get_memory_regions, read_region

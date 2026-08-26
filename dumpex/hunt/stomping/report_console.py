@@ -1,55 +1,7 @@
-"""`StompingReport` -> console lines pure projector -- the ONE console
-renderer for the module-stomping hunter, replacing the pre-migration
-`dumpex.hunt.stomping.presentation.render()` (which printed an ad-hoc IOC
-check line, then every Finding in construction order, then the verdict
-last, and additionally returned the legacy findings dict from the same
-call). This module never prints (returns the exact lines a caller would
-print) and never returns a legacy-dict projection (see `report_legacy.py`
-for that, an independent pure function of the SAME `StompingReport`).
+"""Render a ``StompingReport`` as verdict-first console lines.
 
-Implements the verdict-first structure approved in issue #1 (verdict block
--> KEY SIGNALS -> WHY THIS VERDICT (normal only) -> unified COVERAGE ->
-verbose hint), mirroring `dumpex.hunt.injection.report_console`/
-`dumpex.hunt.encoding.report_console` (the completed reference pilots).
-Legacy console byte parity is intentionally NOT preserved (see issue #8's
-own console scope) -- reviewed goldens in tests/fixtures/hunt_cli_golden/
-stomping_console.txt/stomping_verbose_console.txt/
-stomping_ioc_hit_console.txt/stomping_ioc_hit_verbose_console.txt are the
-new target.
-
-Two things the pre-migration renderer printed BEFORE/DURING the scan are
-gone from normal-mode triage output, per issue #8's "move scan progress
-out of normal-mode triage output":
-
-  * the "[*] Scanning executable MEM_IMAGE regions for IOC strings (lead
-    only)..." progress line and the "[·] Whitelisted network DLLs skipped"
-    note now live in `_scan_detail_lines()`, a VERBOSE-only block (the
-    same resolution dumpex.hunt.encoding.report_console applied to its own
-    "Layer 0/1/2-4: ..." progress announcements);
-  * the ad-hoc "IOC strings in module code regions / INCOMPLETE ..." check
-    line and its "[~] Targeted follow-up needed ..." guidance are now a
-    COVERAGE reason (already carried by `project_coverage_v1`) plus a
-    COVERAGE *impact* (see `_coverage_impacts`), so the same claim is made
-    once, in the section that owns coverage, instead of ahead of the
-    verdict an analyst reads first.
-
-This is also the one place this hunter's normal/verbose CONSOLE detail
-POLICY lives: `report_facts.finding_from_check_result` builds a compat
-`Finding` carrying only wire-shaped `facts` (never `verbose_facts`);
-`_console_finding` below is what augments it with `verbose_facts`,
-entirely locally, so `report_legacy.py`/`report_record.py` never execute
-this policy at all.
-
-Only three checks have a genuinely richer --verbose rendering
-(`_VERBOSE_ITEM_RENDERERS` plus `_ioc_verbose_fact`); the other three
-expand to the SAME text as their wire facts, just uncapped, so
-`report_facts._FACT_ITEM_RENDERERS` is reused directly for those rather
-than transcribed a second time here. That is a deliberate departure from
-`dumpex.hunt.encoding.report_console`, which duplicates its renderers:
-duplication is what keeps a hunter's console free to diverge from its wire
-text, and stomping's three "no delta but the cap" checks have nothing to
-diverge on -- a second copy of six format strings would be pure drift
-surface, not a boundary.
+Verbose output carries bounded scan and evidence detail. Wire facts remain
+capped and stable for legacy and structured projections.
 """
 import dataclasses
 

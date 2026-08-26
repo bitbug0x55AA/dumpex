@@ -1,26 +1,4 @@
-"""Tests for the encoding (obfuscation) pure projectors (dumpex/hunt/
-encoding/report_facts.py, report_legacy.py, report_record.py,
-report_console.py) -- everything that turns a hand-built `EncodingReport`
-(dumpex.hunt.encoding.domain's canonical domain model) into the legacy
-v1.1 dict, the current-schema (v2.13) `HunterRecord`, and the
-verdict-first console. Mirrors tests/hunt/test_injection_projectors.py
-(the completed reference pilot's own test suite) -- see that module's
-own docstring for the general split between this file and its
-neighbours.
-
-No hand-built golden-scenario byte-parity test is duplicated here (unlike
-test_injection_projectors.py's own): tests/integration/
-test_hunt_cli_compat_freeze.py already exercises the exact same
-single-PE-in-Base64 scenario (tests/fixtures/hunt_cli_scenarios.py's
-`_build_obfuscation`) end to end through the REAL production pipeline
-against tests/fixtures/hunt_cli_golden/obfuscation_console.txt/
-obfuscation_verbose_console.txt/obfuscation_hunt_dict.json -- a stronger
-guarantee than re-deriving the same scenario from hand-built evidence
-here would add.
-
-Builder helpers below reuse test_encoding_domain.py's own
-(`_region`/`_location`/`_cls`/`_hit`/`_entropy_hit`/`_coverage`/`_check`).
-"""
+"""Hunter-specific behavior for obfuscation report projectors."""
 import pytest
 
 from tests.hunt.test_encoding_domain import _cls, _hit, _entropy_hit, _coverage, _check
@@ -34,9 +12,7 @@ from dumpex.hunt.encoding.report_facts import finding_from_check_result
 from dumpex.hunt.encoding.report_legacy import project_legacy_dict
 from dumpex.hunt.encoding.report_record import project_hunter_record
 from dumpex.hunt.encoding.report_console import render_console_lines
-from dumpex.output.coverage import (
-    EXIT_NOT_EVALUATED, EXIT_OK, EXIT_PARTIAL, exit_code_for, ScanTarget, ScanTargetKind,
-)
+from dumpex.output.coverage import ScanTarget, ScanTargetKind
 
 
 # ── Report builders ────────────────────────────────────────────────────────
@@ -315,24 +291,6 @@ def test_console_verbose_and_normal_never_change_json_projections():
     assert project_hunter_record(report).findings == project_hunter_record(report).findings
 
 
-# ── 5. Exit-code parity across coverage states ─────────────────────────────
-
-def test_exit_code_complete_coverage_is_ok():
-    record = project_hunter_record(_clean_report())
-    assert record.coverage.status.value == "complete"
-    assert exit_code_for(record.coverage.status) == EXIT_OK == 0
-
-
-def test_exit_code_partial_coverage_is_partial():
-    record = project_hunter_record(_inconclusive_report())
-    assert record.coverage.status.value == "partial"
-    assert exit_code_for(record.coverage.status) == EXIT_PARTIAL == 3
-
-
-def test_exit_code_not_evaluated_coverage_is_not_evaluated():
-    record = project_hunter_record(_not_evaluated_report())
-    assert record.coverage.status.value == "not_evaluated"
-    assert exit_code_for(record.coverage.status) == EXIT_NOT_EVALUATED == 4
 
 
 # ── 6. The "empty/error" acceptance axis ────────────────────────────────────

@@ -1,24 +1,8 @@
-"""
-Layers 2-4 of dumpex.hunt.encoding — Base64, single-byte XOR brute-force,
-and GZIP/ZLIB decompression.
+"""Bounded Base64, XOR, and compressed-payload scanning.
 
-`scan_decode_layers` is the entry point _hunt_encoding calls: it owns the
-per-region read loop (one shared read + coverage pass feeds all three
-sub-layers, since they all need the same region bytes) and returns a
-DecodeResult of standardized Hit objects. `_scan_base64`/`_scan_xor`/
-`_scan_xor_structural`/`_scan_compressed` below it are lower-level
-generators over an already-read `data: bytes` buffer -- kept as their
-own testable units (existing unit tests call them directly), yielding
-raw `(offset, key, decoded, classification)` / `(offset, raw, decoded,
-classification)` tuples rather than Hit objects; `scan_decode_layers` is
-what converts each yield into a Hit and applies the budget's take_hit()
-gate. `_scan_xor` (a sample+printable/keyword heuristic, scoped to the
-region prefix) and `_scan_xor_structural` (offset-independent key
-derivation from the MZ/PE\\0\\0 or shellcode-bootstrap byte patterns
-themselves) are two independent candidate-selection strategies for the
-same single-byte-XOR layer -- see `_scan_xor_structural`'s own docstring
-and dumpex issue #27 for why a text-oriented prefix heuristic alone
-cannot reach a binary structural payload.
+Decode layers share captured region bytes but retain independent work and output
+limits. Structural XOR search is offset-independent, and decompression enforces
+input, output, ratio, and time bounds against dump-controlled data.
 """
 import re
 import zlib

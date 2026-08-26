@@ -1,49 +1,10 @@
-"""`--handles` command -- issue #42's collect/render/command vertical
-slice over the frozen contract in
-docs/developer/recon_process_sysinfo_handles_contract.md §5.
+"""Collect and render handles recorded in a minidump at capture time.
 
-Reports the handles a dump RECORDED AT CAPTURE TIME, read from its
-`HandleDataStream`. Nothing here opens a process, queries a PID, or
-touches live system state, and no console/JSON string may imply that it
-does (§5.7).
-
-`collect_handles()` reads the full `ParsedHandleDataStream` off
-`mf.handles` rather than going through
-`dumpex.core.memory.get_handles()`: that convenience view returns only
-`.handles` (the list) and discards `.header`, and with it
-`NumberOfDescriptors` -- the one value `HANDLE_STREAM_TRUNCATED`'s
-`affected_count` is derived from (§5.1.1 rule 5). A record builder
-written against `get_handles()` could not emit that limitation at all,
-so a dump whose descriptor array was cut short would silently report
-fewer handles with a `complete` verdict.
-
-`render_handles_console()` projects only the already-collected records
-and CoverageReport -- it never touches `mf` (its signature has no `mf`
-parameter), matching every other recon renderer's rule.
-
-`cmd_handles()` is the one call that collects and renders in the usual
-command shape; #43 wired it into argparse, and #98 wired `--verbose`
-through to it.
-
-Console verbosity is a PROJECTION and nothing else (#98): the
-CommandResult `collect_handles()` returns is byte-identical whatever
-`verbose` is, so `--json` always carries the complete normalized
-inventory. The default console folds anonymous rows -- every row whose
-descriptor records no object name, except the investigation-relevant
-types in `_RETAINED_ANONYMOUS_TYPES` and any row that LOST a name --
-into per-type counts, and says exactly how many it folded; `--verbose`
-renders every record. Nothing is ever removed from the records, the
-summary, or `by_type`.
-
-#102 adds the same kind of projection over the Access column: the column
-keeps the raw `0x%08x` mask -- printed exactly once, as the evidence
-anchor a reader scans and copies -- and every printed row is followed by
-its own `Rights` line naming what that mask permits for THAT row's
-recorded object type, so an analyst can read a handle's rights without an
-external access-mask lookup and without leaving the row. The decoder
-(`dumpex.ui.access_rights`) consumes the normalized record and nothing
-else, `granted_access` stays the raw integer in every structured output,
-and no decoded right is ever a verdict.
+Collection retains the HandleDataStream's declared descriptor count so
+truncation cannot be mistaken for a complete shorter list. No live state is
+queried. Console verbosity changes presentation only; structured output keeps
+the complete inventory. Access masks remain raw integers, while type-specific
+decoded rights are derived display text and never a verdict.
 """
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile

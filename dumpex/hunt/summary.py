@@ -1,32 +1,8 @@
-"""
-Cross-hunter `result.summary` reducer for `result.kind == "hunt"`.
+"""Reduce hunter records into one deterministic hunt summary.
 
-The single function JSON and console rendering must both call for
-the same set of `HunterRecord`s -- see docs/developer/hunt_migration_field_matrix.md's
-own "summary rules" section and the v2.4 migration plan's requirement
-that this reducer never be re-derived independently by more than one
-output surface. Pure aggregation over already-computed per-hunter
-judgments: this never re-derives a HunterRecord's own score/verdict/
-coverage, it only combines the 7 (or 1) already-final records into one
-result.summary dict.
-
-Wired into the CLI as of PR4: `dumpex.hunt.collect_hunt()` calls this
-for the silent, JSON-only `CommandResult` path; `dumpex.hunt.cmd_hunt()`
-calls it too (always, regardless of its own `collect_records` flag) and
-uses `summary["overall_status"]` to drive the `--hunt all` console
-summary card's own "Overall: ..." line -- the per-hunter DISPLAY
-formatting in that same card (name/verdict color/score suffix) still
-reads each hunter's own v1.1-shaped dict, since that's presentation, not
-a cross-hunter reduction, but the one cross-hunter judgment (DETECTED/
-INCONCLUSIVE/NOT_EVALUATED/NOT_DETECTED_IN_SCANNED_SCOPE) now has exactly
-one implementation, this one, for JSON and console alike -- see
-`cmd_hunt()`'s own docstring for the exact split. Exercised directly by
-tests/unit/test_hunt_summary.py plus indirectly by every schema test
-that calls it via tests/fixtures/hunt_records.hunt_summary_for(), and by
-tests/integration/test_hunt_cli_compat_freeze.py's byte-exact console
-fixtures (which pin that this reduction produces the same console text
-the old, now-removed independent any_hit/any_not_evaluated/
-any_inconclusive computation did).
+Overall status follows explicit detection and coverage precedence rather than
+console wording. Counts, correlations, investigation actions, and findings are
+derived from existing records without rescanning or changing hunter results.
 """
 from dumpex.output.records import HUNTERS, HunterRecord
 
@@ -71,8 +47,7 @@ def build_hunt_summary(records: "list[HunterRecord]", selected: str, *,
     cross-record reducer in this codebase follows (see e.g.
     dumpex.output.coverage.combine_coverage_reports).
 
-    Status-to-overall-status reduction (see the migration plan's own
-    "整体 Summary 规则" section):
+    Status-to-overall-status reduction (ordering is part of public behavior):
 
         any hunter DETECTED                                  -> DETECTED
         no DETECTED, any INCONCLUSIVE or some-but-not-all

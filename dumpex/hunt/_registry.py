@@ -1,40 +1,11 @@
-"""Closed, immutable analyzer catalog for `--hunt` (issue #71, implementing
-the frozen contract in `docs/developer/hunt_analyzer_registry_contract.md`, issue
-#70).
+"""Closed, immutable catalog of the seven hunt analyzers.
 
-`AnalyzerSpec` is a frozen, validated value object -- one per `HUNTERS`
-identity, describing that analyzer's operational boundary: its builder,
-console renderer, record projector, accepted options, provenance hook, and
-full-scope/targeted-scan capability. `AnalyzerRegistry` is the closed,
-import-time-constructed catalog of exactly those seven specs, exposing
-`get()`/`select()`/`select_targeted()` as its only production lookup and
-selection operations.
+Each validated AnalyzerSpec defines its builder, projections, options,
+provenance hook, and full-scope or targeted capability. Construction failures
+represent developer configuration errors and fail at import.
 
-This module registers the seven current analyzers and validates them
-against `HUNTERS` (identity, order, completeness, report type, capability
-shape) -- it does not change what `collect_hunt()`/`cmd_hunt()`
-(`dumpex/hunt/__init__.py`) call today. Routing those two functions
-through `REGISTRY` is issue #72's own cutover, not this module's job (see
-the contract's §0.2 non-goals).
-
-Every construction-time failure below (§7.1 of the contract) is a hard
-failure that crashes import -- deliberately, since every one of these
-states can only come from a developer's own in-tree edit to this module,
-never from investigator input or dump content. Because `dumpex.cli`
-imports `dumpex.hunt` at module scope, a failure here takes down the
-entire CLI, not only `--hunt` -- see the contract's own §7.1 for why that
-blast radius is accepted.
-
-**Import-timing rule (contract §6 "Module layout and import timing"):**
-this module must be imported by `dumpex/hunt/__init__.py` AFTER every
-facade builder/renderer/collect import already in that file, and must
-NEVER `import dumpex.hunt` at its own top level -- doing so while
-`dumpex/hunt/__init__.py` is still mid-import is exactly how a circular
-`ImportError` happens. Every dispatcher-facing name this module resolves
-(`_build_injection_report`, etc.) is read off `sys.modules["dumpex.hunt"]`
-at call time instead (contract §8's late-binding rule), which also
-happens to be what keeps `monkeypatch.setattr(dumpex.hunt,
-"_build_injection_report", fake)` working after this module exists.
+Dispatcher callables are resolved late from the hunt facade to avoid circular
+imports and preserve supported monkeypatch seams.
 """
 import inspect
 import sys

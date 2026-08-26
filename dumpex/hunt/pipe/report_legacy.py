@@ -1,34 +1,8 @@
-"""`PipeReport` -> the v1.1 legacy `findings` dict -- a pure projection,
-independent of `report_record.py`/`report_console.py`. Mirrors
-`dumpex.hunt.stomping.report_legacy`/`dumpex.hunt.injection.report_legacy`/
-`dumpex.hunt.encoding.report_legacy` (the three completed reference
-pilots).
+"""Project a ``PipeReport`` into the legacy v1.1 findings shape.
 
-The dict's KEY SET is unchanged by this migration (issue #7: "no public
-schema change") -- the same seventeen keys `_hunt_pipe()` has always
-returned, frozen by tests/integration/test_hunt_compat_freeze.py's own
-`_PIPE_KEYS`.
-
-The five evidence-carrying entries no longer embed a live minidump
-`Handle`/`MinidumpMemoryInfo`/`MinidumpThreadInfo`, though: those raw
-objects are exactly what this migration removes from the domain model, so
-the entries are rebuilt here BY VALUE from the typed evidence. Every field
-they carried is still there, and every field
-`dumpex.hunt.pipe.collect`'s own JSON projection ever read off them now
-comes from `report_record.py` reading the same typed evidence directly.
-
-That by-value rebuild also closes a real defect in the pre-migration
-shape: `dumpex.ui.structured._json_safe`'s `str(obj)` fallback used to
-render each embedded raw object as `<...Region object at 0x0000020AC1D7...>`
--- the ANALYSIS HOST's own Python heap address, different on every run,
-inside --json output describing a dump. Nothing here can produce that any
-more.
-
-`c2_context` and `unbacked_in_rgn` stay TUPLES, not dicts: v1.1 consumers
-index them positionally (`hit[1]` is the pipe name, `hit[2]` the record
-list -- see tests/integration/test_hunt_compat_freeze.py), so the
-container shape is part of the frozen contract even though its members
-are now plain values.
+Evidence is rebuilt from typed values so serialized output cannot expose
+analysis-host object identities. ``c2_context`` and ``unbacked_in_rgn``
+remain positional tuples because v1.1 consumers index them by position.
 """
 from dumpex.hunt.pipe.domain import PipeReport
 from dumpex.hunt.pipe.report_facts import finding_from_check_result, project_coverage_v1

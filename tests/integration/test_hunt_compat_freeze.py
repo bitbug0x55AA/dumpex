@@ -286,10 +286,8 @@ def test_cs_beacon_detected(monkeypatch):
     assert f["confidence"] == "high"
     assert f["config_count"] == 1
     assert f["configs"][0]["xor_key"] == 0x69
-    # Confirmed pre-migration shape: va/file_offset/region_base are plain
-    # JSON ints today, NOT the fixed-16-hex-string format the v2.4 contract
-    # requires (see docs/developer/hunt_migration_field_matrix.md) -- pinned here so
-    # PR2's conversion to hex strings is a visible, intentional diff.
+    # This compatibility surface uses plain JSON ints for
+    # va/file_offset/region_base. Pin that representation explicitly.
     assert isinstance(f["configs"][0]["va"], int)
     assert isinstance(f["configs"][0]["file_offset"], int)
     assert all(isinstance(k, str) for k in f["configs"][0]["fields"].keys())

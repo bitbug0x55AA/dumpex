@@ -1,15 +1,11 @@
-# Recon `--profile` contract (issue #95)
+# Recon `--profile` contract
 
-**Status: frozen decision record — self-contained.**
+Status: **implemented**. `--profile` is a released command in the current CLI
+and is part of schema v2.13.
 
-> **Documentation class:** implemented engineering decision record. `--profile`
-> is exposed in the current CLI. Statements below that this contract itself does
-> not expose the command describe its original delivery boundary before the
-> later v2.13 integration, not current product availability.
-
-This document is the complete, normative contract for `--profile`, the
-evidence-capability-map command proposed in discussion #94 and specified
-in issue #95. `dumpex/commands/profile.py`, `dumpex/output/records.py`'s
+This document is the normative contract for the `--profile`
+evidence-capability-map command. `dumpex/commands/profile.py`,
+`dumpex/output/records.py`'s
 `ProfileRecord` family, and the `PROFILE_*` entries in
 `dumpex/output/coverage.py` implement against **this file alone**.
 
@@ -24,19 +20,11 @@ being "unavailable" means dumpex could not gather the evidence that
 capability's real collector/hunter needs — never a claim that the
 underlying activity is absent.
 
-Per #95's own v2.13 delivery boundary, this issue **freezes** the
-collector, record shape, console projection, and capability registry, but
-does **not** expose `--profile` through public argparse/routing, and does
-**not** advance `SCHEMA_VERSION`/`CURRENT_SCHEMA`. Issue #43 owns the
-single atomic v2.13 cutover that exposes `--profile` (together with
-`--process` and `--handles`) through the CLI and the packaged schema. #43
-must not redesign anything frozen here.
-
 ---
 
 ## Table of contents
 
-- §0 Scope, non-goals, and dependency order
+- §0 Scope and non-goals
 - §1 Shared vocabulary and ordering rules
 - §2 The dump's own directory table: stream inventory
 - §3 MINIDUMP_TYPE flags and memory-capture facts
@@ -44,11 +32,10 @@ must not redesign anything frozen here.
 - §5 Coverage and exit semantics
 - §6 Complete code registry
 - §7 Console and `to_dict()` shape
-- §8 Acceptance gate
 
 ---
 
-## §0 Scope, non-goals, and dependency order
+## §0 Scope and non-goals
 
 ### 0.1 What this contract covers
 
@@ -65,7 +52,7 @@ must not redesign anything frozen here.
 6. The complete `LimitationCode`/`CapabilityLimitationCode` registry (§6).
 7. Console and JSON record shape (§7).
 
-### 0.2 Non-goals (frozen)
+### 0.2 Non-goals
 
 - No malicious/clean verdict, finding, ATT&CK mapping, confidence, or
   risk score anywhere in the record or its console projection.
@@ -79,17 +66,7 @@ must not redesign anything frozen here.
 - No promise that an `available` capability guarantees complete capture
   of every relevant artifact — it states that the REQUIRED evidence for
   that capability exists, nothing about what a hunter would find in it.
-- No public CLI wiring (`argparse`), no `CURRENT_SCHEMA`/`SCHEMA_VERSION`
-  change — both belong to #43.
-
-### 0.3 Dependency order
-
-```
-#36 (parent)
-  └─ #95 (this contract + implementation)
-       └─ #43  atomic CLI/schema v2.13 cutover: exposes --profile,
-                consumes this contract unchanged
-```
+- No schema or CLI change outside the released `--profile`/v2.13 contract.
 
 ---
 
@@ -227,7 +204,7 @@ next to it already calls indeterminate.
 
 ### 2.5 Loader fix: the directory walk itself must not crash, and must not fabricate or drop entries
 
-Before this issue, the installed minidump library's own
+The installed minidump library's own
 `MINIDUMP_DIRECTORY.parse()` raised `ValueError` for any raw `StreamType`
 value that is neither a recognized `MINIDUMP_STREAM_TYPE` member nor
 greater than `LastReservedStream` (0xFFFF, the real Microsoft
@@ -247,7 +224,7 @@ closes this gap: **every** unrecognized `StreamType` value — whether
 `>0xFFFF` or a gap value in the named range — is preserved as its own
 row (the raw int, with `Location`/Rva/DataSize parsed normally), never
 crashing and never silently dropped. This is a deliberate departure from
-the upstream library's own `>0xFFFF` drop: #95's acceptance criteria
+the upstream library's own `>0xFFFF` drop: the current contract
 ("Every directory entry is represented" / "preserve unknown stream-type
 IDs rather than silently dropping them") make no exception for a real
 `MINIDUMP_USER_STREAM`, so none is made here either.
@@ -351,7 +328,7 @@ requirement.
 | `module_analysis` | (`modules`) | — | `dumpex.commands.modules` (`--modules`) |
 | `injection_artifact_analysis` | (`memory_info` **or** `thread_info`) | `modules`, `threads`, `memory_content` | `dumpex.hunt.injection` — its own not-evaluated gate is literally `evaluation_sources=("memory_info", "thread_info")` (`dumpex.hunt.injection.report_facts.project_coverage_report`), an OR-group: the hunter still runs — and reports real per-region `PE_HEADER_READ_FAILED`/`_SHORT_READ` facts — on either stream alone, and even with zero captured memory bytes. `memory_content`, `modules` (known/unknown classification), and `threads` (unbacked-region correlation) are therefore optional enrichment, matching the hunter's own `SourceRequirement`-only (never evaluation-group) treatment of them. |
 | `thread_analysis` | (`threads` **or** `thread_info`) | `modules` | `dumpex.commands.threads` (`--threads`) — its own gate is `evaluation_sources=("threads", "thread_info")`: `collect_threads()` builds real records from `ThreadInfoListStream` alone when `ThreadListStream` is absent (reporting a specific field-level limitation, never `not_evaluated`), confirmed by reading `collect_threads()` directly. |
-| `handle_analysis` | (`handles`) | — | `dumpex.commands.handles` (`--handles`, issue #42) |
+| `handle_analysis` | (`handles`) | — | `dumpex.commands.handles` (`--handles`) |
 | `injector_handle_assessment` | (`handles`) | `threads` | The SAME `HandleDataStream` evidence `handle_analysis` uses, answering a DIFFERENT analytical question (discussion #94's "handle-based assessment of potential injector activity") that no dumpex hunter implements yet — this capability id exists so that future work's evidence boundary is already visible today (§0.2's own "no automatic hunter integration" non-goal). |
 
 `required_sources` on the record itself is the flattened, deduplicated,
@@ -617,55 +594,3 @@ recon renderer's own `coverage.reasons` projection.
 recomputation or dump re-read.
 
 ---
-
-## §8 Acceptance gate
-
-`tests/unit/test_profile_cmd.py`, `tests/unit/test_profile_records.py`
-(the record family's own construction-time validation), and
-`tests/unit/test_open_dump.py` (the loader fix, §2.5) together verify:
-
-- Known, unknown, duplicate, absent, present-empty, unparsed, and failed
-  stream entries, including directory-order preservation and
-  `directory_index` correctness.
-- `MiniDumpNormal`, `MiniDumpWithFullMemory`, and mixed/inconsistent
-  flag-vs-stream evidence (§3.2) — neither side ever inferred from the
-  other.
-- Dumps with no memory stream, a partial captured range, and a
-  full-memory claim with nothing actually captured.
-- `available`/`limited`/`unavailable` for every one of the six capability
-  ids, including OR-group semantics (§4.2/§4.3 — `thread_analysis` and
-  `injection_artifact_analysis` each require only ONE alternative, with
-  the unsatisfied sibling degrading to an optional-like gap, not
-  `unavailable`), the optional-gap-never-erases-required-evidence rule,
-  and the stream-inventory/capability-gating consistency rule (§4.5) —
-  including the ambiguous-duplicate-entry case where every duplicate
-  happens to parse cleanly, which must still fail closed to `unavailable`/
-  `REQUIRED_SOURCE_INDETERMINATE` (never the factually-wrong
-  `REQUIRED_SOURCE_FAILED`) rather than `available`, and the matching
-  `architecture`/`captured_segment_count`/`captured_bytes_total` nulling
-  (§2.4).
-- A stream type duplicated far past the displayed-index cap produces one
-  entry per directory index (nothing dropped) and a bounded `detail`
-  string (§2.4's DoS note) — not an unbounded list.
-- A directory walk bounded against the file's own real size never
-  fabricates entries past EOF, and reports the declared-vs-readable
-  shortfall as `PROFILE_DIRECTORY_TRUNCATED` rather than silence (§2.5).
-- A genuine Microsoft `MINIDUMP_USER_STREAM` (`StreamType > 0xFFFF`) gets
-  its own inventory row, not the upstream library's own silent drop
-  (§2.5).
-- Missing `HandleDataStream` → `unavailable` handle capabilities with
-  non-clean wording (§4.4).
-- Deterministic stream/capability ordering and JSON-safe, defensively
-  copied `to_dict()` output (no raw parser objects reachable from it).
-- The renderer performs no dump reads and no capability recomputation.
-- A successfully profiled sparse dump (e.g. `SystemInfoStream` alone)
-  stays `complete`/exit 0 even though most capabilities are `unavailable`.
-- Exact `0`/`3`/`4` exit-code mapping for the not_evaluated/partial/
-  complete cases enumerated in §5.
-- The console renderer is registered in
-  `tests/unit/test_console_untrusted_text.py`'s shared harness.
-- Every rule each `--profile` record's own `__post_init__` enforces
-  rejects a record built directly, not only one built by
-  `collect_profile()` — a rule that merely happens to hold for the
-  collector is caller discipline, not the enforcement this contract
-  requires of the record types themselves.

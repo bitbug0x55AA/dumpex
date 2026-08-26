@@ -1,28 +1,8 @@
-"""
-Aggregation layer for dumpex.hunt.stomping: the ONLY place score,
-coverage, and the six `CheckResult`s (protection_deviation_lead /
-rip_in_anomalous_section_lead / verified_content_change /
-reference_identity_mismatch / module_header_invalid / ioc_string_lead) are
-computed for this hunter. Takes the typed evidence the scan/correlation
-layers (memory_scan, disk_reference, correlation) produced -- with module/
-section/region identity and RIP correlation already resolved once, at scan
-time -- and turns it into an immutable `StompingReport`
-(dumpex.hunt.stomping.domain).
+"""Aggregate stomping evidence into one immutable report.
 
-Nothing here prints, nothing here scans/diffs, and nothing here builds
-rendered `facts`/`verbose_facts` text: `CheckResult.evidence` carries the
-typed value objects; report_facts.py/report_legacy.py/report_record.py/
-report_console.py are the pure projections that render them (see
-domain.py's own docstring for why this split removes the parallel-
-representation drift the pre-migration `Report` had).
-
-Takes ONLY typed evidence tuples plus int/bool scalars -- no `mf`, no
-`verbose`, no raw `modules`/`regions`/`thread_contexts` lists, and no
-`ref_dir` PATH (only `ref_dir_supplied`, a bool: whether a reference
-directory was given is a coverage fact the verdict depends on; the path
-itself is a live filesystem handle this layer must never see).
-`dumpex/hunt/stomping/__init__.py` is where those raw inputs still live; it
-converts them into the typed evidence and scalars this module consumes.
+Only identity-matched, relocation-normalized content differences score.
+Protection and IOC observations remain leads, while comparison and scan gaps
+feed coverage without being treated as negative evidence.
 """
 from dumpex.hunt._domain import CheckResult
 from dumpex.hunt._finding import (

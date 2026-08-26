@@ -1,14 +1,7 @@
-"""Shared projection logic for `EncodingReport` (dumpex/hunt/encoding/
-domain.py) -- everything `report_legacy.py`, `report_record.py`, and
-`report_console.py` all three need, so it is built exactly once. Mirrors
-`dumpex.hunt.injection.report_facts` (the completed reference pilot): see
-that module's own docstring for why `verbose_facts` is deliberately never
-populated here (that policy belongs to `report_console.py` alone).
+"""Shared fact and coverage projections for ``EncodingReport``.
 
-Every fact string below is written to match the pre-migration
-`aggregate.py`'s inference/rationale/facts text byte-for-byte for the same
-evidence, verified by tests/hunt/test_encoding_projectors.py's golden-
-scenario parity test.
+Fact text and ordering remain stable for legacy output, typed records, and
+finding identifiers. Verbose facts are console-only.
 """
 from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.hunt._finding import Finding

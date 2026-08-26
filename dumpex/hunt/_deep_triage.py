@@ -1,56 +1,12 @@
-"""Opt-in `--triage-skipped` budgeted deep-content triage -- issue #19
-Phase 2, the follow-up to `dumpex.hunt._investigation`'s always-on,
-metadata-only skipped-target investigation queue (Phase 1). Where that
-module never reads a byte of region content, `run_deep_triage()` here
-performs a REAL, budgeted content read per already-deduped, already-
-prioritized `InvestigationAction` -- reusing `--report`'s own low-level
-content-scan primitive (`dumpex.commands.report._scan_content_range()`)
-directly, in process, under an explicit per-target/whole-run/target-count
-budget. It never spawns or scrapes a second `dumpex` CLI process, and it
-never silently reuses --report's own 256 MiB-per-region default.
+"""Run opt-in, budgeted content triage for skipped scan targets.
 
-Reads from `target.base_address` directly, via `_scan_content_range()` --
-NEVER through `_collect_triage_card()`'s own `_get_region_at()` MemoryInfo
-lookup. A `ScanTargetKind.MEMORY_SEGMENT` target (built from a Memory64List/
-MemoryList segment -- yara/cs-beacon's own oversized-skip targets) can
-legitimately have NO corresponding MemoryInfoListStream entry at all (see
-`dumpex.output.coverage.ScanTarget`'s own docstring); resolving a region
-first would misreport a perfectly readable, already-captured segment as
-`unreadable`. And even a `MEMORY_REGION` target must be read starting at
-its OWN `base_address`, not a resolved region's `BaseAddress` -- if the
-target only coincides with part of a larger MemoryInfo region (that
-region's own scan cap applied to the WHOLE region, but the target here is
-whatever sub-range a specific hunter actually skipped), reading from the
-region's start would scan the wrong bytes entirely.
+Targets are read from their own base addresses, not through MemoryInfo lookup:
+captured segments may have no MemoryInfo entry, and a target may be only part of
+a larger region. Input ordering, deduplication, and priority are preserved.
 
-Ordering, dedup, and priority are ALL inherited unchanged from
-`build_investigation_queue()` -- this module only ever walks `actions` in
-the exact order it receives them (already priority/skip-count/address
-sorted) and never re-sorts or re-scores. Deep triage can only ever change
-two things on an action: its `triage` (a fresh `TriageInfo(mode="deep",
-...)`, replacing the Phase 1 placeholder) and, when the read did not fully
-examine the target, an appended `chunked_analysis` recommended action.
-`priority`/`priority_reason_codes`/`evidence_availability`/
-`coverage_effect` are never touched -- see issue #19's explicit priority-
-vs-evidence-vs-triage three-axis design and TriageInfo's own docstring.
-
-Budgets (module-level constants, not CLI-configurable -- same style as
-`dumpex/hunt/*/config.py`'s per-hunter caps, e.g. `PIPE_SCAN_MAX`,
-`ENCODING_BUDGET_MAX_RETAINED`):
-
-  DEEP_TRIAGE_PER_TARGET_LIMIT -- read cap for any ONE target.
-  DEEP_TRIAGE_RUN_BUDGET       -- cumulative read cap for the whole
-                                   `--triage-skipped` pass.
-  DEEP_TRIAGE_MAX_TARGETS      -- deterministic priority cutoff: at most
-                                   this many targets are ever read,
-                                   regardless of remaining budget.
-
-A target whose `evidence_availability != "captured"` is never read at all
-(there is nothing in the .dmp to read) and never counts against either
-budget -- it goes straight to `status="not_captured"`. Once EITHER budget
-is exhausted, every remaining (already-lower-priority, by construction)
-target in the queue gets `status="budget_deferred"` -- deterministic,
-since the queue's own order never changes.
+Per-target, whole-run, and target-count budgets are independent. Uncaptured
+targets consume no read budget; remaining targets are deterministically deferred
+after exhaustion. Deep triage does not change priority or coverage meaning.
 """
 from dataclasses import replace
 

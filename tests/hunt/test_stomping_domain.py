@@ -1,22 +1,4 @@
-"""Contract tests for the canonical module-stomping domain model
-(dumpex.hunt._domain.CheckResult, dumpex.hunt.stomping.domain's
-CoverageSnapshot/StompingEvidence/StompingReport, and the
-dumpex.hunt.stomping.models Evidence value objects they are built from).
-Mirrors tests/hunt/test_encoding_domain.py and
-tests/hunt/test_injection_domain.py (the completed reference pilots' own
-test suites) -- see those modules' own docstrings for the general
-acceptance criteria this module applies to the stomping hunter:
-
-  1. Recursive mutation attempts fail for every nested collection and
-     value object.
-  2. Mutating a constructor input after construction cannot change the
-     constructed object.
-  3. The model retains no minidump, resolver, projector, verbosity,
-     Finding, HunterRecord, dict, or console-string reference -- poison
-     objects of each kind are rejected at construction.
-  4. The derived judgment properties agree with the shared reducers
-     dumpex.hunt._finding/_coverage already own.
-"""
+"""Hunter-specific contracts for the canonical stomping domain model."""
 import dataclasses
 import enum
 from types import MappingProxyType
@@ -155,13 +137,6 @@ EVIDENCE_TYPES = [ModuleRef, SectionRef, RegionRef, ThreadHitRef, ProtectionLead
                   IocScanResult, SectionDiffResult]
 
 
-@pytest.mark.parametrize("domain_type", DOMAIN_TYPES + EVIDENCE_TYPES,
-                         ids=[t.__name__ for t in DOMAIN_TYPES + EVIDENCE_TYPES])
-def test_domain_type_is_a_frozen_dataclass(domain_type):
-    assert dataclasses.is_dataclass(domain_type)
-    assert domain_type.__dataclass_params__.frozen is True
-
-
 # ── Construction success for every evidence type ──────────────────────────
 
 def test_every_evidence_type_constructs_from_well_formed_input():
@@ -283,15 +258,6 @@ def _reachable(value):
             yield from _reachable(item)
 
 
-def test_no_mutable_collection_is_reachable_from_a_report():
-    for value in _reachable(_populated_report()):
-        assert not isinstance(value, (list, set, dict, bytearray)), (
-            f"a mutable {type(value).__name__} is reachable from the Report: {value!r}")
-        if dataclasses.is_dataclass(value) and not isinstance(value, type):
-            assert value.__dataclass_params__.frozen is True, (
-                f"a non-frozen {type(value).__name__} is reachable from the Report")
-
-
 def test_report_collections_reject_in_place_mutation():
     report = _populated_report()
     for collection in (report.results, report.evidence.protection_leads,
@@ -374,12 +340,6 @@ _POISON = [
 
 
 @pytest.mark.parametrize("poison", _POISON)
-def test_check_result_evidence_rejects_non_evidence_objects(poison):
-    with pytest.raises(TypeError):
-        _check(evidence=(poison,))
-
-
-@pytest.mark.parametrize("poison", _POISON)
 def test_report_evidence_buckets_reject_non_evidence_objects(poison):
     with pytest.raises(TypeError):
         StompingEvidence(protection_leads=(poison,))
@@ -448,11 +408,6 @@ class _MutableEvidence:
 def test_check_result_evidence_rejects_a_frozen_object_holding_a_mutable_collection():
     with pytest.raises(TypeError):
         _check(evidence=(_EvidenceHoldingAList(items=[1, 2]),))
-
-
-def test_check_result_evidence_rejects_a_non_frozen_dataclass():
-    with pytest.raises(TypeError):
-        _check(evidence=(_MutableEvidence(),))
 
 
 def test_frozen_dataclass_with_undeclared_instance_state_is_rejected():
@@ -524,17 +479,6 @@ def test_a_mapping_proxy_view_nested_inside_a_well_typed_field_is_still_rejected
     object.__setattr__(poisoned_module, "name", MappingProxyType({0x1000: ()}))
     with pytest.raises(TypeError, match="read-only view is not an immutable value"):
         _protection_lead(module=poisoned_module)
-
-
-@pytest.mark.parametrize("not_a_sequence", [
-    pytest.param({"protection_leads": ()}, id="dict"),
-    pytest.param("module=legit.dll", id="bare-string"),
-    pytest.param(iter(()), id="generator"),
-    pytest.param({_protection_lead()}, id="set"),
-])
-def test_evidence_must_be_a_list_or_tuple_not_any_iterable(not_a_sequence):
-    with pytest.raises(TypeError):
-        _check(evidence=not_a_sequence)
 
 
 def test_report_rejects_a_coverage_dict_in_place_of_the_snapshot():
@@ -620,17 +564,6 @@ def test_status_is_derived_from_score_and_coverage():
                    coverage=_coverage(module_list_stream=False)).status == "NOT_EVALUATED"
 
 
-def test_derived_judgment_fields_match_the_shared_reducers():
-    report = _populated_report()
-    assert report.max_score == MAX_SCORE
-    assert report.confidence == overall_confidence(report.results, report.score)
-    assert report.verdict_level == verdict_level(report.score, VERDICT_LEVEL_BY_SCORE,
-                                                  status=report.status)
-    assert report.lead_count == lead_count(report.results)
-    assert report.review_priority == review_priority(report.results, report.score,
-                                                      report.status)
-
-
 def test_build_report_omits_the_no_anomaly_claim_when_not_evaluated():
     """`protection_leads=()` with `module_list_stream=False` means the
     module/section walk never ran at all -- build_report must not claim
@@ -675,20 +608,9 @@ def test_stomping_jumps_from_possible_straight_to_high_skipping_likely():
     assert stomping_aggregate.build_report.__module__.endswith("aggregate")
 
 
-def test_score_above_the_hunters_ceiling_is_rejected():
-    with pytest.raises(ValueError):
-        _report(score=MAX_SCORE + 1)
-
-
 def test_negative_score_is_rejected():
     with pytest.raises(ValueError):
         _report(score=-1)
-
-
-def test_check_result_severity_is_derived_not_settable():
-    assert _check(tag=TAG_OBSERVATION, confidence=CONFIDENCE_HIGH).severity == "info"
-    assert _check(tag=TAG_DETECTION, confidence=CONFIDENCE_HIGH).severity == "critical"
-    assert "severity" not in {f.name for f in dataclasses.fields(CheckResult)}
 
 
 def test_report_holds_no_dump_resolver_or_projection_field():

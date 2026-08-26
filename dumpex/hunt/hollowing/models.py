@@ -1,52 +1,8 @@
-"""
-Immutable Evidence value objects for the process-hollowing scan pipeline
--- built ONCE, at the scan boundary (memory_scan.py / correlation.py, the
-only modules that still touch `mf`/a raw minidump `Module`/
-`MinidumpMemoryInfo`/the `mf.peb` object), and read by aggregate.py and the
-report_* projectors without ever needing `mf`, a raw minidump object, or a
-live `prot_str()`/`va_to_file_offset()`/basename lookup.
+"""Immutable hollowing evidence and resolved image-base context.
 
-This is the "one canonical evidence representation" half of the hollowing
-hunter's output-source migration (see dumpex/hunt/hollowing/domain.py for
-the Report/Evidence container these feed). Not the public JSON shape --
-report_legacy.py and report_record.py project these into the v1.1
-`findings` dict / the current-schema `HollowingDetails`; report_console.py
-projects them into console text. All three read the SAME evidence, so they
-can never disagree about what the image base actually looked like.
-
-Every address-formatting/`prot_str()`/basename/file-offset decision is made
-HERE, once, at construction time (see `region_ref`/`module_ref`/
-`ImageBaseContext` below) -- never re-derived at aggregate or render time,
-which is exactly how the pre-migration `Report` ended up carrying a live
-`MinidumpMemoryInfo` (`base_region`) and a live `Module` (`main_mod`) all
-the way into `_render_hollowing_console()`, which then had to be handed
-`mf` a second time purely to re-run `prot_str()`/`va_to_file_offset()` on
-them.
-
-A scan-layer function itself makes NO decision about score/status/verdict
-and prints nothing -- it returns typed evidence. That decision-making lives
-entirely in aggregate.py; rendering lives entirely in report_console.py.
-
-`ImageBaseContext` is the one value object here that is NOT a "signal
-fired" record: it is the resolved image-base FACTS every projector needs
-whether or not any check fired at all (the PEB's own image path, the image
-base VA and its .dmp offset, the containing region's identity, the header
-read's outcome, and which module -- if any -- the module list attributes
-that base to). Resolving it once, before aggregation, is what lets
-`report_record.py` report `mem_private_at_base: false` (checked, clean)
-distinctly from `null` (the region was never captured, so nothing was
-checked) without the Report keeping a second, parallel copy of the same
-facts as booleans.
-
-Dump-file offsets are carried as plain `int | None` (resolved once, at scan
-time, via `dumpex.core.memory.va_to_file_offset`) rather than through
-`dumpex.hunt._location.Location` -- the image base is the base of its own
-containing region in the ordinary case, but a dump can legitimately place
-it inside a region that began earlier, so the `Location` geometry
-(`va >= region_base`) is not guaranteed here either. `None` means "these
-bytes were never written to the .dmp", which is NOT the same claim as
-"offset zero" -- 0 is an ordinary, valid offset, so no projector may write
-`file_offset or 0`.
+Raw PEB, module, and memory-region objects are reduced to plain values at the
+collection boundary. Header failure, missing capture, absent modules, and clean
+observations remain distinct so downstream scoring cannot invent evidence.
 """
 import ntpath
 from dataclasses import dataclass

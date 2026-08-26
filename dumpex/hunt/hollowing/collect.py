@@ -1,29 +1,4 @@
-"""
-`collect_hollowing_record()` -- the `HunterRecord`-producing entry point for
-the hollowing hunter, alongside the console-oriented `_hunt_hollowing()` in
-`dumpex/hunt/hollowing/__init__.py`. Both call the exact same
-`_build_hollowing_report()` pipeline, so this module only RESHAPES the
-resulting canonical `HollowingReport` into a `HunterRecord` -- via
-`dumpex.hunt.hollowing.report_record.project_hunter_record`, the same pure
-projector `report_console.py`/`report_legacy.py` build their own
-projections from. That is what guarantees the console path and this typed-
-record path can never silently disagree about the same input. Mirrors
-`dumpex.hunt.stomping.collect`/`dumpex.hunt.pipe.collect`/
-`dumpex.hunt.encoding.collect`/`dumpex.hunt.injection.collect` (the four
-completed reference pilots).
-
-The pre-migration equivalent of this module lived as two module-level
-functions inside the single-file `dumpex/hunt/hollowing.py`, next to the
-scan and the renderer; the conversion itself had to re-derive each of
-`HollowingDetails`' tri-state fields from loose booleans on the mutable
-Report, several of which restated what a live `MinidumpMemoryInfo`/`Module`
-the same Report carried already said. All of that now lives in
-report_record.py, reading a `ImageBaseContext` whose identity was resolved
-once at scan time (dumpex.hunt.hollowing.models).
-
-This module is read by `dumpex/hunt/__init__.py`'s `collect_hunt()`
-orchestrator, which `cli.py`'s `--hunt` branch calls for `--json` output.
-"""
+"""Build a hollowing report and project it into a ``HunterRecord``."""
 from dumpex.hunt.hollowing import _build_hollowing_report
 from dumpex.hunt.hollowing.report_record import project_hunter_record
 from dumpex.output.records import HunterRecord

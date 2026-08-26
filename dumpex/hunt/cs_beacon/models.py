@@ -1,31 +1,7 @@
-"""Immutable Evidence value objects for the CS beacon scan pipeline -- built
-ONCE, at the scan boundary (scanner.py, the only module that still touches a
-raw `MinidumpMemoryInfo` region), and read by context.py/aggregate.py/the
-report_* projectors without ever needing a raw minidump region again.
+"""Immutable Cobalt Strike scan and configuration evidence.
 
-This is the "one canonical evidence representation" half of the CS beacon
-hunter's output-source migration (see dumpex/hunt/cs_beacon/domain.py for the
-Report/Evidence container these feed). Not the public JSON shape --
-report_legacy.py and report_record.py project these into the v1.1 `configs`
-dict / the current-schema `CsBeaconDetails`; report_console.py projects them
-into console text. All three read the SAME evidence, so they can never
-disagree about what a config hit actually looked like.
-
-Every `prot_str()`/region-identity decision is made HERE, once, at
-construction time (see `region_ref()` below) -- never re-derived at
-aggregate or render time. A scan-layer function itself makes NO decision
-about score/status/verdict and prints nothing -- it returns typed evidence;
-that decision-making lives entirely in aggregate.py, rendering lives
-entirely in report_console.py.
-
-`ConfigField.raw` is the one field here that is NOT dropped the way it is
-from the public `--json` shape (see report_facts.py's own field-dict
-builder): DER public-key validation already ran at parse time (see
-parser._cs_sanity_check), but Malleable C2/GET/POST-header instruction
-decoding and the --verbose Full Config Field Table both still need the
-field's full raw bytes at RENDER time, and only report_console.py may ever
-read it -- report_legacy.py/report_record.py must never let it reach a
-public dict.
+Raw segments, regions, TLV fields, locations, and thread context are reduced to
+plain values. Candidate retention and scan gaps remain explicit for coverage.
 """
 from dataclasses import dataclass, field
 

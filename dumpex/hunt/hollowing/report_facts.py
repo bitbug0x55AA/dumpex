@@ -1,23 +1,7 @@
-"""Shared projection logic for `HollowingReport` (dumpex/hunt/hollowing/
-domain.py) -- everything `report_legacy.py`, `report_record.py`, and
-`report_console.py` all three need, so it is built exactly once. Mirrors
-`dumpex.hunt.stomping.report_facts`/`dumpex.hunt.pipe.report_facts`/
-`dumpex.hunt.injection.report_facts`/`dumpex.hunt.encoding.report_facts`
-(the four completed reference pilots): see those modules' own docstrings
-for why `verbose_facts` is deliberately never populated here (that policy
-belongs to `report_console.py` alone).
+"""Shared fact and coverage projections for ``HollowingReport``.
 
-Every fact string below is written to match the pre-migration
-`_build_hollowing_report()`'s own `Finding.facts` text byte-for-byte for
-the same evidence -- these arrays are embedded verbatim in BOTH the v1.1
-findings dict and the typed `HunterRecord` (and feed `Finding.id`'s hash
-basis), and tests/fixtures/hunt_cli_golden/hollowing_hunt_dict.json is
-frozen against them. Verified by tests/hunt/test_hollowing_projectors.py's
-own fact-text parity test.
-
-This module owns no dependency on `dumpex.hunt.hollowing.aggregate`:
-`build_report()` is the ONE place a `HollowingReport` is constructed, and
-this module stays a pure function of that already-built Report.
+Fact text and ordering are wire contracts used by legacy output, typed
+records, and finding identifiers. Verbose facts are console-only.
 """
 from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.hunt._finding import Finding
@@ -161,11 +145,9 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a
     hollowing run -- built at each gap site `project_coverage_v1` above
     already derives coverage_status/coverage_reasons from (never parsed back
-    out of that free text; see docs/developer/hunt_migration_field_matrix.md's own
-    migration rule). Replaces the pre-migration module-level
-    `_hollowing_not_evaluated_coverage_report()`/
-    `_hollowing_evaluated_coverage_report()` pair, which had to be called
-    from inside the builder and stored on the Report as a `coverage_report`
+    out of that free text; see docs/developer/hunt_architecture.md's
+    structured-facts ownership rule). The returned report is the authoritative
+    coverage value consumed by structured and console projectors
     attribute.
 
     The two branches are genuinely different reports, not one report with

@@ -1,9 +1,4 @@
-"""V2Output: per-run collector for commands migrated onto the v2 output
-contract (see cli.py's _V2_STRUCTURED_MODES). Constructed the same way
-dumpex.ui.structured.StructuredOutput is, so cli.py's existing
-meta-building call sites barely change -- but produces a v2 envelope via
-dumpex.output.envelope/.serializer instead of v1.1's flat section dict.
-"""
+"""Collect one command run into the versioned v2 output envelope."""
 import os
 import datetime
 
@@ -41,9 +36,7 @@ class V2Output:
             # file a given entry refers to, even if the process's cwd
             # changes between construction and to_json()/write_json().
             evidence = _normalize_evidence_inputs(evidence)
-            # No single canonical dump path exists for a multi-evidence
-            # (e.g. comparison) instance -- see write_json below for the
-            # one place this matters today.
+            # A multi-evidence collector has no single canonical dump path.
             self._dump_path_abs  = None
             self._dump_file_name = None
             self._evidence        = evidence
@@ -72,13 +65,8 @@ class V2Output:
                        options: dict = None, case_id: str = None, analyst: str = None,
                        redact_paths: bool = False,
                        started_at: "datetime.datetime" = None) -> "V2Output":
-        """The multi-evidence counterpart to V2Output(dump_path, ...) --
-        the exact seam a future comparison command calls: open both
-        dumps, build one EvidenceInput per side (e.g. id="baseline"/
-        id="target"), and construct via this classmethod instead of the
-        single dump_path constructor. No current command calls this;
-        it exists so that migration is a one-line change when it
-        happens, not a V2Output redesign."""
+        """Construct a collector for commands with multiple evidence inputs,
+        such as ``--diff``."""
         return cls(evidence=evidence, command=command, options=options, case_id=case_id,
                     analyst=analyst, redact_paths=redact_paths, started_at=started_at)
 
@@ -191,9 +179,8 @@ class V2Output:
         # path for the six existing commands, or every evidence entry's
         # path for an evidence=-constructed (e.g. comparison) instance,
         # so check_not_dump_path (inside write_text_to_target) refuses to
-        # overwrite ANY of them, baseline or target, exactly like today's
-        # single-dump-path guard -- see safe_io.check_not_dump_path's own
-        # docstring for why this can never be lifted by --force.
+        # overwrite any of them, baseline or target. The input-protection
+        # guard cannot be lifted by --force.
         p = write_text_to_target(path, self.to_json(), ".json", cmd_label,
                                   self._protected_paths, force, "--json output")
         print(DIM(f"  [·] JSON written → {p}  ({summarize_file(p)})"))

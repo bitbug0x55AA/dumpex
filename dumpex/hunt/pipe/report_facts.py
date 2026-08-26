@@ -1,22 +1,7 @@
-"""Shared projection logic for `PipeReport` (dumpex/hunt/pipe/domain.py) --
-everything `report_legacy.py`, `report_record.py`, and `report_console.py`
-all three need, so it is built exactly once. Mirrors
-`dumpex.hunt.stomping.report_facts`/`dumpex.hunt.injection.report_facts`/
-`dumpex.hunt.encoding.report_facts` (the three completed reference
-pilots): see those modules' own docstrings for why `verbose_facts` is
-deliberately never populated here (that policy belongs to
-`report_console.py` alone).
+"""Shared fact and coverage projections for ``PipeReport``.
 
-Every fact string below is written to match the pre-migration
-`aggregate.py`'s facts text byte-for-byte for the same evidence -- these
-arrays are embedded verbatim in BOTH the v1.1 findings dict and the typed
-`HunterRecord`, and tests/fixtures/hunt_cli_golden/pipe_hunt_dict.json is
-frozen against them. Verified by
-tests/hunt/test_pipe_projectors.py's golden-scenario parity test.
-
-This module owns no dependency on `dumpex.hunt.pipe.aggregate`:
-`build_report()` is the ONE place a `PipeReport` is constructed, and this
-module stays a pure function of that already-built Report.
+Fact text, ordering, and evidence caps are wire contracts shared by legacy
+and typed output. Richer verbose facts are console-only.
 """
 from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.hunt._finding import Finding
@@ -215,10 +200,9 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a pipe
     run -- built at each gap site `project_coverage_v1` above already
     derives coverage_status/coverage_reasons from (never parsed back out of
-    that free text; see docs/developer/hunt_migration_field_matrix.md's own migration
-    rule). Replaces the pre-migration `dumpex/hunt/pipe/__init__.py`'s
-    `_pipe_coverage_report()`, which had to be called from OUTSIDE the
-    aggregator and assigned onto the Report as a mutable attribute.
+    that free text; see docs/developer/hunt_architecture.md's structured-facts
+    ownership rule). The returned report is the authoritative coverage value
+    consumed by structured and console projectors.
 
     `memory_info`/`handle_data` are ONE combined evaluation_sources group
     (OR-of-presence, matching this hunter's own

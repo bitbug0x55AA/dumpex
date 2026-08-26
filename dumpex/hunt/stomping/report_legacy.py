@@ -1,22 +1,7 @@
-"""`StompingReport` -> the v1.1 legacy `findings` dict -- a pure
-projection, independent of `report_record.py`/`report_console.py`.
-Mirrors `dumpex.hunt.injection.report_legacy`/
-`dumpex.hunt.encoding.report_legacy` (the completed reference pilots).
+"""Project a ``StompingReport`` into the legacy v1.1 findings shape.
 
-The dict's KEY SET is unchanged by this migration (issue #8: "no public
-schema change") -- the same thirteen keys `_hunt_stomping()` has always
-returned, frozen by tests/integration/test_hunt_compat_freeze.py's own
-`_STOMPING_KEYS`.
-
-`protection_leads`/`verified_changes` entries no longer embed a live
-`Module`/`MinidumpMemoryInfo`/`parse_pe_header()` section dict, though:
-those raw objects are exactly what this migration removes from the domain
-model, so the entries are rebuilt here BY VALUE from the typed evidence.
-Every field they carried is still there (`_module_dict`/`_section_dict`/
-`_region_dict` below reproduce the identical facts), and every field
-`dumpex.hunt.stomping.collect`'s own JSON projection ever read off them
-now comes from `report_record.py` reading the same typed evidence
-directly.
+Evidence entries are rebuilt by value while preserving the public key set
+and the fields consumed by compatibility clients.
 """
 from dumpex.hunt.stomping.domain import StompingReport
 from dumpex.hunt.stomping.report_facts import finding_from_check_result, project_coverage_v1

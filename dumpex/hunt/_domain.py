@@ -1,41 +1,9 @@
-"""Canonical, hunter-neutral domain model for the hunt output-source
-migration -- the `CheckResult` half of the Evidence/CheckResult/Report
-triple dumpex/hunt/_location.py's own docstring already names as the
-target boundary.
+"""Shared immutable hunt-domain primitives and validators.
 
-`CheckResult` is what a hunter's aggregate layer produces once it stops
-producing `dumpex.hunt._finding.Finding` objects directly. The difference
-is deliberate and is the whole point of this migration:
-
-  Finding.facts / Finding.verbose_facts are already-FORMATTED console/wire
-  strings ("VA=0x7ff... AllocationBase=0x7ff... size=0x1000 ..."). A
-  hunter that builds those inside aggregate.py has, at that moment,
-  permanently baked one particular rendering into its own decision layer:
-  the JSON `facts` array and the console evidence block can no longer be
-  derived from the same structured source, only from each other's text.
-
-  CheckResult.evidence carries the TYPED value objects those strings were
-  rendered FROM (dumpex.hunt.injection.models.RwxRegionEvidence, ...).
-  Every projection -- the legacy v1.1 dict, the v2.7 HunterRecord/Finding,
-  and the console -- is then a pure function of the same evidence, so two
-  of them can never disagree about what a region/hit/thread actually was.
-
-This module owns no rendering of any kind, and must never grow one: it
-holds no format strings, no width/verbosity/DetailLevel state, and no
-projector. It intentionally imports `Finding` for exactly one purpose --
-to REJECT it (see `_require_evidence_items`): the compat projection type
-must never re-enter the canonical model as evidence, which is the one
-mistake that would silently reintroduce the parallel-representation drift
-this whole migration exists to remove.
-
-Introduced by the Injection 2A issue as the fixed target shape, ahead of
-any hunter's own cutover, so it was defined, validated, and tested once
-rather than re-derived per hunter as each one migrated. Six of the seven
-hunters' `aggregate.py` (injection, encoding, stomping, pipe, hollowing,
-cs-beacon) now construct it as their sole result representation. YARA is
-the deliberate exception: it never builds on `CheckResult`/`Finding` at
-all -- see `dumpex.hunt.yara_hunt.domain`'s own docstring for why its
-`YaraEvidence`/`YaraReport` shape stays off the shared model.
+CheckResult keeps typed evidence separate from rendered facts and validates tag,
+confidence, score contribution, and evidence caps. Recursive immutability checks
+reject mutable or unrecognized payloads so reports cannot retain live parser
+objects or change after scoring.
 """
 import dataclasses
 import enum
@@ -141,85 +109,15 @@ def as_tuple(value, field_name: str) -> tuple:
 
 
 def require_recursively_immutable(value, field_name: str) -> None:
-    """Raise unless EVERYTHING reachable from `value` is immutable.
+    """Raise unless every value reachable from value is immutable.
 
-    `frozen=True` is shallow -- it is a barrier against reassigning an
-    attribute, not against mutating what that attribute points at. A
-    Report that satisfies `__dataclass_params__.frozen` while holding a
-    list of evidence (or an evidence object that itself holds a dict) is
-    still a Report a projector, a console renderer, or a later hunter pass
-    can quietly change after the fact, which is exactly the failure this
-    migration's "Report is recursively immutable" guardrail names.
+    Frozen dataclasses are shallow, so fields, undeclared attributes, and slots
+    across the MRO are inspected recursively. Mutable containers, mutable
+    dataclasses, mapping proxies, immutable-builtin subclasses, and unrecognized
+    objects are rejected to prevent reports retaining mutable parser state.
 
-    Recurses through frozen dataclass fields, tuple/frozenset items, and
-    an enum member's own value, and accepts only `_IMMUTABLE_LEAF_TYPES`
-    as a leaf. EVERYTHING else is rejected, including a type this module
-    simply does not recognize:
-
-      * any list/set/dict/bytearray anywhere in the graph;
-      * any dataclass instance that is not itself frozen;
-      * any `types.MappingProxyType` -- a read-only VIEW is not an
-        immutable value. Whoever still holds the underlying dict can
-        mutate it and the "frozen" Report's contents change with it, so a
-        proxy is only safe when the mapping behind it is provably
-        unreachable, which this function cannot determine by inspection.
-        A caller that has just built one over its own private dict must
-        validate the keys/values itself rather than hand the proxy here
-        (see dumpex.hunt.injection.domain's own correlation handling);
-      * a subclass of an immutable builtin, or of tuple/frozenset -- see
-        `_IMMUTABLE_LEAF_TYPES`;
-      * any other object -- a `MinidumpFile`, a `read_region` resolver, a
-        custom class wrapping a mutable payload. Treating an unrecognized
-        object as an immutable leaf is precisely the escape hatch that
-        would let a frozen evidence object keep a dump handle reachable
-        (and its payload mutable) inside an otherwise-"immutable" Report.
-
-    Plain scalars (int/float/str/bytes/bool/None) are accepted as leaves
-    -- a `str` INSIDE an evidence object (a resolved `prot_str()`
-    protection name, a PE failure reason) is ordinary immutable data,
-    unlike a `str` used AS an evidence item, which is a pre-rendered
-    console fact and is rejected by `_require_evidence_items()` instead.
-
-    An enum member is accepted only after its own `value` and every
-    instance attribute -- ALL of them, not merely the ones that happen not
-    to start with `_` -- pass the same check: `Enum` puts no constraint
-    whatsoever on what a member's value (or any attribute a member's own
-    `__init__` chooses to set) may be, so `class Layer(Enum): RWX = []` is
-    a perfectly ordinary enum holding a mutable list, and so is a member
-    that stashes one in `self._payload` from its own `__init__` -- leading
-    underscores are an ordinary Python naming convention, not a boundary
-    this function may trust.
-
-    A frozen dataclass instance is likewise validated by ITS OWN state,
-    not by its declared fields alone: `dataclasses.fields()` lists only
-    what the dataclass decorator generated `__init__`/`__eq__` for, and
-    says nothing about what a subclass's own `__init__` (or any code
-    holding a reference before this function ever sees it) may have set
-    via `object.__setattr__`. Undeclared state can hide in TWO places, not
-    just one:
-
-      * an attribute in `instance.__dict__` that isn't a declared field
-        (the common case: no `__slots__` anywhere in the hierarchy, or a
-        `__dict__` re-enabled somewhere in it); and
-      * an attribute backed by a `__slots__` ENTRY somewhere in the class's
-        MRO that isn't a declared field -- this one is invisible to
-        `vars(instance)` entirely (that is what `__slots__` is FOR: it
-        stops the attribute from ever reaching an instance `__dict__`),
-        so checking `__dict__` alone would miss a subclass that adds its
-        own `__slots__ = ("hidden",)` to hold a mutable payload no
-        declared field ever exposes.
-
-    Both are checked the same way: the offending name must not appear
-    OUTSIDE the declared field names. The reverse is deliberately NOT
-    required for either: a declared field is allowed to be ABSENT from
-    `vars(value)` (mixed slotted/unslotted inheritance can legitimately
-    store some declared fields in a base class's `__slots__` and the rest
-    in the subclass's own `__dict__`, so a field living in a slot rather
-    than in `__dict__` is not a defect). That field is still validated
-    below regardless of where it physically lives -- `getattr(value,
-    f.name)` reads it the same way either way, and would raise
-    `AttributeError` on its own if a field were somehow truly missing,
-    rather than this function silently accepting it.
+    Tuples, frozensets, exact immutable scalars, frozen dataclasses, and enums are
+    accepted only after their contents and instance state pass the same checks.
     """
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         if not value.__dataclass_params__.frozen:

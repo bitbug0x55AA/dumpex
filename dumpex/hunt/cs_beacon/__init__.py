@@ -1,69 +1,13 @@
-"""Cobalt Strike beacon config scanner (adapted from 1768.py by Didier Stevens).
+"""Cobalt Strike configuration scanner adapted from Didier Stevens' 1768.py.
 
-Recursively immutable Report, standardized console
-────────────────────────────────────────────────────
-This hunter now builds ONE canonical, recursively immutable
-`dumpex.hunt.cs_beacon.domain.CSBeaconReport` and projects it three ways --
-the v1.1 legacy `findings` dict (report_legacy.py), the typed `HunterRecord`
-(report_record.py), and console text (report_console.py) -- instead of the
-mutable, parallel `aggregate.Report` (a `findings` dict PLUS a
-`findings_list` PLUS mutable `hit_records`, with `coverage_report` assigned
-onto it from outside its own constructor and console-progress state
-carried in `scan_note`) this package used to build. See
-dumpex/hunt/cs_beacon/domain.py's own docstring for what changed and why.
+A structurally valid TLV configuration with a known BeaconType and plausible
+ASN.1 public key is strong payload evidence. Executable-private memory context or
+current RIP/EIP in the same allocation raises corroboration; additional copies
+alone do not. Static memory cannot establish whether a beacon was active at dump
+time, and reported versions are estimates from known field identifiers.
 
-  score 0 — no structurally-valid (sanity-checked TLV, known BeaconType,
-            ASN.1-shaped public key) config found in what was scanned.
-  score 1 — at least one structurally-valid config found, with no
-            independent memory-context corroboration. Finding MORE
-            configs (even at distinct addresses) does NOT raise this —
-            config count is a fact reported alongside the finding, not a
-            confidence input. A beacon config surviving in memory is
-            itself strong, hard-to-fake evidence (the TLV structure,
-            field types, and a plausible ASN.1 public key all having to
-            line up by chance is vanishingly unlikely) — this is why
-            score 1 already maps to "likely", not "possible".
-  score 2 — additionally corroborated by memory context independent of
-            the config bytes themselves: either the enclosing region is
-            executable, private memory (not an inert data-only mapping),
-            or a thread's CURRENT RIP/EIP executes somewhere within the
-            same allocation as the config hit — i.e. this isn't just an
-            orphaned copy sitting in unused/freed memory.
-
-Deliberately NOT reported: a DORMANT/INITIALIZED/LIVE activity label.
-A decoded config proves a beacon payload exists (or existed) in this
-process's memory — it says nothing about whether it is CURRENTLY
-maintaining network callbacks at dump time, and claiming otherwise from
-static memory content alone would be exactly the kind of over-attribution
-this schema exists to avoid. CS version is an ESTIMATE from the highest
-recognized field ID (see parser._cs_guess_version) and is reported as
-such, not as a fingerprinted/confirmed build.
-
-This is a package, not a single file: scanner.py only collects facts
-(segment/candidate walk, budgets, coverage) and never scores or prints and
-returns frozen evidence; context.py establishes memory-context
-corroboration for each hit, also as frozen evidence; aggregate.py is the
-ONE place score/status/coverage_status/verdict_level/confidence/
-lead_count/review_priority get computed, from typed evidence and validated
-scalars only; report_console.py is the ONE place anything gets printed to
-the console. This __init__.py is the thin entry point: build config, run
-the scan, corroborate hits, aggregate, print, return the findings dict.
-
-The stable contract is `_hunt_cs_beacon` itself (imported by
-dumpex/hunt/__init__.py): same signature, same fields, same score/status/
-coverage/JSON schema as before this migration. Tunable constants
-(CS_MAX_SEG_SCAN, CS_MAX_*, CS_SCAN_DEADLINE_SECONDS, ...) and
-`get_thread_contexts`/`time` are re-exported here and remain
-monkeypatchable (`cs_beacon.CS_MAX_CANDIDATES = 5` before calling
-`_hunt_cs_beacon()` still changes its behavior — see
-dumpex/hunt/cs_beacon/config.py for why that requires a config object
-threaded through scanner.py rather than scanner.py reading its own
-separate copy of the same-named constant). Private per-step helper
-functions (`_cs_decode_and_parse_tlv`, `_cs_validate_public_key_der`,
-`_cs_sanity_check`, etc.) are NOT re-exported here and make no
-compatibility promise at all — import them from their actual module
-(dumpex.hunt.cs_beacon.parser/.der/...) if you need them directly, as
-this package's own tests do.
+Candidate, byte, time, and retention budgets bound dump-controlled work and feed
+coverage when scanning is incomplete.
 """
 import time
 from minidump.minidumpfile import MinidumpFile

@@ -1,76 +1,13 @@
-"""YARA memory scanner.
+"""Budgeted YARA scanning over captured minidump memory.
 
-Score = number of *distinct rule names* that matched at least once, so
-finding 50 instances of one rule still counts as 1.
+Score counts distinct matching rule names, not match instances. Process VAs and
+dump-file offsets remain distinct. Packaged rules are the default and
+--yara-dir is the explicit override, avoiding implicit searches through
+untrusted case working directories.
 
-Address semantics (consistent with the rest of Dumpex):
-  VA (process)      — virtual address in the target process
-  File offset (.dmp) — byte position inside the .dmp file
-  Region base (VA)  — start of the enclosing memory region
-
-Rules directory resolution (when rules_dir is None — pass --yara-dir
-for an explicit, deliberate override instead of relying on this):
-  1. sys._MEIPASS/rules/yara/         Compatibility with older
-                                       PyInstaller builds
-  2. dumpex.rules_pkg/data/yara/      Canonical package resource used
-                                       by wheels and current PyInstaller
-                                       builds (see rules.packaged_yara_rules_dir())
-
-There is deliberately no automatic cwd/script-dir scan: a DFIR working
-directory routinely contains untrusted case files, and that scan used
-to sit AFTER the packaged-defaults check anyway — which always
-succeeds now that YARA rules are bundled in the wheel — making it dead
-code that could never actually run. --yara-dir is the explicit,
-auditable way to point at a different rules directory.
-
-This is a package, not a single file: `models.py` holds the frozen leaf
-evidence types (rule-file diagnostics, matched strings, one rule's match
-against one segment); `domain.py` holds the canonical, recursively
-immutable `YaraReport` and its nested coverage/rules/scan snapshots --
-score/status/coverage_status/verdict_level are all DERIVED properties on
-that Report (see domain.py's own docstring for what replaced the
-pre-migration mutable `RuleBundle`/`ScanOutcome`/`RuleGroup`, and for why
-YARA deliberately does not build on `dumpex.hunt._domain.CheckResult`/
-`dumpex.hunt._finding.Finding`). `rules.py` resolves the packaged rules
-directory and compiles rule files SILENTLY into a `models.RulesProvenance`
-(never importing this facade); `context.py` owns the
-PE_In_Private_Memory suppression/classification policy; `scanner.py` runs
-the segment × rule-file match loop, applies every whole-scan budget, and
-resolves each hit's module/region context ONCE -- it never scores or
-prints. `aggregate.py` is the ONE place a `domain.YaraReport` gets
-constructed from that scan output. `report_facts.py`/`report_console.py`/
-`report_record.py`/`report_legacy.py` are the three pure projectors (plus
-their shared helpers) turning an already-built Report into console lines,
-a `HunterRecord`, or the v1.1 legacy dict, respectively. This `__init__.py`
-is the thin entry point: it resolves prerequisites (yara-python import,
-rules directory, rule compilation, memory segments) and orchestrates
-scanner -> aggregate -> the projectors. It prints nothing itself --
-`report_console.print_console()` owns the header too.
-
-The stable contract is `_hunt_yara` and `get_yara_provenance` themselves
-(both imported by dumpex/hunt/__init__.py and dumpex/ui/structured.py
-respectively): same signatures, same fields, same score/status/coverage/
-JSON shape as before this migration. Tunable constants (YARA_MATCH_TIMEOUT,
-YARA_MAX_*, YARA_SCAN_DEADLINE_SECONDS, YARA_MAX_TOTAL_BYTES_SCANNED) and
-`time` are re-exported here and remain monkeypatchable (`yara_hunt.
-YARA_SCAN_DEADLINE_SECONDS = -1` before calling `_hunt_yara()` still
-changes its behavior) because they are threaded explicitly/looked up
-fresh at call time rather than scanner.py importing its own separate copy
-— see dumpex/hunt/yara_hunt/config.py and dumpex/hunt/_runtime.py.
-
-`_load_yara_rules` is ALSO kept here (not just re-exported from rules.py)
-as a thin, still-monkeypatchable wrapper around `rules.load_and_compile()`
-— `yara_hunt._load_yara_rules = fake` (replacing the whole wrapper) still
-works. It does NOT touch the compatibility `_LAST_YARA_PROVENANCE` global
-at all: that global is written exactly once per `_build_yara_report()`
-call, AFTER the whole `domain.YaraReport` is built, as a snapshot copy of
-THAT Report's own `coverage.rules.provenance` -- never read back into a
-Report by anything (see `_build_yara_report()`'s own `_finish()` helper).
-YARA_MAX_SEG_SCAN is this hunter's OWN segment-size constant. Private
-per-step helper functions are NOT re-exported here and make no
-compatibility promise at all -- import them from their actual module
-(dumpex.hunt.yara_hunt.context/.scanner/.rules/...) if you need them
-directly.
+Rule compilation, segment scanning, context resolution, and retained evidence
+are bounded and represented in coverage. YARA intentionally does not use the
+shared Finding model.
 """
 import os
 import copy

@@ -1,42 +1,9 @@
-"""Comparison infrastructure (Phase C, PR2/D) -- pure domain functions only.
+"""Collect module, thread, and memory differences between two dumps.
 
-No CLI wiring, no V2Output call, no --json handling here --
-dumpex/commands/diff.py owns all of that (collect_diff/render_diff_console/
-cmd_diff), calling collect_comparison() here with two already-open
-MinidumpFile objects.
-
-Each collect_*_diff() function's set logic (added/removed/rebased,
-added/removed, added/removed/protection_changed) is ported directly from
-diff.py's original diff_modules/diff_threads/diff_memory -- not
-reinvented -- so diff.py's console renderer can still cross-check against
-that lineage.
-
-Per-side stream reads are isolated via _observe_or_failed(): a genuinely
-raised exception (not just an absent/empty stream) becomes
-SourceState.FAILED for that side specifically, rather than crashing the
-whole comparison or letting the OTHER side's real data get silently
-misreported as 100% added/removed against an empty stand-in -- see each
-collect_*_diff()'s own FAILED-gate comment for why the diff-building step
-must never run when a side is FAILED.
-
-Source naming is dotted and entity-namespaced (e.g. "baseline.modules"/
-"target.modules") rather than the bare names the seven single-dump
-commands (--list/--modules/--threads/--sysinfo/--process/--handles/
---profile) use, so a comparison's two sides never collide as coverage
-facts about a same-named source, and dumpex.output.coverage._display_name()
-renders them as "baseline ModuleListStream"/"target ModuleListStream"
-accordingly.
-
-Per-entity coverage uses build_coverage_report()'s evaluation_groups (two
-independent single-source groups, one per side) rather than a single
-merged evaluation_sources group: EITHER side being entirely absent must
-make that entity not_evaluated (an absent baseline can't be diffed
-against a present target any more than the reverse), while still
-producing a DISTINCT limitation per absent side, so "baseline missing",
-"target missing", and "both missing" stay structurally different in the
-output. A present-but-EMPTY side is not absence -- diffed against an
-empty set, so e.g. a present_empty baseline with 5 target modules
-legitimately reports all 5 as "added", not not_evaluated.
+Results are tagged by entity type and preserve before/after null semantics.
+Thread module context distinguishes confirmed unregistered addresses from
+unavailable module evidence. Collection produces structured records that console
+rendering consumes without reopening either dump.
 """
 import ntpath
 

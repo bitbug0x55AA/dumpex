@@ -1,27 +1,8 @@
-"""`--profile` command -- issue #95's collect/render/command vertical
-slice over docs/developer/recon_profile_contract.md.
+"""Report captured evidence and the analyses that evidence can support.
 
-Reports what evidence a process minidump CONTAINS and what kinds of
-analysis that captured evidence can support -- an evidence-capability
-map, never a detector:
-
-    Profile describes what evidence exists. Hunters interpret that
-    evidence.
-
-Nothing here produces a malicious/clean verdict, a confidence score, an
-ATT&CK mapping, or duplicates any hunter's own detection logic; nothing
-here opens a process, queries a PID, or touches live system state. A
-capability being "unavailable" means dumpex could not gather the evidence
-that capability's own real collector/hunter needs -- never a claim that
-the underlying activity is absent (discussion #94's own worked example:
-a missing HandleDataStream means handle-based analysis is unavailable,
-never that no suspicious handles existed).
-
-Per #95's own v2.13 delivery boundary, `--profile` is not wired into
-argparse and CURRENT_SCHEMA is not touched here -- #43 owns that atomic
-cutover, together with `--process` and `--handles`. `cmd_profile()` exists
-so a future CLI wiring (and this module's own tests) has one call that
-collects and renders in the usual command shape.
+A profile is a capability map, never a malicious or clean verdict. Missing or
+failed source evidence means an analysis is unavailable or limited; it does not
+mean the underlying activity was absent. The command reads only minidump state.
 """
 from typing import NamedTuple
 

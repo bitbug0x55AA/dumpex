@@ -1,23 +1,8 @@
-"""
-Immutable Evidence value objects for the encoding/obfuscation scan
-pipeline -- built once, at the scan boundary (sleep_mask.py/entropy.py/
-decoding.py, the only modules that still touch `mf`/raw minidump region
-objects), and read by aggregate.py/the report_* projectors without ever
-needing `mf`, a raw minidump object, or a live address-lookup call (see
-dumpex/hunt/_location.py's `resolve_location`, called exactly once per
-region/hit here).
+"""Immutable encoded-payload evidence and per-layer coverage.
 
-This is the "one canonical evidence representation" half of the encoding
-hunter's output-source migration (see dumpex/hunt/encoding/domain.py for
-the Report/Evidence container these feed). Not the public JSON shape --
-dumpex/hunt/encoding/report_legacy.py and report_record.py project these
-into the v1.1 findings dict / v2.10 ObfuscationDetails; report_console.py
-projects them into console text. All three read the SAME evidence, so
-they can never disagree about what a region/hit actually was.
-
-A layer function itself makes NO decision about score/status/verdict and
-prints nothing -- it returns typed evidence. That decision-making lives
-entirely in aggregate.py; rendering lives entirely in report_console.py.
+Raw regions and decoded bytes are snapshotted with resolved locations.
+Oversized, failed, short, capped, and budget-exhausted states remain distinct so
+aggregation cannot report an incomplete layer as clean.
 """
 from dataclasses import dataclass, field
 

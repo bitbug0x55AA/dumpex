@@ -1,24 +1,8 @@
-"""Shared, hunter-neutral console-PRESENTATION primitives for the
-verdict-first report projectors -- the pieces `dumpex.hunt.injection.
-report_console` and `dumpex.hunt.encoding.report_console` (the two
-completed output-source pilots) turned out to need byte-for-byte
-identically, once both were written independently against the same
-approved structure (issue #1's verdict block -> KEY SIGNALS -> WHY THIS
-VERDICT -> unified COVERAGE -> verbose hint hierarchy).
+"""Shared verdict-first console components for hunter reports.
 
-This module holds ONLY what both pilots actually converged on. It is
-deliberately narrow, and must stay that way (see the issue #6 review this
-module was extracted for): hunter-specific verdict wording, check titles,
-per-evidence-type verbose fact rendering, and bounded hunter-specific
-evidence sections all stay in each hunter's own `report_console.py` --
-promoting THOSE here would be exactly the "speculative universal
-hierarchy" the review was asked to avoid, since nothing proves a third
-hunter needs the same wording rather than the same STRUCTURE.
-
-Layered under `dumpex.hunt._console` (terminal width/wrapping) and
-`dumpex.hunt._finding` (the tag vocabulary), and imported only by hunter
-`report_console.py` modules -- never by `_console.py`/`_finding.py`
-themselves, which would create a cycle.
+Helpers render headers, key signals, rationale, and coverage from completed
+reports. Display ordering and verbose expansion do not mutate evidence, rescore
+findings, or alter structured output.
 """
 import dataclasses
 

@@ -192,51 +192,14 @@ class _FullScopeExecution:
 def _execute_full_scope(mf: MinidumpFile, selected: str, *, ref_dir: str = None,
                          yara_dir: str = None, verbose: bool = False,
                          render: bool = False) -> _FullScopeExecution:
-    """The one internal full-scope executor issue #72 routes both
-    `collect_hunt()` and `cmd_hunt()` through -- replacing the two
-    separate hard-coded `if _wanted(hunter):`/`if run_<hunter>:` selection
-    chains those functions used to maintain independently.
+    """Build and project each selected full-scope analyzer exactly once.
 
-    Selects `AnalyzerSpec`s via `_registry.REGISTRY.select(selected)`,
-    which returns them in fixed `HUNTERS` order (`_registry.py`'s own
-    `AnalyzerRegistry.select()` docstring) -- the same order the old
-    per-hunter `if` chains already produced, so `records`/`results` here
-    come out in exactly the order every existing golden fixture and
-    call-count test already expects. `selected` is passed through
-    unchanged; the caller is responsible for its own "all" vs. one-of-
-    `HUNTERS` validation BEFORE calling this (see `collect_hunt()`/
-    `cmd_hunt()` below) -- `select()` would raise its own
-    `UnknownAnalyzerIdentity` for a bad value, but that exception's
-    message text does not match either caller's own long-frozen
-    error text (contract §7.2 failure #9), so neither caller may let an
-    invalid `selected` reach this function in the first place.
-
-    Each selected spec's own `builder` is called exactly once, with only
-    the option keyword(s) that spec actually declares (`spec.option_names`
-    -- e.g. only `ref_dir` reaches `stomping`'s builder, only `rules_dir`
-    reaches `yara`'s), never the full `{ref_dir, rules_dir}` normalized
-    option view unfiltered -- a builder with a closed option set (contract
-    §7.1 failure #7) would raise `TypeError` on an unexpected keyword
-    otherwise. `rules_dir` is `cmd_hunt()`/`cli.py`'s own `yara_dir`
-    parameter renamed at this boundary (contract §9's own `HuntRequest`
-    row makes the same rename) -- both this function's own `yara_dir`
-    parameter and `cmd_hunt()`'s/`collect_hunt()`'s public `yara_dir`
-    keyword keep that external name unchanged; only the internal option
-    key handed to `spec.builder` is `rules_dir`.
-
-    The one already-built `Report` instance feeds every consumer for that
-    spec: `spec.record_projector(report)` always (both callers need a
-    `HunterRecord`), `spec.renderer(report, verbose)` only when
-    `render=True` (`collect_hunt()`'s own console-silence guarantee --
-    contract §8's "`collect_hunt()` never calls `renderer`" -- passes
-    `render=False`, `cmd_hunt()` passes `render=True`), and
-    `spec.provenance_hook(report)` whenever that spec declares one
-    (`yara` today; contract §5 field 8) -- collected into `provenance` by
-    identity rather than a `yara`-name conditional, so a caller that wants
-    a given identity's own invocation-specific metadata (YARA rule
-    provenance today, a future analyzer's own hook tomorrow) reads
-    `execution.provenance.get(identity)` instead of a growing set of
-    per-analyzer `if identity == "yara":` branches."""
+    Registry selection preserves HUNTERS order. Each builder receives only its
+    declared options; the resulting report feeds the record projector, optional
+    renderer, and optional provenance hook. Collection mode never invokes console
+    rendering. Callers validate the selected identity before this boundary so
+    their public error contracts remain unchanged.
+    """
     options = _option_view(ref_dir, yara_dir)
     specs = _registry.REGISTRY.select(selected)
 
@@ -326,77 +289,18 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
 
 def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None,
              ref_dir: str = None, collect_records: bool = False, triage_skipped: bool = False):
-    """Run TTP-specific detection playbooks, printing the console report
-    exactly as always.
+    """Run selected hunters, render reports, and return their results.
 
-    `collect_records=True` (used by cli.py's `--hunt` branch, PR4) makes
-    this function ALSO build the v2.4 `HunterRecord` for every selected
-    hunter and return `(results, records, investigation_actions,
-    diagnostics, yara_provenance)` -- a 5-tuple, always, since issue #11's
-    own P1 review fix added `yara_provenance` alongside issue #19 Phase
-    2's earlier `--triage-skipped` addition -- instead of the bare
-    `results` dict every existing caller already gets back unchanged.
-    `investigation_actions` is `list[InvestigationAction]` and
-    `diagnostics` is `list[Diagnostic]` (both `[]` for a single-hunter
-    `ttp`, and `diagnostics` is also `[]` whenever `triage_skipped` is
-    False). `yara_provenance` is THIS call's own
-    `domain.RulesProvenance.to_dict()` (or `None` when `ttp` never
-    selects "yara"/"all", or the yara-python/rules-directory/rule-
-    compilation prerequisites weren't met) -- cli.py threads it straight
-    into `V2Output.set_yara_provenance()` so `meta.yara_rules` reflects
-    THIS run's own YARA scan, never `dumpex.hunt.yara_hunt.
-    get_yara_provenance()`'s process-wide "last build" global (which
-    remains available only as a compatibility adapter for
-    `dumpex.ui.structured.StructuredOutput`, the legacy v1.1 output
-    path). Each selected hunter's own `_build_*_report()` is still called
-    EXACTLY ONCE either way -- this function has always called it
-    directly (never through the `_hunt_*()`/`collect_*_record()` compat
-    wrappers, which would each build their own separate Report), feeding
-    that one Report to both this hunter's console-render function and,
-    when `collect_records` is set, `_record_from_*_report()` too. See
-    `collect_hunt()` above for the equivalent silent, JSON-only path used
-    by any caller that doesn't want console output at all (that path
-    stays metadata-only -- it has no `triage_skipped` parameter, since
-    nothing in the CLI wires it to `--triage-skipped`; only THIS
-    function, the real `--hunt` CLI entry point, needs that capability).
+    With collect_records false, return the legacy results dictionary. With it
+    true, return results, typed records, investigation actions, diagnostics, and
+    this invocation's YARA provenance. Each selected report is built once and
+    shared by console and record projections.
 
-    `triage_skipped=True` (only meaningful when `ttp == "all"` -- a
-    single-hunter run never has an investigation queue to begin with)
-    runs `dumpex.hunt._deep_triage.run_deep_triage()` on the metadata
-    queue `build_investigation_queue()` already computed below, EXACTLY
-    ONCE -- the resulting `investigation_actions`/diagnostics feed BOTH
-    this function's own console rendering AND (via the 4-tuple above)
-    `--json`, so a real, budgeted content read is never performed twice
-    for one invocation. See `_deep_triage`'s own module docstring for the
-    budget model.
-
-    The `--hunt all` console summary card's own "Overall: ..." line is
-    derived from the exact same `dumpex.hunt.summary.build_hunt_summary()`
-    reduction the JSON/CSV side uses (via the `summary` this function
-    always computes internally, from the same `records` -- see that
-    module's own docstring) -- not a second, independently-maintained
-    any_hit/any_not_evaluated/any_inconclusive reduction, which could
-    silently disagree with `result.summary.overall_status` if only one
-    side's rule were ever updated. Per-hunter DISPLAY formatting (name/
-    verdict color/score suffix/lead count) still reads from `results`,
-    since that's each hunter's own presentation choice, not a
-    cross-hunter reduction.
-
-    Routed through `_execute_full_scope(..., render=True)` (issue #72),
-    which selects specs via `_registry.REGISTRY.select(ttp)` in fixed
-    `HUNTERS` order rather than this function's own former hard-coded
-    `run_injection`/`run_hollowing`/... flags and `if run_<hunter>:`
-    chain -- --hunt all always runs the full memory scan for every
-    selected analyzer this way (in particular cs-beacon: skipping it
-    when prior TTPs scored 0 used to mean a beacon could be present in a
-    dump with no injection/hollowing/stomping/pipe indicators and
-    --hunt all would still report "No TTP indicators found" without ever
-    having looked -- the registry-driven executor has no such
-    short-circuit to begin with, for any analyzer). `yara_provenance` is
-    now `execution.provenance.get("yara")` -- `_registry.py`'s own
-    `_yara_provenance_hook` performs the exact `RulesProvenance.to_dict()`
-    conversion this function used to hand-roll inline, reading
-    `report.coverage.rules.provenance` off the same `Report` instance."""
+    For hunt-all, optional deep triage runs once over the metadata queue. The
+    same actions and summary feed console and structured output. Registry
+    selection preserves fixed order and never skips an analyzer because an
+    earlier analyzer scored zero.
+    """
     # Derived from HUNTERS (already imported above for the record order)
     # rather than repeated as a second literal: a hunter added to /
     # renamed in HUNTERS but forgotten here used to be accepted-or-

@@ -1,18 +1,7 @@
-"""`CSBeaconReport` -> `HunterRecord` (the current typed record) -- a pure
-projection, independent of `report_legacy.py`/`report_console.py`. Mirrors
-`dumpex.hunt.hollowing.report_record`/`dumpex.hunt.stomping.report_record`
-(the completed reference pilots): builds the SAME `CsBeaconDetails` shape
-the pre-migration `_record_from_cs_beacon_report()` built -- no public
-schema/wire-shape change.
+"""Project a ``CSBeaconReport`` into the current ``HunterRecord``.
 
-`configs[*]["fields"]` stays keyed by field NAME (schema_version 2.7+),
-carrying only `type`/`value` -- `raw`/`name` never reach this shape (see
-`report_facts.field_dict`/`name_keyed_fields`, shared with the field-name-
-collision check `dumpex/hunt/cs_beacon/collect.py` has always raised on).
-`va`/`region_base` (real process addresses) become hex strings;
-`file_offset` (a .dmp BYTE OFFSET, not a memory address) and `xor_key` (a
-one-byte XOR key value, not an address/pointer/handle) stay plain JSON
-integers, per this project's own address-vs-offset type rule.
+Configuration fields are keyed by field name and carry ``type``/``value``.
+Process addresses are hex strings; dump offsets and XOR keys remain integers.
 """
 from dumpex.hunt.cs_beacon.domain import CSBeaconReport
 from dumpex.hunt.cs_beacon.report_facts import (

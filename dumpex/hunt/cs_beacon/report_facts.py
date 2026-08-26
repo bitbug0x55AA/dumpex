@@ -1,20 +1,7 @@
-"""Shared projection logic for `CSBeaconReport` (dumpex/hunt/cs_beacon/
-domain.py) -- everything `report_legacy.py`, `report_record.py`, and
-`report_console.py` all three need, so it is built exactly once. Mirrors
-`dumpex.hunt.hollowing.report_facts`/`dumpex.hunt.stomping.report_facts`/
-`dumpex.hunt.pipe.report_facts`/`dumpex.hunt.injection.report_facts`/
-`dumpex.hunt.encoding.report_facts` (the five completed reference pilots).
+"""Shared fact and coverage projections for ``CSBeaconReport``.
 
-Every fact string below is written to match the pre-migration
-`aggregate.build_report()`'s own `Finding.facts` text byte-for-byte for the
-same evidence -- these arrays are embedded verbatim in BOTH the v1.1
-findings dict and the typed `HunterRecord` (and feed `Finding.id`'s hash
-basis), and tests/fixtures/hunt_cli_golden/cs-beacon_hunt_dict.json is
-frozen against them.
-
-This module owns no dependency on `dumpex.hunt.cs_beacon.aggregate`:
-`build_report()` is the ONE place a `CSBeaconReport` is constructed, and
-this module stays a pure function of that already-built Report.
+Fact text and ordering are stable inputs to legacy output, typed records,
+and finding identifiers.
 """
 from dumpex.hunt._coverage import derive_coverage_status
 from dumpex.hunt._finding import Finding

@@ -1,23 +1,4 @@
-"""Tests for the Injection 2B pure projectors (dumpex/hunt/injection/
-report_facts.py, report_legacy.py, report_record.py, report_console.py) --
-everything that turns a hand-built `InjectionReport` (2A's canonical
-domain model, dumpex.hunt.injection.domain) into the legacy v1.1 dict, the
-current-schema (v2.13) `HunterRecord`, and the verdict-first console.
-
-Distinct from its neighbours: tests/hunt/test_injection_domain.py covers
-the domain model's OWN construction-time contracts (immutability, poison-
-object rejection); this module never constructs an invalid `InjectionReport`
-on purpose, and instead exercises what the three projectors DO with a
-valid one. tests/integration/test_hunt_cli_compat_freeze.py covers the
-still-unchanged PRODUCTION path (aggregate.py/presentation.py/legacy.py/
-collect.py) end-to-end from a FakeMF; this module never touches that path
-or a FakeMF at all -- every report here is hand-built.
-
-Builder helpers below reuse test_injection_domain.py's own
-(`_region`/`_location`/`_rwx`/`_pe_hit`/`_thread`/`_coverage`/`_check`/
-`_correlation_for`) rather than re-declaring them, matching how
-test_injection_models.py already relates to its neighbours.
-"""
+"""Hunter-specific behavior for injection report projectors."""
 import pytest
 
 from tests.hunt.test_injection_domain import (
@@ -40,7 +21,7 @@ from dumpex.hunt.injection.report_facts import (
 from dumpex.hunt.injection.report_legacy import project_legacy_dict
 from dumpex.hunt.injection.report_record import project_hunter_record
 from dumpex.hunt.injection.report_console import render_console_lines, print_console
-from dumpex.output.coverage import EXIT_NOT_EVALUATED, EXIT_OK, EXIT_PARTIAL, SourceState, exit_code_for
+from dumpex.output.coverage import EXIT_PARTIAL, SourceState, exit_code_for
 
 
 # ── Report builders ────────────────────────────────────────────────────────
@@ -589,28 +570,6 @@ def test_golden_scenario_exit_code_matches_production_partial():
     assert exit_code_for(record.coverage.status) == EXIT_PARTIAL == 3
 
 
-# ── 6. Exit-code parity across coverage states ─────────────────────────────
-# "exit behavior" is one of the issue's own named acceptance-test axes --
-# these confirm the structured CoverageReport this module projects drives
-# `dumpex.output.coverage.exit_code_for` the same way for every coverage
-# state a report can legitimately be in.
-
-def test_exit_code_complete_coverage_is_ok():
-    record = project_hunter_record(_clean_report())
-    assert record.coverage.status.value == "complete"
-    assert exit_code_for(record.coverage.status) == EXIT_OK == 0
-
-
-def test_exit_code_partial_coverage_is_partial():
-    record = project_hunter_record(_inconclusive_report())
-    assert record.coverage.status.value == "partial"
-    assert exit_code_for(record.coverage.status) == EXIT_PARTIAL == 3
-
-
-def test_exit_code_not_evaluated_coverage_is_not_evaluated():
-    record = project_hunter_record(_not_evaluated_report())
-    assert record.coverage.status.value == "not_evaluated"
-    assert exit_code_for(record.coverage.status) == EXIT_NOT_EVALUATED == 4
 
 
 # ── 7. The "empty/error" acceptance axis ────────────────────────────────────
