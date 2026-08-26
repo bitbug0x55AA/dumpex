@@ -1,24 +1,4 @@
-"""
-Cross-artifact alignment for the output-contract version.
-
-`dumpex.output.envelope.SCHEMA_VERSION` is the string every producer
-stamps into `meta.schema_version`. Bumping it is never a one-line change:
-a new `dumpex/schemas/dumpex-output-v<X>.schema.json` has to ship with it,
-`dumpex.schemas.CURRENT_SCHEMA` has to name that file, the file's own
-`$id`/`title`/`meta.schema_version.const` have to claim the same version,
-docs/user/OUTPUT_MIGRATION.md's contract table has to move `(current)` onto it,
-and every previous schema has to stay installed and untouched so
-already-collected output remains validatable.
-
-Asserting `SCHEMA_VERSION == "<current literal>"` proves none of that --
-it only proves this file was edited in the same commit as envelope.py.
-These tests assert the constant against the artifacts it has to agree
-with, so a half-finished bump fails CI on the half that was skipped.
-
-Whether documents actually validate against the schema is a separate
-concern, covered by tests/integration/test_json_schema_v2.py (all
-producers) and tests/integration/test_json_schema_v2_5_hunt.py.
-"""
+"""Cross-artifact alignment for the output-contract version."""
 import json
 import re
 from pathlib import Path
@@ -27,6 +7,7 @@ import pytest
 
 from dumpex.output.envelope import SCHEMA_VERSION
 from dumpex.schemas import CURRENT_SCHEMA, schema_path
+from scripts import package_smoke
 
 _REPO_ROOT = Path(__file__).parents[2]
 _SCHEMA_DIR = _REPO_ROOT / "dumpex" / "schemas"
@@ -136,43 +117,17 @@ def test_every_historical_row_is_marked_frozen_and_not_produced():
         assert "frozen" in row and "no command emits this anymore" in row, row
 
 
-# ── scripts/package_smoke.py's own hardcoded schema-filename list ────────
-# package_smoke.py is deliberately standalone (runs against an installed
-# wheel outside this repo, with no pytest/repo-tree dependency -- see its
-# own module docstring), so its `_schema_filenames` tuple is a local
-# variable inside main(), not an importable constant. This parses the
-# tuple literal straight out of the script's source text instead, and
-# compares it against the same _packaged_schemas() every other test in
-# this file already trusts -- a schema file added or removed from the
-# package without updating that hardcoded tuple (exactly the class of
-# drift that left dumpex-output-v2.13.schema.json out of it after the
-# v2.13 cutover) now fails here instead of leaving the package-smoke gate
-# silently checking a stale set of files forever.
-
-_PACKAGE_SMOKE = _REPO_ROOT / "scripts" / "package_smoke.py"
-
-
-def _package_smoke_schema_filenames():
-    text = _PACKAGE_SMOKE.read_text(encoding="utf-8")
-    match = re.search(r"_schema_filenames\s*=\s*\((.*?)\)", text, re.DOTALL)
-    assert match, f"could not find a _schema_filenames = (...) tuple in {_PACKAGE_SMOKE}"
-    return set(re.findall(r'"(dumpex-output-v\d+\.\d+\.schema\.json)"', match.group(1)))
-
-
 def test_package_smoke_schema_filenames_match_the_packaged_set():
     packaged = {filename for filename in _packaged_schemas().values()}
-    listed = _package_smoke_schema_filenames()
+    listed = set(package_smoke.SCHEMA_FILENAMES)
     assert listed == packaged, (
-        f"scripts/package_smoke.py's own _schema_filenames tuple has drifted from the "
+        f"scripts/package_smoke.py's schema list has drifted from the "
         f"packaged dumpex/schemas/ files -- missing: {sorted(packaged - listed)}, "
         f"extra: {sorted(listed - packaged)}")
 
 
-def test_package_smoke_checks_current_schema_is_in_its_own_list():
-    """The list can be complete and package_smoke.py could still forget to
-    single out CURRENT_SCHEMA for the schema_version cross-check -- this
-    pins that the script's own source still contains that guard, not just
-    that its historical-filename tuple is complete."""
-    text = _PACKAGE_SMOKE.read_text(encoding="utf-8")
-    assert "CURRENT_SCHEMA not in _schema_filenames" in text
-    assert "SCHEMA_VERSION" in text
+def test_package_smoke_rejects_an_unlisted_current_schema(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        package_smoke.validate_current_schema_is_listed("dumpex-output-v99.0.schema.json")
+    assert exc_info.value.code == 1
+    assert "would never actually be smoke-tested" in capsys.readouterr().out

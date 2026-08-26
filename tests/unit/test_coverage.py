@@ -1,8 +1,4 @@
-"""
-Unit tests for the shared coverage/status reduction rule
-(dumpex.hunt._coverage) that all four phase-two hunters now call instead
-of each hand-rolling the same if/elif chain.
-"""
+"""Tests for the shared hunter coverage/status reducer."""
 import pytest
 
 from dumpex.hunt._coverage import derive_status, derive_coverage_status, CoverageTracker
@@ -120,4 +116,50 @@ def test_coverage_tracker_note_scanned_increments_and_does_not_affect_complete()
     t.note_scanned()
     t.note_scanned()
     assert t.scanned == 2
-    assert t.complete is True   # a successful scan is not itself a coverage gap
+    assert t.complete is True
+
+
+def _failure_target(base=0x2000, size=4096):
+    return ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=base,
+                      size=size, size_limit=None)
+
+
+def test_note_read_failed_without_a_target_still_works_unchanged():
+    tracker = CoverageTracker()
+    tracker.note_read_failed()
+    assert tracker.read_failed == 1
+    assert tracker.read_failed_targets == []
+
+
+@pytest.mark.parametrize(
+    "method,count_attr,targets_attr,base",
+    [
+        ("note_read_failed", "read_failed", "read_failed_targets", 0x2000),
+        ("note_short_read", "short_reads", "short_read_targets", 0x3000),
+    ],
+    ids=["read-failed", "short-read"],
+)
+def test_failure_notes_retain_their_scan_target(method, count_attr, targets_attr, base):
+    tracker = CoverageTracker()
+    target = _failure_target(base=base)
+    getattr(tracker, method)(target)
+    assert getattr(tracker, count_attr) == 1
+    assert getattr(tracker, targets_attr) == [target]
+
+
+@pytest.mark.parametrize("method", ["note_read_failed", "note_short_read"])
+def test_failure_notes_reject_non_scan_targets(method):
+    tracker = CoverageTracker()
+    with pytest.raises(TypeError):
+        getattr(tracker, method)("0x2000")
+
+
+def test_build_reasons_adds_target_preview_only_when_supplied():
+    bare = CoverageTracker()
+    bare.note_read_failed()
+    assert bare.build_reasons() == ["1 item(s) failed to read"]
+
+    with_target = CoverageTracker()
+    with_target.note_read_failed(_failure_target())
+    assert with_target.build_reasons()[0] == \
+        "1 item(s) failed to read: 0x0000000000002000 (4 KB)"

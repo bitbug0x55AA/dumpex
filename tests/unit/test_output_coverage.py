@@ -1,22 +1,4 @@
-"""
-Table-driven tests for dumpex.output.coverage -- the first-class
-coverage/provenance core extracted from the ad hoc bool(mf.X)-check
-pattern every recon command used to hand-roll independently.
-
-Two structural themes drive this file, both from the code review that
-motivated this rework:
-
-1. build_coverage_report() must derive required-source limitations
-   itself from `sources` via `completeness_checks` (bare source names or
-   SourceRequirement), never trust a caller-supplied limitation object
-   for SOURCE_ABSENT/SOURCE_FAILED -- so every required-source test below
-   passes a plain source name (or SourceRequirement), never a hand-built
-   CoverageLimitation, and asserts the reducer still produces one.
-2. Every limitation is fully structured -- no free-text escape hatch.
-   Tests assert not just the rendered text but limitation.code/source/
-   counterpart_source/affected_count/unavailable_fields/related_sources
-   directly, proving a consumer could act on the structured fields alone.
-"""
+"""Table-driven tests for structured coverage and provenance semantics."""
 import pytest
 
 from dumpex.output.records import hex_address
@@ -688,7 +670,7 @@ def test_source_requirement_rejects_invalid_affected_count_shape(bad_count):
 
 
 def test_build_coverage_report_rejects_nonzero_affected_count_against_present_empty_counterpart():
-    # Exact repro from review: a positive affected_count must not be
+    # A positive affected_count must not be
     # silently swallowed by present_empty suppression just because it
     # isn't literally 0 -- a caller explicitly claiming "5 affected" when
     # the counterpart itself reports zero records is a real
@@ -896,7 +878,7 @@ def test_coverage_limitation_rejects_mismatched_fixed_source_code(code, correct_
 
 
 def test_bug_repro_source_requirement_with_wrong_code_no_longer_silently_diverges():
-    # The exact reproduction from review: constructing this used to
+    # Constructing this must not
     # succeed, then behave differently depending on whether `modules`
     # happened to be present (silent complete) or absent (crash deep in
     # CoverageLimitation) in the dump being analyzed.
@@ -970,14 +952,14 @@ def test_render_limitation_pid_no_usable_fallback():
 # that field being set, not silently ignore it.
 
 def test_coverage_limitation_pid_no_usable_fallback_rejects_contradictory_bundle():
-    # Exact repro from review: PID_NO_USABLE_FALLBACK's own enum comment
+    # PID_NO_USABLE_FALLBACK's enum contract
     # says "fully fixed sentence, no fields" -- nothing previously
     # enforced that, so this combination used to construct successfully,
     # get accepted by the reducer, validate against the schema, and
     # render the fixed sentence while silently ignoring every field below.
     # (Which specific field trips the check first isn't the point here --
     # see the two tests below for source/scope isolated individually, per
-    # review round 2's ask.)
+    # the isolated source/scope cases.)
     with pytest.raises(ValueError):
         CoverageLimitation(code=LimitationCode.PID_NO_USABLE_FALLBACK, source="modules",
                             scope="module", affected_count=7,
@@ -1076,7 +1058,7 @@ def test_coverage_limitation_sysinfo_fixed_text_code_rejects_detail():
                             detail="should not be allowed")
 
 
-# ── SOURCE_ABSENT: field-combination validation (review round 2, P2) ─────
+# ── SOURCE_ABSENT field-combination validation ──────────────────────────
 # allowed_fields alone only says WHICH fields a code may touch, not which
 # COMBINATIONS are coherent -- affected_count/available_fields only mean
 # anything paired with their counterpart field, and counterpart_source
@@ -1156,7 +1138,7 @@ def test_build_coverage_report_derives_affected_count_from_counterpart_when_omit
 
 
 def test_coverage_limitation_source_absent_rejects_available_fields_with_counterpart_source():
-    # Exact repro from review round 3: _render_source_absent branches on
+    # _render_source_absent branches on
     # counterpart_source FIRST, so available_fields is silently ignored
     # whenever it's set, regardless of unavailable_fields also being set.
     with pytest.raises(ValueError, match="counterpart_source"):
@@ -1521,7 +1503,7 @@ def test_coverage_report_normalizes_bare_string_status():
     assert isinstance(report.status, CoverageStatus)
 
 
-# ── _display_name: dotted entity-namespaced source names (Phase C, PR2) ──
+# ── _display_name: dotted entity-namespaced source names ────────────────
 # Used by --diff's own "baseline.modules"/"target.modules"-style source
 # names -- none of the seven single-dump recon commands' source names
 # contain a literal ".", so this is a pure extension for --diff alone.
@@ -1545,7 +1527,7 @@ def test_display_name_dotted_unknown_suffix_falls_back_to_raw_string():
     assert _display_name("baseline.custom_source") == "baseline.custom_source"
 
 
-# ── build_coverage_report: evaluation_groups (Phase C, PR2) ─────────────
+# ── build_coverage_report: evaluation_groups ────────────────────────────
 # Multiple INDEPENDENT single-source groups, each evaluated on its own --
 # the comparison-command shape, where "baseline.modules" being entirely
 # absent must make the whole entity not_evaluated even if
@@ -1639,7 +1621,7 @@ def test_evaluation_groups_single_group_matches_equivalent_evaluation_sources_ca
             == [l.to_dict() for l in via_groups.limitations])
 
 
-# ── combine_coverage_reports (Phase C, PR2) ──────────────────────────────
+# ── combine_coverage_reports ─────────────────────────────────────────────
 # Pure cross-entity reduction, e.g. a future comparison command's
 # --diff-scope all combining collect_module_diff/collect_thread_diff/
 # collect_memory_diff's three independent CoverageReports into one.
@@ -1850,7 +1832,7 @@ def test_coverage_limitation_report_string_scan_truncated_rejects_non_positive_a
                             source="string_search", affected_count=0)
 
 
-# ── v2.4 hunt migration (PR2a): PE_HEADER_READ_FAILED/_SHORT_READ, ────────
+# ── PE_HEADER_READ_FAILED/_SHORT_READ, ───────────────────────────────────
 # THREAD_CONTEXT_UNAVAILABLE/_PARTIAL
 
 def test_pe_header_read_failed_renders_and_validates():
@@ -1993,7 +1975,7 @@ def test_scan_target_requires_size_to_exceed_its_own_limit():
         _region_target(size=512, limit=1024)
 
 
-def test_scan_target_size_limit_none_skips_the_oversize_check(): # issue #28
+def test_scan_target_size_limit_none_skips_the_oversize_check():
     # A read-failed/short-read/scan-truncated target was never skipped for
     # being oversized -- no cap to compare `size` against, so any size,
     # including one smaller than an ordinary oversize cap, is legal.
@@ -2107,7 +2089,7 @@ def test_targets_are_rejected_on_codes_that_do_not_use_them():
                             targets=[_region_target()])
 
 
-# ── targets on the read-failed/short-read/scan-truncated codes (issue #28) ─
+# ── targets on read-failed/short-read/scan-truncated codes ───────────────
 # Unlike SCAN_REGION_OVERSIZED_SKIPPED, targets is OPTIONAL on these five --
 # a bare affected_count (the pre-#28 shape) stays legal -- but when supplied
 # it must still account for every affected item exactly.
@@ -2304,7 +2286,7 @@ def test_oversized_skipped_unknown_source_is_not_kind_or_scope_constrained():
     assert render_limitation(limitation)
 
 
-# ── --process (issue #40 / docs/developer/recon_process_sysinfo_handles_contract.md
+# ── --process (docs/developer/recon_process_sysinfo_handles_contract.md
 # §6.1) -- PROCESS_*/IAT_* limitation codes ──────────────────────────────
 
 def test_process_sources_absent_is_absent_capable_single_source():
@@ -2457,7 +2439,7 @@ def test_process_and_iat_codes_are_all_registered_and_render():
         assert code in _CODE_SPECS
 
 
-# ── --sysinfo (issue #41 / docs/developer/recon_process_sysinfo_handles_contract.md
+# ── --sysinfo (docs/developer/recon_process_sysinfo_handles_contract.md
 # §6.1) -- ENVIRONMENT_* limitation codes ─────────────────────────────────
 
 @pytest.mark.parametrize("code", [
@@ -2615,7 +2597,7 @@ def test_sysinfo_dump_file_source_has_a_display_name():
     assert _display_name("dump_file") == "Dump file"
 
 
-# ── --handles (issue #42 / docs/developer/recon_process_sysinfo_handles_contract.md
+# ── --handles (docs/developer/recon_process_sysinfo_handles_contract.md
 # §5.5/§6.1) -- HANDLE*/HANDLES_* limitation codes ────────────────────────
 
 _HANDLE_GROUP_CODES = (
@@ -2650,7 +2632,7 @@ def test_handle_group_codes_are_absent_capable_over_handle_records(code):
     # all_absent_code -- and only over its own fixed source.
     assert code in _ABSENT_CAPABLE_CODES
     EvaluationRequirement(sources=("handle_records",), all_absent_code=code)
-    with pytest.raises(ValueError, match="requires sources\[0\]"):
+    with pytest.raises(ValueError, match=r"requires sources\[0\]"):
         EvaluationRequirement(sources=("handles",), all_absent_code=code)
     with pytest.raises(ValueError, match="source must be"):
         CoverageLimitation(code=code, source="handles")
@@ -2714,7 +2696,7 @@ def test_handle_codes_are_all_registered_and_render():
         assert code in _CODE_SPECS
 
 
-# -- --profile (issue #95): the three codes whose rendered sentence is --
+# -- --profile: the three codes whose rendered sentence is --
 # composed from a field rather than being fixed text. The fixed-text
 # profile codes are covered by test_every_limitation_code_has_a_registered_spec
 # plus dumpex.commands.profile's own suite; these three interpolate, so

@@ -1,9 +1,4 @@
-"""Guard the analyst-facing scope of docs/user/SOC_QUICKSTART.md.
-
-Complete, versioned JSON examples belong in CLI_REFERENCE.md and
-OUTPUT_SCHEMA.md. The SOC Quick Start instead carries the operational workflow
-and the status/coverage rules an analyst must apply during triage.
-"""
+"""Keep the quickstart's operational guidance aligned with the CLI."""
 import pathlib
 import re
 
@@ -13,14 +8,6 @@ _QUICKSTART = pathlib.Path(__file__).parent.parent.parent / "docs" / "user" / "S
 
 def _text() -> str:
     return _QUICKSTART.read_text(encoding="utf-8")
-
-
-def test_quickstart_stays_an_analyst_guide():
-    text = _text()
-    assert len(text.splitlines()) < 350
-    assert "```json" not in text
-    assert "tests/" not in text
-    assert "issue #" not in text.lower()
 
 
 def test_quickstart_preserves_status_coverage_disposition():

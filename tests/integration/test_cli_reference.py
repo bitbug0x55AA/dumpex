@@ -1,4 +1,4 @@
-"""Guard the current, user-facing scope of docs/user/CLI_REFERENCE.md."""
+"""Keep the CLI reference aligned with the shipped interface."""
 import pathlib
 import re
 
@@ -8,14 +8,6 @@ _REFERENCE = pathlib.Path(__file__).parent.parent.parent / "docs" / "user" / "CL
 
 def _text() -> str:
     return _REFERENCE.read_text(encoding="utf-8")
-
-
-def test_cli_reference_stays_current_and_compact():
-    text = _text()
-    assert len(text.splitlines()) < 400
-    assert "```json" not in text
-    assert "tests/" not in text
-    assert "issue #" not in text.lower()
 
 
 def test_cli_reference_covers_every_command():

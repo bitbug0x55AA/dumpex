@@ -34,9 +34,28 @@ import subprocess
 import sys
 
 
+SCHEMA_FILENAMES = (
+    "dumpex-output-v1.1.schema.json", "dumpex-output-v2.0.schema.json",
+    "dumpex-output-v2.1.schema.json", "dumpex-output-v2.2.schema.json",
+    "dumpex-output-v2.3.schema.json", "dumpex-output-v2.4.schema.json",
+    "dumpex-output-v2.5.schema.json", "dumpex-output-v2.6.schema.json",
+    "dumpex-output-v2.7.schema.json", "dumpex-output-v2.8.schema.json",
+    "dumpex-output-v2.9.schema.json", "dumpex-output-v2.10.schema.json",
+    "dumpex-output-v2.11.schema.json", "dumpex-output-v2.12.schema.json",
+    "dumpex-output-v2.13.schema.json",
+)
+
+
 def _fail(msg: str) -> None:
     print(f"FAIL: {msg}")
     sys.exit(1)
+
+
+def validate_current_schema_is_listed(current_schema: str) -> None:
+    if current_schema not in SCHEMA_FILENAMES:
+        _fail(f"dumpex.schemas.CURRENT_SCHEMA ({current_schema!r}) is not in this script's "
+              "SCHEMA_FILENAMES list -- the installed package's current contract would "
+              "never actually be smoke-tested")
 
 
 def main() -> None:
@@ -95,32 +114,12 @@ def main() -> None:
               f"found {sorted(yar_files)}")
     print(f"packaged YARA rule files: {sorted(yar_files)}")
 
-    _schema_filenames = ("dumpex-output-v1.1.schema.json", "dumpex-output-v2.0.schema.json",
-                         "dumpex-output-v2.1.schema.json", "dumpex-output-v2.2.schema.json",
-                         "dumpex-output-v2.3.schema.json", "dumpex-output-v2.4.schema.json",
-                         "dumpex-output-v2.5.schema.json", "dumpex-output-v2.6.schema.json",
-                         "dumpex-output-v2.7.schema.json", "dumpex-output-v2.8.schema.json",
-                         "dumpex-output-v2.9.schema.json", "dumpex-output-v2.10.schema.json",
-                         "dumpex-output-v2.11.schema.json", "dumpex-output-v2.12.schema.json",
-                         "dumpex-output-v2.13.schema.json")
-
-    # This hardcoded historical list still needs a manual add on every
-    # schema bump (same as every other exact-filename check in this
-    # script), but CURRENT_SCHEMA itself is cross-checked against it and
-    # against SCHEMA_VERSION below -- both read from the INSTALLED package,
-    # not this repo's source tree -- so a bump that updates SCHEMA_VERSION/
-    # CURRENT_SCHEMA but forgets this list (or the reverse) fails loudly
-    # here instead of silently shipping a package-smoke gate that never
-    # actually loads the schema every producer stamps.
     from dumpex.schemas import CURRENT_SCHEMA
     from dumpex.output.envelope import SCHEMA_VERSION
 
-    if CURRENT_SCHEMA not in _schema_filenames:
-        _fail(f"dumpex.schemas.CURRENT_SCHEMA ({CURRENT_SCHEMA!r}) is not in this script's own "
-              f"_schema_filenames list -- the installed package's current contract would never "
-              f"actually be smoke-tested")
+    validate_current_schema_is_listed(CURRENT_SCHEMA)
 
-    for schema_filename in _schema_filenames:
+    for schema_filename in SCHEMA_FILENAMES:
         schema_path = importlib.resources.files("dumpex.schemas").joinpath(schema_filename)
         if not schema_path.is_file():
             _fail(f"dumpex/schemas/{schema_filename} not found via importlib.resources")
@@ -138,7 +137,7 @@ def main() -> None:
                       f"not SCHEMA_VERSION {SCHEMA_VERSION!r} -- every producer stamps "
                       f"SCHEMA_VERSION into meta.schema_version, so a document built by this "
                       f"installed package would fail validation against its own current schema")
-    print(f"packaged schemas: {', '.join(_schema_filenames)}")
+    print(f"packaged schemas: {', '.join(SCHEMA_FILENAMES)}")
     print(f"CURRENT_SCHEMA loads and matches SCHEMA_VERSION: {CURRENT_SCHEMA} == {SCHEMA_VERSION!r}")
 
     from dumpex.rules_pkg import loader

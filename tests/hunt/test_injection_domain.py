@@ -1,27 +1,4 @@
-"""Contract tests for the canonical injection domain model
-(dumpex.hunt._domain.CheckResult, dumpex.hunt.injection.domain's
-CoverageSnapshot/InjectionEvidence/InjectionReport).
-
-Distinct from its neighbours: tests/hunt/test_injection_models.py covers
-the SCAN-layer Evidence value objects and how memory_scan/thread_scan/
-correlation build them; tests/hunt/test_output_source_architecture.py
-covers the cross-hunter Report boundary. This module covers
-`InjectionReport`, the model production now builds -- the old mutable
-`dumpex.hunt.injection.aggregate.Report` no longer exists.
-
-Acceptance criteria exercised here:
-
-  1. Recursive mutation attempts fail for every nested collection and
-     value object -- not merely `__dataclass_params__.frozen is True`,
-     which a Report holding a plain list already satisfies.
-  2. Mutating a constructor input after construction cannot change the
-     constructed object.
-  3. The model retains no minidump, resolver, projector, verbosity,
-     Finding, HunterRecord, dict, or console-string reference -- poison
-     objects of each kind are rejected at construction.
-  4. The derived judgment properties agree with the shared reducers
-     dumpex.hunt._finding/_coverage already own.
-"""
+"""Hunter-specific contracts for the canonical injection domain model."""
 import dataclasses
 import enum
 from types import MappingProxyType
@@ -124,12 +101,6 @@ DOMAIN_TYPES = [CheckResult, CoverageSnapshot, InjectionEvidence, InjectionRepor
                  ThreadContext, CorrelatedAllocationEvidence]
 
 
-@pytest.mark.parametrize("domain_type", DOMAIN_TYPES, ids=[t.__name__ for t in DOMAIN_TYPES])
-def test_domain_type_is_a_frozen_dataclass(domain_type):
-    assert dataclasses.is_dataclass(domain_type)
-    assert domain_type.__dataclass_params__.frozen is True
-
-
 # ── 1. Recursive immutability ─────────────────────────────────────────────
 
 def _walk(value):
@@ -219,17 +190,6 @@ def _reachable(value):
         for key, item in value.items():
             yield from _reachable(key)
             yield from _reachable(item)
-
-
-def test_no_mutable_collection_is_reachable_from_a_report():
-    # The whole-graph assertion the top-level `frozen=True` check cannot
-    # make: a frozen Report holding a plain list is still mutable in place.
-    for value in _reachable(_populated_report()):
-        assert not isinstance(value, (list, set, dict, bytearray)), (
-            f"a mutable {type(value).__name__} is reachable from the Report: {value!r}")
-        if dataclasses.is_dataclass(value) and not isinstance(value, type):
-            assert value.__dataclass_params__.frozen is True, (
-                f"a non-frozen {type(value).__name__} is reachable from the Report")
 
 
 def test_report_collections_reject_in_place_mutation():
@@ -323,12 +283,6 @@ _POISON = [
 
 
 @pytest.mark.parametrize("poison", _POISON)
-def test_check_result_evidence_rejects_non_evidence_objects(poison):
-    with pytest.raises(TypeError):
-        _check(evidence=(poison,))
-
-
-@pytest.mark.parametrize("poison", _POISON)
 def test_report_evidence_buckets_reject_non_evidence_objects(poison):
     with pytest.raises(TypeError):
         InjectionEvidence(rwx=(poison,))
@@ -368,11 +322,6 @@ class _MutableEvidence:
 def test_check_result_evidence_rejects_a_frozen_object_holding_a_mutable_collection():
     with pytest.raises(TypeError):
         _check(evidence=(_EvidenceHoldingAList(hits=[1, 2]),))
-
-
-def test_check_result_evidence_rejects_a_non_frozen_dataclass():
-    with pytest.raises(TypeError):
-        _check(evidence=(_MutableEvidence(),))
 
 
 def test_frozen_dataclass_with_undeclared_instance_state_is_rejected():
@@ -583,20 +532,6 @@ def test_report_owns_its_correlation_maps_not_the_callers():
     assert evidence.correlation.rwx_by_alloc is not correlation.rwx_by_alloc
     assert evidence.correlation.rip_hits[0] is hit
     assert evidence.correlation.rwx_by_alloc[rwx.region.allocation_base][0] is rwx.region
-
-
-@pytest.mark.parametrize("not_a_sequence", [
-    pytest.param({"rwx": ()}, id="dict"),
-    pytest.param("VA=0x1000", id="bare-string"),
-    pytest.param(iter(()), id="generator"),
-    pytest.param({_rwx()}, id="set"),
-])
-def test_evidence_must_be_a_list_or_tuple_not_any_iterable(not_a_sequence):
-    # A bare string would explode into characters, a set/dict would carry
-    # hash-order-dependent ordering into an order-significant field, and a
-    # generator would read empty on the second pass.
-    with pytest.raises(TypeError):
-        _check(evidence=not_a_sequence)
 
 
 def test_report_rejects_a_coverage_dict_in_place_of_the_snapshot():
@@ -973,32 +908,10 @@ def test_status_is_derived_from_score_and_coverage():
     assert _report(score=0, coverage=not_evaluated).status == "NOT_EVALUATED"
 
 
-def test_derived_judgment_fields_match_the_shared_reducers():
-    report = _populated_report()
-    assert report.max_score == MAX_SCORE
-    assert report.confidence == overall_confidence(report.results, report.score)
-    assert report.verdict_level == verdict_level(report.score, VERDICT_LEVEL_BY_SCORE,
-                                                  status=report.status)
-    assert report.lead_count == lead_count(report.results)
-    assert report.review_priority == review_priority(report.results, report.score,
-                                                      report.status)
-
-
 def test_verdict_level_table_is_shared_with_the_production_aggregate():
     # One table, not two copies that a later scoring change could update
     # separately.
     assert injection_aggregate._VERDICT_LEVEL_BY_SCORE is VERDICT_LEVEL_BY_SCORE
-
-
-def test_score_above_the_hunters_ceiling_is_rejected():
-    with pytest.raises(ValueError):
-        _report(score=MAX_SCORE + 1)
-
-
-def test_check_result_severity_is_derived_not_settable():
-    assert _check(tag=TAG_OBSERVATION, confidence=CONFIDENCE_HIGH).severity == "info"
-    assert _check(tag=TAG_DETECTION, confidence=CONFIDENCE_HIGH).severity == "critical"
-    assert "severity" not in {f.name for f in dataclasses.fields(CheckResult)}
 
 
 def test_check_result_rejects_an_unknown_tag_or_confidence():

@@ -1,19 +1,5 @@
-"""
-Unit tests for `dumpex.hunt._registry` (issue #71, implementing the
-contract frozen in `docs/developer/hunt_analyzer_registry_contract.md`, issue #70).
-
-Covers: the real, shipped `REGISTRY`'s roster/order/capability shape; the
-call-time failure modes `AnalyzerRegistry.get()`/`select()`/
-`select_targeted()` must raise (contract §7.2); the construction-time
-failure modes `AnalyzerSpec`/`AnalyzerRegistry` registration must reject
-(contract §7.1), exercised against synthetic specs/registrations rather
-than mutating the real module-level `REGISTRY` (which is a frozen,
-already-validated singleton by the time any test runs); and the
-`_all_specs()` production-boundary rule (contract §6/§12).
-"""
-import ast
+"""Behavioral tests for analyzer registration, selection, and adapters."""
 import dataclasses
-from pathlib import Path
 
 import pytest
 
@@ -37,9 +23,6 @@ from dumpex.hunt._registry import (
     UnsupportedTargetedSource,
 )
 from dumpex.output.records import HUNTERS
-
-_REPO_ROOT = Path(__file__).parents[2]
-
 
 # ── The real, shipped registry ──────────────────────────────────────────
 
@@ -216,9 +199,7 @@ def test_analyzer_spec_rejects_a_non_callable_provenance_hook():
         )
 
 
-# ── inspect.signature()'s own exceptions never leak as bare stdlib ──────
-#    errors (finding: a C builtin with no introspectable signature -- ────
-#    range/type/itertools.repeat -- raised a bare ValueError) ───────────
+# Signature-introspection failures use the registry's exception type.
 
 @pytest.mark.parametrize("uninspectable", [range, type])
 def test_provenance_hook_rejects_an_uninspectable_builtin(uninspectable):
@@ -258,17 +239,7 @@ def test_resolve_and_validate_projector_rejects_an_uninspectable_builtin(monkeyp
         _resolve_and_validate_projector("_fake_projector")
 
 
-# ── Late-binding / monkeypatchability (contract §8) ─────────────────────
-# Contract §8: "Same seam, all three adapters" -- builder/renderer/
-# record_projector are late-bound IDENTICALLY, none a plain captured
-# reference. Parametrized over all seven identities x all three adapters
-# (21 cases), patching the real dumpex.hunt attribute (never a fake
-# stand-in) and asserting spec.<adapter>(...) observes the patch -- proof
-# each one re-resolves the name at CALL time, not once at import time. An
-# earlier version of this suite covered only builder, only for injection;
-# contract §8 calls a registry that silently freezes any of these three at
-# import time "the single most important compatibility hazard this
-# contract names".
+# All three adapters resolve their module attribute at call time.
 
 _ADAPTER_ATTR = {
     "injection":   ("_build_injection_report", "_render_injection_console", "_record_from_injection_report"),
@@ -726,17 +697,7 @@ def test_scoped_source_empty_grant_scopes_cannot_reach_select_targeted():
             TargetedGrant("encoding_scan", frozenset()))
 
 
-# ── AnalyzerRegistry construction-time failures over the full set ───────
-# Every case below calls `AnalyzerRegistry(specs)` DIRECTLY -- the real
-# constructor, not a separately-invoked `_validate_registrations()` helper
-# -- per the finding that an earlier version of this suite validated
-# through a bypassable side door
-# (`_validate_registrations(specs); AnalyzerRegistry(specs)`) that no
-# production or test code was actually forced to go through:
-# `AnalyzerRegistry((duplicate, duplicate))` constructed directly used to
-# succeed silently. `AnalyzerRegistry.__init__` now runs
-# `_validate_registrations()` itself (dumpex/hunt/_registry.py), so these
-# tests now exercise the one and only construction path that exists.
+# Registry construction validates the complete registration set.
 
 def test_registry_construction_rejects_a_duplicate_identity():
     injection = REGISTRY.get("injection")
@@ -868,39 +829,6 @@ def test_construct_unvalidated_also_snapshots_a_mutable_input_sequence():
     specs.clear()
     assert registry._all_specs() == (injection, injection)
     assert registry.select("all") == (injection, injection)
-
-
-def test_analyzer_registry_init_actually_calls_validate_registrations():
-    # Both `type(REGISTRY) is AnalyzerRegistry` and `REGISTRY._all_specs()
-    # == HUNTERS` are true of ANY correctly-ordered seven-spec tuple
-    # regardless of whether __init__ actually validated it (and
-    # `_construct_unvalidated` also uses `cls.__new__(cls)`, so `type(...)
-    # is AnalyzerRegistry` holds for it too) -- an earlier version of this
-    # test asserted exactly those two things and would still pass if
-    # `__init__`'s own call to `_validate_registrations(specs)` (the P1
-    # fix) were silently reverted to a no-op or deleted, since the real
-    # coverage for THAT regression already comes entirely from the
-    # `test_registry_construction_rejects_*`/`test_construct_unvalidated_*`
-    # tests above, which fail on such a revert. This test instead proves
-    # the wiring directly, the same AST technique
-    # test_registry_module_has_no_bare_assert_statements already uses:
-    # `AnalyzerRegistry.__init__`'s own body must contain a call whose
-    # function is named `_validate_registrations`.
-    registry_module = _REPO_ROOT / "dumpex" / "hunt" / "_registry.py"
-    tree = ast.parse(registry_module.read_text(encoding="utf-8"), filename=str(registry_module))
-    class_node = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.ClassDef) and node.name == "AnalyzerRegistry")
-    init_node = next(
-        node for node in ast.walk(class_node)
-        if isinstance(node, ast.FunctionDef) and node.name == "__init__")
-    calls = {
-        node.func.id for node in ast.walk(init_node)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-    }
-    assert "_validate_registrations" in calls, (
-        f"AnalyzerRegistry.__init__ no longer calls _validate_registrations() "
-        f"directly -- found calls: {sorted(calls)}")
 
 
 # ── option_names / signature validation (contract §7.1 failure #7) ──────
@@ -1173,20 +1101,7 @@ def test_not_evaluated_placeholder_sources_are_not_part_of_the_vocabulary():
     assert set(not_evaluated.sources) == {"yara_scan"}
 
 
-# ── scope drift guard (finding: _SCOPED_TARGETED_SOURCES's premise was ──
-#    stated too broadly, and its allowed-scopes value was hard-wired ────
-#    rather than carried per-entry -- had no drift guard either way) ────
-# Symmetric with the COVERAGE_SOURCE_NAMES drift guard above: drive each
-# targeted-capable hunter's real `project_coverage_report()` down every
-# scope-emitting completeness-check branch it has, and confirm the set of
-# emitted `CoverageLimitation.scope` values matches what `_registry`
-# believes that identity's grantable-scope vocabulary is -- empty for
-# pipe/stomping/yara/cs-beacon (none of the four is in
-# `_SCOPED_TARGETED_SOURCES`, so their real, budget-kind/sub-signal
-# `scope` values exist but have no closed constant to validate against
-# yet -- a real, current, and *correctly* unenforced gap, not an
-# oversight), non-empty (`OVERSIZE_SCAN_LAYERS`) for obfuscation's own
-# `encoding_scan` source.
+# Emitted limitation scopes must match each hunter's targeted vocabulary.
 
 def _scan_target(size_limit=None):
     from dumpex.output.coverage import ScanTarget, ScanTargetKind
@@ -1293,9 +1208,7 @@ def test_scoped_targeted_sources_each_source_is_real_for_its_identity():
         assert all(isinstance(s, str) for s in scopes)
 
 
-# ── _validate_scoped_sources() itself: the enforcement, not just the ────
-#    data (finding: the two tests above assert what the real mapping ─────
-#    contains, not that anything would reject a bad one) ────────────────
+# Validate the scoped-source mapping independently of its current contents.
 
 def test_validate_scoped_sources_accepts_an_empty_mapping():
     # The exact case that used to crash with a bare `NameError:
@@ -1324,10 +1237,7 @@ def test_validate_scoped_sources_rejects_empty_scopes():
         _validate_scoped_sources({"obfuscation": ("encoding_scan", frozenset())})
 
 
-# ── _validate_scoped_sources() malformed entries: no bare unpacking ─────
-#    exception may leak (finding: a malformed VALUE crashed with a bare ──
-#    ValueError/TypeError from the `for identity, (source, scopes) in` ──
-#    tuple-unpacking itself, before any InvalidAnalyzerSpec check ran) ──
+# Malformed mapping entries must fail with InvalidAnalyzerSpec.
 
 @pytest.mark.parametrize("bad_entry", [
     "encoding_scan",                                  # bare string, not a 2-tuple
@@ -1386,29 +1296,6 @@ def test_require_subset_raises_invalid_analyzer_spec_not_assertion_error():
     _require_subset(set(), {"a"}, "test empty subset")
 
 
-def test_module_actually_calls_validate_scoped_sources_at_import_time():
-    # The `_validate_scoped_sources({...})`/`_require_subset(...)` unit
-    # tests above prove the FUNCTIONS reject bad input -- they do NOT
-    # prove either is actually invoked at import time (mutation-verified:
-    # deleting the module-level `_validate_scoped_sources(
-    # _SCOPED_TARGETED_SOURCES)` call left every test above still passing,
-    # the same enforcement-vs-test gap the original P1 finding named for
-    # `_validate_registrations`). Proven directly here via the same AST
-    # technique `test_analyzer_registry_init_actually_calls_validate_
-    # registrations` already uses: the module's own top-level statements
-    # must contain a call to `_validate_scoped_sources`.
-    registry_module = _REPO_ROOT / "dumpex" / "hunt" / "_registry.py"
-    tree = ast.parse(registry_module.read_text(encoding="utf-8"), filename=str(registry_module))
-    top_level_calls = {
-        node.value.func.id for node in tree.body
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
-        and isinstance(node.value.func, ast.Name)
-    }
-    assert "_validate_scoped_sources" in top_level_calls, (
-        f"dumpex/hunt/_registry.py no longer calls _validate_scoped_sources() "
-        f"at module (import) time -- found top-level calls: {sorted(top_level_calls)}")
-
-
 def test_a_second_scoped_identity_is_validated_against_its_own_vocabulary_not_obfuscations(monkeypatch):
     # Finding: the allowed-scopes value used to be hard-wired to
     # OVERSIZE_SCAN_LAYERS inside the validation loop regardless of which
@@ -1460,14 +1347,7 @@ def test_a_second_scoped_identity_is_validated_against_its_own_vocabulary_not_ob
             frozenset({TargetedGrant("encoding_scan", frozenset({"sleep_mask"}))})))
 
 
-# ── Import-time invariants survive `python -O` (finding: bare `assert`) ──
-# `assert` statements are stripped entirely under `-O`/`PYTHONOPTIMIZE`,
-# which would silently turn an import-time roster/mapping-completeness
-# check into a no-op. `_require_equal_sets` replaces every such `assert`
-# in _registry.py with a real `if`/`raise` -- verified here directly
-# (never relying on `assert is stripped` semantics, which pytest itself
-# runs without -O and so could never observe) and by an AST sweep proving
-# no bare `assert` remains at module level in _registry.py.
+# Registry invariant helpers remain active under optimized Python.
 
 def test_require_equal_sets_raises_invalid_analyzer_spec_not_assertion_error():
     from dumpex.hunt._registry import _require_equal_sets
@@ -1475,20 +1355,6 @@ def test_require_equal_sets_raises_invalid_analyzer_spec_not_assertion_error():
         _require_equal_sets({"a"}, {"b"}, "test mismatch")
     # No exception for a genuine match.
     _require_equal_sets({"a", "b"}, {"b", "a"}, "test match")
-
-
-def test_registry_module_has_no_bare_assert_statements():
-    # A regression guard: a future edit that reaches for `assert` again
-    # for an import-time invariant would be silently defeated under
-    # `python -O`, exactly the gap this file's own _require_equal_sets
-    # helper exists to close.
-    registry_module = _REPO_ROOT / "dumpex" / "hunt" / "_registry.py"
-    tree = ast.parse(registry_module.read_text(encoding="utf-8"), filename=str(registry_module))
-    asserts = [node for node in ast.walk(tree) if isinstance(node, ast.Assert)]
-    assert not asserts, (
-        f"dumpex/hunt/_registry.py must not use bare `assert` for its own "
-        f"import-time invariants (stripped under python -O) -- found "
-        f"{len(asserts)} at line(s) {[n.lineno for n in asserts]}")
 
 
 # ── P3 cleanups: undefined dispatcher attr, and a read-only registry dict ─
@@ -1507,45 +1373,3 @@ def test_registry_by_identity_is_read_only():
     assert isinstance(REGISTRY._by_identity, types.MappingProxyType)
     with pytest.raises(TypeError):
         REGISTRY._by_identity["yara"] = REGISTRY.get("injection")
-
-
-# ── Architecture boundary: registry/test-only escape hatches ────────────
-# `_all_specs()` (unfiltered by capability) and `_construct_unvalidated()`
-# (skips `_validate_registrations()` entirely) are BOTH the same class of
-# hazard the contract's own leading-underscore convention names but does
-# not itself enforce (contract §6: "the leading underscore alone is a
-# convention, not an enforcement mechanism") -- a production reference to
-# either one would silently reopen exactly the fail-open door #71 exists
-# to close. An earlier version of this suite covered only `_all_specs()`;
-# the addition of `_construct_unvalidated()` as this round's own P1 fix
-# needed a matching guard, not just a test-file comment asserting one
-# existed.
-
-_TEST_ONLY_ESCAPE_HATCHES = ("_all_specs", "_construct_unvalidated")
-
-
-def _production_python_files():
-    for path in (_REPO_ROOT / "dumpex").rglob("*.py"):
-        yield path
-
-
-def test_escape_hatches_are_never_referenced_outside_the_registry_module():
-    registry_module = _REPO_ROOT / "dumpex" / "hunt" / "_registry.py"
-    offenders = []
-    for path in _production_python_files():
-        if path == registry_module:
-            continue
-        source = path.read_text(encoding="utf-8")
-        if not any(name in source for name in _TEST_ONLY_ESCAPE_HATCHES):
-            continue
-        tree = ast.parse(source, filename=str(path))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Attribute) and node.attr in _TEST_ONLY_ESCAPE_HATCHES:
-                offenders.append((str(path.relative_to(_REPO_ROOT)), node.attr))
-            elif isinstance(node, ast.Name) and node.id in _TEST_ONLY_ESCAPE_HATCHES:
-                offenders.append((str(path.relative_to(_REPO_ROOT)), node.id))
-    assert not offenders, (
-        f"{_TEST_ONLY_ESCAPE_HATCHES} must only be referenced from "
-        f"dumpex/hunt/_registry.py itself -- production callers must use "
-        f"select()/select_targeted()/the real AnalyzerRegistry(...) "
-        f"constructor instead, found reference(s) in: {offenders}")

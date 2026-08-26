@@ -1,48 +1,7 @@
-"""Anti-recurrence harness for untrusted dump text reaching the terminal.
+"""Verify that dump-derived text cannot control terminal rendering.
 
-Everything dumpex prints that came OUT OF A DUMP is attacker-controlled:
-a handle's TypeName/ObjectName, a module name/path, the PEB's command
-line, an environment value. Printed raw, such a string is not data on a
-line -- it is input to the terminal's own parser, and can forge dumpex's
-own output (a newline plus "  [~] ..." reads as a real coverage reason),
-clear the screen, or visually reorder itself (U+202E, the Trojan Source
-trick applied to evidence). `dumpex.ui.colors.console_safe()` is the one
-projection that neutralizes it, and it belongs at the console boundary
-only -- the records and `--json` keep the exact decoded bytes.
-
-**This checks behaviour, never spelling.** Each case builds real record
-objects, calls the real renderer, and inspects the bytes that actually
-reached stdout. Nothing here reads source text, matches identifiers, or
-trusts a docstring, so none of these evade it:
-
-    print(rec.name)                        # no f-string
-    print("%s" % rec.name)                 # old-style formatting
-    n = rec.name; print(f"{n}")            # via a local
-    sys.stdout.write(rec.name)             # not print()
-    print(f"{console_safe(a)} {rec.name}") # escaped the WRONG value
-    print(f"{rec.newly_added_field}")      # a field no list knows about
-
-An earlier revision of this file scanned the AST for `print()` calls
-interpolating a hardcoded set of field names. Measured against the eleven
-shapes above it caught two, and its worst miss was the fifth -- which is
-not an exotic evasion but the natural shape of a half-finished fix. It
-was deleted rather than kept alongside this: a check that catches 2-in-11
-while reading like a gate is worse than no check, because it manufactures
-confidence.
-
-Polarity is a ratchet, because most of the codebase predates
-`console_safe()` and this harness had to be addable without a
-codebase-wide fix in the same change:
-
-  * a renderer that leaks and is NOT in `LEAKS_UNTRUSTED_TEXT` -> FAIL
-    (new or newly-regressed unescaped output is blocked at PR time)
-  * a renderer that leaks and IS listed -> warning (tracked debt)
-  * a renderer that no longer leaks but is still listed -> FAIL
-    (delete the entry; the list may only shrink)
-  * a renderer with no fixture at all -> warning naming it
-
-The third rule is what stops the list from becoming an allowlist nobody
-prunes, and it is why fixing a command REQUIRES touching this file.
+Cases keep raw evidence in records/JSON, drive real console renderers, and
+require every declared hostile field to reach stdout before escape checks pass.
 """
 import ast
 import contextlib
@@ -72,6 +31,7 @@ from dumpex.commands.list_cmd import render_regions_console
 from dumpex.commands.modules import render_modules_console
 from dumpex.commands.process import render_process_console
 from dumpex.commands.profile import collect_profile, render_profile_console
+from dumpex.commands.report import render_report_console
 from dumpex.commands.sysinfo import render_sysinfo_console
 from dumpex.commands.threads import render_threads_console
 
@@ -132,22 +92,10 @@ def forged_lines(text: str) -> list:
 # ── Generic hostile records ─────────────────────────────────────────────
 
 def hostile_record(record_cls, baseline: dict, dump_derived_fields):
-    """`record_cls` built from `baseline` with each named field set to its
-    OWN hostile payload (so the checks below can tell which field's text
-    reached the console, and which case is quietly testing nothing).
+    """Build a record with distinct hostile values in declared dump-derived fields.
 
-    `dump_derived_fields` is declared per case and NOT inferred. This is
-    the one judgement in this file a machine cannot make: whether a field
-    can hold dump text is a question about PROVENANCE, and the type says
-    nothing about it. MemoryRegionRecord.protect is `str | None` and can
-    never hold attacker text -- it is `prot_str(r.Protect)`, dumpex's own
-    lookup of an integer -- while ModuleRecord.name is the same type and
-    is read straight out of ModuleListStream. Filling by type alone
-    manufactures false positives on the first kind, which would put an
-    innocent renderer on the leak list below and send someone to "fix" a
-    non-problem. Declaring the fields keeps the harness honest in both
-    directions; the assertions then verify BEHAVIOUR for the fields
-    declared."""
+    Fields are explicit because provenance cannot be inferred from Python types.
+    """
     for name in dump_derived_fields:
         try:
             record_cls(**{**baseline, name: hostile_text_for(name)})
@@ -405,7 +353,7 @@ def _case_strings():
 
 
 # ProfileStreamEntry.detail: a parser exception's own text ("ExcType:
-# message", dumpex.core.memory.open_dump's Phase 2 isolation) can embed
+# message", dumpex.core.memory.open_dump's stream isolation) can embed
 # bytes read from the dump (a struct.error interpolating a malformed
 # length, a decoded fragment) -- see dumpex.commands.profile.
 # render_profile_console's own docstring. Every other field --profile
@@ -441,10 +389,99 @@ def _case_profile():
     return _rendered(render_profile_console, result.records, result.coverage)
 
 
+_REPORT_FIELDS = ("thread_backing_module", "ioc_text", "image_hit_module")
+
+
+def _case_report():
+    thread = records_module.ReportThreadInfo(
+        tid=1,
+        start_address="0x0000000000001000",
+        backing_module=hostile_text_for("thread_backing_module"),
+        module_context=records_module.MODULE_CONTEXT_RESOLVED,
+        kernel_time_100ns=0,
+        user_time_100ns=0,
+        backing_module_base="0x0000000000001000",
+        backing_module_end="0x0000000000002000",
+    )
+    region = records_module.ReportRegionInfo(
+        base_address="0x0000000000001000",
+        size=4096,
+        protect="PAGE_READWRITE",
+        type="MEM_PRIVATE",
+        module_owner=None,
+        file_offset=0,
+        is_rwx_private=False,
+        module_context=records_module.MODULE_CONTEXT_UNREGISTERED,
+        mz_header_detected=False,
+        has_injected_pe=False,
+        protection_suspicious=False,
+    )
+    ioc = records_module.ReportIocString(
+        offset=0,
+        address="0x0000000000001000",
+        encoding="ASCII",
+        text=hostile_text_for("ioc_text"),
+        is_network_pattern=False,
+    )
+    card = records_module.TriageCardRecord(
+        anchor_tid=1,
+        anchor_address="0x0000000000001000",
+        anchor_source=records_module.TRIAGE_ANCHOR_STRING_HIT,
+        thread=thread,
+        region=region,
+        string_hit={"offset": 0, "address": "0x0000000000001000", "encoding": "ASCII"},
+        other_threads_in_region=[],
+        notable_strings=[],
+        ioc_strings=[ioc],
+        string_scan={
+            "requested_bytes": 4096,
+            "bytes_read": 4096,
+            "clamped": False,
+            "truncated": False,
+            "total": 1,
+            "ascii_count": 1,
+            "utf16_count": 0,
+        },
+        string_scan_error=None,
+        thread_region_correlation_excluded=False,
+        findings=[],
+        finding_details={},
+        verdict="CLEAN",
+        artifact_id=None,
+        extract_read_clamped=None,
+        extract_read_truncated=None,
+    )
+    summary = {
+        "mode": "string",
+        "card_count": 1,
+        "query_string": "needle",
+        "query_tid": None,
+        "query_addr": None,
+        "total_hits": 2,
+        "hits_private": 1,
+        "hits_image": 1,
+        "image_hit_modules": [hostile_text_for("image_hit_module")],
+        "skipped_unreadable_regions": 0,
+        "truncated_regions": 0,
+        "clamped_regions": 0,
+    }
+    return _rendered(
+        render_report_console,
+        [card],
+        _coverage("memory_segments"),
+        [],
+        [],
+        summary,
+        FakeMF(),
+        6,
+    )
+
+
 RENDER_CASES = {
     "dumpex.commands.handles.render_handles_console": (_case_handles, _HANDLES_FIELDS),
     "dumpex.commands.profile.render_profile_console": (_case_profile, _PROFILE_FIELDS),
     "dumpex.commands.process.render_process_console": (_case_process, _PROCESS_FIELDS),
+    "dumpex.commands.report.render_report_console":   (_case_report, _REPORT_FIELDS),
     "dumpex.commands.diff.render_diff_console":        (_case_diff, _DIFF_FIELDS),
     "dumpex.commands.extract.render_strings_console": (_case_strings, _STRINGS_FIELDS),
     "dumpex.commands.modules.render_modules_console": (_case_modules, _MODULES_FIELDS),
@@ -469,24 +506,14 @@ NO_UNTRUSTED_INPUT = {
         "prints only dumpex-produced text and the artifact it just wrote",
 }
 
-# render_report_console is the one renderer with neither a case nor an
-# input-free claim, so the warning below keeps naming it. Its three
-# dump-derived sites (a thread's backing module, extracted string text,
-# and the MEM_IMAGE hit module list) HAVE been routed through
-# console_safe(), but that fix is unverified here: the renderer consumes
-# composite triage cards plus a seven-key summary dict, and a fixture that
-# lands on the wrong branch would assert less than it appears to -- the
-# exact failure this file's per-field reachability check exists to reject.
-# Writing that fixture is the next piece of work, not a formality.
-
 # Renderers that print untrusted dump text unescaped TODAY -- measured by
 # running them, not assumed. Delete an entry when you fix the renderer; a
 # stale entry fails test_no_stale_entries_in_the_leak_list below.
 #
 # EMPTY, and it should stay that way. It exists because this harness was
 # added while modules/threads/peb/sysinfo still leaked, and it is the
-# mechanism that let those be fixed one at a time instead of in one
-# unreviewable change. A renderer added here is a decision to ship known
+# mechanism that lets known leaks remain explicit. A renderer added here
+# is a decision to ship known
 # terminal-injection exposure -- write down why, next to the entry.
 LEAKS_UNTRUSTED_TEXT = set()
 

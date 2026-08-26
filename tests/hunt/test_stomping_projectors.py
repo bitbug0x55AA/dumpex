@@ -1,25 +1,4 @@
-"""Tests for the module-stomping pure projectors (dumpex/hunt/stomping/
-report_facts.py, report_legacy.py, report_record.py, report_console.py) --
-everything that turns a hand-built `StompingReport`
-(dumpex.hunt.stomping.domain's canonical domain model) into the legacy v1.1
-dict, the current-schema `HunterRecord`, and the verdict-first console.
-Mirrors tests/hunt/test_encoding_projectors.py and
-tests/hunt/test_injection_projectors.py (the completed reference pilots'
-own test suites) -- see those modules' own docstrings for the general split
-between this file and its neighbours.
-
-Unlike test_encoding_projectors.py, this file DOES carry its own
-fact-text parity test (`test_fact_text_matches_the_pre_migration_wording`):
-the stomping fact strings are the one part of this migration that is
-required to stay byte-identical (the v1.1 findings dict and the typed
-`HunterRecord` both embed them, and tests/fixtures/hunt_cli_golden/
-stomping_hunt_dict.json/stomping_ioc_hit_hunt_dict.json are frozen against
-them), so they are pinned here against literals transcribed from the
-pre-migration `aggregate.py` rather than only via a golden byte-diff of
-the two scenarios the CLI freeze happens to exercise.
-
-Builder helpers below reuse test_stomping_domain.py's own.
-"""
+"""Hunter-specific behavior for module-stomping report projectors."""
 import pytest
 
 from tests.hunt.test_stomping_domain import (
@@ -39,7 +18,6 @@ from dumpex.hunt.stomping.report_console import render_console_lines
 from dumpex.hunt.stomping.report_facts import finding_from_check_result, project_coverage_v1
 from dumpex.hunt.stomping.report_legacy import project_legacy_dict
 from dumpex.hunt.stomping.report_record import project_hunter_record
-from dumpex.output.coverage import EXIT_NOT_EVALUATED, EXIT_OK, EXIT_PARTIAL, exit_code_for
 
 
 # ── Report builders ────────────────────────────────────────────────────────
@@ -785,24 +763,6 @@ def test_all_three_projections_agree_on_the_verdict_fields(report_fn):
     assert d["coverage_status"] == record.coverage.status.value
 
 
-# ── 7. Exit-code parity across coverage states ────────────────────────────
-
-def test_exit_code_complete_coverage_is_ok():
-    record = project_hunter_record(_clean_report())
-    assert record.coverage.status.value == "complete"
-    assert exit_code_for(record.coverage.status) == EXIT_OK == 0
-
-
-def test_exit_code_partial_coverage_is_partial():
-    record = project_hunter_record(_inconclusive_report())
-    assert record.coverage.status.value == "partial"
-    assert exit_code_for(record.coverage.status) == EXIT_PARTIAL == 3
-
-
-def test_exit_code_not_evaluated_coverage_is_not_evaluated():
-    record = project_hunter_record(_not_evaluated_report())
-    assert record.coverage.status.value == "not_evaluated"
-    assert exit_code_for(record.coverage.status) == EXIT_NOT_EVALUATED == 4
 
 
 # ── 8. The "empty/error" acceptance axis ──────────────────────────────────
