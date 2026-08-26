@@ -109,7 +109,7 @@ dumpex sample.dmp --report --report-addr 0x7ff600001000
 dumpex sample.dmp --extract 0x7ff600001000 --size 0x1000 --output region.bin
 
 # Search captured memory for analyst-readable strings
-dumpex sample.dmp --strings --min-length 8 --encoding auto
+dumpex sample.dmp --strings 0x7ff600001000 --min-len 8 --strings-encoding both
 
 # Compare a suspicious capture against a known reference
 dumpex suspect.dmp --diff clean-reference.dmp --diff-scope all

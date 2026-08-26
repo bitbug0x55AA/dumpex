@@ -3,11 +3,8 @@ Regenerate (or, with --check, verify) the `--hunt` CLI golden fixtures in
 tests/fixtures/hunt_cli_golden/ that tests/integration/test_hunt_cli_compat_
 freeze.py diffs against.
 
-This is the single, committed generator for those fixtures -- previously a
-one-off, uncommitted script reconstructed by hand each time a console-
-rendering change needed the goldens refreshed, which is exactly the kind
-of drift risk a golden-fixture suite exists to eliminate elsewhere. It
-shares tests/fixtures/hunt_cli_scenarios.py's `SCENARIOS` table (the same
+This is the single committed generator for those fixtures. It shares
+tests/fixtures/hunt_cli_scenarios.py's `SCENARIOS` table (the same
 FakeMF constructions the tests themselves parametrize over) and tests/
 fixtures/hunt_cli_harness.py's `run_cli()`/`split_console_body()` (the same
 CLI-invocation harness, including the frozen datetime and rules-loader

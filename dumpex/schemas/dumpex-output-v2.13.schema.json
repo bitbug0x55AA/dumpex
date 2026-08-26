@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.13.schema.json",
   "title": "dumpex v2 structured output (schema_version 2.13)",
-  "description": "Validates the v2 envelope written by the seven recon commands (--list/--modules/--threads/--process/--sysinfo/--handles/--profile), --diff, --extract, --strings, --report, and --hunt, via --json. v2.13 (issue #43) is the single atomic cutover documented in docs/developer/recon_process_sysinfo_handles_contract.md and docs/developer/recon_profile_contract.md: `--pid`/`--peb` (result.kind == \"pid\"/\"peb\") are removed immediately, with no hidden alias, and replaced by `--process` (kind == \"process\", $defs/processRecord), `--handles` (kind == \"handles\", $defs/handleRecord over HandleDataStream), and `--profile` (kind == \"profile\", $defs/profileRecord -- issue #95's evidence-capability map: 'Profile describes what evidence exists. Hunters interpret that evidence.'). `sysInfoRecord` drops the process-identity fields `--process` now owns (`pid`, `process_start_utc`, `image_path`, `command_line`, `process_user_time_seconds`, `process_kernel_time_seconds`) and gains `current_directory`/`environment_variables`. `processRecord` is the only $def in this schema with an optional property (`peb_extended`, present only under `--process --verbose`); every other record $def keeps `additionalProperties: false` with every key `required`, same convention as v2.12. `$defs/pidRecord` and `$defs/pebRecord` are removed from this file (v2.12 and earlier keep them, and stay frozen so historical output remains validatable). v2.9 added `investigation_actions` to `huntSummary` (result.summary for kind == \"hunt\") -- the deduplicated, priority-ordered skipped-target investigation queue `--hunt all` builds automatically from already-collected coverage metadata (see the `investigationAction` $def and dumpex.hunt._investigation.build_investigation_queue()). v2.10 adds `content_reason_codes` to `triageInfo`: the opt-in `--hunt all --triage-skipped` budgeted deep-content triage pass (dumpex.hunt._deep_triage.run_deep_triage(), issue #19 Phase 2) reuses --report's own low-level content-scan primitive under an explicit per-target/whole-run/target-count budget and records what it actually found (an IOC-pattern string match, a network-pattern string match, a bare MZ header, and/or an MZ header CONFIRMED to sit in unregistered/unbacked memory) as this new closed-enum array -- always `[]` for the default `mode == \"metadata\"` pass. `investigation_actions` remains always present and `[]` for a single-hunter `--hunt <name>` run; populated only for `selected == \"all\"`. v2.11 adds `va`/`region_offset`/`file_offset` to `huntPeHeaderHit`: `--hunt injection`'s hidden-PE scan now searches each eligible region for candidate 'MZ' headers at every byte offset instead of only probing the region base (https://github.com/bitbug0x55AA/dumpex/issues/26), so a hit's containing region no longer identifies where the PE actually is -- these three fields carry the candidate's own process address, its offset inside that region, and its .dmp file offset (`null` when the VA is not covered by a captured segment). They are required and always emitted; for a PE at a region's base `va` equals `region.base_address` and `region_offset` is 0. v2.12 (https://github.com/bitbug0x55AA/dumpex/issues/28): `coverageLimitation.targets` is no longer exclusive to SCAN_REGION_OVERSIZED_SKIPPED -- PE_HEADER_READ_FAILED/PE_HEADER_SHORT_READ/PE_HEADER_SCAN_TRUNCATED/PE_HEADER_SCAN_NOT_STARTED (injection's hidden-PE scan) and SCAN_REGION_READ_FAILED/SCAN_REGION_SHORT_READ (pipe/cs-beacon/yara/obfuscation/stomping's region and segment scans, and any other hunter using the shared CoverageTracker) may now carry a `targets` array too, identifying the exact region a read failed/read short/was truncated/was never started on rather than only counting it -- OPTIONAL on these six codes (still `[]` when a producer cannot resolve target identity), and when non-empty its length must equal `affected_count`. PE_HEADER_SCAN_NOT_STARTED is a new code distinguishing a LATER region the whole-hunt scan budget was already exhausted before its own search ever started (nothing examined at all) from PE_HEADER_SCAN_TRUNCATED's own claim (this region's own search got PART of it before running out of budget -- an unfinished remainder). `scanTarget.size_limit` is now nullable: `null` for a target that was never actually oversized (a read-failed/short-read/scan-truncated/not-started target has no cap it exceeded), non-null only for an oversized-skip target. `skipRelationship` (inside `investigationAction`) gains a required `cause` field (`\"oversized_skipped\"`/`\"read_failed\"`/`\"short_read\"`/`\"scan_truncated\"`/`\"scan_not_started\"`) -- `hunter`/`source`/`scope` alone cannot distinguish these, and `build_investigation_queue()` now dedups on the four together; `skipRelationship.size_limit` is correspondingly nullable, non-null only when `cause` is `\"oversized_skipped\"`. Later same-version additions (issue #28 P4 follow-up, still schema_version 2.12): PE_HEADER_SCAN_TRUNCATED/PE_HEADER_SCAN_NOT_STARTED may optionally set `scope` to the hidden-PE scan budget (reads_per_region/total_bytes/validations_per_region/validations_total) that stopped the affected region(s), with `detail` (\"limit=<int> consumed=<int>\") carrying that budget's own configured limit and how much was consumed; `build_investigation_queue()`'s dedup key drops `ScanTarget.kind` (a memory_region and a memory_segment target naming the same (base_address, size) now merge into one investigation_actions entry, enriching a segment-only representative with MemoryInfo facts from the already-passed memory_regions when a covering region exists).",
+  "description": "Validates the v2.13 `--json` envelope for --list, --modules, --threads, --process, --sysinfo, --handles, --profile, --diff, --extract, --strings, --report, and --hunt. `result.kind` selects the record and summary shapes. Record objects are closed where declared; `processRecord.peb_extended` is the only optional record property and appears only for `--process --verbose`. Hunt investigation actions are present only for `selected == \"all\"` and describe unresolved coverage targets rather than verdicts.",
   "type": "object",
   "required": [
     "meta",
@@ -582,7 +582,7 @@
       }
     },
     "sysInfoRecord": {
-      "description": "docs/developer/recon_process_sysinfo_handles_contract.md §4.2's 18-field shape (issue #41, exposed here by #43): the process identity/runtime fields now owned by `--process` (pid, process_start_utc, image_path, command_line, process_user_time_seconds, process_kernel_time_seconds) are gone; `current_directory`/`environment_variables` are added -- same environment_variables array-of-{name,value} shape `pebRecord` used in v2.12 (never a map: duplicate names, `=`-prefixed names, and source order are real forensic evidence a JSON object key set would silently destroy).",
+      "description": "The 18-field `--sysinfo` record. Process identity and runtime fields belong to `--process`; this record carries system, host, current-directory, and environment facts. `environment_variables` is an ordered array of `{name, value}` entries, never a map, so duplicate names, `=`-prefixed names, and source order remain evidence.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -733,7 +733,7 @@
       }
     },
     "processDiagnosticRecord": {
-      "description": "Matches dumpex.output.records.ProcessDiagnosticRecord.to_dict() -- one `identity_evidence.diagnostics[]`/`iat.diagnostics[]` entry, the closed seven-code registry frozen by docs/developer/recon_process_sysinfo_handles_contract.md §6.2 (never a LimitationCode -- these never appear in `coverage.limitations`, and unlike that intentionally-open vocabulary, this one is small and fully frozen, so `code` is a closed enum here). `severity` is constrained to info/warning only, and the allOf below closes each code's own `details` key set and value shapes -- together these are the schema-level guarantee that no verdict vocabulary (DETECTED/malicious/confidence/peb_trusted/ATT&CK id/reconstructed address/...) can ever appear on a Recon diagnostic, matching §0.2/§1.6's non-goal and §37's 'no peb_trusted boolean, no treating consistency as proof the PEB is authentic' rule.",
+      "description": "One `identity_evidence.diagnostics[]` or `iat.diagnostics[]` entry. `code` is a closed seven-value diagnostic vocabulary, distinct from coverage limitations, and `severity` is limited to info or warning. Each code has a closed `details` shape. Recon diagnostics must not contain verdict, confidence, ATT&CK, reconstructed-address, or PEB-authenticity claims.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -999,7 +999,7 @@
       ]
     },
     "importEntryRecord": {
-      "description": "Matches dumpex.output.records.ImportEntryRecord.to_dict() -- one IAT thunk slot (§3.5.3). `symbol` is non-null only when `import_by == \"name\"`; `ordinal` is non-null only when `import_by == \"ordinal\"` (and always set in that case -- an ordinal is decoded directly from the already-captured thunk value, so there is no 'ordinal read failed' case, unlike `symbol`'s own separate bounded name read).",
+      "description": "One IAT thunk slot. `symbol` is non-null only when `import_by == \"name\"`; `ordinal` is non-null and decoded from the captured thunk only when `import_by == \"ordinal\"`.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1108,7 +1108,7 @@
       ]
     },
     "iatRecord": {
-      "description": "Matches dumpex.output.records.IatRecord.to_dict() -- `--process`'s `iat` object (§3.5), always present, never null. `table_present`/`import_directory_present` are each true/false/null (§3.5.2's three-state presence); the allOf below enforces the address/presence/count consistency rules IatRecord.__post_init__ requires. NOT expressed here (Python-only): len(entries) must equal entry_count exactly -- JSON Schema cannot compare an array's LENGTH against a sibling field's value.",
+      "description": "The always-present, non-null `--process` IAT object. `table_present` and `import_directory_present` are three-state values (true, false, or null); the conditions below enforce address, presence, and count consistency. The producer additionally requires `len(entries) == entry_count`, which JSON Schema cannot express.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1307,7 +1307,7 @@
       ]
     },
     "processRecord": {
-      "description": "Matches dumpex.output.records.ProcessRecord.to_dict() -- `--process`'s record (§3.1, docs/developer/recon_process_sysinfo_handles_contract.md), replacing v2.12's `pidRecord`/`pebRecord`. Exactly one per result, always emitted even when every scalar field is null. `identity_evidence` nests the process-identity-snapshot claims a caller can audit (§3.4): `misc_info_claim` (pid/process_create_time_utc plus their own raw_pid/raw_process_create_time preserved on rejection -- integer or string, never the live object), `peb_claim` (image_base_address as hexAddress, image_path, name, and the three raw_* fields -- each a string, or for raw_image_base_address a fixed-width hex string, when the normalized value is null), `module_claim` (match_state is resolved/unregistered/unavailable; name_matched_candidate is {base_address, name, path} or null), `main_image_pe` (checked/valid/reason), `selected_path_source` (peb/module/null), and `diagnostics` (processDiagnosticRecord array). `peb_extended` is the ONLY optional property in this schema (present only under `--process --verbose`, carrying the seven retired `--peb`-only fields per §3.6) -- every other property here, and every other record $def in this schema, keeps `additionalProperties: false` with every key `required`.",
+      "description": "The single `--process` record, emitted even when every scalar field is null. `identity_evidence` preserves auditable claims from misc-info, PEB, module, and main-image PE sources, including rejected raw values where defined, path-selection provenance, and diagnostics. `peb_extended` is the only optional property in this schema and is present only for `--process --verbose`; all other properties here are required and the object is closed.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1568,7 +1568,7 @@
           }
         },
         "peb_extended": {
-          "description": "Present only when --process was run with --verbose (§3.6) -- the seven retired --peb-only fields. Omitted entirely (not merely null) otherwise; this is the one property in this schema that `required` does not cover.",
+          "description": "The seven extended PEB fields, present only for `--process --verbose`. The property is omitted entirely, not set to null, otherwise; it is the only property in this schema outside its object's `required` set.",
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -1616,7 +1616,7 @@
       }
     },
     "handleRecord": {
-      "description": "Matches dumpex.output.records.HandleRecord.to_dict() -- one `--handles` record (§5.2), one per HandleDataStream descriptor whose Handle value is usable. `handle` is a fixed-width hex string, never null. `type_name_status`/`object_name_status` are §5.2.1's independent ok/unnamed/unreadable discriminators; the allOf below enforces that each name is non-null if and only if its own status is \"ok\" (empty-string names are rejected by minLength on the property itself). `attributes`/`granted_access` stay raw, undecoded masks.",
+      "description": "One `--handles` record per HandleDataStream descriptor with a usable handle value. `handle` is a non-null fixed-width hex string. `type_name_status` and `object_name_status` independently distinguish ok, unnamed, and unreadable; each name is non-null exactly when its status is `ok`. `attributes` and `granted_access` remain raw masks.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1748,7 +1748,7 @@
       ]
     },
     "profileStreamEntry": {
-      "description": "Matches dumpex.output.records.ProfileStreamEntry.to_dict() -- one row of the dump's own MINIDUMP_DIRECTORY table (docs/developer/recon_profile_contract.md). `parser_state` is the closed StreamParserState vocabulary; the allOf below enforces record_count/detail exactly 0/null as ProfileStreamEntry.__post_init__ requires per state. NOT expressed here (Python-only): for parser_state == 'parsed', record_count may be a real count (a collection stream) or null (a singular non-collection stream) -- JSON Schema cannot distinguish those two legitimate cases from the stream_type_id alone.",
+      "description": "One row of the dump's MINIDUMP_DIRECTORY table. `parser_state` is closed, and the conditions below constrain `record_count` and `detail` for each state. For `parsed`, `record_count` may be an integer for a collection stream or null for a singular stream; JSON Schema cannot distinguish those cases from `stream_type_id` alone.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1882,7 +1882,7 @@
       ]
     },
     "profileMemoryCapture": {
-      "description": "Matches dumpex.output.records.ProfileMemoryCapture.to_dict() -- explicit memory-capture facts, kept independent per docs/developer/recon_profile_contract.md §5.3.2: 'Do not infer MiniDumpWithFullMemory from Memory64ListStream alone. Report the raw flag and observed memory evidence independently.' The allOf below enforces captured_segment_count/captured_bytes_total staying both-null-or-both-set together, as ProfileMemoryCapture.__post_init__ requires.",
+      "description": "Explicit memory-capture facts. Do not infer `MiniDumpWithFullMemory` from `Memory64ListStream`; the raw flag and observed memory evidence are independent. `captured_segment_count` and `captured_bytes_total` are either both null or both set.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1960,7 +1960,7 @@
       ]
     },
     "capabilityLimitation": {
-      "description": "Matches dumpex.output.records.CapabilityLimitation.to_dict() -- one reason ONE analysis capability is limited or unavailable (docs/developer/recon_profile_contract.md §6.2). Distinct from the top-level $defs/coverageLimitation: this describes an analysis CAPABILITY's own evidence gap, never whether --profile itself completed. `code` is closed (unlike the top-level coverageLimitation's intentionally-open `code`) because this is a fresh, small, fully-frozen vocabulary owned entirely by the profile capability registry, not one that grows per-command the way dumpex.output.coverage.LimitationCode does.",
+      "description": "One reason an analysis capability is limited or unavailable. This describes the capability's evidence gap, not whether `--profile` completed. Its `code` vocabulary is closed, unlike the top-level `coverageLimitation.code` vocabulary.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1995,7 +1995,7 @@
       }
     },
     "profileCapabilityEntry": {
-      "description": "Matches dumpex.output.records.ProfileCapabilityEntry.to_dict() -- one row of the closed analysis-capability matrix (docs/developer/recon_profile_contract.md §4). `required_source_groups` is a tuple of OR-groups: each inner array is one or more alternative source names where at least one must be usable. `status`/`limitations` are cross-validated in Python (ProfileCapabilityEntry.__post_init__) beyond what JSON Schema can express here: 'available' carries zero limitations; 'limited' carries no REQUIRED_SOURCE_* limitation but at least one REQUIRED_GROUP_MEMBER_*/OPTIONAL_SOURCE_*/*_TRUNCATED one; 'unavailable' carries at least one REQUIRED_SOURCE_* limitation and at least one whole required group fully blocked; no source is named by more than one limitation; required_sources always equals the flattened, order-preserving union of required_source_groups.",
+      "description": "One row of the closed analysis-capability matrix. Each `required_source_groups` entry is an OR-group with at least one usable source required. `available` has no limitations; `limited` has non-blocking group, optional-source, or truncation limitations; `unavailable` has a blocking required-source limitation and a fully blocked required group. A source may appear in at most one limitation, and `required_sources` is the order-preserving flattened union of the groups.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -2942,7 +2942,7 @@
       ]
     },
     "profileRecord": {
-      "description": "Matches dumpex.output.records.ProfileRecord.to_dict() -- `--profile`'s record (issue #95, docs/developer/recon_profile_contract.md). Exactly one per result when a dump's directory table could be read at all (coverage.status is then complete or partial, never not_evaluated); zero records with coverage.status == \"not_evaluated\" otherwise. `capabilities` always contains exactly the six frozen capability ids in the fixed order enumerated on profileCapabilityEntry.capability_id -- never carries malicious/clean, confidence, ATT&CK, or hunter-score semantics (a hard non-goal of #95: 'Profile describes what evidence exists. Hunters interpret that evidence.'). The allOf below enforces raw_flags/recognized_flags/unrecognized_flag_bits/memory_capture.full_memory_flag_set nullability together (dumpex.commands.profile._decode_flags()/_build_memory_capture() read all four from the same raw_flags is-None branch). NOT expressed here (Python-only, see ProfileRecord.__post_init__): streams stay in directory order with directory_index == array position; capabilities' capability_id sequence matches the frozen registry order exactly.",
+      "description": "The `--profile` evidence-capability record. It is emitted exactly once when the dump directory is readable, with complete or partial coverage, and omitted when coverage is `not_evaluated`. `capabilities` contains exactly six fixed capability ids in registry order and never expresses malicious/clean, confidence, ATT&CK, or hunter-score verdicts. The conditions below keep raw flag fields and `memory_capture.full_memory_flag_set` nullable together. The producer also preserves stream directory order and requires each `directory_index` to equal its array position.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -2993,7 +2993,7 @@
           }
         },
         "capabilities": {
-          "description": "The six frozen capability ids, in the frozen registry order (docs/developer/recon_profile_contract.md's own CAPABILITY_REGISTRY) -- pinned positionally via prefixItems, each slot cross-checked against its own frozen capability_id/required_source_groups/required_sources/optional_sources, so a producer cannot repeat, reorder, drop, or reattribute a capability's own source rule and still validate.",
+          "description": "The six fixed capability ids in registry order. Positional constraints prevent repeating, reordering, dropping, or reattributing a capability's source rules.",
           "type": "array",
           "prefixItems": [
             {
@@ -3151,7 +3151,7 @@
       }
     },
     "stringsSummary": {
-      "description": "Matches result.summary for kind == 'strings' (dumpex.commands.extract.collect_strings). Pins the scan-context fields the P2 review's own 'a zero-result scan must still be able to tell where the scan started' finding needs machine-enforced, not just documented/unit-tested -- requested_address is the only way to know the scan origin when `data.records` is empty. additionalProperties: false since these six fields are the whole of collect_strings' own summary dict today; a future field added there must extend this def too, the same way every other v2 record type is kept in lockstep with its Python producer.",
+      "description": "The summary for `result.kind == \"strings\"`. `requested_address` preserves the scan origin even when `data.records` is empty. These six fields are the complete closed summary shape.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -3991,7 +3991,7 @@
       ]
     },
     "reportSummary": {
-      "description": "Matches result.summary for kind == 'report' (dumpex.commands.report.collect_report). `mode` says which of --report-tid/--report-addr/--report-string (or the tid+addr combination) produced this result -- the allOf below pins which query_* fields are required non-null per mode, the same way stringsSummary pins requested_address for --strings. `skipped_unreadable_regions`/`truncated_regions`/`clamped_regions` are StringSearchStats' own three counters (see dumpex.core.memory.StringSearchStats), always 0 outside string-search mode. additionalProperties: false since these twelve fields are the whole of collect_report's own summary dict today.",
+      "description": "The summary for `result.kind == \"report\"`. `mode` identifies --report-tid, --report-addr, --report-string, or the tid-plus-address combination; the conditions below require the corresponding non-null query fields. `skipped_unreadable_regions`, `truncated_regions`, and `clamped_regions` are string-search counters and remain zero outside string-search mode. These twelve fields are the complete closed summary shape.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -4727,7 +4727,7 @@
       ],
       "properties": {
         "kind": {
-          "description": "Which canonical record type result.data.records holds. Grows as more commands migrate onto v2 -- not an open string.",
+          "description": "Selects the canonical record type held by `result.data.records`; this is a closed vocabulary.",
           "enum": [
             "memory_regions",
             "modules",
@@ -4782,7 +4782,7 @@
               "default": {}
             },
             "limitations": {
-              "description": "Structured, machine-readable coverage gaps -- the source `reasons` is rendered from. `code` is intentionally a plain string, not a closed enum: dumpex.output.coverage.LimitationCode grows as commands migrate, and this schema should not need a version bump every time a new code is added.",
+              "description": "Structured, machine-readable coverage gaps from which `reasons` is rendered. `code` intentionally remains an open string vocabulary so new limitation codes do not require a schema-version change.",
               "type": "array",
               "items": {
                 "$ref": "#/$defs/coverageLimitation"
@@ -6341,7 +6341,7 @@
       ]
     },
     "scanTarget": {
-      "description": "Matches dumpex.output.coverage.ScanTarget.to_dict() -- ONE region/segment a scan did not examine, carried on a coverage limitation (coverageLimitation.targets) so a partial result names the exact virtual addresses an investigator still has to extract, rescan, or recollect rather than only counting them. New in schema_version 2.8. `size_limit` is the configured per-target cap this target exceeded, recorded per target because the same physical region can exceed several scan layers' different caps; WHICH layer is named once by the owning limitation's own `scope`, not repeated onto every target. As of schema_version 2.12, `size_limit` is `null` for a target that was never actually oversized -- a region a scan attempted but failed to read, read short, or ran out of scan budget on (there is no cap being exceeded there, just an I/O failure or a budget exhaustion); it stays non-null only for an oversized-skip target. `file_offset` is a byte offset inside the .dmp file (null when those bytes were never captured), NOT an address -- addresses use the fixed-width hexAddress form. allocation_base/state/type/protection are MemoryInfo facts and are always null for kind == \"memory_segment\", which has no MemoryInfo behind it. `captured_size`/`capture_state` (new in schema_version 2.12, issue #28) are a STRUCTURAL fact from the dump's own segment table -- how many of `size` bytes starting at `base_address` are actually present in the .dmp file, independent of whether any hunt's own live-memory read attempt succeeded. `capture_state` is derived from `captured_size` (`null` when not computed, `\"none\"` when 0, `\"complete\"` when equal to `size`, `\"partial\"` otherwise) -- see `investigationAction.evidence_availability`'s own `\"partial\"` value, which this field feeds. Python additionally requires size > size_limit whenever size_limit is non-null (a target that fits inside the cap was not skipped for being oversized), and captured_size <= size -- both comparisons between two field VALUES, which JSON Schema cannot express.",
+      "description": "One memory region or segment a scan did not examine, attached to a coverage limitation so the unresolved virtual range is explicit. `size_limit` is non-null only for an oversized skip and records the cap exceeded; the owning limitation's `scope` names the scan layer. `file_offset` is a dump-file byte offset and is null when the bytes were not captured. MemoryInfo fields are null for `kind == \"memory_segment\"`. `captured_size` and `capture_state` describe dump capture independently of a hunter's read attempt: state is null when size is unknown, none at zero, complete when equal to `size`, and partial otherwise. The producer additionally requires non-null `size_limit < size` and `captured_size <= size`, comparisons JSON Schema cannot express.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -6504,7 +6504,7 @@
       ]
     },
     "coverageLimitation": {
-      "description": "Matches dumpex.output.coverage.CoverageLimitation.to_dict(), which always emits every field regardless of `code` (null/[] where a given code doesn't use a field) -- `required` covers the full set for the same reason sourceObservation's does. `allOf` below constrains each KNOWN code's disallowed fields to their default (null/[]), pins `source` where fixed, and mirrors the value-shape rules dumpex.output.coverage._CODE_SPECS/CoverageLimitation.__post_init__ enforce that JSON Schema CAN express (minItems, exact array contents, non-null requirements, one-field-implies-another-field dependencies) -- each `if` matches only that one `code` value, so an unrecognized future code matches none of them and stays fully open; `code` itself remains a plain string, not an enum. This is NOT full parity with the Python model: rules comparing two field VALUES for inequality (source != counterpart_source) or against another object's state entirely outside this fragment (counterpart_source's own record_count, a sibling entry in result.coverage.sources) are Python-only and cannot be expressed here -- see CoverageLimitation.__post_init__ and _validate_source_absent_against_sources for those, and, new in schema_version 2.8, SCAN_REGION_OVERSIZED_SKIPPED's own affected_count == len(targets) rule (a count compared against another field's array LENGTH, which JSON Schema cannot express either). Also new in 2.8: four source-keyed branches on SCAN_REGION_OVERSIZED_SKIPPED pin `scope` and every `targets[*].kind` to the fixed contract each known source (`pipe_name_scan`/`ioc_string_scan`/`segment_scan`/`encoding_scan`) actually produces -- mirroring dumpex.output.coverage._SCAN_REGION_OVERSIZED_SKIPPED_SOURCE_CONTRACTS; an unrecognized future `source` value matches none of the four and stays unconstrained on this axis, same as an unrecognized `code`.",
+      "description": "A coverage gap record that always emits every field, using null or `[]` where a code does not use one. The conditions below constrain known codes, fixed sources, allowed defaults, dependencies, and source-specific oversized-target kinds. Unknown `code` or `source` values remain open. Producer-only checks compare sibling values or external source state, including source inequality, counterpart record counts, `affected_count == len(targets)`, and other relationships JSON Schema cannot express.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -6596,14 +6596,14 @@
           "minLength": 1
         },
         "targets": {
-          "description": "New in schema_version 2.8. The typed region/segment references a scan-coverage code identifies as the exact things it did not examine. Empty for every code that does not use it -- an existing consumer that ignores this key sees v2.7's shape unchanged. SCAN_REGION_OVERSIZED_SKIPPED always populates it (non-empty, length equals affected_count exactly). As of schema_version 2.12, PE_HEADER_READ_FAILED/PE_HEADER_SHORT_READ/PE_HEADER_SCAN_TRUNCATED/PE_HEADER_SCAN_NOT_STARTED/SCAN_REGION_READ_FAILED/SCAN_REGION_SHORT_READ may also populate it -- OPTIONAL on these six (a producer that cannot resolve target identity still emits `[]`), but when non-empty its length must equal affected_count exactly, same rule as SCAN_REGION_OVERSIZED_SKIPPED (Python-side rule, see the $def description above).",
+          "description": "Typed region or segment references identifying what a scan did not examine. Codes that do not use targets emit `[]`. SCAN_REGION_OVERSIZED_SKIPPED requires a non-empty array; the read-failed, short-read, scan-truncated, and scan-not-started codes may use `[]` when target identity is unavailable. Whenever targets are present, the producer requires their count to equal `affected_count`.",
           "type": "array",
           "items": {
             "$ref": "#/$defs/scanTarget"
           }
         },
         "budget_limit": {
-          "description": "New in schema_version 2.12 (issue #28 P6 follow-up). The structured counterpart of `scope` naming WHICH resource budget a scan-budget-exhaustion code stopped on -- `scope` carries the (closed-vocabulary, per-code) KIND, this and `budget_consumed` carry that budget's own configured limit and how much was consumed. Kept as its own dedicated field rather than packed into `detail` (a prior version of this feature parsed \"limit=<int> consumed=<int>\" text out of `detail`, which broke the moment a code that ALSO uses `detail` for its own free-text reason -- e.g. CS_BEACON_SCAN_BUDGET_EXHAUSTED's human-readable budget_reason -- needed both at once). Minimum 0 (not 1) -- a configured budget of exactly 0 is legal (e.g. \"no validations at all\"). Non-null only alongside a non-null `scope`.",
+          "description": "The configured limit for the resource budget named by `scope`; `budget_consumed` records the observed use. This structured value is independent of free-text `detail`. Minimum 0 permits a deliberately disabled budget. Non-null only with a non-null `scope`.",
           "type": [
             "integer",
             "null"
@@ -7649,7 +7649,7 @@
           }
         },
         {
-          "description": "New in schema_version 2.12 (issue #28): the six read-failed/short-read/scan-truncated/scan-not-started codes are never oversized-skip codes, so a target attached to one of them can never carry the size_limit an oversized skip would have exceeded -- mirrors dumpex.output.coverage._require_optional_targets_matching_count's own Python-side size_limit check.",
+          "description": "Read-failed, short-read, scan-truncated, and scan-not-started targets are not oversized skips, so their `size_limit` must be null.",
           "if": {
             "properties": {
               "code": {
@@ -7679,7 +7679,7 @@
           }
         },
         {
-          "description": "New in schema_version 2.12 (issue #28 P4/P6 follow-up): PE_HEADER_SCAN_TRUNCATED/PE_HEADER_SCAN_NOT_STARTED may optionally name WHICH of the hidden-PE scan's four independent budgets (reads_per_region/total_bytes/validations_per_region/validations_total -- see dumpex.hunt.injection.memory_scan._ScanBudget) stopped the region(s) this limitation reports, via `scope`, with that budget's own configured limit/consumed as `budget_limit`/`budget_consumed`. `null` together when no region in this hunt run's scan actually stopped on a budget. Mirrors dumpex.output.coverage._validate_optional_budget_fields -- the Python-only rule that scope and budget_limit/budget_consumed must be set TOGETHER (never one without the other) is not expressible here, same acknowledged gap this $def's own top-level description already notes for other cross-field rules.",
+          "description": "PE_HEADER_SCAN_TRUNCATED and PE_HEADER_SCAN_NOT_STARTED may name the stopping hidden-PE budget in `scope` (reads_per_region, total_bytes, validations_per_region, or validations_total) with its limit and consumption. All three fields are null when no budget stopped the scan; the producer requires them to be set or null together.",
           "if": {
             "properties": {
               "code": {
@@ -7705,7 +7705,7 @@
           }
         },
         {
-          "description": "New in schema_version 2.12 (issue #28 P6 follow-up): YARA_HIT_CAP_REACHED/YARA_SCAN_BUDGET_EXHAUSTED may optionally name WHICH of yara_hunt.scanner's own independent budgets (max_total_hits/scan_deadline_seconds/max_total_bytes_scanned) stopped the scan, via `scope`, with that budget's own configured limit/consumed as `budget_limit`/`budget_consumed`.",
+          "description": "YARA_HIT_CAP_REACHED and YARA_SCAN_BUDGET_EXHAUSTED may identify the stopping YARA budget in `scope` (max_total_hits, scan_deadline_seconds, or max_total_bytes_scanned) with its limit and consumption.",
           "if": {
             "properties": {
               "code": {
@@ -7730,7 +7730,7 @@
           }
         },
         {
-          "description": "New in schema_version 2.12 (issue #28 P6 follow-up): CS_BEACON_SCAN_BUDGET_EXHAUSTED may optionally name WHICH of cs_beacon.scanner's own independent budgets (scan_deadline_seconds/max_total_scanned_bytes/max_candidates/max_decoded_bytes/max_hits) stopped the scan, via `scope`, with that budget's own configured limit/consumed as `budget_limit`/`budget_consumed` -- a SEPARATE fact from `detail`, which keeps its own pre-existing free-text human-readable reason on this code.",
+          "description": "CS_BEACON_SCAN_BUDGET_EXHAUSTED may identify the stopping budget in `scope` (scan_deadline_seconds, max_total_scanned_bytes, max_candidates, max_decoded_bytes, or max_hits) with its limit and consumption. `detail` remains a separate human-readable reason.",
           "if": {
             "properties": {
               "code": {
@@ -7754,7 +7754,7 @@
           }
         },
         {
-          "description": "New in schema_version 2.12 (issue #28 P6 follow-up): every OTHER code (besides the five above) must leave budget_limit/budget_consumed null -- only a scan-budget-exhaustion code has a resource budget to attribute. Deliberately does NOT also constrain `scope` here -- unlike budget_limit/budget_consumed (which only these five codes ever use), `scope` has its own separate, established meanings on several OTHER codes entirely (e.g. SCAN_REGION_OVERSIZED_SKIPPED/SCAN_REGION_READ_FAILED/_SHORT_READ's own scan-layer name), each already constrained by its own dedicated branch elsewhere in this $def.",
+          "description": "All other codes leave `budget_limit` and `budget_consumed` null. This branch does not constrain `scope`, which has separate meanings for other coverage codes.",
           "if": {
             "not": {
               "properties": {
@@ -7831,7 +7831,7 @@
       }
     },
     "finding": {
-      "description": "Matches dumpex.hunt._finding.Finding.to_dict() -- one hunter-agnostic judgment (facts/inference/confidence/rationale/limitations, tagged observation/lead/detection) inside a hunterRecord's `findings` array, extended (v2.5) with a normalized-SIEM-alert shape: `id` (deterministic -- 128-bit SHA-256 prefix of an unambiguous JSON encoding of check/rule_id/confidence/facts, so it never changes across a re-scan of the SAME evidence; content-only, so it is NOT a globally unique cross-dump identifier -- combine it with meta.evidence[].sha256 for that), `severity` (always derived from tag+confidence -- see the allOf block below, which pins the exact mapping so an external producer must follow it too, not just this codebase's own Finding.__post_init__), `technique_ids` (real MITRE ATT&CK technique/sub-technique IDs only, e.g. \"T1055\"/\"T1559.001\" -- empty unless the hunter has an actual mapping -- never invented per check), `evidence_refs` (structured pointers into the hunter's own `details`, distinct from free-text `facts`), `iocs` (indicator-of-compromise values), and `rule_id`/`rule_version` (detection-logic provenance -- `rule_id` defaults to `check`; `rule_version` stays null unless a real versioned rule source produced this finding, e.g. rules.yaml-derived findings carry that ruleset's own CONTENT sha256, never rules.yaml's top-level `version:` FORMAT field, which does not change when rule content does). yara is the one hunter that never populates this -- its own matches/rules_hit stay in YaraDetails instead (see hunterRecord's own allOf: findings must be [] for hunter == 'yara').",
+      "description": "One hunter-agnostic judgment in a hunter record's `findings` array, combining facts, inference, confidence, rationale, limitations, normalized identity, severity, ATT&CK mappings, evidence references, IOCs, and rule provenance. `id` is a deterministic 128-bit SHA-256 prefix for the same finding content, not a globally unique cross-dump identifier; combine it with `meta.evidence[].sha256`. `severity` is derived from tag and confidence. `technique_ids` must be real mapped techniques and may be empty. `rule_version` is null unless a versioned rule source produced the finding; rules.yaml findings use its content hash, not its format-version field. YARA records keep matches in `YaraDetails` and require `findings == []`.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -7910,7 +7910,7 @@
           "uniqueItems": true,
           "items": {
             "type": "string",
-            "description": "MITRE ATT&CK technique (\"T1055\") or sub-technique (\"T1559.001\") id. Expressed as two fixed-length oneOf branches, each pattern PLUS an exact minLength/maxLength, rather than a single '^...$'-anchored pattern -- a review found that '$' (in both Python re, which the `jsonschema` library's own pattern check uses via re.search(), AND in ECMA 262, the dialect the JSON Schema spec itself designates) matches just before a trailing newline, not only at the true end of string, so a bare pattern alone would incorrectly accept \"T1055\\n\"/\"T1559.001\\n\". The length bound closes that gap portably, without relying on a non-standard anchor like Python's \\Z.",
+            "description": "A MITRE ATT&CK technique (`T1055`) or sub-technique (`T1559.001`) id. Each branch combines a pattern with an exact length because `$` may also match before a trailing newline; the length bound rejects that case without a non-standard anchor.",
             "oneOf": [
               {
                 "pattern": "^T[0-9]{4}$",
@@ -7957,7 +7957,7 @@
       },
       "allOf": [
         {
-          "description": "severity is a pure function of (tag, confidence) -- see dumpex.hunt._finding.severity_for()'s own 9-entry mapping table. Pinned here as an allOf/if-then so a producer OTHER than this codebase's own Finding dataclass cannot emit a document where severity contradicts tag+confidence -- the same enforcement Finding.__post_init__ applies in Python (severity is init=False there), now also enforced on the wire.",
+          "description": "`severity` is a pure function of `(tag, confidence)`. This condition pins the nine-value mapping so every producer must keep severity consistent with those fields.",
           "if": {
             "properties": {
               "tag": {
@@ -8097,7 +8097,7 @@
       ]
     },
     "huntRegionRef": {
-      "description": "Matches dumpex.output.records.HuntRegionRef.to_dict() -- a memory region reference inside a hunter's `details`, replacing the raw Region object v1.1 exposed via `_json_safe()`'s non-reproducible str(obj) fallback (see docs/developer/hunt_migration_field_matrix.md's cross-cutting finding #1). `base_address` is never null -- a region reference always names a real address.",
+      "description": "A reproducible memory-region reference inside a hunter's `details`. `base_address` is never null because every region reference names a real address.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -8214,7 +8214,7 @@
       }
     },
     "huntPeHeaderHit": {
-      "description": "Matches dumpex.output.records.HuntPeHeaderHit.to_dict() -- one MZ candidate examined for a hidden PE header: where it is, its containing region, and the structural-validation outcome. `entry_point_rva` stays a plain int (an RVA is relative to a not-yet-established image base, not itself a memory address); `image_base` (the PE header's OWN declared base) is a real address, hex-formatted. `reason` is set only when `valid` is false; every PE-fact field is set only when `valid` is true. New in schema_version 2.11: `va` (the process address the candidate's 'MZ' was found at), `region_offset` (how far into `region` that is) and `file_offset` (where those bytes sit in the .dmp, `null` when the VA is not covered by any captured segment -- not the same claim as offset zero). The hidden-PE scan searches whole regions for candidates rather than only probing each region base, so `region` alone no longer identifies where a PE actually is; for a PE at a region's base `va` equals `region.base_address` and `region_offset` is 0.",
+      "description": "One MZ candidate examined for a hidden PE header, including its exact location, containing region, and structural-validation outcome. `entry_point_rva` is an integer RVA; the header's declared `image_base` is a hex address. `reason` is set only when `valid` is false, while PE fact fields are set only when it is true. `va` is the candidate address, `region_offset` its offset inside `region`, and `file_offset` its dump-file offset or null when uncaptured. At a region base, `va == region.base_address` and `region_offset == 0`.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -8541,7 +8541,7 @@
       }
     },
     "stompingDetails": {
-      "description": "Matches dumpex.output.records.StompingDetails.to_dict() -- `--hunt stomping`'s hunter-specific evidence. `protection_leads`/`verified_changes` entries are plain objects, not yet a dedicated typed shape (tracked follow-up -- see docs/developer/hunt_migration_field_matrix.md's stomping section) -- open objects here reflect that Python-side reality rather than inventing a contract the collector doesn't enforce yet.",
+      "description": "The `--hunt stomping` evidence. `protection_leads` and `verified_changes` entries are intentionally schema-open objects because the collector does not enforce a narrower entry shape.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -8564,7 +8564,7 @@
       }
     },
     "pipeDetails": {
-      "description": "Matches dumpex.output.records.PipeDetails.to_dict() -- `--hunt pipe`'s hunter-specific evidence. Entries are plain objects, not yet a dedicated typed shape (tracked follow-up) -- same rationale as stompingDetails above.",
+      "description": "The `--hunt pipe` evidence. Entries are intentionally schema-open objects because the collector does not enforce a narrower entry shape.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -8608,7 +8608,7 @@
       }
     },
     "csBeaconDetails": {
-      "description": "Matches dumpex.output.records.CsBeaconDetails.to_dict() -- `--hunt cs-beacon`'s hunter-specific evidence. NOT expressed here (Python-only, see CsBeaconDetails.__post_init__): config_count must equal len(configs). As of schema_version 2.7, each `configs[*]` item's `fields` is keyed by field NAME (e.g. `\"BeaconType\"`, or `\"field_0xNNNN\"` for an unrecognized field ID) instead of the raw TLV field ID string, and each field's own value carries only `type`/`value` -- the `name` property (redundant once the key IS the name) was dropped (see dumpex/hunt/cs_beacon/collect.py's `_config_dict()`/`_field_dict()`). Unlike the `raw`-removal in 2.6, THIS constraint IS expressed structurally below (`fields`' own `propertyNames`/`additionalProperties`), not just documented -- a `configs[*]` item whose `fields` still uses numeric-string keys or still carries a `name` property fails validation. `configs[*]` items otherwise stay schema-open (`type: object`) here -- every property besides `fields` is unconstrained.",
+      "description": "The `--hunt cs-beacon` evidence. The producer requires `config_count == len(configs)`, which JSON Schema cannot compare. Each config's `fields` object is keyed by field name (`BeaconType` or `field_0xNNNN` for an unknown id), and each value contains only `type` and `value`; numeric-only keys and a nested `name` property are rejected. Other config-item properties remain schema-open.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -8623,7 +8623,7 @@
             "properties": {
               "fields": {
                 "type": "object",
-                "description": "Keyed by field NAME (schema_version 2.7) -- a purely-numeric-string key (the pre-2.7 shape) is rejected by propertyNames below.",
+                "description": "Keyed by field name; `propertyNames` rejects purely numeric keys.",
                 "propertyNames": {
                   "pattern": "^(field_0x[0-9a-f]{4}|[A-Za-z][A-Za-z0-9_]*)$"
                 },
@@ -8738,7 +8738,7 @@
       }
     },
     "hunterRecord": {
-      "description": "Matches dumpex.output.records.HunterRecord.to_dict() -- one hunter's complete result, one entry in `result.data.records` for `result.kind == \"hunt\"`. `hunter` discriminates which of the 7 *Details types `details` must be (see the allOf below). `max_score`/`confidence`/`lead_count`/`review_priority` are null for every hunter except `hunter == \"yara\"`, where they must ALL be null -- never a mix of some set, some not (yara has none of these today, see docs/developer/hunt_migration_field_matrix.md's yara section). `coverage` is this ONE hunter's own CoverageReport, not the top-level `result.coverage` (which combines all selected hunters' reports -- see combine_coverage_reports()).",
+      "description": "One hunter's complete entry in `result.data.records` for `result.kind == \"hunt\"`. `hunter` selects one of seven details shapes. `max_score`, `confidence`, `lead_count`, and `review_priority` are all null for YARA and otherwise must not be partially populated. `coverage` belongs to this hunter; top-level `result.coverage` combines selected hunters.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -9200,7 +9200,7 @@
       ]
     },
     "huntSummary": {
-      "description": "Matches result.summary for kind == 'hunt' -- the cross-hunter roll-up a single shared reducer computes (never re-derived independently by JSON/console -- see docs/developer/hunt_migration_field_matrix.md's own summary-rules section). `selected` is the `--hunt` argument (\"all\" or one hunter name). `highest_verdict_level` is picked only from DETECTED hunters when any exist; otherwise it reflects the strongest non-detected signal (clean/inconclusive/not_evaluated).",
+      "description": "The shared cross-hunter summary for `result.kind == \"hunt\"`. `selected` is `all` or one hunter name. When any hunter is DETECTED, `highest_verdict_level` is chosen only from detected hunters; otherwise it is the strongest clean, inconclusive, or not-evaluated signal.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -9604,7 +9604,7 @@
       ]
     },
     "skipRelationship": {
-      "description": "Matches dumpex.hunt._investigation.SkipRelationship.to_dict() -- one (hunter, source, scope, cause) that skipped this physical target. `source`/`scope` mirror the owning coverageLimitation's own fields (source stays an open vocabulary, same as coverageLimitation.source). `cause` is new in schema_version 2.12 -- `hunter`/`source`/`scope` alone cannot distinguish an oversized region a scan never attempted from one it attempted and failed to read, read short, or ran out of scan budget on. `size_limit` is non-null only when `cause` is `\"oversized_skipped\"` (the cap that target exceeded); every other cause leaves it `null`, since there is no cap being exceeded for an I/O failure or a scan-budget exhaustion.",
+      "description": "One `(hunter, source, scope, cause)` relationship explaining why this physical target was skipped. `source` and `scope` mirror the owning coverage limitation, with `source` remaining open. `cause` distinguishes oversized, read-failed, short-read, scan-truncated, and scan-not-started gaps. `size_limit` is non-null only for `oversized_skipped` and is null for I/O and budget failures.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -9662,7 +9662,7 @@
           "minimum": 1
         },
         "budget_kind": {
-          "description": "New in schema_version 2.12 (issue #28 P5 follow-up). WHICH of the owning hunter's own independent scan budgets this relationship's own scan_truncated/scan_not_started/hit_cap_reached/scan_budget_exhausted stopped on -- injection's four (reads_per_region/total_bytes/validations_per_region/validations_total), yara_hunt's three (max_total_hits/scan_deadline_seconds/max_total_bytes_scanned), or cs_beacon's five (scan_deadline_seconds/max_total_scanned_bytes/max_candidates/max_decoded_bytes/max_hits) -- the structured counterpart of what previously only reached `scope` (see coverageLimitation's own PE_HEADER_SCAN_TRUNCATED/_SCAN_NOT_STARTED/YARA_HIT_CAP_REACHED/YARA_SCAN_BUDGET_EXHAUSTED/CS_BEACON_SCAN_BUDGET_EXHAUSTED scope/detail wiring). `null` for every other cause.",
+          "description": "The independent scan budget that caused scan_truncated, scan_not_started, hit_cap_reached, or scan_budget_exhausted. Allowed names are scoped to the injection, YARA, and Cobalt Strike scanners. Null for every other cause.",
           "type": [
             "string",
             "null"
@@ -9725,7 +9725,7 @@
           }
         },
         {
-          "description": "New in schema_version 2.12 (issue #28 P5/P6 follow-up): budget_kind/budget_limit/budget_consumed are only ever set together for cause scan_truncated/scan_not_started (injection) or hit_cap_reached/scan_budget_exhausted (yara_hunt/cs_beacon); every other cause leaves all three null.",
+          "description": "`budget_kind`, `budget_limit`, and `budget_consumed` are set together only for budget-related injection, YARA, or Cobalt Strike causes; every other cause leaves all three null.",
           "if": {
             "properties": {
               "cause": {
@@ -9755,7 +9755,7 @@
       ]
     },
     "contentFinding": {
-      "description": "Matches dumpex.hunt._investigation.ContentFinding.to_dict() -- one piece of structured evidence the opt-in --triage-skipped deep read itself found (issue #19 Phase 2), backing the quick triage.content_reason_codes summary with actual detail. `type` discriminates two closed, mutually exclusive shapes: 'ioc_string' (offset/encoding/value/is_network_pattern all set, module_context null -- value is truncated to at most 256 characters, a bounded lead rather than the full match) and 'mz_header' (module_context set, every ioc_string-only field null). At most 20 of these accompany one investigationAction entry (triageInfo.findings' own maxItems) -- an analyst who needs the complete string text, hexdump context, or an extractable artifact still runs --report --report-addr <target.base_address> directly; this array is a bounded lead, never a substitute.",
+      "description": "One structured finding from opt-in `--triage-skipped` deep reading, backing `triage.content_reason_codes`. `type` selects two closed, mutually exclusive shapes: `ioc_string` sets offset, encoding, value, and network-pattern state while leaving module context null; `mz_header` sets module context and leaves string-only fields null. Values are bounded and at most 20 findings accompany an action, so this is an investigative lead rather than complete content or an extractable artifact.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -9889,7 +9889,7 @@
       ]
     },
     "triageInfo": {
-      "description": "Matches dumpex.hunt._investigation.TriageInfo.to_dict(). The --hunt all default pass only ever emits mode == \"metadata\", pinned to status == \"completed\", bytes_examined == 0, region_fully_examined == false, content_reason_codes == [], findings == [], finding_count == 0, findings_truncated == false -- the schema-enforced proof that the default pass never reads region content. mode == \"deep\" is emitted by the opt-in --hunt all --triage-skipped budgeted deep-content triage pass (dumpex.hunt._deep_triage.run_deep_triage(), issue #19 Phase 2): status in [not_captured, budget_deferred, unreadable] means no read was attempted/succeeded (bytes_examined == 0, region_fully_examined == false, content_reason_codes == [], findings == [], finding_count == 0, findings_truncated == false -- no content signal is possible without a real read); status == completed means the whole target was examined (region_fully_examined == true) and bytes_examined >= 1; status in [partial, clamped] means bytes_examined >= 1 but the target was NOT fully examined (region_fully_examined == false) -- partial is a real evidence gap (the dump had fewer bytes than requested), clamped is deep triage's own per-target/run-budget policy limit. content_reason_codes/findings are populated only for completed/partial/clamped, from `_scan_content_range()`'s own IOC-pattern/network-pattern string matches and MZ-header detection over the bytes actually examined -- content_reason_codes is a quick, closed-vocabulary SUMMARY; findings (see the contentFinding $def, capped at 20 entries) is the bounded, structured EVIDENCE backing it, selected REPRESENTATIVE-FIRST (an MZ finding, then one network-pattern IOC finding, then one plain IOC finding, then remaining IOC findings in offset order) rather than a bare offset-order fill, so a reason code is never left with zero backing evidence purely because 20+ plain IOC hits filled every slot first. finding_count is the TOTAL number of individual findings this read produced (BEFORE that capped/reordered selection -- an MZ header counts as at most 1, every IOC string hit counts as 1 each); findings_truncated is true exactly when finding_count > len(findings), i.e. the array does not carry every finding the read produced. MZ_HEADER_DETECTED and INJECTED_PE_HEADER are independent facts, not one collapsed code: MZ_HEADER_DETECTED means the read's own start begins with an MZ header; INJECTED_PE_HEADER additionally requires that memory be CONFIRMED unregistered (module classification available and no owning module found) -- when module classification itself is unavailable (no ModuleListStream in this dump), that confirmation cannot be made, and MZ_HEADER_DETECTED alone still surfaces the raw signal rather than silently dropping it. content_reason_codes/findings are never a verdict, and never a claim that the originating hunter's own coverage gap (see investigationAction.coverage_effect) is resolved.",
+      "description": "Triage state for one investigation action. Metadata mode performs no content read and therefore fixes status to completed with zero bytes, false `region_fully_examined`, empty reason/finding arrays, zero count, and no truncation. Deep mode is opt-in and budgeted: not_captured, budget_deferred, and unreadable mean no successful read and no content signal; completed means at least one byte and the full target examined; partial and clamped mean at least one byte but incomplete examination, caused respectively by missing captured bytes or triage policy limits. Content reason codes and findings occur only after a successful read and are bounded evidence, not verdicts or proof that the originating coverage gap is resolved. Findings are selected representative-first so each reason can retain backing evidence. `finding_count` is the total before selection, and `findings_truncated` is true exactly when it exceeds `len(findings)`. MZ_HEADER_DETECTED is the raw header signal; INJECTED_PE_HEADER additionally requires confirmed unregistered memory, so unavailable module classification cannot produce that stronger claim.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -10150,7 +10150,7 @@
       ]
     },
     "investigationAction": {
-      "description": "Matches dumpex.hunt._investigation.InvestigationAction.to_dict() -- one deduplicated physical skipped target (see build_investigation_queue()'s own docstring for the dedup key), with every hunter/source/scope that skipped it merged into `skipped_by`. `priority`/`evidence_availability` are two independent axes: a missing captured range means recollection may be needed, never that the target is more suspicious. `coverage_effect` is always \"original_hunter_gap_not_resolved\" in this schema version -- only a real hunter-specific targeted rescan (not implemented yet) could ever change it.",
+      "description": "One deduplicated physical skipped target with all contributing hunter, source, scope, and cause relationships merged into `skipped_by`. `priority` and `evidence_availability` are independent: missing captured bytes can require recollection without increasing suspicion. `coverage_effect` is fixed to `original_hunter_gap_not_resolved`; triage does not claim a targeted hunter rescan occurred.",
       "type": "object",
       "additionalProperties": false,
       "required": [

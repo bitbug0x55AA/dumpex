@@ -5,7 +5,7 @@ version: 1
 
 # ── Memory Protection ────────────────────────────────────────────────────────
 # Windows page-protection flags considered suspicious (RWX combinations).
-# These strings must match the output of prot_str() in Dumpex.py.
+# These strings must match prot_str() in dumpex/core/memory.py.
 suspicious_protections:
   - PAGE_EXECUTE_READWRITE
   - PAGE_EXECUTE_WRITECOPY

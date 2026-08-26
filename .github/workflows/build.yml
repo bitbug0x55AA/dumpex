@@ -106,24 +106,10 @@ jobs:
           & .\dist\dumpex.exe --help
 
       - name: Stage the output-contract schemas as release assets
-        # dumpex.exe never reads these files at runtime (only the test suite
-        # and external --json consumers validate against them), so they
-        # aren't collected into the frozen EXE via --collect-data -- there is
-        # nothing for PyInstaller to bundle them FOR. They're shipped instead
-        # as plain, separately downloadable files alongside dumpex.exe, so an
-        # EXE-only user (no `pip install dumpex`, no source checkout) can
-        # still get the current schema for this release without needing the
-        # wheel. Every dumpex-output-v*.schema.json is staged (the current
-        # contract every command -- including --hunt -- now produces is
-        # named by dumpex.schemas.CURRENT_SCHEMA, v2.13 as of this writing,
-        # plus every frozen historical version kept for validating output
-        # produced before each respective schema_version
-        # bump -- see docs/OUTPUT_SCHEMA.md), matching what the wheel already
-        # packages (see scripts/package_smoke.py's own schema-presence
-        # check), rather than a hardcoded single-file list that would need
-        # editing every time a new schema version ships. Each file is
-        # validated as JSON here so a corrupted/empty file never ships
-        # silently.
+        # Ship dumpex.schemas.CURRENT_SCHEMA and every supported frozen schema
+        # as standalone assets for EXE-only consumers, matching the wheel's
+        # package data and docs/user/OUTPUT_SCHEMA.md. Validate every staged
+        # schema as JSON before it can enter a release bundle.
         shell: pwsh
         run: |
           $schemas = Get-ChildItem dumpex/schemas -Filter 'dumpex-output-v*.schema.json'
@@ -193,19 +179,10 @@ jobs:
             -DestinationPath "dist/$bundleName.zip"
 
       - name: Verify release bundle contents
-        # Guards against exactly the gap this release process shipped once
-        # before: dumpex.exe, LICENSE/NOTICE/etc, and only the *v1.1* schema
-        # made it into the zip while the CLI itself had already moved every
-        # command (including --hunt) onto a newer schema -- an EXE-only user
-        # had no way to get the schema that actually described their own
-        # --json output. The required current-schema filename is read from
-        # dumpex.schemas.CURRENT_SCHEMA itself, not hardcoded here, so this
-        # check can't silently go stale the next time schema_version bumps
-        # (it did once already, when this literal named v2.6 long after the
-        # contract had moved on).
-        # Checked against the built zip itself (not just $bundleDir) so a
-        # Compress-Archive mistake (wrong -Path, wrong destination) would
-        # also be caught here, not just a missing Copy-Item.
+        # Read the required current schema from dumpex.schemas.CURRENT_SCHEMA
+        # and verify the final ZIP, not only the staging directory. The bundle
+        # must contain the EXE, all staged schemas, licenses, dependency
+        # notices, and the source notice; every bundled schema must parse.
         shell: pwsh
         env:
           RELEASE_VERSION: ${{ steps.release_version.outputs.version }}
@@ -227,9 +204,7 @@ jobs:
             throw "Release bundle is missing required file(s): $($missing -join ', ')"
           }
 
-          # Every dumpex-output-v*.schema.json staged into dist/ earlier must
-          # have made it into the bundle too -- not just the current schema
-          # ($currentSchema, dumpex.schemas.CURRENT_SCHEMA) checked above.
+          # Every supported frozen schema must accompany the current schema.
           $stagedSchemas = (Get-ChildItem dist -Filter 'dumpex-output-v*.schema.json').Name
           $bundledSchemas = (Get-ChildItem $extractDir -Filter 'dumpex-output-v*.schema.json').Name
           $missingSchemas = $stagedSchemas | Where-Object { $_ -notin $bundledSchemas }
@@ -237,9 +212,7 @@ jobs:
             throw "Release bundle is missing schema file(s): $($missingSchemas -join ', ')"
           }
 
-          # Every schema file inside the zip must still be valid, parseable
-          # JSON (catches a truncated/corrupted Compress-Archive as well as
-          # a corrupted source file).
+          # Validate the copies extracted from the final ZIP.
           foreach ($schema in $bundledSchemas) {
             python -c "import json; json.load(open(r'$(Join-Path $extractDir $schema)', encoding='utf-8'))"
           }

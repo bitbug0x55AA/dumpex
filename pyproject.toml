@@ -14,16 +14,9 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
-    # Both bounds pinned to the exact version dumpex/core/memory.py's
-    # parallel HandleDataStream parser was validated against -- minidump
-    # has never shipped anything but 0.0.x releases, and 0.0.x carries no
-    # compatibility promise between patch releases, so 0.0.25 could change
-    # any of the ~25 names imported across memory.py:11-31 or either
-    # descriptor's on-disk size just as easily as a hypothetical 0.1
-    # would. Widening this range requires re-validating the three
-    # reasons at memory.py:47-63 AND both HandleDataStream descriptor
-    # sizes (see _handle_descriptor_layout() in memory.py) against the
-    # new ceiling version before raising it (see issue #86).
+    # Pin the minidump version validated by dumpex/core/memory.py. Before
+    # widening it, revalidate _handle_descriptor_layout() and run
+    # tests/unit/test_handle_stream_parse.py plus the CI version-range gate.
     "minidump>=0.0.24,<0.0.25",
     "colorama>=0.4.6",
     "pyyaml",
@@ -48,19 +41,10 @@ where = ["."]
 include = ["dumpex*"]
 
 [tool.setuptools.package-data]
-# The packaged canonical copy of the TTP rule defaults / YARA rules, so
-# `pip install dumpex` works standalone with no rules/ directory living
-# next to whatever script invoked it. dumpex/rules_pkg/loader.py and
-# dumpex/hunt/yara_hunt/ both resolve this via importlib.resources ahead
-# of any dev-tree/user-override path (script dir / cwd).
-#
-# dumpex/rules_pkg/loader.py's _DEFAULT_RULES is a separate, hardcoded
-# emergency-only fallback for when this packaged copy can't be read at
-# all (corrupted install, missing package data) — not a second source of
-# truth. tests/unit/test_rules_loader.py's
-# test_packaged_rules_match_builtin_fallback enforces that the two stay
-# identical; update _DEFAULT_RULES in the same change if you edit
-# rules.yaml, or that test will fail.
+# Canonical rules live in dumpex.rules_pkg and must load from a base install
+# through importlib.resources. dumpex/rules_pkg/loader.py's _DEFAULT_RULES
+# remains the emergency fallback and must match the packaged rules;
+# test_packaged_rules_match_builtin_fallback detects drift.
 "dumpex.rules_pkg" = ["data/rules.yaml", "data/yara/*.yar"]
 "dumpex.schemas" = ["*.schema.json"]
 
@@ -85,11 +69,7 @@ source = ["dumpex"]
 branch = true
 
 [tool.coverage.report]
-# Gate CI on total coverage, not just report it — a few points below the
-# measured baseline (branch coverage, full extras installed) at the time
-# this was added, so ordinary test additions don't trip it while a real
-# regression (removing tests, adding a large untested module) does. Raise
-# this incrementally as coverage improves; never lower it to make a
-# failing PR pass — fix the coverage gap instead.
+# Gate total branch coverage with fail_under. Raise the threshold as real
+# coverage improves; never lower it merely to make a pull request pass.
 fail_under = 45
 show_missing = true

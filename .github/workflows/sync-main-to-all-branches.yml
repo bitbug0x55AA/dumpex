@@ -1,44 +1,17 @@
 name: Sync main to all branches
 
-# Long-lived branches (architecture_restructure, feature_adding,
-# urgent_patch, ...) drift the moment a pull request lands on main. The
-# cost of that drift is not paid here -- it is paid weeks later, as a
-# conflict in whichever branch merged second. So main is merged outward
-# automatically, rather than whenever someone remembers to press a button.
+# Automatic sync starts only from a main commit that passed the required CI.
+# By default it performs fast-forwards only: ahead or diverged branches are
+# held for a human, pushes never use force, and a branch that moves during the
+# sync is rejected rather than overwritten. Concurrency prevents sync runs
+# from interleaving. Expected held branches make the workflow fail visibly.
 #
-# Two invariants make that safe to automate, and both are enforced below
-# rather than assumed:
-#
-#   1. main must be GREEN first. This workflow keys off the completion of
-#      main's own CI, not off the push, because the two are otherwise
-#      concurrent: Tests takes ~4.7 minutes and a push-triggered sync
-#      finished in ~10 seconds, so a broken main was fanned out to every
-#      branch before its own suite had finished installing dependencies --
-#      turning one bad commit into four bad branches, each with a merge
-#      commit to unpick.
-#
-#   2. Every push must be a FAST-FORWARD. A branch with no commits of its
-#      own fast-forwards to main, which means its resulting tree is
-#      byte-identical to the main that just tested green -- there is
-#      nothing new that could be broken. A branch that is ahead would
-#      instead produce a genuinely new tree that no CI run has ever seen,
-#      so it is reported and left alone for a human. Because of this rule
-#      the workflow authors no content at all: it only moves branch
-#      pointers onto an already-verified commit.
-#
-# Note on CI: pushes made with GITHUB_TOKEN deliberately do not trigger
-# other workflows. Syncing therefore costs zero test runs -- but it also
-# means an open pull request's green checks still describe the tree from
-# BEFORE the sync.
+# GITHUB_TOKEN pushes do not trigger other workflows, so checks on an open
+# pull request still describe its pre-sync tree.
 on:
-  # Both of main's workflows are listed so that whichever finishes LAST
-  # drives the sync. The one that finishes first finds its sibling still
-  # running and exits quietly. This is self-converging and costs no runner
-  # time, unlike polling for green inside the job, which would idle for
-  # the length of the slowest workflow on every single merge.
-  #
-  # workflow_run only fires for workflow files that live on the default
-  # branch, so this file has no effect until it is merged to main.
+  # Each required workflow can start the gate; pending siblings defer the
+  # sync until the last required workflow completes. workflow_run uses the
+  # workflow file on the default branch.
   workflow_run:
     workflows: ["Tests", "Repository Leak Scan"]
     types: [completed]
@@ -131,9 +104,7 @@ jobs:
 
           sha="${TRIGGER_SHA:-$main_tip}"
 
-          # main moved on. That newer commit has its own CI run, whose
-          # completion will drive its own sync -- syncing the older commit
-          # now would only add a merge the newer one has to redo.
+          # Refuse a stale verified SHA; the newer main tip requires its own CI.
           if [[ "$sha" != "$main_tip" ]]; then
             stop "\`main\` has advanced to \`${main_tip:0:8}\` since \`${sha:0:8}\` was verified. That commit's own CI run will drive the sync."
           fi
@@ -242,13 +213,8 @@ jobs:
               if [[ "$ALLOW_MERGE_COMMITS" == "true" ]]; then
                 echo "Ahead by $ahead; allow_merge_commits is set, attempting a real merge."
 
-                # --force, and the exit code is checked. A plain `git
-                # switch` refuses to move while the worktree is dirty, and
-                # an unchecked failure here is silent and dangerous: the
-                # merge would then run against whatever HEAD happened to
-                # be, report "Already up to date", and try to push main's
-                # own tip over the branch. The workspace is disposable, so
-                # discarding it is always the right recovery.
+                # Check out the exact remote ref and verify success before a
+                # manual-override merge; never merge from an unintended HEAD.
                 if ! git checkout --force --detach "$ref" --quiet; then
                   echo "Could not check out '$branch'." >&2
                   rejected+=("$branch")
@@ -282,10 +248,8 @@ jobs:
               continue
             fi
 
-            # Pure fast-forward: the resulting tree is byte-identical to the
-            # main that just tested green. Pushed WITHOUT --force, so the
-            # remote independently enforces the same fast-forward rule -- a
-            # branch that moved since the fetch is rejected, not overwritten.
+            # Push without force so the remote rejects a branch that moved
+            # since fetch instead of overwriting it.
             pushed=false
             for attempt in 1 2; do
               if git push origin "$SHA:refs/heads/$branch"; then
@@ -364,11 +328,8 @@ jobs:
 
           failures=$(( ${#held[@]} + ${#conflicted[@]} + ${#rejected[@]} ))
           if (( failures > 0 )); then
-            # Red on purpose. Under the fast-forward rule a conflict is
-            # impossible, so "held" is the only signal this workflow has
-            # left; if it never went red there would be no reason to look
-            # at it at all. Every branch that COULD be synced already has
-            # been -- this is a report, not a rollback.
+            # Fail visibly when any branch needs human handling; branches that
+            # could be synchronized have already been updated.
             echo "$failures branch(es) were not synced; see the job summary." >&2
             exit 1
           fi
