@@ -9,55 +9,26 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
-### Fixed
+No additional user-facing changes recorded.
 
-- Hunt coverage now reports "complete" only when every region or segment a scan
-  took into scope actually reached a recorded outcome. Previously a scan loop
-  that passed over an item without recording anything was indistinguishable
-  from full coverage, so an unexamined region could turn "we could not rule
-  this out" (`INCONCLUSIVE`) into "we checked and it is not there"
-  (`NOT_DETECTED_IN_SCANNED_SCOPE`). Such a shortfall now degrades coverage to
-  `partial` and is reported as a `SCAN_ITEMS_UNACCOUNTED` limitation.
-- The named-pipe, module-stomping IOC, and CS Beacon segment scans now record
-  what they scanned instead of reporting coverage from counters that were never
-  populated.
-- When a named-pipe scan budget is exhausted, the eligible regions it left
-  unresolved are now retained as concrete scan targets rather than only setting
-  a flag. The pipe-name and C2-context budgets keep separate target sets, both
-  reach `SCAN_BUDGET_EXHAUSTED` limitations as `targets`/`affected_count`, and
-  under `--hunt all` they now produce investigation-queue actions naming the
-  exact addresses to rescan.
-- A dump declaring a zero-length committed region or captured segment no longer
-  aborts the run, on any path -- including the budget and truncation paths that
-  report abandoned regions. Such an item holds no bytes to scan and none anyone
-  could miss, so every hunter now filters it and `--hunt` still reports its
-  findings.
-- The CS Beacon, obfuscation, hollowing, named-pipe, and module-stomping hunters
-  now render every virtual address at the same fixed-width, zero-padded
-  16-hex-digit form their `--json` records already use (`VA=0x0000000000270000`,
-  not `VA=0x270000`), across every surface: the wire finding facts, the
-  `--verbose` console evidence detail, and each hunter's KEY SIGNALS locator.
-  This completes the unification begun for injection facts in 3.3.0 — no hunter
-  is left rendering the same address two different ways depending on which
-  surface you read. Non-address numbers (sizes, thread and handle IDs,
-  granted-access masks, file offsets) keep their compact form. As with the 3.3.0
-  change, this alters `facts`, which is part of the finding-identity hash, so
-  affected findings in these five hunters receive a new `Finding.id` once;
-  consumers keying on `id` for deduplication will see them as new findings on
-  the first run after upgrading.
+## 3.5.2 — 2026-08-27
 
 ### Changed
 
-- Temporarily disabled `--triage-skipped`. The retired generic content pass
-  could not close hunter-specific coverage gaps; the option name is reserved
-  for future analyzer-aware recovery orchestration.
-- A memory read that returns no bytes at all is now reported as a failed read
-  rather than as a short read, which described a readable prefix that did not
-  exist. This applies to every hunter that reads memory, so the limitation code
-  for that observation is the same across all of them.
-- The named-pipe scan now distinguishes a region left unexamined because its
-  budget was spent from one that held nothing to analyze. Both are outcomes
-  rather than coverage gaps, but only the first is worth a rescan.
+- Temporarily disabled `--triage-skipped` pending analyzer-aware recovery
+  orchestration.
+- Standardized empty memory reads as failed reads across all hunters.
+
+### Fixed
+
+- Made hunt coverage fail closed when eligible scan items are left unaccounted
+  for, reporting `SCAN_ITEMS_UNACCOUNTED` instead of complete coverage.
+- Preserved exact named-pipe rescan targets when scan budgets are exhausted.
+- Prevented zero-length committed regions or captured segments from aborting
+  hunt execution.
+- Standardized virtual-address formatting across CS Beacon, obfuscation,
+  hollowing, named-pipe, and module-stomping output. This may regenerate
+  affected deterministic `Finding.id` values once after upgrading.
 
 ## 3.4.0 — 2026-08-23
 
