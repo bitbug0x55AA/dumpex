@@ -186,6 +186,9 @@ def _build_stomping_report(mf: MinidumpFile, ref_dir: str = None):
         ioc_read_failed_targets=ioc_coverage.read_failed_targets,
         ioc_short_reads=ioc_coverage.short_reads,
         ioc_short_read_targets=ioc_coverage.short_read_targets,
+        ioc_unaccounted=ioc_coverage.unaccounted,
+        ioc_over_accounted=ioc_coverage.over_accounted,
+        ioc_ledger_imbalance=ioc_coverage.ledger_imbalance,
         ioc_whitelisted_modules=ioc_coverage.whitelisted_skipped,
         **counts)
 

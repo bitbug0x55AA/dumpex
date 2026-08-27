@@ -265,6 +265,13 @@ capture state, captured size/file offset, and MemoryInfo context when available.
 `file_offset: null` means the bytes are not present in the dump; it is not
 offset zero.
 
+`SCAN_ITEMS_UNACCOUNTED` is the one scan-coverage code that reports a count with
+no `targets`. It means that many regions or segments failed to reconcile against
+the scan's own eligibility ledger, in either direction: taken into scope with no
+outcome recorded, or an outcome recorded by a scan that never took its items into
+scope. Either way their identity was never captured, so treat it as coverage that
+cannot be confirmed rather than as a located gap to revisit.
+
 Do not parse `reasons` text to automate follow-up. Use limitation codes and
 structured target/budget fields.
 

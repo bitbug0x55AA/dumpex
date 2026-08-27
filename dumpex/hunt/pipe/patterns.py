@@ -100,7 +100,7 @@ def _iter_printable_runs(data: bytes):
         yield m.start(), m.group().decode('utf-16-le', errors='replace'), True
 
 
-def _iter_c2_matches(data: bytes, pattern, budget):
+def _iter_c2_matches(data: bytes, pattern, budget, truncated_out: list = None):
     """
     Stream C2_PAT matches against each ASCII/UTF16LE printable run found in
     `data` individually — matching the same string boundaries a human or
@@ -134,14 +134,24 @@ def _iter_c2_matches(data: bytes, pattern, budget):
     only the short, bounded match token and its BYTE offset within `data`
     are ever yielded — the full run itself (which can be enormous) is
     never retained.
+
+    `truncated_out`, when given, is a one-element list set to `True` iff the
+    match stream was cut short by the budget rather than run to its natural
+    end -- what a caller needs to decide whether this region's C2 coverage
+    is actually incomplete, without reverse-inferring it from a
+    lazily-observed budget state after the fact.
     """
     count = 0
     for run_offset, text, is_utf16 in _iter_printable_runs(data):
         if not budget.poll():
+            if truncated_out is not None:
+                truncated_out[0] = True
             return
         for m in pattern.finditer(text):
             count += 1
             if count % 16 == 0 and not budget.poll():
+                if truncated_out is not None:
+                    truncated_out[0] = True
                 return
             if is_utf16:
                 byte_start = run_offset + m.start() * 2

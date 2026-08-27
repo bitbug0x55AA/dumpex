@@ -96,3 +96,40 @@ def test_all_seven_collectors_feed_the_real_summary_reducer_and_validate(validat
     # some non-DETECTED terminal state -- confirming no collector crashed
     # or silently fabricated a detection on empty input.
     assert summary["detected_count"] == 0
+
+
+def test_a_zero_length_committed_region_still_produces_every_record(validator):
+    """A dump whose MemoryInfo declares a committed region of zero bytes is
+    malformed-but-parseable input, and nothing about it is in scope for any
+    scan: no bytes to read, no bytes anyone could miss. Every hunter still
+    produces its record, because a coverage caveat is the most an odd
+    region may ever cost -- a run that raises delivers no findings at all,
+    for any of the seven.
+    """
+    from tests.fixtures.fakes import Region, Segment
+
+    zero_region = Region(0x30000000, 0x30000000, 0, "MEM_COMMIT",
+                          "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")
+
+    class MF(_empty_mf().__class__):
+        memory_info = FakeStream([zero_region], "infos")
+        memory_segments_64 = FakeStream([Segment(0x30000000, 0x1000, 0)],
+                                         "memory_segments")
+
+    mf = MF()
+    records = [
+        collect_injection_record(mf),
+        collect_hollowing_record(mf),
+        collect_stomping_record(mf),
+        collect_pipe_record(mf),
+        collect_cs_beacon_record(mf),
+        collect_yara_record(mf),
+        collect_obfuscation_record(mf),
+    ]
+
+    assert tuple(r.hunter for r in records) == HUNTERS
+    assert all(isinstance(record, HunterRecord) for record in records)
+    # ...and the seven still reduce to a real summary, so `--hunt all`
+    # produces its whole envelope rather than a traceback.
+    summary = build_hunt_summary(records, selected="all")
+    assert summary["hunter_count"] == len(HUNTERS)

@@ -572,6 +572,31 @@ def test_the_two_budgets_are_separate_limitations_distinguished_by_scope():
     assert budget_limits == {"c2_context": "deadline", "pipe_name": "max_hits"}
 
 
+def _budget_target(base):
+    return dataclasses.replace(_oversize_target(base=base), size_limit=None)
+
+
+def test_a_budget_limitation_carries_its_unresolved_regions_as_targets():
+    targets = (_budget_target(0x1000000), _budget_target(0x2000000))
+    coverage = _coverage(pipe_name_budget_exhausted=True, pipe_name_budget_reason="deadline",
+                          pipe_name_budget_exhausted_targets=targets)
+    record = project_hunter_record(
+        PipeReport(score=0, coverage=coverage, results=(), evidence=PipeEvidence()))
+    lim = next(l for l in record.coverage.limitations
+               if l.code.value == "SCAN_BUDGET_EXHAUSTED" and l.scope == "pipe_name")
+    assert lim.affected_count == 2
+    assert [t.base_address for t in lim.targets] == [0x1000000, 0x2000000]
+
+
+def test_a_budget_limitation_stays_reason_only_when_nothing_was_left_to_name():
+    coverage = _coverage(c2_budget_exhausted=True, c2_budget_reason="deadline")
+    record = project_hunter_record(
+        PipeReport(score=0, coverage=coverage, results=(), evidence=PipeEvidence()))
+    lim = next(l for l in record.coverage.limitations
+               if l.code.value == "SCAN_BUDGET_EXHAUSTED" and l.scope == "c2_context")
+    assert lim.affected_count is None and lim.targets == ()
+
+
 def test_memory_info_absent_alone_stays_complete_in_both_coverage_projections():
     coverage = _coverage(memory_info_stream=False)
     status, reasons = project_coverage_v1(coverage)

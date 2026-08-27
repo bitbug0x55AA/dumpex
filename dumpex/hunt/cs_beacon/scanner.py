@@ -87,6 +87,14 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
     `models.ConfigEvidence` in scan order; `diagnostics` is a frozen
     `domain.ScanDiagnostics`.
     """
+    # Zero-length segments are dropped once, here, rather than at each
+    # place a segment is walked or sliced: they hold nothing to scan and
+    # no bytes anyone could miss, and a ScanTarget cannot name one -- a
+    # target has an extent by definition. Filtering at the entry keeps
+    # every later use (the walk, and the budget/truncation slices that
+    # turn abandoned segments into targets) working from the same set.
+    segment_count = len(segs)   # every segment the dump declares, filter or no
+    segs = [seg for seg in segs if seg.size > 0]
     coverage_counts = CoverageTracker()
     hits = []
     seen_hit_vas = set()   # O(1) dedup, not an O(n) scan of `hits` per candidate
@@ -197,6 +205,12 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                 f"found — total scanned-bytes budget exhausted",
                 "max_total_scanned_bytes", total_scanned_bytes)
             break
+        # Past both whole-scan budget checks above, so this segment IS in
+        # scope and every path out of the iteration from here on owes the
+        # ledger a disposition. Segments the loop `break`s before ever
+        # reaching were never eligible -- `budget_exhausted_targets` is
+        # what accounts for those.
+        coverage_counts.note_eligible(seg.size)
         if seg.size > config.max_seg_scan:
             coverage_counts.note_skipped_oversize(
                 segment_scan_target(seg, config.max_seg_scan))
@@ -215,6 +229,12 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
 
         total_scanned_bytes += len(data)
 
+        if not data:
+            # Nothing came back at all: no partial content to scan, so
+            # this is a failed read rather than a short one -- a short read
+            # ANNOTATES a segment that was otherwise scanned.
+            coverage_counts.note_read_failed(segment_scan_target(seg))
+            continue
         if len(data) < seg.size:
             # A short read (fewer bytes back than the segment's own
             # declared size) is NOT the same as "read fine, no hit" —
@@ -223,8 +243,10 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
             # still contain a hit), but this segment must not silently
             # count toward a "complete" scan.
             coverage_counts.note_short_read(segment_scan_target(seg))
-            if not data:
-                continue
+        # Recorded before the candidate scan below, not after it: that
+        # scan can `break` out on an exhausted budget, and a disposition
+        # placed after the loop would be skipped on exactly that path.
+        coverage_counts.note_scanned()
 
         for xor_key, idx, hit_va, hit_fo in _cs_scan_segment(
                 data, seg.start_virtual_address, seg.start_file_address):
@@ -323,7 +345,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                                 if budget_exhausted_kind is not None else None)
 
     diagnostics = ScanDiagnostics(
-        segment_count=len(segs),
+        segment_count=segment_count,
         total_candidates=total_candidates,
         total_decoded_bytes=total_decoded_bytes,
         total_scanned_bytes=total_scanned_bytes,
@@ -336,5 +358,12 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
         budget_exhausted_kind=budget_exhausted_kind,
         budget_exhausted_limit=budget_exhausted_limit,
         budget_exhausted_consumed=budget_exhausted_consumed,
+        scanned=coverage_counts.scanned,
+        eligible_total=coverage_counts.total,
+        eligible_bytes=coverage_counts.eligible_bytes,
+        not_applicable=coverage_counts.not_applicable,
+        budget_skipped=coverage_counts.budget_skipped,
+        unaccounted=coverage_counts.unaccounted,
+        over_accounted=coverage_counts.over_accounted,
     )
     return tuple(hits), diagnostics

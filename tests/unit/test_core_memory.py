@@ -232,6 +232,83 @@ def test_va_range_captured_bytes_zero_for_zero_or_negative_size():
     assert va_range_captured_bytes(mf, 0x1000, -1) == 0
 
 
+def test_va_range_captured_bytes_reads_an_unsorted_table_in_address_order():
+    """The segment table is indexed by ascending VA before it is walked,
+    so a table stored out of order resolves the same contiguous run as an
+    ordered one."""
+    ordered = _mf_with_segments([Segment(0x1000, 0x1000, 0x800),
+                                  Segment(0x1800, 0x1800, 0x800)])
+    shuffled = _mf_with_segments([Segment(0x1800, 0x1800, 0x800),
+                                   Segment(0x1000, 0x1000, 0x800)])
+    assert (va_range_captured_bytes(shuffled, 0x1000, 0x1000)
+            == va_range_captured_bytes(ordered, 0x1000, 0x1000) == 0x1000)
+
+
+def test_va_range_captured_bytes_covers_a_range_an_earlier_segment_overlaps():
+    """An overlapping table (an earlier entry extending past a later
+    entry's start) still resolves against the entry that actually covers
+    the range, not whichever one the index landed on first."""
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x4000),
+                             Segment(0x2000, 0x9000, 0x400)])
+    assert va_range_captured_bytes(mf, 0x2000, 0x1000) == 0x1000
+
+
+def test_va_range_captured_bytes_sees_past_short_segments_nested_in_a_long_one():
+    """Short entries nested inside a longer one sit between it and the
+    query address in start order, and every one of them ends before that
+    address. The covering entry still has to be found -- reporting 0 here
+    would claim the dump captured none of a range it holds in full."""
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x5000),    # [0x1000, 0x6000)
+                             Segment(0x2000, 0x9000, 0x100),     # [0x2000, 0x2100)
+                             Segment(0x3000, 0x9100, 0x100)])    # [0x3000, 0x3100)
+    assert va_range_captured_bytes(mf, 0x4000, 0x800) == 0x800
+
+
+def test_va_range_captured_bytes_matches_a_plain_address_ordered_walk():
+    """Randomized differential check over overlapping, nested, and
+    gapped tables: the index is only an entry point into the same
+    contiguous-run walk, never a different answer from it."""
+    import random
+
+    def plain_walk(segments, va, size):
+        end, cursor = va + size, va
+        for seg in sorted(segments, key=lambda s: s.start_virtual_address):
+            if seg.end_virtual_address <= cursor:
+                continue
+            if seg.start_virtual_address > cursor:
+                break
+            cursor = min(seg.end_virtual_address, end)
+            if cursor >= end:
+                break
+        return cursor - va
+
+    rng = random.Random(7)
+    for _ in range(200):
+        segments = [Segment(start, start, rng.randrange(0x100, 0x4000, 0x100))
+                    for start in (rng.randrange(0x1000, 0x9000, 0x100)
+                                  for _ in range(rng.randint(1, 12)))]
+        rng.shuffle(segments)
+        mf = _mf_with_segments(segments)
+        for _ in range(25):
+            va = rng.randrange(0x1000, 0x9000, 0x100)
+            size = rng.randrange(0x100, 0x3000, 0x100)
+            assert va_range_captured_bytes(mf, va, size) == plain_walk(segments, va, size), (
+                f"va={va:#x} size={size:#x} over "
+                f"{[(s.start_virtual_address, s.end_virtual_address) for s in segments]}")
+
+
+def test_va_range_captured_bytes_rebuilds_its_index_when_the_table_is_replaced():
+    """The per-dump index is keyed on the segment list it was built from,
+    so swapping the stream out (which tests do) cannot serve an answer
+    from the previous table."""
+    mf = _mf_with_segments([Segment(0x1000, 0x1000, 0x1000)])
+    assert va_range_captured_bytes(mf, 0x1000, 0x1000) == 0x1000
+
+    mf.memory_segments_64 = FakeStream([Segment(0x1000, 0x1000, 0x400)],
+                                        "memory_segments")
+    assert va_range_captured_bytes(mf, 0x1000, 0x1000) == 0x400
+
+
 # ── clamped_reader() / read_region_clamped() (issue #40) ─────────────────
 # A read(addr, size) primitive that never asks for more than the CURRENT
 # segment's own remaining bytes -- see clamped_reader()'s own docstring

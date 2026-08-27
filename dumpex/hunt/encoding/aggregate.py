@@ -54,7 +54,13 @@ def build_report(sleep_mask_hits: tuple, entropy_hits: tuple, base64_hits: tuple
                   decode_read_failed: tuple = (),
                   sleep_mask_short_read: tuple = (), entropy_short_read: tuple = (),
                   decode_short_read: tuple = (),
-                  budget_exhausted: bool = False, exhausted_reason: str = "") -> EncodingReport:
+                  budget_exhausted: bool = False, exhausted_reason: str = "",
+                  sleep_mask_unaccounted: int = 0, entropy_unaccounted: int = 0,
+                  decode_unaccounted: int = 0,
+                  sleep_mask_over_accounted: int = 0, entropy_over_accounted: int = 0,
+                  decode_over_accounted: int = 0,
+                  sleep_mask_imbalance: int = 0, entropy_imbalance: int = 0,
+                  decode_imbalance: int = 0) -> EncodingReport:
     """
     Turn the scan layers' typed evidence into the final `EncodingReport`.
     This is the ONLY place score/coverage/the seven CheckResults are
@@ -269,6 +275,15 @@ def build_report(sleep_mask_hits: tuple, entropy_hits: tuple, base64_hits: tuple
         sleep_mask_short_read=sleep_mask_short_read, entropy_short_read=entropy_short_read,
         decode_short_read=decode_short_read,
         budget_exhausted=budget_exhausted, exhausted_reason=exhausted_reason,
+        sleep_mask_unaccounted=sleep_mask_unaccounted,
+        entropy_unaccounted=entropy_unaccounted,
+        decode_unaccounted=decode_unaccounted,
+        sleep_mask_over_accounted=sleep_mask_over_accounted,
+        entropy_over_accounted=entropy_over_accounted,
+        decode_over_accounted=decode_over_accounted,
+        sleep_mask_imbalance=sleep_mask_imbalance,
+        entropy_imbalance=entropy_imbalance,
+        decode_imbalance=decode_imbalance,
     )
     evidence = EncodingEvidence(
         sleep_mask_hits=sleep_mask_hits, entropy_hits=entropy_hits,

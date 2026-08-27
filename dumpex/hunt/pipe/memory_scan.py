@@ -14,7 +14,9 @@ re-derived at aggregate or render time.
 import os
 import hashlib
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import addr_to_module, prot_str, va_to_file_offset
+from dumpex.core.memory import (
+    addr_to_module, prot_str, va_range_captured_bytes, va_to_file_offset,
+)
 from dumpex.hunt._coverage import region_scan_target
 from dumpex.hunt.pipe.config import (PIPE_SCAN_MAX, PIPE_MAX_MATCHES_PER_REGION,
     PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION, PIPE_C2_CONTEXT_BYTES,
@@ -123,6 +125,21 @@ def dedupe_private_pipes(private_pipes: list) -> list:
     return deduped
 
 
+def _dedupe_targets(targets: list) -> tuple:
+    """Collapse targets naming the same physical region (base + size),
+    preserving first-seen order -- a duplicate MemoryInfo entry, or a
+    region observed through more than one budget-exhaustion check, must
+    not inflate a scope's target tuple or its affected_count."""
+    seen = set()
+    out = []
+    for t in targets:
+        key = (t.base_address, t.size)
+        if key not in seen:
+            seen.add(key)
+            out.append(t)
+    return tuple(out)
+
+
 def _build_c2_record(data: bytes, start: int, end: int, token: bytes,
                       region_base: int) -> C2ContextRecord:
     """One `C2ContextRecord` from a raw match span -- shared by both the
@@ -162,16 +179,44 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
     image_pipe_refs = 0
     image_pipe_modules = []
     c2_regions = []
+    # One ScanTarget per eligible region a spent budget left unresolved for
+    # its scope, accumulated at the decision site that could not proceed --
+    # never reconstructed after the fact from a stop index or the final
+    # budget state. Deduped by physical region at the end.
+    pipe_name_budget_affected = []
+    c2_budget_affected = []
 
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
             continue
+        if r.RegionSize <= 0:
+            # A zero-length region has nothing to read and no bytes anyone
+            # could miss: a filter, not a coverage gap. It is also not
+            # something a ScanTarget can identify -- a target has an
+            # extent by definition.
+            continue
+        # Every committed, non-empty region the walk reaches is in scope and
+        # owes the ledger a disposition -- including one the walk can do no
+        # scan work on because both budgets are already spent. The walk does
+        # NOT stop early on exhaustion: enumerating the rest is metadata-only
+        # (no region-content reads) and is what keeps every oversized skip
+        # and every unresolved region visible instead of silently dropped.
+        coverage_counts.note_eligible(
+            va_range_captured_bytes(mf, r.BaseAddress, r.RegionSize))
         if r.RegionSize > PIPE_SCAN_MAX:
             coverage_counts.note_skipped_oversize(
                 region_scan_target(mf, r, PIPE_SCAN_MAX))
             continue
         if pipe_name_budget.exhausted() and c2_budget.exhausted():
-            break   # nothing left this loop could still usefully collect
+            # Neither pipe-name matching nor its dependent C2 collection can
+            # make a claim for this region; no scan work runs. Attributed to
+            # BOTH scopes -- the conservative contract, since neither signal
+            # can vouch for the range.
+            target = region_scan_target(mf, r)
+            pipe_name_budget_affected.append(target)
+            c2_budget_affected.append(target)
+            coverage_counts.note_budget_skipped()
+            continue
         mtype = prot_str(r.Type)
         mod   = addr_to_module(r.BaseAddress, modules)
 
@@ -184,6 +229,12 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # rescan, or recollect this exact region.
             coverage_counts.note_read_failed(region_scan_target(mf, r))
             continue
+        if not data:
+            # Nothing came back at all: there is no readable portion to
+            # scan, so this is a failed read rather than a short one -- a
+            # short read ANNOTATES a region that was otherwise scanned.
+            coverage_counts.note_read_failed(region_scan_target(mf, r))
+            continue
         if len(data) < r.RegionSize:
             # Fewer bytes came back than the region's own declared size —
             # not the same as "read fine, nothing here". Still scan what
@@ -191,26 +242,37 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # in the readable portion), but this region must not silently
             # count toward a "complete" scan.
             coverage_counts.note_short_read(region_scan_target(mf, r))
-            if not data:
-                continue
-
         # Resolved ONCE per region, here, rather than per hit or at render
         # time -- every projection reads these already-resolved strings.
         region = region_ref(r)
         pipes_before = len(string_leads)
 
+        # Whether any pattern was actually run over `data`. The region's
+        # disposition is decided by this at the end of the iteration, not
+        # by having reached this line: with pipe_name_budget already
+        # exhausted the loop below runs no pattern at all, and the C2
+        # passes are gated on this region yielding a NEW pipe name, so
+        # nothing would examine the bytes that were read.
+        examined = False
+        # True once this region's pipe-name matching stopped short for lack
+        # of budget -- it could not start at all, or it ran out partway.
+        pipe_name_cut = pipe_name_budget.exhausted()
         region_matches = 0
         for pat, is_utf16 in ((PIPE_PAT_ASCII, False), (PIPE_PAT_UTF16, True)):
             if pipe_name_budget.exhausted():
+                pipe_name_cut = True
                 break
+            examined = True
             for m in pat.finditer(data):
                 if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
                     break
                 if pipe_name_budget.exhausted():
+                    pipe_name_cut = True
                     break
                 region_matches += 1
                 info = _extract_pipe_name(data, m, is_utf16)
                 if not pipe_name_budget.take_hit(len(info["preview"])):
+                    pipe_name_cut = True
                     break
                 if "MEM_IMAGE" in mtype and _is_system_dll(mod):
                     # Expected, and never a lead: counted (plus the module
@@ -229,7 +291,28 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
                     # which is NOT the same claim as "offset zero".
                     file_offset=va_to_file_offset(mf, va)))
 
-        if len(string_leads) > pipes_before and not c2_budget.exhausted():
+        # This region's pipe-name matching could not run to completion
+        # within budget -- it could not start (already spent when the region
+        # was reached) or a hit/match check inside the loop was refused. A
+        # region whose matching finished within budget is never here, even
+        # if the budget then reads exhausted on its final hit.
+        if pipe_name_cut:
+            pipe_name_budget_affected.append(region_scan_target(mf, r))
+
+        # This region's C2 coverage is incomplete only if the c2_budget
+        # actually blocked work here: collection could not start (already
+        # spent), a `take_hit` was refused, `_iter_c2_matches` cut a match
+        # stream short, or the budget ran out between the two passes so the
+        # second never ran. A region whose passes both ran to their natural
+        # end within budget is never flagged, even when a whole-hunt
+        # deadline is observed to have expired immediately afterward.
+        c2_context_incomplete = False
+        new_pipe_leads = len(string_leads) > pipes_before
+        if new_pipe_leads and c2_budget.exhausted():
+            # Already spent before this region: its C2 context cannot be
+            # gathered at all.
+            c2_context_incomplete = True
+        elif new_pipe_leads:
             # Build small, bounded C2ContextRecords right here while `data`
             # is still in scope — the raw region bytes are never cached or
             # retained past this loop iteration. Only C2-context gathering
@@ -251,13 +334,17 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # of its own. Retained for as long as the whole-hunt c2_budget
             # has room, full stop — a region with many corroborating
             # matches keeps every one of them the budget allows.
-            for start, end, token in _iter_c2_matches(data, c2_pattern, c2_budget):
+            pass1_truncated = [False]
+            for start, end, token in _iter_c2_matches(data, c2_pattern, c2_budget, pass1_truncated):
                 if not is_proximity_match(start, region_pipe_offsets, PIPE_CONTEXT_DISTANCE):
                     continue
                 record = _build_c2_record(data, start, end, token, r.BaseAddress)
                 if not c2_budget.take_hit(len(record.context) + len(record.match)):
+                    c2_context_incomplete = True
                     break
                 records.append(record)
+            if pass1_truncated[0]:
+                c2_context_incomplete = True
 
             # Pass 2 — context-only evidence: a SEPARATE, small, fixed
             # per-region quota (PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION) so it
@@ -268,22 +355,54 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # dumpex/hunt/pipe/__init__.py).
             if not c2_budget.exhausted():
                 context_kept = 0
-                for start, end, token in _iter_c2_matches(data, c2_pattern, c2_budget):
+                pass2_truncated = [False]
+                for start, end, token in _iter_c2_matches(data, c2_pattern, c2_budget,
+                                                           pass2_truncated):
                     if context_kept >= PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION:
                         break
                     if is_proximity_match(start, region_pipe_offsets, PIPE_CONTEXT_DISTANCE):
                         continue
                     record = _build_c2_record(data, start, end, token, r.BaseAddress)
                     if not c2_budget.take_hit(len(record.context) + len(record.match)):
+                        c2_context_incomplete = True
                         break
                     records.append(record)
                     context_kept += 1
+                if pass2_truncated[0]:
+                    c2_context_incomplete = True
+            else:
+                # Pass 2 (context-only C2 evidence over the same bytes)
+                # could not start -- the c2_budget was spent during pass 1
+                # or in the gap before this check, so this region's
+                # context-only matches were never gathered.
+                c2_context_incomplete = True
 
             if records:
                 c2_regions.append(RegionC2Records(region=region, records=tuple(records)))
 
+        # A region whose new pipe-name leads the c2_budget could not gather
+        # full C2 context for -- recorded at the point the budget actually
+        # blocked a pass, never inferred from the final budget state, so a
+        # deadline observed only after BOTH passes already finished does not
+        # flag a region whose C2 context is in fact complete.
+        if c2_context_incomplete:
+            c2_budget_affected.append(region_scan_target(mf, r))
+
+        # Exactly one disposition, on every path out of this iteration:
+        # `scanned` when at least one pattern ran over the region's bytes,
+        # `budget_skipped` when the whole-hunt budgets left nothing to run
+        # -- read fine and perfectly analyzable, just not examined. Kept
+        # out of `not_applicable`, which claims a rescan would find the
+        # same nothing; a bigger budget reaches these.
+        if examined:
+            coverage_counts.note_scanned()
+        else:
+            coverage_counts.note_budget_skipped()
+
     coverage = PipeScanCoverage.from_scan(
         coverage_counts, pipe_name_budget, c2_budget,
-        image_pipe_refs=image_pipe_refs, image_pipe_modules=image_pipe_modules)
+        image_pipe_refs=image_pipe_refs, image_pipe_modules=image_pipe_modules,
+        pipe_name_budget_exhausted_targets=_dedupe_targets(pipe_name_budget_affected),
+        c2_budget_exhausted_targets=_dedupe_targets(c2_budget_affected))
     return PipeNameScanResult(string_leads=tuple(dedupe_private_pipes(string_leads)),
                                c2_regions=tuple(c2_regions), coverage=coverage)

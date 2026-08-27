@@ -196,6 +196,17 @@ def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
     return coverage_status, reasons
 
 
+def _budget_limitation(scope: str, detail: str, targets: tuple) -> CoverageLimitation:
+    """One `SCAN_BUDGET_EXHAUSTED` limitation for a pipe budget. When the
+    scanner resolved the regions that budget left unresolved for `scope`,
+    they ride along as `targets` (with `affected_count`); otherwise the
+    limitation is reason-only, exactly as before."""
+    extra = {"affected_count": len(targets), "targets": list(targets)} if targets else {}
+    return CoverageLimitation(
+        code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="pipe_name_scan",
+        scope=scope, detail=detail, **extra)
+
+
 def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     """The structured `dumpex.output.coverage.CoverageReport` for a pipe
     run -- built at each gap site `project_coverage_v1` above already
@@ -244,15 +255,27 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     # Two SEPARATE limitations, distinguished by `scope`, never one merged
     # "budget exhausted" entry -- which signal's collection stopped early
     # is exactly what an analyst needs to know (see
-    # dumpex/hunt/pipe/config.py).
+    # dumpex/hunt/pipe/config.py). `targets` (the eligible regions that
+    # budget left unresolved for its scope) ride along when the scanner
+    # could name them; an exhaustion that stopped the walk with nothing
+    # eligible left to point at stays reason-only. Ordering is fixed:
+    # c2_context first, then pipe_name.
     if coverage.c2_budget_exhausted:
-        completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="pipe_name_scan",
-            scope="c2_context", detail=coverage.c2_budget_reason))
+        completeness_checks.append(_budget_limitation(
+            "c2_context", coverage.c2_budget_reason,
+            coverage.c2_budget_exhausted_targets))
     if coverage.pipe_name_budget_exhausted:
+        completeness_checks.append(_budget_limitation(
+            "pipe_name", coverage.pipe_name_budget_reason,
+            coverage.pipe_name_budget_exhausted_targets))
+    if coverage.unreconciled:
+        # No `targets` -- see SCAN_ITEMS_UNACCOUNTED on LimitationCode
+        # for why this gap cannot name what it lost. Both ledger
+        # directions land on the same code: either way, that many regions
+        # have no trustworthy outcome.
         completeness_checks.append(CoverageLimitation(
-            code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="pipe_name_scan",
-            scope="pipe_name", detail=coverage.pipe_name_budget_reason))
+            code=LimitationCode.SCAN_ITEMS_UNACCOUNTED, source="pipe_name_scan",
+            affected_count=coverage.unreconciled))
 
     return build_coverage_report(
         sources, evaluation_sources=EvaluationRequirement(("memory_info", "handle_data")),

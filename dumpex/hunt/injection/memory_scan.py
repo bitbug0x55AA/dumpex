@@ -89,6 +89,11 @@ def _hunt_rwx(mf: MinidumpFile) -> tuple:
     regions = get_memory_regions(mf)
     hits = []
     for r in regions:
+        if r.RegionSize <= 0:
+            # A zero-length region spans no address a hit could sit at:
+            # `resolve_location` places a VA INSIDE its region, which a
+            # region of no extent has nowhere to do.
+            continue
         if _is_suspicious_rwx(prot_str(r.Protect), prot_str(r.Type)):
             hits.append(RwxRegionEvidence(
                 region=region_ref(r),
@@ -667,6 +672,11 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
     scan_not_started_by_kind = {}  # budget_kind -> list[ScanTarget] -- issue #28 P5 follow-up
     for r in get_memory_regions(mf):
         if prot_str(r.State) != "MEM_COMMIT":
+            continue
+        if r.RegionSize <= 0:
+            # A zero-length region holds no candidate header, and a
+            # ScanTarget cannot name it -- a target has an extent by
+            # definition, which every gap recorded below relies on.
             continue
         # Membership is a RANGE check (addr_to_module), not "does this
         # region's BaseAddress exactly equal a module's base" — a prior

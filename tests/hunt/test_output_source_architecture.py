@@ -297,8 +297,10 @@ def test_pipe_aggregate_receives_only_typed_evidence_and_scalars():
         "skipped_oversize", "read_failed", "read_failed_targets",
         "short_reads", "short_read_targets", "c2_budget_exhausted",
         "c2_budget_reason", "pipe_name_budget_exhausted",
-        "pipe_name_budget_reason", "image_pipe_refs", "image_pipe_modules",
-        "rule_version",
+        "pipe_name_budget_reason", "pipe_name_budget_exhausted_targets",
+        "c2_budget_exhausted_targets", "image_pipe_refs", "image_pipe_modules",
+        # the ledger's two directions, scalar counts
+        "rule_version", "unaccounted", "over_accounted", "ledger_imbalance",
     }
     parameter_names = set(inspect.signature(pipe_aggregate.build_report).parameters)
     unexpected = parameter_names - allowed
@@ -322,6 +324,10 @@ def test_encoding_aggregate_receives_only_typed_evidence_and_scalars():
         "decode_oversized", "sleep_mask_read_failed", "entropy_read_failed",
         "decode_read_failed", "sleep_mask_short_read", "entropy_short_read",
         "decode_short_read", "budget_exhausted", "exhausted_reason",
+        # the ledger's two directions, per scan layer
+        "sleep_mask_unaccounted", "entropy_unaccounted", "decode_unaccounted",
+        "sleep_mask_over_accounted", "entropy_over_accounted", "decode_over_accounted",
+        "sleep_mask_imbalance", "entropy_imbalance", "decode_imbalance",
     }
     parameter_names = set(inspect.signature(encoding_aggregate.build_report).parameters)
     unexpected = parameter_names - allowed
@@ -349,6 +355,8 @@ def test_stomping_aggregate_receives_only_typed_evidence_and_scalars():
         "ioc_oversized", "ioc_read_failed", "ioc_read_failed_targets",
         "ioc_short_reads", "ioc_short_read_targets",
         "ioc_whitelisted_modules",
+        "ioc_unaccounted", "ioc_over_accounted",   # the ledger's two directions
+        "ioc_ledger_imbalance",
     }
     parameter_names = set(inspect.signature(stomping_aggregate.build_report).parameters)
     unexpected = parameter_names - allowed

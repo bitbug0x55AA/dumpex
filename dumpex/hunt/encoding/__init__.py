@@ -116,6 +116,18 @@ def _build_encoding_report(mf: MinidumpFile):
         entropy_short_read=tuple(ent_cov.short_read_targets),
         decode_short_read=tuple(dec_cov.short_read_targets),
         budget_exhausted=decode_budget.exhausted(), exhausted_reason=decode_budget.exhausted_reason,
+        # Per layer, like the target tuples above: an unreconciled region
+        # is a bug in ONE layer's own loop, and summing the three here
+        # would leave the structured limitation unable to name which.
+        sleep_mask_unaccounted=sm_cov.unaccounted,
+        entropy_unaccounted=ent_cov.unaccounted,
+        decode_unaccounted=dec_cov.unaccounted,
+        sleep_mask_over_accounted=sm_cov.over_accounted,
+        entropy_over_accounted=ent_cov.over_accounted,
+        decode_over_accounted=dec_cov.over_accounted,
+        sleep_mask_imbalance=sm_cov.ledger_imbalance,
+        entropy_imbalance=ent_cov.ledger_imbalance,
+        decode_imbalance=dec_cov.ledger_imbalance,
     )
     return report
 

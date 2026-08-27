@@ -6,7 +6,10 @@ clean only when every required comparison completed.
 """
 from dataclasses import dataclass, field
 
-from dumpex.hunt._coverage import derive_status, derive_coverage_status
+from dumpex.hunt._coverage import (
+    derive_status, derive_coverage_status, UNACCOUNTED_LABEL, OVER_ACCOUNTED_LABEL,
+    UNBALANCED_LABEL,
+)
 from dumpex.hunt._domain import CheckResult, require_recursively_immutable, as_tuple
 from dumpex.hunt._finding import (
     overall_confidence, verdict_level, lead_count, review_priority,
@@ -40,9 +43,8 @@ MAX_SCORE = 2
 # coverage_reasons (report_facts.project_coverage_v1), the
 # stomping.ioc_string_lead CheckResult's `limitations` (aggregate.py), and
 # report_console.py's COVERAGE section/impact. Worded and ordered to match
-# `dumpex.hunt._coverage.CoverageTracker.build_reasons` exactly -- including
-# the same bounded VA/size preview the structured
-# SCAN_REGION_OVERSIZED_SKIPPED limitation renders
+# each other exactly, including the same bounded VA/size preview the
+# structured SCAN_REGION_OVERSIZED_SKIPPED limitation renders
 # (`format_scan_target_preview`), so the console reason and --json's own
 # coverage.reasons describe the identical skips identically. The wording
 # says "never scanned", not "skipped": an analyst has to be able to tell
@@ -186,6 +188,21 @@ class CoverageSnapshot:
     ioc_read_failed_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget] -- issue #28
     ioc_short_reads: int = 0
     ioc_short_read_targets: tuple = field(default_factory=tuple)    # tuple[ScanTarget] -- issue #28
+    # The IOC scan's ledger, in both directions: regions taken into scope
+    # with no outcome recorded, and outcomes recorded for regions never
+    # taken into scope. Neither carries targets by construction -- an item
+    # nobody reconciled is precisely one whose identity the loop never
+    # captured. Either being non-zero means a bug in
+    # `memory_scan.scan_ioc_strings`' own loop, and makes coverage partial
+    # rather than letting the gap render as a complete scan.
+    ioc_unaccounted:    int = 0
+    ioc_over_accounted: int = 0
+    # Items with no trustworthy outcome BEYOND the two counts above: what
+    # the scan's own books are short by once both are taken into account.
+    # Non-zero means a count did not survive the trip from the scan to
+    # here, which neither direction can show -- a counter that never
+    # arrived reads as zero.
+    ioc_ledger_imbalance: int = 0
     # Whitelisted network DLLs whose regions WERE scanned, just without the
     # network-IOC pattern set (network strings are expected there) -- not a
     # gap, a scan-detail fact report_console.py surfaces under --verbose.
@@ -195,7 +212,8 @@ class CoverageSnapshot:
         for name in ("memory_info_stream", "module_list_stream", "ref_dir_supplied"):
             _require_bool(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in (*COVERAGE_COUNT_FIELDS, "header_read_failed", "header_parse_failed",
-                     "ioc_read_failed", "ioc_short_reads"):
+                     "ioc_read_failed", "ioc_short_reads", "ioc_unaccounted",
+                     "ioc_over_accounted", "ioc_ledger_imbalance"):
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         object.__setattr__(self, "ioc_oversized", _require_scan_targets(
             self.ioc_oversized, "CoverageSnapshot.ioc_oversized"))
@@ -220,8 +238,22 @@ class CoverageSnapshot:
                              self.short_reads, self.relocation_failed)))
 
     @property
+    def ioc_unreconciled(self) -> int:
+        """Regions with no trustworthy outcome, in every direction at once:
+        taken into scope and never dispositioned, dispositioned without
+        being in scope, and whatever the books are still short by. One
+        number, because that is what a reader has to act on -- the
+        directions are what the reasons distinguish."""
+        return (self.ioc_unaccounted + self.ioc_over_accounted
+                + self.ioc_ledger_imbalance)
+
+    @property
     def ioc_complete(self) -> bool:
-        return not (self.ioc_oversized or self.ioc_read_failed or self.ioc_short_reads)
+        """The ledger is what makes this a POSITIVE assertion: not "no gap
+        was reported", but "every region the scan took into scope reached
+        exactly one recorded outcome"."""
+        return not (self.ioc_oversized or self.ioc_read_failed
+                    or self.ioc_short_reads or self.ioc_unreconciled)
 
     @property
     def evaluated(self) -> bool:
@@ -283,8 +315,8 @@ class CoverageSnapshot:
 
     def ioc_gap_reasons(self) -> tuple:
         """The IOC sub-scan's coverage gaps as human-readable reason
-        strings, in `CoverageTracker.build_reasons`' own fixed order --
-        empty when the scan got through every eligible region.
+        strings, in a fixed order -- empty when the scan got through
+        every eligible region.
 
         The ONE canonical wording (see IOC_*_LABEL above): aggregate.py
         embeds these in the stomping.ioc_string_lead CheckResult's
@@ -305,6 +337,14 @@ class CoverageSnapshot:
             preview = (f": {format_scan_target_preview(self.ioc_short_read_targets)}"
                        if self.ioc_short_read_targets else "")
             reasons.append(f"{self.ioc_short_reads} {IOC_SHORT_READ_LABEL}{preview}")
+        # Last, and with no target preview: see `ioc_unaccounted` for why
+        # these can never name what they lost.
+        if self.ioc_unaccounted:
+            reasons.append(f"{self.ioc_unaccounted} region(s) {UNACCOUNTED_LABEL}")
+        if self.ioc_over_accounted:
+            reasons.append(f"{self.ioc_over_accounted} region(s) {OVER_ACCOUNTED_LABEL}")
+        if self.ioc_ledger_imbalance:
+            reasons.append(f"{self.ioc_ledger_imbalance} region(s) {UNBALANCED_LABEL}")
         return tuple(reasons)
 
     def coverage_counts(self) -> dict:

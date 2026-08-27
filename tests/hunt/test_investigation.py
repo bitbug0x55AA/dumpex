@@ -377,6 +377,51 @@ def test_multiple_causes_same_scope_vs_genuinely_distinct_scopes():
 
 # ── priority truth table ─────────────────────────────────────────────────
 
+def _pipe_budget_limitation(scope, targets):
+    return CoverageLimitation(
+        code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="pipe_name_scan",
+        scope=scope, detail="deadline",
+        affected_count=len(targets), targets=tuple(targets))
+
+
+def test_pipe_budget_exhaustion_targets_reach_the_investigation_queue():
+    """A target-bearing generic SCAN_BUDGET_EXHAUSTED limitation produces a
+    real investigation action -- without the _TARGET_BEARING_LIMITATION_
+    CAUSES entry the coverage record would improve but the recovery
+    workflow would not."""
+    t = target(base=0xA000, size=0x1000, size_limit=None, type_="MEM_PRIVATE",
+               protection="PAGE_EXECUTE_READWRITE")
+    actions = build_investigation_queue(
+        [pipe_record([_pipe_budget_limitation("pipe_name", [t])])], [])
+    assert len(actions) == 1
+    assert actions[0].target.base_address == 0xA000
+    assert [s.cause for s in actions[0].skipped_by] == ["scan_budget_exhausted"]
+    assert actions[0].skipped_by[0].scope == "pipe_name"
+
+
+def test_both_pipe_scopes_on_one_region_dedupe_to_one_action_two_relationships():
+    """When pipe_name and c2_context both name the same physical region the
+    queue emits ONE action carrying a distinct SkipRelationship per scope,
+    and the two-scope overlap is itself a correlation signal."""
+    t = target(base=0xB000, size=0x1000, size_limit=None, type_="MEM_MAPPED",
+               protection="PAGE_READWRITE")
+    actions = build_investigation_queue([pipe_record([
+        _pipe_budget_limitation("c2_context", [t]),
+        _pipe_budget_limitation("pipe_name", [t]),
+    ])], [])
+    assert len(actions) == 1
+    scopes = sorted(s.scope for s in actions[0].skipped_by)
+    assert scopes == ["c2_context", "pipe_name"]
+    assert "MULTIPLE_SCOPES_SKIPPED" in actions[0].priority_reason_codes
+
+
+def test_reason_only_pipe_budget_limitation_fabricates_no_action():
+    lim = CoverageLimitation(
+        code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="pipe_name_scan",
+        scope="c2_context", detail="deadline")
+    assert build_investigation_queue([pipe_record([lim])], []) == []
+
+
 def test_priority_truth_table():
     assert _derive_priority(False, False) == "low"
     assert _derive_priority(True, False) == "medium"

@@ -129,6 +129,15 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
     suppressed_scoped    = 0
     context_unverified   = 0
 
+    # Zero-length segments are dropped once, here, rather than at each
+    # place a segment is walked or sliced: they hold nothing to scan and
+    # no bytes anyone could miss, and a ScanTarget cannot name one -- a
+    # target has an extent by definition. Filtering at the entry keeps
+    # every later use (the walk, and the budget/truncation slices that
+    # turn abandoned segments into targets) working from the same set.
+    segment_count = len(segs)   # every segment the dump declares, filter or no
+    segs = [seg for seg in segs if seg.size > 0]
+
     for seg_index, seg in enumerate(segs):
         if truncated:
             break
@@ -154,11 +163,16 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
         total_bytes_scanned += len(data)
         if total_bytes_scanned > config.max_total_bytes_scanned:
             _mark_budget_exhausted("max_total_bytes_scanned", total_bytes_scanned)
+        if not data:
+            # Nothing came back at all: no bytes to match against, so this
+            # is a failed read rather than a short one -- a short read
+            # ANNOTATES a segment that was otherwise scanned.
+            read_failed += 1
+            read_failed_targets.append(segment_scan_target(seg))
+            continue
         if len(data) < seg.size:
             short_reads += 1
             short_read_targets.append(segment_scan_target(seg))
-            if not data:
-                continue
         scanned += 1
 
         for rule_index, (fname, compiled) in enumerate(rule_files):
@@ -310,7 +324,7 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
         for hit in all_hits)
 
     diagnostics = ScanDiagnostics(
-        segment_count=len(segs), scanned=scanned,
+        segment_count=segment_count, scanned=scanned,
         skipped_oversize_targets=tuple(skipped_targets),
         read_failed_targets=tuple(read_failed_targets),
         short_read_targets=tuple(short_read_targets),

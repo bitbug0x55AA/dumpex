@@ -3,7 +3,9 @@
 Fact text and ordering are stable inputs to legacy output, typed records,
 and finding identifiers.
 """
-from dumpex.hunt._coverage import derive_coverage_status
+from dumpex.hunt._coverage import (
+    derive_coverage_status, UNACCOUNTED_LABEL, OVER_ACCOUNTED_LABEL, UNBALANCED_LABEL,
+)
 from dumpex.hunt._finding import Finding
 from dumpex.hunt.cs_beacon.domain import CSBeaconReport, CoverageSnapshot, ScanDiagnostics
 from dumpex.hunt.cs_beacon.models import ConfigEvidence, CorroborationEvidence
@@ -94,11 +96,11 @@ def finding_from_check_result(result, report: CSBeaconReport) -> Finding:
 # ── Coverage projections ──────────────────────────────────────────────────
 
 def _scan_reasons(scan: ScanDiagnostics) -> list:
-    """The oversize/read-failed/short-read reasons -- byte-identical to
-    `dumpex.hunt._coverage.CoverageTracker.build_reasons()`'s own rendering
-    for the labels this hunter has always used, reproduced here because
-    `ScanDiagnostics` is a frozen snapshot (tuples of `ScanTarget`), not a
-    live `CoverageTracker`."""
+    """The oversize/read-failed/short-read reasons, rendered from the
+    frozen `ScanDiagnostics` snapshot: the tracker accumulates facts and
+    renders none of them, so each hunter owns its own wording -- with the
+    shared labels in `dumpex.hunt._coverage` keeping the reconciliation
+    reasons identical across all four."""
     reasons = []
     if scan.skipped_oversize:
         reasons.append(f"{scan.skipped_oversize} oversized segment(s) skipped: "
@@ -112,6 +114,14 @@ def _scan_reasons(scan: ScanDiagnostics) -> list:
                    if scan.short_read_targets else "")
         reasons.append(f"{scan.short_reads} segment(s) returned fewer bytes than declared "
                         f"(short read) — not fully scanned{preview}")
+    # Last, and with no target preview: see `ScanDiagnostics.unaccounted`
+    # for why these can never name what they lost.
+    if scan.unaccounted:
+        reasons.append(f"{scan.unaccounted} segment(s) {UNACCOUNTED_LABEL}")
+    if scan.over_accounted:
+        reasons.append(f"{scan.over_accounted} segment(s) {OVER_ACCOUNTED_LABEL}")
+    if scan.ledger_imbalance:
+        reasons.append(f"{scan.ledger_imbalance} segment(s) {UNBALANCED_LABEL}")
     return reasons
 
 
@@ -183,6 +193,14 @@ def project_coverage_report(coverage: CoverageSnapshot, *, has_hits: bool = Fals
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="segment_scan",
             affected_count=scan.short_reads, targets=list(scan.short_read_targets)))
+    if scan.unreconciled:
+        # No `targets` -- see SCAN_ITEMS_UNACCOUNTED on LimitationCode
+        # for why this gap cannot name what it lost. Both ledger
+        # directions land on the same code: either way, that many segments
+        # have no trustworthy outcome.
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_ITEMS_UNACCOUNTED, source="segment_scan",
+            affected_count=scan.unreconciled))
     if scan.has_real_budget_gap:
         targets = list(scan.budget_exhausted_targets)
         completeness_checks.append(CoverageLimitation(
