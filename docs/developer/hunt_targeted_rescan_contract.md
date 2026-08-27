@@ -45,8 +45,8 @@ reused; no second size option is introduced.
 - `--hunt-addr` rejects `--hunt all`; `all` is a selection mode, not an analyzer.
 - `--hunt-addr` rejects an unknown hunter and the known but unsupported
   `injection` and `hollowing` hunters.
-- `--triage-skipped` is accepted with a targeted single-hunter invocation but
-  remains inert, matching current single-hunter behavior.
+- `--triage-skipped` is temporarily unavailable and is rejected before opening
+  the dump, including with a targeted single-hunter invocation.
 - A modifier supplied with another mutually exclusive mode is rejected.
 
 ### Range validation

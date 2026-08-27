@@ -84,17 +84,19 @@ complete and does not change.
 | `--yara-dir DIR` | Use an explicit directory of `.yar`/`.yara` rules for YARA hunting |
 | `--ref-dir DIR` | Supply reference DLL/EXE files for module-stomping comparison |
 | `--rules-file FILE` | Use an explicit TTP rules YAML/JSON file |
-| `--triage-skipped` | With `--hunt all`, perform bounded deep triage of skipped targets |
+| `--triage-skipped` | Temporarily unavailable; name reserved for future analyzer-aware recovery orchestration |
 
 An explicit `--rules-file` fails closed if missing, unreadable, malformed, or
 unsupported; dumpex does not silently fall back to another ruleset. The
 `--ref-dir` path is validated before analysis and should contain trusted,
 same-build reference modules.
 
-`--triage-skipped` reads content under fixed per-target, whole-run, and target-
-count budgets. It changes only advisory investigation-action triage and console
-details; it does not change hunter verdicts, coverage, or exit code. A focused
-single-hunter run has no investigation queue, so the option has no effect there.
+`--triage-skipped` currently fails with argparse usage exit code `2` before the
+dump is opened, rules are loaded, scans begin, or output artifacts are created.
+It is never a silent no-op. Without the flag, `--hunt all` continues to build
+the metadata-only skipped-target investigation queue without additional content
+reads. Only a successful targeted rescan by the originating hunter can close
+that hunter's coverage gap.
 
 ## Report options
 
@@ -254,7 +256,6 @@ dumpex sample.dmp --threads
 dumpex sample.dmp --hunt all --json hunt.json
 dumpex sample.dmp --hunt stomping --ref-dir trusted-modules
 dumpex sample.dmp --hunt yara --yara-dir case-yara
-dumpex sample.dmp --hunt all --triage-skipped
 
 dumpex sample.dmp --report --report-tid 0x1234
 dumpex sample.dmp --report --report-addr 0x7ff600001000 --output region.bin

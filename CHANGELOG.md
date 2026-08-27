@@ -9,7 +9,11 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
-No additional user-facing changes recorded.
+### Changed
+
+- Temporarily disabled `--triage-skipped`. The retired generic content pass
+  could not close hunter-specific coverage gaps; the option name is reserved
+  for future analyzer-aware recovery orchestration.
 
 ## 3.4.0 — 2026-08-23
 

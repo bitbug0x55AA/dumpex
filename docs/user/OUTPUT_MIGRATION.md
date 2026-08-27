@@ -81,6 +81,10 @@ Coverage gaps became actionable rather than count-only:
 Consumers should use structured limitation/action fields rather than parsing
 `coverage.reasons` text.
 
+Deep-mode triage is a historical v2.10-v2.13 producer shape. Current dumpex
+keeps those schemas frozen for archived output validation but emits metadata-
+only investigation actions; `--triage-skipped` is temporarily unavailable.
+
 ### v2.4 to v2.7
 
 The hunt result joined the v2 envelope in v2.4. Later versions expanded the

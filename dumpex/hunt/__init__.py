@@ -27,7 +27,6 @@ from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations
 from dumpex.hunt._investigation import build_investigation_queue
-from dumpex.hunt._deep_triage import run_deep_triage
 from dumpex.output.command_result import CommandResult
 from dumpex.output.coverage import CoverageReport
 from dumpex.output.records import HUNTERS
@@ -288,18 +287,17 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
                           coverage=_hunt_coverage_report(records, summary), summary=summary)
 
 def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None,
-             ref_dir: str = None, collect_records: bool = False, triage_skipped: bool = False):
+             ref_dir: str = None, collect_records: bool = False):
     """Run selected hunters, render reports, and return their results.
 
     With collect_records false, return the legacy results dictionary. With it
-    true, return results, typed records, investigation actions, diagnostics, and
-    this invocation's YARA provenance. Each selected report is built once and
-    shared by console and record projections.
+    true, return results, typed records, investigation actions, and this
+    invocation's YARA provenance. Each selected report is built once and shared
+    by console and record projections.
 
-    For hunt-all, optional deep triage runs once over the metadata queue. The
-    same actions and summary feed console and structured output. Registry
-    selection preserves fixed order and never skips an analyzer because an
-    earlier analyzer scored zero.
+    For hunt-all, the same metadata-only actions and summary feed console and
+    structured output. Registry selection preserves fixed order and never skips
+    an analyzer because an earlier analyzer scored zero.
     """
     # Derived from HUNTERS (already imported above for the record order)
     # rather than repeated as a second literal: a hunter added to /
@@ -367,7 +365,6 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         results["obfuscation"] = {"score": 0, "status": NOT_EVALUATED}
 
     investigation_actions = []
-    deep_diagnostics = []
     if ttp == "all":
         # The single cross-hunter renderer (Step 1.5, console presentation
         # patch) -- reads ONLY `records`/`summary`/the document-level
@@ -388,24 +385,12 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         memory_regions = get_memory_regions(mf)
         region_correlations = build_region_correlations(records, memory_regions)
         investigation_actions = build_investigation_queue(records, memory_regions)
-        # --triage-skipped (issue #19 Phase 2): run the real, budgeted
-        # content read EXACTLY ONCE here, over the metadata queue just
-        # built above -- both this call's own console rendering below AND
-        # the (investigation_actions, deep_diagnostics) this function
-        # returns to collect_records=True callers consume the SAME
-        # already-deep-triaged list, never a second independent pass (see
-        # this function's own docstring and dumpex.hunt._deep_triage's
-        # module docstring for why re-running it would silently double
-        # the read budget).
-        if triage_skipped and investigation_actions:
-            investigation_actions, deep_diagnostics = run_deep_triage(mf, investigation_actions)
         summary_presentation.render_hunt_summary(
             records, summary, doc_coverage.status.value,
             region_correlations=region_correlations,
-            investigation_actions=investigation_actions,
-            deep_triage_diagnostics=deep_diagnostics, verbose=verbose)
+            investigation_actions=investigation_actions, verbose=verbose)
 
     if collect_records:
-        return results, records, investigation_actions, deep_diagnostics, yara_provenance
+        return results, records, investigation_actions, yara_provenance
     return results
 

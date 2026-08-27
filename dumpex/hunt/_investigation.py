@@ -116,7 +116,7 @@ class InvestigationPriority(str, Enum):
 
 class TriageMode(str, Enum):
     METADATA = "metadata"
-    # Produced by the opt-in --triage-skipped content pass.
+    # Retained for historical document compatibility.
     DEEP = "deep"
 
 
@@ -150,19 +150,17 @@ class EvidenceAvailability(str, Enum):
 
 
 class ContentReasonCode(str, Enum):
-    """Closed vocabulary for `TriageInfo.content_reason_codes` -- what the
-    opt-in deep-content read itself (not metadata) found in a target's
-    examined bytes, via `dumpex.hunt._deep_triage`'s reuse of --report's
-    own `_scan_content_range()` string/IOC/MZ scan. Only ever populated for
-    `mode == "deep"` and a status where a real read actually happened
-    (completed/partial/clamped -- see TriageInfo.__post_init__); always
-    `()` otherwise. Deliberately its own closed enum, separate from
+    """Historical vocabulary for deep-mode content signals.
+
+    Only valid for `mode == "deep"` and a status where a real read happened
+    (completed/partial/clamped -- see TriageInfo.__post_init__); always `()`
+    otherwise. Deliberately its own closed enum, separate from
     `InvestigationReasonCode` (metadata-only signals) -- keeping the two
     apart preserves the metadata pass's own "zero content reads" proof
     (nothing in InvestigationReasonCode could ever require a read) and
     lets a JSON consumer tell "why is this HIGH priority" (metadata,
     always present) apart from "what did the deep read actually find"
-    (deep-triage-only, may never have been attempted)."""
+    (historical deep-triage data, absent from current producer output)."""
     IOC_PATTERN_STRING_MATCH     = "IOC_PATTERN_STRING_MATCH"
     NETWORK_PATTERN_STRING_MATCH = "NETWORK_PATTERN_STRING_MATCH"
     # MZ_HEADER_DETECTED and INJECTED_PE_HEADER are deliberately separate
@@ -171,8 +169,7 @@ class ContentReasonCode(str, Enum):
     # CONFIRMING the memory is unregistered (module_context ==
     # "unregistered") -- when module classification itself is unavailable
     # (no ModuleListStream), that confirmation cannot be made, and
-    # collapsing the two would silently drop the MZ signal entirely (see
-    # dumpex.hunt._deep_triage._content_reason_codes()'s own docstring).
+    # collapsing the two would silently drop the MZ signal entirely.
     MZ_HEADER_DETECTED = "MZ_HEADER_DETECTED"
     INJECTED_PE_HEADER = "INJECTED_PE_HEADER"
 
@@ -192,8 +189,9 @@ MAX_FINDING_VALUE_LEN = 256      # same order of magnitude as ReportIocString.
 
 @dataclass(frozen=True)
 class ContentFinding:
-    """One piece of REAL evidence the opt-in `--triage-skipped` deep read
-    itself found (issue #19 Phase 2) -- `TriageInfo.content_reason_codes`
+    """One piece of evidence retained in historical deep-mode output.
+
+    `TriageInfo.content_reason_codes`
     alone only says THAT something was found, never WHAT; this is the
     bounded, structured record of WHAT, so a JSON consumer doesn't have to
     re-run `--report --report-addr <base_address>` just to see it (though
@@ -210,12 +208,8 @@ class ContentFinding:
                       confirmed at all), every ioc_string-only field
                       `None`.
 
-    `dumpex.hunt._deep_triage.run_deep_triage()` is the only real
-    constructor, and it also caps the NUMBER of `ContentFinding` entries
-    per target at `MAX_FINDINGS_PER_TARGET` before ever constructing one
-    -- `TriageInfo.__post_init__` re-enforces that same cap here too, so
-    this array can never grow unbounded even against adversarial
-    content."""
+    `TriageInfo.__post_init__` caps the number of entries at
+    `MAX_FINDINGS_PER_TARGET`, preserving the historical structured shape."""
     type: str
     address: str
     offset: "int | None" = None
@@ -421,13 +415,10 @@ class TriageInfo:
     pinned to exactly these five values by construction (see
     `__post_init__`) -- `bytes_examined=0`/`region_fully_examined=False`/
     `content_reason_codes=()`/`findings=()` are the schema-enforced proof
-    that the default pass reads no region content. `mode="deep"` is
-    constructed ONLY by `dumpex.hunt._deep_triage.run_deep_triage()` (the
-    opt-in `--triage-skipped` budgeted deep-content triage, issue #19
-    Phase 2) -- never by this module. `__post_init__` still enforces
-    every mode="deep" invariant here (not in `_deep_triage`) so the two
-    producers (the always-on metadata pass and the opt-in deep pass)
-    share one place a reader can trust: a zero-byte status
+    that the default pass reads no region content. `mode="deep"` remains
+    accepted for historical document compatibility, although the current
+    producer does not emit it. `__post_init__` still enforces every historical
+    deep-mode invariant: a zero-byte status
     (not_captured/budget_deferred/unreadable) can never claim bytes were
     examined or that content was found; a real-read status
     (completed/partial/clamped) can never claim zero bytes; and only
@@ -439,11 +430,8 @@ class TriageInfo:
     see `ContentFinding`'s own docstring. Both share the exact same
     "only populated for a real-read status" rule.
 
-    `finding_count` is the TOTAL number of individual findings the deep
-    read actually produced (an MZ header counts as at most one; every IOC
-    string hit counts as one each) -- BEFORE `dumpex.hunt._deep_triage.
-    _content_signals()`'s own representative-first selection caps the
-    `findings` array at `MAX_FINDINGS_PER_TARGET`. `findings_truncated` is
+    `finding_count` is the TOTAL number of individual findings represented by
+    a historical deep-mode record. `findings_truncated` is
     `True` exactly when `finding_count > len(findings)`, i.e. the array
     does not carry every finding the read produced. Both exist so a JSON
     consumer can tell "there were exactly 3 findings, all shown" apart
@@ -507,10 +495,7 @@ class TriageInfo:
                     "content_reason_codes=(), findings=(), finding_count=0, "
                     "findings_truncated=False -- the metadata pass never reads region content")
             return
-        # mode == "deep" -- dumpex.hunt._deep_triage's own opt-in
-        # --triage-skipped budgeted phase (issue #19 Phase 2). See this
-        # class's own docstring for why these invariants live here rather
-        # than in _deep_triage itself.
+        # Historical deep-mode compatibility invariants.
         if self.status in _TRIAGE_ZERO_BYTE_STATUSES:
             if (self.bytes_examined, self.region_fully_examined, self.content_reason_codes,
                     self.findings, self.finding_count, self.findings_truncated) \

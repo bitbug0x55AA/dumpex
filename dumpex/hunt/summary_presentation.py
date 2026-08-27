@@ -10,7 +10,7 @@ from dumpex.hunt.summary import _DETECTED_VERDICT_ORDER
 from dumpex.hunt.region_correlation import RegionCorrelation
 from dumpex.hunt._investigation import InvestigationAction
 from dumpex.output.coverage import _format_bytes
-from dumpex.output.records import HUNTERS, HunterRecord, Diagnostic, _HUNT_CONFIDENCES, _HUNT_REVIEW_PRIORITIES
+from dumpex.output.records import HUNTERS, HunterRecord, _HUNT_CONFIDENCES, _HUNT_REVIEW_PRIORITIES
 
 _DISPLAY_NAME = {
     "injection":   "Process Injection",
@@ -377,47 +377,6 @@ _ACTION_TYPE_LABEL = {
     "chunked_analysis": "chunked analysis",
 }
 
-# ── deep triage (--triage-skipped, issue #19 Phase 2) ─────────────────────
-# `action.triage` is always present (mode == "metadata" by default, "deep"
-# only after a --triage-skipped run -- see dumpex.hunt._deep_triage). This
-# section adds ONE extra "Deep triage: ..." block per entry, printed ONLY
-# for mode == "deep" -- every word in it is a direct read of fields already
-# in --json (triage.status/bytes_examined/region_fully_examined/
-# content_reason_codes), never invented here, preserving console/JSON
-# parity the same way the rest of this entry already does.
-_CONTENT_REASON_CODE_LABEL = {
-    "IOC_PATTERN_STRING_MATCH": "IOC-pattern string match",
-    "NETWORK_PATTERN_STRING_MATCH": "network-pattern string match",
-    "MZ_HEADER_DETECTED": "MZ header detected",
-    "INJECTED_PE_HEADER": "MZ header in confirmed unregistered memory",
-}
-# Deep-read statuses where content_reason_codes is meaningful (a real read
-# happened) -- not_captured/budget_deferred/unreadable never have any (see
-# TriageInfo.__post_init__'s own zero-byte-status invariant).
-_DEEP_STATUSES_WITH_CONTENT_SIGNAL = frozenset({"completed", "partial", "clamped"})
-
-# `triage.findings` console preview caps -- deliberately smaller than the
-# JSON array's own MAX_FINDINGS_PER_TARGET=20 cap in normal mode (a few
-# representative entries are enough to act on from the console; the full
-# retained list is one --json or --verbose away). `t.findings` is already
-# ordered representative-first by dumpex.hunt._deep_triage._content_signals()
-# (an MZ finding, then one network-pattern IOC, then one plain IOC, then the
-# rest in offset order) -- taking the first N here is not a re-selection,
-# just a further, purely-presentational truncation of an already-ordered list.
-_MAX_CONTENT_FINDINGS_SHOWN_NORMAL = 3
-
-
-def _content_finding_text(finding) -> str:
-    """One line of ALREADY-COMPUTED evidence from a `ContentFinding` --
-    reads only fields the JSON already carries (`finding.value`/`.address`/
-    `.encoding`/`.is_network_pattern`/`.module_context`), never re-analyzes
-    or re-reads the dump. See `ContentFinding.to_dict()`'s own field set."""
-    if finding.type == "ioc_string":
-        net_suffix = ", network pattern" if finding.is_network_pattern else ""
-        return f"{finding.value!r} at {finding.address} ({finding.encoding}{net_suffix})"
-    return f"MZ header at {finding.address} (module context: {finding.module_context})"
-
-
 _CAUSE_LABEL = {
     "oversized_skipped": "oversized, never read",
     "read_failed":       "read failed",
@@ -476,44 +435,6 @@ def _render_investigation_action_entry(action: InvestigationAction, width: int, 
     action_texts = [_ACTION_TYPE_LABEL.get(a.type, a.type) for a in action.recommended_actions]
     lines.extend(_wrap_block(f"Next: {_bounded_join(action_texts, action_cap)}", width, 7))
 
-    if action.triage.mode == "deep":
-        t = action.triage
-        status_text = t.status.replace("_", " ")
-        extent = " (region fully examined)" if t.region_fully_examined else ""
-        lines.extend(_wrap_block(
-            f"Deep triage: {status_text} -- {_format_bytes(t.bytes_examined)} examined{extent}",
-            width, 7))
-        if t.status in _DEEP_STATUSES_WITH_CONTENT_SIGNAL:
-            if t.content_reason_codes:
-                found_texts = [_CONTENT_REASON_CODE_LABEL.get(c, c) for c in t.content_reason_codes]
-                lines.extend(_wrap_block(
-                    f"Deep triage found: {'; '.join(found_texts)} -- a lead, not a verdict; "
-                    f"does not resolve the skipping hunter's own coverage gap.", width, 7))
-                if t.findings:
-                    finding_cap = None if verbose else _MAX_CONTENT_FINDINGS_SHOWN_NORMAL
-                    shown_findings = t.findings if finding_cap is None else t.findings[:finding_cap]
-                    for f in shown_findings:
-                        lines.extend(_wrap_block(f"- {_content_finding_text(f)}", width, 9))
-                    console_omitted = len(t.findings) - len(shown_findings)
-                    if console_omitted > 0:
-                        lines.extend(_wrap_block(
-                            f"... {console_omitted} additional retained finding(s) -- pass "
-                            f"--verbose or see --json triage.findings.", width, 9))
-                if t.findings_truncated:
-                    # A data-level truncation (more findings existed than the
-                    # JSON's own MAX_FINDINGS_PER_TARGET=20 cap retained) --
-                    # distinct from console_omitted above (a purely
-                    # presentational cap on top of what WAS retained) and
-                    # always shown regardless of verbose, since --verbose
-                    # only expands the console's own preview of the
-                    # RETAINED findings, never what was truncated before
-                    # they were ever written to triage.findings.
-                    lines.extend(_wrap_block(
-                        f"Showing {len(t.findings)} of {t.finding_count} deep-triage findings.",
-                        width, 7))
-            else:
-                lines.extend(_wrap_block("No generic indicators in examined bytes.", width, 7))
-
     if verbose:
         lines.extend(_wrap_block(
             "Coverage effect: original hunter's coverage gap is not resolved by this "
@@ -538,23 +459,6 @@ def _render_investigation_actions(actions: list, width: int, verbose: bool) -> l
             f"-- see result.summary.investigation_actions in --json output "
             f"(or pass --verbose).", width, 2))
         lines.append("")
-    return lines
-
-
-def _render_deep_triage_diagnostics(diagnostics: list, width: int) -> list:
-    """Bounded whole-run notes from `dumpex.hunt._deep_triage.
-    run_deep_triage()` (budget-exhausted / read-failed / a one-line
-    summary) -- printed right after SKIPPED TARGET ACTIONS, using the
-    SAME `Diagnostic.message` strings that also went into `--json
-    diagnostics.warnings`, so nothing here is console-only. Empty
-    (nothing printed) when `diagnostics` is empty -- the same "no empty
-    section" rule every other optional section in this module follows."""
-    if not diagnostics:
-        return []
-    lines = [f"  {BOLD('DEEP TRIAGE NOTES')}", ""]
-    for d in diagnostics:
-        lines.extend(_wrap_block(f"[~] {d.message}", width, 2))
-    lines.append("")
     return lines
 
 
@@ -587,7 +491,6 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
                          width: "int | None" = None,
                          region_correlations: "list | None" = None,
                          investigation_actions: "list | None" = None,
-                         deep_triage_diagnostics: "list | None" = None,
                          verbose: bool = False) -> None:
     """Print the `--hunt all` `HUNT SUMMARY` card. `records` must be the
     same 7-element `list[HunterRecord]` (HUNTERS' own fixed order)
@@ -604,14 +507,8 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
     `investigation_actions` is the optional `list[InvestigationAction]`
     `dumpex.hunt._investigation.build_investigation_queue()` already built
     from these same `records` plus the dump's MemoryInfo list -- `None` or
-    `[]` (the default) omits SKIPPED TARGET ACTIONS entirely; each entry's
-    own `.triage.mode` may be `"deep"` when the caller ran `--triage-skipped`
-    (see `dumpex.hunt._deep_triage.run_deep_triage()`), which adds extra
-    "Deep triage: ..." lines to that entry -- still just a projection of
-    fields already on the entry, same parity rule as the rest of this
-    section. `deep_triage_diagnostics` is the optional `list[Diagnostic]`
-    `run_deep_triage()` also returns -- `None` or `[]` (the default) omits
-    the DEEP TRIAGE NOTES block entirely. `verbose` controls ONLY that
+    `[]` (the default) omits SKIPPED TARGET ACTIONS entirely. `verbose`
+    controls ONLY that
     section's own presentation (how much of each already-computed entry is
     shown, and how many entries) -- it changes no other section, no
     ordering, and never the underlying list itself (see
@@ -628,11 +525,6 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
             or any(not isinstance(a, InvestigationAction) for a in investigation_actions)):
         raise TypeError("render_hunt_summary() investigation_actions must be None or a "
                          "list of InvestigationAction")
-    if deep_triage_diagnostics is not None and (
-            not isinstance(deep_triage_diagnostics, list)
-            or any(not isinstance(d, Diagnostic) for d in deep_triage_diagnostics)):
-        raise TypeError("render_hunt_summary() deep_triage_diagnostics must be None or a "
-                         "list of Diagnostic")
     w = resolve_width(width)
 
     print(BOLD("══════════════════════════════════════════"))
@@ -661,10 +553,6 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
 
     if investigation_actions:
         for line in _render_investigation_actions(investigation_actions, w, verbose):
-            print(line)
-
-    if deep_triage_diagnostics:
-        for line in _render_deep_triage_diagnostics(deep_triage_diagnostics, w):
             print(line)
 
     steps = _build_next_investigation_steps(review_first_ordered, records, summary)

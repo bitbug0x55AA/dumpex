@@ -49,7 +49,7 @@ def _run_hunt_yara_to_v2output(mf, rules_dir: str) -> V2Output:
     collect_records=True)`, thread its `yara_provenance` return value into
     a fresh `V2Output` via `set_yara_provenance()`, exactly as cli.py
     does before writing `--json`."""
-    _results, records, _actions, _diagnostics, yara_provenance = hunt_pkg.cmd_hunt(
+    _results, records, _actions, yara_provenance = hunt_pkg.cmd_hunt(
         mf, "yara", verbose=False, yara_dir=rules_dir, collect_records=True)
     out = V2Output("/tmp/fake.dmp", command="hunt_yara", options={})
     out.set_yara_provenance(yara_provenance)
