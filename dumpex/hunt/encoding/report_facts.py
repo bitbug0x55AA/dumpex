@@ -12,6 +12,7 @@ from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, EvaluationRequirement, LimitationCode,
     build_coverage_report, format_scan_target_preview, observe_source, scan_target_noun,
 )
+from dumpex.output.records import hex_address
 
 # This hunter's public coverage-source vocabulary -- the exact `sources`
 # dict keys `project_coverage_report()` below builds. Extracted into a
@@ -23,42 +24,48 @@ from dumpex.output.coverage import (
 COVERAGE_SOURCE_NAMES = frozenset({"memory_info", "encoding_scan"})
 
 
-# ── Fact-string builders -- byte-identical to the pre-migration aggregate.py ──
+# ── Fact-string builders ─────────────────────────────────────────────────
+# The address-typed fields (`VA`, `container_VA` -- both the decode
+# location's absolute address) go through the shared `hex_address()`
+# helper, so a fact renders an address in the same fixed-width,
+# zero-padded 16-hex-digit form as this hunter's `report_record.py` and
+# `--json` `details`. `key`, `rotation_offset`, `entropy`, `threshold`,
+# and `decoded_size` are not addresses and keep their existing form.
 
 def _sleep_mask_item_fact(h, report: EncodingReport) -> str:
-    return (f"VA=0x{h.location.va:x} key={h.key.hex()} rotation_offset={h.key_offset} "
+    return (f"VA={hex_address(h.location.va)} key={h.key.hex()} rotation_offset={h.key_offset} "
             f"decoded_type={h.classification.kind}")
 
 
 def _entropy_item_fact(h, report: EncodingReport) -> str:
-    return (f"VA=0x{h.location.va:x} entropy={h.entropy:.3f} threshold={h.threshold} "
+    return (f"VA={hex_address(h.location.va)} entropy={h.entropy:.3f} threshold={h.threshold} "
             f"protect={h.region.protect}")
 
 
 def _base64_item_fact(h, report: EncodingReport) -> str:
-    return (f"VA=0x{h.location.va:x} decoded_type={h.classification.kind} "
+    return (f"VA={hex_address(h.location.va)} decoded_type={h.classification.kind} "
             f"decoded_size={len(h.decoded)}")
 
 
 def _xor_item_fact(h, report: EncodingReport) -> str:
-    return f"VA=0x{h.location.va:x} key=0x{h.key:02x} decoded_type={h.classification.kind}"
+    return f"VA={hex_address(h.location.va)} key=0x{h.key:02x} decoded_type={h.classification.kind}"
 
 
 def _compressed_item_fact(h, report: EncodingReport) -> str:
-    return (f"VA=0x{h.location.va:x} algo={h.layer} decoded_type={h.classification.kind} "
+    return (f"VA={hex_address(h.location.va)} algo={h.layer} decoded_type={h.classification.kind} "
             f"decoded_size={len(h.decoded)}")
 
 
 def _structural_pe_item_fact(h, report: EncodingReport) -> str:
     reg_str = "registered" if h.known_module else "UNREGISTERED"
-    return (f"type=PE encoding={h.layer} container_VA=0x{h.location.va:x} "
+    return (f"type=PE encoding={h.layer} container_VA={hex_address(h.location.va)} "
             f"module_status={reg_str} decoded_size={len(h.decoded)}"
             + ("" if h.complete else " decode=incomplete(output-cap)"))
 
 
 def _shellcode_item_fact(h, report: EncodingReport) -> str:
     in_context = h in report.evidence.shellcode_context_hits
-    return (f"type=shellcode_bootstrap encoding={h.layer} container_VA=0x{h.location.va:x} "
+    return (f"type=shellcode_bootstrap encoding={h.layer} container_VA={hex_address(h.location.va)} "
             f"decoded_size={len(h.decoded)} prefix={h.decoded[:6].hex()}"
             + (f" container_protect={h.region.protect} (executable+private)" if in_context else ""))
 

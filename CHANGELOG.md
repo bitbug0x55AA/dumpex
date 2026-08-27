@@ -32,6 +32,19 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   report abandoned regions. Such an item holds no bytes to scan and none anyone
   could miss, so every hunter now filters it and `--hunt` still reports its
   findings.
+- The CS Beacon, obfuscation, hollowing, named-pipe, and module-stomping hunters
+  now render every virtual address at the same fixed-width, zero-padded
+  16-hex-digit form their `--json` records already use (`VA=0x0000000000270000`,
+  not `VA=0x270000`), across every surface: the wire finding facts, the
+  `--verbose` console evidence detail, and each hunter's KEY SIGNALS locator.
+  This completes the unification begun for injection facts in 3.3.0 — no hunter
+  is left rendering the same address two different ways depending on which
+  surface you read. Non-address numbers (sizes, thread and handle IDs,
+  granted-access masks, file offsets) keep their compact form. As with the 3.3.0
+  change, this alters `facts`, which is part of the finding-identity hash, so
+  affected findings in these five hunters receive a new `Finding.id` once;
+  consumers keying on `id` for deduplication will see them as new findings on
+  the first run after upgrading.
 
 ### Changed
 

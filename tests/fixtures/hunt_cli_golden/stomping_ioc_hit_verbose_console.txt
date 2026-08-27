@@ -47,7 +47,8 @@
                   contribute to the stomping score; see stomping.verified_content_change for the
                   only signal that scores.
     Facts:
-      - module=legit.dll region=0x7ff600001000 VA=0x7ff600001040 encoding=ASCII token=mimikatz
+      - module=legit.dll region=0x00007ff600001000 VA=0x00007ff600001040 encoding=ASCII
+        token=mimikatz
     Limitations:
       - Not corroborated by any structural (section/protection) evidence on its own.
 

@@ -457,8 +457,8 @@ def test_xor_structural_reports_correct_va_and_file_offset(capsys, monkeypatch):
     expected_va = region_base + len(padding)
     expected_file_offset = 0x9000 + expected_va
     out = capsys.readouterr().out
-    assert f"container_VA=0x{expected_va:x}" in out   # structural_payload's own fact
-    assert f"VA=0x{expected_va:016x}" in out           # xor_observation's verbose fact (same hit)
+    assert f"container_VA=0x{expected_va:016x}" in out   # structural_payload's own fact
+    assert f"VA=0x{expected_va:016x}" in out             # xor_observation's verbose fact (same hit)
     assert f"File_offset=0x{expected_file_offset:x}" in out
     assert f"XOR_key=0x{key:02x}" in out
 

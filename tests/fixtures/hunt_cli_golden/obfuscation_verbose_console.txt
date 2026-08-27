@@ -24,7 +24,8 @@
                   section table). Encoding was only the delivery mechanism here — the payload itself
                   is the evidence.
     Facts:
-      - type=PE encoding=base64 container_VA=0x300000 module_status=UNREGISTERED decoded_size=1184
+      - type=PE encoding=base64 container_VA=0x0000000000300000 module_status=UNREGISTERED
+        decoded_size=1184
     Limitations:
       - Structural validation reduces but does not eliminate false positives from
         adversarially-crafted or coincidental byte sequences in high-entropy data.

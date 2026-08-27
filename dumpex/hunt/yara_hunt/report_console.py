@@ -11,6 +11,7 @@ from dumpex.hunt._report_console import header_lines, render_coverage, wrap_bloc
 from dumpex.hunt.yara_hunt.domain import YaraReport
 from dumpex.hunt.yara_hunt.models import RuleMatchEvidence
 from dumpex.hunt.yara_hunt.report_facts import project_coverage_reasons
+from dumpex.output.records import hex_address
 
 # Normal-mode per-rule region preview cap -- mirrors the pre-migration
 # presentation.py's own "first 5 regions" summary.
@@ -59,7 +60,10 @@ def _distinct_sources(matches: tuple) -> list:
 
 def _region_preview(matches: tuple) -> str:
     regions = _distinct_regions(matches)
-    shown = [f"0x{va:x}" for va in regions[:MAX_DISPLAYED_REGIONS]]
+    # Region VAs render in the shared fixed-width, zero-padded 16-hex-digit
+    # form -- identical to this match's `--verbose` region line and its
+    # `--json` `seg_va`.
+    shown = [hex_address(va) for va in regions[:MAX_DISPLAYED_REGIONS]]
     overflow = len(regions) - len(shown)
     text = f"regions: {', '.join(shown)}"
     if overflow > 0:

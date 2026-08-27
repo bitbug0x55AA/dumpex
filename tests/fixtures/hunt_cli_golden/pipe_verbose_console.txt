@@ -22,11 +22,11 @@
                   string — the strongest correlation this hunter can produce.
     Facts:
       - Handle=0x88 ObjectName=\Device\NamedPipe\msagent_1337 pipe_va=0x0000000001230101
-        File_offset=(not captured) Region=0x1230000 protect=PAGE_EXECUTE_READ
+        File_offset=(not captured) Region=0x0000000001230000 protect=PAGE_EXECUTE_READ
       - ↳ c2_va=0x0000000001230116 c2_match='http://' distance=0x15 same_page=True
       - ↳ c2_va=0x000000000123011d c2_match='198.51.100.7:8080' distance=0x1c same_page=True
       - ↳ c2_va=0x000000000123012f c2_match='submit.php' distance=0x2e same_page=True
-      - ↳ live_rip=TID:0x999@RIP=0x1230105 distance=0x4 same_page=True
+      - ↳ live_rip=TID:0x999@RIP=0x0000000001230105 distance=0x4 same_page=True
     Limitations:
       - Name correlation between a handle's ObjectName and a string scan hit uses exact match on the
         canonicalized pipe name (prefix stripped, casefolded) — still not a cryptographic guarantee
@@ -73,7 +73,7 @@
                   contribute to the pipe score on its own.
     Facts:
       - VA=0x0000000001230101 File_offset=(not captured) name='\\.\\pipe\\msagent_1337'
-        canonical='msagent_1337' Region=0x1230000 size=0x1000 region_type=MEM_PRIVATE
+        canonical='msagent_1337' Region=0x0000000001230000 size=0x1000 region_type=MEM_PRIVATE
         protect=PAGE_EXECUTE_READ encoding=ascii original_length=20 truncated=False
         sha256=d6c2e70f9c9c3c0846775370930f27816544963d398f55aa7d0aa43b0255f06d
     Limitations:
@@ -84,20 +84,20 @@
   EVIDENCE DETAIL
 
   1 framework naming-convention match(es) on string leads — attribution only, never scored:
-      Pipe: \.\pipe\msagent_1337 Region=0x1230000 (this name also has an open handle — see
+      Pipe: \.\pipe\msagent_1337 Region=0x0000000001230000 (this name also has an open handle — see
       pipe.open_handles/pipe.handle_framework_match/pipe.corroboration above)
         Framework: Cobalt Strike — SMB Beacon peer-to-peer pipe — default msagent pipe name
         [T1090.001]
 
   1 region(s) with a pipe-name string + C2 artifacts:
-      Region 0x1230000 pipe: \.\pipe\msagent_1337 (this name also has an open handle — see
+      Region 0x0000000001230000 pipe: \.\pipe\msagent_1337 (this name also has an open handle — see
       pipe.open_handles/pipe.corroboration above)
         C2: http:// VA 0x0000000001230116
         C2: 198.51.100.7:8080 VA 0x000000000123011d
         C2: submit.php VA 0x000000000123012f
 
   1 unbacked thread(s) starting in a pipe-name-string region — lead only, never scored:
-      TID=0x999 StartAddr=0x1230010 Region=0x1230000
+      TID=0x999 StartAddr=0x0000000001230010 Region=0x0000000001230000
 
   COVERAGE
 

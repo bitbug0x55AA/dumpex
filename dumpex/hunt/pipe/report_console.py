@@ -21,6 +21,7 @@ from dumpex.hunt.pipe.report_facts import (
     _FACT_ITEM_RENDERERS, _file_offset_text, _proximity_text, finding_from_check_result,
     project_coverage_v1,
 )
+from dumpex.output.records import hex_address
 
 
 _CORROBORATION            = "pipe.corroboration"
@@ -80,6 +81,12 @@ def _ordered_for_display(findings: list) -> list:
 
 
 # ── Verbose-only evidence-item fact rendering (console policy only) ──────
+# Address-typed fields (`VA`, `pipe_va`, `c2_va`, `Region` base, a
+# thread's `StartAddr`, and a live `RIP`/`EIP`) go through the shared
+# `hex_address()` helper here too, so a verbose line renders an address in
+# the same fixed-width, zero-padded 16-hex-digit form as the wire fact,
+# the structured record, and `--json` `details`. `Handle`, `GrantedAccess`,
+# `TID`, `size`, `distance`, and file offsets stay compact.
 
 def _open_handle_verbose_fact(ev, report: PipeReport) -> str:
     """The wire-shaped fact plus the CANONICALIZED name -- the exact
@@ -98,9 +105,9 @@ def _string_lead_verbose_fact(ev, report: PipeReport) -> str:
     meant to need: the canonicalized name, the containing region's own
     identity, the full-run digest/length, and whether the retained preview
     was truncated."""
-    return (f"VA=0x{ev.va:016x} File_offset={_file_offset_text(ev.file_offset)} "
+    return (f"VA={hex_address(ev.va)} File_offset={_file_offset_text(ev.file_offset)} "
             f"name={ev.name.strip()!r} canonical={canonical_pipe_name(ev.name)!r} "
-            f"Region=0x{ev.region.base_address:x} size=0x{ev.region.size:x} "
+            f"Region={hex_address(ev.region.base_address)} size=0x{ev.region.size:x} "
             f"region_type={ev.region.type} protect={ev.region.protect} "
             f"encoding={ev.encoding} original_length={ev.original_length} "
             f"truncated={ev.truncated} sha256={ev.sha256}")
@@ -118,16 +125,16 @@ def _corroboration_verbose_facts(ev) -> list:
     run-together blob this expansion exists to avoid."""
     href = ev.handle.handle
     facts = [f"Handle=0x{href.handle:x} ObjectName={href.object_name} "
-             f"pipe_va=0x{ev.pipe_va:016x} "
+             f"pipe_va={hex_address(ev.pipe_va)} "
              f"File_offset={_file_offset_text(ev.string_hit.file_offset)} "
-             f"Region=0x{ev.string_hit.region.base_address:x} "
+             f"Region={hex_address(ev.string_hit.region.base_address)} "
              f"protect={ev.string_hit.region.protect}"]
-    facts.extend(f"  ↳ c2_va=0x{rec.va:016x} c2_match={rec.match!r} "
+    facts.extend(f"  ↳ c2_va={hex_address(rec.va)} c2_match={rec.match!r} "
                  f"{_proximity_text(rec.va, ev.pipe_va)}"
                  for rec in ev.nearby_c2)
     if ev.rip_hit is not None:
         tc = ev.rip_hit
-        facts.append(f"  ↳ live_rip=TID:0x{tc.thread_id:x}@{tc.ip_reg}=0x{tc.ip:x} "
+        facts.append(f"  ↳ live_rip=TID:0x{tc.thread_id:x}@{tc.ip_reg}={hex_address(tc.ip)} "
                      f"{_proximity_text(tc.ip, ev.pipe_va)}")
     return facts
 
@@ -268,7 +275,7 @@ def _evidence_detail_lines(report: PipeReport, w: int) -> list:
                             "pipe.handle_framework_match/pipe.corroboration above)"
                             if _has_open_handle(ev.pipe_name) else "")
             lines.extend(wrap_block(f"Pipe: {ev.pipe_name}  "
-                                     f"Region=0x{ev.region.base_address:x}{handle_note}", w, 6))
+                                     f"Region={hex_address(ev.region.base_address)}{handle_note}", w, 6))
             lines.extend(wrap_block(f"Framework: {ev.framework.framework} — "
                                      f"{ev.framework.technique} "
                                      f"[{ev.framework.mitre}]", w, 8))
@@ -283,10 +290,10 @@ def _evidence_detail_lines(report: PipeReport, w: int) -> list:
                                  "pipe.corroboration above"
                                  if _has_open_handle(ev.pipe_name) else
                                  "no corresponding open handle for this exact name")
-            lines.extend(wrap_block(f"Region 0x{ev.region.base_address:x}  "
+            lines.extend(wrap_block(f"Region {hex_address(ev.region.base_address)}  "
                                      f"pipe: {ev.pipe_name}  ({correlation_note})", w, 6))
             for rec in ev.records:
-                lines.extend(wrap_block(f"C2: {rec.match}  VA 0x{rec.va:016x}", w, 8))
+                lines.extend(wrap_block(f"C2: {rec.match}  VA {hex_address(rec.va)}", w, 8))
         lines.extend(_more_lines(evidence.c2_context, w))
         lines.append("")
 
@@ -295,9 +302,9 @@ def _evidence_detail_lines(report: PipeReport, w: int) -> list:
                           f"pipe-name-string region — lead only, never scored:"))
         for ev in evidence.unbacked_threads[:_DETAIL_LIMIT]:
             start = ev.thread.start_address
-            start_text = f"0x{start:x}" if start is not None else "(not recorded)"
+            start_text = hex_address(start) if start is not None else "(not recorded)"
             lines.extend(wrap_block(f"TID=0x{ev.thread.thread_id:x}  StartAddr={start_text}  "
-                                     f"Region=0x{ev.region.base_address:x}", w, 6))
+                                     f"Region={hex_address(ev.region.base_address)}", w, 6))
         lines.extend(_more_lines(evidence.unbacked_threads, w))
         lines.append("")
 
