@@ -69,6 +69,8 @@ def test_help_groups_commands_and_modifiers_and_hides_legacy_names(
     # #98: --verbose now also gates the --handles projection, and the
     # help text has to say so -- passing it used to be silently ignored.
     assert "--handles" in collapsed_verbose_help()
+    assert "Temporarily unavailable; reserved for future" in collapsed_help
+    assert "recovery orchestration" in collapsed_help
     # --sysinfo's own help text must reflect the removed Process section /
     # added Environment section, not the pre-#41 "process" summary.
     assert "Show OS, host, environment and CPU summary" in help_text
@@ -1158,12 +1160,9 @@ def _oversized_skip_mf():
     limitation -- same fixture shape as tests/hunt/test_pipe_collect.py's
     own test_oversized_region_is_skipped(), reused here so `--hunt all`
     end-to-end (all seven hunters, not just pipe, over ONE shared MF) has
-    a real, non-empty investigation_actions queue to run --triage-skipped
-    against. No memory_segments_64/memory_segments stream is set, so the
-    skipped target's own file_offset is None (evidence_availability ==
-    "not_captured") -- dumpex.hunt._deep_triage.run_deep_triage()'s own
-    real-content-read path is exercised directly, with real bytes, in
-    tests/hunt/test_deep_triage.py instead."""
+    a real, non-empty metadata-only investigation_actions queue. No
+    memory_segments_64/memory_segments stream is set, so the skipped target's
+    own file_offset is None (evidence_availability == "not_captured")."""
     region_base = 0x3000000
     regions = [Region(region_base, region_base, 0x10000, "MEM_COMMIT",
                        "PAGE_READWRITE", "MEM_PRIVATE")]
@@ -1177,7 +1176,7 @@ def _oversized_skip_mf():
     return MF()
 
 
-def _run_hunt_all_with_oversized_skip(monkeypatch, tmp_path, *, triage_skipped: bool, label: str):
+def _run_hunt_all_with_oversized_skip(monkeypatch, tmp_path, *, label: str):
     import dumpex.hunt.pipe as pipemod
     import dumpex.hunt.pipe.memory_scan as memory_scan_mod
     from tests.fixtures.fakes import mem_reader
@@ -1192,8 +1191,6 @@ def _run_hunt_all_with_oversized_skip(monkeypatch, tmp_path, *, triage_skipped: 
 
         out_json = str(tmp_path / f"{label}.json")
         argv = ["dumpex", dump_path, "--hunt", "all", "--json", out_json]
-        if triage_skipped:
-            argv.append("--triage-skipped")
         monkeypatch.setattr(sys, "argv", argv)
         with pytest.raises(SystemExit) as exc:
             cli.main()
@@ -1204,49 +1201,64 @@ def _run_hunt_all_with_oversized_skip(monkeypatch, tmp_path, *, triage_skipped: 
         os.remove(dump_path)
 
 
-def test_triage_skipped_flag_is_recorded_in_meta_options(monkeypatch, tmp_path):
-    _exit_code, doc = _run_hunt_all_with_oversized_skip(
-        monkeypatch, tmp_path, triage_skipped=True, label="opts")
-    assert doc["meta"]["execution"]["options"]["triage_skipped"] is True
+@pytest.mark.parametrize("command", [
+    ["--hunt", "all"],
+    ["--hunt", "injection"],
+    ["--modules"],
+])
+def test_triage_skipped_is_rejected_before_io_rules_or_scans(
+        monkeypatch, tmp_path, capsys, command):
+    json_path = tmp_path / "result.json"
+    txt_path = tmp_path / "result.txt"
+    output_path = tmp_path / "result.bin"
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("preflight rejection must happen before runtime work")
+
+    monkeypatch.setattr(cli, "open_dump", forbidden)
+    monkeypatch.setattr(cli, "configure_rules_source", forbidden)
+    monkeypatch.setattr(cli, "get_rules", forbidden)
+    monkeypatch.setattr(cli, "cmd_hunt", forbidden)
+    monkeypatch.setattr(sys, "argv", [
+        "dumpex", str(tmp_path / "missing.dmp"), *command,
+        "--triage-skipped", "--rules-file", str(tmp_path / "rules.yaml"),
+        "--json", str(json_path), "--txt", str(txt_path),
+        "--output", str(output_path),
+    ])
+
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+
+    assert exc.value.code == 2
+    stderr = " ".join(capsys.readouterr().err.split())
+    assert "--triage-skipped is temporarily unavailable" in stderr
+    assert "cannot close hunter-specific coverage gaps" in stderr
+    assert not json_path.exists()
+    assert not txt_path.exists()
+    assert not output_path.exists()
 
 
-def test_triage_skipped_produces_deep_mode_investigation_actions(monkeypatch, tmp_path):
+def test_hunt_all_default_investigation_queue_remains_metadata_only(
+        monkeypatch, tmp_path, capsys):
     exit_code, doc = _run_hunt_all_with_oversized_skip(
-        monkeypatch, tmp_path, triage_skipped=True, label="deep")
+        monkeypatch, tmp_path, label="baseline")
+
+    assert exit_code == cli.EXIT_PARTIAL == 3
+    assert doc["result"]["coverage"] == {
+        "status": "partial", "reasons": [], "sources": {}, "limitations": []}
+    assert doc["result"]["summary"]["overall_status"] == "INCONCLUSIVE"
+    assert doc["meta"]["execution"]["options"]["triage_skipped"] is False
     actions = doc["result"]["summary"]["investigation_actions"]
     assert len(actions) == 1
-    triage = actions[0]["triage"]
-    assert triage["mode"] == "deep"
-    # This fixture's target has no memory_segments backing (see
-    # _oversized_skip_mf()'s own docstring) -- not_captured is the one
-    # deep-triage outcome reachable without a real content read.
-    assert triage["status"] == "not_captured"
-    assert triage["bytes_examined"] == 0
-    assert triage["content_reason_codes"] == []
-    assert any(w["code"] == "DEEP_TRIAGE_SUMMARY" for w in doc["diagnostics"]["warnings"])
-
-    jsonschema = pytest.importorskip("jsonschema")
-    from dumpex.schemas import current_schema_path
-    with current_schema_path() as path, open(path, encoding="utf-8") as fh:
-        schema = json.load(fh)
-    assert list(jsonschema.Draft202012Validator(schema).iter_errors(doc)) == []
-
-
-def test_triage_skipped_does_not_change_exit_code_or_coverage(monkeypatch, tmp_path):
-    baseline_exit, baseline_doc = _run_hunt_all_with_oversized_skip(
-        monkeypatch, tmp_path, triage_skipped=False, label="baseline")
-    deep_exit, deep_doc = _run_hunt_all_with_oversized_skip(
-        monkeypatch, tmp_path, triage_skipped=True, label="triaged")
-
-    assert deep_exit == baseline_exit
-    assert deep_doc["result"]["coverage"] == baseline_doc["result"]["coverage"]
-    assert deep_doc["result"]["summary"]["overall_status"] == \
-        baseline_doc["result"]["summary"]["overall_status"]
-    # Metadata-only baseline: mode stays "metadata", proving --triage-skipped
-    # (not the mere presence of a skipped target) is what flips it to "deep".
-    baseline_actions = baseline_doc["result"]["summary"]["investigation_actions"]
-    assert len(baseline_actions) == 1
-    assert baseline_actions[0]["triage"]["mode"] == "metadata"
+    assert actions[0]["triage"] == {
+        "mode": "metadata", "status": "completed", "bytes_examined": 0,
+        "region_fully_examined": False, "content_reason_codes": [],
+        "findings": [], "finding_count": 0, "findings_truncated": False,
+    }
+    console = capsys.readouterr().out
+    assert "Deep triage:" not in console
+    assert "Deep triage found:" not in console
+    assert "DEEP TRIAGE NOTES" not in console
 
 
 def test_threads_degraded_exits_with_partial_code_even_without_json(monkeypatch):

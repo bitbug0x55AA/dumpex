@@ -199,11 +199,12 @@ For `SCAN_REGION_OVERSIZED_SKIPPED`, inspect `targets[]`:
   only way to recover them.
 
 On `--hunt all`, `result.summary.investigation_actions` deduplicates skipped
-regions and orders follow-up. The default queue is metadata-only.
-`--hunt all --triage-skipped` performs an opt-in, budgeted content read of that
-queue, but its generic IOC/header checks do not replace the skipped hunter. It
-never upgrades the original verdict or coverage. Empty
-`content_reason_codes` means no generic indicator in examined bytes, not clean.
+regions and orders follow-up. The queue remains metadata-only and performs no
+additional skipped-region content reads. `--triage-skipped` is temporarily
+unavailable and fails before analysis instead of running or being ignored.
+Historical v2.10-v2.13 JSON may contain retired deep-mode IOC/header leads;
+those leads never upgraded the original verdict or coverage. Only the
+originating hunter's successful targeted rescan can close its coverage gap.
 
 The console/`--txt` `CORRELATED REGIONS` section means different hunters placed
 evidence in the same normalized memory region. It is a location correlation,

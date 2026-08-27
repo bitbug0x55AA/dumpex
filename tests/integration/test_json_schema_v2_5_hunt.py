@@ -12,8 +12,8 @@ dumpex/hunt/_finding.py), v2.6's `csBeaconDetails.configs[*].fields[*]`
 `huntSummary.investigation_actions` (issue #19 Phase 1's default,
 metadata-only skipped-target queue -- see dumpex.hunt._investigation),
 v2.10's `triageInfo.content_reason_codes` (issue #19 Phase 2's opt-in
-`--triage-skipped` budgeted deep-content triage -- see
-dumpex.hunt._deep_triage), v2.11's `huntPeHeaderHit.va`/`region_offset`/
+`--triage-skipped` budgeted deep-content triage, now historical), v2.11's
+`huntPeHeaderHit.va`/`region_offset`/
 `file_offset`, and v2.12's `targets` on PE_HEADER_*/SCAN_REGION_*_FAILED
 limitations plus `skipRelationship.cause` (issue #28). Every schema bump
 since v2.5 has been structurally IDENTICAL for every shape THIS file
@@ -32,9 +32,8 @@ every existing test in this file (still required and validated -- see
 `tests/fixtures/hunt_records.hunt_summary_for()`'s own docstring); the
 populated-queue shape (mode == "metadata", content_reason_codes always
 `[]`) is exercised separately below and in tests/hunt/test_investigation.py,
-and the v2.10 mode == "deep"/content_reason_codes shape in
-tests/hunt/test_deep_triage.py plus the dedicated section near the bottom
-of this file. Built directly from
+and the historical v2.10 mode == "deep"/content_reason_codes shape in the
+dedicated section near the bottom of this file. Built directly from
 tests/fixtures/hunt_records.py's synthetic HunterRecord fixtures, NOT
 through a real hunter collect_*() pipeline -- only injection's
 collect_injection_record() exists so far; the other six hunters' real
@@ -747,10 +746,8 @@ def test_investigation_actions_rejects_hunters_field_on_non_rescan_type(validato
 
 # ── v2.10: triageInfo.content_reason_codes (issue #19 Phase 2) ──────────────
 # hunt_summary_for()'s own investigation_actions are always mode ==
-# "metadata" (nothing in this file's fixtures runs --triage-skipped's real
-# dumpex.hunt._deep_triage.run_deep_triage() -- that's exercised directly,
-# against real reads, in tests/hunt/test_deep_triage.py). These tests hand-
-# construct a plausible `mode == "deep"` triage dict on top of an otherwise
+# "metadata" (the current producer no longer emits deep mode). These tests
+# hand-construct a plausible historical `mode == "deep"` triage dict on an otherwise
 # real, schema-valid investigationAction (same "mutate one real document"
 # style as the negative tests directly above) to exercise the v2.10
 # allOf branches a synthetic metadata-only fixture can never reach.

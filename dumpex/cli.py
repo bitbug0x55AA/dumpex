@@ -180,9 +180,8 @@ def main():
     hunt_group.add_argument('--rules-file', metavar='FILE', default=None,
                             help='Explicit rules.yaml/.yml/.json for --hunt')
     hunt_group.add_argument('--triage-skipped', action='store_true',
-                            help='--hunt all: opt-in budgeted deep-content triage of the '
-                                 'skipped-target investigation queue (real, bounded reads '
-                                 '-- no effect on a single-hunter --hunt)')
+                            help='Temporarily unavailable; reserved for future analyzer-aware '
+                                 'recovery orchestration')
 
     report_group = parser.add_argument_group("report options")
     report_group.add_argument('--report-tid', metavar='TID',
@@ -208,6 +207,11 @@ def main():
     args = parser.parse_args()
 
     run_mode = _selected_run_mode(args)
+
+    if args.triage_skipped:
+        parser.error(
+            "--triage-skipped is temporarily unavailable. The generic skipped-target "
+            "content pass was retired because it cannot close hunter-specific coverage gaps.")
 
     # --ref-dir is only meaningful for --hunt stomping, but validated
     # unconditionally and up front — a silently-ignored typo'd/missing
@@ -428,14 +432,11 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
         # same call -- see cmd_hunt()'s own docstring. Calling cmd_hunt()
         # for console and dumpex.hunt.collect_hunt() separately for JSON
         # would scan every selected hunter twice. Likewise,
-        # investigation_actions/deep_diagnostics come straight back from
-        # this SAME call (cmd_hunt() computes them, optionally running
-        # --triage-skipped's own budgeted content reads, exactly once
-        # internally) -- never recomputed here, which would silently
-        # double the deep-triage read budget for one invocation.
-        _, hunt_records, investigation_actions, deep_diagnostics, yara_provenance = cmd_hunt(
+        # investigation_actions come straight back from this SAME call --
+        # never recomputed here, which would duplicate the metadata queue.
+        _, hunt_records, investigation_actions, yara_provenance = cmd_hunt(
             mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
-            ref_dir=args.ref_dir, collect_records=True, triage_skipped=args.triage_skipped)
+            ref_dir=args.ref_dir, collect_records=True)
         # Threaded straight from THIS call's own YaraReport (see cmd_hunt()'s
         # own docstring) -- never dumpex.hunt.yara_hunt.get_yara_provenance()'s
         # process-wide global, which could otherwise attribute a later run's
@@ -448,7 +449,7 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
         exit_code = _apply_command_result(
             CommandResult(kind="hunt", records=hunt_records,
                           coverage=_hunt_coverage_report(hunt_records, hunt_summary),
-                          summary=hunt_summary, diagnostics=deep_diagnostics))
+                          summary=hunt_summary))
     elif args.diff:
         exit_code = _apply_command_result(
             cmd_diff(mf, mf_reference, args.diff_mode, verbose=args.verbose))

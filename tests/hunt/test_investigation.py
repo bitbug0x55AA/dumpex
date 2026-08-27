@@ -768,12 +768,9 @@ def test_triage_info_rejects_unknown_mode_or_status():
         TriageInfo(mode="metadata", status="not-a-real-status")
 
 
-# ── TriageInfo mode="deep" invariants (issue #19 Phase 2) ──────────────────
-# dumpex.hunt._deep_triage.run_deep_triage() is the only real constructor of
-# mode="deep" TriageInfo instances (see tests/hunt/test_deep_triage.py for
-# that engine's own tests) -- these exercise TriageInfo.__post_init__'s own
-# validation directly, the one place both producers (the always-on
-# metadata pass and the opt-in deep pass) share their invariants.
+# ── Historical TriageInfo mode="deep" compatibility invariants ─────────────
+# The current producer emits metadata mode only. These tests retain direct
+# validation of deep-mode instances that historical documents may contain.
 
 @pytest.mark.parametrize("status", ["not_captured", "budget_deferred", "unreadable"])
 def test_triage_info_deep_mode_zero_byte_status_accepts_zero_bytes(status):
@@ -977,9 +974,7 @@ def test_triage_info_deep_completed_accepts_and_round_trips_findings():
     assert info.to_dict()["findings_truncated"] is False
 
 
-# ── TriageInfo.finding_count/findings_truncated (issue #19 Phase 2 review
-# round 2, item 2) -- see ContentFinding's own findings-selection docstring
-# in dumpex.hunt._deep_triage._content_signals() for why these exist. ─────
+# ── Historical TriageInfo.finding_count/findings_truncated compatibility ──
 
 def test_triage_info_finding_count_must_be_at_least_len_findings():
     with pytest.raises(ValueError):

@@ -280,15 +280,19 @@ Each action contains:
 - `skipped_by`: every hunter/source/scope/cause relationship;
 - `priority` and deterministic `priority_reason_codes`;
 - `evidence_availability`: `captured`, `partial`, or `not_captured`;
-- `triage`: metadata-only or opt-in deep-triage results;
+- `triage`: metadata-only results from the current producer; historical schemas
+  also permit retired deep-mode results;
 - `recommended_actions`: structured next steps;
 - `coverage_effect`.
 
-The default queue is metadata-only. With `--triage-skipped`, dumpex performs a
-bounded content read and records its actual status, bytes examined, reason
-codes, and retained findings. This pass is advisory: it never changes the
-original hunter's verdict, coverage, or exit code. `coverage_effect` therefore
-remains `original_hunter_gap_not_resolved`.
+The current queue is metadata-only: `triage.mode` is `metadata`, no skipped-
+region content is read, and `coverage_effect` remains
+`original_hunter_gap_not_resolved`. The reserved `--triage-skipped` option is
+temporarily unavailable and is rejected before analysis. Historical v2.10-
+v2.13 documents may contain `mode="deep"`, content reason codes, and bounded
+findings; validate those documents against the schema version they declare.
+Deep-mode historical evidence did not close an originating hunter's coverage
+gap, and current gaps likewise require that hunter's successful targeted rescan.
 
 ## Artifacts and diagnostics
 

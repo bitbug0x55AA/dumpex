@@ -83,10 +83,8 @@ def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: 
     own docstring for why this takes a bare `base_address`/`requested_size`
     rather than a resolved MemoryInfo region. `module_context` (one of
     MODULE_CONTEXT_RESOLVED/UNREGISTERED/UNAVAILABLE) is supplied by the
-    caller -- both callers already have to resolve it their own way
-    (--report via the region's own module ownership, deep triage via
-    `addr_to_module(target.base_address, modules)` directly) before they
-    can decide `has_injected_pe`, so it is not re-derived here."""
+    caller from the region's module ownership before `has_injected_pe` can
+    be decided, so it is not re-derived here."""
     # Scoped to ONLY the read itself -- see this function's own docstring
     # for why the analysis below must NOT be inside this try/except.
     try:
@@ -161,8 +159,7 @@ def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: 
 def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len: int,
                           extract_to: "str | None", force: bool, suspicious_prots,
                           modules: list, regions: list, infos: list, tid_map: dict,
-                          modules_available: bool, string_hit_tuple=None,
-                          max_region_read: "int | None" = None):
+                          modules_available: bool, string_hit_tuple=None):
     """Sections 1-4 + verdict + optional extract from today's single-shot
     cmd_report, unchanged in logic (including the exact MECE
     reconciliation rule for tid_unbacked_detail) -- just building a
@@ -175,19 +172,8 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     string_hit's own docstring for why this isn't re-derived from
     notable_strings).
 
-    `max_region_read` caps ONLY Section 4's string/IOC scan read
-    (`read_size` below) -- `None` (the default) resolves to the CURRENT
-    value of the module-level MAX_REGION_READ at call time (not a value
-    bound once at import time), so every existing --report caller
-    (collect_report()) is byte-for-byte unchanged, including tests that
-    monkeypatch MAX_REGION_READ itself. dumpex.hunt._deep_triage's own
-    opt-in `--triage-skipped`
-    budgeted deep-content triage (issue #19 Phase 2) is the one caller
-    that passes a smaller, explicit per-target budget here instead of
-    silently reusing --report's own 256 MiB default across every skipped
-    target -- see that module's own docstring. The optional `--output`
-    extract branch below is untouched (still reads up to MAX_REGION_READ):
-    it is unreachable from deep triage, which never passes `extract_to`."""
+    Section 4's string/IOC scan and the optional `--output` extraction are
+    capped by the current module-level `MAX_REGION_READ` value."""
     tid_int  = tid
     addr_int = addr
 
@@ -336,8 +322,7 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     #      injected-PE tri-state from this same content read -- see
     #      Section 2's own note on why there is no separate header peek) ──
     if region is not None:
-        effective_max_region_read = MAX_REGION_READ if max_region_read is None else max_region_read
-        read_size = min(region.RegionSize, effective_max_region_read)
+        read_size = min(region.RegionSize, MAX_REGION_READ)
         scan = _scan_content_range(mf, base_address=region.BaseAddress, requested_size=read_size,
                                     min_len=min_len, module_context=region_module_context)
         mz_header_detected = scan.mz_header_detected
