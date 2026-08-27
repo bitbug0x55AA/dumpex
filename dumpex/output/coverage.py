@@ -517,6 +517,23 @@ class LimitationCode(str, Enum):
     # but got fewer bytes back than declared/requested -- not fully
     # scanned, not a confirmed absence of whatever was being searched for.
     # caller_buildable; affected_count.
+    SCAN_ITEMS_UNACCOUNTED = "SCAN_ITEMS_UNACCOUNTED"
+    # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED/_READ_FAILED/_SHORT_READ,
+    # and the one gap in the family that can never name what it lost: N
+    # region(s)/segment(s) whose outcome a scan's own accounting cannot
+    # vouch for -- either taken into scope and walked past with no outcome
+    # recorded, or an outcome recorded by a loop that never took its items
+    # into scope. The other three are gaps the loop noticed and reported;
+    # this one is the loop failing to report -- caught by reconciling
+    # dumpex.hunt._coverage.CoverageTracker's dispositions against its own
+    # eligible-item count, which is why there is a count but no `targets`
+    # (an item nobody reconciled is precisely one whose identity was never
+    # captured). Non-zero always means a bug in that scan loop; it makes
+    # coverage partial rather than letting an unexamined region render as
+    # a clean, complete scan.
+    # `scope` names the scan LAYER for a hunter running several
+    # (obfuscation's sleep_mask/entropy/decode), same role it plays on
+    # SCAN_REGION_OVERSIZED_SKIPPED. caller_buildable; affected_count.
     SCAN_BUDGET_EXHAUSTED = "SCAN_BUDGET_EXHAUSTED"
     # ^ Generic: a dumpex.hunt._budget.ScanBudget backing an on-the-fly
     # scan (pipe's independent pipe-name/C2-context budgets, obfuscation's
@@ -1237,7 +1254,7 @@ def format_scan_target_preview(targets, limit: int = _TARGET_PREVIEW_LIMIT) -> s
     """The bounded, human-readable target list shared by the JSON-facing
     renderer (_render_scan_region_oversized_skipped) and the v1.1
     `coverage_reasons` strings hunters still build from their own
-    CoverageTracker (dumpex.hunt._coverage.CoverageTracker.build_reasons)
+    CoverageTracker (dumpex.hunt._coverage.CoverageTracker)
     -- one implementation so the console and --json never drift into
     describing the same skips differently. Only the TEXT is bounded; the
     full list always ships in the JSON, and the overflow clause says so
@@ -1612,6 +1629,15 @@ def _render_scan_region_short_read(limitation: "CoverageLimitation") -> str:
     return _with_optional_target_preview(
         f"{limitation.affected_count} region(s) returned fewer bytes than declared "
         f"(short read){layer} -- not fully scanned", limitation.targets)
+
+
+def _render_scan_items_unaccounted(limitation: "CoverageLimitation") -> str:
+    # No target preview, unlike its three SCAN_REGION_* companions: see
+    # LimitationCode.SCAN_ITEMS_UNACCOUNTED for why this gap structurally
+    # cannot name the items it lost.
+    layer = f" the {limitation.scope} scan's" if limitation.scope else " the scan's"
+    return (f"{limitation.affected_count} item(s){layer} own accounting cannot vouch "
+            f"for -- coverage cannot be confirmed for them")
 
 
 _SCAN_BUDGET_EXHAUSTED_REASONS = frozenset(
@@ -2513,6 +2539,11 @@ _CODE_SPECS = {
         render=_render_scan_region_short_read, caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("SCAN_REGION_SHORT_READ"),
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
+    LimitationCode.SCAN_ITEMS_UNACCOUNTED: _CodeSpec(
+        render=_render_scan_items_unaccounted, caller_buildable=True,
+        validate_fields=_require_positive_affected_count("SCAN_ITEMS_UNACCOUNTED"),
+        # No "targets": structurally unavailable for this code.
+        allowed_fields=frozenset({"affected_count", "scope"})),
     LimitationCode.SCAN_BUDGET_EXHAUSTED: _CodeSpec(
         render=_render_scan_budget_exhausted, caller_buildable=True,
         validate_fields=_validate_scan_budget_exhausted_fields,

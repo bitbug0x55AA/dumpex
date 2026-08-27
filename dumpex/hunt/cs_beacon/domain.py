@@ -126,12 +126,27 @@ class ScanDiagnostics:
     budget_exhausted_kind:       "str | None" = None
     budget_exhausted_limit:      "int | None" = None
     budget_exhausted_consumed:   "int | None" = None
+    # The scan's reconciliation ledger. `segment_count` is every segment
+    # in the dump; `eligible_total` is the subset this scan actually took
+    # into scope (a whole-scan budget can stop the walk early), and
+    # `scanned`/`not_applicable` plus the read-failed/oversize target
+    # tuples above are the outcomes those eligible segments reached.
+    scanned:                     int = 0
+    eligible_total:              int = 0
+    eligible_bytes:              int = 0
+    not_applicable:              int = 0
+    budget_skipped:              int = 0
+    unaccounted:                 int = 0
+    over_accounted:              int = 0
 
     def __post_init__(self):
         _require_count(self.segment_count, "ScanDiagnostics.segment_count")
         _require_count(self.total_candidates, "ScanDiagnostics.total_candidates")
         _require_count(self.total_decoded_bytes, "ScanDiagnostics.total_decoded_bytes")
         _require_count(self.total_scanned_bytes, "ScanDiagnostics.total_scanned_bytes")
+        for name in ("scanned", "eligible_total", "eligible_bytes", "not_applicable",
+                     "budget_skipped", "unaccounted", "over_accounted"):
+            _require_count(getattr(self, name), f"ScanDiagnostics.{name}")
         object.__setattr__(self, "skipped_oversize_targets", _require_scan_targets(
             self.skipped_oversize_targets, "ScanDiagnostics.skipped_oversize_targets"))
         object.__setattr__(self, "read_failed_targets", _require_scan_targets(
@@ -172,12 +187,55 @@ class ScanDiagnostics:
         return self.budget_exhausted and bool(self.budget_exhausted_targets)
 
     @property
+    def accounted(self) -> int:
+        """Every disposition carried across this boundary, summed exactly
+        as `dumpex.hunt._coverage.CoverageTracker.accounted` sums them --
+        see its DISPOSITION_COUNTERS for the set both have to agree on."""
+        return (self.scanned + self.not_applicable + self.budget_skipped
+                + self.read_failed + self.skipped_oversize)
+
+    @property
+    def ledger_imbalance(self) -> int:
+        """Items with no trustworthy outcome BEYOND the two direction
+        counts. The books balance when the dispositions plus the items
+        nobody dispositioned equal the items taken into scope plus the
+        outcomes that belonged to no item:
+
+            accounted + unaccounted == eligible_total + over_accounted
+
+        Anything left over is a count that did not survive the trip from
+        the scan to here -- invisible to both direction counts, since a
+        counter that never arrived reads as zero."""
+        return abs(self.accounted + self.unaccounted
+                   - self.eligible_total - self.over_accounted)
+
+    @property
+    def reconciled(self) -> bool:
+        """Every eligible item accounted for exactly once, nothing
+        accounted for that was never eligible, and the books balancing --
+        see `ledger_imbalance`."""
+        return (not self.unaccounted and not self.over_accounted
+                and not self.ledger_imbalance)
+
+
+    @property
+    def unreconciled(self) -> int:
+        """Segments with no trustworthy outcome, in every direction at once:
+        taken into scope and never dispositioned, dispositioned without
+        being in scope, and whatever the books are still short by. One
+        number, because that is what a reader has to act on -- the
+        directions are what the reasons distinguish."""
+        return (self.unaccounted + self.over_accounted
+                + self.ledger_imbalance)
+
+    @property
     def scan_complete(self) -> bool:
-        """True iff nothing here forced a gap in what was actually
-        scanned. Does not by itself decide `CoverageSnapshot.complete` --
-        that also needs `mem_info_available` and the thread-context gap."""
+        """True iff every eligible segment reached a recorded outcome and
+        none of those outcomes was a gap. Does not by itself decide
+        `CoverageSnapshot.complete` -- that also needs `mem_info_available`
+        and the thread-context gap."""
         return not (self.skipped_oversize or self.read_failed or self.short_reads
-                    or self.has_real_budget_gap)
+                    or self.has_real_budget_gap) and self.reconciled
 
 
 @dataclass(frozen=True)

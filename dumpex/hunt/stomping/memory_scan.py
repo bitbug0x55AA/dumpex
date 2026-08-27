@@ -11,8 +11,8 @@ dumpex/hunt/stomping/models.py defines, with module basenames and
 report_* projectors never see a raw object or re-derive a formatted one.
 """
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import (addr_to_module, prot_str, va_to_file_offset,
-    _extract_ioc_strings)
+from dumpex.core.memory import (addr_to_module, prot_str, va_range_captured_bytes,
+    va_to_file_offset, _extract_ioc_strings)
 from dumpex.core.pe_utils import (parse_pe_header, expected_protection_name,
     section_protection_deviates)
 from dumpex.hunt._coverage import CoverageTracker, region_scan_target
@@ -167,11 +167,20 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
             continue
         if "EXECUTE" not in p:
             continue
+        if r.RegionSize <= 0:
+            # A zero-length region has nothing to read and no bytes anyone
+            # could miss: a filter, not a coverage gap. It is also not
+            # something a ScanTarget can identify -- a target has an
+            # extent by definition.
+            continue
         # Eligible from here on, so the next two `continue`s are not filter
         # misses but coverage gaps -- a region this scan was supposed to
         # read and didn't. Both are recorded on `coverage`; the `continue`s
         # further down (no hits / weak-only hits) are results from a region
-        # that WAS fully read, not gaps.
+        # that WAS fully read, not gaps -- but they are still OUTCOMES,
+        # and every path out of this iteration records one against the
+        # eligible item opened here.
+        coverage.note_eligible(va_range_captured_bytes(mf, r.BaseAddress, r.RegionSize))
         if r.RegionSize > IOC_SCAN_MAX:
             coverage.note_skipped_oversize(region_scan_target(mf, r, IOC_SCAN_MAX))
             continue
@@ -185,6 +194,12 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
         except Exception:
             coverage.note_read_failed(region_scan_target(mf, r))
             continue
+        if not data:
+            # Nothing came back at all: no readable prefix to scan, so
+            # this is a failed read rather than a short one -- a short read
+            # ANNOTATES a region that was otherwise scanned.
+            coverage.note_read_failed(region_scan_target(mf, r))
+            continue
         if len(data) < r.RegionSize:
             # Fewer bytes came back than the region's own declared size --
             # not the same as "read fine, nothing here" (see
@@ -193,8 +208,7 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
             # hit in the readable prefix is still a real hit -- but this
             # region must not silently count toward a "complete" IOC scan.
             coverage.note_short_read(region_scan_target(mf, r))
-            if not data:
-                continue
+        coverage.note_scanned()
 
         strings = _extract_ioc_strings(data, r.BaseAddress)
         patterns = ([ioc_patterns] if is_wl else [ioc_patterns, net_ioc_patterns])

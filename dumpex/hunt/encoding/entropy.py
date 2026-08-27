@@ -7,7 +7,7 @@ dumpex/hunt/encoding/models.py and dumpex/hunt/encoding/aggregate.py.
 import math
 from collections import Counter
 
-from dumpex.core.memory import addr_to_module, prot_str
+from dumpex.core.memory import addr_to_module, prot_str, va_range_captured_bytes
 from dumpex.hunt._coverage import CoverageTracker, region_scan_target
 from dumpex.hunt._location import resolve_location
 from dumpex.hunt.encoding.config import (
@@ -46,6 +46,15 @@ def _scan_entropy(regions, modules, mf, susp_prots, read_region, config: Encodin
             continue
         if addr_to_module(r.BaseAddress, modules):
             continue
+        if r.RegionSize <= 0:
+            # A zero-length region has nothing to read and no bytes anyone
+            # could miss: a filter, not a coverage gap. It is also not
+            # something a ScanTarget can identify -- a target has an
+            # extent by definition.
+            continue
+        # Past every filter: this region is IN SCOPE, so every path out of
+        # the iteration from here on owes the ledger a disposition.
+        coverage.note_eligible(va_range_captured_bytes(mf, r.BaseAddress, r.RegionSize))
         if r.RegionSize > config.entropy_scan_max:
             coverage.note_skipped_oversize(
                 region_scan_target(mf, r, config.entropy_scan_max))
@@ -55,11 +64,18 @@ def _scan_entropy(regions, modules, mf, susp_prots, read_region, config: Encodin
         except Exception:
             coverage.note_read_failed(region_scan_target(mf, r))
             continue
+        if not data:
+            # Nothing came back at all: no prefix to scan, so this is a
+            # failed read rather than a short one -- a short read is an
+            # ANNOTATION on a region that WAS scanned.
+            coverage.note_read_failed(region_scan_target(mf, r))
+            continue
         if len(data) < r.RegionSize:
             coverage.note_short_read(region_scan_target(mf, r))
-            if not data:
-                continue
         if len(data) < 256:
+            # Read fine, just too little data for a meaningful Shannon
+            # entropy -- an outcome, not a gap.
+            coverage.note_not_applicable()
             continue
         coverage.note_scanned()
 

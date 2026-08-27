@@ -6,7 +6,10 @@ separate facts; neither turns an unscored string into handle evidence.
 """
 from dataclasses import dataclass, field
 
-from dumpex.hunt._coverage import derive_status, derive_coverage_status
+from dumpex.hunt._coverage import (
+    derive_status, derive_coverage_status, UNACCOUNTED_LABEL, OVER_ACCOUNTED_LABEL,
+    UNBALANCED_LABEL,
+)
 from dumpex.hunt._domain import CheckResult, require_recursively_immutable, as_tuple
 from dumpex.hunt._finding import (
     overall_confidence, verdict_level, lead_count, review_priority,
@@ -36,18 +39,14 @@ MAX_SCORE = 3
 # THREE consumers describe the same gap: the hunter's coverage_reasons
 # (report_facts.project_coverage_v1), the structured CoverageReport
 # (report_facts.project_coverage_report), and report_console.py's COVERAGE
-# section/impact. Worded and ordered to match
-# `dumpex.hunt._coverage.CoverageTracker.build_reasons` exactly -- including
-# the same bounded VA/size preview the structured
-# SCAN_REGION_OVERSIZED_SKIPPED limitation renders
+# section/impact. Each carries the same bounded VA/size preview the
+# structured SCAN_REGION_OVERSIZED_SKIPPED limitation renders
 # (`format_scan_target_preview`), so the console reason and --json's own
 # coverage.reasons describe the identical skips identically.
 #
-# These are byte-identical to the label strings the pre-migration
-# `aggregate.build_report()` passed to `CoverageTracker.build_reasons()`:
-# the v1.1 `coverage_reasons` array is part of the frozen output contract
-# (tests/integration/test_hunt_cli_compat_freeze.py), so the wording moved
-# here without changing.
+# The v1.1 `coverage_reasons` array is part of the frozen output contract
+# (tests/integration/test_hunt_cli_compat_freeze.py), so these strings are
+# fixed.
 OVERSIZE_LABEL    = "oversized region(s) skipped"
 READ_FAILED_LABEL = "region(s) failed to read"
 SHORT_READ_LABEL  = ("region(s) returned fewer bytes than declared (short read) — "
@@ -156,6 +155,21 @@ class CoverageSnapshot:
     read_failed_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     short_reads:      int = 0
     short_read_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
+    # The region walk's ledger, in both directions: regions taken into
+    # scope with no outcome recorded, and outcomes recorded for regions
+    # never taken into scope. Neither carries targets by construction --
+    # an item nobody reconciled is precisely one whose identity the loop
+    # never captured. Either being non-zero means a bug in
+    # `memory_scan.scan_pipe_names`' own loop, and makes coverage partial
+    # rather than letting the gap render as a complete scan.
+    unaccounted:      int = 0
+    over_accounted:   int = 0
+    # Items with no trustworthy outcome BEYOND the two counts above: what
+    # the scan's own books are short by once both are taken into account.
+    # Non-zero means a count did not survive the trip from the scan to
+    # here, which neither direction can show -- a counter that never
+    # arrived reads as zero.
+    ledger_imbalance: int = 0
 
     # The two INDEPENDENT whole-hunt budgets, each with the reason it ran
     # out ("deadline"/"max_hits"/... -- see dumpex.hunt._budget.ScanBudget).
@@ -175,7 +189,8 @@ class CoverageSnapshot:
         for name in ("memory_info_stream", "handle_data_stream",
                      "c2_budget_exhausted", "pipe_name_budget_exhausted"):
             _require_bool(getattr(self, name), f"CoverageSnapshot.{name}")
-        for name in ("read_failed", "short_reads", "image_pipe_refs"):
+        for name in ("read_failed", "short_reads", "image_pipe_refs", "unaccounted",
+                     "over_accounted", "ledger_imbalance"):
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in ("c2_budget_reason", "pipe_name_budget_reason"):
             _require_str(getattr(self, name), f"CoverageSnapshot.{name}")
@@ -197,13 +212,25 @@ class CoverageSnapshot:
         return self.c2_budget_exhausted or self.pipe_name_budget_exhausted
 
     @property
+    def unreconciled(self) -> int:
+        """Regions with no trustworthy outcome, in every direction at once:
+        taken into scope and never dispositioned, dispositioned without
+        being in scope, and whatever the books are still short by. One
+        number, because that is what a reader has to act on -- the
+        directions are what the reasons distinguish."""
+        return (self.unaccounted + self.over_accounted
+                + self.ledger_imbalance)
+
+    @property
     def region_scan_complete(self) -> bool:
         """Whether the `\\pipe\\` region walk itself got through every
         eligible region -- the pre-migration `coverage_counts.complete and
         not budget_exhausted`, and the v1.1 findings dict's own
-        `scan_complete` key."""
+        `scan_complete` key. The ledger makes this a POSITIVE assertion:
+        not merely "no gap was reported", but "every region the walk took
+        into scope reached exactly one recorded outcome"."""
         return not (self.skipped_oversize or self.read_failed or self.short_reads
-                    or self.budget_exhausted)
+                    or self.budget_exhausted or self.unreconciled)
 
     @property
     def evaluated(self) -> bool:
@@ -243,9 +270,8 @@ class CoverageSnapshot:
 
     def region_gap_reasons(self) -> tuple:
         """The region scan's coverage gaps as human-readable reason
-        strings, in `CoverageTracker.build_reasons`' own fixed order --
-        empty when the walk got through every eligible region within both
-        budgets.
+        strings, in a fixed order -- empty when the walk got through
+        every eligible region within both budgets.
 
         The ONE canonical wording (see OVERSIZE_LABEL/READ_FAILED_LABEL/
         SHORT_READ_LABEL above): `report_facts.project_coverage_v1` embeds
@@ -269,6 +295,14 @@ class CoverageSnapshot:
             reasons.append(f"C2-context scan budget exhausted ({self.c2_budget_reason})")
         if self.pipe_name_budget_exhausted:
             reasons.append(f"pipe-name scan budget exhausted ({self.pipe_name_budget_reason})")
+        # Last, and with no target preview: see `unaccounted` for why
+        # these can never name what they lost.
+        if self.unaccounted:
+            reasons.append(f"{self.unaccounted} region(s) {UNACCOUNTED_LABEL}")
+        if self.over_accounted:
+            reasons.append(f"{self.over_accounted} region(s) {OVER_ACCOUNTED_LABEL}")
+        if self.ledger_imbalance:
+            reasons.append(f"{self.ledger_imbalance} region(s) {UNBALANCED_LABEL}")
         return tuple(reasons)
 
 

@@ -450,12 +450,25 @@ class IocCoverage:
     short_reads:              int = 0
     short_read_targets:       tuple = field(default_factory=tuple)   # tuple[ScanTarget] -- issue #28
     whitelisted_skipped:      tuple = field(default_factory=tuple)   # tuple[str]
+    # The tracker's reconciliation ledger, carried across the scan/
+    # aggregate boundary rather than collapsed into a bool -- see
+    # `unaccounted` below.
+    scanned:                  int = 0
+    eligible_total:           int = 0
+    eligible_bytes:           int = 0
+    not_applicable:           int = 0
+    budget_skipped:           int = 0
+    unaccounted:              int = 0
+    over_accounted:           int = 0
 
     def __post_init__(self):
         object.__setattr__(self, "skipped_oversize_targets", _require_typed_tuple(
             self.skipped_oversize_targets, ScanTarget, "IocCoverage.skipped_oversize_targets"))
         _require_count(self.read_failed, "IocCoverage.read_failed")
         _require_count(self.short_reads, "IocCoverage.short_reads")
+        for name in ("scanned", "eligible_total", "eligible_bytes", "not_applicable",
+                     "budget_skipped", "unaccounted", "over_accounted"):
+            _require_count(getattr(self, name), f"IocCoverage.{name}")
         object.__setattr__(self, "read_failed_targets", _require_typed_tuple(
             self.read_failed_targets, ScanTarget, "IocCoverage.read_failed_targets"))
         object.__setattr__(self, "short_read_targets", _require_typed_tuple(
@@ -464,6 +477,37 @@ class IocCoverage:
             self.whitelisted_skipped, str, "IocCoverage.whitelisted_skipped"))
         require_recursively_immutable(self, "IocCoverage")
 
+    @property
+    def accounted(self) -> int:
+        """Every disposition carried across this boundary, summed exactly
+        as `dumpex.hunt._coverage.CoverageTracker.accounted` sums them --
+        see its DISPOSITION_COUNTERS for the set both have to agree on."""
+        return (self.scanned + self.not_applicable + self.budget_skipped
+                + self.read_failed + len(self.skipped_oversize_targets))
+
+    @property
+    def ledger_imbalance(self) -> int:
+        """Items with no trustworthy outcome BEYOND the two direction
+        counts. The books balance when the dispositions plus the items
+        nobody dispositioned equal the items taken into scope plus the
+        outcomes that belonged to no item:
+
+            accounted + unaccounted == eligible_total + over_accounted
+
+        Anything left over is a count that did not survive the trip from
+        the scan to here -- invisible to both direction counts, since a
+        counter that never arrived reads as zero."""
+        return abs(self.accounted + self.unaccounted
+                   - self.eligible_total - self.over_accounted)
+
+    @property
+    def reconciled(self) -> bool:
+        """Every eligible item accounted for exactly once, nothing
+        accounted for that was never eligible, and the books balancing --
+        see `ledger_imbalance`."""
+        return (not self.unaccounted and not self.over_accounted
+                and not self.ledger_imbalance)
+
     @classmethod
     def from_tracker(cls, tracker, whitelisted_skipped=()) -> "IocCoverage":
         return cls(skipped_oversize_targets=tuple(tracker.skipped_oversize_targets),
@@ -471,11 +515,18 @@ class IocCoverage:
                    read_failed_targets=tuple(tracker.read_failed_targets),
                    short_reads=tracker.short_reads,
                    short_read_targets=tuple(tracker.short_read_targets),
-                   whitelisted_skipped=tuple(whitelisted_skipped))
+                   whitelisted_skipped=tuple(whitelisted_skipped),
+                   scanned=tracker.scanned, eligible_total=tracker.total,
+                   eligible_bytes=tracker.eligible_bytes,
+                   not_applicable=tracker.not_applicable,
+                   budget_skipped=tracker.budget_skipped,
+                   unaccounted=tracker.unaccounted,
+                   over_accounted=tracker.over_accounted)
 
     @property
     def complete(self) -> bool:
-        return not (self.skipped_oversize_targets or self.read_failed or self.short_reads)
+        return not (self.skipped_oversize_targets or self.read_failed
+                    or self.short_reads) and self.reconciled
 
 
 @dataclass(frozen=True)

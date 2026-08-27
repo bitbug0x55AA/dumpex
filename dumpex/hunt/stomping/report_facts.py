@@ -336,6 +336,14 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
         ioc_limitations.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_SHORT_READ, source="ioc_string_scan",
             affected_count=coverage.ioc_short_reads, targets=coverage.ioc_short_read_targets))
+    if coverage.ioc_unreconciled:
+        # No `targets` -- see SCAN_ITEMS_UNACCOUNTED on LimitationCode
+        # for why this gap cannot name what it lost. Both ledger
+        # directions land on the same code: either way, that many regions
+        # have no trustworthy outcome.
+        ioc_limitations.append(CoverageLimitation(
+            code=LimitationCode.SCAN_ITEMS_UNACCOUNTED, source="ioc_string_scan",
+            affected_count=coverage.ioc_unreconciled))
     if not ioc_limitations:
         return report
 

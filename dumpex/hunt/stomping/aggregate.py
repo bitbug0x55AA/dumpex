@@ -27,7 +27,8 @@ def build_report(protection_leads: tuple = (), rip_correlated_leads: tuple = (),
                   header_read_failed: int = 0, header_parse_failed: int = 0,
                   ioc_oversized: tuple = (), ioc_read_failed: int = 0,
                   ioc_read_failed_targets: tuple = (), ioc_short_reads: int = 0,
-                  ioc_short_read_targets: tuple = (),
+                  ioc_short_read_targets: tuple = (), ioc_unaccounted: int = 0,
+                  ioc_over_accounted: int = 0, ioc_ledger_imbalance: int = 0,
                   ioc_whitelisted_modules: tuple = ()) -> StompingReport:
     """
     Turn the scan/correlation layers' typed evidence into the final
@@ -52,7 +53,8 @@ def build_report(protection_leads: tuple = (), rip_correlated_leads: tuple = (),
         header_read_failed=header_read_failed, header_parse_failed=header_parse_failed,
         ioc_oversized=ioc_oversized, ioc_read_failed=ioc_read_failed,
         ioc_read_failed_targets=ioc_read_failed_targets, ioc_short_reads=ioc_short_reads,
-        ioc_short_read_targets=ioc_short_read_targets,
+        ioc_short_read_targets=ioc_short_read_targets, ioc_unaccounted=ioc_unaccounted,
+        ioc_over_accounted=ioc_over_accounted, ioc_ledger_imbalance=ioc_ledger_imbalance,
         ioc_whitelisted_modules=ioc_whitelisted_modules,
     )
 

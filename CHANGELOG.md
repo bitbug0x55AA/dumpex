@@ -9,11 +9,36 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
+### Fixed
+
+- Hunt coverage now reports "complete" only when every region or segment a scan
+  took into scope actually reached a recorded outcome. Previously a scan loop
+  that passed over an item without recording anything was indistinguishable
+  from full coverage, so an unexamined region could turn "we could not rule
+  this out" (`INCONCLUSIVE`) into "we checked and it is not there"
+  (`NOT_DETECTED_IN_SCANNED_SCOPE`). Such a shortfall now degrades coverage to
+  `partial` and is reported as a `SCAN_ITEMS_UNACCOUNTED` limitation.
+- The named-pipe, module-stomping IOC, and CS Beacon segment scans now record
+  what they scanned instead of reporting coverage from counters that were never
+  populated.
+- A dump declaring a zero-length committed region or captured segment no longer
+  aborts the run, on any path -- including the budget and truncation paths that
+  report abandoned regions. Such an item holds no bytes to scan and none anyone
+  could miss, so every hunter now filters it and `--hunt` still reports its
+  findings.
+
 ### Changed
 
 - Temporarily disabled `--triage-skipped`. The retired generic content pass
   could not close hunter-specific coverage gaps; the option name is reserved
   for future analyzer-aware recovery orchestration.
+- A memory read that returns no bytes at all is now reported as a failed read
+  rather than as a short read, which described a readable prefix that did not
+  exist. This applies to every hunter that reads memory, so the limitation code
+  for that observation is the same across all of them.
+- The named-pipe scan now distinguishes a region left unexamined because its
+  budget was spent from one that held nothing to analyze. Both are outcomes
+  rather than coverage gaps, but only the first is worth a rescan.
 
 ## 3.4.0 — 2026-08-23
 

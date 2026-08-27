@@ -253,6 +253,14 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="pipe_name_scan",
             scope="pipe_name", detail=coverage.pipe_name_budget_reason))
+    if coverage.unreconciled:
+        # No `targets` -- see SCAN_ITEMS_UNACCOUNTED on LimitationCode
+        # for why this gap cannot name what it lost. Both ledger
+        # directions land on the same code: either way, that many regions
+        # have no trustworthy outcome.
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_ITEMS_UNACCOUNTED, source="pipe_name_scan",
+            affected_count=coverage.unreconciled))
 
     return build_coverage_report(
         sources, evaluation_sources=EvaluationRequirement(("memory_info", "handle_data")),

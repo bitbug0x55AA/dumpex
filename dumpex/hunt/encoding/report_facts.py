@@ -3,7 +3,9 @@
 Fact text and ordering remain stable for legacy output, typed records, and
 finding identifiers. Verbose facts are console-only.
 """
-from dumpex.hunt._coverage import derive_coverage_status
+from dumpex.hunt._coverage import (
+    derive_coverage_status, UNACCOUNTED_LABEL, OVER_ACCOUNTED_LABEL, UNBALANCED_LABEL,
+)
 from dumpex.hunt._finding import Finding
 from dumpex.hunt.encoding.domain import CoverageSnapshot, EncodingReport
 from dumpex.output.coverage import (
@@ -160,6 +162,16 @@ def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
     reasons.extend(_short_read_layer_reasons(coverage))
     if coverage.budget_exhausted:
         reasons.append(f"decode budget exhausted ({coverage.exhausted_reason})")
+    # Last, one reason per LAYER (never a single summed one, the rule the
+    # three gap-reason builders above already follow) and with no target
+    # preview -- see `CoverageSnapshot`'s own ledger fields for why these
+    # can never name what they lost.
+    reasons.extend(f"{count} region(s) in the {layer} scan {UNACCOUNTED_LABEL}"
+                   for layer, count in coverage.unaccounted_by_layer())
+    reasons.extend(f"{count} region(s) in the {layer} scan {OVER_ACCOUNTED_LABEL}"
+                   for layer, count in coverage.over_accounted_by_layer())
+    reasons.extend(f"{count} region(s) in the {layer} scan {UNBALANCED_LABEL}"
+                   for layer, count in coverage.imbalance_by_layer())
     coverage_status = derive_coverage_status(coverage.evaluated, coverage.complete)
     return coverage_dict, coverage_status, reasons
 
@@ -196,6 +208,15 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="encoding_scan",
             detail=coverage.exhausted_reason))
+    # One limitation per layer, `scope` naming it -- the same shape the
+    # three loops above use for their own per-layer gaps. Both ledger
+    # directions land on the same code and are counted together: either
+    # way, that many of this layer's regions have no trustworthy outcome.
+    # No `targets`: see SCAN_ITEMS_UNACCOUNTED on LimitationCode.
+    for layer, count in coverage.unreconciled_by_layer():
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.SCAN_ITEMS_UNACCOUNTED, source="encoding_scan",
+            scope=layer, affected_count=count))
     return build_coverage_report(
         sources, evaluation_sources=EvaluationRequirement(("memory_info",)),
         completeness_checks=completeness_checks)

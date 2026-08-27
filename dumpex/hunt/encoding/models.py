@@ -232,13 +232,25 @@ class LayerCoverage:
     ordinary, non-frozen dataclass with a mutable `skipped_oversize_targets`
     list) would stay reachable -- and mutable -- after the scan function
     returns, between collection and aggregate.py ever consuming it.
-    Carries only the fields encoding's own scan layers actually set on
-    their tracker (`total`/`timed_out`/`reasons` are never touched by
-    sleep_mask.py/entropy.py/decoding.py); `dumpex.hunt._coverage.
-    CoverageTracker` itself stays the general-purpose, hunter-neutral
-    accumulator, still fully mutable DURING a scan loop -- only what
-    crosses the scan/aggregate boundary is frozen here."""
+    Carries the fields encoding's own scan layers actually set on their
+    tracker (`reasons` is never touched by sleep_mask.py/entropy.py/
+    decoding.py); `dumpex.hunt._coverage.CoverageTracker` itself stays the
+    general-purpose, hunter-neutral accumulator, still fully mutable
+    DURING a scan loop -- only what crosses the scan/aggregate boundary is
+    frozen here.
+
+    `eligible_total`/`eligible_bytes`/`not_applicable` are the tracker's
+    reconciliation ledger, carried across the boundary rather than
+    collapsed into a bool: `unaccounted` below is what makes a layer that
+    walked past a region without recording its outcome degrade to partial
+    instead of reporting a clean, complete scan."""
     scanned: int = 0
+    eligible_total: int = 0   # items this layer took into scope
+    eligible_bytes: int = 0   # and how many CAPTURED bytes they add up to
+    not_applicable: int = 0   # read fine, nothing analyzable in it
+    budget_skipped: int = 0   # read fine, no budget left to examine it
+    unaccounted:    int = 0   # in scope, no outcome recorded
+    over_accounted: int = 0   # outcome recorded, never taken into scope
     read_failed: int = 0
     read_failed_targets: tuple = field(default_factory=tuple)   # issue #28
     short_reads: int = 0
@@ -248,6 +260,12 @@ class LayerCoverage:
 
     def __post_init__(self):
         _require_count(self.scanned, "LayerCoverage.scanned")
+        _require_count(self.eligible_total, "LayerCoverage.eligible_total")
+        _require_count(self.eligible_bytes, "LayerCoverage.eligible_bytes")
+        _require_count(self.not_applicable, "LayerCoverage.not_applicable")
+        _require_count(self.budget_skipped, "LayerCoverage.budget_skipped")
+        _require_count(self.unaccounted, "LayerCoverage.unaccounted")
+        _require_count(self.over_accounted, "LayerCoverage.over_accounted")
         _require_count(self.read_failed, "LayerCoverage.read_failed")
         _require_count(self.short_reads, "LayerCoverage.short_reads")
         _require_bool(self.budget_exhausted, "LayerCoverage.budget_exhausted")
@@ -264,9 +282,44 @@ class LayerCoverage:
         # ScanTarget whose own field was poisoned via object.__setattr__).
         require_recursively_immutable(self, "LayerCoverage")
 
+    @property
+    def accounted(self) -> int:
+        """Every disposition carried across this boundary, summed exactly
+        as `dumpex.hunt._coverage.CoverageTracker.accounted` sums them --
+        see its DISPOSITION_COUNTERS for the set both have to agree on."""
+        return (self.scanned + self.not_applicable + self.budget_skipped
+                + self.read_failed + len(self.skipped_oversize_targets))
+
+    @property
+    def ledger_imbalance(self) -> int:
+        """Items with no trustworthy outcome BEYOND the two direction
+        counts. The books balance when the dispositions plus the items
+        nobody dispositioned equal the items taken into scope plus the
+        outcomes that belonged to no item:
+
+            accounted + unaccounted == eligible_total + over_accounted
+
+        Anything left over is a count that did not survive the trip from
+        the scan to here -- invisible to both direction counts, since a
+        counter that never arrived reads as zero."""
+        return abs(self.accounted + self.unaccounted
+                   - self.eligible_total - self.over_accounted)
+
+    @property
+    def reconciled(self) -> bool:
+        """Every eligible item accounted for exactly once, nothing
+        accounted for that was never eligible, and the books balancing --
+        see `ledger_imbalance`."""
+        return (not self.unaccounted and not self.over_accounted
+                and not self.ledger_imbalance)
+
     @classmethod
     def from_tracker(cls, tracker) -> "LayerCoverage":
         return cls(scanned=tracker.scanned, read_failed=tracker.read_failed,
+                   eligible_total=tracker.total, eligible_bytes=tracker.eligible_bytes,
+                   not_applicable=tracker.not_applicable,
+                   budget_skipped=tracker.budget_skipped,
+                   unaccounted=tracker.unaccounted, over_accounted=tracker.over_accounted,
                    read_failed_targets=tuple(tracker.read_failed_targets),
                    short_reads=tracker.short_reads,
                    short_read_targets=tuple(tracker.short_read_targets),

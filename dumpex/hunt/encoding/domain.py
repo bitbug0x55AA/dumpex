@@ -6,7 +6,9 @@ as complete coverage.
 """
 from dataclasses import dataclass, field
 
-from dumpex.hunt._coverage import derive_status, derive_coverage_status
+from dumpex.hunt._coverage import (
+    derive_status, derive_coverage_status, UNACCOUNTED_LABEL,
+)
 from dumpex.hunt._domain import CheckResult, require_recursively_immutable, as_tuple
 from dumpex.hunt._finding import (
     overall_confidence, verdict_level, lead_count, review_priority,
@@ -138,6 +140,29 @@ class CoverageSnapshot:
     decode_short_read:      tuple = field(default_factory=tuple)
     budget_exhausted: bool = False
     exhausted_reason: str = ""
+    # Each layer scan's ledger, in both directions and kept PER LAYER for
+    # the same reason the three target tuples above are: a region taken
+    # into scope with no outcome recorded (or an outcome recorded for a
+    # region never taken into scope) is a bug in ONE layer's loop, and
+    # summing the three would leave an analyst -- and whoever fixes it --
+    # unable to tell which. One region missed by two layers counts twice,
+    # exactly as `read_failed`/`short_reads` already count per-layer gaps.
+    # Neither direction carries targets by construction: an item nobody
+    # reconciled is precisely one whose identity the loop never captured.
+    sleep_mask_unaccounted: int = 0
+    entropy_unaccounted:    int = 0
+    decode_unaccounted:     int = 0
+    sleep_mask_over_accounted: int = 0
+    entropy_over_accounted:    int = 0
+    decode_over_accounted:     int = 0
+    # What each layer's books are still short by once both counts above
+    # are taken into account -- per layer, for the same reason they are:
+    # a count that did not survive the trip from one layer's scan to here
+    # is that layer's, and neither direction can show it (a counter that
+    # never arrived reads as zero).
+    sleep_mask_imbalance: int = 0
+    entropy_imbalance:    int = 0
+    decode_imbalance:     int = 0
 
     _TARGET_TUPLE_FIELDS = (
         "sleep_mask_oversized", "entropy_oversized", "decode_oversized",
@@ -145,10 +170,18 @@ class CoverageSnapshot:
         "sleep_mask_short_read", "entropy_short_read", "decode_short_read",
     )
 
+    _LEDGER_COUNT_FIELDS = (
+        "sleep_mask_unaccounted", "entropy_unaccounted", "decode_unaccounted",
+        "sleep_mask_over_accounted", "entropy_over_accounted", "decode_over_accounted",
+        "sleep_mask_imbalance", "entropy_imbalance", "decode_imbalance",
+    )
+
     def __post_init__(self):
         _require_bool(self.memory_info_stream, "CoverageSnapshot.memory_info_stream")
         _require_optional_count(self.region_count, "CoverageSnapshot.region_count")
         _require_bool(self.any_region_scanned, "CoverageSnapshot.any_region_scanned")
+        for name in self._LEDGER_COUNT_FIELDS:
+            _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in self._TARGET_TUPLE_FIELDS:
             object.__setattr__(self, name, _require_scan_targets(
                 getattr(self, name), f"CoverageSnapshot.{name}"))
@@ -182,6 +215,39 @@ class CoverageSnapshot:
         return self._by_layer(self.sleep_mask_short_read, self.entropy_short_read,
                                self.decode_short_read)
 
+    def unaccounted_by_layer(self) -> tuple:
+        """`((layer_name, count), ...)` for every layer that walked past a
+        region without recording an outcome, same shape and order as
+        `oversized_targets_by_layer()`."""
+        return self._by_layer(self.sleep_mask_unaccounted, self.entropy_unaccounted,
+                               self.decode_unaccounted)
+
+    def over_accounted_by_layer(self) -> tuple:
+        """`((layer_name, count), ...)` for every layer that recorded an
+        outcome for a region it never took into scope."""
+        return self._by_layer(self.sleep_mask_over_accounted, self.entropy_over_accounted,
+                               self.decode_over_accounted)
+
+    def imbalance_by_layer(self) -> tuple:
+        """`((layer_name, count), ...)` per layer whose books do not
+        balance beyond its two direction counts."""
+        return self._by_layer(self.sleep_mask_imbalance, self.entropy_imbalance,
+                               self.decode_imbalance)
+
+    def unreconciled_by_layer(self) -> tuple:
+        """`((layer_name, count), ...)` per layer whose ledger does not
+        reconcile, counting every direction together -- one entry per
+        layer, which is what a structured limitation needs (`scope` names
+        the layer, `affected_count` says how many of its regions have no
+        trustworthy outcome)."""
+        return self._by_layer(
+            self.sleep_mask_unaccounted + self.sleep_mask_over_accounted
+            + self.sleep_mask_imbalance,
+            self.entropy_unaccounted + self.entropy_over_accounted
+            + self.entropy_imbalance,
+            self.decode_unaccounted + self.decode_over_accounted
+            + self.decode_imbalance)
+
     @property
     def any_oversized(self) -> bool:
         return bool(self.sleep_mask_oversized or self.entropy_oversized or self.decode_oversized)
@@ -201,6 +267,25 @@ class CoverageSnapshot:
                 + len(self.decode_short_read))
 
     @property
+    def unaccounted(self) -> int:
+        """Total across all three layers, on the same "a region missed by
+        two layers is two gaps" rule `read_failed`/`short_reads` follow.
+        Derived from the per-layer fields, never stored alongside them --
+        `unaccounted_by_layer()` is what keeps the attribution."""
+        return (self.sleep_mask_unaccounted + self.entropy_unaccounted
+                + self.decode_unaccounted)
+
+    @property
+    def over_accounted(self) -> int:
+        return (self.sleep_mask_over_accounted + self.entropy_over_accounted
+                + self.decode_over_accounted)
+
+    @property
+    def ledger_imbalance(self) -> int:
+        return (self.sleep_mask_imbalance + self.entropy_imbalance
+                + self.decode_imbalance)
+
+    @property
     def fully_skipped(self) -> bool:
         """All regions existed (MemoryInfo present, region_count > 0) but
         every single layer's own filters skipped every one of them --
@@ -218,8 +303,13 @@ class CoverageSnapshot:
 
     @property
     def complete(self) -> bool:
+        """The ledger is what makes this a POSITIVE assertion: not "no gap
+        was reported", but "every region each layer took into scope
+        reached exactly one recorded outcome"."""
         return not (self.fully_skipped or self.any_oversized or self.read_failed
-                    or self.short_reads or self.budget_exhausted)
+                    or self.short_reads or self.budget_exhausted
+                    or self.unaccounted or self.over_accounted
+                    or self.ledger_imbalance)
 
     @property
     def status(self) -> str:

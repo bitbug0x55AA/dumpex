@@ -1,4 +1,5 @@
 """Core memory helpers: address translation, region lookup, module lookup."""
+import bisect
 import io
 import os
 import ntpath
@@ -1087,6 +1088,45 @@ def va_to_file_offset(mf: MinidumpFile, va: int):
     return None
 
 
+def _segments_by_va(mf: MinidumpFile) -> tuple:
+    """`(segments_in_ascending_VA_order, running_max_end_address)`,
+    resolved once per dump and memoized on `mf` itself.
+
+    The segment table is fixed once the dump is parsed, so re-sorting it
+    per lookup is pure repeated work -- and `va_range_captured_bytes()`
+    below runs once per ELIGIBLE region on a hunter's scan path, not just
+    on the rare skip/failure path, so that work is the difference between
+    an O(regions) and an O(regions x segments log segments) scan.
+
+    The second list is a running maximum of the end addresses seen so far,
+    which is non-decreasing and therefore searchable: `max_ends[i] <= va`
+    means EVERY segment up to `i` ends at or before `va` and cannot
+    contribute to a range starting there. Start addresses alone cannot
+    answer that -- a table where a long segment is followed by shorter
+    ones nested inside it has entries that end before `va` sitting between
+    the entry that covers it and `va`'s own position in start order.
+
+    The cache is keyed on the identity of the underlying segment list, so
+    a caller that swaps `mf`'s stream out (tests do) gets a rebuilt index
+    rather than a stale one. A reader that refuses attribute assignment
+    still works -- it just recomputes."""
+    raw = _memory_segments(mf)
+    cached = getattr(mf, "_dumpex_segments_by_va", None)
+    if cached is not None and cached[0] is raw:
+        return cached[1], cached[2]
+    ordered = sorted(raw, key=lambda s: s.start_virtual_address)
+    max_ends = []
+    running = 0
+    for seg in ordered:
+        running = max(running, seg.end_virtual_address)
+        max_ends.append(running)
+    try:
+        mf._dumpex_segments_by_va = (raw, ordered, max_ends)
+    except Exception:
+        pass
+    return ordered, max_ends
+
+
 def va_range_captured_bytes(mf: MinidumpFile, va: int, size: int) -> int:
     """How many of the `size` bytes starting at `va` are actually present
     in the .dmp file, per the dump's own segment table -- a STRUCTURAL
@@ -1120,7 +1160,14 @@ def va_range_captured_bytes(mf: MinidumpFile, va: int, size: int) -> int:
         return 0
     end = va + size
     cursor = va
-    for seg in sorted(_memory_segments(mf), key=lambda s: s.start_virtual_address):
+    segments, max_ends = _segments_by_va(mf)
+    # The first segment whose prefix reaches past `va` -- everything
+    # before it ends at or before `va` and would only be skipped. Searched
+    # on the running maximum rather than on start addresses, so a segment
+    # nested inside an earlier, longer one cannot hide that longer one
+    # (see _segments_by_va).
+    index = bisect.bisect_right(max_ends, va)
+    for seg in segments[index:]:
         if seg.end_virtual_address <= cursor:
             continue   # entirely before the still-uncovered start of the run
         if seg.start_virtual_address > cursor:

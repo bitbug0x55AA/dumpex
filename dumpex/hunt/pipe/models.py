@@ -625,6 +625,16 @@ class PipeScanCoverage:
     pipe_name_budget_reason:    str = ""
     image_pipe_refs:            int = 0
     image_pipe_modules:         tuple = field(default_factory=tuple)   # tuple[str]
+    # The tracker's reconciliation ledger, carried across the scan/
+    # aggregate boundary rather than collapsed into a bool -- see
+    # `unaccounted` below.
+    scanned:                    int = 0
+    eligible_total:             int = 0
+    eligible_bytes:             int = 0
+    not_applicable:             int = 0
+    budget_skipped:             int = 0
+    unaccounted:                int = 0
+    over_accounted:             int = 0
 
     def __post_init__(self):
         object.__setattr__(self, "skipped_oversize_targets", _require_typed_tuple(
@@ -634,7 +644,9 @@ class PipeScanCoverage:
             self.read_failed_targets, ScanTarget, "PipeScanCoverage.read_failed_targets"))
         object.__setattr__(self, "short_read_targets", _require_typed_tuple(
             self.short_read_targets, ScanTarget, "PipeScanCoverage.short_read_targets"))
-        for name in ("read_failed", "short_reads", "image_pipe_refs"):
+        for name in ("read_failed", "short_reads", "image_pipe_refs",
+                     "scanned", "eligible_total", "eligible_bytes", "not_applicable",
+                     "budget_skipped", "unaccounted", "over_accounted"):
             _require_count(getattr(self, name), f"PipeScanCoverage.{name}")
         for name in ("c2_budget_exhausted", "pipe_name_budget_exhausted"):
             _require_bool(getattr(self, name), f"PipeScanCoverage.{name}")
@@ -643,6 +655,37 @@ class PipeScanCoverage:
         object.__setattr__(self, "image_pipe_modules", _require_typed_tuple(
             self.image_pipe_modules, str, "PipeScanCoverage.image_pipe_modules"))
         require_recursively_immutable(self, "PipeScanCoverage")
+
+    @property
+    def accounted(self) -> int:
+        """Every disposition carried across this boundary, summed exactly
+        as `dumpex.hunt._coverage.CoverageTracker.accounted` sums them --
+        see its DISPOSITION_COUNTERS for the set both have to agree on."""
+        return (self.budget_skipped + self.scanned + self.not_applicable + self.read_failed
+                + len(self.skipped_oversize_targets))
+
+    @property
+    def ledger_imbalance(self) -> int:
+        """Items with no trustworthy outcome BEYOND the two direction
+        counts. The books balance when the dispositions plus the items
+        nobody dispositioned equal the items taken into scope plus the
+        outcomes that belonged to no item:
+
+            accounted + unaccounted == eligible_total + over_accounted
+
+        Anything left over is a count that did not survive the trip from
+        the scan to here -- invisible to both direction counts, since a
+        counter that never arrived reads as zero."""
+        return abs(self.accounted + self.unaccounted
+                   - self.eligible_total - self.over_accounted)
+
+    @property
+    def reconciled(self) -> bool:
+        """Every eligible item accounted for exactly once, nothing
+        accounted for that was never eligible, and the books balancing --
+        see `ledger_imbalance`."""
+        return (not self.unaccounted and not self.over_accounted
+                and not self.ledger_imbalance)
 
     @classmethod
     def from_scan(cls, tracker, pipe_name_budget, c2_budget, *,
@@ -661,8 +704,13 @@ class PipeScanCoverage:
                    pipe_name_budget_exhausted=pipe_name_budget.exhausted(),
                    pipe_name_budget_reason=pipe_name_budget.exhausted_reason or "",
                    image_pipe_refs=image_pipe_refs,
-                   image_pipe_modules=tuple(image_pipe_modules))
-
+                   image_pipe_modules=tuple(image_pipe_modules),
+                   scanned=tracker.scanned, eligible_total=tracker.total,
+                   eligible_bytes=tracker.eligible_bytes,
+                   not_applicable=tracker.not_applicable,
+                   budget_skipped=tracker.budget_skipped,
+                   unaccounted=tracker.unaccounted,
+                   over_accounted=tracker.over_accounted)
 
 @dataclass(frozen=True)
 class PipeNameScanResult:

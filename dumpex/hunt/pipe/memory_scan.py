@@ -14,7 +14,9 @@ re-derived at aggregate or render time.
 import os
 import hashlib
 from minidump.minidumpfile import MinidumpFile
-from dumpex.core.memory import addr_to_module, prot_str, va_to_file_offset
+from dumpex.core.memory import (
+    addr_to_module, prot_str, va_range_captured_bytes, va_to_file_offset,
+)
 from dumpex.hunt._coverage import region_scan_target
 from dumpex.hunt.pipe.config import (PIPE_SCAN_MAX, PIPE_MAX_MATCHES_PER_REGION,
     PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION, PIPE_C2_CONTEXT_BYTES,
@@ -166,12 +168,25 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
     for r in regions:
         if prot_str(r.State) != "MEM_COMMIT":
             continue
+        if pipe_name_budget.exhausted() and c2_budget.exhausted():
+            break   # nothing left this loop could still usefully collect
+        if r.RegionSize <= 0:
+            # A zero-length region has nothing to read and no bytes anyone
+            # could miss: a filter, not a coverage gap. It is also not
+            # something a ScanTarget can identify -- a target has an
+            # extent by definition.
+            continue
+        # Checked BEFORE the region is marked eligible: a region the loop
+        # stops short of was never in scope for this scan, so it is not an
+        # unaccounted item -- the two budgets' own exhausted flags are what
+        # make coverage partial in that case. Past this point every path
+        # out of the iteration owes the ledger a disposition.
+        coverage_counts.note_eligible(
+            va_range_captured_bytes(mf, r.BaseAddress, r.RegionSize))
         if r.RegionSize > PIPE_SCAN_MAX:
             coverage_counts.note_skipped_oversize(
                 region_scan_target(mf, r, PIPE_SCAN_MAX))
             continue
-        if pipe_name_budget.exhausted() and c2_budget.exhausted():
-            break   # nothing left this loop could still usefully collect
         mtype = prot_str(r.Type)
         mod   = addr_to_module(r.BaseAddress, modules)
 
@@ -184,6 +199,12 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # rescan, or recollect this exact region.
             coverage_counts.note_read_failed(region_scan_target(mf, r))
             continue
+        if not data:
+            # Nothing came back at all: there is no readable portion to
+            # scan, so this is a failed read rather than a short one -- a
+            # short read ANNOTATES a region that was otherwise scanned.
+            coverage_counts.note_read_failed(region_scan_target(mf, r))
+            continue
         if len(data) < r.RegionSize:
             # Fewer bytes came back than the region's own declared size —
             # not the same as "read fine, nothing here". Still scan what
@@ -191,18 +212,23 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # in the readable portion), but this region must not silently
             # count toward a "complete" scan.
             coverage_counts.note_short_read(region_scan_target(mf, r))
-            if not data:
-                continue
-
         # Resolved ONCE per region, here, rather than per hit or at render
         # time -- every projection reads these already-resolved strings.
         region = region_ref(r)
         pipes_before = len(string_leads)
 
+        # Whether any pattern was actually run over `data`. The region's
+        # disposition is decided by this at the end of the iteration, not
+        # by having reached this line: with pipe_name_budget already
+        # exhausted the loop below runs no pattern at all, and the C2
+        # passes are gated on this region yielding a NEW pipe name, so
+        # nothing would examine the bytes that were read.
+        examined = False
         region_matches = 0
         for pat, is_utf16 in ((PIPE_PAT_ASCII, False), (PIPE_PAT_UTF16, True)):
             if pipe_name_budget.exhausted():
                 break
+            examined = True
             for m in pat.finditer(data):
                 if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
                     break
@@ -281,6 +307,17 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
 
             if records:
                 c2_regions.append(RegionC2Records(region=region, records=tuple(records)))
+
+        # Exactly one disposition, on every path out of this iteration:
+        # `scanned` when at least one pattern ran over the region's bytes,
+        # `budget_skipped` when the whole-hunt budgets left nothing to run
+        # -- read fine and perfectly analyzable, just not examined. Kept
+        # out of `not_applicable`, which claims a rescan would find the
+        # same nothing; a bigger budget reaches these.
+        if examined:
+            coverage_counts.note_scanned()
+        else:
+            coverage_counts.note_budget_skipped()
 
     coverage = PipeScanCoverage.from_scan(
         coverage_counts, pipe_name_budget, c2_budget,
