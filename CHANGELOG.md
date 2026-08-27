@@ -21,6 +21,12 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 - The named-pipe, module-stomping IOC, and CS Beacon segment scans now record
   what they scanned instead of reporting coverage from counters that were never
   populated.
+- When a named-pipe scan budget is exhausted, the eligible regions it left
+  unresolved are now retained as concrete scan targets rather than only setting
+  a flag. The pipe-name and C2-context budgets keep separate target sets, both
+  reach `SCAN_BUDGET_EXHAUSTED` limitations as `targets`/`affected_count`, and
+  under `--hunt all` they now produce investigation-queue actions naming the
+  exact addresses to rescan.
 - A dump declaring a zero-length committed region or captured segment no longer
   aborts the run, on any path -- including the budget and truncation paths that
   report abandoned regions. Such an item holds no bytes to scan and none anyone

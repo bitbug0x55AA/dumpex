@@ -67,6 +67,11 @@ _TARGET_BEARING_LIMITATION_CAUSES = {
     LimitationCode.YARA_HIT_CAP_REACHED:          SkipCause.HIT_CAP_REACHED,
     LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED:    SkipCause.SCAN_BUDGET_EXHAUSTED,
     LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED: SkipCause.SCAN_BUDGET_EXHAUSTED,
+    # The generic code: pipe's pipe_name/c2_context region walk names the
+    # eligible regions a spent budget left unresolved. Other producers of
+    # this code (encoding's sleep-mask scan) stay reason-only -- a
+    # limitation with no `targets` contributes nothing to the queue.
+    LimitationCode.SCAN_BUDGET_EXHAUSTED:         SkipCause.SCAN_BUDGET_EXHAUSTED,
 }
 
 

@@ -623,6 +623,17 @@ class PipeScanCoverage:
     c2_budget_reason:           str = ""
     pipe_name_budget_exhausted: bool = False
     pipe_name_budget_reason:    str = ""
+    # One ScanTarget per eligible region a spent budget left unresolved for
+    # its own scope, kept SEPARATE because the two budgets stop different
+    # work: `pipe_name_budget_exhausted_targets` holds each region whose
+    # pipe-name matching could not run to completion within budget;
+    # `c2_budget_exhausted_targets` holds each region that yielded new
+    # private pipe-name leads whose C2 context the c2_budget could not
+    # gather. Either can be empty while its `_exhausted` flag is True.
+    # Deduped by physical region. Every target has `size_limit=None`:
+    # budget exhaustion is not a size-cap skip.
+    pipe_name_budget_exhausted_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
+    c2_budget_exhausted_targets:        tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     image_pipe_refs:            int = 0
     image_pipe_modules:         tuple = field(default_factory=tuple)   # tuple[str]
     # The tracker's reconciliation ledger, carried across the scan/
@@ -644,6 +655,15 @@ class PipeScanCoverage:
             self.read_failed_targets, ScanTarget, "PipeScanCoverage.read_failed_targets"))
         object.__setattr__(self, "short_read_targets", _require_typed_tuple(
             self.short_read_targets, ScanTarget, "PipeScanCoverage.short_read_targets"))
+        for name in ("pipe_name_budget_exhausted_targets", "c2_budget_exhausted_targets"):
+            targets = _require_typed_tuple(getattr(self, name), ScanTarget,
+                                          f"PipeScanCoverage.{name}")
+            capped = [f"0x{t.base_address:x}" for t in targets if t.size_limit is not None]
+            if capped:
+                raise ValueError(
+                    f"PipeScanCoverage.{name} must all have size_limit=None -- budget "
+                    f"exhaustion is not a size-cap skip, got a cap on target(s) at {capped!r}")
+            object.__setattr__(self, name, targets)
         for name in ("read_failed", "short_reads", "image_pipe_refs",
                      "scanned", "eligible_total", "eligible_bytes", "not_applicable",
                      "budget_skipped", "unaccounted", "over_accounted"):
@@ -689,7 +709,9 @@ class PipeScanCoverage:
 
     @classmethod
     def from_scan(cls, tracker, pipe_name_budget, c2_budget, *,
-                   image_pipe_refs: int = 0, image_pipe_modules=()) -> "PipeScanCoverage":
+                   image_pipe_refs: int = 0, image_pipe_modules=(),
+                   pipe_name_budget_exhausted_targets=(),
+                   c2_budget_exhausted_targets=()) -> "PipeScanCoverage":
         """Freeze a finished scan's live tracker/budgets. `exhausted()` is
         called (not `exhausted_reason` read directly) because a budget only
         notices an expired DEADLINE when asked -- see
@@ -705,6 +727,8 @@ class PipeScanCoverage:
                    pipe_name_budget_reason=pipe_name_budget.exhausted_reason or "",
                    image_pipe_refs=image_pipe_refs,
                    image_pipe_modules=tuple(image_pipe_modules),
+                   pipe_name_budget_exhausted_targets=tuple(pipe_name_budget_exhausted_targets),
+                   c2_budget_exhausted_targets=tuple(c2_budget_exhausted_targets),
                    scanned=tracker.scanned, eligible_total=tracker.total,
                    eligible_bytes=tracker.eligible_bytes,
                    not_applicable=tracker.not_applicable,

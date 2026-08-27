@@ -177,6 +177,16 @@ class CoverageSnapshot:
     c2_budget_reason:           str = ""
     pipe_name_budget_exhausted: bool = False
     pipe_name_budget_reason:    str = ""
+    # The eligible regions each spent budget left unresolved for its own
+    # scope -- kept SEPARATE for the same reason the two budgets are. The
+    # `pipe_name` set holds each region whose pipe-name matching could not
+    # complete within budget; the `c2` set holds each region whose new
+    # pipe-name leads the c2_budget could not gather C2 context for. Either
+    # can be empty while its `_exhausted` flag is True. Deduped by physical
+    # region; every target carries `size_limit=None` -- budget exhaustion
+    # is not a size-cap skip.
+    pipe_name_budget_exhausted_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
+    c2_budget_exhausted_targets:        tuple = field(default_factory=tuple)   # tuple[ScanTarget]
 
     # Pipe references found inside Microsoft system DLLs -- NOT a gap:
     # those regions WERE fully read, and a pipe name in
@@ -200,6 +210,14 @@ class CoverageSnapshot:
             self.read_failed_targets, "CoverageSnapshot.read_failed_targets"))
         object.__setattr__(self, "short_read_targets", _require_scan_targets(
             self.short_read_targets, "CoverageSnapshot.short_read_targets"))
+        for name in ("pipe_name_budget_exhausted_targets", "c2_budget_exhausted_targets"):
+            targets = _require_scan_targets(getattr(self, name), f"CoverageSnapshot.{name}")
+            capped = [f"0x{t.base_address:x}" for t in targets if t.size_limit is not None]
+            if capped:
+                raise ValueError(
+                    f"CoverageSnapshot.{name} must all have size_limit=None -- budget "
+                    f"exhaustion is not a size-cap skip, got a cap on target(s) at {capped!r}")
+            object.__setattr__(self, name, targets)
         object.__setattr__(self, "image_pipe_modules", _require_str_items(
             self.image_pipe_modules, "CoverageSnapshot.image_pipe_modules"))
 

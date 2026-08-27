@@ -1646,7 +1646,8 @@ _SCAN_BUDGET_EXHAUSTED_REASONS = frozenset(
 
 def _render_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
     scope = f"{limitation.scope} " if limitation.scope else ""
-    return f"{scope}scan budget exhausted ({limitation.detail})"
+    return _with_optional_target_preview(
+        f"{scope}scan budget exhausted ({limitation.detail})", limitation.targets)
 
 
 def _validate_scan_budget_exhausted_fields(limitation: "CoverageLimitation") -> None:
@@ -1654,6 +1655,11 @@ def _validate_scan_budget_exhausted_fields(limitation: "CoverageLimitation") -> 
         raise ValueError(
             f"CoverageLimitation(code=SCAN_BUDGET_EXHAUSTED) requires detail to be one of "
             f"{sorted(_SCAN_BUDGET_EXHAUSTED_REASONS)!r}, got {limitation.detail!r}")
+    # `affected_count`/`targets` are BOTH optional (a budget can trip with
+    # nothing eligible left to name), but a non-empty `targets` requires a
+    # matching `affected_count`, and a budget target never carries a
+    # size cap it exceeded -- see the shared validator's own docstring.
+    _require_optional_affected_count_and_targets("SCAN_BUDGET_EXHAUSTED")(limitation)
 
 
 def _render_cs_beacon_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
@@ -2547,7 +2553,7 @@ _CODE_SPECS = {
     LimitationCode.SCAN_BUDGET_EXHAUSTED: _CodeSpec(
         render=_render_scan_budget_exhausted, caller_buildable=True,
         validate_fields=_validate_scan_budget_exhausted_fields,
-        allowed_fields=frozenset({"scope", "detail"})),
+        allowed_fields=frozenset({"scope", "detail", "affected_count", "targets"})),
     LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
         render=_render_cs_beacon_scan_budget_exhausted, fixed_source="segment_scan",
         caller_buildable=True, validate_fields=_validate_cs_beacon_scan_budget_exhausted_fields,

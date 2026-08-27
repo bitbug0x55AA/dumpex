@@ -297,7 +297,8 @@ def test_pipe_aggregate_receives_only_typed_evidence_and_scalars():
         "skipped_oversize", "read_failed", "read_failed_targets",
         "short_reads", "short_read_targets", "c2_budget_exhausted",
         "c2_budget_reason", "pipe_name_budget_exhausted",
-        "pipe_name_budget_reason", "image_pipe_refs", "image_pipe_modules",
+        "pipe_name_budget_reason", "pipe_name_budget_exhausted_targets",
+        "c2_budget_exhausted_targets", "image_pipe_refs", "image_pipe_modules",
         # the ledger's two directions, scalar counts
         "rule_version", "unaccounted", "over_accounted", "ledger_imbalance",
     }

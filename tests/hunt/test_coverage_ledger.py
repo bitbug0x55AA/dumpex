@@ -866,6 +866,167 @@ def test_pipe_records_a_scan_once_a_pattern_actually_runs():
     _assert_reconciled(result.coverage, expect_total=5, note="pipe budgets live")
 
 
+def _expired_budget():
+    return ScanBudget(max_bytes_read=10**9, max_attempts=10**9, max_retained_bytes=10**9,
+                       max_hits=10**9, deadline=time.monotonic() - 1)
+
+
+def test_pipe_name_budget_names_every_eligible_region_it_left_unscanned():
+    """A spent pipe-name budget does not just flip a flag: the eligible
+    regions it never scanned are retained as targets so an analyst can go
+    rescan the exact addresses."""
+    regions = [_private_region(base=BASE + i * 0x10000, size=0x1000) for i in range(5)]
+    result = scan_pipe_names(
+        _mf(captured=[_captured(base=r.BaseAddress, size=0x1000) for r in regions]),
+        _fixed_reader(rb"\pipe\demo" + b"\x00" * 0x100), regions, [],
+        CoverageTracker(), _expired_budget(), _budget(),
+        re.compile(r"nothing-matches-this"))
+    coverage = result.coverage
+
+    assert [t.base_address for t in coverage.pipe_name_budget_exhausted_targets] == \
+        [r.BaseAddress for r in regions]
+    assert all(t.size_limit is None for t in coverage.pipe_name_budget_exhausted_targets)
+    assert coverage.c2_budget_exhausted_targets == ()
+    _assert_reconciled(coverage, expect_total=5, note="pipe-name budget spent")
+
+
+def test_pipe_name_budget_targets_begin_at_the_region_it_ran_out_on():
+    """A region whose pipe-name matching finished within budget is never a
+    target; attribution begins at the region the budget was first unable to
+    fully serve and runs to the end of the eligible walk."""
+    regions = [_private_region(base=BASE + i * 0x10000, size=0x1000) for i in range(4)]
+    one_hit = ScanBudget(max_bytes_read=10**9, max_attempts=10**9,
+                          max_retained_bytes=10**9, max_hits=1)
+    result = scan_pipe_names(
+        _mf(captured=[_captured(base=r.BaseAddress, size=0x1000) for r in regions]),
+        _fixed_reader(rb"\pipe\a" + b"\x00" * 0x100), regions, [],
+        CoverageTracker(), one_hit, _budget(), re.compile(r"nothing-matches-this"))
+    coverage = result.coverage
+
+    assert [t.base_address for t in coverage.pipe_name_budget_exhausted_targets] == \
+        [r.BaseAddress for r in regions[1:]]
+    _assert_reconciled(coverage, expect_total=4, note="pipe-name budget one hit")
+
+
+def test_c2_budget_names_the_lead_bearing_regions_it_could_not_contextualize():
+    """C2-context exhaustion keeps its OWN target set: the regions that
+    yielded a new private pipe-name lead the c2_budget could not gather
+    context for -- independent of the still-live pipe-name budget."""
+    regions = [_private_region(base=BASE + i * 0x10000, size=0x1000) for i in range(3)]
+    result = scan_pipe_names(
+        _mf(captured=[_captured(base=r.BaseAddress, size=0x1000) for r in regions]),
+        _fixed_reader(rb"\pipe\demo" + b"\x00" * 0x100), regions, [],
+        CoverageTracker(), _budget(), _expired_budget(),
+        re.compile(r"nothing-matches-this"))
+    coverage = result.coverage
+
+    assert [t.base_address for t in coverage.c2_budget_exhausted_targets] == \
+        [r.BaseAddress for r in regions]
+    assert coverage.pipe_name_budget_exhausted_targets == ()
+    _assert_reconciled(coverage, expect_total=3, note="c2 budget spent")
+
+
+class _C2BudgetSpentBetweenPasses:
+    """A c2_budget stand-in that stays healthy until pass 1 retains one
+    record, then reports exhausted forever -- placing the deadline
+    transition precisely in the gap between pass 1 finishing and the
+    pass-2 guard, which no real clock lets a test hit deterministically."""
+
+    def __init__(self):
+        self._hits = 0
+        self.exhausted_reason = ""
+
+    def exhausted(self):
+        if self._hits >= 1 and not self.exhausted_reason:
+            self.exhausted_reason = "deadline"
+        return bool(self.exhausted_reason)
+
+    def poll(self):
+        return not self.exhausted()
+
+    def take_hit(self, retained_bytes=0):
+        if self.exhausted():
+            return False
+        self._hits += 1
+        return True
+
+
+def test_c2_budget_spent_between_the_two_passes_still_names_the_region():
+    """Pass 1 finishes cleanly, then the c2_budget is found spent at the
+    pass-2 guard: this region's context-only C2 evidence was never
+    gathered, so it is still a c2-scope target -- not silently dropped
+    because pass 1 happened to complete."""
+    region = _private_region(base=BASE, size=0x1000)
+    # `\pipe\x` at offset 0 and an `http://` C2 token right after it, within
+    # PIPE_CONTEXT_DISTANCE -- one proximity record for pass 1 to retain.
+    data = rb"\pipe\x" + b"\x00" + b"http://c2" + b"\x00" + b"\x00" * 0x40
+    c2_budget = _C2BudgetSpentBetweenPasses()
+    result = scan_pipe_names(
+        _mf(captured=[_captured(base=BASE, size=0x1000)]),
+        _fixed_reader(data), [region], [], CoverageTracker(),
+        _budget(), c2_budget, re.compile(r"https?://"))
+    coverage = result.coverage
+
+    assert coverage.c2_budget_exhausted is True
+    assert [t.base_address for t in coverage.c2_budget_exhausted_targets] == [BASE]
+    _assert_reconciled(coverage, expect_total=1, note="c2 budget spent between passes")
+
+
+def test_both_budgets_spent_attributes_the_abandoned_walk_to_both_scopes():
+    """With both budgets spent no scan work runs, but the walk still
+    enumerates every remaining region: each reconciles as budget-skipped
+    and is attributed to BOTH scopes -- neither signal can make a complete
+    claim for those ranges."""
+    regions = [_private_region(base=BASE + i * 0x10000, size=0x1000) for i in range(5)]
+    result = scan_pipe_names(
+        _mf(captured=[_captured(base=r.BaseAddress, size=0x1000) for r in regions]),
+        _fixed_reader(rb"\pipe\demo" + b"\x00" * 0x100), regions, [],
+        CoverageTracker(), _expired_budget(), _expired_budget(),
+        re.compile(r"nothing-matches-this"))
+    coverage = result.coverage
+
+    bases = [r.BaseAddress for r in regions]
+    assert [t.base_address for t in coverage.pipe_name_budget_exhausted_targets] == bases
+    assert [t.base_address for t in coverage.c2_budget_exhausted_targets] == bases
+    assert (coverage.scanned, coverage.budget_skipped) == (0, 5)
+    _assert_reconciled(coverage, expect_total=5, note="both budgets spent")
+
+
+def test_oversized_region_in_the_abandoned_walk_keeps_its_oversized_skip():
+    """An oversized region the walk reaches with both budgets spent is
+    still recorded as an oversized skip with its own target -- a spent
+    budget never relabels it or makes it vanish."""
+    regions = [_private_region(base=BASE, size=0x1000),
+               _private_region(base=BASE + 0x1000000, size=9 * 1024 * 1024)]
+    result = scan_pipe_names(
+        _mf(captured=[_captured(base=r.BaseAddress, size=r.RegionSize) for r in regions]),
+        _fixed_reader(rb"\pipe\demo" + b"\x00" * 0x100), regions, [],
+        CoverageTracker(), _expired_budget(), _expired_budget(),
+        re.compile(r"nothing-matches-this"))
+    coverage = result.coverage
+
+    assert [t.base_address for t in coverage.skipped_oversize_targets] == [BASE + 0x1000000]
+    budget_targets = (coverage.pipe_name_budget_exhausted_targets
+                      + coverage.c2_budget_exhausted_targets)
+    assert all(t.base_address == BASE for t in budget_targets)
+    _assert_reconciled(coverage, expect_total=2, note="oversized in abandoned walk")
+
+
+def test_budget_targets_dedupe_a_duplicate_memoryinfo_entry():
+    """A region list carrying the same physical entry twice must not
+    inflate a scope's target tuple or its affected_count."""
+    region = _private_region(base=BASE, size=0x1000)
+    result = scan_pipe_names(
+        _mf(captured=[_captured(base=BASE, size=0x1000)]),
+        _fixed_reader(rb"\pipe\demo" + b"\x00" * 0x100), [region, region], [],
+        CoverageTracker(), _expired_budget(), _expired_budget(),
+        re.compile(r"nothing-matches-this"))
+    coverage = result.coverage
+
+    assert [t.base_address for t in coverage.pipe_name_budget_exhausted_targets] == [BASE]
+    assert [t.base_address for t in coverage.c2_budget_exhausted_targets] == [BASE]
+
+
 def test_the_unaccounted_limitation_reads_the_same_for_both_ledger_directions():
     """The code carries both directions, so its rendered text cannot claim
     the items were walked -- half of what it reports never was."""

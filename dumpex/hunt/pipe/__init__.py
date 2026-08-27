@@ -133,6 +133,8 @@ def _build_pipe_report(mf: MinidumpFile):
         c2_budget_reason=scan_coverage.c2_budget_reason,
         pipe_name_budget_exhausted=scan_coverage.pipe_name_budget_exhausted,
         pipe_name_budget_reason=scan_coverage.pipe_name_budget_reason,
+        pipe_name_budget_exhausted_targets=scan_coverage.pipe_name_budget_exhausted_targets,
+        c2_budget_exhausted_targets=scan_coverage.c2_budget_exhausted_targets,
         image_pipe_refs=scan_coverage.image_pipe_refs,
         image_pipe_modules=scan_coverage.image_pipe_modules,
         rule_version=RULE_VERSION)

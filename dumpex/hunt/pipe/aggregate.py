@@ -26,6 +26,8 @@ def build_report(handle_pipes: tuple = (), string_leads: tuple = (),
                   c2_budget_exhausted: bool = False, c2_budget_reason: str = "",
                   pipe_name_budget_exhausted: bool = False,
                   pipe_name_budget_reason: str = "",
+                  pipe_name_budget_exhausted_targets: tuple = (),
+                  c2_budget_exhausted_targets: tuple = (),
                   image_pipe_refs: int = 0, image_pipe_modules: tuple = (),
                   rule_version: "str | None" = None) -> PipeReport:
     """
@@ -48,6 +50,8 @@ def build_report(handle_pipes: tuple = (), string_leads: tuple = (),
         c2_budget_exhausted=c2_budget_exhausted, c2_budget_reason=c2_budget_reason,
         pipe_name_budget_exhausted=pipe_name_budget_exhausted,
         pipe_name_budget_reason=pipe_name_budget_reason,
+        pipe_name_budget_exhausted_targets=pipe_name_budget_exhausted_targets,
+        c2_budget_exhausted_targets=c2_budget_exhausted_targets,
         image_pipe_refs=image_pipe_refs, image_pipe_modules=image_pipe_modules,
     )
 
