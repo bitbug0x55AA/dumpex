@@ -97,9 +97,9 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "module=legit.dll section='.text' VA=0x7ff600001000 compared=8192 bytes changed_ranges=[+0x0(len 0x2000)] disk_sha256_prefix=52a0eef5d9945c5a\u2026 mem_sha256_prefix=14161ad8540739ba\u2026"
+        "module=legit.dll section='.text' VA=0x00007ff600001000 compared=8192 bytes changed_ranges=[+0x0(len 0x2000)] disk_sha256_prefix=52a0eef5d9945c5a\u2026 mem_sha256_prefix=14161ad8540739ba\u2026"
       ],
-      "id": "finding-9b4c6a314f865620fdebb4423b636b71",
+      "id": "finding-7e926b6cefd50bb4e31f9327dcb95106",
       "inference": "1 module section(s) have relocation-normalized, byte-level content differences from an identity-matched (Machine/SizeOfImage/TimeDateStamp) reference file supplied via --ref-dir.",
       "iocs": [],
       "limitations": [
@@ -119,9 +119,9 @@
       "confidence": "low",
       "evidence_refs": [],
       "facts": [
-        "module=legit.dll VA=0x7ff600001000 terms=mimikatz"
+        "module=legit.dll VA=0x00007ff600001000 terms=mimikatz"
       ],
-      "id": "finding-f35452c8969d1294f0b3c041f2e9bf5e",
+      "id": "finding-eab5a89b294b2a539a033ffac0e902a1",
       "inference": "1 strong + 0 weak IOC-keyword token(s) found across 1 executable module region(s).",
       "iocs": [],
       "limitations": [

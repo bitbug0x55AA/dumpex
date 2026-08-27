@@ -36,6 +36,17 @@ def test_hex_address_large_value_not_truncated():
     assert hex_address(big) == "0x" + "f" * 16
 
 
+def test_hex_address_is_lowercase_and_exactly_16_digits():
+    """Pins the shared address format: `0x` + exactly 16 lowercase hex
+    digits. Every finding-fact and record surface in the tool routes
+    addresses through this helper, so a silent width or case change here
+    would move every affected `Finding.id` at once."""
+    rendered = hex_address(0xABCDEF)
+    assert rendered == "0x0000000000abcdef"
+    assert rendered[2:].islower() or rendered[2:].isdigit()
+    assert len(rendered) == 18
+
+
 # ── MemoryRegionRecord ───────────────────────────────────────────────────
 
 def test_memory_region_record_to_dict_shape():

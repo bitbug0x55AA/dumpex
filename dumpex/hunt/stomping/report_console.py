@@ -19,6 +19,7 @@ from dumpex.hunt.stomping.domain import StompingReport
 from dumpex.hunt.stomping.report_facts import (
     _FACT_ITEM_RENDERERS, finding_from_check_result, project_coverage_v1,
 )
+from dumpex.output.records import hex_address
 
 
 _VERIFIED_CONTENT_CHANGE = "stomping.verified_content_change"
@@ -26,6 +27,12 @@ _IOC_STRING_LEAD         = "stomping.ioc_string_lead"
 
 
 # ── Verbose-only evidence-item fact rendering (console policy only) ──────
+# Address-typed fields (`VA`/`va_start`/`va_end`, the `Region` base, and a
+# token's absolute `VA`) go through the shared `hex_address()` helper here
+# too, so a verbose line renders an address in the same fixed-width,
+# zero-padded 16-hex-digit form as the wire fact, the structured record,
+# and `--json` `details`. `File_offset`, `size`, `compared` length, and
+# the `+0x..` changed-range offsets stay compact.
 
 def _file_offset_text(file_offset) -> str:
     """"(not captured)" for None -- the bytes were never written to the
@@ -41,8 +48,9 @@ def _protection_lead_verbose_fact(ev, report: StompingReport) -> str:
     offset (where to point --extract/--strings)."""
     return (f"module={ev.module.basename or '(unnamed module)'} "
             f"section={ev.section.name!r} "
-            f"VA=0x{ev.va_start:016x}-0x{ev.va_end:x} File_offset={_file_offset_text(ev.file_offset)} "
-            f"Region=0x{ev.region.base_address:x} size=0x{ev.region.size:x} "
+            f"VA={hex_address(ev.va_start)}-{hex_address(ev.va_end)} "
+            f"File_offset={_file_offset_text(ev.file_offset)} "
+            f"Region={hex_address(ev.region.base_address)} size=0x{ev.region.size:x} "
             f"declared={ev.expected} actual={ev.actual} page_type={ev.region.type}")
 
 
@@ -56,7 +64,7 @@ def _verified_change_verbose_fact(vc, report: StompingReport) -> str:
                         f"{len(vc.diff_ranges)} kept for display)")
     live = "  [LIVE RIP/EIP inside changed range]" if vc.rip_in_changed_range else ""
     return (f"module={vc.module.basename or '(unnamed module)'} "
-            f"section={vc.section.name!r} VA=0x{vc.va_start:016x} "
+            f"section={vc.section.name!r} VA={hex_address(vc.va_start)} "
             f"File_offset={_file_offset_text(vc.file_offset)} "
             f"compared={vc.compared_len} bytes changed_ranges=[{ranges_str}] "
             f"disk_sha256={vc.disk_sha256} mem_sha256={vc.mem_sha256}{live}")
@@ -76,7 +84,7 @@ def _ioc_verbose_fact(ev) -> list:
     `_ioc_verbose_facts()`, which is the one piece of presentation
     formatting that used to live in the aggregation layer."""
     name = ev.module.basename if ev.module is not None else "(unknown)"
-    return [f"module={name} region=0x{ev.region.base_address:x} VA=0x{token.va:x} "
+    return [f"module={name} region={hex_address(ev.region.base_address)} VA={hex_address(token.va)} "
             f"encoding={token.encoding} token={token.token}"
             + (" (weak/common API)" if token.is_weak else "")
             for token in ev.tokens]

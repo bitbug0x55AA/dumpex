@@ -416,7 +416,7 @@ def test_corroborated_config_sorts_first_for_display_only():
     key_signals = joined.split("KEY SIGNALS", 1)[1].split("WHY THIS VERDICT", 1)[0]
     # The corroborated config (seg2, scanned SECOND) must be the FIRST
     # KEY SIGNAL entry shown.
-    first_va_pos = key_signals.find(f"0x{report.evidence.hits[1].hit_va:x}")
-    second_va_pos = key_signals.find(f"0x{report.evidence.hits[0].hit_va:x}")
+    first_va_pos = key_signals.find(f"0x{report.evidence.hits[1].hit_va:016x}")
+    second_va_pos = key_signals.find(f"0x{report.evidence.hits[0].hit_va:016x}")
     assert first_va_pos != -1 and second_va_pos != -1
     assert first_va_pos < second_va_pos

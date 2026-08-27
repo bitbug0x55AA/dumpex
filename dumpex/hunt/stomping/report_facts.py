@@ -10,6 +10,7 @@ from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, CoverageStatus, EvaluationRequirement, LimitationCode,
     SourceRequirement, build_coverage_report, observe_source,
 )
+from dumpex.output.records import hex_address
 
 # This hunter's public coverage-source vocabulary -- the exact `sources`
 # dict keys `project_coverage_report()` below builds. Extracted into a
@@ -31,7 +32,14 @@ COVERAGE_SOURCE_NAMES = frozenset({
 _RANGES_SHOWN_PER_FACT = 5
 
 
-# ── Fact-string builders -- byte-identical to the pre-migration aggregate.py ──
+# ── Fact-string builders ─────────────────────────────────────────────────
+# Address-typed fields (`VA`, `va_start`, `va_end`, the header-parse
+# `base`, and a thread's live `RIP`/`EIP`) go through the shared
+# `hex_address()` helper, so a fact renders an address in the same
+# fixed-width, zero-padded 16-hex-digit form as this hunter's
+# `report_record.py` and `--json` `details`. `TID`, `compared` length,
+# and the `+0x{off:x}` changed-range offsets (relative to a section, not
+# process addresses) keep their compact form.
 
 def _module_name(module) -> str:
     """`(unnamed module)` for a module whose recorded path yielded no
@@ -43,16 +51,16 @@ def _module_name(module) -> str:
 
 def _protection_lead_fact(ev, report: StompingReport) -> str:
     return (f"module={_module_name(ev.module)} section={ev.section.name!r} "
-            f"VA=0x{ev.region.base_address:x} declared={ev.expected} actual={ev.actual} "
+            f"VA={hex_address(ev.region.base_address)} declared={ev.expected} actual={ev.actual} "
             f"page_type={ev.region.type}")
 
 
 def _rip_lead_fact(ev, report: StompingReport) -> str:
     lead, thread = ev.lead, ev.thread
     return (f"module={_module_name(lead.module)} section={lead.section.name!r} "
-            f"VA=0x{lead.va_start:x}-0x{lead.va_end:x} "
+            f"VA={hex_address(lead.va_start)}-{hex_address(lead.va_end)} "
             f"declared={lead.expected} actual={lead.actual} "
-            f"TID=0x{thread.thread_id:x} {thread.ip_reg}=0x{thread.ip:x}")
+            f"TID=0x{thread.thread_id:x} {thread.ip_reg}={hex_address(thread.ip)}")
 
 
 def _verified_change_fact(vc, report: StompingReport) -> str:
@@ -64,7 +72,7 @@ def _verified_change_fact(vc, report: StompingReport) -> str:
         ranges_str += f" ({vc.total_ranges} total differing range(s), truncated for display)"
     live = "  [LIVE RIP/EIP inside changed range]" if vc.rip_in_changed_range else ""
     return (f"module={_module_name(vc.module)} section={vc.section.name!r} "
-            f"VA=0x{vc.va_start:x} compared={vc.compared_len} bytes "
+            f"VA={hex_address(vc.va_start)} compared={vc.compared_len} bytes "
             f"changed_ranges=[{ranges_str}] "
             f"disk_sha256_prefix={vc.disk_sha256[:16]}… "
             f"mem_sha256_prefix={vc.mem_sha256[:16]}…{live}")
@@ -77,7 +85,7 @@ def _identity_mismatch_fact(ev, report: StompingReport) -> str:
 
 def _parse_failed_fact(ev, report: StompingReport) -> str:
     return (f"module={ev.module.basename or '(unnamed)'} "
-            f"base=0x{ev.module.base_address:x} reason={ev.reason}")
+            f"base={hex_address(ev.module.base_address)} reason={ev.reason}")
 
 
 def _ioc_hit_fact(ev, report: StompingReport) -> str:
@@ -87,7 +95,7 @@ def _ioc_hit_fact(ev, report: StompingReport) -> str:
     report_console.py's own `_ioc_verbose_fact`."""
     name = ev.module.basename if ev.module is not None else "(unknown)"
     terms = sorted({token.token for token in ev.tokens})[:8]
-    return f"module={name} VA=0x{ev.region.base_address:x} terms={', '.join(terms)}"
+    return f"module={name} VA={hex_address(ev.region.base_address)} terms={', '.join(terms)}"
 
 
 _FACT_ITEM_RENDERERS = {

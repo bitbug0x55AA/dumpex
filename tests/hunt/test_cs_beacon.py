@@ -285,8 +285,8 @@ def test_console_pairs_each_config_block_with_its_own_finding(capsys):
 
     # Every fact/header line in a config's own block is built relative to
     # its segment's own VA (the hit is at some offset inside it) -- assert
-    # on that segment VA, present in both hex-padding styles the render
-    # path uses (zero-padded for the header table, un-padded in facts).
+    # on that segment VA, accepting either hex-padding style so this test
+    # pins placement, not address width.
     assert f"0x{seg1_va:016x}" in block1 or f"0x{seg1_va:x}" in block1
     assert f"0x{seg2_va:016x}" not in block1 and f"0x{seg2_va:x}" not in block1
     assert f"0x{seg2_va:016x}" in block2 or f"0x{seg2_va:x}" in block2

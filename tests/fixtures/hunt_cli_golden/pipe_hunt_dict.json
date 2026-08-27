@@ -204,9 +204,9 @@
       "confidence": "low",
       "evidence_refs": [],
       "facts": [
-        "VA=0x1230101 file_offset=(not captured) name='\\\\.\\\\pipe\\\\msagent_1337' region_type=MEM_PRIVATE"
+        "VA=0x0000000001230101 file_offset=(not captured) name='\\\\.\\\\pipe\\\\msagent_1337' region_type=MEM_PRIVATE"
       ],
-      "id": "finding-5004268ea4f881140e7ac5f6d1725d99",
+      "id": "finding-af766527ca016f8428d59a240cfd2761",
       "inference": "1 occurrence(s) of a '\\pipe\\' name found in non-system-DLL memory via byte-pattern scan.",
       "iocs": [],
       "limitations": [
@@ -224,9 +224,9 @@
       "confidence": "high",
       "evidence_refs": [],
       "facts": [
-        "Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 pipe_va=0x1230101  c2_va=0x1230116 c2_match='http://' distance=0x15 same_page=True  live_rip=TID:0x999@RIP=0x1230105 distance=0x4 same_page=True"
+        "Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 pipe_va=0x0000000001230101  c2_va=0x0000000001230116 c2_match='http://' distance=0x15 same_page=True  live_rip=TID:0x999@RIP=0x0000000001230105 distance=0x4 same_page=True"
       ],
-      "id": "finding-1b886abb20f8d6b8ace9f62653810205",
+      "id": "finding-9f2e0a40fb8a0bf720a41b842f4dc132",
       "inference": "1 open pipe handle(s) are corroborated by C2-style context and/or live RIP/EIP execution within \u00b14096 bytes of a matching pipe-name string's own address.",
       "iocs": [],
       "limitations": [

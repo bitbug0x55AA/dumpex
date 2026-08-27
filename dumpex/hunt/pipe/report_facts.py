@@ -10,6 +10,7 @@ from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, EvaluationRequirement, LimitationCode,
     build_coverage_report, observe_source,
 )
+from dumpex.output.records import hex_address
 
 # This hunter's public coverage-source vocabulary -- the exact `sources`
 # dict keys `project_coverage_report()` below builds. Extracted into a
@@ -45,7 +46,14 @@ def _proximity_text(target_va: int, pipe_va: int) -> str:
     return f"distance=0x{distance:x} same_page={same_page}"
 
 
-# ── Fact-string builders -- byte-identical to the pre-migration aggregate.py ──
+# ── Fact-string builders ─────────────────────────────────────────────────
+# Address-typed fields (`VA`, `pipe_va`, `c2_va`, `StartAddr`, and a
+# thread's live `RIP`/`EIP`) go through the shared `hex_address()` helper,
+# so a fact renders an address in the same fixed-width, zero-padded
+# 16-hex-digit form as this hunter's `report_record.py` and `--json`
+# `details`. `Handle`, `GrantedAccess`, `TID`, `distance`, and the string
+# lead's `file_offset` (a dump offset) are not addresses and keep their
+# compact `:x` form.
 
 def _open_handle_fact(ev, report: PipeReport) -> str:
     h = ev.handle
@@ -61,24 +69,24 @@ def _framework_handle_fact(ev, report: PipeReport) -> str:
 
 
 def _string_lead_fact(ev, report: PipeReport) -> str:
-    return (f"VA=0x{ev.va:x} file_offset={_file_offset_text(ev.file_offset)} "
+    return (f"VA={hex_address(ev.va)} file_offset={_file_offset_text(ev.file_offset)} "
             f"name={ev.name.strip()!r} region_type={ev.region.type}")
 
 
 def _corroboration_fact(ev, report: PipeReport) -> str:
     href = ev.handle.handle
     fact = (f"Handle=0x{href.handle:x} ObjectName={href.object_name} "
-            f"pipe_va=0x{ev.pipe_va:x}")
+            f"pipe_va={hex_address(ev.pipe_va)}")
     if ev.nearby_c2:
         # Only the FIRST nearby record, matching the pre-migration wire
         # fact; --verbose expands every one of them (see
         # report_console._corroboration_verbose_fact).
         rec = ev.nearby_c2[0]
-        fact += (f"  c2_va=0x{rec.va:x} c2_match={rec.match!r} "
+        fact += (f"  c2_va={hex_address(rec.va)} c2_match={rec.match!r} "
                  f"{_proximity_text(rec.va, ev.pipe_va)}")
     if ev.rip_hit is not None:
         tc = ev.rip_hit
-        fact += (f"  live_rip=TID:0x{tc.thread_id:x}@{tc.ip_reg}=0x{tc.ip:x} "
+        fact += (f"  live_rip=TID:0x{tc.thread_id:x}@{tc.ip_reg}={hex_address(tc.ip)} "
                  f"{_proximity_text(tc.ip, ev.pipe_va)}")
     return fact
 
@@ -91,8 +99,8 @@ def _start_address_lead_fact(ev, report: PipeReport) -> str:
     # see report_record._thread_dict.
     sa = ev.thread.start_address or 0
     return (f"Handle=0x{href.handle:x} ObjectName={href.object_name} "
-            f"pipe_va=0x{ev.pipe_va:x} "
-            f"TID=0x{ev.thread.thread_id:x} StartAddr=0x{sa:x} "
+            f"pipe_va={hex_address(ev.pipe_va)} "
+            f"TID=0x{ev.thread.thread_id:x} StartAddr={hex_address(sa)} "
             f"{_proximity_text(sa, ev.pipe_va)}")
 
 

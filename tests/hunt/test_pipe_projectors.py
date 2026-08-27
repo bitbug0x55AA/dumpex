@@ -287,9 +287,12 @@ def test_console_lines_contain_expected_sections():
 # ── 2. Fact-text parity with the pre-migration aggregate.py ───────────────
 
 def test_fact_text_matches_the_pre_migration_wording():
-    """Literal transcriptions of what the pre-migration `aggregate.py`
-    produced for the same evidence -- the fact strings are embedded in BOTH
-    the v1.1 dict and the typed `HunterRecord`, so they may not drift."""
+    """The fact strings are embedded in BOTH the v1.1 dict and the typed
+    `HunterRecord`, and feed `Finding.id`, so they may not drift.
+    Address-typed fields (`VA`, `pipe_va`, `c2_va`, `StartAddr`, and a
+    thread's live `RIP`/`EIP`) render in the shared `hex_address()`
+    fixed-width, zero-padded 16-hex-digit form; `Handle`, `GrantedAccess`,
+    `TID`, and `distance` stay compact."""
     report = _all_checks_report()
     facts = {r.check: finding_from_check_result(r, report).facts for r in report.results}
 
@@ -301,17 +304,17 @@ def test_fact_text_matches_the_pre_migration_wording():
         "Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 framework=Cobalt Strike "
         "technique=SMB Beacon peer-to-peer pipe mitre=T1090.001",)
     assert facts["pipe.string_scan_lead"] == (
-        f"VA=0x{_PIPE_VA:x} file_offset=(not captured) "
+        f"VA=0x{_PIPE_VA:016x} file_offset=(not captured) "
         f"name='\\\\\\\\.\\\\pipe\\\\msagent_1337' region_type=MEM_PRIVATE",
-        f"VA=0x{_REGION_BASE + 0x400:x} file_offset=(not captured) "
+        f"VA=0x{_REGION_BASE + 0x400:016x} file_offset=(not captured) "
         f"name='\\\\\\\\.\\\\pipe\\\\ordinary' region_type=MEM_PRIVATE")
     assert facts["pipe.corroboration"] == (
-        f"Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 pipe_va=0x{_PIPE_VA:x}"
-        f"  c2_va=0x{_PIPE_VA + 0x15:x} c2_match='http://' distance=0x15 same_page=True"
-        f"  live_rip=TID:0x999@RIP=0x{_PIPE_VA + 4:x} distance=0x4 same_page=True",)
+        f"Handle=0x88 ObjectName=\\Device\\NamedPipe\\msagent_1337 pipe_va=0x{_PIPE_VA:016x}"
+        f"  c2_va=0x{_PIPE_VA + 0x15:016x} c2_match='http://' distance=0x15 same_page=True"
+        f"  live_rip=TID:0x999@RIP=0x{_PIPE_VA + 4:016x} distance=0x4 same_page=True",)
     assert facts["pipe.start_address_proximity_lead"] == (
         f"Handle=0x90 ObjectName=\\Device\\NamedPipe\\ordinary "
-        f"pipe_va=0x{_REGION_BASE + 0x400:x} TID=0x999 StartAddr=0x{_REGION_BASE + 0x10:x} "
+        f"pipe_va=0x{_REGION_BASE + 0x400:016x} TID=0x999 StartAddr=0x{_REGION_BASE + 0x10:016x} "
         f"distance=0x3f0 same_page=True",)
 
 
@@ -766,7 +769,8 @@ def test_c2_context_still_reports_uncorrelated_when_no_handle_matches():
     lead = _string_lead(name="\\\\.\\pipe\\unrelated")
     evidence = PipeEvidence(string_leads=(lead,), c2_context=(_c2_context(string_hit=lead),))
     report = PipeReport(score=0, coverage=_coverage(), results=(), evidence=evidence)
-    verbose = strip_ansi("\n".join(render_console_lines(report, verbose=True)))
+    # Collapse word-wrap/indent so the note is matched by content, not layout.
+    verbose = " ".join(strip_ansi("\n".join(render_console_lines(report, verbose=True))).split())
     assert "no corresponding open handle for this exact name" in verbose
     assert "this name also has an open handle" not in verbose
 

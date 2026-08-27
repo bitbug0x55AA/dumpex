@@ -11,7 +11,7 @@
 
   KEY SIGNALS
 
-  Beacon config @ 0x50100  [MEDIUM]  DETECTION  (cs_beacon.structural_config)
+  Beacon config @ 0x0000000000050100  [MEDIUM]  DETECTION  (cs_beacon.structural_config)
     Inference   : Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed,
                   known BeaconType, ASN.1-shaped public key) found at this address.
     Confidence  : medium — The config's own structural validity — TLV wire format, known field
@@ -20,10 +20,10 @@
                   (executable private region, or a thread executing within the same allocation) was
                   found for this hit.
     Facts:
-      - VA=0x50100 file_offset=0x5100 xor_key=0x69 cs_version_estimated=3.x field_count=2
-      - region=0x50000 size=0x226 protect=PAGE_READWRITE
+      - VA=0x0000000000050100 file_offset=0x5100 xor_key=0x69 cs_version_estimated=3.x field_count=2
+      - region=0x0000000000050000 size=0x226 protect=PAGE_READWRITE
 
-  Beacon config @ 0x60100  [MEDIUM]  DETECTION  (cs_beacon.structural_config)
+  Beacon config @ 0x0000000000060100  [MEDIUM]  DETECTION  (cs_beacon.structural_config)
     Inference   : Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed,
                   known BeaconType, ASN.1-shaped public key) found at this address.
     Confidence  : medium — The config's own structural validity — TLV wire format, known field
@@ -32,8 +32,8 @@
                   (executable private region, or a thread executing within the same allocation) was
                   found for this hit.
     Facts:
-      - VA=0x60100 file_offset=0x6100 xor_key=0x2e cs_version_estimated=3.x field_count=2
-      - region=0x60000 size=0x226 protect=PAGE_READWRITE
+      - VA=0x0000000000060100 file_offset=0x6100 xor_key=0x2e cs_version_estimated=3.x field_count=2
+      - region=0x0000000000060000 size=0x226 protect=PAGE_READWRITE
 
   BEACON CONFIGS
 

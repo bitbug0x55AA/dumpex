@@ -142,9 +142,9 @@
       "confidence": "low",
       "evidence_refs": [],
       "facts": [
-        "VA=0x300000 decoded_type=pe decoded_size=1184"
+        "VA=0x0000000000300000 decoded_type=pe decoded_size=1184"
       ],
-      "id": "finding-a1e0447339e92f07fc1d489d23421e04",
+      "id": "finding-38fcc5f89164ce318a4d9327ebc96d0f",
       "inference": "1 region(s) contain data that decodes cleanly as Base64.",
       "iocs": [],
       "limitations": [
@@ -162,9 +162,9 @@
       "confidence": "high",
       "evidence_refs": [],
       "facts": [
-        "type=PE encoding=base64 container_VA=0x300000 module_status=UNREGISTERED decoded_size=1184"
+        "type=PE encoding=base64 container_VA=0x0000000000300000 module_status=UNREGISTERED decoded_size=1184"
       ],
-      "id": "finding-e17919d506ed29f5a840bb0df97ae357",
+      "id": "finding-63d11abdc8940f44fd46a3528f5cee3d",
       "inference": "Decoded/decompressed content from one or more obfuscation layers structurally validates as a PE image.",
       "iocs": [],
       "limitations": [

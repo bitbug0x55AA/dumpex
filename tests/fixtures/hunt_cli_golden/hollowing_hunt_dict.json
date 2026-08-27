@@ -42,9 +42,9 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "VA=0x140000000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
+        "VA=0x0000000140000000 type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE"
       ],
-      "id": "finding-4f8cd1dec0ec6e5581ec190490785356",
+      "id": "finding-8cbdca9368595f2522e11336b88607d9",
       "inference": "The main module's image base is backed by MEM_PRIVATE memory, not a file-mapped MEM_IMAGE region.",
       "iocs": [],
       "limitations": [
@@ -62,9 +62,9 @@
       "confidence": "low",
       "evidence_refs": [],
       "facts": [
-        "VA=0x140000000 protect=PAGE_EXECUTE_READWRITE"
+        "VA=0x0000000140000000 protect=PAGE_EXECUTE_READWRITE"
       ],
-      "id": "finding-0e3b733aa0ccb903a862bf9cb88756fb",
+      "id": "finding-c5f3820a4a07233f0f916c761b36c6e2",
       "inference": "The main module's image base carries RWX-family protection.",
       "iocs": [],
       "limitations": [
@@ -82,9 +82,9 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "VA=0x140000000 MEM_PRIVATE at image base + RWX protection"
+        "VA=0x0000000140000000 MEM_PRIVATE at image base + RWX protection"
       ],
-      "id": "finding-9ed89fafcc0ec45db4dcacb718819094",
+      "id": "finding-df931f040c717ed4fe145699f237da9c",
       "inference": "2 independent structural signal(s) correlate at the same image base: MEM_PRIVATE at image base, RWX protection.",
       "iocs": [],
       "limitations": [

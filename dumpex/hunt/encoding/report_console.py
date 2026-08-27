@@ -14,18 +14,25 @@ from dumpex.hunt._report_console import (
     render_why_this_verdict, render_coverage, with_verbose_facts,
 )
 from dumpex.hunt.encoding.domain import EncodingReport
-from dumpex.hunt.encoding.report_facts import finding_from_check_result, project_coverage_v1
+from dumpex.hunt.encoding.report_facts import (
+    _shellcode_item_fact, _structural_pe_item_fact, finding_from_check_result,
+    project_coverage_v1,
+)
+from dumpex.output.records import hex_address
 
 
 # ── Verbose-only evidence-item fact rendering (console policy only) ──────
 # Richer than report_facts.py's capped, wire-shaped facts: includes file
-# offset and a couple of fields --json never carried, byte-identical to
-# the pre-migration aggregate.py's own _*_verbose_fact() functions.
+# offset and a couple of fields --json never carried. Every address-typed
+# field (`VA`, `container_VA`) goes through the shared `hex_address()`
+# helper, so a verbose line renders an address in the same fixed-width,
+# zero-padded 16-hex-digit form as the wire fact, the structured record,
+# and `--json` `details`.
 
 def _sleep_mask_verbose_fact(h) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{h.location.va:016x} File_offset={fo_str} Region_size=0x{h.region.size:x} "
+    fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} Region_size=0x{h.region.size:x} "
             f"XOR_key={h.key.hex()} rotation_offset={h.key_offset} "
             f"Decoded_type={h.classification.kind.upper()}")
     if h.classification.ioc_strings:
@@ -37,14 +44,14 @@ def _entropy_verbose_fact(h) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
     rwx = " [RWX]" if h.region.is_rwx else ""
-    return (f"VA=0x{h.location.va:016x}{rwx} File_offset={fo_str} Size=0x{h.region.size:x} "
+    return (f"VA={hex_address(h.location.va)}{rwx} File_offset={fo_str} Size=0x{h.region.size:x} "
             f"Entropy={h.entropy:.3f}bits threshold={h.threshold} Protection={h.region.protect}")
 
 
 def _base64_verbose_fact(h) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{h.location.va:016x} File_offset={fo_str} "
+    fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} "
             f"Decoded_type={h.classification.kind.upper()} "
             f"Decoded_size={len(h.decoded)}bytes B64_length={len(h.raw)}chars")
     if h.classification.ioc_strings:
@@ -55,7 +62,7 @@ def _base64_verbose_fact(h) -> str:
 def _xor_verbose_fact(h) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{h.location.va:016x} File_offset={fo_str} XOR_key=0x{h.key:02x} "
+    fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} XOR_key=0x{h.key:02x} "
             f"Decoded_type={h.classification.kind.upper()}")
     if h.classification.ioc_strings:
         fact += f" IOC_strings={', '.join(h.classification.ioc_strings[:3])}"
@@ -65,25 +72,11 @@ def _xor_verbose_fact(h) -> str:
 def _compressed_verbose_fact(h) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
-    fact = (f"VA=0x{h.location.va:016x} File_offset={fo_str} Algorithm={h.layer.upper()} "
+    fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} Algorithm={h.layer.upper()} "
             f"Decoded_type={h.classification.kind.upper()} Decoded_size={len(h.decoded)}bytes")
     if h.classification.ioc_strings:
         fact += f" IOC_strings={', '.join(h.classification.ioc_strings[:3])}"
     return fact
-
-
-def _structural_pe_verbose_fact(h) -> str:
-    reg_str = "registered" if h.known_module else "UNREGISTERED"
-    return (f"type=PE encoding={h.layer} container_VA=0x{h.location.va:x} "
-            f"module_status={reg_str} decoded_size={len(h.decoded)}"
-            + ("" if h.complete else " decode=incomplete(output-cap)"))
-
-
-def _shellcode_verbose_fact(h, report: EncodingReport) -> str:
-    in_context = h in report.evidence.shellcode_context_hits
-    return (f"type=shellcode_bootstrap encoding={h.layer} container_VA=0x{h.location.va:x} "
-            f"decoded_size={len(h.decoded)} prefix={h.decoded[:6].hex()}"
-            + (f" container_protect={h.region.protect} (executable+private)" if in_context else ""))
 
 
 _VERBOSE_ITEM_RENDERERS = {
@@ -95,19 +88,18 @@ _VERBOSE_ITEM_RENDERERS = {
 }
 
 # structural_payload/shellcode_bootstrap_lead's verbose rendering is the
-# SAME text as their wire-shaped facts (report_facts.py's own
-# _structural_pe_item_fact/_shellcode_item_fact, duplicated here rather
-# than imported -- see this module's own docstring) -- only uncapped,
-# matching the pre-migration aggregate.py's own `verbose_facts=facts`
-# (the full, uncapped list; every field it carries per hit is already
-# complete, so the only delta verbose provides is completeness, not new
-# fields).
+# SAME text as their wire-shaped facts, only uncapped: the check already
+# carries every field it knows about its own evidence item, so the only
+# delta --verbose provides is completeness. The wire renderers in
+# report_facts.py are the single source for that text (and, through
+# `hex_address()`, for its address formatting) rather than a second copy
+# kept in step by hand.
 
 def _verbose_facts_for(result, report: EncodingReport) -> tuple:
     if result.check == "obfuscation.structural_payload":
-        return tuple(_structural_pe_verbose_fact(item) for item in result.evidence)
+        return tuple(_structural_pe_item_fact(item, report) for item in result.evidence)
     if result.check == "obfuscation.shellcode_bootstrap_lead":
-        return tuple(_shellcode_verbose_fact(item, report) for item in result.evidence)
+        return tuple(_shellcode_item_fact(item, report) for item in result.evidence)
     renderer = _VERBOSE_ITEM_RENDERERS.get(result.check)
     if renderer is None:
         return ()

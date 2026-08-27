@@ -784,17 +784,17 @@ def test_verbose_shows_per_token_va_encoding_and_weak_flag(capsys):
         stomping._hunt_stomping(MF(), verbose=False, ref_dir=d)
         normal_out = capsys.readouterr().out
         assert "weak/common API" not in normal_out
-        assert f"0x{module_base + section['vaddr'] + 0x40:x}" not in normal_out
+        assert f"0x{module_base + section['vaddr'] + 0x40:016x}" not in normal_out
 
         stomping._hunt_stomping(MF(), verbose=True, ref_dir=d)
-        verbose_out = capsys.readouterr().out
+        # Collapse the console's word-wrap/indent so content checks below do
+        # not depend on where a line happens to break.
+        verbose_out = " ".join(capsys.readouterr().out.split())
 
     mimikatz_va = module_base + section["vaddr"] + 0x40
     valloc_va = module_base + section["vaddr"] + 0x80
-    assert f"0x{mimikatz_va:x}" in verbose_out
-    assert "encoding=ASCII token=mimikatz" in verbose_out
-    assert f"0x{valloc_va:x}" in verbose_out
-    assert "weak/common API" in verbose_out
+    assert f"VA=0x{mimikatz_va:016x} encoding=ASCII token=mimikatz" in verbose_out
+    assert f"VA=0x{valloc_va:016x} encoding=ASCII token=VirtualAlloc (weak/common API)" in verbose_out
 
 
 # ── Bonus: genuine-detection paths must still work (no false negatives) ───

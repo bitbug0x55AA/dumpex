@@ -11,7 +11,7 @@
 
   KEY SIGNALS
 
-  [!] DETECTION  Beacon config @ 0x20100
+  [!] DETECTION  Beacon config @ 0x0000000000020100
       Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known
       BeaconType, ASN.1-shaped public key) found at this address.
 

@@ -94,10 +94,10 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "VA=0x50100 file_offset=0x5100 xor_key=0x69 cs_version_estimated=3.x field_count=2",
-        "region=0x50000 size=0x226 protect=PAGE_READWRITE"
+        "VA=0x0000000000050100 file_offset=0x5100 xor_key=0x69 cs_version_estimated=3.x field_count=2",
+        "region=0x0000000000050000 size=0x226 protect=PAGE_READWRITE"
       ],
-      "id": "finding-41c2fa76ceaf1bf15e36c61cc37c12ff",
+      "id": "finding-0b9bbb718cb61760c7568a4738fa626b",
       "inference": "Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.",
       "iocs": [],
       "limitations": [
@@ -115,10 +115,10 @@
       "confidence": "medium",
       "evidence_refs": [],
       "facts": [
-        "VA=0x60100 file_offset=0x6100 xor_key=0x2e cs_version_estimated=3.x field_count=2",
-        "region=0x60000 size=0x226 protect=PAGE_READWRITE"
+        "VA=0x0000000000060100 file_offset=0x6100 xor_key=0x2e cs_version_estimated=3.x field_count=2",
+        "region=0x0000000000060000 size=0x226 protect=PAGE_READWRITE"
       ],
-      "id": "finding-c7382a746d70ed8152d25eb89a98caf3",
+      "id": "finding-3e9fb803bf60bf6dab5c2129b92cfb8f",
       "inference": "Structurally-valid Cobalt Strike beacon configuration (TLV wire format parsed, known BeaconType, ASN.1-shaped public key) found at this address.",
       "iocs": [],
       "limitations": [

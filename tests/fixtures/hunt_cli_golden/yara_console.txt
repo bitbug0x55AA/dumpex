@@ -13,7 +13,7 @@
 
   [!] DETECTION  Rule: HitRule  (1 region(s), 1 string hit(s))
       hit.yar
-      regions: 0x50000
+      regions: 0x0000000000050000
 
   WHY THIS VERDICT
 

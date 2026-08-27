@@ -193,22 +193,25 @@ def test_console_lines_contain_expected_sections():
 # ── 2. Fact-text parity with the pre-migration aggregate.py ───────────────
 
 def test_fact_text_matches_the_pre_migration_wording():
-    """Literal transcriptions of what the pre-migration `aggregate.py`
-    produced for the same evidence -- the fact strings are embedded in BOTH
-    the v1.1 dict and the typed `HunterRecord`, so they may not drift."""
+    """The fact strings are embedded in BOTH the v1.1 dict and the typed
+    `HunterRecord`, and feed `Finding.id`, so they may not drift.
+    Address-typed fields (`VA`, `va_start`, `va_end`, the header-parse
+    `base`, and a thread's live `RIP`/`EIP`) render in the shared
+    `hex_address()` fixed-width, zero-padded 16-hex-digit form; `TID`,
+    `compared` length, and the `+0x..` changed-range offsets stay compact."""
     report = _all_checks_report()
     facts = {r.check: finding_from_check_result(r, report).facts for r in report.results}
 
     assert facts["stomping.protection_deviation_lead"] == (
-        f"module=legit.dll section='.text' VA=0x{_SECTION_VA:x} "
+        f"module=legit.dll section='.text' VA=0x{_SECTION_VA:016x} "
         f"declared=PAGE_EXECUTE_READ actual=PAGE_EXECUTE_READWRITE page_type=MEM_IMAGE",)
     assert facts["stomping.rip_in_anomalous_section_lead"] == (
         f"module=legit.dll section='.text' "
-        f"VA=0x{_SECTION_VA:x}-0x{_SECTION_VA + 0x2000:x} "
+        f"VA=0x{_SECTION_VA:016x}-0x{_SECTION_VA + 0x2000:016x} "
         f"declared=PAGE_EXECUTE_READ actual=PAGE_EXECUTE_READWRITE "
-        f"TID=0x42 RIP=0x{_SECTION_VA + 0x10:x}",)
+        f"TID=0x42 RIP=0x{_SECTION_VA + 0x10:016x}",)
     assert facts["stomping.verified_content_change"] == (
-        f"module=legit.dll section='.text' VA=0x{_SECTION_VA:x} compared=8192 bytes "
+        f"module=legit.dll section='.text' VA=0x{_SECTION_VA:016x} compared=8192 bytes "
         f"changed_ranges=[+0x0(len 0x4), +0x40(len 0x4), +0x80(len 0x4), +0xc0(len 0x4), "
         f"+0x100(len 0x4), ... +2 more shown (25 total differing range(s), truncated for "
         f"display)] disk_sha256_prefix={'a' * 16}… mem_sha256_prefix={'b' * 16}…  "
@@ -216,9 +219,9 @@ def test_fact_text_matches_the_pre_migration_wording():
     assert facts["stomping.reference_identity_mismatch"] == (
         "module=legit.dll section='.text' reason=TimeDateStamp mismatch",)
     assert facts["stomping.module_header_invalid"] == (
-        f"module=legit.dll base=0x{_MODULE_BASE:x} reason=no MZ signature",)
+        f"module=legit.dll base=0x{_MODULE_BASE:016x} reason=no MZ signature",)
     assert facts["stomping.ioc_string_lead"] == (
-        f"module=legit.dll VA=0x{_SECTION_VA:x} terms=VirtualAlloc, mimikatz",)
+        f"module=legit.dll VA=0x{_SECTION_VA:016x} terms=VirtualAlloc, mimikatz",)
 
 
 def test_protection_deviation_no_anomaly_fact_comes_from_coverage_not_evidence():
@@ -324,8 +327,8 @@ def test_ioc_verbose_facts_expand_per_token_not_per_region():
     result = next(r for r in report.results if r.check == "stomping.ioc_string_lead")
     verbose = _console_finding(result, report).verbose_facts
     assert len(verbose) == 2   # one region, two tokens
-    assert verbose[0] == (f"module=legit.dll region=0x{_SECTION_VA:x} "
-                          f"VA=0x{_SECTION_VA + 0x40:x} encoding=ASCII token=mimikatz")
+    assert verbose[0] == (f"module=legit.dll region=0x{_SECTION_VA:016x} "
+                          f"VA=0x{_SECTION_VA + 0x40:016x} encoding=ASCII token=mimikatz")
     assert verbose[1].endswith("token=VirtualAlloc (weak/common API)")
 
 

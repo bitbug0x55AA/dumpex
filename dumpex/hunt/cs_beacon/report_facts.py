@@ -13,6 +13,7 @@ from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, EvaluationRequirement, LimitationCode,
     SourceRequirement, build_coverage_report, format_scan_target_preview, observe_source,
 )
+from dumpex.output.records import hex_address
 
 # This hunter's public coverage-source vocabulary once a scan has actually
 # run (the `not coverage.evaluated` branch below uses its own single
@@ -25,7 +26,12 @@ from dumpex.output.coverage import (
 COVERAGE_SOURCE_NAMES = frozenset({"memory_info", "segment_scan", "thread_context"})
 
 
-# ── Fact-string builders -- byte-identical to the pre-migration builder ───
+# ── Fact-string builders ─────────────────────────────────────────────────
+# Address-typed fields (the config hit VA, the enclosing region base) go
+# through the shared `hex_address()` helper, so a fact renders an address
+# in the same fixed-width, zero-padded 16-hex-digit form as this hunter's
+# `report_record.py` and `--json` `details`. `file_offset` (a dump offset,
+# not a process address), `xor_key`, and `size` keep their compact `:x`.
 
 def _hit_of(result) -> ConfigEvidence:
     return next(item for item in result.evidence if isinstance(item, ConfigEvidence))
@@ -39,9 +45,9 @@ def _corroboration_of(result) -> "CorroborationEvidence | None":
 def _structural_config_facts(result, report: CSBeaconReport) -> tuple:
     hit = _hit_of(result)
     region = hit.region
-    facts = [f"VA=0x{hit.hit_va:x} file_offset=0x{hit.hit_fo:x} xor_key=0x{hit.xor_key:02x} "
+    facts = [f"VA={hex_address(hit.hit_va)} file_offset=0x{hit.hit_fo:x} xor_key=0x{hit.xor_key:02x} "
              f"cs_version_estimated={hit.cs_version} field_count={len(hit.fields)}"]
-    facts.append(f"region=0x{region.base_address:x} size=0x{region.size:x} "
+    facts.append(f"region={hex_address(region.base_address)} size=0x{region.size:x} "
                   f"protect={region.protect}"
                  if region is not None else
                  "enclosing region not covered by MemoryInfoListStream")

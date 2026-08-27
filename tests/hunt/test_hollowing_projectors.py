@@ -201,23 +201,23 @@ def test_console_lines_contain_expected_sections():
 # ── 2. Fact-text parity with the pre-migration builder ────────────────────
 
 def test_fact_text_matches_the_pre_migration_wording():
-    """Literal transcriptions of what the pre-migration
-    `_build_hollowing_report()` produced for the same evidence -- the fact
-    strings are embedded in BOTH the v1.1 dict and the typed
-    `HunterRecord`, and feed `Finding.id`, so they may not drift."""
+    """The fact strings are embedded in BOTH the v1.1 dict and the typed
+    `HunterRecord`, and feed `Finding.id`, so they may not drift. Every
+    address-typed field (`VA` -- region base or PEB image base) renders in
+    the shared `hex_address()` fixed-width, zero-padded 16-hex-digit form."""
     report = _all_checks_report()
     facts = {r.check: finding_from_check_result(r, report).facts for r in report.results}
 
     assert facts["hollowing.mem_private_at_image_base"] == (
-        f"VA=0x{_IMAGE_BASE:x} type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE",)
+        f"VA=0x{_IMAGE_BASE:016x} type=MEM_PRIVATE protect=PAGE_EXECUTE_READWRITE",)
     assert facts["hollowing.mz_header_missing"] == (
-        f"VA=0x{_IMAGE_BASE:x} header_bytes={_ZERO_BYTES[:8].hex()}",)
+        f"VA=0x{_IMAGE_BASE:016x} header_bytes={_ZERO_BYTES[:8].hex()}",)
     assert facts["hollowing.rwx_at_image_base"] == (
-        f"VA=0x{_IMAGE_BASE:x} protect=PAGE_EXECUTE_READWRITE",)
+        f"VA=0x{_IMAGE_BASE:016x} protect=PAGE_EXECUTE_READWRITE",)
     assert facts["hollowing.peb_module_name_mismatch"] == (
         f"PEB_image_path={_IMAGE_PATH!r} module_list_match=True",)
     assert facts["hollowing.structural_correlation"] == (
-        f"VA=0x{_IMAGE_BASE:x} MEM_PRIVATE at image base + MZ header missing/wiped "
+        f"VA=0x{_IMAGE_BASE:016x} MEM_PRIVATE at image base + MZ header missing/wiped "
         f"+ RWX protection",)
 
 

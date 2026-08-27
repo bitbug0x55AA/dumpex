@@ -13,6 +13,7 @@ from dumpex.output.coverage import (
     CoverageReport, EvaluationRequirement, LimitationCode, SourceObservation,
     SourceRequirement, SourceState, build_coverage_report, observe_source,
 )
+from dumpex.output.records import hex_address
 
 
 def header_preview(header_bytes: bytes) -> str:
@@ -31,19 +32,25 @@ def file_offset_text(file_offset) -> str:
     return f"0x{file_offset:x}" if file_offset is not None else "(not captured)"
 
 
-# ── Fact-string builders -- byte-identical to the pre-migration builder ───
+# ── Fact-string builders ─────────────────────────────────────────────────
+# The address-typed fields (`VA` -- either the enclosing region base or
+# the PEB-declared image base) go through the shared `hex_address()`
+# helper, so a fact renders an address in the same fixed-width,
+# zero-padded 16-hex-digit form as this hunter's `report_record.py` and
+# `--json` `details`. The file offset in `file_offset_text` is a dump
+# offset, not a process address, and keeps its compact form.
 
 def _mem_private_fact(ev, report: HollowingReport) -> str:
-    return (f"VA=0x{ev.region.base_address:x} type={ev.region.type} "
+    return (f"VA={hex_address(ev.region.base_address)} type={ev.region.type} "
             f"protect={ev.region.protect}")
 
 
 def _wiped_header_fact(ev, report: HollowingReport) -> str:
-    return f"VA=0x{ev.image_base:x} header_bytes={header_preview(ev.header_bytes)}"
+    return f"VA={hex_address(ev.image_base)} header_bytes={header_preview(ev.header_bytes)}"
 
 
 def _rwx_fact(ev, report: HollowingReport) -> str:
-    return f"VA=0x{ev.region.base_address:x} protect={ev.region.protect}"
+    return f"VA={hex_address(ev.region.base_address)} protect={ev.region.protect}"
 
 
 def _name_mismatch_fact(ev, report: HollowingReport) -> str:
@@ -55,7 +62,7 @@ def _name_mismatch_fact(ev, report: HollowingReport) -> str:
 
 
 def _correlation_fact(ev, report: HollowingReport) -> str:
-    return f"VA=0x{ev.image_base:x} " + " + ".join(ev.corroborators)
+    return f"VA={hex_address(ev.image_base)} " + " + ".join(ev.corroborators)
 
 
 _FACT_ITEM_RENDERERS = {

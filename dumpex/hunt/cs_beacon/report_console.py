@@ -20,6 +20,7 @@ from dumpex.hunt.cs_beacon.parser import _cs_decode_instructions, _cs_decode_typ
 from dumpex.hunt.cs_beacon.report_facts import (
     finding_from_check_result, project_coverage_v1,
 )
+from dumpex.output.records import hex_address
 from dumpex.hunt.cs_beacon.schema import (
     CS_BEACON_TYPES, CS_FIELD_TYPE_NAMES, CS_INJECT_PERMS, CS_PROXY_TYPES,
 )
@@ -129,7 +130,7 @@ def _value_lines(f, prefix: str, w: int) -> list:
 def _key_signal_title(result, hit: "ConfigEvidence | None") -> str:
     if hit is None:
         return "No structurally-valid config found"
-    return f"Beacon config @ 0x{hit.hit_va:x}"
+    return f"Beacon config @ {hex_address(hit.hit_va)}"
 
 
 def _render_key_signal_compact(finding, hit, width: int) -> list:
@@ -164,10 +165,10 @@ def _ordered_for_display(report: CSBeaconReport, findings: list) -> list:
 def _location_lines(hit: ConfigEvidence, w: int) -> list:
     region = hit.region
     lines = wrap_block(
-        f"VA 0x{hit.hit_va:016x}  File offset {_file_offset_text(hit.hit_fo)}", w, 6)
+        f"VA {hex_address(hit.hit_va)}  File offset {_file_offset_text(hit.hit_fo)}", w, 6)
     if region is not None:
         lines.extend(wrap_block(
-            f"Region 0x{region.base_address:016x}  size 0x{region.size:x}  "
+            f"Region {hex_address(region.base_address)}  size 0x{region.size:x}  "
             f"protect {region.protect}", w, 6))
     else:
         lines.extend(wrap_block(
