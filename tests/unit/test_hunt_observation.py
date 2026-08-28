@@ -487,6 +487,31 @@ def test_a_producer_exception_whose_str_raises_still_tombstones():
     assert "could not be formatted" in caught.value.failure_message
 
 
+def test_a_producer_exception_whose_str_raises_baseexception_still_tombstones():
+    # The fallback tombstone and FAILED event are written before any of the
+    # exception's own formatting runs, so even a __str__ that raises a
+    # BaseException (a real interrupt) cannot make the producer run twice --
+    # and the interrupt is not swallowed.
+    class Interrupting(RuntimeError):
+        def __str__(self):
+            raise KeyboardInterrupt
+
+    registry = ObservationRegistry()
+    runs = []
+
+    def producer():
+        runs.append(1)
+        raise Interrupting()
+
+    with pytest.raises(KeyboardInterrupt):
+        registry.get_or_compute(_key(), producer)
+    assert registry.abandoned == 1
+    assert registry.counts()[ObservationOutcome.FAILED] == 1
+    with pytest.raises(ObservationProducerFailed):
+        registry.get_or_compute(_key(), producer)
+    assert runs == [1]
+
+
 def test_repeated_failed_requests_do_not_grow_a_cached_traceback():
     import traceback as _tb
     registry = ObservationRegistry()
