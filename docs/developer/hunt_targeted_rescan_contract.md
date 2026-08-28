@@ -1,8 +1,21 @@
 # Hunt targeted-rescan contract
 
-Status: **planned and not implemented**. `--hunt-addr` is not present in the
-released CLI. This is the live final design for the outstanding targeted-rescan
-work; it does not authorize behavior changes to current full-scope `--hunt`.
+Status: **partially implemented**. `--hunt-addr` is not present in the released
+CLI and no targeted scan runs yet. The internal request/context/observation
+boundary exists (`dumpex.hunt._request.HuntRequest`,
+`dumpex.hunt._execution.HuntExecutionContext`,
+`dumpex.hunt._observation`). The capability matrix below is registered as
+`AnalyzerSpec.targeted_capability` -- grants plus a `request_ceiling` -- and
+`HuntRequest` resolves it through `AnalyzerRegistry.select_targeted_scopes()`
+and enforces the ceiling. An obfuscation targeted request carries all three
+layers as one `targeted_scopes` set (one request = one invocation = one
+capture), and the observation layer splits execution identity
+(`ObservationKey`) from per-`(source, scope)` closures (`ObservationClosure`),
+so one expensive run projects `pipe_name` and `c2_context` closures (or the
+three obfuscation layers) independently without duplicate scanning. The
+concrete per-analyzer targeted executors, the CLI flag, and the structured
+output remain outstanding. This is the live final design; it does not
+authorize behavior changes to current full-scope `--hunt`.
 
 ## Scope and vocabulary
 

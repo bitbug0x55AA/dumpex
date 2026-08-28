@@ -49,31 +49,20 @@ from dumpex.output.records import HUNTERS
 # hard-coded `if _wanted(hunter):`/`if run_<hunter>:` branches, which are
 # removed below.
 from dumpex.hunt import _registry
+from dumpex.hunt._request import HuntOptions, HuntRequest
+from dumpex.hunt._execution import build_execution_context
 
 
 def _option_view(ref_dir: "str | None", yara_dir: "str | None") -> dict:
-    """The ONE, real mapping from `_execute_full_scope()`'s own public
-    keyword parameters to the internal option names `AnalyzerSpec.
-    option_names` values are drawn from -- `_execute_full_scope()` below
-    and the import-time drift guard immediately below THIS function both
-    call this same function, rather than each maintaining its own
-    hand-written `{"ref_dir": ..., "rules_dir": ...}` literal.
-
-    Finding, #73: an earlier version of this guard compared TWO
-    independently hand-maintained frozensets (a local `_OPTION_NAMES`
-    constant here against `_registry.KNOWN_OPTION_NAMES`) -- neither one
-    was actually derived from the real dict `_execute_full_scope()`
-    builds, so a future edit could keep both constants in lockstep and
-    still leave THIS dict's own keys out of sync with them, reopening the
-    exact bare-`KeyError`-after-six-real-builders regression this whole
-    guard exists to close (reproduced directly: `KNOWN_OPTION_NAMES` and
-    the old `_OPTION_NAMES` both updated to add a name, `_execute_full_
-    scope()`'s own dict literal left untouched -- the import-time guard
-    passed, and `collect_hunt("all")` still crashed with a bare
-    `KeyError` after every other selected builder had already run).
-    Making this function the one place either an import-time OR a
-    per-call check reads means there is no second literal left to drift."""
-    return {"ref_dir": ref_dir, "rules_dir": yara_dir}
+    """The ONE mapping from `_execute_full_scope()`'s public keyword
+    parameters to the internal option names `AnalyzerSpec.option_names`
+    values are drawn from. Built from `HuntOptions` so its key set is the
+    same one `_execute_full_scope()` reads off `request.options` at
+    execution time -- there is no second literal to drift from
+    `_registry.KNOWN_OPTION_NAMES`. Called by the import-time drift guard
+    immediately below; the executor reads `request.options.as_option_view()`
+    directly."""
+    return HuntOptions(ref_dir=ref_dir, rules_dir=yara_dir).as_option_view()
 
 
 def _check_option_names_in_sync(local_names: frozenset, registry_names: frozenset) -> None:
@@ -186,6 +175,12 @@ class _FullScopeExecution:
     records: list
     results: dict = field(default_factory=dict)
     provenance: dict = field(default_factory=dict)
+    # The one `HuntExecutionContext` this invocation built. Carried out so a
+    # caller can read `context.observations.counts()` / `.event_overflow` --
+    # the fact that an expensive observation was produced, reused,
+    # unavailable, failed, or budget-exhausted is reachable, not dropped with
+    # the context.
+    context: object = None
 
 
 def _execute_full_scope(mf: MinidumpFile, selected: str, *, ref_dir: str = None,
@@ -198,9 +193,16 @@ def _execute_full_scope(mf: MinidumpFile, selected: str, *, ref_dir: str = None,
     renderer, and optional provenance hook. Collection mode never invokes console
     rendering. Callers validate the selected identity before this boundary so
     their public error contracts remain unchanged.
+
+    One `HuntRequest` and one `HuntExecutionContext` are built per invocation --
+    the request/observation/budget boundary every analyzer shares. The
+    full-scope builders still read the dump handle directly; a builder opting
+    into `context.observations` / `context.budgets` is a separate migration.
     """
-    options = _option_view(ref_dir, yara_dir)
-    specs = _registry.REGISTRY.select(selected)
+    request = HuntRequest.full(selected, ref_dir=ref_dir, rules_dir=yara_dir)
+    context = build_execution_context(mf, request)
+    options = request.options.as_option_view()
+    specs = _registry.REGISTRY.select(request.selected)
 
     # `options`' own keys are checked against `_registry.KNOWN_OPTION_
     # NAMES` once already, at IMPORT time (this module's own top-level
@@ -225,7 +227,7 @@ def _execute_full_scope(mf: MinidumpFile, selected: str, *, ref_dir: str = None,
             raise _registry.InvalidAnalyzerSpec(
                 f"{spec.identity}: option_names "
                 f"{sorted(spec.option_names - known)} are not in this call's own "
-                f"options view {sorted(known)} -- _option_view() and "
+                f"options view {sorted(known)} -- HuntOptions and "
                 f"_registry.KNOWN_OPTION_NAMES have drifted apart")
 
     records = []
@@ -233,13 +235,15 @@ def _execute_full_scope(mf: MinidumpFile, selected: str, *, ref_dir: str = None,
     provenance = {}
     for spec in specs:
         kwargs = {name: options[name] for name in spec.option_names}
-        report = spec.builder(mf, **kwargs)
+        builder_input = context if spec.builder_arg == "context" else context.mf
+        report = spec.builder(builder_input, **kwargs)
         records.append(spec.record_projector(report))
         if render:
             results[spec.identity] = spec.renderer(report, verbose)
         if spec.provenance_hook is not None:
             provenance[spec.identity] = spec.provenance_hook(report)
-    return _FullScopeExecution(records=records, results=results, provenance=provenance)
+    return _FullScopeExecution(records=records, results=results, provenance=provenance,
+                               context=context)
 
 
 def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,

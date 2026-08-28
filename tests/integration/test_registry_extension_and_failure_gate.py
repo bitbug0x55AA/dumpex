@@ -100,11 +100,16 @@ def test_full_scope_extension_joins_the_registry_when_roster_entries_are_complet
     assert spec in registry.select("all")
 
 
+_FUTURE_CEILING = 256 * (1 << 20)
+
+
 def _patch_targeted_mappings_for_future_identity(monkeypatch):
     monkeypatch.setattr(registry_mod, "_EXPECTED_TARGETED_SCAN_UNITS", {
         **registry_mod._EXPECTED_TARGETED_SCAN_UNITS, _FUTURE_IDENTITY: TargetedScanUnit.REGION})
     monkeypatch.setattr(registry_mod, "_COVERAGE_SOURCE_NAMES_BY_IDENTITY", {
         **registry_mod._COVERAGE_SOURCE_NAMES_BY_IDENTITY, _FUTURE_IDENTITY: frozenset({"future_scan"})})
+    monkeypatch.setattr(registry_mod, "_EXPECTED_TARGETED_REQUEST_CEILINGS", {
+        **registry_mod._EXPECTED_TARGETED_REQUEST_CEILINGS, _FUTURE_IDENTITY: _FUTURE_CEILING})
     monkeypatch.setattr(registry_mod, "_APPROVED_TARGETED_IDENTITIES",
                          registry_mod._APPROVED_TARGETED_IDENTITIES | {_FUTURE_IDENTITY})
 
