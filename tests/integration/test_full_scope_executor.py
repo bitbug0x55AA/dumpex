@@ -339,3 +339,82 @@ def test_all_selection_routes_through_registry_select_in_hunters_order(monkeypat
 
     assert calls == ["all"]
     assert tuple(r.hunter for r in execution.records) == HUNTERS
+
+
+def test_one_execution_context_is_built_per_invocation(monkeypatch):
+    from dumpex.hunt._execution import HuntExecutionContext
+    from dumpex.hunt._request import HuntScopeKind
+
+    built = []
+    real = hunt_pkg.build_execution_context
+
+    def spy(mf, request, **kwargs):
+        context = real(mf, request, **kwargs)
+        built.append(context)
+        return context
+    monkeypatch.setattr(hunt_pkg, "build_execution_context", spy)
+
+    hunt_pkg.cmd_hunt(_empty_mf(), "all", verbose=False)
+
+    assert len(built) == 1
+    context = built[0]
+    assert isinstance(context, HuntExecutionContext)
+    assert context.request.scope is HuntScopeKind.FULL
+    assert context.request.selected == "all"
+    assert context.observations.retained == 0
+    assert context.budgets.names() == ()
+
+
+def test_execution_carries_the_context_out_so_observation_facts_are_reachable():
+    execution = hunt_pkg._execute_full_scope(_empty_mf(), "all")
+    assert execution.context is not None
+    # the observation instrumentation is reachable, not dropped with the context
+    counts = execution.context.observations.counts()
+    assert set(counts.values()) == {0}
+    assert execution.context.observations.event_overflow == 0
+
+
+def test_the_builder_receives_the_contexts_own_dump_handle(monkeypatch):
+    seen = []
+    real = hunt_pkg._build_pipe_report
+
+    def wrapper(mf, **kwargs):
+        seen.append(mf)
+        return real(mf, **kwargs)
+    monkeypatch.setattr(hunt_pkg, "_build_pipe_report", wrapper)
+
+    mf = _empty_mf()
+    hunt_pkg._execute_full_scope(mf, "pipe")
+
+    assert seen == [mf]
+
+
+def test_a_context_arg_builder_receives_the_execution_context(monkeypatch):
+    """The optional `builder_arg="context"` seam: a builder declaring
+    `context` as its first parameter is handed the whole
+    HuntExecutionContext, not the bare dump handle."""
+    from dumpex.hunt import _registry as registry_module
+    from dumpex.hunt._registry import AnalyzerRegistry, AnalyzerSpec
+    from dumpex.hunt._execution import HuntExecutionContext
+
+    captured = {}
+
+    def ctx_builder(context):
+        captured["context"] = context
+        return object()
+
+    spec = AnalyzerSpec(
+        identity="pipe", package="dumpex.hunt.pipe", report_type=object,
+        builder=ctx_builder, renderer=lambda report, verbose: {},
+        record_projector=lambda report: object(), option_names=frozenset(),
+        provenance_hook=None, full_scope_capable=True, targeted_capability=None,
+        builder_arg="context")
+    monkeypatch.setattr(
+        registry_module, "REGISTRY", AnalyzerRegistry._construct_unvalidated((spec,)))
+
+    mf = _empty_mf()
+    hunt_pkg._execute_full_scope(mf, "pipe")
+
+    assert isinstance(captured["context"], HuntExecutionContext)
+    assert captured["context"].mf is mf
+    assert captured["context"].request.selected == "pipe"

@@ -19,6 +19,7 @@ from dumpex.hunt._registry import (
     UnpopulatedTargetedGrant,
     UnsupportedFullScopeRequest,
     UnsupportedTargetedCapability,
+    UnsupportedTargetedExecution,
     UnsupportedTargetedScope,
     UnsupportedTargetedSource,
 )
@@ -50,14 +51,159 @@ def test_select_single_identity_returns_a_one_tuple(identity):
     assert tuple(spec.identity for spec in REGISTRY.select(identity)) == (identity,)
 
 
-def test_zero_grants_populated_this_release():
-    # Pinned explicitly (contract §12) so the day #61 writes the first
-    # real grant, this assertion starts failing loudly rather than
-    # silently continuing to pass.
-    assert sum(
-        1 for spec in REGISTRY._all_specs()
-        if spec.targeted_capability is not None and spec.targeted_capability.grants
-    ) == 0
+# The targeted-rescan capability matrix, as the shipped registry carries
+# it: one granted source per targeted-capable identity, and obfuscation's
+# three layer scopes on its one source.
+_CAPABILITY_MATRIX = {
+    "pipe": ("pipe_name_scan", frozenset()),
+    "stomping": ("ioc_string_scan", frozenset()),
+    "cs-beacon": ("segment_scan", frozenset()),
+    "yara": ("segment_scan", frozenset()),
+    "obfuscation": ("encoding_scan", frozenset({"sleep_mask", "entropy", "decode"})),
+}
+
+
+def test_grants_populated_from_the_capability_matrix():
+    for identity, (source, scopes) in _CAPABILITY_MATRIX.items():
+        capability = REGISTRY.get(identity).targeted_capability
+        assert {(g.source, g.scopes) for g in capability.grants} == {(source, scopes)}
+
+
+_MIB = 1 << 20
+
+
+def test_request_ceiling_is_carried_on_the_capability_from_the_matrix():
+    for identity in _CAPABILITY_MATRIX:
+        expected = 32 * _MIB if identity == "obfuscation" else 256 * _MIB
+        assert REGISTRY.get(identity).targeted_capability.request_ceiling == expected
+
+
+def test_registry_rejects_a_spec_whose_request_ceiling_is_wrong():
+    real = REGISTRY.get("pipe")
+    bad = AnalyzerSpec(
+        identity="pipe", package=real.package, report_type=real.report_type,
+        builder=real.builder, renderer=real.renderer, record_projector=real.record_projector,
+        option_names=real.option_names, provenance_hook=real.provenance_hook,
+        full_scope_capable=True,
+        targeted_capability=TargetedCapability(
+            TargetedScanUnit.REGION,
+            frozenset({TargetedGrant("pipe_name_scan", frozenset())}),
+            1 << 40))
+    specs = tuple(bad if s.identity == "pipe" else s for s in REGISTRY._all_specs())
+    with pytest.raises(InvalidAnalyzerSpec, match="request_ceiling"):
+        AnalyzerRegistry(specs)
+
+
+def test_select_targeted_scopes_unscoped_source_needs_an_empty_set():
+    assert REGISTRY.select_targeted_scopes("pipe", "pipe_name_scan", frozenset()) is REGISTRY.get("pipe")
+    with pytest.raises(UnsupportedTargetedScope):
+        REGISTRY.select_targeted_scopes("pipe", "pipe_name_scan", frozenset({"x"}))
+
+
+def test_select_targeted_scopes_obfuscation_needs_the_full_layer_set():
+    layers = frozenset({"sleep_mask", "entropy", "decode"})
+    assert REGISTRY.select_targeted_scopes(
+        "obfuscation", "encoding_scan", layers) is REGISTRY.get("obfuscation")
+    with pytest.raises(UnsupportedTargetedScope):
+        REGISTRY.select_targeted_scopes("obfuscation", "encoding_scan", frozenset({"entropy"}))
+    with pytest.raises(UnsupportedTargetedScope):
+        REGISTRY.select_targeted_scopes("obfuscation", "encoding_scan", frozenset())
+
+
+def test_select_targeted_scopes_checks_identity_before_the_scopes_type():
+    # An unknown identity is UnknownAnalyzerIdentity regardless of what the
+    # scopes argument is -- identity/capability/grant/source are checked
+    # before the scope set, matching select_targeted's ordering.
+    with pytest.raises(UnknownAnalyzerIdentity):
+        REGISTRY.select_targeted_scopes("not-a-hunter", "x", "not-a-frozenset")
+    with pytest.raises(UnknownAnalyzerIdentity):
+        REGISTRY.select_targeted_scopes("not-a-hunter", "x", frozenset())
+
+
+def test_select_targeted_scopes_rejects_a_non_frozenset_with_a_type_error():
+    with pytest.raises(TypeError):
+        REGISTRY.select_targeted_scopes("pipe", "pipe_name_scan", {"x"})
+
+
+def test_granted_scopes_resolves_the_full_set_or_empty():
+    assert REGISTRY.granted_scopes("obfuscation", "encoding_scan") == frozenset(
+        {"sleep_mask", "entropy", "decode"})
+    assert REGISTRY.granted_scopes("pipe", "pipe_name_scan") == frozenset()
+    assert REGISTRY.granted_scopes("not-a-hunter", "x") == frozenset()
+    assert REGISTRY.granted_scopes("injection", "x") == frozenset()
+
+
+def test_targeted_adapter_is_none_for_every_identity():
+    # Every capability declaration authorizes routing only -- no execution
+    # adapter is registered yet, so targeted execution fails closed.
+    for spec in REGISTRY._all_specs():
+        assert spec.targeted_adapter is None
+
+
+def test_builder_arg_is_mf_for_every_identity():
+    for spec in REGISTRY._all_specs():
+        assert spec.builder_arg == "mf"
+
+
+def test_analyzer_spec_rejects_an_unknown_builder_arg():
+    with pytest.raises(InvalidAnalyzerSpec):
+        AnalyzerSpec(**_valid_kwargs(builder_arg="dump"))
+
+
+def test_analyzer_spec_rejects_builder_arg_disagreeing_with_the_builder_signature():
+    with pytest.raises(InvalidAnalyzerSpec):
+        AnalyzerSpec(**_valid_kwargs(builder=lambda mf: None, builder_arg="context"))
+    with pytest.raises(InvalidAnalyzerSpec):
+        AnalyzerSpec(**_valid_kwargs(builder=lambda context: None, builder_arg="mf"))
+
+
+def test_analyzer_spec_accepts_builder_arg_matching_the_builder_signature():
+    spec = AnalyzerSpec(**_valid_kwargs(builder=lambda context: None, builder_arg="context"))
+    assert spec.builder_arg == "context"
+
+
+def _kwonly_builder(*, context):
+    return None
+
+
+def _varargs_builder(*args, **kwargs):
+    return None
+
+
+@pytest.mark.parametrize("builder", [
+    _kwonly_builder,                       # first parameter is keyword-only
+    _varargs_builder,                      # *args/**kwargs catch-all, not a real wrapper
+    len,                                   # uninspectable C builtin
+])
+def test_analyzer_spec_rejects_a_direct_builder_that_cannot_take_a_positional_first_arg(builder):
+    with pytest.raises(InvalidAnalyzerSpec):
+        AnalyzerSpec(**_valid_kwargs(builder=builder, builder_arg="context"))
+
+
+def test_only_the_late_bound_wrapper_is_trusted_without_inspection():
+    # The real registered builder is a marked pass-through wrapper.
+    assert getattr(REGISTRY.get("pipe").builder, "_dumpex_late_bound", False) is True
+
+
+def test_resolve_and_validate_builder_accepts_a_context_first_parameter(monkeypatch):
+    from dumpex.hunt._registry import _resolve_and_validate_builder
+
+    def ctx_builder(context):
+        return None
+
+    monkeypatch.setattr(hunt_pkg, "_fake_builder", ctx_builder, raising=False)
+    assert callable(_resolve_and_validate_builder("_fake_builder", {}, "context"))
+
+
+def test_resolve_and_validate_builder_rejects_mf_when_context_is_declared(monkeypatch):
+    from dumpex.hunt._registry import _resolve_and_validate_builder
+
+    def mf_builder(mf):
+        return None
+
+    monkeypatch.setattr(hunt_pkg, "_fake_builder", mf_builder, raising=False)
+    with pytest.raises(InvalidAnalyzerSpec):
+        _resolve_and_validate_builder("_fake_builder", {}, "context")
 
 
 def test_approved_targeted_identities_exactly_five():
@@ -377,14 +523,39 @@ _TARGETED_CASES = (
     ("obfuscation", "encoding_scan", "sleep_mask"),
 )
 
+# (identity, source, full granted scope set) -- the shape a HuntRequest /
+# an executor carries.
+_TARGETED_SCOPE_SET_CASES = (
+    ("pipe", "pipe_name_scan", frozenset()),
+    ("stomping", "ioc_string_scan", frozenset()),
+    ("yara", "segment_scan", frozenset()),
+    ("cs-beacon", "segment_scan", frozenset()),
+    ("obfuscation", "encoding_scan", frozenset({"sleep_mask", "entropy", "decode"})),
+)
+
 
 @pytest.mark.parametrize("identity,source,scope", _TARGETED_CASES)
-def test_select_targeted_unpopulated_grant_this_release(identity, source, scope):
-    # This release's real, shipped registry has zero populated grants for
-    # every targeted-capable identity -- this is the actual shipped state,
-    # not a hypothetical.
-    with pytest.raises(UnpopulatedTargetedGrant):
-        REGISTRY.select_targeted(identity, source, scope)
+def test_select_targeted_resolves_a_granted_source_and_scope(identity, source, scope):
+    # The shipped registry carries the capability matrix's grants, so a
+    # granted (source, scope) resolves to that identity's real spec.
+    spec = REGISTRY.select_targeted(identity, source, scope)
+    assert spec is REGISTRY.get(identity)
+
+
+@pytest.mark.parametrize("identity,source,scopes", _TARGETED_SCOPE_SET_CASES)
+def test_resolve_targeted_adapter_fails_closed_without_an_adapter(identity, source, scopes):
+    # Routing is authorized; execution is not, because no targeted_adapter
+    # is registered. resolve_targeted_adapter takes the SAME scope-set shape
+    # HuntRequest does, so the two boundaries agree.
+    with pytest.raises(UnsupportedTargetedExecution):
+        REGISTRY.resolve_targeted_adapter(identity, source, scopes)
+
+
+def test_resolve_targeted_adapter_refuses_a_single_obfuscation_layer():
+    # The executor entry point and the request model agree: a partial
+    # obfuscation layer set is not a legal targeted scan.
+    with pytest.raises(UnsupportedTargetedScope):
+        REGISTRY.resolve_targeted_adapter("obfuscation", "encoding_scan", frozenset({"entropy"}))
 
 
 def _spec_with_grant(identity, scan_unit, grant):
@@ -398,7 +569,24 @@ def _spec_with_grant(identity, scan_unit, grant):
     )
 
 
-def test_select_targeted_unpopulated_grant_positive_case():
+def test_select_targeted_unpopulated_grant_fails_closed():
+    # A synthetic capability declared with no grant fails closed -- the
+    # shape a future analyzer has between declaring a capability and
+    # deciding its grant.
+    real = REGISTRY.get("stomping")
+    spec = AnalyzerSpec(
+        identity=real.identity, package=real.package, report_type=real.report_type,
+        builder=real.builder, renderer=real.renderer, record_projector=real.record_projector,
+        option_names=real.option_names, provenance_hook=real.provenance_hook,
+        full_scope_capable=real.full_scope_capable,
+        targeted_capability=TargetedCapability(TargetedScanUnit.REGION, frozenset()),
+    )
+    registry = AnalyzerRegistry._construct_unvalidated((spec,))
+    with pytest.raises(UnpopulatedTargetedGrant):
+        registry.select_targeted("stomping", "ioc_string_scan", None)
+
+
+def test_select_targeted_positive_case_reads_the_grant_field():
     # A synthetic spec with a real, matching grant succeeds -- proves the
     # gate reads the field rather than always failing.
     spec = _spec_with_grant(
@@ -406,6 +594,67 @@ def test_select_targeted_unpopulated_grant_positive_case():
     registry = AnalyzerRegistry._construct_unvalidated((spec,))
     result = registry.select_targeted("stomping", "ioc_string_scan", None)
     assert result is spec
+
+
+def test_resolve_targeted_adapter_returns_a_registered_adapter():
+    # When a spec DOES carry an adapter, resolve_targeted_adapter() returns
+    # it alongside the spec.
+    real = REGISTRY.get("pipe")
+
+    def adapter(context):
+        return None
+
+    spec = AnalyzerSpec(
+        identity=real.identity, package=real.package, report_type=real.report_type,
+        builder=real.builder, renderer=real.renderer, record_projector=real.record_projector,
+        option_names=real.option_names, provenance_hook=real.provenance_hook,
+        full_scope_capable=real.full_scope_capable,
+        targeted_capability=TargetedCapability(
+            TargetedScanUnit.REGION, frozenset({TargetedGrant("pipe_name_scan", frozenset())})),
+        targeted_adapter=adapter,
+    )
+    registry = AnalyzerRegistry._construct_unvalidated((spec,))
+    resolved_spec, resolved_adapter = registry.resolve_targeted_adapter("pipe", "pipe_name_scan")
+    assert resolved_spec is spec
+    assert resolved_adapter is adapter
+
+
+def test_analyzer_spec_rejects_a_targeted_adapter_without_a_capability():
+    with pytest.raises(InvalidAnalyzerSpec):
+        AnalyzerSpec(**_valid_kwargs(targeted_capability=None, targeted_adapter=lambda c: None))
+
+
+def _spec_with_adapter(adapter):
+    real = REGISTRY.get("pipe")
+    return AnalyzerSpec(
+        identity=real.identity, package=real.package, report_type=real.report_type,
+        builder=real.builder, renderer=real.renderer, record_projector=real.record_projector,
+        option_names=real.option_names, provenance_hook=real.provenance_hook,
+        full_scope_capable=real.full_scope_capable,
+        targeted_capability=real.targeted_capability,
+        targeted_adapter=adapter,
+    )
+
+
+def test_analyzer_spec_rejects_a_non_callable_targeted_adapter():
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_adapter("not callable")
+
+
+@pytest.mark.parametrize("adapter", [
+    lambda: None,                         # zero args
+    lambda context, extra: None,          # too many
+    lambda ctx: None,                     # wrong name
+    lambda *, context: None,              # keyword-only
+])
+def test_analyzer_spec_rejects_a_wrong_signature_targeted_adapter(adapter):
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_adapter(adapter)
+
+
+def test_analyzer_spec_accepts_the_context_signature_targeted_adapter():
+    spec = _spec_with_adapter(lambda context: None)
+    assert spec.targeted_adapter is not None
 
 
 def test_select_targeted_unsupported_source_real_but_ungranted():

@@ -81,9 +81,9 @@ class UnpopulatedTargetedGrant(Exception):
     """Call-time failure #12 -- `targeted_capability` is non-`None` but its
     `grants` is empty. `frozenset()` means "not yet granted", never
     "unrestricted" -- see the contract's own §1/§7.2 discussion of why this
-    must fail closed. Fires for all five targeted-capable identities this
-    release, unconditionally (#59 decides grant contents, #61 writes
-    them)."""
+    must fail closed. Unreachable for the shipped registry (every
+    targeted-capable spec carries a populated grant); it exists for a
+    future capability declared before its grant is decided."""
 
     def __init__(self, identity):
         self.identity = identity
@@ -114,6 +114,24 @@ class UnsupportedTargetedScope(Exception):
         self.scope = scope
         super().__init__(
             f"{identity!r}/{source!r} has no targeted grant for scope {scope!r}")
+
+
+class UnsupportedTargetedExecution(Exception):
+    """Call-time failure -- ``identity``/``source``/``scopes`` is a granted
+    targeted capability, but the spec carries no ``targeted_adapter`` to
+    execute it. A capability declaration authorizes routing; it does not
+    prove an executor exists. Fires for all five targeted-capable
+    identities this release (no adapter is registered yet) and fails
+    closed. ``scopes`` is the (possibly empty) frozenset the request
+    carried."""
+
+    def __init__(self, identity, source, scopes):
+        self.identity = identity
+        self.source = source
+        self.scopes = frozenset(scopes)
+        super().__init__(
+            f"{identity!r}/{source!r} (scopes {sorted(self.scopes)}) has a granted "
+            f"targeted capability but no registered execution adapter")
 
 
 def _defaults_match(actual, expected) -> bool:
@@ -179,8 +197,8 @@ class TargetedGrant:
     `source` is a `CoverageLimitation.source`-shaped public source name
     (e.g. `"ioc_string_scan"`), never a `CoverageSnapshot` internal field
     name. `scopes` is empty unless the source has named sub-scopes
-    (obfuscation's `OVERSIZE_SCAN_LAYERS`); an empty `scopes` means "no
-    finer subdivision", never "unrestricted"."""
+    (obfuscation's `encoding_scan` -> `OVERSIZE_SCAN_LAYERS`); an empty
+    `scopes` means "no finer subdivision", never "unrestricted"."""
     source: str
     scopes: frozenset
 
@@ -195,11 +213,16 @@ class TargetedGrant:
 @dataclass(frozen=True)
 class TargetedCapability:
     """The value `AnalyzerSpec.targeted_capability` holds when non-`None`
-    (contract §1) -- a `scan_unit` tag plus the closed set of grants
-    populated so far (empty this release for all five targeted-capable
-    analyzers; #59 decides contents, #61 writes them)."""
+    (contract §1) -- a `scan_unit` tag, the closed set of grants for this
+    analyzer's targetable sources, and the per-analyzer `request_ceiling`
+    (the largest targeted range this analyzer may be asked for, in bytes --
+    a required safety bound frozen by the capability matrix, kept ON the
+    capability rather than in a second identity-keyed table). Each
+    targeted-capable analyzer carries exactly the grant(s) and ceiling the
+    targeted-rescan capability matrix freezes for it."""
     scan_unit: TargetedScanUnit
     grants: frozenset
+    request_ceiling: int = 256 * (1 << 20)
 
     def __post_init__(self):
         if not isinstance(self.scan_unit, TargetedScanUnit):
@@ -211,6 +234,11 @@ class TargetedCapability:
             raise InvalidAnalyzerSpec(
                 f"TargetedCapability.grants must be a frozenset[TargetedGrant], "
                 f"got {self.grants!r}")
+        if not isinstance(self.request_ceiling, int) or isinstance(self.request_ceiling, bool) \
+                or self.request_ceiling <= 0:
+            raise InvalidAnalyzerSpec(
+                f"TargetedCapability.request_ceiling must be a positive int (bytes), "
+                f"got {self.request_ceiling!r}")
 
 
 # Approved first-release targeted-scan identity set (#58) -- checked as an
@@ -238,6 +266,25 @@ _EXPECTED_TARGETED_SCAN_UNITS = {
 _require_equal_sets(
     set(_EXPECTED_TARGETED_SCAN_UNITS), _APPROVED_TARGETED_IDENTITIES,
     "_EXPECTED_TARGETED_SCAN_UNITS must exactly match _APPROVED_TARGETED_IDENTITIES")
+
+# Each targeted-capable analyzer's own frozen request-size ceiling in bytes
+# (contract §"Range validation" 5-6) -- bound to identity here so a spec
+# whose `TargetedCapability.request_ceiling` disagrees (or silently keeps
+# the field default) is a construction-time failure. `TargetedCapability`
+# carries the value; this table only pins which value each real identity
+# must carry, exactly the way `_EXPECTED_TARGETED_SCAN_UNITS` above pins
+# the scan unit.
+_MIB_ = 1 << 20
+_EXPECTED_TARGETED_REQUEST_CEILINGS = {
+    "pipe": 256 * _MIB_,
+    "stomping": 256 * _MIB_,
+    "cs-beacon": 256 * _MIB_,
+    "yara": 256 * _MIB_,
+    "obfuscation": 32 * _MIB_,
+}
+_require_equal_sets(
+    set(_EXPECTED_TARGETED_REQUEST_CEILINGS), _APPROVED_TARGETED_IDENTITIES,
+    "_EXPECTED_TARGETED_REQUEST_CEILINGS must exactly match _APPROVED_TARGETED_IDENTITIES")
 
 # Each targeted-capable analyzer's own real, public coverage-source
 # vocabulary (contract §7.1 failure #5's ".source" gap-closing
@@ -365,6 +412,34 @@ def _validate_scoped_sources(mapping: dict) -> None:
 _validate_scoped_sources(_SCOPED_TARGETED_SOURCES)
 
 
+# ── Public coverage-vocabulary accessors ───────────────────────────────
+# The observation layer (`dumpex.hunt._observation`) validates a closure's
+# `(source, scope)` against the analyzer's real published vocabulary -- the
+# same per-hunter `report_facts.COVERAGE_SOURCE_NAMES` a `TargetedGrant.source`
+# is checked against. It reads it through these accessors, never the private
+# `_COVERAGE_SOURCE_NAMES_BY_IDENTITY` / `_SCOPED_TARGETED_SOURCES` tables, so
+# a restructure here does not silently break an external consumer.
+
+def coverage_sources_for(identity: str) -> frozenset:
+    """The published coverage-source vocabulary for `identity` (the shipped
+    `report_facts.COVERAGE_SOURCE_NAMES`). Empty for `injection`/`hollowing`
+    (no published constant) and for an unknown identity."""
+    return frozenset(_COVERAGE_SOURCE_NAMES_BY_IDENTITY.get(identity, ()))
+
+
+def closed_scope_vocab_for(identity: str, source: str) -> "frozenset | None":
+    """The CLOSED, importable sub-scope vocabulary for `(identity, source)`,
+    or `None` when the source has no such vocabulary (its `scope`, if any, is
+    an open budget-kind / sub-signal tag). Today only obfuscation's
+    `encoding_scan` -> `OVERSIZE_SCAN_LAYERS`. A closure may legitimately name
+    no scope on such a source (a layer-agnostic gap); only an invented layer
+    name is rejected."""
+    entry = _SCOPED_TARGETED_SOURCES.get(identity)
+    if entry is not None and entry[0] == source:
+        return frozenset(entry[1])
+    return None
+
+
 # The full set of option keyword names `_execute_full_scope()`
 # (`dumpex/hunt/__init__.py`) actually knows how to supply a value for --
 # the single source of truth `AnalyzerSpec.option_names` (§5 field 7) must
@@ -386,6 +461,14 @@ _validate_scoped_sources(_SCOPED_TARGETED_SOURCES)
 # independently re-deriving its own `options` dict's key set, so the two
 # can never silently drift apart again.
 KNOWN_OPTION_NAMES = frozenset({"ref_dir", "rules_dir"})
+
+
+# A full-scope builder's first positional parameter. `"mf"` receives the
+# raw dump handle (every builder today); `"context"` receives the whole
+# `HuntExecutionContext`, for a builder that consumes the shared
+# observation registry or budgets. `_execute_full_scope()` passes one or
+# the other by this declared convention.
+_BUILDER_ARGS = frozenset({"mf", "context"})
 
 
 # ── AnalyzerSpec (contract §5) ─────────────────────────────────────────
@@ -431,6 +514,8 @@ class AnalyzerSpec:
     provenance_hook: "Callable | None"
     full_scope_capable: bool
     targeted_capability: "TargetedCapability | None"
+    targeted_adapter: "Callable | None" = None
+    builder_arg: str = "mf"
 
     def __post_init__(self):
         if self.identity not in HUNTERS:
@@ -438,6 +523,10 @@ class AnalyzerSpec:
                 f"AnalyzerSpec.identity must be one of {HUNTERS}, got "
                 f"{self.identity!r}")
         _require_str(self.package, "AnalyzerSpec.package")
+        if self.builder_arg not in _BUILDER_ARGS:
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: builder_arg must be one of {sorted(_BUILDER_ARGS)}, "
+                f"got {self.builder_arg!r}")
         if not isinstance(self.report_type, type):
             raise InvalidAnalyzerSpec(
                 f"AnalyzerSpec.report_type must be a type, got {self.report_type!r}")
@@ -446,6 +535,7 @@ class AnalyzerSpec:
                 raise InvalidAnalyzerSpec(
                     f"AnalyzerSpec.{name} must be callable, got "
                     f"{getattr(self, name)!r}")
+        _check_builder_arg_matches_signature(self.identity, self.builder, self.builder_arg)
         if self.provenance_hook is not None:
             _validate_provenance_hook_shape(self.provenance_hook)
         if not isinstance(self.option_names, frozenset) or not all(
@@ -475,6 +565,12 @@ class AnalyzerSpec:
                 f"could run in neither mode")
         if self.targeted_capability is not None:
             self._validate_targeted_capability_shape()
+        if self.targeted_adapter is not None:
+            if self.targeted_capability is None:
+                raise InvalidAnalyzerSpec(
+                    f"{self.identity}: targeted_adapter set with no targeted_capability "
+                    f"-- an executor for a capability that does not exist")
+            _validate_targeted_adapter_shape(self.identity, self.targeted_adapter)
 
     def _validate_targeted_capability_shape(self) -> None:
         # Both lookups below are deliberately unconditional membership
@@ -644,10 +740,17 @@ class AnalyzerRegistry:
         return (spec,)
 
     def select_targeted(self, identity: str, source: str, scope: "str | None" = None) -> AnalyzerSpec:
-        """The one entry point a future targeted-scan call site (#61,
-        after #59/#60) uses. Answers "is `source`/`scope` granted", not
-        merely "does this analyzer have any grant at all" -- see the
-        contract's own §6 discussion of the symmetric `scopes` match."""
+        """Single-`(source, scope)` grant primitive: answers "is this ONE
+        `source`/`scope` granted", with the symmetric-match rule (an empty
+        grant `scopes` authorizes `scope=None` only; a non-empty one
+        authorizes a named member only).
+
+        This does NOT authorize a whole invocation: a `HuntRequest` carries a
+        scope SET and an obfuscation invocation always attempts all three
+        layers, so `HuntRequest` and `resolve_targeted_adapter` both go
+        through `select_targeted_scopes()` instead. Use this only where a
+        single grant genuinely is the question (grant-shape tests, a future
+        single-layer capability)."""
         if identity not in self._by_identity:
             raise UnknownAnalyzerIdentity(identity, set(self._by_identity))
         spec = self._by_identity[identity]
@@ -667,6 +770,70 @@ class AnalyzerRegistry:
         if not authorized:
             raise UnsupportedTargetedScope(identity, source, scope)
         return spec
+
+    def select_targeted_scopes(self, identity: str, source: str,
+                               scopes: frozenset) -> AnalyzerSpec:
+        """Like `select_targeted()`, but validates the whole scope SET one
+        request will attempt at once (a `HuntRequest` carries a set, not a
+        single layer -- obfuscation always attempts all of its granted
+        layers, and the contract has no public per-layer selection). An
+        unscoped source requires an empty set; a scoped source requires
+        exactly its full granted scope set. Raises the same typed
+        `UnknownAnalyzerIdentity` / `UnsupportedTargetedCapability` /
+        `UnpopulatedTargetedGrant` / `UnsupportedTargetedSource` /
+        `UnsupportedTargetedScope` failures as `select_targeted()`, in that
+        order -- identity/capability/grant/source are checked before the
+        scope set, so an unknown identity is `UnknownAnalyzerIdentity`
+        regardless of what `scopes` is. A non-frozenset `scopes` is a caller
+        type error, not a scope failure."""
+        if identity not in self._by_identity:
+            raise UnknownAnalyzerIdentity(identity, set(self._by_identity))
+        spec = self._by_identity[identity]
+        if spec.targeted_capability is None:
+            raise UnsupportedTargetedCapability(identity)
+        capability = spec.targeted_capability
+        if not capability.grants:
+            raise UnpopulatedTargetedGrant(identity)
+        matching = [g for g in capability.grants if g.source == source]
+        if not matching:
+            raise UnsupportedTargetedSource(identity, source)
+        if not isinstance(scopes, frozenset):
+            raise TypeError(
+                f"select_targeted_scopes() scopes must be a frozenset, got {scopes!r}")
+        granted = self.granted_scopes(identity, source)
+        if granted:
+            if scopes != granted:
+                raise UnsupportedTargetedScope(identity, source, tuple(sorted(scopes)))
+        elif scopes:
+            raise UnsupportedTargetedScope(identity, source, tuple(sorted(scopes)))
+        return spec
+
+    def granted_scopes(self, identity: str, source: str) -> frozenset:
+        """The full granted scope set for `(identity, source)` -- empty for an
+        unscoped source, an unknown identity/source, or an analyzer with no
+        capability; obfuscation's three layers for `encoding_scan`. The one
+        place a caller resolves "the granted set" instead of restating it.
+        This resolves only -- authorization is `select_targeted_scopes()`'s
+        job, which a caller still goes through afterwards."""
+        spec = self._by_identity.get(identity)
+        if spec is None or spec.targeted_capability is None:
+            return frozenset()
+        matching = [g for g in spec.targeted_capability.grants if g.source == source]
+        return frozenset().union(*(g.scopes for g in matching)) if matching else frozenset()
+
+    def resolve_targeted_adapter(self, identity: str, source: str,
+                                 scopes: frozenset = frozenset()) -> "tuple[AnalyzerSpec, Callable]":
+        """The one entry point a targeted-scan executor uses. Resolves the
+        grant and the scope SET exactly as `select_targeted_scopes()` does
+        (raising the same typed lookup/capability/scope failures -- so the
+        executor boundary and the `HuntRequest` boundary agree on what a legal
+        obfuscation targeted scan is), then requires the spec to carry a
+        `targeted_adapter`. A granted capability with no adapter raises
+        `UnsupportedTargetedExecution`. Returns `(spec, adapter)`."""
+        spec = self.select_targeted_scopes(identity, source, scopes)
+        if spec.targeted_adapter is None:
+            raise UnsupportedTargetedExecution(identity, source, scopes)
+        return spec, spec.targeted_adapter
 
 
 # ── Registration (contract §7.1, §8) ───────────────────────────────────
@@ -700,6 +867,12 @@ def _late_bound(attr_name: str) -> Callable:
     def _call(*args, **kwargs):
         target = getattr(sys.modules[_DISPATCHER_MODULE], attr_name)
         return target(*args, **kwargs)
+    # Marks this as the internal pass-through wrapper whose real target
+    # `_resolve_and_validate_*` already signature-checked -- the one
+    # callable `_check_builder_arg_matches_signature` trusts without
+    # re-inspecting (its own signature is `(*args, **kwargs)` and says
+    # nothing about the real builder).
+    _call._dumpex_late_bound = True
     return _call
 
 
@@ -741,7 +914,35 @@ def _resolve_callable(attr_name: str):
     return target
 
 
-def _resolve_and_validate_builder(attr_name: str, option_defaults: dict) -> Callable:
+def _check_builder_arg_matches_signature(identity: str, builder, builder_arg: str) -> None:
+    """`_register()` validates the real target through
+    `_resolve_and_validate_builder()`, but a direct `AnalyzerSpec(...)` can
+    still declare a `builder_arg` its builder's own first parameter
+    contradicts -- and passing the whole `HuntExecutionContext` to a builder
+    that named its first parameter `mf` only fails later, deeper in that
+    builder.
+
+    Only the `_late_bound()` pass-through wrapper (which carries an explicit
+    marker, and whose real target `_resolve_and_validate_builder()` already
+    checked) is trusted without inspection. Every other callable must have an
+    introspectable signature whose first parameter is a positionally-passable
+    parameter named `builder_arg` -- a keyword-only first parameter, an
+    `*args`/`**kwargs` catch-all, or an uninspectable callable all fail
+    closed, since `_execute_full_scope()` calls `spec.builder(<mf-or-context>)`
+    positionally."""
+    if getattr(builder, "_dumpex_late_bound", False):
+        return
+    params = list(_safe_signature(builder, f"{identity} builder").parameters.values())
+    if not params or params[0].name != builder_arg \
+            or params[0].kind not in _POSITIONALLY_PASSABLE:
+        raise InvalidAnalyzerSpec(
+            f"{identity}: builder_arg={builder_arg!r} requires the builder's first "
+            f"parameter to be a positionally-passable {builder_arg!r}, got "
+            f"{[p.name for p in params]!r}")
+
+
+def _resolve_and_validate_builder(attr_name: str, option_defaults: dict,
+                                  builder_arg: str = "mf") -> Callable:
     """Resolve the REAL target once, here, at registration time (facade
     imports are already complete by the time this module's top-level code
     runs -- contract §6's own import-ordering guarantee) to validate its
@@ -775,10 +976,10 @@ def _resolve_and_validate_builder(attr_name: str, option_defaults: dict) -> Call
     target = _resolve_callable(attr_name)
     sig = _safe_signature(target, attr_name)
     params = list(sig.parameters.values())
-    if not params or params[0].name != "mf" or params[0].kind not in _POSITIONALLY_PASSABLE:
+    if not params or params[0].name != builder_arg or params[0].kind not in _POSITIONALLY_PASSABLE:
         raise InvalidAnalyzerSpec(
             f"{attr_name}: first parameter must be a positionally-passable "
-            f"'mf', got {[p.name for p in params]!r}")
+            f"{builder_arg!r}, got {[p.name for p in params]!r}")
     rest = params[1:]
     for param in rest:
         if param.kind in _VAR_KINDS:
@@ -919,21 +1120,49 @@ def _validate_provenance_hook_shape(hook) -> None:
             f"AnalyzerSpec.provenance_hook cannot be called as hook(report): {exc}")
 
 
+def _validate_targeted_adapter_shape(identity: str, adapter) -> None:
+    """`AnalyzerSpec.targeted_adapter` gets the same resolve-then-inspect
+    treatment `builder`/`renderer`/`record_projector` get -- `callable(...)`
+    alone accepts a zero-arg or wrong-arity adapter that only raises
+    `TypeError` the first time a targeted executor calls it against a real
+    `HuntExecutionContext`, which can be well after a dump is open. The one
+    call shape a targeted executor uses is `adapter(context)`: exactly one
+    positionally-passable parameter named `context`."""
+    if not callable(adapter):
+        raise InvalidAnalyzerSpec(
+            f"{identity}: targeted_adapter must be None or callable, got {adapter!r}")
+    sig = _safe_signature(adapter, f"{identity} targeted_adapter")
+    params = list(sig.parameters.values())
+    if len(params) != 1 or params[0].name != "context" \
+            or params[0].kind not in _POSITIONALLY_PASSABLE:
+        raise InvalidAnalyzerSpec(
+            f"{identity}: targeted_adapter must accept exactly one positionally-passable "
+            f"'context' parameter, got {[p.name for p in params]!r}")
+    try:
+        sig.bind(object())
+    except TypeError as exc:
+        raise InvalidAnalyzerSpec(
+            f"{identity}: targeted_adapter cannot be called as adapter(context): {exc}")
+
+
 def _register(identity: str, package: str, report_type: type, builder_attr: str,
               renderer_attr: str, projector_attr: str, option_defaults: dict,
               provenance_hook, full_scope_capable: bool,
-              targeted_capability) -> AnalyzerSpec:
+              targeted_capability, targeted_adapter=None,
+              builder_arg: str = "mf") -> AnalyzerSpec:
     return AnalyzerSpec(
         identity=identity,
         package=package,
         report_type=report_type,
-        builder=_resolve_and_validate_builder(builder_attr, option_defaults),
+        builder=_resolve_and_validate_builder(builder_attr, option_defaults, builder_arg),
         renderer=_resolve_and_validate_renderer(renderer_attr),
         record_projector=_resolve_and_validate_projector(projector_attr),
         option_names=frozenset(option_defaults),
         provenance_hook=provenance_hook,
         full_scope_capable=full_scope_capable,
         targeted_capability=targeted_capability,
+        targeted_adapter=targeted_adapter,
+        builder_arg=builder_arg,
     )
 
 
@@ -966,31 +1195,47 @@ def _build_registrations() -> tuple:
             "_build_stomping_report", "_render_stomping_console",
             "_record_from_stomping_report", {"ref_dir": None}, None,
             full_scope_capable=True,
-            targeted_capability=TargetedCapability(TargetedScanUnit.REGION, frozenset())),
+            targeted_capability=TargetedCapability(
+                TargetedScanUnit.REGION,
+                frozenset({TargetedGrant("ioc_string_scan", frozenset())}),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["stomping"])),
         _register(
             "pipe", "dumpex.hunt.pipe", PipeReport,
             "_build_pipe_report", "_render_pipe_console",
             "_record_from_pipe_report", {}, None,
             full_scope_capable=True,
-            targeted_capability=TargetedCapability(TargetedScanUnit.REGION, frozenset())),
+            targeted_capability=TargetedCapability(
+                TargetedScanUnit.REGION,
+                frozenset({TargetedGrant("pipe_name_scan", frozenset())}),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["pipe"])),
         _register(
             "cs-beacon", "dumpex.hunt.cs_beacon", CSBeaconReport,
             "_build_cs_beacon_report", "_render_cs_beacon_console",
             "_record_from_cs_beacon_report", {}, None,
             full_scope_capable=True,
-            targeted_capability=TargetedCapability(TargetedScanUnit.SEGMENT, frozenset())),
+            targeted_capability=TargetedCapability(
+                TargetedScanUnit.SEGMENT,
+                frozenset({TargetedGrant("segment_scan", frozenset())}),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["cs-beacon"])),
         _register(
             "yara", "dumpex.hunt.yara_hunt", YaraReport,
             "_build_yara_report", "_render_yara_console",
             "_record_from_yara_report", {"rules_dir": None}, _yara_provenance_hook,
             full_scope_capable=True,
-            targeted_capability=TargetedCapability(TargetedScanUnit.SEGMENT, frozenset())),
+            targeted_capability=TargetedCapability(
+                TargetedScanUnit.SEGMENT,
+                frozenset({TargetedGrant("segment_scan", frozenset())}),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["yara"])),
         _register(
             "obfuscation", "dumpex.hunt.encoding", EncodingReport,
             "_build_encoding_report", "_render_encoding_console",
             "_record_from_encoding_report", {}, None,
             full_scope_capable=True,
-            targeted_capability=TargetedCapability(TargetedScanUnit.REGION_LAYER, frozenset())),
+            targeted_capability=TargetedCapability(
+                TargetedScanUnit.REGION_LAYER,
+                frozenset({TargetedGrant(
+                    "encoding_scan", frozenset({"sleep_mask", "entropy", "decode"}))}),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["obfuscation"])),
     )
 
 
@@ -1023,6 +1268,25 @@ def _validate_registrations(specs: tuple) -> None:
         raise InvalidAnalyzerSpec(
             f"targeted_capability identities {sorted(targeted_identities)} must "
             f"equal the approved set {sorted(_APPROVED_TARGETED_IDENTITIES)} exactly")
+
+    # Each targeted-capable spec's request ceiling must be the exact
+    # matrix-frozen value -- unconditional `[identity]` lookup (never
+    # `.get(...)`), so a MISSING expected entry or a spec that silently
+    # kept `TargetedCapability.request_ceiling`'s field default both fail
+    # here, the same way `_EXPECTED_TARGETED_SCAN_UNITS` is enforced.
+    for spec in specs:
+        if spec.targeted_capability is None:
+            continue
+        if spec.identity not in _EXPECTED_TARGETED_REQUEST_CEILINGS:
+            raise InvalidAnalyzerSpec(
+                f"{spec.identity}: no expected request ceiling on file -- "
+                f"_EXPECTED_TARGETED_REQUEST_CEILINGS is missing an entry for this "
+                f"targeted-capable identity")
+        expected_ceiling = _EXPECTED_TARGETED_REQUEST_CEILINGS[spec.identity]
+        if spec.targeted_capability.request_ceiling != expected_ceiling:
+            raise InvalidAnalyzerSpec(
+                f"{spec.identity}: targeted_capability.request_ceiling must be "
+                f"{expected_ceiling}, got {spec.targeted_capability.request_ceiling}")
 
 
 _REGISTRATIONS = _build_registrations()
