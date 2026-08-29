@@ -7,6 +7,7 @@ Algorithm adapted from cs-analyze-processdump.py by Didier Stevens
 Returns a LayerResult, never prints, never decides score/status — see
 dumpex/hunt/encoding/models.py and dumpex/hunt/encoding/aggregate.py.
 """
+import dataclasses
 import struct
 
 from dumpex.core.memory import addr_to_module, prot_str, va_range_captured_bytes
@@ -341,6 +342,8 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
         )
     hits = []
     coverage = CoverageTracker()
+    window_sampled = False
+    candidate_cap_hit = False
     for r in regions:
         if budget is not None and budget.exhausted():
             coverage.budget_exhausted = True
@@ -383,11 +386,28 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
             coverage.note_short_read(region_scan_target(mf, r))
         coverage.note_scanned()
 
-        candidates = _sm_recover_candidates(
+        # SLEEP_MASK_MAX_WINDOWS strides the recovery scan over a sample of
+        # windows once a region is large enough; SLEEP_MASK_MAX_CANDIDATES
+        # truncates the recovered key list. Either bounds the search, so a
+        # negative result over this region is not a full-search negative.
+        per_offset = max(1, config.sleep_mask_max_windows // config.sleep_mask_key_size)
+        if len(data) // config.sleep_mask_key_size > per_offset:
+            window_sampled = True
+
+        # Ask for one more candidate than the cap allows: a returned list
+        # LONGER than the cap proves a real key was dropped, whereas a list
+        # exactly AT the cap only proves that many qualified. Only the first
+        # `max_candidates` are ever validated.
+        recovered = _sm_recover_candidates(
             data, key_size=config.sleep_mask_key_size, min_repeat=config.sleep_mask_min_repeat,
-            max_candidates=config.sleep_mask_max_candidates, max_windows=config.sleep_mask_max_windows,
+            max_candidates=config.sleep_mask_max_candidates + 1,
+            max_windows=config.sleep_mask_max_windows,
             max_byte_freq=config.sleep_mask_max_byte_freq, min_acbd=config.sleep_mask_min_acbd,
             budget=budget)
+        if len(recovered) > config.sleep_mask_max_candidates:
+            candidate_cap_hit = True
+            recovered = recovered[:config.sleep_mask_max_candidates]
+        candidates = recovered
         if not candidates:
             continue
 
@@ -403,4 +423,8 @@ def _scan_sleep_mask(regions, modules, mf, read_region, config: EncodingConfig =
                 decoded=decoded, classification=classification,
                 complete=True, key=key, key_offset=offset))
 
-    return LayerResult(hits=hits, coverage=LayerCoverage.from_tracker(coverage))
+    return LayerResult(
+        hits=hits,
+        coverage=dataclasses.replace(
+            LayerCoverage.from_tracker(coverage),
+            window_sampled=window_sampled, candidate_cap_hit=candidate_cap_hit))

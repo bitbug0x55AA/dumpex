@@ -48,10 +48,13 @@ combination fails closed. Each `TargetedCapability` also carries a
 `request_ceiling` (256 MiB for pipe/stomping/cs-beacon/yara, 32 MiB for
 obfuscation) -- the per-analyzer safety bound the targeted-rescan matrix
 freezes, kept on the capability rather than in a second identity-keyed table,
-and cross-checked at import against `_EXPECTED_TARGETED_REQUEST_CEILINGS`. No
-spec carries a `targeted_adapter` yet, so `resolve_targeted_adapter()` fails
-closed for every identity until the concrete targeted executors land.
-Injection and hollowing have `targeted_capability=None`.
+and cross-checked at import against `_EXPECTED_TARGETED_REQUEST_CEILINGS`.
+`obfuscation` carries a `targeted_adapter`
+(`dumpex.hunt._run_targeted_obfuscation`, resolving to
+`dumpex.hunt.encoding.targeted.run_targeted_encoding`); `pipe`, `stomping`,
+`cs-beacon`, and `yara` do not yet, so `resolve_targeted_adapter()` still fails
+closed for those four until their executors land. Injection and hollowing have
+`targeted_capability=None`.
 
 ## `AnalyzerSpec`
 
@@ -70,10 +73,14 @@ Injection and hollowing have `targeted_capability=None`.
     grant set, and `request_ceiling` (bytes; the largest targeted range this
     analyzer may be asked for, cross-checked at import).
 11. `targeted_adapter: Callable | None` — the executor a targeted-scan run
-    calls as `adapter(context)`, or `None`. `None` for every current spec. A
-    non-`None` adapter requires a non-`None` `targeted_capability` and is
-    checked at construction for exactly one positionally-passable `context`
-    parameter, the same way the builder/renderer/projector signatures are.
+    calls as `adapter(context)`, or `None`. Non-`None` only for `obfuscation`
+    today (late-bound through the `dumpex.hunt._run_targeted_obfuscation`
+    facade, exactly as the builder/renderer/projector are); `None` for the
+    other six. Registered through `_register(..., targeted_adapter_attr=)`,
+    which resolves the real target and checks it at construction for exactly
+    one positionally-passable `context` parameter, the same way the
+    builder/renderer/projector signatures are. A non-`None` adapter requires a
+    non-`None` `targeted_capability`.
 12. `builder_arg: "mf" | "context"` — the builder's first positional
     parameter. `"mf"` (every current spec) receives the raw dump handle;
     `"context"` receives the whole `HuntExecutionContext`, for a builder that
@@ -147,10 +154,12 @@ diagnostic, or exit-code drift.
 
 ## Execution invariants
 
-Builder, renderer, and record-projector adapters are late-bound by name through
-the `dumpex.hunt` facade on every call. Existing monkeypatch seams therefore
-continue to work, and importing the registry does not introduce a circular
-import through the facade.
+Builder, renderer, record-projector, and (where present) targeted-adapter
+callables are late-bound by name through the `dumpex.hunt` facade on every call.
+Existing monkeypatch seams therefore continue to work, and importing the
+registry does not introduce a circular import through the facade — the
+obfuscation targeted adapter's own module (`dumpex.hunt.encoding.targeted`) is
+imported lazily inside the facade function for that reason.
 
 `_execute_full_scope()` builds one `HuntRequest.full(...)` and one
 `HuntExecutionContext` per invocation. Each builder receives the dump handle

@@ -23,6 +23,23 @@ from dumpex.hunt.cs_beacon.collect import _record_from_cs_beacon_report
 from dumpex.hunt.yara_hunt.collect import _record_from_yara_report
 from dumpex.hunt.encoding.collect  import _record_from_encoding_report
 
+
+def _run_targeted_obfuscation(context):
+    """The dispatcher-facing name `_registry.py` resolves `obfuscation`'s
+    `targeted_adapter` through (contract §8): given one targeted
+    `HuntExecutionContext`, run the entropy, sleep-mask, and decode layers
+    over the single requested virtual-address range and return an
+    `ObservationResult` with one independent closure per layer.
+
+    The real implementation lives in `dumpex.hunt.encoding.targeted` and is
+    imported lazily -- `_registry`'s import-time resolution of this name (via
+    `_resolve_and_validate_targeted_adapter`) only needs the callable to
+    exist, and the executor's own observation-layer imports must not be
+    pulled in while `dumpex.hunt` is still assembling."""
+    from dumpex.hunt.encoding.targeted import run_targeted_encoding
+    return run_targeted_encoding(context)
+
+
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations

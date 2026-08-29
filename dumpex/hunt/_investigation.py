@@ -58,6 +58,7 @@ _TARGET_BEARING_LIMITATION_CAUSES = {
     LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED: SkipCause.OVERSIZED_SKIPPED,
     LimitationCode.SCAN_REGION_READ_FAILED:       SkipCause.READ_FAILED,
     LimitationCode.SCAN_REGION_SHORT_READ:        SkipCause.SHORT_READ,
+    LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED: SkipCause.SCAN_TRUNCATED,
     LimitationCode.PE_HEADER_READ_FAILED:         SkipCause.READ_FAILED,
     LimitationCode.PE_HEADER_SHORT_READ:          SkipCause.SHORT_READ,
     LimitationCode.PE_HEADER_SCAN_TRUNCATED:      SkipCause.SCAN_TRUNCATED,

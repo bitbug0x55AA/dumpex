@@ -2066,6 +2066,7 @@ def test_oversized_skipped_limitation_rejects_a_target_with_no_size_limit():
 @pytest.mark.parametrize("code,source", [
     (LimitationCode.SCAN_REGION_READ_FAILED, "pipe_name_scan"),
     (LimitationCode.SCAN_REGION_SHORT_READ, "pipe_name_scan"),
+    (LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED, "encoding_scan"),
     (LimitationCode.PE_HEADER_READ_FAILED, "hidden_pe_scan"),
     (LimitationCode.PE_HEADER_SHORT_READ, "hidden_pe_scan"),
     (LimitationCode.PE_HEADER_SCAN_TRUNCATED, "hidden_pe_scan"),
@@ -2097,6 +2098,7 @@ def test_targets_are_rejected_on_codes_that_do_not_use_them():
 @pytest.mark.parametrize("code,source", [
     (LimitationCode.SCAN_REGION_READ_FAILED, "pipe_name_scan"),
     (LimitationCode.SCAN_REGION_SHORT_READ, "pipe_name_scan"),
+    (LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED, "encoding_scan"),
     (LimitationCode.PE_HEADER_READ_FAILED, "hidden_pe_scan"),
     (LimitationCode.PE_HEADER_SHORT_READ, "hidden_pe_scan"),
     (LimitationCode.PE_HEADER_SCAN_TRUNCATED, "hidden_pe_scan"),
@@ -2118,12 +2120,58 @@ def test_read_failed_short_read_scan_truncated_targets_are_optional(code, source
 
 @pytest.mark.parametrize("code,source", [
     (LimitationCode.SCAN_REGION_READ_FAILED, "pipe_name_scan"),
+    (LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED, "encoding_scan"),
     (LimitationCode.PE_HEADER_READ_FAILED, "hidden_pe_scan"),
 ])
 def test_read_failed_targets_must_match_affected_count_when_non_empty(code, source):
     with pytest.raises(ValueError, match=r"must equal len\(targets\)"):
         CoverageLimitation(code=code, source=source, affected_count=2,
                             targets=[_region_target(limit=None)])
+
+
+def test_scan_region_evaluation_truncated_names_the_layer_and_previews_targets():
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED, source="encoding_scan",
+        scope="entropy", affected_count=1,
+        targets=[_region_target(base=0x2000, size=0x4000, limit=None)])
+    text = render_limitation(limitation)
+    assert "evaluation stop at a region/segment boundary" in text
+    assert "under the entropy scan" in text
+    assert "0x0000000000002000" in text
+
+
+def test_scan_region_evaluation_truncated_rejects_unexpected_fields():
+    with pytest.raises(ValueError):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED,
+                            source="encoding_scan", affected_count=1, detail="nope")
+
+
+@pytest.mark.parametrize("detail", ["window_sampled", "candidate_list_truncated",
+                                    "overlapping_capture"])
+def test_scan_region_search_incomplete_renders_each_reason_with_the_layer(detail):
+    limitation = CoverageLimitation(
+        code=LimitationCode.SCAN_REGION_SEARCH_INCOMPLETE, source="encoding_scan",
+        scope="sleep_mask", detail=detail, affected_count=1)
+    text = render_limitation(limitation)
+    assert "under the sleep_mask scan" in text
+    assert "not a full-search negative" in text
+
+
+def test_scan_region_search_incomplete_requires_a_known_detail():
+    with pytest.raises(ValueError, match="detail to be one of"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_SEARCH_INCOMPLETE,
+                            source="encoding_scan", scope="sleep_mask", affected_count=1)
+    with pytest.raises(ValueError, match="detail to be one of"):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_SEARCH_INCOMPLETE,
+                            source="encoding_scan", scope="sleep_mask",
+                            detail="made_up", affected_count=1)
+
+
+def test_scan_region_search_incomplete_rejects_targets():
+    with pytest.raises(ValueError):
+        CoverageLimitation(code=LimitationCode.SCAN_REGION_SEARCH_INCOMPLETE,
+                            source="encoding_scan", detail="window_sampled",
+                            affected_count=1, targets=[_region_target(limit=None)])
 
 
 def test_targets_must_be_scan_target_instances_exactly():

@@ -779,9 +779,11 @@ def test_layer_coverage_count_fields_reject_bad_values(field_name, bad_count):
     pytest.param("true", id="string"),
     pytest.param(None, id="none"),
 ])
-def test_layer_coverage_budget_exhausted_rejects_non_bool_values(bad_flag):
-    with pytest.raises(TypeError, match="LayerCoverage.budget_exhausted must be a bool"):
-        LayerCoverage(budget_exhausted=bad_flag)
+@pytest.mark.parametrize("flag_name",
+                         ["budget_exhausted", "window_sampled", "candidate_cap_hit"])
+def test_layer_coverage_bool_flags_reject_non_bool_values(flag_name, bad_flag):
+    with pytest.raises(TypeError, match=f"LayerCoverage.{flag_name} must be a bool"):
+        LayerCoverage(**{flag_name: bad_flag})
 
 
 def test_layer_coverage_scanned_mutable_list_cannot_reach_layer_result_or_decode_result():
