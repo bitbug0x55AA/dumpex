@@ -1,8 +1,8 @@
 # Hunt targeted-rescan contract
 
 Status: **partially implemented**. `--hunt-addr` is not present in the released
-CLI and no targeted scan runs yet. The internal request/context/observation
-boundary exists (`dumpex.hunt._request.HuntRequest`,
+CLI and no targeted scan is reachable from a command yet. The internal
+request/context/observation boundary exists (`dumpex.hunt._request.HuntRequest`,
 `dumpex.hunt._execution.HuntExecutionContext`,
 `dumpex.hunt._observation`). The capability matrix below is registered as
 `AnalyzerSpec.targeted_capability` -- grants plus a `request_ceiling` -- and
@@ -12,10 +12,24 @@ layers as one `targeted_scopes` set (one request = one invocation = one
 capture), and the observation layer splits execution identity
 (`ObservationKey`) from per-`(source, scope)` closures (`ObservationClosure`),
 so one expensive run projects `pipe_name` and `c2_context` closures (or the
-three obfuscation layers) independently without duplicate scanning. The
-concrete per-analyzer targeted executors, the CLI flag, and the structured
-output remain outstanding. This is the live final design; it does not
-authorize behavior changes to current full-scope `--hunt`.
+three obfuscation layers) independently without duplicate scanning.
+
+The obfuscation targeted executor is implemented
+(`dumpex.hunt.encoding.targeted.run_targeted_encoding`, registered as
+`obfuscation`'s `AnalyzerSpec.targeted_adapter` and reachable through
+`AnalyzerRegistry.resolve_targeted_adapter()`). It runs the sleep-mask,
+entropy, and decode layers over one captured range -- reading only the captured
+prefix, bypassing only each layer's per-region size cap, retaining every other
+budget -- and returns an `ObservationResult` with one independent closure per
+layer plus a `TargetedEncodingEvidence` payload (each layer's own scan result
+and the containing-allocation `ScanTarget`). The descriptor-boundary rule
+(`dumpex.hunt._targeted`: clip to the containing descriptor, `SCAN_REGION_
+EVALUATION_TRUNCATED`, the sub-region caveat, the synthetic-region shim) is
+shared so pipe, stomping, YARA, and CS Beacon reuse one implementation; only the
+coverage-to-status reduction stays analyzer-local. The pipe, stomping, YARA, and
+CS Beacon executors, the CLI flag, and the structured output remain outstanding.
+This is the live final design; it does not authorize behavior changes to current
+full-scope `--hunt`.
 
 ## Scope and vocabulary
 
@@ -341,15 +355,21 @@ parallel result model.
 
 ## Diagnostics, ordering, and exit codes
 
-The only new limitation codes are:
+The new limitation codes are:
 
 | Code | Construction | Allowed fields | Meaning |
 |---|---|---|---|
 | `TARGETED_SOURCE_NOT_EVALUATED` | absent-capable | `scope` | a required targeted closure did not run |
 | `SCAN_REGION_EVALUATION_TRUNCATED` | caller-buildable | `scope`, `targets` | evaluation stopped at the first descriptor boundary while capture continued |
+| `SCAN_REGION_SEARCH_INCOMPLETE` | caller-buildable | `scope`, `detail`, `affected_count` | the scan reached the requested bytes but a bounded internal sample (`window_sampled`, `candidate_list_truncated`) or an ambiguous overlapping capture (`overlapping_capture`) means its negative is not a full-search negative |
 
+`SCAN_REGION_SEARCH_INCOMPLETE` covers conditions the cap-bypass makes reachable
+in targeted mode that the frozen contract predated (obfuscation's
+`SLEEP_MASK_MAX_WINDOWS` / `SLEEP_MASK_MAX_CANDIDATES` sampling, and a
+`CapturedSlice.overlapping` segment table); it is distinct from
+`SCAN_BUDGET_EXHAUSTED`, which specifically names a shared `ScanBudget` limit.
 All other failure and budget conditions reuse current codes. The two registries
-must stay complete and fail closed; neither new code is a diagnostic-only value.
+must stay complete and fail closed; no new code is a diagnostic-only value.
 
 Targeted mode names exactly one hunter. Obfuscation closure order is always
 `sleep_mask`, `entropy`, `decode`; evidence, limitations, and diagnostics keep

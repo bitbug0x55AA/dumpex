@@ -517,6 +517,32 @@ class LimitationCode(str, Enum):
     # but got fewer bytes back than declared/requested -- not fully
     # scanned, not a confirmed absence of whatever was being searched for.
     # caller_buildable; affected_count.
+    SCAN_REGION_EVALUATION_TRUNCATED = "SCAN_REGION_EVALUATION_TRUNCATED"
+    # ^ Companion to SCAN_REGION_SHORT_READ for a targeted rescan whose
+    # requested range crosses a region/segment descriptor boundary: the
+    # bytes were captured across the whole request, but source eligibility
+    # and evaluation are anchored to the descriptor containing the
+    # requested base address, so evaluation stops at that descriptor's end
+    # rather than borrow a different descriptor's state/type/protection.
+    # The closure is `partial`, not a confirmed absence past the boundary.
+    # `scope` names the scan LAYER (obfuscation's sleep_mask/entropy/
+    # decode); `targets` carries one ScanTarget per requested range whose
+    # evaluation was cut at a boundary and affected_count matches its
+    # length when set. caller_buildable; maps to SkipCause.SCAN_TRUNCATED.
+    SCAN_REGION_SEARCH_INCOMPLETE = "SCAN_REGION_SEARCH_INCOMPLETE"
+    # ^ A targeted rescan whose scan reached the requested bytes but could not
+    # search them exhaustively -- so a negative result is "not found in what
+    # was searched", not "not found after a full search". Distinct from
+    # SCAN_BUDGET_EXHAUSTED, which specifically means a shared
+    # dumpex.hunt._budget.ScanBudget hit one of ITS limits. `detail` names the
+    # reason, from a closed set: "window_sampled" (a per-region window sample,
+    # obfuscation's SLEEP_MASK_MAX_WINDOWS), "candidate_list_truncated" (a
+    # recovered-key list cut at a cap, SLEEP_MASK_MAX_CANDIDATES), or
+    # "overlapping_capture" (the dump's segment table maps a requested VA to
+    # more than one file offset, so the analyzed bytes are one arbitrary choice
+    # among conflicting claims -- CapturedSlice.overlapping). `scope` names the
+    # scan LAYER; caller_buildable; affected_count carries the range count. No
+    # `targets` -- the gap is about the search, not an unread region.
     SCAN_ITEMS_UNACCOUNTED = "SCAN_ITEMS_UNACCOUNTED"
     # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED/_READ_FAILED/_SHORT_READ,
     # and the one gap in the family that can never name what it lost: N
@@ -1631,6 +1657,40 @@ def _render_scan_region_short_read(limitation: "CoverageLimitation") -> str:
         f"(short read){layer} -- not fully scanned", limitation.targets)
 
 
+def _render_scan_region_evaluation_truncated(limitation: "CoverageLimitation") -> str:
+    layer = f" under the {limitation.scope} scan" if limitation.scope else ""
+    return _with_optional_target_preview(
+        f"{limitation.affected_count} targeted range(s) had evaluation stop at a "
+        f"region/segment boundary{layer} while capture continued -- the bytes past "
+        f"the boundary were not evaluated", limitation.targets)
+
+
+_SCAN_REGION_SEARCH_INCOMPLETE_REASONS = {
+    "window_sampled":
+        "the key search sampled a strided subset of windows across the range",
+    "candidate_list_truncated":
+        "the recovered-key list was cut at its cap before every candidate was checked",
+    "overlapping_capture":
+        "the dump's segment table maps a requested address to multiple file offsets, "
+        "so the analyzed bytes are one arbitrary choice among conflicting claims",
+}
+
+
+def _render_scan_region_search_incomplete(limitation: "CoverageLimitation") -> str:
+    layer = f" under the {limitation.scope} scan" if limitation.scope else ""
+    reason = _SCAN_REGION_SEARCH_INCOMPLETE_REASONS.get(limitation.detail, limitation.detail)
+    return (f"{limitation.affected_count} targeted range(s){layer} were not searched "
+            f"exhaustively ({reason}) -- a negative result is not a full-search negative")
+
+
+def _validate_scan_region_search_incomplete_fields(limitation: "CoverageLimitation") -> None:
+    _require_positive_affected_count("SCAN_REGION_SEARCH_INCOMPLETE")(limitation)
+    if limitation.detail not in _SCAN_REGION_SEARCH_INCOMPLETE_REASONS:
+        raise ValueError(
+            f"CoverageLimitation(code=SCAN_REGION_SEARCH_INCOMPLETE) requires detail to be "
+            f"one of {sorted(_SCAN_REGION_SEARCH_INCOMPLETE_REASONS)!r}, got {limitation.detail!r}")
+
+
 def _render_scan_items_unaccounted(limitation: "CoverageLimitation") -> str:
     # No target preview, unlike its three SCAN_REGION_* companions: see
     # LimitationCode.SCAN_ITEMS_UNACCOUNTED for why this gap structurally
@@ -2545,6 +2605,15 @@ _CODE_SPECS = {
         render=_render_scan_region_short_read, caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("SCAN_REGION_SHORT_READ"),
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
+    LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED: _CodeSpec(
+        render=_render_scan_region_evaluation_truncated, caller_buildable=True,
+        validate_fields=_require_optional_targets_matching_count(
+            "SCAN_REGION_EVALUATION_TRUNCATED"),
+        allowed_fields=frozenset({"affected_count", "targets", "scope"})),
+    LimitationCode.SCAN_REGION_SEARCH_INCOMPLETE: _CodeSpec(
+        render=_render_scan_region_search_incomplete, caller_buildable=True,
+        validate_fields=_validate_scan_region_search_incomplete_fields,
+        allowed_fields=frozenset({"scope", "detail", "affected_count"})),
     LimitationCode.SCAN_ITEMS_UNACCOUNTED: _CodeSpec(
         render=_render_scan_items_unaccounted, caller_buildable=True,
         validate_fields=_require_positive_affected_count("SCAN_ITEMS_UNACCOUNTED"),

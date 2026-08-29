@@ -1127,10 +1127,17 @@ def _validate_targeted_adapter_shape(identity: str, adapter) -> None:
     `TypeError` the first time a targeted executor calls it against a real
     `HuntExecutionContext`, which can be well after a dump is open. The one
     call shape a targeted executor uses is `adapter(context)`: exactly one
-    positionally-passable parameter named `context`."""
+    positionally-passable parameter named `context`.
+
+    Only the `_late_bound()` pass-through wrapper (whose real target
+    `_resolve_and_validate_targeted_adapter()` already signature-checked) is
+    trusted without inspection -- its own signature is `(*args, **kwargs)`, the
+    same seam `_check_builder_arg_matches_signature` already exempts."""
     if not callable(adapter):
         raise InvalidAnalyzerSpec(
             f"{identity}: targeted_adapter must be None or callable, got {adapter!r}")
+    if getattr(adapter, "_dumpex_late_bound", False):
+        return
     sig = _safe_signature(adapter, f"{identity} targeted_adapter")
     params = list(sig.parameters.values())
     if len(params) != 1 or params[0].name != "context" \
@@ -1145,10 +1152,35 @@ def _validate_targeted_adapter_shape(identity: str, adapter) -> None:
             f"{identity}: targeted_adapter cannot be called as adapter(context): {exc}")
 
 
+def _resolve_and_validate_targeted_adapter(attr_name: str) -> Callable:
+    """Resolve the real targeted-adapter target once, here, at registration
+    time (facade imports are complete by the time this module's top-level code
+    runs -- contract §6's import-ordering guarantee) and validate its full
+    signature is exactly `adapter(context)` -- one positionally-passable
+    `context` parameter, the shape `resolve_targeted_adapter()`'s executor
+    boundary calls it with. `spec.targeted_adapter` itself stays late-bound
+    (`_late_bound` above), so monkeypatching `dumpex.hunt.<attr_name>` after
+    construction is untouched by this check having already run once."""
+    target = _resolve_callable(attr_name)
+    sig = _safe_signature(target, attr_name)
+    params = list(sig.parameters.values())
+    if len(params) != 1 or params[0].name != "context" \
+            or params[0].kind not in _POSITIONALLY_PASSABLE:
+        raise InvalidAnalyzerSpec(
+            f"{attr_name}: targeted_adapter must accept exactly one positionally-passable "
+            f"'context' parameter, got {[p.name for p in params]!r}")
+    try:
+        sig.bind(object())
+    except TypeError as exc:
+        raise InvalidAnalyzerSpec(
+            f"{attr_name}: cannot be called as adapter(context): {exc}")
+    return _late_bound(attr_name)
+
+
 def _register(identity: str, package: str, report_type: type, builder_attr: str,
               renderer_attr: str, projector_attr: str, option_defaults: dict,
               provenance_hook, full_scope_capable: bool,
-              targeted_capability, targeted_adapter=None,
+              targeted_capability, targeted_adapter_attr: "str | None" = None,
               builder_arg: str = "mf") -> AnalyzerSpec:
     return AnalyzerSpec(
         identity=identity,
@@ -1161,7 +1193,8 @@ def _register(identity: str, package: str, report_type: type, builder_attr: str,
         provenance_hook=provenance_hook,
         full_scope_capable=full_scope_capable,
         targeted_capability=targeted_capability,
-        targeted_adapter=targeted_adapter,
+        targeted_adapter=(None if targeted_adapter_attr is None
+                          else _resolve_and_validate_targeted_adapter(targeted_adapter_attr)),
         builder_arg=builder_arg,
     )
 
@@ -1235,7 +1268,8 @@ def _build_registrations() -> tuple:
                 TargetedScanUnit.REGION_LAYER,
                 frozenset({TargetedGrant(
                     "encoding_scan", frozenset({"sleep_mask", "entropy", "decode"}))}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["obfuscation"])),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["obfuscation"]),
+            targeted_adapter_attr="_run_targeted_obfuscation"),
     )
 
 

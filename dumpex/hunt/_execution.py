@@ -143,13 +143,21 @@ class HuntExecutionContext:
             self._view_cache["segments"] = va_range.captured_segments(self.mf)
         return self._view_cache["segments"]
 
+    def captured_region_enumeration(self) -> va_range.CapturedEnumeration:
+        """Every ``MemoryInfoListStream`` region as ascending-address
+        :class:`dumpex.core.va_range.CapturedRegion` views, plus the count of
+        raw descriptors the value model could not represent -- enumerated once.
+        A consumer that must distinguish "no region contains this address" from
+        "a region does, but its descriptor was dropped" reads ``.skipped``."""
+        if "region_enum" not in self._view_cache:
+            self._view_cache["region_enum"] = va_range.enumerate_captured_regions(self.mf)
+        return self._view_cache["region_enum"]
+
     def captured_regions(self) -> tuple:
         """Every ``MemoryInfoListStream`` region of the dump as ascending-
         address :class:`dumpex.core.va_range.CapturedRegion` views,
         enumerated once."""
-        if "regions" not in self._view_cache:
-            self._view_cache["regions"] = va_range.captured_regions(self.mf)
-        return self._view_cache["regions"]
+        return self.captured_region_enumeration().views
 
     def capture_of(self, requested: va_range.VirtualRange) -> va_range.CapturedSlice:
         """How ``requested`` relates to the dump's captured evidence, computed

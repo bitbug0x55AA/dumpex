@@ -257,6 +257,14 @@ class LayerCoverage:
     short_read_targets: tuple = field(default_factory=tuple)    # issue #28
     budget_exhausted: bool = False
     skipped_oversize_targets: tuple = field(default_factory=tuple)
+    # Sleep-mask only: a region large enough that SLEEP_MASK_MAX_WINDOWS forced
+    # the recovery scan to stride a sample of windows rather than examine every
+    # one, and/or SLEEP_MASK_MAX_CANDIDATES truncated the recovered key list. A
+    # negative sleep-mask result under either is "not found in a bounded
+    # sample", not "not found after a full search" -- both default False for
+    # every other layer, which never sets them.
+    window_sampled: bool = False
+    candidate_cap_hit: bool = False
 
     def __post_init__(self):
         _require_count(self.scanned, "LayerCoverage.scanned")
@@ -269,6 +277,8 @@ class LayerCoverage:
         _require_count(self.read_failed, "LayerCoverage.read_failed")
         _require_count(self.short_reads, "LayerCoverage.short_reads")
         _require_bool(self.budget_exhausted, "LayerCoverage.budget_exhausted")
+        _require_bool(self.window_sampled, "LayerCoverage.window_sampled")
+        _require_bool(self.candidate_cap_hit, "LayerCoverage.candidate_cap_hit")
         object.__setattr__(self, "skipped_oversize_targets", _require_typed_tuple(
             self.skipped_oversize_targets, ScanTarget, "LayerCoverage.skipped_oversize_targets"))
         object.__setattr__(self, "read_failed_targets", _require_typed_tuple(
