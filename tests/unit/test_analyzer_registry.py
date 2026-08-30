@@ -133,13 +133,13 @@ def test_granted_scopes_resolves_the_full_set_or_empty():
     assert REGISTRY.granted_scopes("injection", "x") == frozenset()
 
 
-def test_obfuscation_is_the_only_identity_carrying_a_targeted_adapter():
-    # Obfuscation carries an executable targeted adapter; every other
-    # capability declaration authorizes routing only, so its targeted
-    # execution fails closed.
+def test_exactly_the_executable_identities_carry_a_targeted_adapter():
+    # These three carry an executable targeted adapter; every other capability
+    # declaration authorizes routing only, so its targeted execution fails
+    # closed.
     with_adapter = {spec.identity for spec in REGISTRY._all_specs()
                     if spec.targeted_adapter is not None}
-    assert with_adapter == {"obfuscation"}
+    assert with_adapter == {"obfuscation", "yara", "cs-beacon"}
 
 
 def test_builder_arg_is_mf_for_every_identity():
@@ -526,13 +526,19 @@ _TARGETED_CASES = (
 )
 
 # (identity, source, full granted scope set) -- the shape a HuntRequest /
-# an executor carries. These four are routing-only (no targeted_adapter);
-# obfuscation, which does carry one, is covered separately below.
+# an executor carries. These two are routing-only (no targeted_adapter); the
+# three that do carry one are covered separately below.
 _TARGETED_SCOPE_SET_CASES = (
     ("pipe", "pipe_name_scan", frozenset()),
     ("stomping", "ioc_string_scan", frozenset()),
+)
+
+# (identity, source, full granted scope set) for every identity whose grant is
+# backed by a registered executor.
+_TARGETED_EXECUTABLE_CASES = (
     ("yara", "segment_scan", frozenset()),
     ("cs-beacon", "segment_scan", frozenset()),
+    ("obfuscation", "encoding_scan", frozenset({"sleep_mask", "entropy", "decode"})),
 )
 
 
@@ -553,13 +559,13 @@ def test_resolve_targeted_adapter_fails_closed_without_an_adapter(identity, sour
         REGISTRY.resolve_targeted_adapter(identity, source, scopes)
 
 
-def test_resolve_targeted_adapter_returns_the_obfuscation_executor():
-    # Obfuscation carries an executable targeted adapter: the full granted
-    # layer set resolves to (spec, adapter), and the adapter is callable as
+@pytest.mark.parametrize("identity,source,scopes", _TARGETED_EXECUTABLE_CASES)
+def test_resolve_targeted_adapter_returns_the_registered_executor(identity, source, scopes):
+    # An identity carrying an executable targeted adapter: its full granted
+    # scope set resolves to (spec, adapter), and the adapter is callable as
     # adapter(context).
-    spec, adapter = REGISTRY.resolve_targeted_adapter(
-        "obfuscation", "encoding_scan", frozenset({"sleep_mask", "entropy", "decode"}))
-    assert spec is REGISTRY.get("obfuscation")
+    spec, adapter = REGISTRY.resolve_targeted_adapter(identity, source, scopes)
+    assert spec is REGISTRY.get(identity)
     assert adapter is spec.targeted_adapter
     assert callable(adapter)
 

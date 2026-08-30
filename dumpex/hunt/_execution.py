@@ -135,13 +135,22 @@ class HuntExecutionContext:
         self.observations.claim()
         self.budgets.claim()
 
+    def captured_segment_enumeration(self) -> va_range.CapturedEnumeration:
+        """Every ``Memory64List``/``MemoryList`` segment as ascending-address
+        :class:`dumpex.core.va_range.CapturedSegment` views, plus the count of
+        raw descriptors the value model could not represent -- enumerated once.
+        A consumer that must distinguish "no segment contains this address"
+        from "a segment does, but its descriptor was dropped" reads
+        ``.skipped``."""
+        if "segment_enum" not in self._view_cache:
+            self._view_cache["segment_enum"] = va_range.enumerate_captured_segments(self.mf)
+        return self._view_cache["segment_enum"]
+
     def captured_segments(self) -> tuple:
         """Every ``Memory64List``/``MemoryList`` segment of the dump as
         ascending-address :class:`dumpex.core.va_range.CapturedSegment`
         views, enumerated once."""
-        if "segments" not in self._view_cache:
-            self._view_cache["segments"] = va_range.captured_segments(self.mf)
-        return self._view_cache["segments"]
+        return self.captured_segment_enumeration().views
 
     def captured_region_enumeration(self) -> va_range.CapturedEnumeration:
         """Every ``MemoryInfoListStream`` region as ascending-address

@@ -35,6 +35,39 @@ def select_segments(mf) -> list:
     return []
 
 
+# The XOR key passes `_cs_scan_segment` makes over a segment, in the order it
+# makes them. Declared once: `LAST_XOR_KEY` is derived from this tuple rather
+# than restated, so the stop cursor in `scan_segments` -- whose correctness
+# rests entirely on knowing which pass is last -- cannot drift from the walk it
+# describes when a key is added or the order changes.
+_XOR_KEY_PASSES = ((0x69, CS_SIG_XOR69), (0x2e, CS_SIG_XOR2E))
+
+LAST_XOR_KEY = _XOR_KEY_PASSES[-1][0]
+
+
+def _stop_cursor(xor_key: int, idx: int, data_len: int, *,
+                 candidate_examined: bool) -> "int | None":
+    """The first offset in this segment no longer guaranteed to have been
+    searched when a budget ended the walk, or `None` when no offset bounds the
+    gap.
+
+    Only a stop during the LAST key's pass yields a bounding offset: during any
+    earlier pass a later key has not looked at the segment at all, so nothing
+    below the cursor is fully searched either.
+
+    `candidate_examined` says whether the candidate AT `idx` was decoded and
+    judged before the budget stopped the walk. When it was, `_cs_scan_segment`
+    would have resumed its search at `idx + 1`, and that is the first
+    unexamined offset; when the budget stopped before that candidate was
+    decoded, `idx` itself is still unexamined. Reporting `idx` for a candidate
+    already judged would widen the residual by one byte and stop it being
+    byte-exact.
+    """
+    if xor_key != LAST_XOR_KEY:
+        return None
+    return min(idx + 1, data_len) if candidate_examined else idx
+
+
 def _cs_scan_segment(data: bytes, seg_va: int, seg_fo: int):
     """
     Locate candidate CS beacon config markers in one memory segment.
@@ -57,7 +90,7 @@ def _cs_scan_segment(data: bytes, seg_va: int, seg_fo: int):
 
     Yields (xor_key, offset_in_data, hit_va, hit_file_offset).
     """
-    for key, marker in ((0x69, CS_SIG_XOR69), (0x2e, CS_SIG_XOR2E)):
+    for key, marker in _XOR_KEY_PASSES:
         start = 0
         while True:
             idx = data.find(marker, start)
@@ -129,23 +162,33 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
     # time is measured directly rather than assumed to equal the
     # configured deadline.
     budget_exhausted_consumed = None
+    # Where inside the current segment the marker walk had reached when a
+    # budget ended it. `_cs_scan_segment` walks the buffer once per XOR key in
+    # a fixed order, so once the LAST key's pass is under way every offset
+    # below its cursor has been searched by every key and the rest of the
+    # segment is exactly what is left. During any earlier key's pass a later
+    # key has not looked at the segment at all, so no offset bounds the gap and
+    # the cursor stays None.
+    budget_stop_offset = None
     scan_start = monotonic()
     scan_deadline = scan_start + config.scan_deadline_seconds
 
-    def _mark_budget_exhausted(reason: str, kind: str, consumed: int, stop_index: "int | None" = None):
+    def _mark_budget_exhausted(reason: str, kind: str, consumed: int, stop_index: "int | None" = None,
+                               stop_offset: "int | None" = None):
         # `stop_index` defaults to the CURRENT segment (still mid-
         # processing, or not started yet) -- overridden to `seg_index + 1`
         # at the one call site where `seg` has already been fully
         # candidate-scanned by the time its own deadline recheck fires
         # (only LATER segments are actually unstarted there).
         nonlocal budget_exhausted, budget_reason, budget_exhausted_stop_index, budget_exhausted_kind, \
-            budget_exhausted_consumed
+            budget_exhausted_consumed, budget_stop_offset
         budget_exhausted = True
         budget_reason = reason
         if budget_exhausted_stop_index is None:
             budget_exhausted_stop_index = seg_index if stop_index is None else stop_index
             budget_exhausted_kind = kind
             budget_exhausted_consumed = consumed
+            budget_stop_offset = stop_offset
 
     def _elapsed_seconds(now: float) -> int:
         # Ceiling, and floored at 0 -- mirrors budget_exhausted_limit's own
@@ -216,7 +259,14 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                 segment_scan_target(seg, config.max_seg_scan))
             continue
         try:
-            data = reader.read(seg.start_virtual_address, seg.size)
+            # Clipped to the segment's own declared extent, never trusted at
+            # the length the reader chose to return: a segment names exactly
+            # `size` bytes, and searching past that would attribute a config
+            # hit -- whose VA and file offset are both derived from the
+            # segment base plus the marker offset -- to bytes outside the unit
+            # being scanned. A reader that returns nothing sliceable is a
+            # failed read, the same as one that raises.
+            data = reader.read(seg.start_virtual_address, seg.size)[:seg.size]
         except Exception:
             # A read failure means this segment was never actually looked
             # at — it must not be silently indistinguishable from "read
@@ -265,7 +315,8 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                     f"{total_decoded_bytes} byte(s) decoded, "
                     f"{len(hits)} hit(s) found before the scan "
                     f"budget was exhausted",
-                    exhausted_kind, exhausted_consumed)
+                    exhausted_kind, exhausted_consumed,
+                    stop_offset=_stop_cursor(xor_key, idx, len(data), candidate_examined=False))
                 break
             parsed = _cs_decode_and_parse_tlv(data, idx, xor_key, config.config_decode_max)
             total_decoded_bytes += parsed['consumed']
@@ -284,7 +335,8 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                             f"{total_candidates} candidate(s) examined, "
                             f"{total_decoded_bytes} byte(s) decoded, "
                             f"{len(hits)} hit(s) found — hit cap reached",
-                            "max_hits", len(hits))
+                            "max_hits", len(hits),
+                            stop_offset=_stop_cursor(xor_key, idx, len(data), candidate_examined=True))
                         break
             # Re-checked immediately after THIS candidate's decode work,
             # not only at the top of the next loop iteration — if this
@@ -299,7 +351,8 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                     f"{total_decoded_bytes} byte(s) decoded, "
                     f"{len(hits)} hit(s) found before the scan "
                     f"budget was exhausted",
-                    exhausted_kind, exhausted_consumed)
+                    exhausted_kind, exhausted_consumed,
+                    stop_offset=_stop_cursor(xor_key, idx, len(data), candidate_examined=True))
                 break
         if budget_exhausted:
             break
@@ -358,6 +411,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
         budget_exhausted_kind=budget_exhausted_kind,
         budget_exhausted_limit=budget_exhausted_limit,
         budget_exhausted_consumed=budget_exhausted_consumed,
+        budget_stop_offset=budget_stop_offset,
         scanned=coverage_counts.scanned,
         eligible_total=coverage_counts.total,
         eligible_bytes=coverage_counts.eligible_bytes,

@@ -90,6 +90,61 @@ def classify_scoped_hit(addr, modules, regions, modules_available,
     return False, True, ctx.value
 
 
+def classify_over_addresses(classify, addresses, modules, regions,
+                             modules_available, mem_info_available,
+                             *, truncated: bool = False) -> "tuple[bool, bool, str, int | None]":
+    """Reduce one of the two classifiers above over every address a single
+    match resolves to, returning that match's own
+    ``(suppressed, unverified, memory_context_value, chosen_address)``.
+
+    A match is suppressed only when every address it resolves to is
+    module-backed. One address that escapes suppression keeps the whole match:
+    a scanned range can span several MemoryInfo regions, and a rule matching in
+    a private region must not be discarded because some other part of the same
+    range is a loaded module. Of the surviving addresses a confidently-private
+    one is preferred over an unverified one, so the strongest classification a
+    real match instance supports is the one reported.
+
+    ``chosen_address`` is the address the returned classification was actually
+    made at, so a caller resolving anything else about the hit -- the backing
+    module above all -- anchors it at the same place and cannot report a
+    private-memory context and a containing module for one match at once.
+
+    ``truncated`` says ``addresses`` is a prefix of the instances this match
+    really has. Suppression is the one conclusion that needs them all ("every
+    address is module-backed"), so a truncated all-suppressed reduction is
+    downgraded to unverified rather than discarding the match on evidence that
+    was never fully examined. A surviving address found within the prefix is
+    sound as it stands.
+
+    An empty ``addresses`` means the match could not be located at all -- a
+    condition with no string instances to place. That is never a reason to
+    discard evidence: the match is kept and marked unverified.
+    """
+    if not addresses:
+        return False, True, MemoryContext.UNKNOWN.value, None
+    first_kept = None
+    first_suppressed = None
+    for addr in addresses:
+        suppressed, unverified, ctx_value = classify(
+            addr, modules, regions, modules_available, mem_info_available)
+        if suppressed:
+            if first_suppressed is None:
+                first_suppressed = (True, False, ctx_value, addr)
+            continue
+        if not unverified:
+            # Confidently private: no later address can strengthen this, so
+            # stop rather than classify the rest of an attacker-sized list.
+            return False, False, ctx_value, addr
+        if first_kept is None:
+            first_kept = (False, True, ctx_value, addr)
+    if first_kept is not None:
+        return first_kept
+    if truncated:
+        return False, True, MemoryContext.UNKNOWN.value, addresses[0]
+    return first_suppressed
+
+
 def context_unverified_reason(contexts) -> str:
     """
     Build an accurate explanation for a set of MemoryContext values (see

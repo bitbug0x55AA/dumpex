@@ -14,22 +14,59 @@ capture), and the observation layer splits execution identity
 so one expensive run projects `pipe_name` and `c2_context` closures (or the
 three obfuscation layers) independently without duplicate scanning.
 
-The obfuscation targeted executor is implemented
-(`dumpex.hunt.encoding.targeted.run_targeted_encoding`, registered as
-`obfuscation`'s `AnalyzerSpec.targeted_adapter` and reachable through
-`AnalyzerRegistry.resolve_targeted_adapter()`). It runs the sleep-mask,
-entropy, and decode layers over one captured range -- reading only the captured
-prefix, bypassing only each layer's per-region size cap, retaining every other
-budget -- and returns an `ObservationResult` with one independent closure per
-layer plus a `TargetedEncodingEvidence` payload (each layer's own scan result
-and the containing-allocation `ScanTarget`). The descriptor-boundary rule
-(`dumpex.hunt._targeted`: clip to the containing descriptor, `SCAN_REGION_
-EVALUATION_TRUNCATED`, the sub-region caveat, the synthetic-region shim) is
-shared so pipe, stomping, YARA, and CS Beacon reuse one implementation; only the
-coverage-to-status reduction stays analyzer-local. The pipe, stomping, YARA, and
-CS Beacon executors, the CLI flag, and the structured output remain outstanding.
-This is the live final design; it does not authorize behavior changes to current
-full-scope `--hunt`.
+Three targeted executors are implemented, each registered as its analyzer's
+`AnalyzerSpec.targeted_adapter` and reachable through
+`AnalyzerRegistry.resolve_targeted_adapter()`:
+
+- `dumpex.hunt.encoding.targeted.run_targeted_encoding` runs the sleep-mask,
+  entropy, and decode layers over one captured range -- reading only the
+  captured prefix, bypassing only each layer's per-region size cap -- and
+  returns an `ObservationResult` with one independent closure per layer plus a
+  `TargetedEncodingEvidence` payload (each layer's own scan result and the
+  containing-allocation `ScanTarget`).
+- `dumpex.hunt.yara_hunt.targeted.run_targeted_yara` and
+  `dumpex.hunt.cs_beacon.targeted.run_targeted_cs_beacon` hand their own
+  scanner a single-segment slice of the captured segment containing the
+  requested base -- virtual base at `hunt_addr`, size the requested (clipped)
+  extent, dump-file offset displaced by the slice's distance from the segment
+  base, so hit VAs and file offsets stay absolute -- bypassing only
+  `YARA_MAX_SEG_SCAN` / `CS_MAX_SEG_SCAN`. Each returns one `segment_scan`
+  closure plus a `TargetedYaraEvidence` / `TargetedCSBeaconEvidence` payload
+  (matches or config hits, the scanner's diagnostics, YARA's `RulesProvenance`
+  or CS Beacon's per-hit corroboration, and the containing-segment
+  `ScanTarget`).
+
+Every other budget is retained at its full-scope value in all three. The
+descriptor-boundary rule (`dumpex.hunt._targeted`: clip to the containing
+descriptor, `SCAN_REGION_EVALUATION_TRUNCATED`, the sub-descriptor caveat, the
+synthetic region/segment shims, and the unexamined-suffix target) is shared in
+both scan units, so pipe and stomping reuse one implementation; only the
+coverage-to-status reduction stays analyzer-local.
+
+How exact a budget's remaining target can be is a property of the scan
+algorithm, not of the targeted layer:
+
+- A stop before a single byte is read always names the exact unexamined suffix:
+  the whole request.
+- **CS Beacon** names the exact residual for a mid-walk stop too. The marker
+  walk sweeps the buffer once per XOR key in a fixed order, so once the last
+  key's pass is under way every offset below its cursor has been searched by
+  every key, and `ScanDiagnostics.budget_stop_offset` bounds the gap. During an
+  earlier key's pass a later key has not looked at the segment at all; the
+  cursor is then withheld and the whole slice stands.
+- **YARA** cannot. `compiled.match()` runs a whole rule file over the whole
+  buffer at once, so a hit-cap or deadline stop leaves "rule files k..n did not
+  run over these bytes" -- a rule-set residual, not a byte range. Those gaps
+  name the whole evaluated slice.
+
+Where a byte-exact residual is unavailable the target is always a conservative
+superset, never narrower than what is actually unresolved: naming a narrower
+range would send a rescan past the bytes that stopped early. A rule-set
+residual for YARA would need a new limitation shape and is not in this release.
+
+The pipe and stomping executors, the CLI flag, and the
+structured output remain outstanding. This is the live final design; it does
+not authorize behavior changes to current full-scope `--hunt`.
 
 ## Scope and vocabulary
 
@@ -306,6 +343,32 @@ Targeted coverage sources are deliberately narrow:
 For stomping in particular, completion of `ioc_string_scan` is independent of
 module/reference comparison. A targeted IOC result cannot assert that stomping
 as a whole was ruled out.
+
+### YARA match-context anchoring
+
+Targeted and full-scope judge a hit's memory context at different addresses,
+and this changes which hits are reported, not merely how they are labelled.
+
+A full-scope scan anchors the `PE_In_Private_Memory` / `dumpex_scope =
+"private_or_unbacked"` suppression at the scanned segment's base, which is the
+address it reports the hit against. A targeted rescan anchors it at the string
+instances behind the match instead: a requested range can span several
+`MemoryInfo` regions, and a rule matching inside a private one must not be
+discarded because the range happens to begin in a loaded module. A match is
+suppressed only when every instance examined is module-backed; one surviving
+instance keeps the match, and the backing-module lookup is anchored at that
+same address, so a hit never reports private memory and a containing module at
+once.
+
+At most `YARA_MAX_STRINGS_PER_MATCH` instances are examined -- instance count
+is attacker-controlled. When that cap truncates the list, suppression (the one
+conclusion needing every instance) is downgraded to context-unverified rather
+than discarding the match on evidence never fully examined, which makes the
+closure partial through the existing match-context rule.
+
+A targeted rescan can therefore report a hit the equivalent full-scope scan
+suppressed. That is the intended direction: the finer anchor is the more
+precise one, and the rescan exists to examine a range an investigator named.
 
 ## Structured output
 

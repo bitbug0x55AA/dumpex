@@ -40,6 +40,34 @@ def _run_targeted_obfuscation(context):
     return run_targeted_encoding(context)
 
 
+def _run_targeted_yara(context):
+    """The dispatcher-facing name `_registry.py` resolves `yara`'s
+    `targeted_adapter` through (contract §8): given one targeted
+    `HuntExecutionContext`, match every compiled rule against the single
+    requested virtual-address range and return an `ObservationResult` with one
+    `segment_scan` closure.
+
+    The real implementation lives in `dumpex.hunt.yara_hunt.targeted` and is
+    imported lazily, for the same reason `_run_targeted_obfuscation` above
+    imports its own."""
+    from dumpex.hunt.yara_hunt.targeted import run_targeted_yara
+    return run_targeted_yara(context)
+
+
+def _run_targeted_cs_beacon(context):
+    """The dispatcher-facing name `_registry.py` resolves `cs-beacon`'s
+    `targeted_adapter` through (contract §8): given one targeted
+    `HuntExecutionContext`, search the single requested virtual-address range
+    for beacon configurations and return an `ObservationResult` with one
+    `segment_scan` closure.
+
+    The real implementation lives in `dumpex.hunt.cs_beacon.targeted` and is
+    imported lazily, for the same reason `_run_targeted_obfuscation` above
+    imports its own."""
+    from dumpex.hunt.cs_beacon.targeted import run_targeted_cs_beacon
+    return run_targeted_cs_beacon(context)
+
+
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations

@@ -49,11 +49,14 @@ combination fails closed. Each `TargetedCapability` also carries a
 obfuscation) -- the per-analyzer safety bound the targeted-rescan matrix
 freezes, kept on the capability rather than in a second identity-keyed table,
 and cross-checked at import against `_EXPECTED_TARGETED_REQUEST_CEILINGS`.
-`obfuscation` carries a `targeted_adapter`
-(`dumpex.hunt._run_targeted_obfuscation`, resolving to
-`dumpex.hunt.encoding.targeted.run_targeted_encoding`); `pipe`, `stomping`,
-`cs-beacon`, and `yara` do not yet, so `resolve_targeted_adapter()` still fails
-closed for those four until their executors land. Injection and hollowing have
+`obfuscation`, `yara`, and `cs-beacon` carry a `targeted_adapter`
+(`dumpex.hunt._run_targeted_obfuscation` /  `_run_targeted_yara` /
+`_run_targeted_cs_beacon`, resolving to
+`dumpex.hunt.encoding.targeted.run_targeted_encoding`,
+`dumpex.hunt.yara_hunt.targeted.run_targeted_yara`, and
+`dumpex.hunt.cs_beacon.targeted.run_targeted_cs_beacon`); `pipe` and `stomping`
+do not yet, so `resolve_targeted_adapter()` still fails closed for those two
+until their executors land. Injection and hollowing have
 `targeted_capability=None`.
 
 ## `AnalyzerSpec`
@@ -73,10 +76,11 @@ closed for those four until their executors land. Injection and hollowing have
     grant set, and `request_ceiling` (bytes; the largest targeted range this
     analyzer may be asked for, cross-checked at import).
 11. `targeted_adapter: Callable | None` — the executor a targeted-scan run
-    calls as `adapter(context)`, or `None`. Non-`None` only for `obfuscation`
-    today (late-bound through the `dumpex.hunt._run_targeted_obfuscation`
-    facade, exactly as the builder/renderer/projector are); `None` for the
-    other six. Registered through `_register(..., targeted_adapter_attr=)`,
+    calls as `adapter(context)`, or `None`. Non-`None` for `obfuscation`,
+    `yara`, and `cs-beacon` today (each late-bound through its own
+    `dumpex.hunt._run_targeted_*` facade name, exactly as the
+    builder/renderer/projector are); `None` for the other four. Registered
+    through `_register(..., targeted_adapter_attr=)`,
     which resolves the real target and checks it at construction for exactly
     one positionally-passable `context` parameter, the same way the
     builder/renderer/projector signatures are. A non-`None` adapter requires a
@@ -157,9 +161,10 @@ diagnostic, or exit-code drift.
 Builder, renderer, record-projector, and (where present) targeted-adapter
 callables are late-bound by name through the `dumpex.hunt` facade on every call.
 Existing monkeypatch seams therefore continue to work, and importing the
-registry does not introduce a circular import through the facade — the
-obfuscation targeted adapter's own module (`dumpex.hunt.encoding.targeted`) is
-imported lazily inside the facade function for that reason.
+registry does not introduce a circular import through the facade — each
+targeted adapter's own module (`dumpex.hunt.encoding.targeted`,
+`dumpex.hunt.yara_hunt.targeted`, `dumpex.hunt.cs_beacon.targeted`) is imported
+lazily inside its facade function for that reason.
 
 `_execute_full_scope()` builds one `HuntRequest.full(...)` and one
 `HuntExecutionContext` per invocation. Each builder receives the dump handle
