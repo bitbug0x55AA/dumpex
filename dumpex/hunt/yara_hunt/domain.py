@@ -265,6 +265,38 @@ class CoverageSnapshot:
                 and self.rules.compile_failed == 0)
 
 
+# ── Match-context reduction ─────────────────────────────────────────────
+# Pure functions over a plain sequence of `models.RuleMatchEvidence`, so the
+# same reduction serves a whole-dump `YaraReport` and a single-slice targeted
+# rescan (`dumpex.hunt.yara_hunt.targeted`), which has matches but no Report.
+# One definition, so the two paths cannot disagree about which rules count as
+# confirmed or about when an unclassified hit makes coverage partial.
+
+def triggered_rule_names(matches) -> tuple:
+    """Distinct rule names with at least one confidently-classified
+    (non-context_unverified) hit -- drives `score`/DETECTED. A rule with both a
+    confirmed hit and a separate unverified hit appears here, and NOT in
+    `unverified_rule_names`, whose own definition is "every hit for this rule
+    was unverified"."""
+    return tuple(sorted({m.rule for m in matches if not m.context_unverified}))
+
+
+def unverified_rule_names(matches) -> tuple:
+    """Distinct rule names whose EVERY hit is context_unverified."""
+    by_rule = {}
+    for m in matches:
+        by_rule.setdefault(m.rule, []).append(m.context_unverified)
+    return tuple(sorted(rule for rule, flags in by_rule.items() if all(flags)))
+
+
+def match_context_incomplete(matches) -> bool:
+    """Hits exist and not one of them could be confidently classified. The
+    match-context check therefore did not run to a usable conclusion for any of
+    them, which makes coverage partial on its own: an unclassified hit is
+    itself a reason a negative cannot be trusted."""
+    return bool(matches) and not triggered_rule_names(matches)
+
+
 @dataclass(frozen=True)
 class YaraEvidence:
     """Every individual rule match this hunter observed, in scan order --
@@ -343,22 +375,11 @@ class YaraReport:
 
     @property
     def triggered_rules(self) -> tuple:
-        """Distinct rule names with at least one confidently-classified
-        (non-context_unverified) hit -- drives `score`/DETECTED. A rule
-        with both a confirmed hit and a separate unverified hit appears
-        here (and NOT in `unverified_rules`, whose own definition is
-        "every hit for this rule was unverified") -- mirrors the
-        pre-migration scanner.py's own per-hit `triggered_rules`/
-        `unverified_rules` sets exactly."""
-        return tuple(sorted({m.rule for m in self.evidence.matches if not m.context_unverified}))
+        return triggered_rule_names(self.evidence.matches)
 
     @property
     def unverified_rules(self) -> tuple:
-        """Distinct rule names whose EVERY hit is context_unverified."""
-        by_rule = {}
-        for m in self.evidence.matches:
-            by_rule.setdefault(m.rule, []).append(m.context_unverified)
-        return tuple(sorted(rule for rule, flags in by_rule.items() if all(flags)))
+        return unverified_rule_names(self.evidence.matches)
 
     @property
     def score(self) -> int:
@@ -370,12 +391,11 @@ class YaraReport:
         be classified as context_unverified force coverage to read
         partial regardless of whether the scan loop itself hit a gap --
         an unclassified hit is itself a reason a negative can't be
-        trusted, matching the pre-migration builder's own unconditional
-        `coverage_status = "partial"` for that case. This is also the
+        trusted (see `match_context_incomplete`). This is also the
         exact v1.1 legacy `findings["scan_complete"]` value (see
         `report_legacy.py`) -- a real part of this hunter's public output
         contract, not an internal-only derivation."""
-        if self.has_hits and not self.triggered_rules:
+        if match_context_incomplete(self.evidence.matches):
             return False
         return self.coverage.complete
 

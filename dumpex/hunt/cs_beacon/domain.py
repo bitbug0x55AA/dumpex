@@ -126,6 +126,15 @@ class ScanDiagnostics:
     budget_exhausted_kind:       "str | None" = None
     budget_exhausted_limit:      "int | None" = None
     budget_exhausted_consumed:   "int | None" = None
+    # Where inside the segment being processed the marker walk stopped when a
+    # budget ended it, as a byte offset from that segment's own base -- the
+    # first offset no longer guaranteed to have been searched. `None` when no
+    # budget stopped the walk, and also when the stop happened during the FIRST
+    # XOR key's pass: the second key's pass had not started, so nothing at any
+    # offset in that segment is fully searched and no suffix describes the gap.
+    # Deliberately an offset, not an address: the caller that owns the segment
+    # identity resolves it against that segment's base and file offset.
+    budget_stop_offset:          "int | None" = None
     # The scan's reconciliation ledger. `segment_count` is every segment
     # in the dump; `eligible_total` is the subset this scan actually took
     # into scope (a whole-scan budget can stop the walk early), and
@@ -162,6 +171,12 @@ class ScanDiagnostics:
                                  "ScanDiagnostics.budget_exhausted_limit")
         _require_optional_count(self.budget_exhausted_consumed,
                                  "ScanDiagnostics.budget_exhausted_consumed")
+        _require_optional_count(self.budget_stop_offset,
+                                 "ScanDiagnostics.budget_stop_offset")
+        if self.budget_stop_offset is not None and not self.budget_exhausted:
+            raise ValueError(
+                "ScanDiagnostics.budget_stop_offset is set but budget_exhausted is False -- "
+                "a stop cursor only exists where a budget ended the walk")
         require_recursively_immutable(self, "ScanDiagnostics")
 
     @property

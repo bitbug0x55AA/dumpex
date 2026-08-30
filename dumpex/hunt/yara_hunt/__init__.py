@@ -87,6 +87,65 @@ def _load_yara_rules(rules_dir: str) -> tuple:
     return rules.load_and_compile(rules_dir)
 
 
+def _yara_config() -> YaraConfig:
+    """Every `yara_hunt.*` tunable at its full-scope value, bundled for
+    scanner.py. Read from THIS module's own re-exported (and therefore still
+    monkeypatchable) globals -- see dumpex/hunt/yara_hunt/config.py for why
+    scanner.py can't just read its own separate copy of these constants
+    directly. Shared with the targeted adapter so a full-scope override of
+    `dumpex.hunt.yara_hunt.<CONST>` moves both modes together."""
+    return YaraConfig(
+        match_timeout=YARA_MATCH_TIMEOUT, max_strings_per_match=YARA_MAX_STRINGS_PER_MATCH,
+        max_total_hits=YARA_MAX_TOTAL_HITS, scan_deadline_seconds=YARA_SCAN_DEADLINE_SECONDS,
+        max_total_bytes_scanned=YARA_MAX_TOTAL_BYTES_SCANNED, max_seg_scan=YARA_MAX_SEG_SCAN,
+    )
+
+
+def _resolve_rule_files(rules_dir: str = None) -> tuple:
+    """The three prerequisites every YARA scan shares -- yara-python is
+    importable, a rules directory resolves, and at least one file in it
+    compiles -- as `(rule_files, RulesDiagnostics)`.
+
+    `rule_files` is empty for each prerequisite failure and the diagnostics say
+    which one fired, so a caller decides what a missing prerequisite means for
+    its own output shape (a not-evaluated `YaraReport` for the full-scope
+    builder below, a not-evaluated closure for the targeted adapter in
+    `dumpex.hunt.yara_hunt.targeted`) without either restating the chain.
+
+    `rules_dir=None` resolves the packaged rules the same way `--yara-dir`'s
+    absence always has; the returned diagnostics carry the directory actually
+    used, so provenance names real rule content rather than the caller's
+    argument."""
+    try:
+        import yara
+    except ImportError:
+        return (), RulesDiagnostics(yara_available=False)
+
+    if rules_dir is None:
+        # sys.argv[0] and cwd are dev-environment assumptions — a pip-
+        # installed dumpex has no rules/ next to whatever invoked it.
+        # Current PyInstaller builds collect dumpex.rules_pkg's package data
+        # in its canonical layout; the _MEIPASS/rules path below is retained
+        # only for compatibility with older frozen builds.
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass and (Path(meipass) / "rules" / "yara").is_dir():
+            rules_dir = str(Path(meipass) / "rules" / "yara")
+        else:
+            rules_dir = rules.packaged_yara_rules_dir()
+
+    if rules_dir is None or not os.path.isdir(rules_dir):
+        return (), RulesDiagnostics(yara_available=True)
+
+    # Looked up HERE by its bare name (this module's own re-exported,
+    # still-monkeypatchable global) so a test replacing the whole
+    # `_load_yara_rules` wrapper is honored.
+    rule_files, provenance = _load_yara_rules(rules_dir)
+    return rule_files, RulesDiagnostics(
+        yara_available=True, rules_dir=rules_dir, attempted=True,
+        compiled_ok=provenance.compiled_ok, compile_failed=provenance.compile_failed,
+        provenance=provenance)
+
+
 def _build_yara_report(mf: MinidumpFile, rules_dir: str = None):
     """Run the prerequisite checks / scan / aggregate pipeline and return
     the domain.YaraReport -- the ONE place this pipeline is assembled,
@@ -118,37 +177,8 @@ def _build_yara_report(mf: MinidumpFile, rules_dir: str = None):
         _LAST_YARA_PROVENANCE = provenance.to_dict() if provenance is not None else None
         return report
 
-    # ── Locate and import yara-python ─────────────────────────────────
-    try:
-        import yara
-    except ImportError:
-        return _finish(aggregate.build_not_evaluated_report(RulesDiagnostics(yara_available=False)))
-
-    # ── Resolve rules directory ───────────────────────────────────────
-    if rules_dir is None:
-        # sys.argv[0] and cwd are dev-environment assumptions — a pip-
-        # installed dumpex has no rules/ next to whatever invoked it.
-        # Current PyInstaller builds collect dumpex.rules_pkg's package data
-        # in its canonical layout; the _MEIPASS/rules path below is retained
-        # only for compatibility with older frozen builds.
-        meipass = getattr(sys, "_MEIPASS", None)
-        if meipass and (Path(meipass) / "rules" / "yara").is_dir():
-            rules_dir = str(Path(meipass) / "rules" / "yara")
-        else:
-            rules_dir = rules.packaged_yara_rules_dir()
-
-    if rules_dir is None or not os.path.isdir(rules_dir):
-        return _finish(aggregate.build_not_evaluated_report(RulesDiagnostics(yara_available=True)))
-
-    # ── Load rule files ───────────────────────────────────────────────
-    # Looked up HERE by its bare name (this module's own re-exported,
-    # still-monkeypatchable global) so a test replacing the whole
-    # `_load_yara_rules` wrapper is honored exactly as it was before.
-    rule_files, provenance = _load_yara_rules(rules_dir)
-    rules_diag = RulesDiagnostics(
-        yara_available=True, rules_dir=rules_dir, attempted=True,
-        compiled_ok=provenance.compiled_ok, compile_failed=provenance.compile_failed,
-        provenance=provenance)
+    # ── yara-python, rules directory, compiled rule files ─────────────
+    rule_files, rules_diag = _resolve_rule_files(rules_dir)
     if not rule_files:
         return _finish(aggregate.build_not_evaluated_report(rules_diag))
 
@@ -168,15 +198,7 @@ def _build_yara_report(mf: MinidumpFile, rules_dir: str = None):
     modules = get_modules(mf)
     regions = get_memory_regions(mf)
 
-    # config bundles every yara_hunt.* tunable, read from THIS module's own
-    # (re-exported, and therefore still monkeypatchable) globals -- see
-    # dumpex/hunt/yara_hunt/config.py for why scanner.py can't just read
-    # its own separate copy of these constants directly.
-    config = YaraConfig(
-        match_timeout=YARA_MATCH_TIMEOUT, max_strings_per_match=YARA_MAX_STRINGS_PER_MATCH,
-        max_total_hits=YARA_MAX_TOTAL_HITS, scan_deadline_seconds=YARA_SCAN_DEADLINE_SECONDS,
-        max_total_bytes_scanned=YARA_MAX_TOTAL_BYTES_SCANNED, max_seg_scan=YARA_MAX_SEG_SCAN,
-    )
+    config = _yara_config()
     # `time.monotonic` is looked up HERE (this module's own re-exported
     # `time` module) rather than imported separately inside scanner.py --
     # see dumpex/hunt/_runtime.py.

@@ -30,6 +30,21 @@ from dumpex.hunt.cs_beacon import report_console
 from dumpex.hunt.cs_beacon import report_legacy
 
 
+def _cs_beacon_config() -> CSBeaconConfig:
+    """Every `cs_beacon.*` tunable at its full-scope value, bundled for
+    scanner.py. Read from THIS module's own re-exported (and therefore still
+    monkeypatchable) globals -- see dumpex/hunt/cs_beacon/config.py for why
+    scanner.py can't just read its own separate copy of these constants
+    directly. Shared with the targeted adapter so a full-scope override of
+    `dumpex.hunt.cs_beacon.<CONST>` moves both modes together."""
+    return CSBeaconConfig(
+        max_seg_scan=CS_MAX_SEG_SCAN, config_decode_max=CS_CONFIG_DECODE_MAX,
+        max_candidates=CS_MAX_CANDIDATES, max_decoded_bytes=CS_MAX_DECODED_BYTES,
+        max_hits=CS_MAX_HITS, scan_deadline_seconds=CS_SCAN_DEADLINE_SECONDS,
+        max_total_scanned_bytes=CS_MAX_TOTAL_SCANNED_BYTES,
+    )
+
+
 def _build_cs_beacon_report(mf: MinidumpFile):
     """Run the scan/corroborate/aggregate pipeline and return the
     immutable `domain.CSBeaconReport` -- the ONE place this pipeline is
@@ -88,16 +103,7 @@ def _build_cs_beacon_report(mf: MinidumpFile):
     threads_total    = len(mf.threads.threads) if (mf.threads and mf.threads.threads) else 0
     contexts_parsed  = len(thread_contexts)
 
-    # config bundles every cs_beacon.* tunable, read from THIS module's own
-    # (re-exported, and therefore still monkeypatchable) globals -- see
-    # dumpex/hunt/cs_beacon/config.py for why scanner.py can't just read
-    # its own separate copy of these constants directly.
-    config = CSBeaconConfig(
-        max_seg_scan=CS_MAX_SEG_SCAN, config_decode_max=CS_CONFIG_DECODE_MAX,
-        max_candidates=CS_MAX_CANDIDATES, max_decoded_bytes=CS_MAX_DECODED_BYTES,
-        max_hits=CS_MAX_HITS, scan_deadline_seconds=CS_SCAN_DEADLINE_SECONDS,
-        max_total_scanned_bytes=CS_MAX_TOTAL_SCANNED_BYTES,
-    )
+    config = _cs_beacon_config()
     # `time.monotonic` is looked up HERE (not defaulted inside scanner.py's
     # own signature) so a test that monkeypatches this module's `time.
     # monotonic` attribute (a shared stdlib module object -- see

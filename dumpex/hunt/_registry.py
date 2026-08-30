@@ -120,10 +120,9 @@ class UnsupportedTargetedExecution(Exception):
     """Call-time failure -- ``identity``/``source``/``scopes`` is a granted
     targeted capability, but the spec carries no ``targeted_adapter`` to
     execute it. A capability declaration authorizes routing; it does not
-    prove an executor exists. Fires for all five targeted-capable
-    identities this release (no adapter is registered yet) and fails
-    closed. ``scopes`` is the (possibly empty) frozenset the request
-    carried."""
+    prove an executor exists, so a granted-but-unimplemented capability
+    fails closed here rather than returning a clean empty result.
+    ``scopes`` is the (possibly empty) frozenset the request carried."""
 
     def __init__(self, identity, source, scopes):
         self.identity = identity
@@ -1249,7 +1248,8 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.SEGMENT,
                 frozenset({TargetedGrant("segment_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["cs-beacon"])),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["cs-beacon"]),
+            targeted_adapter_attr="_run_targeted_cs_beacon"),
         _register(
             "yara", "dumpex.hunt.yara_hunt", YaraReport,
             "_build_yara_report", "_render_yara_console",
@@ -1258,7 +1258,8 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.SEGMENT,
                 frozenset({TargetedGrant("segment_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["yara"])),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["yara"]),
+            targeted_adapter_attr="_run_targeted_yara"),
         _register(
             "obfuscation", "dumpex.hunt.encoding", EncodingReport,
             "_build_encoding_report", "_render_encoding_console",

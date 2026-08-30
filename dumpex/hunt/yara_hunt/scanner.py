@@ -8,6 +8,7 @@ import dataclasses
 import math
 import os
 import time
+from typing import NamedTuple
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import addr_to_module
 from dumpex.hunt._coverage import segment_scan_target
@@ -67,9 +68,61 @@ class ScanResult:
                 f"{type(self.diagnostics).__name__}: {self.diagnostics!r}")
 
 
+class HitAddresses(NamedTuple):
+    """Where one match is judged to be. `addresses` is ascending and
+    deduplicated; `truncated` says it is a prefix of the instances the match
+    really has, so a conclusion needing ALL of them (only suppression does)
+    cannot be drawn from it."""
+    addresses: tuple
+    truncated: bool
+
+
+def segment_base_addresses(seg, match, limit: int) -> HitAddresses:
+    """The default `hit_addresses` policy: one address per match, the scanned
+    segment's own base. A whole-dump segment is the unit the scan reports a hit
+    against, and `RuleMatchEvidence.seg_va` is that same address. Never
+    truncated -- one address is the whole answer."""
+    return HitAddresses((seg.start_virtual_address,), False)
+
+
+def string_instance_addresses(seg, match, limit: int) -> HitAddresses:
+    """A `hit_addresses` policy resolving a match to the virtual address of the
+    string instances behind it, ascending and deduplicated.
+
+    At most `limit` instances are read, and iteration stops there rather than
+    materializing the rest: instance COUNT is attacker-controlled (a crafted
+    buffer can repeat a needle for as long as the range allows, and yara caps a
+    single string at a million instances), so an unbounded walk here would hand
+    a dump control over this scan's memory and running time. The same cap
+    already governs how many `StringEvidence` a match retains; this keeps the
+    classification input under the same discipline instead of opening a second,
+    unbounded one beside it.
+
+    Handles both yara-python string shapes -- the modern `StringMatch` with
+    `.instances`, and the legacy `(offset, identifier, data)` tuple. A match
+    whose condition places no string returns an empty tuple: it cannot be
+    located, which `classify_over_addresses` treats as unverifiable rather than
+    as grounds to discard the match.
+    """
+    offsets = set()
+    truncated = False
+    for s in match.strings:
+        instances = s.instances if hasattr(s, "instances") else (s,)
+        for inst in instances:
+            if len(offsets) >= limit:
+                truncated = True
+                break
+            offsets.add(inst.offset if hasattr(inst, "offset") else inst[0])
+        if truncated:
+            break
+    return HitAddresses(
+        tuple(seg.start_virtual_address + off for off in sorted(offsets)), truncated)
+
+
 def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list, regions: list,
                    modules_available: bool, mem_info_available: bool,
-                   config: YaraConfig, monotonic=time.monotonic) -> ScanResult:
+                   config: YaraConfig, monotonic=time.monotonic,
+                   hit_addresses=segment_base_addresses) -> ScanResult:
     """
     Walk every segment in `segs`, matching each against every compiled
     rule file in `rule_files`, applying every whole-scan resource budget
@@ -78,6 +131,15 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
     from `time` in this module) so a caller/test can substitute a fake
     clock without needing the global `time.monotonic` to be patched — see
     dumpex/hunt/_runtime.py.
+
+    `hit_addresses(seg, match, limit) -> HitAddresses` names the address(es) a
+    match's memory-context classification and backing-module lookup are
+    anchored at, reading at most `limit` string instances
+    (`config.max_strings_per_match`). It defaults to `segment_base_addresses`,
+    which is what a whole-dump scan reports a hit against. A caller scanning a
+    range that can span several MemoryInfo regions passes
+    `string_instance_addresses` instead, so a match is judged where it actually
+    sits rather than by whatever the range happens to start in.
     """
     reader = mf.get_reader()
 
@@ -155,7 +217,13 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             _mark_budget_exhausted("max_total_bytes_scanned", total_bytes_scanned)
             break
         try:
-            data = reader.read(seg.start_virtual_address, seg.size)
+            # Clipped to the segment's own declared extent, never trusted at
+            # the length the reader chose to return: a segment names exactly
+            # `size` bytes, and matching past that would attribute evidence --
+            # and a hit VA derived from `seg_va + offset` -- to bytes outside
+            # the unit being scanned. A reader that returns nothing sliceable
+            # is a failed read, the same as one that raises.
+            data = reader.read(seg.start_virtual_address, seg.size)[:seg.size]
         except Exception:
             read_failed += 1
             read_failed_targets.append(segment_scan_target(seg))
@@ -208,29 +276,30 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
                     _mark_truncated()
                     break
 
+                # Where this match is judged to be, per `hit_addresses`.
+                located = hit_addresses(seg, match, config.max_strings_per_match)
+
                 hit_context_unverified = False
                 hit_memory_context = None
+                anchor = None
+                classifier = None
                 if match.rule == "PE_In_Private_Memory":
-                    addr = seg.start_virtual_address
-                    suppressed, unverified, ctx_value = context_mod.classify_pe_in_private_memory_hit(
-                        addr, modules, regions, modules_available, mem_info_available)
-                    hit_memory_context = ctx_value
-
-                    if suppressed:
-                        suppressed_module_pe += 1
-                        continue
-
-                    if unverified:
-                        context_unverified += 1
-                        hit_context_unverified = True
+                    classifier = context_mod.classify_pe_in_private_memory_hit
                 elif match.meta.get("dumpex_scope") == SCOPE_PRIVATE_OR_UNBACKED:
-                    addr = seg.start_virtual_address
-                    suppressed, unverified, ctx_value = context_mod.classify_scoped_hit(
-                        addr, modules, regions, modules_available, mem_info_available)
+                    classifier = context_mod.classify_scoped_hit
+
+                if classifier is not None:
+                    suppressed, unverified, ctx_value, anchor = context_mod.classify_over_addresses(
+                        classifier, located.addresses, modules, regions,
+                        modules_available, mem_info_available,
+                        truncated=located.truncated)
                     hit_memory_context = ctx_value
 
                     if suppressed:
-                        suppressed_scoped += 1
+                        if classifier is context_mod.classify_pe_in_private_memory_hit:
+                            suppressed_module_pe += 1
+                        else:
+                            suppressed_scoped += 1
                         continue
 
                     if unverified:
@@ -238,8 +307,14 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
                         hit_context_unverified = True
 
                 # Module/region context resolved ONCE, here, at scan time --
-                # not re-derived by the console at render time.
-                mod = addr_to_module(seg.start_virtual_address, modules) if modules_available else None
+                # not re-derived by the console at render time. Anchored at the
+                # SAME address the memory-context judgement was made at, so one
+                # match can never report private memory and a containing module
+                # at the same time.
+                if anchor is None:
+                    anchor = (located.addresses[0] if located.addresses
+                              else seg.start_virtual_address)
+                mod = addr_to_module(anchor, modules) if modules_available else None
                 backing_module = os.path.basename(mod.name) if mod else None
 
                 # `string_count` counts every string INSTANCE this match

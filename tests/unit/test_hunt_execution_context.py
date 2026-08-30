@@ -47,7 +47,7 @@ def test_context_is_frozen():
 
 def test_captured_views_enumerate_the_dump_once(monkeypatch):
     calls = {"segments": 0, "regions": 0}
-    real_segments = va_range.captured_segments
+    real_segments = va_range.enumerate_captured_segments
     real_regions = va_range.enumerate_captured_regions
 
     def spy_segments(mf):
@@ -58,7 +58,7 @@ def test_captured_views_enumerate_the_dump_once(monkeypatch):
         calls["regions"] += 1
         return real_regions(mf)
 
-    monkeypatch.setattr(va_range, "captured_segments", spy_segments)
+    monkeypatch.setattr(va_range, "enumerate_captured_segments", spy_segments)
     monkeypatch.setattr(va_range, "enumerate_captured_regions", spy_regions)
 
     ctx = _context()
@@ -66,7 +66,8 @@ def test_captured_views_enumerate_the_dump_once(monkeypatch):
     assert ctx.captured_segments() is first_segments
     assert ctx.captured_regions() is ctx.captured_regions()
     assert ctx.captured_region_enumeration() is ctx.captured_region_enumeration()
-    # captured_regions() delegates to the memoized enumeration -- one walk.
+    assert ctx.captured_segment_enumeration() is ctx.captured_segment_enumeration()
+    # Both accessors delegate to their memoized enumeration -- one walk each.
     assert calls == {"segments": 1, "regions": 1}
 
 
