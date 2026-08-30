@@ -379,13 +379,17 @@ class ParseFailedEvidence:
 
 @dataclass(frozen=True)
 class IocTokenHit:
-    """One IOC-pattern token match inside one scanned region. `offset` is
-    region-relative (what `_extract_ioc_strings` reports); `va` is the
-    absolute process address, resolved once here so no projector re-adds
+    """One IOC-pattern token match inside one scanned region. `offset` is a
+    region-relative BYTE offset (`_extract_ioc_strings` reports each run's
+    byte offset, and `_classify_ioc_hits` scales the match's character index
+    inside that run by the run's own encoding width); `va` is the absolute
+    process address, resolved once here so no projector re-adds
     `region.base_address + offset` and risks disagreeing with another."""
     offset:   int
     va:       int
-    encoding: str    # "ASCII" / "ASCII-URL" / "UTF-16LE"
+    # One of `dumpex.core.memory.IOC_STRING_ENCODING_WIDTHS`' keys, which is
+    # also where that encoding's byte-per-character width is defined.
+    encoding: str
     token:    str
     is_weak:  bool = False   # an API name that also appears in plenty of
                               # benign code (see memory_scan._WEAK_IOC_TERMS)
@@ -450,6 +454,14 @@ class IocCoverage:
     short_reads:              int = 0
     short_read_targets:       tuple = field(default_factory=tuple)   # tuple[ScanTarget] -- issue #28
     whitelisted_skipped:      tuple = field(default_factory=tuple)   # tuple[str]
+    # Every whitelisted module whose region was scanned with the NETWORK IOC
+    # pattern set withheld, recorded whether or not that region then produced
+    # a non-network hit. `whitelisted_skipped` above is the narrower
+    # console-facing fact (whitelisted regions that yielded nothing at all);
+    # this one answers "was a whole pattern class not applied to these bytes",
+    # which is what stops a scan that deliberately narrowed itself from
+    # reading as a full-search negative.
+    network_ioc_withheld:     tuple = field(default_factory=tuple)   # tuple[str]
     # The tracker's reconciliation ledger, carried across the scan/
     # aggregate boundary rather than collapsed into a bool -- see
     # `unaccounted` below.
@@ -475,6 +487,8 @@ class IocCoverage:
             self.short_read_targets, ScanTarget, "IocCoverage.short_read_targets"))
         object.__setattr__(self, "whitelisted_skipped", _require_typed_tuple(
             self.whitelisted_skipped, str, "IocCoverage.whitelisted_skipped"))
+        object.__setattr__(self, "network_ioc_withheld", _require_typed_tuple(
+            self.network_ioc_withheld, str, "IocCoverage.network_ioc_withheld"))
         require_recursively_immutable(self, "IocCoverage")
 
     @property
@@ -509,13 +523,15 @@ class IocCoverage:
                 and not self.ledger_imbalance)
 
     @classmethod
-    def from_tracker(cls, tracker, whitelisted_skipped=()) -> "IocCoverage":
+    def from_tracker(cls, tracker, whitelisted_skipped=(),
+                      network_ioc_withheld=()) -> "IocCoverage":
         return cls(skipped_oversize_targets=tuple(tracker.skipped_oversize_targets),
                    read_failed=tracker.read_failed,
                    read_failed_targets=tuple(tracker.read_failed_targets),
                    short_reads=tracker.short_reads,
                    short_read_targets=tuple(tracker.short_read_targets),
                    whitelisted_skipped=tuple(whitelisted_skipped),
+                   network_ioc_withheld=tuple(network_ioc_withheld),
                    scanned=tracker.scanned, eligible_total=tracker.total,
                    eligible_bytes=tracker.eligible_bytes,
                    not_applicable=tracker.not_applicable,

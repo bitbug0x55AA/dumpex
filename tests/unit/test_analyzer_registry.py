@@ -134,12 +134,13 @@ def test_granted_scopes_resolves_the_full_set_or_empty():
 
 
 def test_exactly_the_executable_identities_carry_a_targeted_adapter():
-    # These three carry an executable targeted adapter; every other capability
-    # declaration authorizes routing only, so its targeted execution fails
-    # closed.
+    # Every targeted-capable identity carries an executable adapter; the two
+    # that carry no capability at all carry no adapter either.
     with_adapter = {spec.identity for spec in REGISTRY._all_specs()
                     if spec.targeted_adapter is not None}
-    assert with_adapter == {"obfuscation", "yara", "cs-beacon"}
+    assert with_adapter == {"obfuscation", "yara", "cs-beacon", "pipe", "stomping"}
+    assert {spec.identity for spec in REGISTRY._all_specs()
+            if spec.targeted_capability is None} == {"injection", "hollowing"}
 
 
 def test_builder_arg_is_mf_for_every_identity():
@@ -525,17 +526,12 @@ _TARGETED_CASES = (
     ("obfuscation", "encoding_scan", "sleep_mask"),
 )
 
-# (identity, source, full granted scope set) -- the shape a HuntRequest /
-# an executor carries. These two are routing-only (no targeted_adapter); the
-# three that do carry one are covered separately below.
-_TARGETED_SCOPE_SET_CASES = (
+# (identity, source, full granted scope set) for every identity whose grant is
+# backed by a registered executor -- the shape a HuntRequest / an executor
+# carries. Every granted identity is executable.
+_TARGETED_EXECUTABLE_CASES = (
     ("pipe", "pipe_name_scan", frozenset()),
     ("stomping", "ioc_string_scan", frozenset()),
-)
-
-# (identity, source, full granted scope set) for every identity whose grant is
-# backed by a registered executor.
-_TARGETED_EXECUTABLE_CASES = (
     ("yara", "segment_scan", frozenset()),
     ("cs-beacon", "segment_scan", frozenset()),
     ("obfuscation", "encoding_scan", frozenset({"sleep_mask", "entropy", "decode"})),
@@ -550,13 +546,17 @@ def test_select_targeted_resolves_a_granted_source_and_scope(identity, source, s
     assert spec is REGISTRY.get(identity)
 
 
-@pytest.mark.parametrize("identity,source,scopes", _TARGETED_SCOPE_SET_CASES)
-def test_resolve_targeted_adapter_fails_closed_without_an_adapter(identity, source, scopes):
-    # Routing is authorized; execution is not, because no targeted_adapter
-    # is registered. resolve_targeted_adapter takes the SAME scope-set shape
+def test_resolve_targeted_adapter_fails_closed_without_an_adapter():
+    # A granted capability with no registered executor authorizes routing and
+    # nothing more: execution fails closed rather than returning a clean empty
+    # result. resolve_targeted_adapter takes the SAME scope-set shape
     # HuntRequest does, so the two boundaries agree.
+    spec = _spec_with_grant(
+        "stomping", TargetedScanUnit.REGION, TargetedGrant("ioc_string_scan", frozenset()))
+    assert spec.targeted_adapter is None
+    registry = AnalyzerRegistry._construct_unvalidated((spec,))
     with pytest.raises(UnsupportedTargetedExecution):
-        REGISTRY.resolve_targeted_adapter(identity, source, scopes)
+        registry.resolve_targeted_adapter("stomping", "ioc_string_scan", frozenset())
 
 
 @pytest.mark.parametrize("identity,source,scopes", _TARGETED_EXECUTABLE_CASES)

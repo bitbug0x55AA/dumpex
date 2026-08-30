@@ -1230,7 +1230,8 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.REGION,
                 frozenset({TargetedGrant("ioc_string_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["stomping"])),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["stomping"]),
+            targeted_adapter_attr="_run_targeted_stomping"),
         _register(
             "pipe", "dumpex.hunt.pipe", PipeReport,
             "_build_pipe_report", "_render_pipe_console",
@@ -1239,7 +1240,8 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.REGION,
                 frozenset({TargetedGrant("pipe_name_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["pipe"])),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["pipe"]),
+            targeted_adapter_attr="_run_targeted_pipe"),
         _register(
             "cs-beacon", "dumpex.hunt.cs_beacon", CSBeaconReport,
             "_build_cs_beacon_report", "_render_cs_beacon_console",

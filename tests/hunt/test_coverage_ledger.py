@@ -663,6 +663,32 @@ def _run_pipe_builder(region, reader, config=None, captured=()):
     return PipeScanCoverage.from_scan(seen[0], _budget(), _budget())
 
 
+def _run_pipe_targeted(region, reader, config=None, captured=()):
+    """Drives `pipe.targeted.run_targeted_pipe`, which constructs its own
+    tracker and hands it to `scan_pipe_names` -- so the targeted adapter's
+    ledger is exercised in its own right rather than inheriting the full-scope
+    builder's. Reports the `PipeScanCoverage` the adapter carried out on its
+    result payload, the same transport shape every other runner returns."""
+    import dumpex.hunt.pipe.targeted as pipe_targeted
+    from dumpex.core.va_range import VirtualRange
+    from dumpex.hunt._execution import build_execution_context
+    from dumpex.hunt._request import HuntRequest
+
+    mf = _mf(regions=[region], captured=captured)
+    request = HuntRequest.targeted(
+        "pipe", "pipe_name_scan",
+        VirtualRange(region.BaseAddress, region.RegionSize))
+    original_read = pipe_targeted.read_region_spanning
+    pipe_targeted.read_region_spanning = reader
+    try:
+        result = pipe_targeted.run_targeted_pipe(build_execution_context(mf, request))
+    finally:
+        pipe_targeted.read_region_spanning = original_read
+
+    assert result.payload is not None, "the targeted pipe adapter returned no scan payload"
+    return result.payload.coverage
+
+
 # Every `CoverageTracker(...)` construction site in dumpex/hunt, paired
 # with the scan entry point that drives it. Each pairing is checked twice
 # below: the set of sites has to match what the tree actually contains
@@ -675,6 +701,7 @@ TRACKER_CONSTRUCTION_SITES = {
     "encoding/entropy.py::_scan_entropy":           (_run_entropy,    _private_region),
     "encoding/sleep_mask.py::_scan_sleep_mask":     (_run_sleep_mask, _private_region),
     "pipe/__init__.py::_build_pipe_report":  (_run_pipe_builder, _private_region),
+    "pipe/targeted.py::run_targeted_pipe":   (_run_pipe_targeted, _private_region),
     "stomping/memory_scan.py::scan_ioc_strings":    (_run_ioc,        _image_region),
 }
 
