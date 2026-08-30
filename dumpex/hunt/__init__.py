@@ -68,6 +68,37 @@ def _run_targeted_cs_beacon(context):
     return run_targeted_cs_beacon(context)
 
 
+def _run_targeted_pipe(context):
+    """The dispatcher-facing name `_registry.py` resolves `pipe`'s
+    `targeted_adapter` through (contract §8): given one targeted
+    `HuntExecutionContext`, collect pipe names and the C2 context around them
+    over the single requested virtual-address range and return an
+    `ObservationResult` with one independent `pipe_name` closure and one
+    `c2_context` closure.
+
+    The real implementation lives in `dumpex.hunt.pipe.targeted` and is
+    imported lazily, for the same reason `_run_targeted_obfuscation` above
+    imports its own."""
+    from dumpex.hunt.pipe.targeted import run_targeted_pipe
+    return run_targeted_pipe(context)
+
+
+def _run_targeted_stomping(context):
+    """The dispatcher-facing name `_registry.py` resolves `stomping`'s
+    `targeted_adapter` through (contract §8): given one targeted
+    `HuntExecutionContext`, run the unscored IOC-string scan over the single
+    requested virtual-address range and return an `ObservationResult` with one
+    `ioc_string_scan` closure. Stomping's module-header, reference-file,
+    executable-section, relocation, and content-diff sources are not evaluated
+    by it.
+
+    The real implementation lives in `dumpex.hunt.stomping.targeted` and is
+    imported lazily, for the same reason `_run_targeted_obfuscation` above
+    imports its own."""
+    from dumpex.hunt.stomping.targeted import run_targeted_stomping
+    return run_targeted_stomping(context)
+
+
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations

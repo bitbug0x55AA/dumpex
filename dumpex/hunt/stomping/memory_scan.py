@@ -12,7 +12,7 @@ report_* projectors never see a raw object or re-derive a formatted one.
 """
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import (addr_to_module, prot_str, va_range_captured_bytes,
-    va_to_file_offset, _extract_ioc_strings)
+    va_to_file_offset, IOC_STRING_ENCODING_WIDTHS, _extract_ioc_strings)
 from dumpex.core.pe_utils import (parse_pe_header, expected_protection_name,
     section_protection_deviates)
 from dumpex.hunt._coverage import CoverageTracker, region_scan_target
@@ -115,13 +115,22 @@ def _classify_ioc_hits(strings, patterns, region_base: int) -> tuple:
     as immutable `IocTokenHit`s with their absolute VA already resolved --
     `_extract_ioc_strings` reports region-relative offsets, and resolving
     the VA here (once) is what stops two projectors adding
-    `region.base_address + offset` independently."""
+    `region.base_address + offset` independently.
+
+    A match inside a UTF-16LE run sits `m.start()` CHARACTERS into that run,
+    which is twice as many bytes -- so the character index is scaled to the
+    string's own encoding width before it is added to the run's byte offset.
+    The width comes from `IOC_STRING_ENCODING_WIDTHS`, which is defined
+    alongside the tags in `dumpex.core.memory` rather than restated here, and
+    is indexed directly: a tag with no width is a producer/map inconsistency
+    in that module, never something a dump can cause."""
     hits = []
     for off, enc, s in strings:
+        width = IOC_STRING_ENCODING_WIDTHS[enc]
         for pat in patterns:
             for m in pat.finditer(s):
                 token = m.group(0)
-                offset = off + m.start()
+                offset = off + m.start() * width
                 hits.append(IocTokenHit(offset=offset, va=region_base + offset, encoding=enc,
                                          token=token,
                                          is_weak=token.casefold() in _WEAK_IOC_TERMS))
@@ -129,7 +138,8 @@ def _classify_ioc_hits(strings, patterns, region_base: int) -> tuple:
 
 
 def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list,
-                      whitelist, ioc_patterns, net_ioc_patterns) -> IocScanResult:
+                      whitelist, ioc_patterns, net_ioc_patterns,
+                      scan_max: "int | None" = None) -> IocScanResult:
     """
     Scan every executable MEM_IMAGE region for IOC-pattern strings — an
     unscored, low-confidence lead (see dumpex/hunt/_finding.py for why raw
@@ -151,13 +161,26 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
     complete, clean IOC result (see report_console.py / this package's
     docstring).
 
+    `scan_max` is the per-region size cap a region has to stay under to be
+    read at all. `None` means this module's own `IOC_SCAN_MAX`, resolved per
+    call rather than bound at import so the module-global monkeypatch seam
+    keeps working; a targeted rescan (dumpex.hunt.stomping.targeted) passes
+    an explicit value to bypass that ONE cap for the range an investigator
+    named. No other limit is affected by it.
+
     The live `CoverageTracker` is frozen into an `IocCoverage` before it is
     returned, so nothing downstream can mutate this scan's own result.
     """
     ioc_hits = []
     skipped_wl = []
+    # Every whitelisted module whose region was scanned with the network IOC
+    # pattern set withheld, recorded at the decision site regardless of what
+    # the remaining patterns then found -- `skipped_wl` below is the narrower
+    # console fact and is appended only on the no-hit path.
+    network_withheld = []
     weak_only_regions = 0
     coverage = CoverageTracker()
+    region_cap = IOC_SCAN_MAX if scan_max is None else scan_max
 
     for r in regions:
         mtype = prot_str(r.Type)
@@ -181,8 +204,8 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
         # and every path out of this iteration records one against the
         # eligible item opened here.
         coverage.note_eligible(va_range_captured_bytes(mf, r.BaseAddress, r.RegionSize))
-        if r.RegionSize > IOC_SCAN_MAX:
-            coverage.note_skipped_oversize(region_scan_target(mf, r, IOC_SCAN_MAX))
+        if r.RegionSize > region_cap:
+            coverage.note_skipped_oversize(region_scan_target(mf, r, region_cap))
             continue
 
         mod      = addr_to_module(r.BaseAddress, modules)
@@ -211,6 +234,8 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
         coverage.note_scanned()
 
         strings = _extract_ioc_strings(data, r.BaseAddress)
+        if is_wl:
+            network_withheld.append(mod_name)
         patterns = ([ioc_patterns] if is_wl else [ioc_patterns, net_ioc_patterns])
         hits = _classify_ioc_hits(strings, patterns, r.BaseAddress)
 
@@ -226,5 +251,6 @@ def scan_ioc_strings(mf: MinidumpFile, read_region, regions: list, modules: list
                                         tokens=hits, not_whitelisted=not is_wl))
 
     return IocScanResult(hits=tuple(ioc_hits),
-                          coverage=IocCoverage.from_tracker(coverage, skipped_wl),
+                          coverage=IocCoverage.from_tracker(
+                              coverage, skipped_wl, network_withheld),
                           weak_only_regions=weak_only_regions)

@@ -49,14 +49,17 @@ combination fails closed. Each `TargetedCapability` also carries a
 obfuscation) -- the per-analyzer safety bound the targeted-rescan matrix
 freezes, kept on the capability rather than in a second identity-keyed table,
 and cross-checked at import against `_EXPECTED_TARGETED_REQUEST_CEILINGS`.
-`obfuscation`, `yara`, and `cs-beacon` carry a `targeted_adapter`
-(`dumpex.hunt._run_targeted_obfuscation` /  `_run_targeted_yara` /
-`_run_targeted_cs_beacon`, resolving to
+All five carry a `targeted_adapter` — `dumpex.hunt._run_targeted_obfuscation` /
+`_run_targeted_yara` / `_run_targeted_cs_beacon` / `_run_targeted_pipe` /
+`_run_targeted_stomping`, resolving to
 `dumpex.hunt.encoding.targeted.run_targeted_encoding`,
-`dumpex.hunt.yara_hunt.targeted.run_targeted_yara`, and
-`dumpex.hunt.cs_beacon.targeted.run_targeted_cs_beacon`); `pipe` and `stomping`
-do not yet, so `resolve_targeted_adapter()` still fails closed for those two
-until their executors land. Injection and hollowing have
+`dumpex.hunt.yara_hunt.targeted.run_targeted_yara`,
+`dumpex.hunt.cs_beacon.targeted.run_targeted_cs_beacon`,
+`dumpex.hunt.pipe.targeted.run_targeted_pipe`, and
+`dumpex.hunt.stomping.targeted.run_targeted_stomping` — so
+`resolve_targeted_adapter()` resolves an executor for every granted capability.
+A capability declared without one still fails closed
+(`UnsupportedTargetedExecution`). Injection and hollowing have
 `targeted_capability=None`.
 
 ## `AnalyzerSpec`
@@ -76,10 +79,11 @@ until their executors land. Injection and hollowing have
     grant set, and `request_ceiling` (bytes; the largest targeted range this
     analyzer may be asked for, cross-checked at import).
 11. `targeted_adapter: Callable | None` — the executor a targeted-scan run
-    calls as `adapter(context)`, or `None`. Non-`None` for `obfuscation`,
-    `yara`, and `cs-beacon` today (each late-bound through its own
+    calls as `adapter(context)`, or `None`. Non-`None` for every
+    targeted-capable identity today (each late-bound through its own
     `dumpex.hunt._run_targeted_*` facade name, exactly as the
-    builder/renderer/projector are); `None` for the other four. Registered
+    builder/renderer/projector are); `None` for `injection` and `hollowing`,
+    which carry no capability at all. Registered
     through `_register(..., targeted_adapter_attr=)`,
     which resolves the real target and checks it at construction for exactly
     one positionally-passable `context` parameter, the same way the

@@ -1394,6 +1394,28 @@ def _search_string_in_memory(mf: MinidumpFile, needle: str) -> tuple:
 
     return hits, StringSearchStats(skipped=skipped, clamped=clamped, truncated=truncated)
 
+# The encoding tag `_extract_ioc_strings` attaches to each string it
+# extracts, and how many BYTES one character of such a string occupies.
+#
+# The two belong together: a caller matching a pattern against the DECODED
+# text gets a CHARACTER index back, and resolving that to a region byte
+# offset needs the width. Defining the widths beside the tags — rather than
+# leaving a consumer to restate them — is what stops a new or renamed tag
+# from silently taking a wrong width in a caller that never learned about
+# it. A consumer indexes this map directly (never `.get(enc, 1)`): an
+# unknown tag is an in-module inconsistency between this map and the three
+# `results.append(...)` calls below, not something a dump can produce.
+_IOC_ENC_ASCII = "ASCII"
+_IOC_ENC_ASCII_URL = "ASCII-URL"
+_IOC_ENC_UTF16 = "UTF16"
+
+IOC_STRING_ENCODING_WIDTHS = {
+    _IOC_ENC_ASCII:     1,
+    _IOC_ENC_ASCII_URL: 1,
+    _IOC_ENC_UTF16:     2,
+}
+
+
 def _extract_ioc_strings(data: bytes, base_addr: int) -> list:
     """
     Extract IOC-relevant strings with full length preservation.
@@ -1402,7 +1424,9 @@ def _extract_ioc_strings(data: bytes, base_addr: int) -> list:
       2. Anchor-and-extend for known prefixes (https://, http://) that may
          be followed by bytes that break the printable-ASCII run — this
          prevents truncation of URLs stored with mixed-case or encoded chars.
-    Returns list of (offset, enc, string).
+    Returns list of (offset, enc, string). `offset` is a BYTE offset into
+    `data`; `enc` is one of `IOC_STRING_ENCODING_WIDTHS`' keys above, whose
+    value is the byte width of one character of `string`.
     """
     results = []
     seen_offsets = set()
@@ -1410,7 +1434,8 @@ def _extract_ioc_strings(data: bytes, base_addr: int) -> list:
     # Strategy 1: standard printable ASCII, min 8 chars
     pat = rb'[ -~]{8,}'
     for m in re.finditer(pat, data):
-        results.append((m.start(), "ASCII", m.group().decode("ascii", errors="replace")))
+        results.append((m.start(), _IOC_ENC_ASCII,
+                        m.group().decode("ascii", errors="replace")))
         seen_offsets.add(m.start())
 
     # Strategy 2: anchor-and-extend for URL prefixes
@@ -1429,7 +1454,7 @@ def _extract_ioc_strings(data: bytes, base_addr: int) -> list:
                     end += 1
                 s = data[idx:end].decode("ascii", errors="replace")
                 if len(s) >= 8:
-                    results.append((idx, "ASCII-URL", s))
+                    results.append((idx, _IOC_ENC_ASCII_URL, s))
                     seen_offsets.add(idx)
             pos = idx + 1
 
@@ -1437,7 +1462,7 @@ def _extract_ioc_strings(data: bytes, base_addr: int) -> list:
     pat_uni = rb'(?:[ -~]\x00){8,}'
     for m in re.finditer(pat_uni, data):
         if m.start() not in seen_offsets:
-            results.append((m.start(), "UTF16",
+            results.append((m.start(), _IOC_ENC_UTF16,
                             m.group().decode("utf-16-le", errors="replace")))
 
     results.sort(key=lambda x: x[0])

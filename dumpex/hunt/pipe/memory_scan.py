@@ -160,7 +160,8 @@ def _build_c2_record(data: bytes, start: int, end: int, token: bytes,
 
 
 def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
-                     coverage_counts, pipe_name_budget, c2_budget, c2_pattern) -> PipeNameScanResult:
+                     coverage_counts, pipe_name_budget, c2_budget, c2_pattern,
+                     scan_max: "int | None" = None) -> PipeNameScanResult:
     """
     Walk every committed, not-oversized region: collect '\\pipe\\' string
     occurrences (private leads / expected system-DLL references) under
@@ -170,15 +171,30 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
     (the handle-correlation checks' raw material) is unaffected by
     c2_budget running out, and vice versa.
 
+    `scan_max` is the per-region size cap a region has to stay under to be
+    read at all. `None` means this module's own `PIPE_SCAN_MAX`, resolved
+    per call rather than bound at import so the module-global monkeypatch
+    seam keeps working; a targeted rescan (dumpex.hunt.pipe.targeted) passes
+    an explicit value to bypass that ONE cap for the range an investigator
+    named. Every other budget is unaffected by it.
+
     Returns a fully immutable `PipeNameScanResult` -- including a frozen
     `PipeScanCoverage` snapshot of the still-live tracker/budgets this
     function was handed, so neither can be mutated after the scan finishes
     and silently change what the Report reports.
     """
+    region_cap = PIPE_SCAN_MAX if scan_max is None else scan_max
     string_leads = []
     image_pipe_refs = 0
     image_pipe_modules = []
     c2_regions = []
+    # A per-region quota that actually DROPPED an occurrence, recorded at the
+    # site that dropped it. These are not budget exhaustion (no whole-hunt
+    # resource ran out) and not a read gap, but they do mean the pattern walk
+    # over that region stopped before every occurrence was processed -- so a
+    # negative from it is not a full-search negative.
+    match_cap_hit = False
+    context_only_cap_hit = False
     # One ScanTarget per eligible region a spent budget left unresolved for
     # its scope, accumulated at the decision site that could not proceed --
     # never reconstructed after the fact from a stop index or the final
@@ -203,9 +219,9 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
         # and every unresolved region visible instead of silently dropped.
         coverage_counts.note_eligible(
             va_range_captured_bytes(mf, r.BaseAddress, r.RegionSize))
-        if r.RegionSize > PIPE_SCAN_MAX:
+        if r.RegionSize > region_cap:
             coverage_counts.note_skipped_oversize(
-                region_scan_target(mf, r, PIPE_SCAN_MAX))
+                region_scan_target(mf, r, region_cap))
             continue
         if pipe_name_budget.exhausted() and c2_budget.exhausted():
             # Neither pipe-name matching nor its dependent C2 collection can
@@ -265,6 +281,10 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             examined = True
             for m in pat.finditer(data):
                 if region_matches >= PIPE_MAX_MATCHES_PER_REGION:
+                    # Every iteration of this loop is a real match, so reaching
+                    # the quota here always means at least one occurrence went
+                    # unprocessed.
+                    match_cap_hit = True
                     break
                 if pipe_name_budget.exhausted():
                     pipe_name_cut = True
@@ -358,10 +378,18 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
                 pass2_truncated = [False]
                 for start, end, token in _iter_c2_matches(data, c2_pattern, c2_budget,
                                                            pass2_truncated):
-                    if context_kept >= PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION:
-                        break
+                    # The proximity test comes FIRST so the quota is only
+                    # consulted for a match this pass would actually have
+                    # retained: a stream whose next match is proximity evidence
+                    # (pass 1's, already kept) has had nothing dropped, and
+                    # stopping on it would report a quota gap that did not
+                    # happen -- and, worse, would hide a context-only match
+                    # further along that genuinely is dropped.
                     if is_proximity_match(start, region_pipe_offsets, PIPE_CONTEXT_DISTANCE):
                         continue
+                    if context_kept >= PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION:
+                        context_only_cap_hit = True
+                        break
                     record = _build_c2_record(data, start, end, token, r.BaseAddress)
                     if not c2_budget.take_hit(len(record.context) + len(record.match)):
                         c2_context_incomplete = True
@@ -403,6 +431,7 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
         coverage_counts, pipe_name_budget, c2_budget,
         image_pipe_refs=image_pipe_refs, image_pipe_modules=image_pipe_modules,
         pipe_name_budget_exhausted_targets=_dedupe_targets(pipe_name_budget_affected),
-        c2_budget_exhausted_targets=_dedupe_targets(c2_budget_affected))
+        c2_budget_exhausted_targets=_dedupe_targets(c2_budget_affected),
+        match_cap_hit=match_cap_hit, context_only_cap_hit=context_only_cap_hit)
     return PipeNameScanResult(string_leads=tuple(dedupe_private_pipes(string_leads)),
                                c2_regions=tuple(c2_regions), coverage=coverage)

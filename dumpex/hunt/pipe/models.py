@@ -636,6 +636,17 @@ class PipeScanCoverage:
     c2_budget_exhausted_targets:        tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     image_pipe_refs:            int = 0
     image_pipe_modules:         tuple = field(default_factory=tuple)   # tuple[str]
+    # A per-region QUOTA that dropped an occurrence, as opposed to a
+    # whole-hunt budget that ran out (the two `_budget_exhausted` pairs above)
+    # or a read that came up short. `match_cap_hit`: the pipe-name walk hit
+    # PIPE_MAX_MATCHES_PER_REGION and left occurrences unprocessed.
+    # `context_only_cap_hit`: the context-only C2 pass hit
+    # PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION and left a non-adjacent artifact
+    # unretained. Both are set only where an occurrence was actually dropped,
+    # so either one being True means a negative over that region is not a
+    # full-search negative.
+    match_cap_hit:              bool = False
+    context_only_cap_hit:       bool = False
     # The tracker's reconciliation ledger, carried across the scan/
     # aggregate boundary rather than collapsed into a bool -- see
     # `unaccounted` below.
@@ -668,7 +679,8 @@ class PipeScanCoverage:
                      "scanned", "eligible_total", "eligible_bytes", "not_applicable",
                      "budget_skipped", "unaccounted", "over_accounted"):
             _require_count(getattr(self, name), f"PipeScanCoverage.{name}")
-        for name in ("c2_budget_exhausted", "pipe_name_budget_exhausted"):
+        for name in ("c2_budget_exhausted", "pipe_name_budget_exhausted",
+                     "match_cap_hit", "context_only_cap_hit"):
             _require_bool(getattr(self, name), f"PipeScanCoverage.{name}")
         for name in ("c2_budget_reason", "pipe_name_budget_reason"):
             _require_str(getattr(self, name), f"PipeScanCoverage.{name}")
@@ -711,7 +723,9 @@ class PipeScanCoverage:
     def from_scan(cls, tracker, pipe_name_budget, c2_budget, *,
                    image_pipe_refs: int = 0, image_pipe_modules=(),
                    pipe_name_budget_exhausted_targets=(),
-                   c2_budget_exhausted_targets=()) -> "PipeScanCoverage":
+                   c2_budget_exhausted_targets=(),
+                   match_cap_hit: bool = False,
+                   context_only_cap_hit: bool = False) -> "PipeScanCoverage":
         """Freeze a finished scan's live tracker/budgets. `exhausted()` is
         called (not `exhausted_reason` read directly) because a budget only
         notices an expired DEADLINE when asked -- see
@@ -729,6 +743,8 @@ class PipeScanCoverage:
                    image_pipe_modules=tuple(image_pipe_modules),
                    pipe_name_budget_exhausted_targets=tuple(pipe_name_budget_exhausted_targets),
                    c2_budget_exhausted_targets=tuple(c2_budget_exhausted_targets),
+                   match_cap_hit=match_cap_hit,
+                   context_only_cap_hit=context_only_cap_hit,
                    scanned=tracker.scanned, eligible_total=tracker.total,
                    eligible_bytes=tracker.eligible_bytes,
                    not_applicable=tracker.not_applicable,

@@ -9,7 +9,13 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
-No additional user-facing changes recorded.
+### Fixed
+
+- Corrected the reported address of a UTF-16LE IOC token in module-stomping
+  output. Its `VA` was computed from the match's character position rather than
+  its byte position, placing the token at half its true distance into the
+  string. ASCII and URL-run tokens are unaffected; which tokens match, the hit
+  counts, the weak/strong classification, and the score are unchanged.
 
 ## 3.5.2 — 2026-08-27
 

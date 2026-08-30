@@ -537,12 +537,21 @@ class LimitationCode(str, Enum):
     # dumpex.hunt._budget.ScanBudget hit one of ITS limits. `detail` names the
     # reason, from a closed set: "window_sampled" (a per-region window sample,
     # obfuscation's SLEEP_MASK_MAX_WINDOWS), "candidate_list_truncated" (a
-    # recovered-key list cut at a cap, SLEEP_MASK_MAX_CANDIDATES), or
+    # recovered-key list cut at a cap, SLEEP_MASK_MAX_CANDIDATES),
     # "overlapping_capture" (the dump's segment table maps a requested VA to
     # more than one file offset, so the analyzed bytes are one arbitrary choice
-    # among conflicting claims -- CapturedSlice.overlapping). `scope` names the
-    # scan LAYER; caller_buildable; affected_count carries the range count. No
-    # `targets` -- the gap is about the search, not an unread region.
+    # among conflicting claims -- CapturedSlice.overlapping),
+    # "match_cap_reached" (a per-target match quota left occurrences
+    # unprocessed, pipe's PIPE_MAX_MATCHES_PER_REGION),
+    # "context_only_cap_reached" (a per-target retention quota left a
+    # non-adjacent artifact unkept, pipe's
+    # PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION), or "pattern_set_withheld" (a whole
+    # pattern class was deliberately not applied, stomping's network IOC set
+    # over a whitelisted module). Each names a bound the scan itself imposed on
+    # its own search, which is what separates them from SCAN_BUDGET_EXHAUSTED.
+    # `scope` names the scan LAYER; caller_buildable; affected_count carries
+    # the range count. No `targets` -- the gap is about the search, not an
+    # unread region.
     SCAN_ITEMS_UNACCOUNTED = "SCAN_ITEMS_UNACCOUNTED"
     # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED/_READ_FAILED/_SHORT_READ,
     # and the one gap in the family that can never name what it lost: N
@@ -1673,6 +1682,15 @@ _SCAN_REGION_SEARCH_INCOMPLETE_REASONS = {
     "overlapping_capture":
         "the dump's segment table maps a requested address to multiple file offsets, "
         "so the analyzed bytes are one arbitrary choice among conflicting claims",
+    "match_cap_reached":
+        "the per-target match quota was reached before every occurrence in the range "
+        "was processed",
+    "context_only_cap_reached":
+        "the per-target context-only retention quota was reached before every "
+        "non-adjacent artifact was kept",
+    "pattern_set_withheld":
+        "a whole pattern class was deliberately not applied to these bytes, so the "
+        "range was searched for fewer indicators than a full scan applies",
 }
 
 

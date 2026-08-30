@@ -14,7 +14,7 @@ capture), and the observation layer splits execution identity
 so one expensive run projects `pipe_name` and `c2_context` closures (or the
 three obfuscation layers) independently without duplicate scanning.
 
-Three targeted executors are implemented, each registered as its analyzer's
+All five targeted executors are implemented, each registered as its analyzer's
 `AnalyzerSpec.targeted_adapter` and reachable through
 `AnalyzerRegistry.resolve_targeted_adapter()`:
 
@@ -35,13 +35,42 @@ Three targeted executors are implemented, each registered as its analyzer's
   (matches or config hits, the scanner's diagnostics, YARA's `RulesProvenance`
   or CS Beacon's per-hit corroboration, and the containing-segment
   `ScanTarget`).
+- `dumpex.hunt.pipe.targeted.run_targeted_pipe` runs the pipe-name and
+  C2-context passes over one clipped range in a single read, bypassing only
+  `PIPE_SCAN_MAX`, and returns an `ObservationResult` with one independent
+  `pipe_name` closure and one `c2_context` closure plus a `TargetedPipeEvidence`
+  payload (the range's string leads, its C2 records, the scan's frozen
+  coverage, and the containing-allocation `ScanTarget`). Both budgets are
+  registered on `context.budgets`, so several ranges rescanned on one context
+  share one cumulative allowance instead of each getting a fresh one. They are
+  registered *before* the range is read, so each deadline bounds the read as
+  well as the passes that follow it -- a targeted range runs up to the whole
+  request ceiling, so reading it is scan work an investigator waits on, not free
+  setup -- and a range both budgets are already spent for is never read at all.
+  Because
+  C2 records are retained against that range's own pipe-name hits, a pipe-name
+  pass its own budget cut short leaves the `c2_context` closure `partial` too,
+  attributed to the pipe-name budget's own `SCAN_BUDGET_EXHAUSTED` rather than
+  merged into the C2 one.
+- `dumpex.hunt.stomping.targeted.run_targeted_stomping` runs the unscored
+  IOC-string scan over one clipped range, bypassing only `IOC_SCAN_MAX`, and
+  returns an `ObservationResult` with a single `ioc_string_scan` closure plus a
+  `TargetedStompingEvidence` payload (the range's IOC hits, whether its only
+  tokens were weak ones, the scan's frozen coverage, and the
+  containing-allocation `ScanTarget`). It projects no closure for any other
+  stomping source. A range attributed to a whitelisted network module keeps
+  full scope's rule -- the network IOC pattern set is not applied -- but the
+  closure says so through `SCAN_REGION_SEARCH_INCOMPLETE`/
+  `pattern_set_withheld` and is `partial`, because a scan that applied fewer
+  patterns cannot carry a full-search negative.
 
-Every other budget is retained at its full-scope value in all three. The
+Every other budget is retained at its full-scope value in all five. The
 descriptor-boundary rule (`dumpex.hunt._targeted`: clip to the containing
 descriptor, `SCAN_REGION_EVALUATION_TRUNCATED`, the sub-descriptor caveat, the
 synthetic region/segment shims, and the unexamined-suffix target) is shared in
-both scan units, so pipe and stomping reuse one implementation; only the
-coverage-to-status reduction stays analyzer-local.
+both scan units, so pipe/stomping/obfuscation reuse one region implementation
+and YARA/CS Beacon one segment implementation; only the coverage-to-status
+reduction stays analyzer-local.
 
 How exact a budget's remaining target can be is a property of the scan
 algorithm, not of the targeted layer:
@@ -58,15 +87,50 @@ algorithm, not of the targeted layer:
   buffer at once, so a hit-cap or deadline stop leaves "rule files k..n did not
   run over these bytes" -- a rule-set residual, not a byte range. Those gaps
   name the whole evaluated slice.
+- **Pipe** cannot either. Each pattern sweeps the whole buffer, and a budget
+  stop is recorded per region rather than per offset, so a cut pass leaves the
+  whole evaluated range as its target.
 
 Where a byte-exact residual is unavailable the target is always a conservative
 superset, never narrower than what is actually unresolved: naming a narrower
 range would send a rescan past the bytes that stopped early. A rule-set
 residual for YARA would need a new limitation shape and is not in this release.
 
-The pipe and stomping executors, the CLI flag, and the
-structured output remain outstanding. This is the live final design; it does
-not authorize behavior changes to current full-scope `--hunt`.
+The CLI flag and the structured output remain outstanding. This is the live
+final design; it does not authorize behavior changes to current full-scope
+`--hunt`.
+
+### The one deliberate full-scope change
+
+Targeted mode reuses the analyzers' own scanners rather than forking them, so a
+defect in a shared scanner is fixed in one place and both paths change together.
+There is exactly one such fix, and it is intentional:
+
+`dumpex.hunt.stomping.memory_scan._classify_ioc_hits` resolves an IOC token's
+`offset`/`va` from its match position inside a decoded string.
+`_extract_ioc_strings` reports each run's BYTE offset in the region and its
+DECODED text, so a match's `m.start()` is a CHARACTER index -- and the two units
+only coincide for a single-byte encoding. A token found in a UTF-16LE run was
+therefore reported at half its true distance into the run. The index is now
+scaled by the run's own encoding width from
+`dumpex.core.memory.IOC_STRING_ENCODING_WIDTHS`.
+
+- This changes full-scope output: a UTF-16LE IOC token's reported `offset` and
+  `va` move from `run_offset + character_index` to
+  `run_offset + character_index * 2`. The corrected address is the one an
+  investigator extracts or pivots on, so shipping targeted mode on top of the
+  old arithmetic would have propagated a wrong address to a second consumer.
+- `ASCII` and `ASCII-URL` are unchanged: their width is 1, so the scaling is the
+  identity.
+- Nothing else moves. Which tokens match, how many hits a region yields, the
+  weak/strong classification, whitelist handling, scoring, and every coverage
+  semantic are untouched -- only the address arithmetic for a multi-byte
+  encoding.
+
+Both paths are pinned: `tests/hunt/test_stomping_memory_scan.py` covers
+`_classify_ioc_hits` directly and the encoding-width map's parity with the
+extractor, and `tests/hunt/test_stomping_ioc_addressing.py` drives the full-scope
+`scan_ioc_strings` entry point and the console projection.
 
 ## Scope and vocabulary
 
@@ -274,9 +338,10 @@ that repeated chunks automatically close the original gap.
 
 ### Closure and evaluation
 
-One invocation produces one closure for pipe, stomping, YARA, and CS Beacon,
-and three layer closures for obfuscation. Identity always uses the requested
-base and size, regardless of capture outcome.
+One invocation produces one closure for stomping, YARA, and CS Beacon, two for
+pipe (`pipe_name` and `c2_context`, both under `pipe_name_scan`), and three
+layer closures for obfuscation. Identity always uses the requested base and
+size, regardless of capture outcome.
 
 Per-closure status is derived from two independent gates:
 
@@ -424,13 +489,26 @@ The new limitation codes are:
 |---|---|---|---|
 | `TARGETED_SOURCE_NOT_EVALUATED` | absent-capable | `scope` | a required targeted closure did not run |
 | `SCAN_REGION_EVALUATION_TRUNCATED` | caller-buildable | `scope`, `targets` | evaluation stopped at the first descriptor boundary while capture continued |
-| `SCAN_REGION_SEARCH_INCOMPLETE` | caller-buildable | `scope`, `detail`, `affected_count` | the scan reached the requested bytes but a bounded internal sample (`window_sampled`, `candidate_list_truncated`) or an ambiguous overlapping capture (`overlapping_capture`) means its negative is not a full-search negative |
+| `SCAN_REGION_SEARCH_INCOMPLETE` | caller-buildable | `scope`, `detail`, `affected_count` | the scan reached the requested bytes but a bounded internal sample (`window_sampled`, `candidate_list_truncated`), a per-target quota that dropped an occurrence (`match_cap_reached`, `context_only_cap_reached`), a deliberately narrowed pattern set (`pattern_set_withheld`), or an ambiguous overlapping capture (`overlapping_capture`) means its negative is not a full-search negative |
 
 `SCAN_REGION_SEARCH_INCOMPLETE` covers conditions the cap-bypass makes reachable
-in targeted mode that the frozen contract predated (obfuscation's
-`SLEEP_MASK_MAX_WINDOWS` / `SLEEP_MASK_MAX_CANDIDATES` sampling, and a
-`CapturedSlice.overlapping` segment table); it is distinct from
-`SCAN_BUDGET_EXHAUSTED`, which specifically names a shared `ScanBudget` limit.
+in targeted mode that the frozen contract predated: obfuscation's
+`SLEEP_MASK_MAX_WINDOWS` / `SLEEP_MASK_MAX_CANDIDATES` sampling, a
+`CapturedSlice.overlapping` segment table, pipe's per-region
+`PIPE_MAX_MATCHES_PER_REGION` / `PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION` quotas,
+and stomping's whitelist withholding the whole network IOC pattern set. It is
+distinct from `SCAN_BUDGET_EXHAUSTED`, which specifically names a shared
+`ScanBudget` limit: every reason here is a bound the scan imposed on its own
+search, not a resource that ran out.
+
+The per-region quotas matter here in a way they do not full-scope. Full scope
+never hands one region more than the per-target cap (8 MiB for pipe), so a
+50-match or 5-record quota is rarely reached; targeted mode hands a single
+synthetic region up to the request ceiling, so a rescan of exactly the
+oversized region this feature exists for is where they start dropping
+occurrences. Each is recorded at the site that dropped one -- never inferred
+from a final count -- so a range whose quota was reached but that lost nothing
+stays `complete`.
 All other failure and budget conditions reuse current codes. The two registries
 must stay complete and fail closed; no new code is a diagnostic-only value.
 
