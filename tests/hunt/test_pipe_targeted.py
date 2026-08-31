@@ -592,12 +592,16 @@ def test_a_base_in_no_region_is_not_evaluated_for_either_scope(monkeypatch):
     assert result.payload is None
 
 
-def test_an_uncommitted_region_is_not_evaluated_for_either_scope(monkeypatch):
+def test_an_uncommitted_region_is_not_applicable_for_either_scope(monkeypatch):
+    # Uncommitted memory is outside the population this source examines at all,
+    # so both closures decline the target and name the gate -- distinct from a
+    # range this source would have searched and could not.
     ctx, result = _run(monkeypatch, requested=VirtualRange(_BASE, _SIZE),
                        regions=[_private_rw(state="MEM_RESERVE")])
 
     for closure in result.closures:
-        assert closure.coverage_status == "not_evaluated"
+        assert closure.coverage_status == "not_applicable"
+        assert closure.applicability_reason == "region_not_committed"
         assert any("not committed" in note for note in closure.diagnostics)
 
 

@@ -276,7 +276,14 @@ coverage closure in the analyzer's own fixed closure order — one for
   "size": 1048576,
   "captured_size": 524288,
   "capture_state": "partial",
-  "coverage_status": "partial"
+  "coverage_status": "partial",
+  "applicability_reason": null,
+  "measurements": [
+    {"name": "whole_range_entropy", "value": 0.45, "unit": "bits_per_byte",
+     "base_address": null, "size": null},
+    {"name": "entropy_top_window", "value": 8.0, "unit": "bits_per_byte",
+     "base_address": "0x0000000010140000", "size": 65536}
+  ]
 }
 ```
 
@@ -291,6 +298,55 @@ bytes never reached the algorithm's minimum input — in which case
 `captured_size` still reports the real captured prefix, which is what a
 re-collection or a chunked rescan is sized from. `captured_size` is `null`
 only when availability was genuinely never measured.
+
+`coverage_status` has a fourth value that is **not** a coverage failure.
+`not_applicable` means the source does not apply to the range you asked for:
+the sleep-mask layer examines read-write private memory, so it says nothing
+about an executable range, and nothing there was missed.
+`applicability_reason` names what declined it — `region_not_committed`,
+`region_type_ineligible`, `region_protection_ineligible`,
+`region_module_backed`, `region_system_module`, or
+`range_below_source_minimum` — and is `null` for every other status.
+
+The last of those is about the range you asked for, not about the dump: a
+request shorter than the algorithm can be applied to would produce no result
+however completely it were captured, so a larger `--size` is what changes it. A
+request that IS long enough but that the dump only partly backs is the other
+case entirely — `not_evaluated`, with `captured_size` reporting the prefix a
+re-collection has to beat.
+
+That distinction reaches the record. `coverage.status` reduces over the
+closures that apply, so one inapplicable layer does not turn the layers that
+did apply into a partial result; a rescan whose closures all decline the target
+evaluated no bytes and reports `not_evaluated`. Do not count `not_applicable`
+as a gap.
+
+`measurements` is what the closure retained about the work it did, kept whether
+or not it found anything — a negative that records nothing is indistinguishable
+from a scan that never ran. Each entry is `{name, value, unit, base_address,
+size}`. `unit` is one of `bytes`, `count`, `bits_per_byte`, `seconds`, `text`,
+or `flag`, and `value`'s type follows from it; `value` is `null` only when the
+quantity was not measured, never as a stand-in for zero. `base_address` and
+`size` locate a measurement inside the requested range when it has a location,
+such as an entropy window. A name may repeat: a bounded top-N list is N entries
+sharing one name, in the order the closure ranked them, so its first entry is
+that ranking's maximum.
+
+Measurements are observations. They never create a finding, change a score, or
+say anything about a source other than the closure carrying them — including
+the structural context entries (`containing_region`, `containing_module`,
+`capture_file_offset`, and their siblings), which say where the requested range
+sits, not that any hunter evaluated the module or allocation named.
+
+For a targeted `obfuscation` rescan the entropy layer measures the range in
+bounded windows as well as end to end, because one Shannon value over a sparse
+oversized allocation is an average its zero-filled majority dominates: a
+bounded encrypted payload inside it reads as low-entropy. `whole_range_entropy`
+is that average, `entropy_top_window` entries carry the highest-entropy
+sub-ranges with their addresses, `entropy_windows_above_threshold` counts how
+many crossed the threshold, and `entropy_window_coverage` is `exhaustive` or
+`sampled`. A `sampled` pass leaves the closure `partial`, since a window
+between two measured ones could hold something nobody looked at.
 
 A full-scope result omits `targeted_scope` entirely rather than emitting
 `null`, so existing full-scope consumers see no change.
@@ -313,8 +369,13 @@ covered". A targeted record is therefore the one place `coverage.status` can be
 scan, they are the boundary of what the result is about.
 
 `TARGETED_SOURCE_NOT_EVALUATED` sourced to `targeted_scan` (optionally scoped
-to a closure) is the other shape: a granted closure that did not run. The
-prerequisite limitations explaining it stay alongside it.
+to a closure) is the other shape: a granted closure that would have applied and
+did not run. The prerequisite limitations explaining it stay alongside it.
+
+`TARGETED_SOURCE_NOT_APPLICABLE`, also sourced to `targeted_scan`, is the
+closure whose eligibility gate declined the target, with that gate in `detail`.
+The two never appear together for one closure: a source that never applied to
+the target did not fail to evaluate it.
 
 ### Process, handle, and profile records (v2.13)
 

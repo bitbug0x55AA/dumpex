@@ -13,11 +13,20 @@ Two authorities meet here and neither is allowed to speak for the other:
   into that analyzer's canonical ``Report``, which is where score, verdict
   tier, confidence, lead count, review priority, findings, and the details
   shape come from -- the same ``aggregate.build_report()`` full scope uses.
-* The observation's closures decide coverage. ``HunterRecord.coverage.status``
-  is ``complete`` only when every closure is complete, ``not_evaluated`` only
-  when every closure is not evaluated, and ``partial`` otherwise -- never the
-  report's own full-scope-shaped snapshot, which also weighs sources outside
-  this invocation's single grant.
+* The observation's closures decide coverage, and only the closures that
+  actually apply to the target take part. ``HunterRecord.coverage.status`` is
+  ``complete`` only when every applicable closure is complete,
+  ``not_evaluated`` when every applicable closure is not evaluated (or nothing
+  applies at all), and ``partial`` otherwise -- never the report's own
+  full-scope-shaped snapshot, which also weighs sources outside this
+  invocation's single grant.
+
+A closure whose source declined the target -- its own descriptor-eligibility
+gate excluded the range -- is ``not_applicable``, not ``not_evaluated``. It
+carries ``TARGETED_SOURCE_NOT_APPLICABLE`` with the exact gate, and it is left
+out of the reduction above: one inapplicable layer must not turn its completed
+siblings into a coverage failure, because nothing about the target changes what
+those siblings established.
 
 ``status``/``verdict_level`` are then re-derived from that coverage and the
 report's own detection, through the same
@@ -48,6 +57,7 @@ from dataclasses import dataclass, replace
 
 from dumpex.hunt import _registry
 from dumpex.hunt._coverage import derive_status
+from dumpex.hunt._observation import UNREACHED_STATUSES
 from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, CoverageStatus, LimitationCode,
     SourceObservation, SourceState,
@@ -134,7 +144,9 @@ def targeted_scope_records(request, result) -> list:
             base_address=hex_address(requested.base_address), size=requested.size,
             captured_size=_captured_size(closure),
             capture_state=closure.capture_state.value,
-            coverage_status=closure.coverage_status)
+            coverage_status=closure.coverage_status,
+            applicability_reason=closure.applicability_reason,
+            measurements=closure.measurements)
         for closure in result.closures
     ]
 
@@ -144,13 +156,32 @@ def _not_evaluated_limitation(closure) -> CoverageLimitation:
     run, scoped to that closure.
 
     Built only from the closure's own ``coverage_status``, in this one
-    function, so it can never accompany a closure that did run. It names no
-    cause -- an unmet prerequisite, an ineligible descriptor, and a range below
-    the algorithm's minimum input are the same fact to a consumer, and each
-    keeps its own prerequisite limitation alongside this one."""
+    function, so it can never accompany a closure that did run, and never a
+    closure the source declined outright -- that is
+    :func:`_not_applicable_limitation`, a different fact with its own code.
+    Within what is left it names no cause: an unmet prerequisite, a range below
+    the algorithm's minimum input, and a spent budget are all "this source
+    would have applied and did not get to", and each keeps its own prerequisite
+    limitation alongside this one."""
     return CoverageLimitation(
         code=LimitationCode.TARGETED_SOURCE_NOT_EVALUATED,
         source=TARGETED_COVERAGE_SOURCE, scope=closure.scope)
+
+
+def _not_applicable_limitation(closure) -> CoverageLimitation:
+    """``TARGETED_SOURCE_NOT_APPLICABLE`` for one granted closure its own
+    descriptor-eligibility gate declined, scoped to that closure and carrying
+    the exact gate as ``detail``.
+
+    This is the counterpart of :func:`_not_evaluated_limitation` and never
+    accompanies it: a source that never applied to the target did not fail to
+    evaluate it. Built only from the closure's own ``coverage_status`` and
+    ``applicability_reason``, in this one function, so a closure that ran can
+    never carry it."""
+    return CoverageLimitation(
+        code=LimitationCode.TARGETED_SOURCE_NOT_APPLICABLE,
+        source=TARGETED_COVERAGE_SOURCE, scope=closure.scope,
+        detail=closure.applicability_reason)
 
 
 def _out_of_scope_limitation(source: str) -> CoverageLimitation:
@@ -180,10 +211,13 @@ def _out_of_scope_limitation(source: str) -> CoverageLimitation:
 def build_targeted_coverage(result, identity: str) -> CoverageReport:
     """The ``HunterRecord.coverage`` for one targeted rescan of ``identity``.
 
-    Status is the closure reduction alone: ``complete`` when every closure is
-    complete, ``not_evaluated`` when every closure is not evaluated, and
-    ``partial`` otherwise. A source outside the rescan's own grant never moves
-    it -- a targeted rescan's conclusion is about the range it was given, and a
+    Status is the reduction over the closures that apply: ``complete`` when
+    every applicable closure is complete, ``not_evaluated`` when every
+    applicable closure is not evaluated -- or when no closure applies at all --
+    and ``partial`` otherwise. A closure the source declined outright is not an
+    applicable one and takes no part; it says so through its own
+    ``TARGETED_SOURCE_NOT_APPLICABLE``. A source outside the rescan's own grant
+    never moves it -- a targeted rescan's conclusion is about the range it was given, and a
     source it was never asked to run cannot make that conclusion partial. It is
     always SAID, though: see :func:`_out_of_scope_limitation`.
 
@@ -207,23 +241,35 @@ def build_targeted_coverage(result, identity: str) -> CoverageReport:
     order, with a closure's derived "did not run" ahead of the prerequisite
     facts explaining it; then one entry per out-of-scope source, sorted.
     """
-    statuses = [closure.coverage_status for closure in result.closures]
-    if all(status == "complete" for status in statuses):
+    # A closure the source never applied to is not part of the completeness
+    # question. Reducing over it would let one inapplicable layer turn two
+    # complete ones into PARTIAL/INCONCLUSIVE, which reports a bounded result
+    # as a broken one and hides the conclusion the applicable layers reached.
+    applicable = [closure.coverage_status for closure in result.closures
+                  if closure.coverage_status != "not_applicable"]
+    if not applicable:
+        # Nothing this analyzer does applies to the requested range. That is a
+        # real answer about the target, but it is not a completeness claim
+        # about it: no source evaluated these bytes.
+        status = CoverageStatus.NOT_EVALUATED
+    elif all(item == "complete" for item in applicable):
         status = CoverageStatus.COMPLETE
-    elif all(status == "not_evaluated" for status in statuses):
+    elif all(item == "not_evaluated" for item in applicable):
         status = CoverageStatus.NOT_EVALUATED
     else:
         status = CoverageStatus.PARTIAL
 
     granted_sources = {closure.source for closure in result.closures}
     evaluated_sources = {closure.source for closure in result.closures
-                         if closure.coverage_status != "not_evaluated"}
+                         if closure.coverage_status not in UNREACHED_STATUSES}
     anything_ran = bool(evaluated_sources)
     out_of_scope = _registry.unevaluated_targeted_sources(identity)
 
     limitations = []
     for closure in result.closures:
-        if closure.coverage_status == "not_evaluated":
+        if closure.coverage_status == "not_applicable":
+            limitations.append(_not_applicable_limitation(closure))
+        elif closure.coverage_status == "not_evaluated":
             limitations.append(_not_evaluated_limitation(closure))
         limitations.extend(closure.limitations)
 

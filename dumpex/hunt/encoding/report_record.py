@@ -39,7 +39,17 @@ def _decoded_hit_dict(h) -> dict:
 
 
 def _entropy_hit_dict(h) -> dict:
-    return {"region": _region_dict(h.region), "entropy": h.entropy, "threshold": h.threshold}
+    """`window` appears only for a value measured over a bounded sub-range of
+    its region: a targeted rescan locates high entropy inside a sparse
+    allocation whose own average is under the threshold, and the address of
+    that sub-range is the thing an investigator extracts. A whole-region value
+    -- every full-scope hit -- omits the key entirely rather than emitting a
+    window equal to the region."""
+    out = {"region": _region_dict(h.region), "entropy": h.entropy,
+           "threshold": h.threshold}
+    if h.size is not None:
+        out["window"] = {"base_address": hex_address(h.location.va), "size": h.size}
+    return out
 
 
 def _evidence_for(report: EncodingReport, check: str) -> tuple:

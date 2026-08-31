@@ -15,6 +15,7 @@ from dumpex.core.va_range import (
 from dumpex.hunt._observation import ObservationClosure, ObservationKey, ObservationResult
 from dumpex.hunt._targeted_console import render_targeted_console_lines
 from dumpex.output.coverage import CoverageLimitation, LimitationCode, render_limitation
+from dumpex.output.records import TargetedMeasurement
 from dumpex.ui.structured import _ANSI_RE
 
 from tests.fixtures.fakes import Segment
@@ -65,14 +66,33 @@ class _Record:
         self.details = None
 
 
-def _closure(status, scope):
+def _closure(status, scope, *, measurements=(), applicability_reason=None):
     requested = VirtualRange(base_address=_BASE, size=_SIZE)
     captured = slice_captured(
         requested, (CapturedSegment.from_segment(Segment(_BASE, 0x3000, _SIZE)),))
-    read_slice = None if status == "not_evaluated" else captured.read_input(_SIZE)
+    read_slice = (None if status in ("not_evaluated", "not_applicable")
+                  else captured.read_input(_SIZE))
     return ObservationClosure(source="encoding_scan", scope=scope, coverage_status=status,
                               capture_state=CaptureState.COMPLETE, read_slice=read_slice,
+                              applicability_reason=applicability_reason,
+                              measurements=measurements,
                               diagnostics=(f"{scope} note",))
+
+
+def _context_measurement():
+    """One measurement from the shared structural-context set -- the same value
+    on every closure, so the default card leaves it out."""
+    return TargetedMeasurement(name="containing_region_type", value="MEM_PRIVATE",
+                               unit="text")
+
+
+def _ranked(*values):
+    """A bounded ranked list: several measurements sharing one name, in the
+    order the closure ranked them."""
+    return tuple(
+        TargetedMeasurement(name="entropy_top_window", value=value, unit="bits_per_byte",
+                            base_address=f"0x{_BASE + index * 0x1000:016x}", size=0x1000)
+        for index, value in enumerate(values))
 
 
 def _result(*closures):
@@ -246,3 +266,89 @@ def test_verbose_adds_each_yara_hits_own_segment():
     record = _YaraRecord([_match("HitRule")], ["HitRule"], status="DETECTED")
     assert "0x0000000010000000 (512 bytes)" in _render(
         record, _result(_closure("complete", None)), verbose=True)
+
+
+# ── measurements ───────────────────────────────────────────────────────
+
+def test_a_completed_no_hit_closure_shows_what_it_measured():
+    """The card an analyst reads after a negative. Without this the closure row
+    says "complete" and nothing else, and the result is a bare assertion."""
+    measurements = (
+        TargetedMeasurement(name="bytes_evaluated", value=8192, unit="bytes"),
+        TargetedMeasurement(name="whole_range_entropy", value=0.45,
+                            unit="bits_per_byte"),
+    )
+    text = _render(_Record(), _result(_closure("complete", "entropy",
+                                               measurements=measurements)))
+    assert "measured" in text
+    assert "bytes evaluated" in text and "8192 byte(s)" in text
+    assert "whole range entropy" in text and "0.45 bits/byte" in text
+
+
+def test_a_located_measurement_carries_the_address_it_was_measured_at():
+    text = _render(_Record(), _result(_closure("complete", "entropy",
+                                               measurements=_ranked(7.9))))
+    assert f"@ 0x{_BASE:016x}" in text
+    assert "4096 byte(s)" in text
+
+
+def test_the_default_card_shows_a_ranked_lists_top_entry_and_says_there_are_more():
+    text = _render(_Record(), _result(_closure("complete", "entropy",
+                                               measurements=_ranked(7.9, 7.1, 6.4))))
+    assert text.count("entropy top window") == 1
+    assert "7.90 bits/byte" in text
+    assert "(+2 more, --verbose)" in text
+    assert "7.10 bits/byte" not in text
+
+
+def test_verbose_expands_the_ranked_list_and_adds_the_structural_context():
+    """--verbose has to add evidence, not reprint the default card."""
+    measurements = (_context_measurement(),) + _ranked(7.9, 7.1, 6.4)
+    result = _result(_closure("complete", "entropy", measurements=measurements))
+    default = _render(_Record(), result)
+    verbose = _render(_Record(), result, verbose=True)
+
+    assert verbose.count("entropy top window") == 3
+    assert "7.10 bits/byte" in verbose and "6.40 bits/byte" in verbose
+    assert "(+2 more, --verbose)" not in verbose
+    # The structural context is the same on every closure, so it is verbose-only.
+    assert "containing region type" in verbose
+    assert "containing region type" not in default
+    assert len(verbose) > len(default)
+
+
+def test_a_measurement_that_was_never_taken_is_not_a_measured_zero():
+    measurements = (TargetedMeasurement(name="budget_exhausted_reason", value=None,
+                                        unit="text"),)
+    text = _render(_Record(), _result(_closure("complete", "decode",
+                                               measurements=measurements)))
+    assert "budget exhausted reason" in text
+    assert "\u2014" in text or "—" in text
+
+
+# ── applicability ──────────────────────────────────────────────────────
+
+def test_an_inapplicable_closure_reads_as_not_applicable_not_as_a_gap():
+    text = _render(
+        _Record(),
+        _result(_closure("not_applicable", "sleep_mask",
+                         applicability_reason="region_protection_ineligible"),
+                _closure("complete", "entropy")))
+    assert "evaluation  not applicable" in text
+    assert "evaluation  not evaluated" not in text
+
+
+def test_a_complete_rescan_names_the_layers_that_did_not_apply():
+    """"Evaluated completely" must not be readable as "every layer looked"."""
+    text = _render(
+        _Record(),
+        _result(_closure("not_applicable", "sleep_mask",
+                         applicability_reason="region_protection_ineligible"),
+                _closure("complete", "entropy")))
+    assert "evaluated that range completely" in text
+    assert "sleep_mask does not apply to this target" in text
+
+
+def test_a_complete_rescan_with_no_inapplicable_layer_says_nothing_about_one():
+    text = _render(_Record(), _result(_closure("complete", "entropy")))
+    assert "does not apply to this target" not in text

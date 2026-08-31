@@ -377,37 +377,205 @@ pipe (`pipe_name` and `c2_context`, both under `pipe_name_scan`), and three
 layer closures for obfuscation. Identity always uses the requested base and
 size, regardless of capture outcome.
 
-Per-closure status is derived from two independent gates:
+Per-closure status is derived from two independent gates, which are two
+different facts and never collapse into one:
 
-1. prerequisites for that source are ready; and
-2. the requested bytes actually reach that source's algorithm under the source
-   eligibility/minimum-input rules.
+1. the source applies to the target at all — its eligibility gate accepts the
+   containing descriptor, and the requested extent is one the algorithm can be
+   applied to; and
+2. prerequisites are ready and the captured bytes actually reach that source's
+   algorithm.
 
-If either gate fails, the closure is `not_evaluated`. If both hold and any read,
-short-read, boundary, timeout, hit-cap, candidate-cap, or retained-budget gap
-applies, it is `partial`; otherwise it is `complete`.
+Failing gate 1 is `not_applicable`: the source does not apply to this target,
+so there is nothing here it could have missed, and no re-collection or larger
+budget would change that — only a different request would. Failing gate 2 is
+`not_evaluated`: the source would have applied and did not get to run, which is
+a coverage failure a fuller capture or a larger budget could close. If both
+hold and any read, short-read, boundary, timeout, hit-cap, candidate-cap, or
+retained-budget gap applies, the closure is `partial`; otherwise it is
+`complete`.
 
-The source-specific input gate is:
+The source-specific gates are below. Gate 1 has two independent parts, both
+properties of the target: the descriptor containing the requested base, and the
+requested extent itself. Gate 2 is one number, and it is about the capture.
 
-| Source | Eligibility based on descriptor containing `base_address` | Minimum captured input |
-|---|---|---|
-| `pipe_name_scan` | `State == MEM_COMMIT` | 1 byte |
-| `ioc_string_scan` | committed `MEM_IMAGE` with executable protection | 1 byte |
-| YARA `segment_scan` | selected captured segment; no extra region filter | 1 byte |
-| CS Beacon `segment_scan` | selected captured segment; no extra region filter | 1 byte |
-| `encoding_scan/sleep_mask` | layer's existing committed private/image eligibility | layer's existing minimum |
-| `encoding_scan/entropy` | layer's existing committed private/image eligibility | 256 bytes |
-| `encoding_scan/decode` | committed private/image, excluding system-DLL image regions | 1 byte |
+| Source | Descriptor gate (gate 1) | Minimum requested extent (gate 1) | Minimum captured input (gate 2) |
+|---|---|---|---|
+| `pipe_name_scan` | `State == MEM_COMMIT` | — | 1 byte |
+| `ioc_string_scan` | committed `MEM_IMAGE` with executable protection | — | 1 byte |
+| YARA `segment_scan` | selected captured segment; no extra region filter | — | 1 byte |
+| CS Beacon `segment_scan` | selected captured segment; no extra region filter | — | 1 byte |
+| `encoding_scan/sleep_mask` | committed unbacked `MEM_PRIVATE` `PAGE_READWRITE` | `SLEEP_MASK_KEY_SIZE * SLEEP_MASK_MIN_REPEAT` | 1 byte |
+| `encoding_scan/entropy` | committed unbacked `MEM_PRIVATE` | `ENTROPY_MIN_INPUT` (256 bytes) | 256 bytes |
+| `encoding_scan/decode` | committed private/image, excluding system-DLL image regions | — | 1 byte |
 
-Candidate-pattern minimums inside an algorithm do not make the closure
-not-evaluated; receiving eligible input and legitimately finding no candidate is
-still evaluation.
+Only entropy carries a number in both columns, and they are the same number
+answering two questions: a 200-byte request is declined for its extent, while a
+0x2000-byte request the dump backs 200 bytes of is not evaluated.
 
-Across closures, `HunterRecord.coverage.status` is `complete` only when every
-closure is complete, `not_evaluated` only when every closure is not evaluated,
-and `partial` otherwise. Each obfuscation layer attributes shared-budget
-exhaustion only when that layer observed or was prevented by the exhaustion;
-one layer must not inherit another layer's limitation blindly.
+YARA and CS Beacon have no descriptor eligibility filter at all, so neither
+ever produces `not_applicable`.
+
+A `not_applicable` closure carries an `applicability_reason` naming the exact
+gate, from a closed vocabulary: `region_not_committed`,
+`region_type_ineligible`, `region_protection_ineligible`,
+`region_module_backed`, `region_system_module`, `range_below_source_minimum`.
+"Does not apply" without the gate is not actionable, so the reason is required
+for that status and forbidden for every other. Widening an analyzer's
+eligibility merely to make it run is not an option: the boundary is the answer.
+
+A minimum input splits across both gates, and which side it falls on is decided
+by WHAT is short:
+
+* the requested range, clipped to its containing descriptor, is itself shorter
+  than the algorithm can be applied to — `not_applicable`, with
+  `range_below_source_minimum`. No capture of that range would produce a
+  result, so it is a property of the target. Only a different, larger request
+  changes it.
+* the range clears the minimum but the dump backs fewer bytes of it than the
+  minimum — `not_evaluated`. A fuller collection closes exactly this, which is
+  what makes it a coverage failure rather than a boundary.
+
+Both are reachable for one source over one dump, so neither may stand in for
+the other: an analyst told "does not apply" reaches for a different address,
+and one told "not evaluated" reaches for a better capture.
+
+Full scope never makes this distinction, and does not need to: it walks whole
+regions rather than a range anybody asked for, so a region under the minimum is
+an eligible item with a not-applicable disposition on its own ledger. That
+accounting is unchanged — the extent check that produces
+`range_below_source_minimum` belongs to the targeted executor, where the extent
+is the investigator's own request.
+
+Candidate-pattern minimums inside an algorithm make the closure neither: an
+eligible input in which no candidate legitimately appears is still evaluation.
+
+Across closures, `HunterRecord.coverage.status` reduces over the closures that
+APPLY: `complete` only when every applicable closure is complete,
+`not_evaluated` when every applicable closure is not evaluated — or when no
+closure applies at all — and `partial` otherwise. A `not_applicable` closure
+takes no part. One layer whose gate declined the target must not turn its
+completed siblings into a coverage failure, because nothing about the target
+changes what those siblings established; a rescan whose every closure is
+inapplicable evaluated no bytes and reports `not_evaluated`, which is a real
+answer about the target and not a completeness claim about it.
+
+Each obfuscation layer attributes shared-budget exhaustion only when that layer
+observed or was prevented by the exhaustion, and never when its own gate
+declined the target — blaming a budget for an inapplicable layer would imply a
+bigger-budget rerun could help where it never could. One layer must not inherit
+another layer's limitation blindly.
+
+### Retained measurements
+
+A closure that completed without a hit still records what it did. Without that
+a targeted result reduces to an unexplained negative: the same card is printed
+whether the scan read eight megabytes and measured them or read nothing at all.
+
+Each closure carries bounded `measurements` — a name, a value, its unit, and
+optionally the address and extent it was measured at. They are observations
+only: they create no finding, move no score, and say nothing about any source
+other than the closure carrying them. A `None` value means the closure did not
+measure that quantity and is never a measured zero.
+
+Two groups sit in one list. **Structural context** describes where the
+requested range sits — `containing_region` (or `containing_segment`),
+`containing_allocation_base`, `containing_region_state` / `_type` /
+`_protection`, `containing_segment_file_offset`, `containing_module`,
+`evaluated_extent`, `captured_bytes`, `capture_file_offset`. Naming a module or
+an allocation here is attribution, never a claim that any hunter evaluated it,
+and it never imports another hunter's verdict or coverage. Every closure of one
+invocation carries identical values for these, so a closure read on its own is
+still self-explanatory. **Per-closure work** is everything else, and is the
+closure's own.
+
+A closure that never reached its algorithm carries `bytes_evaluated` and the
+structural context, and nothing else. Every remaining measurement describes an
+execution, and an inapplicable layer reporting an exhaustive window search and
+a complete candidate list would describe a search that never ran, contradicting
+the closure standing beside it.
+
+Obfuscation's per-layer names are:
+
+| Layer | Names |
+|---|---|
+| `sleep_mask` | `sleep_mask_keys_recovered`, `sleep_mask_window_coverage`, `sleep_mask_candidate_list` |
+| `entropy` | `whole_range_entropy`, `entropy_threshold`, `entropy_window_size`, `entropy_windows_total`, `entropy_windows_evaluated`, `entropy_windows_above_threshold`, `entropy_window_coverage`, `entropy_top_window` (repeated), `entropy_ranges_retained` |
+| `decode` | `base64_candidates`, `base64_attempts`, `xor_keys_scored`, `xor_text_candidates`, `xor_structural_candidates`, `xor_attempts`, `compressed_candidates`, `compressed_attempts`, `base64_retained`, `xor_retained`, `compressed_retained`, `xor_sublayer` |
+
+The decode sub-layers count candidates and attempts separately from what they
+retained, because a retained count of zero has two causes an analyst acts on
+differently: nothing in the range resembled a candidate, or many were decoded
+and every one was rejected. The shared budget's attempt total cannot stand in
+for them — it is spent by sleep-mask and all three sub-layers together, so it
+answers a question about the invocation, not about Base64, XOR, or compression.
+`*_candidates` is what the sub-layer's own pre-filter accepted for trying;
+`*_attempts` is how many of those actually spent an attempt, which is smaller
+whenever a budget or a dedup cut the run short. `xor_keys_scored` is the fixed
+255-key text sweep, which spends no attempt at all and is therefore invisible
+in any budget number.
+
+A layer that draws on the shared budget also reports, for each of its four
+independent resources, what THIS layer spent and that resource's limit:
+`budget_attempts_spent` / `_limit`, `budget_decoded_bytes_spent` / `_limit`,
+`budget_retained_bytes_spent` / `_limit`, `budget_hits_spent` / `_limit`, plus
+`budget_exhausted_reason`. Every `_spent` value is the difference between
+immutable snapshots taken immediately before and after that layer's own call.
+The budget is one mutable object all three layers spend from in turn, so a
+value read off it after they have all run would attribute the whole
+invocation's consumption — and the last layer's exhaustion — to every layer
+alike. `budget_exhausted_reason` is likewise the reason attributed to that
+layer alone, and stays `None` for a layer that finished inside the allowance
+even when a later layer went on to exhaust the same budget. All four resources
+are reported, the decoded-output cap included: when that is what a run stops
+for, a reason with no consumption or ceiling beside it leaves an analyst unable
+to size a rerun.
+
+A name is not unique within a closure: a bounded top-N list is N entries
+sharing one name, in the order the closure ranked them.
+
+### Windowed targeted entropy
+
+Bypassing the entropy size cap and computing one Shannon value over an
+investigator-supplied range does not, on its own, recover what the cap hid. A
+single value over a sparse oversized allocation is an average dominated by its
+zero-filled majority: a bounded encrypted payload inside it measures far below
+the threshold as one number and far above it as its own window. Recovering the
+evidence from the whole-range value alone would require the analyst to already
+know which sub-window matters, while the skipped-target queue supplies only the
+containing target.
+
+A targeted entropy pass therefore measures the range twice. The whole-range
+average is still computed and still decides a whole-range hit, so a range that
+would flag full-scope flags here too. In addition the range is measured in
+fixed, non-overlapping `ENTROPY_WINDOW_SIZE` windows from its base; a trailing
+remainder shorter than the 256-byte minimum input is not measured. Past
+`ENTROPY_MAX_WINDOWS` the offsets are strided by a deterministic step rather
+than truncated, so a sampled pass still spans the whole range — and reports
+itself as sampled, which makes the closure `partial` through
+`SCAN_REGION_SEARCH_INCOMPLETE` with detail `entropy_window_sampled`, because a
+window between two measured ones could hold a payload nobody looked at.
+
+`ENTROPY_TOP_WINDOWS` windows are retained, ordered by descending entropy then
+ascending address, so the same bytes always produce the same list and its first
+entry is the range's maximum with its location. The window summary is retained
+whether or not any window crossed the threshold: "measured 512 windows, highest
+3.1" and "did not measure" are different answers to the same question.
+
+Hits stay observation-only, exactly as full scope: when the whole-range average
+clears the threshold the range itself is the hit, and only when it does not do
+the above-threshold windows become hits instead. The two are mutually
+exclusive, so one high-entropy range never reports both itself and its own
+parts. A window hit's `EntropyHit.size` is the window extent — `None` means the
+whole region — and its JSON carries a `window` object with that extent's base
+address and size. A whole-region value omits the key entirely.
+
+`aggregate.build_report` is shared with full scope and stays that way. Its
+entropy observation words itself from the evidence it is handed, not from how
+the scan was invoked: a hit list containing a windowed value says so and adds
+the caveat that a window describes only itself, while a list of whole-region
+values — every full-scope result — renders exactly the sentence and the single
+limitation it always has.
 
 ### Negative-result rule
 
@@ -423,10 +591,16 @@ in another result. Cross-boundary signatures are evaluated only within the
 actual contiguous input given to the algorithm; targeted mode must not invent
 bytes across an uncaptured gap or concatenate unrelated descriptors.
 
-When a granted closure does not run, add `TARGETED_SOURCE_NOT_EVALUATED`
-sourced to `targeted_scan`, with the closure's scope when it has one. It is
-absent-capable (not caller-buildable) and renders a reason without claiming one
-particular cause. Prerequisite limitations remain present alongside it.
+When a granted closure would have applied and did not run, add
+`TARGETED_SOURCE_NOT_EVALUATED` sourced to `targeted_scan`, with the closure's
+scope when it has one. It is absent-capable (not caller-buildable) and renders
+a reason without claiming one particular cause. Prerequisite limitations remain
+present alongside it.
+
+When a granted closure's own eligibility gate declined the target, add
+`TARGETED_SOURCE_NOT_APPLICABLE` instead — same source, same scope, plus the
+gate as `detail`. The two never accompany each other: a source that never
+applied to the target did not fail to evaluate it.
 
 The same code, sourced to a real coverage source instead, states the boundary
 of the whole invocation: the sources a targeted rescan of that analyzer never
@@ -502,7 +676,16 @@ Targeted results add `details.targeted_scope`, one item per closure:
   "size": 1048576,
   "captured_size": 524288,
   "capture_state": "partial",
-  "coverage_status": "partial"
+  "coverage_status": "partial",
+  "applicability_reason": null,
+  "measurements": [
+    {"name": "containing_region", "value": 4194304, "unit": "bytes",
+     "base_address": "0x0000000010000000", "size": 4194304},
+    {"name": "whole_range_entropy", "value": 0.45, "unit": "bits_per_byte",
+     "base_address": null, "size": null},
+    {"name": "entropy_top_window", "value": 8.0, "unit": "bits_per_byte",
+     "base_address": "0x0000000010140000", "size": 65536}
+  ]
 }
 ```
 
@@ -517,11 +700,24 @@ The item is closed and deterministic:
   real captured prefix -- that is the number a re-collection or a chunked
   rescan is sized from.
 - `capture_state`: `none`, `partial`, or `complete`.
-- `coverage_status`: `not_evaluated`, `partial`, or `complete`.
+- `coverage_status`: `not_applicable`, `not_evaluated`, `partial`, or
+  `complete`.
+- `applicability_reason`: the eligibility gate that declined the target,
+  non-null exactly when `coverage_status` is `not_applicable`.
+- `measurements`: bounded neutral observations, possibly empty. Each is
+  `{name, value, unit, base_address, size}`; `unit` is one of `bytes`, `count`,
+  `bits_per_byte`, `seconds`, `text`, `flag`, and its type follows from that.
+  `value` is `null` only when the quantity was not measured. `base_address` and
+  `size` locate a measurement inside the requested range when it has a
+  location, and `size` is never set without one.
 
 `captured_size` measures byte availability, not a byte-precise “algorithm
 examined through here” offset. Coverage status carries honest algorithm-level
 completion where scanners are candidate-, window-, hit-, or deadline-bounded.
+
+A consumer must not count `not_applicable` as a coverage failure. The record's
+own `coverage.status` does not, and a rescan whose closures are all
+inapplicable reports `not_evaluated` rather than `complete`.
 
 `targeted_scope` is added only for targeted results. Full-scope detail records
 omit the key completely; they do not emit `targeted_scope: null`. The field is
@@ -531,9 +727,20 @@ fixtures therefore remain byte-for-byte unaffected by this design.
 
 Console output labels the normalized range and prints each closure in the fixed
 order above, clearly separating capture from evaluation and retaining ordinary
-limitations/diagnostics. It does not print a clean banner when coverage is
-partial or not evaluated. JSON uses the typed record conversion; no raw parser
-object is serialized.
+limitations/diagnostics. A closure reading `not applicable` prints the gate that
+declined it, and a complete rescan's closing scope statement names the closures
+that did not apply, so "evaluated that range completely" is never readable as
+"every layer looked". It does not print a clean banner when coverage is partial
+or not evaluated. JSON uses the typed record conversion; no raw parser object is
+serialized.
+
+Each closure also prints what it measured, from the same `measurements` the
+document carries, so console and JSON cannot disagree. The default card shows
+the closure's own work and, for a ranked list, its first entry plus how many
+more there are. `--verbose` adds material evidence rather than reprinting the
+default card: the structural context the range sits in — one repeated fact
+across closures, which is why it is verbose-only — and every entry of a bounded
+ranked list.
 
 Every gap has exactly one owning closure. An adapter raises a budget's
 exhaustion on the closure that owns that budget; a closure the same budget also
@@ -581,13 +788,15 @@ The new limitation codes are:
 
 | Code | Construction | Allowed fields | Meaning |
 |---|---|---|---|
-| `TARGETED_SOURCE_NOT_EVALUATED` | absent-capable | `scope` | two shapes, told apart by `source`: `targeted_scan` means a required targeted closure did not run (`scope` names the closure); any other source means one of that analyzer's coverage sources a targeted invocation structurally never evaluates |
+| `TARGETED_SOURCE_NOT_EVALUATED` | absent-capable | `scope` | two shapes, told apart by `source`: `targeted_scan` means a required targeted closure would have applied and did not run (`scope` names the closure); any other source means one of that analyzer's coverage sources a targeted invocation structurally never evaluates |
+| `TARGETED_SOURCE_NOT_APPLICABLE` | caller-buildable | `scope`, `detail` | source fixed to `targeted_scan`: a granted closure whose own descriptor-eligibility gate declined the target, so nothing here was missed. `detail` is REQUIRED and names the gate from the closed applicability vocabulary. Not a coverage failure, and never paired with `TARGETED_SOURCE_NOT_EVALUATED` on the same closure |
 | `SCAN_REGION_EVALUATION_TRUNCATED` | caller-buildable | `scope`, `targets` | evaluation stopped at the first descriptor boundary while capture continued |
 | `SCAN_REGION_SEARCH_INCOMPLETE` | caller-buildable | `scope`, `detail`, `affected_count` | the scan reached the requested bytes but a bounded internal sample (`window_sampled`, `candidate_list_truncated`), a per-target quota that dropped an occurrence (`match_cap_reached`, `context_only_cap_reached`), a deliberately narrowed pattern set (`pattern_set_withheld`), or an ambiguous overlapping capture (`overlapping_capture`) means its negative is not a full-search negative |
 
 `SCAN_REGION_SEARCH_INCOMPLETE` covers conditions the cap-bypass makes reachable
 in targeted mode that the frozen contract predated: obfuscation's
-`SLEEP_MASK_MAX_WINDOWS` / `SLEEP_MASK_MAX_CANDIDATES` sampling, a
+`SLEEP_MASK_MAX_WINDOWS` / `SLEEP_MASK_MAX_CANDIDATES` sampling, a targeted
+entropy pass strided past `ENTROPY_MAX_WINDOWS` (`entropy_window_sampled`), a
 `CapturedSlice.overlapping` segment table, pipe's per-region
 `PIPE_MAX_MATCHES_PER_REGION` / `PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION` quotas,
 and stomping's whitelist withholding the whole network IOC pattern set. It is
@@ -619,7 +828,9 @@ uses the existing `exit_code_for(coverage.status)` mapping: complete 0, partial
 ## Compatibility invariants
 
 - `--hunt-addr` landed atomically with its range, capability, executor, CLI,
-  record, and schema support, in schema v2.14.
+  record, and schema support, in schema v2.14. Applicability, retained
+  measurements, and windowed targeted entropy are same-version additions to
+  those still-unreleased shapes.
 - v2.13 and older schemas remain frozen.
 - Current `--hunt <identity>` and `--hunt all` retain their selection,
   detection, scoring, ordering, console/JSON shape, diagnostics, and exit codes.

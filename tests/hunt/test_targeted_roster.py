@@ -224,7 +224,7 @@ def test_a_partly_captured_range_reports_its_real_prefix_even_when_nothing_ran(m
                         lambda mf, addr, size: b"\x00" * min(size, _SIZE // 2))
     execution = execute_targeted(MF(), _request("stomping"))
     entry = execution.result.records[0].details.targeted_scope[0]
-    assert entry.coverage_status == "not_evaluated"
+    assert entry.coverage_status == "not_applicable"
     assert entry.capture_state == "partial"
     assert entry.captured_size == _SIZE // 2
 

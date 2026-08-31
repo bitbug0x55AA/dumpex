@@ -245,15 +245,32 @@ def _search_incomplete_reasons(scope: str, cov, *, overlapping: bool) -> tuple:
     return tuple(reasons)
 
 
+def pipe_region_ineligible_reason(region) -> "str | None":
+    """Why ``scan_pipe_names``'s descriptor gate declines this target, or
+    ``None`` when it accepts it -- a statement of that loop's own filter, in
+    the vocabulary ``LimitationCode.TARGETED_SOURCE_NOT_APPLICABLE`` renders.
+
+    ``region`` is a :class:`~dumpex.core.va_range.CapturedRegion`, whose state
+    string is already resolved."""
+    if region.state != "MEM_COMMIT":
+        return "region_not_committed"
+    return None
+
+
 def _scope_status(scope: str, cov, capture_state: CaptureState, *, reached: bool,
-                  prevented: bool, truncated: bool, search_incomplete: tuple) -> str:
+                  ineligible_reason: "str | None", prevented: bool, truncated: bool,
+                  search_incomplete: tuple) -> str:
     """This closure's honest ``coverage_status``.
 
-    ``not_evaluated`` -- the range never reached this pass: the containing
-    region's own eligibility filter excluded it, the read returned nothing, the
-    pipe-name budget was already spent so no pattern ran at all, or -- for
-    ``c2_context`` -- its own budget was already spent when the range was
-    reached and the range did hold anchors that pass would have worked on.
+    ``not_applicable`` -- the containing region is not committed memory, which
+    is the whole population this source examines. Nothing here was missed, and
+    no re-collection, larger budget, or narrower request would change that.
+
+    ``not_evaluated`` -- the range would have been examined and was not: the
+    read returned nothing, the pipe-name budget was already spent so no pattern
+    ran at all, or -- for ``c2_context`` -- its own budget was already spent
+    when the range was reached and the range did hold anchors that pass would
+    have worked on.
 
     Otherwise ``partial`` on any gap -- a read gap shared by both scopes, the
     budget that bounds THIS scope's own work having blocked some of it, or a
@@ -262,6 +279,8 @@ def _scope_status(scope: str, cov, capture_state: CaptureState, *, reached: bool
     got through all of it. Finding no pipe name, or no C2 artifact, in eligible
     input is a result, not a gap.
     """
+    if ineligible_reason is not None:
+        return "not_applicable"
     if not reached or prevented:
         return "not_evaluated"
     if _shared_gap(cov, capture_state, truncated=truncated):
@@ -457,6 +476,13 @@ def run_targeted_pipe(context) -> ObservationResult:
     stopped_short = read_slice is not None and read_slice.read_bytes < eval_range.size
     unexamined = _targeted.unexamined_suffix_target(read_slice) if stopped_short else None
 
+    ineligible_reason = pipe_region_ineligible_reason(containing)
+    # The same structural context on both closures: the allocation the range
+    # sits in, the module backing it, and what the dump holds. Context only --
+    # naming them neither evaluates them nor claims any hunter did.
+    target_context = _targeted.region_context_measurements(
+        boundary, containing, capture, modules)
+
     closures = []
     for scope in TARGETED_SCOPES:
         prevented = scope == "c2_context" and c2_prevented and has_anchors
@@ -466,9 +492,10 @@ def run_targeted_pipe(context) -> ObservationResult:
         search_incomplete = _search_incomplete_reasons(
             scope, cov, overlapping=reached and capture.overlapping)
         status = _scope_status(scope, cov, capture.state, reached=reached,
+                               ineligible_reason=ineligible_reason,
                                prevented=prevented, truncated=boundary.truncated,
                                search_incomplete=search_incomplete)
-        ran = status != "not_evaluated"
+        ran = status not in ("not_evaluated", "not_applicable")
 
         truncation_limitation = (
             _targeted.evaluation_truncated_limitation(
@@ -481,7 +508,8 @@ def run_targeted_pipe(context) -> ObservationResult:
         diagnostics = []
         if not ran:
             diagnostics.append(_not_evaluated_note(
-                cov, prevented=prevented, name_prevented=name_prevented, unread=unread))
+                cov, ineligible_reason=ineligible_reason, prevented=prevented,
+                name_prevented=name_prevented, unread=unread))
         if boundary.truncated and ran:
             diagnostics.append(_targeted.truncation_diagnostic(
                 boundary.region_range, requested, eval_range))
@@ -523,13 +551,25 @@ def run_targeted_pipe(context) -> ObservationResult:
         budget_name = BUDGET_PIPE_NAME if scope == "pipe_name" else BUDGET_C2
         exhausted = (cov.pipe_name_budget_exhausted if scope == "pipe_name"
                      else cov.c2_budget_exhausted)
+        retained = (len(scan.string_leads) if scope == "pipe_name"
+                    else len(scan.c2_regions))
+        measurements = target_context + (
+            _targeted.bytes_measurement(
+                "bytes_evaluated", len(read[0]) if (read and cov.scanned) else 0),
+            _targeted.count_measurement(
+                "pipe_names_retained" if scope == "pipe_name" else "c2_records_retained",
+                retained),
+            _targeted.text_measurement(
+                "budget_state", "exhausted" if exhausted else "available"),
+        )
         closures.append(ObservationClosure(
             source=TARGETED_SOURCE, scope=scope, coverage_status=status,
             capture_state=capture.state, captured_bytes=capture.captured_bytes,
             read_slice=read_slice if ran else None,
+            applicability_reason=ineligible_reason if status == "not_applicable" else None,
             limitations=limitations,
             budget_outcomes=(BudgetOutcome(name=budget_name, exhausted=exhausted),),
-            diagnostics=tuple(diagnostics)))
+            measurements=measurements, diagnostics=tuple(diagnostics)))
 
     payload = TargetedPipeEvidence(
         string_leads=scan.string_leads, c2_regions=scan.c2_regions, coverage=cov,
@@ -537,11 +577,11 @@ def run_targeted_pipe(context) -> ObservationResult:
     return ObservationResult(key=key, closures=tuple(closures), payload=payload)
 
 
-def _not_evaluated_note(cov, *, prevented: bool, name_prevented: bool,
-                        unread: bool) -> str:
-    """Why this scope's pass never ran -- read off the scan's own frozen
-    coverage rather than re-derived from the region, so the note and the
-    closure's status always name the same cause.
+def _not_evaluated_note(cov, *, ineligible_reason: "str | None", prevented: bool,
+                        name_prevented: bool, unread: bool) -> str:
+    """Why no conclusion is available for this scope -- the eligibility gate
+    that declined the target, or, past that gate, the scan's own frozen
+    coverage, so the note and the closure's status always name the same cause.
 
     ``unread`` and ``name_prevented`` are the two the coverage cannot
     distinguish on its own, both snapshotted before the read: with both budgets
@@ -551,15 +591,15 @@ def _not_evaluated_note(cov, *, prevented: bool, name_prevented: bool,
     read itself consumed points at a different rerun than one an earlier range
     had already used up.
     """
+    if ineligible_reason is not None:
+        return ("the MemoryInfo region containing the requested base is not committed "
+                "memory, so the pipe-name scan does not apply to it")
     if unread:
         return ("both the pipe-name and C2-context budgets were already spent when this "
                 "range was reached; it was not read and no pattern was run over it")
     if prevented:
         return ("the C2-context budget was already spent when this range was reached; "
                 "no C2 artifact around a pipe name here was gathered")
-    if not cov.eligible_total:
-        return ("the MemoryInfo region containing the requested base is not committed "
-                "memory, so the pipe-name scan does not apply to it")
     if cov.read_failed:
         return "the requested range returned no readable bytes; no pattern was run over it"
     if name_prevented:

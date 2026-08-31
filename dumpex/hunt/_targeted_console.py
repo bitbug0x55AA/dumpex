@@ -12,7 +12,14 @@ so at every level. One card is rendered, from the already-built
   evaluation kept in separate columns -- a complete capture can still evaluate
   partially, and a partial capture can be not-evaluated, so collapsing them
   into one "coverage" word would hide the difference an investigator acts on;
-* each closure's own diagnostics;
+  a closure reading ``not applicable`` is the source declining the target, and
+  the reason it did rides on the same block;
+* each closure's own diagnostics, and what it measured: a completed closure
+  that found nothing still says how many bytes it read and what it measured
+  over them, which is the difference between a bounded result and an
+  unexplained one. ``--verbose`` adds the structural context the range sits in
+  and every entry of a bounded ranked list, rather than repeating the default
+  card;
 * the findings the analyzer's own scoring produced (or, for YARA, the rule
   matches it reports instead -- YARA deliberately stays off the shared Finding
   model, and a card showing a verdict with nothing behind it would be the one
@@ -33,6 +40,8 @@ evaluated, so no clean banner can be read off a partial rescan.
 This module is a pure projection: it returns lines and prints nothing except
 through :func:`print_targeted_console`.
 """
+from collections import Counter
+
 from dumpex.hunt._console import resolve_width, render_kv_block
 from dumpex.hunt._report_console import (
     COVERAGE_ICON, TAG_ICON, TAG_LABEL, LABEL_WIDTH, header_lines, wrap_block,
@@ -40,6 +49,7 @@ from dumpex.hunt._report_console import (
 from dumpex.hunt._ui import (
     DETECTED, INCONCLUSIVE, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, _status_text,
 )
+from dumpex.hunt._targeted import CONTEXT_MEASUREMENT_NAMES
 from dumpex.hunt._targeted_record import TARGETED_COVERAGE_SOURCE
 from dumpex.output.coverage import (
     LimitationCode, display_source_name, render_limitation,
@@ -47,6 +57,9 @@ from dumpex.output.coverage import (
 from dumpex.ui.colors import BOLD, DIM
 
 __all__ = ["render_targeted_console_lines", "print_targeted_console"]
+
+_EVALUATION_ICON = dict(COVERAGE_ICON)
+_EVALUATION_ICON["not_applicable"] = DIM("[·]")
 
 _CAPTURE_TEXT = {
     "complete": "the whole requested range is captured in this dump",
@@ -88,12 +101,76 @@ def _verdict_rows(record) -> list:
     ]
 
 
-def _closure_lines(result, width: int) -> list:
+def _format_value(measurement) -> str:
+    """One measurement's value in its own unit. ``—`` marks a quantity the
+    closure genuinely did not measure, never a measured zero."""
+    value = measurement.value
+    if value is None:
+        return "—"
+    unit = measurement.unit
+    if unit == "bits_per_byte":
+        return f"{value:.2f} bits/byte"
+    if unit == "bytes":
+        return f"{value} byte(s)"
+    if unit == "flag":
+        return "yes" if value else "no"
+    return str(value)
+
+
+def _measurement_row(measurement) -> tuple:
+    """``(label, value)`` for one measurement, with its location appended when
+    it has one -- a ranked window is only useful with the address it sits at."""
+    text = _format_value(measurement)
+    if measurement.base_address is not None:
+        extent = f", {measurement.size} byte(s)" if measurement.size is not None else ""
+        text = f"{text}  @ {measurement.base_address}{extent}"
+    return (measurement.name.replace("_", " "), text)
+
+
+def _measurement_lines(closure, verbose: bool) -> list:
+    """What this closure measured.
+
+    The default card carries the closure's own measurements -- the ones that
+    say what it did to these bytes. ``--verbose`` adds the structural context
+    the range sits in, which is the same on every closure and would otherwise
+    be four repetitions of one fact.
+
+    A ranked list repeats one name; the default card shows its first entry (the
+    ranking's own maximum) and says how many more there are, so the number an
+    analyst acts on is present without the whole list."""
+    measurements = closure.measurements
+    if not measurements:
+        return []
+    own = [m for m in measurements if m.name not in CONTEXT_MEASUREMENT_NAMES]
+    context = [m for m in measurements if m.name in CONTEXT_MEASUREMENT_NAMES]
+    selected = (context + own) if verbose else own
+    if not selected:
+        return []
+
+    if verbose:
+        return ["      measured"] + render_kv_block(
+            [_measurement_row(m) for m in selected], indent=8)
+
+    repeats = Counter(m.name for m in selected)
+    rows = []
+    for measurement in selected:
+        if any(name == measurement.name for name, _ in rows):
+            continue
+        label, value = _measurement_row(measurement)
+        extra = repeats[measurement.name] - 1
+        if extra:
+            value = f"{value}  (+{extra} more, --verbose)"
+        rows.append((measurement.name, (label, value)))
+    return ["      measured"] + render_kv_block([row for _, row in rows], indent=8)
+
+
+def _closure_lines(result, width: int, verbose: bool = False) -> list:
     """One block per closure: what the dump held, how far the algorithm got,
-    and whatever that closure itself recorded about the difference."""
+    whatever that closure itself recorded about the difference, and what it
+    measured on the way."""
     lines = [f"  {BOLD('REQUESTED RANGE')}", ""]
     for closure in result.closures:
-        icon = COVERAGE_ICON.get(closure.coverage_status, DIM("[?]"))
+        icon = _EVALUATION_ICON.get(closure.coverage_status, DIM("[?]"))
         name = closure.source if closure.scope is None else f"{closure.source} / {closure.scope}"
         lines.append(f"  {icon} {name}")
         capture = closure.capture_state.value
@@ -111,6 +188,7 @@ def _closure_lines(result, width: int) -> list:
         lines.extend(wrap_block(_CAPTURE_TEXT.get(capture, capture), width, 6))
         for note in closure.diagnostics:
             lines.extend(wrap_block(note, width, 6))
+        lines.extend(_measurement_lines(closure, verbose))
         lines.append("")
     return lines
 
@@ -218,17 +296,24 @@ def _out_of_scope_lines(record, width: int) -> list:
     return lines
 
 
-def _scope_note(record, request, width: int) -> list:
+def _scope_note(record, result, request, width: int) -> list:
     """The closing statement, always printed. A targeted rescan supplements an
     investigation; it never closes another result's gap, and it never speaks
     for a byte outside the range it was given."""
     target = request.target_range
     span = f"[{target.base_address:#018x}, {target.end_address:#018x})"
+    declined = [closure.scope or closure.source for closure in result.closures
+                if closure.coverage_status == "not_applicable"]
     if record.coverage.status.value == "complete":
+        # A completeness claim covers the closures that applied. Naming the ones
+        # that did not is what stops "evaluated completely" from being read as
+        # "every layer looked", which it never was.
+        bounded = (f" {', '.join(declined)} does not apply to this target and reached no "
+                   f"conclusion about it." if declined else "")
         body = (f"Every conclusion above applies to {span} only. {request.selected} "
-                f"evaluated that range completely through {request.targeted_source}; "
-                f"nothing here is a statement about any other address, about any other "
-                f"source, or about a coverage gap recorded by an earlier run.")
+                f"evaluated that range completely through {request.targeted_source}."
+                f"{bounded} Nothing here is a statement about any other address, about "
+                f"any other source, or about a coverage gap recorded by an earlier run.")
     else:
         body = (f"Every conclusion above applies to {span} only, and that range was NOT "
                 f"fully evaluated -- see the closure rows above for what was and was not "
@@ -247,11 +332,11 @@ def render_targeted_console_lines(record, result, request, verbose: bool = False
     lines.append("")
     lines.extend(render_kv_block(_verdict_rows(record)))
     lines.append("")
-    lines.extend(_closure_lines(result, w))
+    lines.extend(_closure_lines(result, w, verbose))
     lines.extend(_finding_lines(record, w, verbose))
     lines.extend(_coverage_lines(record, w))
     lines.extend(_out_of_scope_lines(record, w))
-    lines.extend(_scope_note(record, request, w))
+    lines.extend(_scope_note(record, result, request, w))
     return lines
 
 

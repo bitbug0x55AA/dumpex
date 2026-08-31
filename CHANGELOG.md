@@ -18,6 +18,34 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   coverage vocabulary. Only the selected scanner's per-region or per-segment
   size cap is bypassed; every other budget stays enforced. Conclusions apply to
   the requested range only.
+- A targeted rescan now separates "this source does not apply to the requested
+  range" from "this source could not evaluate it". A closure whose own
+  descriptor-eligibility gate declined the target reports `not_applicable` with
+  the gate that declined it, rather than the same `not_evaluated` a missing
+  capture, a read failure, or a spent budget produces. A minimum input splits
+  the same way: a requested range shorter than the algorithm can be applied to
+  is `not_applicable` (a larger `--size` is what changes it), while a range
+  that clears the minimum but is only partly captured stays `not_evaluated`
+  (a fuller collection is). Only the second is a
+  coverage failure, so one inapplicable layer no longer forces the layers that
+  did apply to read as `PARTIAL` / `INCONCLUSIVE`.
+- A targeted closure that finished without a hit now records what it did: bytes
+  evaluated, values measured, bounds reached, per-decode-sub-layer candidate and
+  attempt counts, and what that layer alone spent against each of the shared
+  budget's four limits. The measurements appear in `details.targeted_scope` and
+  on the console card, and `--verbose` adds the structural context the range
+  sits in — containing allocation, module attribution, capture file offset —
+  plus every entry of a bounded ranked list. They are observations only: they
+  create no finding, move no score, and make no claim about any other source's
+  coverage.
+- A targeted `obfuscation` rescan now measures entropy in bounded windows as
+  well as over the whole range. A single Shannon value over a sparse oversized
+  allocation is an average its zero-filled majority dominates, so a bounded
+  encrypted payload inside it reads as low-entropy; the rescan now reports the
+  highest-entropy sub-ranges with their addresses, how many windows crossed the
+  threshold, and whether the windows were measured exhaustively or sampled. A
+  range whose own average clears the threshold is still reported as one hit, as
+  before.
 
 ### Changed
 
@@ -39,6 +67,13 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   source, must name that analyzer's scope set exactly, and requires
   `targeted_scope` on the record with one entry per closure in the analyzer's
   own fixed order; a `full` tag forbids `targeted_scope` entirely.
+- A `targeted_scope` entry now carries `applicability_reason` and
+  `measurements`, and its `coverage_status` may be `not_applicable`. A consumer
+  must not count `not_applicable` as a coverage failure: the record's own
+  `coverage.status` does not, and a rescan whose closures all decline the target
+  reports `not_evaluated`. These are same-version additions to the still
+  unreleased v2.14 targeted shapes; schema v2.13 and older stay frozen, and
+  full-scope documents are unaffected.
 - A hunt option the selected hunter's targeted rescan does not read is now a
   usage error instead of being accepted and ignored. `--hunt stomping
   --hunt-addr` rejects `--ref-dir`, which supplies reference modules for a

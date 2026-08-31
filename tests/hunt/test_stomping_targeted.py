@@ -255,21 +255,28 @@ def test_a_base_in_no_region_is_not_evaluated(monkeypatch):
     assert result.payload is None
 
 
-@pytest.mark.parametrize("region", [
-    Region(_BASE, _BASE, _SIZE, "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_PRIVATE"),
-    Region(_BASE, _BASE, _SIZE, "MEM_COMMIT", "PAGE_READONLY", "MEM_IMAGE"),
-    Region(_BASE, _BASE, _SIZE, "MEM_RESERVE", "PAGE_EXECUTE_READ", "MEM_IMAGE"),
+@pytest.mark.parametrize("region,reason", [
+    (Region(_BASE, _BASE, _SIZE, "MEM_COMMIT", "PAGE_EXECUTE_READ", "MEM_PRIVATE"),
+     "region_type_ineligible"),
+    (Region(_BASE, _BASE, _SIZE, "MEM_COMMIT", "PAGE_READONLY", "MEM_IMAGE"),
+     "region_protection_ineligible"),
+    (Region(_BASE, _BASE, _SIZE, "MEM_RESERVE", "PAGE_EXECUTE_READ", "MEM_IMAGE"),
+     "region_not_committed"),
 ])
-def test_an_ineligible_region_is_not_evaluated(monkeypatch, region):
+def test_an_ineligible_region_is_not_applicable_with_its_reason(monkeypatch, region, reason):
     # The same source-eligibility gate as full-scope: committed, executable
-    # MEM_IMAGE only. An inherited region fact is context, not a result.
+    # MEM_IMAGE only. A target outside that population is one this source does
+    # not apply to -- distinct from one it would have examined and could not,
+    # and named by the exact filter that declined it. An inherited region fact
+    # is context, not a result.
     ctx, result = _run(monkeypatch, requested=VirtualRange(_BASE, _SIZE),
                        regions=[region])
 
     closure = _one(result)
-    assert closure.coverage_status == "not_evaluated"
+    assert closure.coverage_status == "not_applicable"
+    assert closure.applicability_reason == reason
     assert closure.read_slice is None
-    assert any("MEM_IMAGE" in note for note in closure.diagnostics)
+    assert closure.diagnostics
 
 
 # ── short and failed reads ──────────────────────────────────────────────

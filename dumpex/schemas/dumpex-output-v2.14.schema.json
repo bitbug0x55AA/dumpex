@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/bitbug0x55AA/dumpex/schemas/dumpex-output-v2.14.schema.json",
   "title": "dumpex v2 structured output (schema_version 2.14)",
-  "description": "Validates the v2.14 `--json` envelope for --list, --modules, --threads, --process, --sysinfo, --handles, --profile, --diff, --extract, --strings, --report, and --hunt. `result.kind` selects the record and summary shapes. Record objects are closed where declared; `processRecord.peb_extended` is the only optional record property and appears only for `--process --verbose`. Hunt investigation actions are present only for `selected == \"all\"` and describe unresolved coverage targets rather than verdicts. Later same-version addition (still schema_version 2.13): `coverageLimitation.code` may be `SCAN_ITEMS_UNACCOUNTED` -- N region(s) or segment(s) whose outcome a scan's own eligibility ledger cannot reconcile, either taken into scope with no outcome recorded or an outcome recorded for items never taken into scope. It always emits `targets: []` (an unreconciled item is one whose identity the scan never captured) and carries `affected_count`; `scope` names the scan layer (sleep_mask, entropy, or decode) when `source` is \"encoding_scan\". The `code` field is open, so this is additive for consumers pinned to 2.13. v2.14 exposes `--hunt-addr` targeted rescans: every `hunt` summary carries a closed `scan_scope` tag naming what the invocation covered, and a targeted result's hunter details additionally carry one `targeted_scope` entry per coverage closure. Full-scope hunt details omit `targeted_scope` entirely rather than emitting null. A `hunt` result's `summary.scan_scope` is cross-checked against the rest of the document: a `targeted` tag pins `summary.selected` to the same analyzer (which in turn pins the single record's `hunter`), pins `source`/`scopes` to that analyzer's registered targeted capability, and requires `targeted_scope` on the record's details; a `full` tag forbids `targeted_scope`.",
+  "description": "Validates the v2.14 `--json` envelope for --list, --modules, --threads, --process, --sysinfo, --handles, --profile, --diff, --extract, --strings, --report, and --hunt. `result.kind` selects the record and summary shapes. Record objects are closed where declared; `processRecord.peb_extended` is the only optional record property and appears only for `--process --verbose`. Hunt investigation actions are present only for `selected == \"all\"` and describe unresolved coverage targets rather than verdicts. Later same-version addition (still schema_version 2.13): `coverageLimitation.code` may be `SCAN_ITEMS_UNACCOUNTED` -- N region(s) or segment(s) whose outcome a scan's own eligibility ledger cannot reconcile, either taken into scope with no outcome recorded or an outcome recorded for items never taken into scope. It always emits `targets: []` (an unreconciled item is one whose identity the scan never captured) and carries `affected_count`; `scope` names the scan layer (sleep_mask, entropy, or decode) when `source` is \"encoding_scan\". The `code` field is open, so this is additive for consumers pinned to 2.13. v2.14 exposes `--hunt-addr` targeted rescans: every `hunt` summary carries a closed `scan_scope` tag naming what the invocation covered, and a targeted result's hunter details additionally carry one `targeted_scope` entry per coverage closure. Full-scope hunt details omit `targeted_scope` entirely rather than emitting null. A `hunt` result's `summary.scan_scope` is cross-checked against the rest of the document: a `targeted` tag pins `summary.selected` to the same analyzer (which in turn pins the single record's `hunter`), pins `source`/`scopes` to that analyzer's registered targeted capability, and requires `targeted_scope` on the record's details; a `full` tag forbids `targeted_scope`. Later same-version addition (still schema_version 2.14, which is unreleased): a `targeted_scope` entry additionally carries `applicability_reason` and `measurements`, and its `coverage_status` may be \"not_applicable\" -- the source's own descriptor-eligibility gate declined the target, which is the boundary of what that source speaks about rather than a gap in what it did. A consumer must not count \"not_applicable\" as a coverage failure: the record's `coverage.status` does not, and a rescan whose every closure is inapplicable reports `coverage.status` \"not_evaluated\".",
   "type": "object",
   "required": [
     "meta",
@@ -9275,7 +9275,7 @@
       }
     },
     "targetedScope": {
-      "description": "Matches dumpex.output.records.TargetedScopeRecord.to_dict() -- one coverage closure of a targeted (`--hunt-addr`) rescan. `base_address`/`size` are always the REQUESTED range, never the containing descriptor and never the captured prefix, so a closure's identity is (hunter, source, scope, base_address, size) whatever the capture outcome was. Capture and evaluation are independent: `captured_size`/`capture_state` describe byte availability in the dump, while `coverage_status` describes how far that source's own algorithm got. A complete capture can still evaluate partially (a retained budget), and a partial capture can be not_evaluated (the bytes never reached the algorithm's minimum input). `scope` is the closure scope (a layer name) and null for an unscoped source. Producer-only: `coverage_status` \"complete\" requires `capture_state` \"complete\", and `captured_size` never exceeds `size`.",
+      "description": "Matches dumpex.output.records.TargetedScopeRecord.to_dict() -- one coverage closure of a targeted (`--hunt-addr`) rescan. `base_address`/`size` are always the REQUESTED range, never the containing descriptor and never the captured prefix, so a closure's identity is (hunter, source, scope, base_address, size) whatever the capture outcome was. Capture and evaluation are independent: `captured_size`/`capture_state` describe byte availability in the dump, while `coverage_status` describes how far that source's own algorithm got. A complete capture can still evaluate partially (a retained budget), and a partial capture can be not_evaluated (the bytes never reached the algorithm's minimum input). `coverage_status` \"not_applicable\" is a fourth, distinct outcome: the source's own descriptor-eligibility gate declined this target, so nothing here was missed and no re-collection, larger budget, or narrower request would change it -- `applicability_reason` names the gate, and the record's `coverage.status` reduction leaves such a closure out rather than letting it turn a completed sibling into a coverage failure. `measurements` is what the closure retained about work it completed without a hit; the entries are observations only and never imply a finding, a score, or coverage of any other source. `scope` is the closure scope (a layer name) and null for an unscoped source. Producer-only: `coverage_status` \"complete\" requires `capture_state` \"complete\", `captured_size` never exceeds `size`, and `applicability_reason` is non-null exactly when `coverage_status` is \"not_applicable\".",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -9285,7 +9285,9 @@
         "size",
         "captured_size",
         "capture_state",
-        "coverage_status"
+        "coverage_status",
+        "applicability_reason",
+        "measurements"
       ],
       "properties": {
         "source": {
@@ -9322,10 +9324,34 @@
         },
         "coverage_status": {
           "enum": [
+            "not_applicable",
             "not_evaluated",
             "partial",
             "complete"
           ]
+        },
+        "applicability_reason": {
+          "description": "The descriptor-eligibility gate that declined this target, from a closed set; null for every `coverage_status` other than \"not_applicable\".",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "region_not_committed",
+            "region_type_ineligible",
+            "region_protection_ineligible",
+            "region_module_backed",
+            "region_system_module",
+            "range_below_source_minimum"
+          ]
+        },
+        "measurements": {
+          "description": "Neutral measurements this closure retained -- bytes evaluated, values measured, bounds reached -- so a completed no-hit closure still records what it did. Observations only. `name` is not unique within a closure: a bounded top-N list is N entries sharing one name, in the order the closure ranked them.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/targetedMeasurement"
+          }
         }
       },
       "allOf": [
@@ -9341,6 +9367,33 @@
             "properties": {
               "capture_state": {
                 "const": "complete"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "coverage_status": {
+                "const": "not_applicable"
+              }
+            },
+            "required": [
+              "coverage_status"
+            ]
+          },
+          "then": {
+            "properties": {
+              "applicability_reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "applicability_reason": {
+                "const": null
               }
             }
           }
@@ -10935,6 +10988,73 @@
                     }
                   }
                 }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "targetedMeasurement": {
+      "description": "Matches dumpex.output.records.TargetedMeasurement.to_dict() -- one thing a targeted closure measured. `value` is null only when the closure genuinely did not measure this quantity; its type follows `unit` (bool for \"flag\", a non-empty string for \"text\", a non-negative number otherwise). `base_address`/`size` locate the measurement inside the requested range when it has a location (an entropy window) and are null for a measurement about the closure as a whole; `size` is never set without `base_address`.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "value",
+        "unit",
+        "base_address",
+        "size"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean",
+            "null"
+          ]
+        },
+        "unit": {
+          "enum": [
+            "bytes",
+            "count",
+            "bits_per_byte",
+            "seconds",
+            "text",
+            "flag"
+          ]
+        },
+        "base_address": {
+          "$ref": "#/$defs/hexAddress"
+        },
+        "size": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "size": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "size"
+            ]
+          },
+          "then": {
+            "properties": {
+              "base_address": {
+                "type": "string"
               }
             }
           }

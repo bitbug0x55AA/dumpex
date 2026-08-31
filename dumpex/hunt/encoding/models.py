@@ -210,17 +210,38 @@ class DecodedHit:
 
 @dataclass(frozen=True)
 class EntropyHit:
-    """One high-entropy region flagged by the entropy layer -- a
-    statistical observation, never classified/decoded content."""
+    """One high-entropy range flagged by the entropy layer -- a
+    statistical observation, never classified/decoded content.
+
+    `size` is the extent the value was measured over, and `None` means the
+    whole of `region`. A bounded window inside a larger allocation sets it,
+    so a consumer can tell "this 4 MB allocation averages 7.4" from "a 64 KiB
+    window at this address measures 7.4 inside an allocation that averages
+    2.1" -- two different leads. `location` locates the measured extent, not
+    the allocation, in both cases."""
     region: RegionRef
     location: Location
     entropy: float
     threshold: float
+    size: "int | None" = None
 
     def __post_init__(self):
         _require_type(self.region, RegionRef, "EntropyHit.region")
         _require_type(self.location, Location, "EntropyHit.location")
+        if self.size is not None:
+            if isinstance(self.size, bool) or not isinstance(self.size, int) or self.size <= 0:
+                raise ValueError(
+                    f"EntropyHit.size must be None or a positive plain int, got {self.size!r}")
+            if self.size > self.region.size:
+                raise ValueError(
+                    f"EntropyHit.size ({self.size}) cannot exceed the containing region's "
+                    f"size ({self.region.size})")
         require_recursively_immutable(self, "EntropyHit")
+
+    @property
+    def measured_size(self) -> int:
+        """The extent behind `entropy`, resolving the whole-region default."""
+        return self.region.size if self.size is None else self.size
 
 
 @dataclass(frozen=True)
@@ -366,6 +387,38 @@ class LayerResult:
 
 
 @dataclass(frozen=True)
+class DecodeCounts:
+    """How much work each decode sub-layer did, independent of what it kept.
+
+    A retained-hit count of zero has two very different causes -- nothing in
+    the range looked like a candidate at all, or a great many candidates were
+    tried and every one was rejected -- and only these counts separate them.
+    `*_candidates` is what the sub-layer's own pre-filter accepted for trying;
+    `*_attempts` is how many of those actually spent a decode/decompress
+    attempt, which is smaller whenever a shared budget or a dedup cut the run
+    short. `xor_keys_scored` is the fixed 255-key sweep of the text path, which
+    spends no attempt at all.
+
+    Counted at each decision site rather than derived from a final tally, so a
+    sub-layer a gate excluded reads as zero work rather than as zero findings.
+    """
+    base64_candidates: int = 0
+    base64_attempts: int = 0
+    xor_keys_scored: int = 0
+    xor_text_candidates: int = 0
+    xor_structural_candidates: int = 0
+    xor_attempts: int = 0
+    compressed_candidates: int = 0
+    compressed_attempts: int = 0
+
+    def __post_init__(self):
+        for name in ("base64_candidates", "base64_attempts", "xor_keys_scored",
+                     "xor_text_candidates", "xor_structural_candidates",
+                     "xor_attempts", "compressed_candidates", "compressed_attempts"):
+            _require_count(getattr(self, name), f"DecodeCounts.{name}")
+
+
+@dataclass(frozen=True)
 class DecodeResult:
     """Combined result of the Base64/XOR/GZIP-ZLIB region scan
     (decoding.scan_decode_layers) -- one shared per-region read/coverage
@@ -374,8 +427,10 @@ class DecodeResult:
     xor: tuple = field(default_factory=tuple)           # tuple[DecodedHit]
     compressed: tuple = field(default_factory=tuple)    # tuple[DecodedHit]
     coverage: "LayerCoverage | None" = None
+    counts: "DecodeCounts" = field(default_factory=lambda: DecodeCounts())
 
     def __post_init__(self):
+        _require_type(self.counts, DecodeCounts, "DecodeResult.counts")
         object.__setattr__(self, "base64",
                             _require_typed_tuple(self.base64, DecodedHit, "DecodeResult.base64"))
         object.__setattr__(self, "xor",

@@ -98,6 +98,36 @@ The integration harness validates these policies before testing results. See
 the category README and example manifest for the fields required on each
 sample.
 
+## Targeted-rescan replay
+
+A sample may additionally declare `expected.targeted_rescan`, which replays the
+recovery workflow `--hunt-addr` exists for against that dump: the full-scope
+hunt leaves an oversized target in the investigation queue, the queue
+recommends a rescan by the named hunter, and that rescan runs over exactly that
+target.
+
+```yaml
+expected:
+  targeted_rescan:
+    hunter: obfuscation
+    coverage_status: partial          # optional
+    require_applicability_reasons: true
+    require_measurements:
+      - bytes_evaluated
+```
+
+The rescan target is read off the queue, never off the manifest: pinning an
+address here would test a different scan from the one the queue recommends, and
+would keep passing if the queue stopped producing the entry at all.
+
+What this asserts is that the rescan is **actionable and scope-honest**, not
+that it detects anything. Finding nothing over the requested range is a valid
+outcome; producing a result that explains nothing is not. So every closure that
+reached the bytes must retain the named measurements, every closure that
+declined the target must name the eligibility gate that declined it, and every
+closure must identify the requested range rather than the containing
+descriptor.
+
 The machine-readable contract is
 [`manifest-v2.schema.json`](manifest-v2.schema.json). The stricter
 `scripts/corpus_manager.py` validation additionally checks unique IDs, safe

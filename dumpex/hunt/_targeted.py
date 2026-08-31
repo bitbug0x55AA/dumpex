@@ -25,6 +25,7 @@ analyzer's own targeted module.
 """
 from dataclasses import dataclass
 
+from dumpex.core.memory import addr_to_module, module_name_only
 from dumpex.core.va_range import (
     CapturedRegion, CapturedSegment, ReadSlice, VirtualRange, segment_containing,
 )
@@ -32,6 +33,7 @@ from dumpex.hunt._coverage import region_scan_target, segment_scan_target
 from dumpex.output.coverage import (
     CoverageLimitation, LimitationCode, ScanTarget, ScanTargetKind,
 )
+from dumpex.output.records import TargetedMeasurement, hex_address
 
 __all__ = [
     "SyntheticRegion",
@@ -45,6 +47,12 @@ __all__ = [
     "truncation_diagnostic",
     "sub_region_diagnostic",
     "sub_segment_diagnostic",
+    "bytes_measurement",
+    "count_measurement",
+    "text_measurement",
+    "region_context_measurements",
+    "segment_context_measurements",
+    "CONTEXT_MEASUREMENT_NAMES",
 ]
 
 
@@ -273,3 +281,110 @@ def sub_segment_diagnostic(segment_range: VirtualRange, requested: VirtualRange)
             f"containing captured segment {segment_range}; a signature spanning either "
             f"requested boundary is evaluated by neither this rescan nor the surrounding "
             f"bytes of the segment")
+
+
+# ── Neutral measurements ──────────────────────────────────────────────
+#
+# A measurement records what a closure did, never what it concluded. Nothing
+# built here creates a finding, moves a score, or says anything about a source
+# other than the closure carrying it -- in particular, naming the module or
+# allocation a requested range sits in is structural context an investigator
+# reads alongside the result, not a claim that any hunter evaluated that module
+# or that allocation.
+
+
+# The measurement names that describe WHERE the requested range sits rather
+# than what a closure did to it. Every closure of one invocation carries the
+# same values for them, so a consumer -- the console card in particular -- can
+# tell one repeated structural fact from the per-closure work it surrounds.
+# Pinned to what the two builders below emit by
+# tests/hunt/test_targeted_measurements.py.
+CONTEXT_MEASUREMENT_NAMES = frozenset({
+    "containing_region", "containing_allocation_base", "containing_region_state",
+    "containing_region_type", "containing_region_protection", "containing_segment",
+    "containing_segment_file_offset", "containing_module", "evaluated_extent",
+    "captured_bytes", "capture_file_offset",
+})
+
+
+def bytes_measurement(name: str, value: "int | None", *, base_address: int = None,
+                      size: int = None) -> TargetedMeasurement:
+    return TargetedMeasurement(
+        name=name, value=value, unit="bytes",
+        base_address=None if base_address is None else hex_address(base_address),
+        size=size)
+
+
+def count_measurement(name: str, value: "int | None") -> TargetedMeasurement:
+    return TargetedMeasurement(name=name, value=value, unit="count")
+
+
+def text_measurement(name: str, value: "str | None") -> TargetedMeasurement:
+    return TargetedMeasurement(name=name, value=value, unit="text")
+
+
+def _address_measurement(name: str, address: "int | None") -> TargetedMeasurement:
+    """An address as its own fixed-width normalized string, or ``None`` when
+    there is no such address -- never ``0``, which is an ordinary address."""
+    return text_measurement(name, None if address is None else hex_address(address))
+
+
+def _module_measurement(address: int, modules) -> TargetedMeasurement:
+    """The module backing ``address``, by basename, or ``None`` when nothing
+    does. Structural attribution only: naming a module here neither evaluates
+    it nor claims any hunter did."""
+    module = addr_to_module(address, modules)
+    name = module_name_only(getattr(module, "name", "") or "") if module is not None else ""
+    return text_measurement("containing_module", name or None)
+
+
+def _capture_context(capture) -> list:
+    """The dump-side context every scan unit shares: how much of the requested
+    range the dump backs, and where its first byte lives in the .dmp."""
+    return [
+        bytes_measurement("captured_bytes", capture.captured_bytes),
+        _address_measurement("capture_file_offset", capture.file_offset),
+    ]
+
+
+def region_context_measurements(boundary: "TargetedRegionBoundary", region: CapturedRegion,
+                                capture, modules) -> tuple:
+    """Where the requested range sits, for a ``MemoryInfo``-descriptor scan
+    unit: the containing allocation's extent and attributes, the module (if
+    any) backing the requested base, the evaluated extent after the boundary
+    clip, and the dump-side capture context.
+
+    ``containing_region`` carries the allocation's own base and size, so a
+    consumer can tell a request covering a whole allocation from one naming a
+    sub-range of it without re-deriving either."""
+    return tuple([
+        bytes_measurement("containing_region", region.range.size,
+                          base_address=region.range.base_address, size=region.range.size),
+        _address_measurement("containing_allocation_base", region.allocation_base),
+        text_measurement("containing_region_state", region.state),
+        text_measurement("containing_region_type", region.type),
+        text_measurement("containing_region_protection", region.protection),
+        _module_measurement(boundary.eval_range.base_address, modules),
+        bytes_measurement("evaluated_extent", boundary.eval_range.size,
+                          base_address=boundary.eval_range.base_address,
+                          size=boundary.eval_range.size),
+    ] + _capture_context(capture))
+
+
+def segment_context_measurements(boundary: "TargetedSegmentBoundary",
+                                 segment: CapturedSegment, capture, modules) -> tuple:
+    """The captured-segment counterpart of :func:`region_context_measurements`.
+    A segment has no state/type/protection of its own -- those live on the
+    ``MemoryInfo`` descriptor, which this scan unit is not anchored to -- so it
+    carries the segment's extent, its dump-file offset, and the module backing
+    the requested base."""
+    return tuple([
+        bytes_measurement("containing_segment", boundary.segment_range.size,
+                          base_address=boundary.segment_range.base_address,
+                          size=boundary.segment_range.size),
+        _address_measurement("containing_segment_file_offset", segment.file_offset),
+        _module_measurement(boundary.eval_range.base_address, modules),
+        bytes_measurement("evaluated_extent", boundary.eval_range.size,
+                          base_address=boundary.eval_range.base_address,
+                          size=boundary.eval_range.size),
+    ] + _capture_context(capture))

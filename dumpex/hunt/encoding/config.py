@@ -11,6 +11,24 @@ ENTROPY_PRIVATE_THRESHOLD = 7.2   # MEM_PRIVATE: likely encrypted / packed
 ENTROPY_RWX_THRESHOLD     = 6.5   # MEM_PRIVATE + RWX: lower bar (combo is critical)
 ENTROPY_SCAN_MAX          = 10 * 1024 * 1024   # entropy scan: skip regions > 10 MB
 
+ENTROPY_MIN_INPUT         = 256                # fewest bytes a Shannon entropy value is
+                                                # computed over: below this the sample is
+                                                # too small for the value to mean anything
+
+# A single Shannon value over a whole allocation is an average, and an average
+# over a sparse region is dominated by its zero-filled majority: a bounded
+# encrypted payload inside a mostly-empty multi-megabyte allocation measures
+# well below the threshold as one number and well above it as its own window.
+# A targeted rescan therefore also measures the range in fixed, non-overlapping
+# windows, which is where the sub-range an investigator can act on is named.
+ENTROPY_WINDOW_SIZE       = 64 * 1024          # bytes per measured window
+ENTROPY_MAX_WINDOWS       = 512                # windows measured per range; past this the
+                                                # windows are strided and the coverage is
+                                                # reported as sampled rather than exhaustive
+ENTROPY_TOP_WINDOWS       = 5                  # highest-entropy windows retained, in
+                                                # descending order -- the first is the
+                                                # range's maximum
+
 B64_MIN_LEN               = 80                 # minimum Base64 string length
 
 XOR_SCAN_MAX              = 512 * 1024         # max region for single-byte XOR BF
@@ -106,6 +124,10 @@ class EncodingConfig:
     entropy_private_threshold: float = ENTROPY_PRIVATE_THRESHOLD
     entropy_rwx_threshold: float = ENTROPY_RWX_THRESHOLD
     entropy_scan_max: int = ENTROPY_SCAN_MAX
+    entropy_min_input: int = ENTROPY_MIN_INPUT
+    entropy_window_size: int = ENTROPY_WINDOW_SIZE
+    entropy_max_windows: int = ENTROPY_MAX_WINDOWS
+    entropy_top_windows: int = ENTROPY_TOP_WINDOWS
 
     b64_min_len: int = B64_MIN_LEN
 

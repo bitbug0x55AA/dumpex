@@ -229,10 +229,18 @@ def test_a_complete_targeted_rescan_validates_and_reports_its_scope(
     assert summary["investigation_actions"] == []
 
     record = _record(doc)
-    assert record["details"]["targeted_scope"] == [{
+    entry, = record["details"]["targeted_scope"]
+    assert {k: entry[k] for k in
+            ("source", "scope", "base_address", "size", "captured_size",
+             "capture_state", "coverage_status", "applicability_reason")} == {
         "source": "ioc_string_scan", "scope": None, "base_address": f"0x{_BASE:016x}",
         "size": _SIZE, "captured_size": _SIZE, "capture_state": "complete",
-        "coverage_status": "complete"}]
+        "coverage_status": "complete", "applicability_reason": None}
+    # A completed scan still records what it did over the bytes, so a no-hit
+    # result is not an unexplained negative.
+    measured = {m["name"] for m in entry["measurements"]}
+    assert {"containing_region", "containing_module", "bytes_evaluated",
+            "captured_bytes"} <= measured
     assert record["coverage"]["status"] == "complete"
     # The completeness claim covers ioc_string_scan alone. Every other stomping
     # source is in the roster as absent AND carries its own limitation, so a
@@ -331,6 +339,75 @@ def test_an_obfuscation_rescan_projects_one_entry_per_layer(
         "sleep_mask", "entropy", "decode"]
     assert doc["result"]["summary"]["scan_scope"]["scopes"] == [
         "decode", "entropy", "sleep_mask"]
+
+
+def test_an_inapplicable_layer_reaches_the_document_with_its_reason(
+        monkeypatch, tmp_path, validator):
+    """An executable private range: the sleep-mask layer examines read-write
+    private memory, so it declines the target while the other two evaluate it
+    completely. The document has to say which of the two happened, and must not
+    report the layers that did apply as a coverage failure."""
+    regions = [Region(_BASE, _BASE, _SIZE, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE",
+                      "MEM_PRIVATE")]
+    monkeypatch.setattr(encoding_targeted, "read_region_spanning",
+                        _reader({_BASE: _payload()}))
+    code, doc, console = run_cli(
+        monkeypatch, tmp_path,
+        ["--hunt", "obfuscation", "--hunt-addr", hex(_BASE), "--size", hex(_SIZE)],
+        _mf(regions=regions))
+    assert list(validator.iter_errors(doc)) == []
+    record = _record(doc)
+    entries = {item["scope"]: item for item in record["details"]["targeted_scope"]}
+
+    assert entries["sleep_mask"]["coverage_status"] == "not_applicable"
+    assert entries["sleep_mask"]["applicability_reason"] == "region_protection_ineligible"
+    assert entries["entropy"]["applicability_reason"] is None
+
+    # The layers that applied evaluated the range completely, and the record
+    # says so -- exit 0, not the exit 3 a collapsed "did not run" would give.
+    assert record["coverage"]["status"] == "complete"
+    assert code == 0
+    codes = {limitation["code"] for limitation in record["coverage"]["limitations"]}
+    assert "TARGETED_SOURCE_NOT_APPLICABLE" in codes
+
+    flat = _flat(console)
+    assert "not applicable" in flat
+    assert "sleep_mask does not apply to this target" in flat
+
+
+def test_the_console_and_the_document_carry_the_same_measurements(
+        monkeypatch, tmp_path, validator):
+    """One projection of one scan: a number an analyst reads off the card has
+    to be the number a consumer reads out of the document."""
+    regions = [Region(_BASE, _BASE, _SIZE, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+    monkeypatch.setattr(encoding_targeted, "read_region_spanning",
+                        _reader({_BASE: _payload()}))
+    _code, doc, console = run_cli(
+        monkeypatch, tmp_path,
+        ["--hunt", "obfuscation", "--hunt-addr", hex(_BASE), "--size", hex(_SIZE),
+         "--verbose"],
+        _mf(regions=regions))
+    assert list(validator.iter_errors(doc)) == []
+    entries = {item["scope"]: item for item in _record(doc)["details"]["targeted_scope"]}
+
+    entropy = {m["name"]: m for m in entries["entropy"]["measurements"]}
+    assert entropy["entropy_window_coverage"]["value"] in ("exhaustive", "sampled")
+    assert entropy["whole_range_entropy"]["unit"] == "bits_per_byte"
+
+    flat = _flat(console)
+    assert "whole range entropy" in flat
+    assert "entropy window coverage" in flat
+    assert entropy["entropy_window_coverage"]["value"] in flat
+    # --verbose is where the structural context lives, on the card and in the
+    # document alike.
+    assert "containing region protection" in flat
+    # Per-layer work legitimately differs between closures; the structural
+    # context is one fact about the target and is identical on all of them.
+    context = [m for m in entries["entropy"]["measurements"]
+               if m["name"].startswith(("containing", "capture", "evaluated"))]
+    assert context
+    assert all(m in entries["decode"]["measurements"] for m in context)
+    assert all(m in entries["sleep_mask"]["measurements"] for m in context)
 
 
 # ── full-scope compatibility ────────────────────────────────────────────

@@ -83,6 +83,34 @@
         "obfuscation"
       ]
     },
+    "targetedRescanAssertion": {
+      "description": "Replays the recovery workflow a targeted rescan exists for: a full-scope hunt leaves an oversized target in the investigation queue, the queue recommends a hunter-specific rescan, and that rescan is run over exactly that target. The rescan target is read off the queue, never pinned here. The assertion is about the rescan being ACTIONABLE and scope-honest, not about a verdict -- a rescan that finds nothing is a valid outcome, one that explains nothing is not. Omit the whole object for a sample whose hunt leaves no oversized queue entry.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hunter"],
+      "properties": {
+        "hunter": {
+          "$ref": "#/$defs/hunter"
+        },
+        "coverage_status": {
+          "enum": ["complete", "partial", "not_evaluated"]
+        },
+        "require_measurements": {
+          "description": "Measurement names every closure that reached the bytes must retain. A closure that completed without a hit and recorded nothing is the under-informative result this replay exists to catch. Defaults to bytes_evaluated.",
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "require_applicability_reasons": {
+          "description": "When true (the default), every closure reporting coverage_status \"not_applicable\" must name the eligibility gate that declined the target, and no other closure may name one.",
+          "type": "boolean"
+        }
+      }
+    },
     "huntAssertion": {
       "type": "object",
       "properties": {
@@ -171,6 +199,9 @@
               "additionalProperties": {
                 "$ref": "#/$defs/huntAssertion"
               }
+            },
+            "targeted_rescan": {
+              "$ref": "#/$defs/targetedRescanAssertion"
             }
           }
         },

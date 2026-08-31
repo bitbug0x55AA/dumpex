@@ -575,6 +575,25 @@ class LimitationCode(str, Enum):
     # prerequisite, an ineligible descriptor, and a range that never reached
     # the minimum input are all the same fact, and each keeps its own
     # prerequisite limitation alongside.
+    TARGETED_SOURCE_NOT_APPLICABLE = "TARGETED_SOURCE_NOT_APPLICABLE"
+    # ^ A targeted closure its source's own descriptor-eligibility gate
+    # excluded: the source does not apply to this target at all, so there is
+    # nothing here for it to have missed. This is a property of the requested
+    # range -- a re-collection, a bigger budget, and a narrower request all
+    # leave it unchanged -- which is exactly what separates it from
+    # TARGETED_SOURCE_NOT_EVALUATED, where the source WOULD have applied and an
+    # evidence or execution gap stopped it. A consumer must not count it as a
+    # coverage failure, and the record's own reduction does not let it drag an
+    # applicable sibling closure down.
+    #
+    # `source` is always "targeted_scan" (the rescan reporting about itself);
+    # `scope` names the closure scope (obfuscation's sleep_mask/entropy/decode)
+    # and is absent for an unscoped source. `detail` is REQUIRED and names the
+    # exact gate, from the closed vocabulary below -- an analyst reading
+    # "does not apply" without the reason cannot tell a wrong target from a
+    # right one. Caller-buildable: the gate is a fact only the adapter that
+    # applied it knows, never something the coverage reducer can infer from
+    # source state.
     SCAN_ITEMS_UNACCOUNTED = "SCAN_ITEMS_UNACCOUNTED"
     # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED/_READ_FAILED/_SHORT_READ,
     # and the one gap in the family that can never name what it lost: N
@@ -1708,6 +1727,9 @@ def _render_scan_region_evaluation_truncated(limitation: "CoverageLimitation") -
 _SCAN_REGION_SEARCH_INCOMPLETE_REASONS = {
     "window_sampled":
         "the key search sampled a strided subset of windows across the range",
+    "entropy_window_sampled":
+        "the entropy scan measured a strided subset of windows across the range, so a "
+        "high-entropy sub-range between two measured windows would not have been seen",
     "candidate_list_truncated":
         "the recovered-key list was cut at its cap before every candidate was checked",
     "overlapping_capture":
@@ -1768,6 +1790,51 @@ def _render_targeted_source_not_evaluated(limitation: "CoverageLimitation") -> s
                 f"source carries no conclusion about it")
     return (f"{_display_name(limitation.source)} is outside this targeted rescan's granted "
             f"scope -- the result neither measures nor closes that source's own coverage")
+
+
+# Every reason a targeted closure's source can decline a target outright. Each
+# is a property of the requested range and the descriptor containing it, never
+# of the dump's capture, the scan's budget, or the order the layers ran in --
+# that is what makes the whole code a boundary rather than a gap.
+_TARGETED_SOURCE_NOT_APPLICABLE_REASONS = {
+    "region_not_committed":
+        "the MemoryInfo region containing the requested base is not committed memory",
+    "region_type_ineligible":
+        "the containing region's memory type is not one this source examines",
+    "region_protection_ineligible":
+        "the containing region's protection is not one this source examines",
+    "region_module_backed":
+        "the containing region is backed by a loaded module, and this source examines "
+        "unbacked private memory only",
+    "region_system_module":
+        "the containing region belongs to a system module this source deliberately "
+        "leaves out",
+    "range_below_source_minimum":
+        "the requested range is smaller than the smallest range this source's algorithm "
+        "can apply to",
+}
+
+
+def _render_targeted_source_not_applicable(limitation: "CoverageLimitation") -> str:
+    scope = f" ({limitation.scope})" if limitation.scope else ""
+    reason = _TARGETED_SOURCE_NOT_APPLICABLE_REASONS.get(limitation.detail, limitation.detail)
+    return (f"The targeted rescan{scope} does not apply to the requested range ({reason}) "
+            f"-- a property of the target, not a gap in the scan, and not something a "
+            f"re-collection or a larger budget would change")
+
+
+def _validate_targeted_source_not_applicable_fields(limitation: "CoverageLimitation") -> None:
+    if limitation.source != _TARGETED_SCAN_SOURCE:
+        raise ValueError(
+            f"CoverageLimitation(code=TARGETED_SOURCE_NOT_APPLICABLE) requires source "
+            f"{_TARGETED_SCAN_SOURCE!r} -- inapplicability is the rescan's own statement "
+            f"about a closure it ran, not a claim about another coverage source, got "
+            f"{limitation.source!r}")
+    if limitation.detail not in _TARGETED_SOURCE_NOT_APPLICABLE_REASONS:
+        raise ValueError(
+            f"CoverageLimitation(code=TARGETED_SOURCE_NOT_APPLICABLE) requires detail to be "
+            f"one of {sorted(_TARGETED_SOURCE_NOT_APPLICABLE_REASONS)!r}, got "
+            f"{limitation.detail!r}")
 
 
 def _render_scan_items_unaccounted(limitation: "CoverageLimitation") -> str:
@@ -2696,6 +2763,11 @@ _CODE_SPECS = {
     LimitationCode.TARGETED_SOURCE_NOT_EVALUATED: _CodeSpec(
         render=_render_targeted_source_not_evaluated,
         absent_capable=True, allowed_fields=frozenset({"scope"})),
+    LimitationCode.TARGETED_SOURCE_NOT_APPLICABLE: _CodeSpec(
+        render=_render_targeted_source_not_applicable, fixed_source=_TARGETED_SCAN_SOURCE,
+        caller_buildable=True,
+        validate_fields=_validate_targeted_source_not_applicable_fields,
+        allowed_fields=frozenset({"scope", "detail"})),
     LimitationCode.SCAN_ITEMS_UNACCOUNTED: _CodeSpec(
         render=_render_scan_items_unaccounted, caller_buildable=True,
         validate_fields=_require_positive_affected_count("SCAN_ITEMS_UNACCOUNTED"),
