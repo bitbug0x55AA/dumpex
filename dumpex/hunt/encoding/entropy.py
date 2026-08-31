@@ -110,26 +110,39 @@ class WindowedEntropy:
         return self.top_windows[0] if self.top_windows else None
 
 
-def _window_offsets(length: int, window_size: int, max_windows: int, min_input: int):
-    """``(offsets, windows_total, exhaustive)`` for ``length`` bytes.
+def _window_spans(length: int, base_address: int, window_size: int,
+                  max_windows: int, min_input: int):
+    """``(spans, windows_total, exhaustive)`` for a virtual-address range.
 
-    Windows are fixed-size and non-overlapping from offset 0. A trailing
-    remainder is measured only when it still reaches ``min_input`` -- below
-    that a Shannon value says nothing -- so a shorter tail is neither counted
-    nor measured. Past ``max_windows`` the offsets are strided by a
-    deterministic step rather than truncated, so a sampled pass still spans the
-    whole range instead of stopping part-way through it."""
+    Each ``span`` is ``(offset, size)``. Windows are fixed-size,
+    non-overlapping, and aligned to absolute virtual-address boundaries rather
+    than to offset zero: a request that starts or ends within a window therefore
+    has a partial edge span. An edge below ``min_input`` is not measured because
+    a Shannon value over so few bytes says nothing.
+
+    Past ``max_windows`` the spans are selected with a deterministic stride
+    rather than truncated, so a sampled pass still crosses the whole range
+    instead of stopping part-way through it.
+    """
     if length < min_input or window_size <= 0 or max_windows <= 0:
         return (), 0, True
-    full = length // window_size
-    remainder = length - full * window_size
-    total = full + (1 if remainder >= min_input else 0)
+
+    spans = []
+    offset = 0
+    first_size = window_size - (base_address % window_size)
+    while offset < length:
+        size = min(first_size if offset == 0 else window_size, length - offset)
+        if size >= min_input:
+            spans.append((offset, size))
+        offset += size
+
+    total = len(spans)
     if total <= 0:
         return (), 0, True
     if total <= max_windows:
-        return tuple(i * window_size for i in range(total)), total, True
+        return tuple(spans), total, True
     step = (total + max_windows - 1) // max_windows
-    return tuple(i * window_size for i in range(0, total, step)), total, False
+    return tuple(spans[i] for i in range(0, total, step)), total, False
 
 
 def scan_entropy_windows(data: bytes, base_address: int, threshold: float,
@@ -137,13 +150,13 @@ def scan_entropy_windows(data: bytes, base_address: int, threshold: float,
     """Measure ``data`` (mapped at ``base_address``) both as one value and as
     bounded windows. Pure: no dump access, no coverage ledger, no hits."""
     whole = _shannon_entropy(data)
-    offsets, total, exhaustive = _window_offsets(
-        len(data), config.entropy_window_size, config.entropy_max_windows,
+    spans, total, exhaustive = _window_spans(
+        len(data), base_address, config.entropy_window_size, config.entropy_max_windows,
         config.entropy_min_input)
     measured = []
     above = 0
-    for offset in offsets:
-        chunk = data[offset:offset + config.entropy_window_size]
+    for offset, size in spans:
+        chunk = data[offset:offset + size]
         value = _shannon_entropy(chunk)
         if value >= threshold:
             above += 1
@@ -155,7 +168,7 @@ def scan_entropy_windows(data: bytes, base_address: int, threshold: float,
     return WindowedEntropy(
         whole_range_entropy=whole, threshold=threshold,
         window_size=config.entropy_window_size, windows_total=total,
-        windows_evaluated=len(offsets), windows_above_threshold=above,
+        windows_evaluated=len(spans), windows_above_threshold=above,
         exhaustive=exhaustive,
         top_windows=tuple(measured[:config.entropy_top_windows]))
 

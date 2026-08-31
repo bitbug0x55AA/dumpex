@@ -303,6 +303,30 @@ def test_an_oversized_queue_entry_rescans_into_an_actionable_result(sample):
             f"was measured to reach it"
         )
 
+    # A real sample can pin a minimum observed value, not just the existence of
+    # a measurement name. This catches regressions where the targeted pass runs
+    # and explains itself but still misses the payload the sample exists to
+    # exercise (for example a page-local entropy peak).
+    entries_by_scope = {entry.scope: entry for entry in scopes}
+    for scope, minimums in assertion.get("min_measurements", {}).items():
+        assert scope in entries_by_scope, (
+            f"{sample['id']}: expected targeted scope {scope!r} is not present"
+        )
+        entry = entries_by_scope[scope]
+        for name, minimum in minimums.items():
+            values = [
+                measurement.value for measurement in entry.measurements
+                if measurement.name == name
+                and isinstance(measurement.value, (int, float))
+                and not isinstance(measurement.value, bool)
+            ]
+            assert values, (
+                f"{sample['id']}/{scope}: expected numeric measurement {name!r}"
+            )
+            assert max(values) >= minimum, (
+                f"{sample['id']}/{scope}: expected {name} >= {minimum}, got {values}"
+            )
+
 
 _CLEAN_SAMPLES = [sample for sample in _SAMPLES if sample["_kind"] == "clean"]
 

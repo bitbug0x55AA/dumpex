@@ -38,7 +38,8 @@ def _sleep_mask_item_fact(h, report: EncodingReport) -> str:
 
 
 def _entropy_item_fact(h, report: EncodingReport) -> str:
-    return (f"VA={hex_address(h.location.va)} entropy={h.entropy:.3f} threshold={h.threshold} "
+    extent = f" window_size={h.measured_size}" if h.size is not None else ""
+    return (f"VA={hex_address(h.location.va)}{extent} entropy={h.entropy:.3f} threshold={h.threshold} "
             f"protect={h.region.protect}")
 
 

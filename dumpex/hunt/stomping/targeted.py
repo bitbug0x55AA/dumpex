@@ -355,12 +355,15 @@ def run_targeted_stomping(context) -> ObservationResult:
         boundary, containing, capture, modules) + (
         _targeted.bytes_measurement("bytes_evaluated",
                                     len(buf) if cov.scanned else 0),
-        _targeted.count_measurement("ioc_strings_retained", len(scan.hits)),
-        _targeted.count_measurement("weak_only_regions", scan.weak_only_regions),
-        _targeted.text_measurement(
-            "network_ioc_pattern_set",
-            "withheld" if cov.network_ioc_withheld else "applied"),
     )
+    if reached:
+        measurements += (
+            _targeted.count_measurement("ioc_strings_retained", len(scan.hits)),
+            _targeted.count_measurement("weak_only_regions", scan.weak_only_regions),
+            _targeted.text_measurement(
+                "network_ioc_pattern_set",
+                "withheld" if cov.network_ioc_withheld else "applied"),
+        )
 
     closure = ObservationClosure(
         source=TARGETED_SOURCE, coverage_status=status, capture_state=capture.state,

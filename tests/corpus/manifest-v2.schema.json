@@ -105,6 +105,24 @@
             "minLength": 1
           }
         },
+        "min_measurements": {
+          "description": "Minimum numeric measurement values required from named targeted scopes. Use this to pin a real-sample observation (for example entropy.entropy_windows_above_threshold: 1), not merely the presence of its field.",
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "object",
+            "minProperties": 1,
+            "propertyNames": {
+              "minLength": 1
+            },
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
         "require_applicability_reasons": {
           "description": "When true (the default), every closure reporting coverage_status \"not_applicable\" must name the eligibility gate that declined the target, and no other closure may name one.",
           "type": "boolean"

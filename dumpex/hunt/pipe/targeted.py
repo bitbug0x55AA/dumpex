@@ -556,19 +556,24 @@ def run_targeted_pipe(context) -> ObservationResult:
         measurements = target_context + (
             _targeted.bytes_measurement(
                 "bytes_evaluated", len(read[0]) if (read and cov.scanned) else 0),
-            _targeted.count_measurement(
-                "pipe_names_retained" if scope == "pipe_name" else "c2_records_retained",
-                retained),
-            _targeted.text_measurement(
-                "budget_state", "exhausted" if exhausted else "available"),
         )
+        budget_outcomes = ()
+        if status != "not_applicable":
+            measurements += (
+                _targeted.count_measurement(
+                    "pipe_names_retained" if scope == "pipe_name" else "c2_records_retained",
+                    retained),
+                _targeted.text_measurement(
+                    "budget_state", "exhausted" if exhausted else "available"),
+            )
+            budget_outcomes = (BudgetOutcome(name=budget_name, exhausted=exhausted),)
         closures.append(ObservationClosure(
             source=TARGETED_SOURCE, scope=scope, coverage_status=status,
             capture_state=capture.state, captured_bytes=capture.captured_bytes,
             read_slice=read_slice if ran else None,
             applicability_reason=ineligible_reason if status == "not_applicable" else None,
             limitations=limitations,
-            budget_outcomes=(BudgetOutcome(name=budget_name, exhausted=exhausted),),
+            budget_outcomes=budget_outcomes,
             measurements=measurements, diagnostics=tuple(diagnostics)))
 
     payload = TargetedPipeEvidence(

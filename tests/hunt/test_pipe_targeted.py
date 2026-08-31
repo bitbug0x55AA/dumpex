@@ -14,6 +14,7 @@ from dumpex.hunt._coverage import CoverageTracker
 from dumpex.hunt._execution import build_execution_context
 from dumpex.hunt._observation import ObservationResult
 from dumpex.hunt._request import HuntRequest
+from dumpex.hunt._targeted import CONTEXT_MEASUREMENT_NAMES
 from dumpex.output.coverage import LimitationCode
 
 import dumpex.hunt._budget as _budget_mod
@@ -603,6 +604,11 @@ def test_an_uncommitted_region_is_not_applicable_for_either_scope(monkeypatch):
         assert closure.coverage_status == "not_applicable"
         assert closure.applicability_reason == "region_not_committed"
         assert any("not committed" in note for note in closure.diagnostics)
+        names = {measurement.name for measurement in closure.measurements}
+        assert names - CONTEXT_MEASUREMENT_NAMES == {"bytes_evaluated"}
+        assert next(measurement for measurement in closure.measurements
+                    if measurement.name == "bytes_evaluated").value == 0
+        assert closure.budget_outcomes == ()
 
 
 # ── short and failed reads ──────────────────────────────────────────────

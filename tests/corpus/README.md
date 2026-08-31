@@ -114,6 +114,9 @@ expected:
     require_applicability_reasons: true
     require_measurements:
       - bytes_evaluated
+    min_measurements:                 # optional, keyed by targeted scope
+      entropy:
+        entropy_windows_above_threshold: 1
 ```
 
 The rescan target is read off the queue, never off the manifest: pinning an
@@ -127,6 +130,11 @@ reached the bytes must retain the named measurements, every closure that
 declined the target must name the eligibility gate that declined it, and every
 closure must identify the requested range rather than the containing
 descriptor.
+
+`min_measurements` is the stronger real-sample assertion: it requires the
+named scope to emit a numeric measurement at or above the declared value. Use
+it when the corpus sample is expected to exercise a specific observation, such
+as at least one page-sized entropy window above threshold.
 
 The machine-readable contract is
 [`manifest-v2.schema.json`](manifest-v2.schema.json). The stricter

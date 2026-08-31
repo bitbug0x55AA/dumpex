@@ -12,6 +12,7 @@ from dumpex.core.va_range import CaptureState, VirtualRange
 from dumpex.hunt._execution import build_execution_context
 from dumpex.hunt._observation import ObservationResult
 from dumpex.hunt._request import HuntRequest
+from dumpex.hunt._targeted import CONTEXT_MEASUREMENT_NAMES
 from dumpex.output.coverage import LimitationCode
 
 import dumpex.hunt.stomping.memory_scan as memory_scan
@@ -277,6 +278,10 @@ def test_an_ineligible_region_is_not_applicable_with_its_reason(monkeypatch, reg
     assert closure.applicability_reason == reason
     assert closure.read_slice is None
     assert closure.diagnostics
+    names = {measurement.name for measurement in closure.measurements}
+    assert names - CONTEXT_MEASUREMENT_NAMES == {"bytes_evaluated"}
+    assert next(measurement for measurement in closure.measurements
+                if measurement.name == "bytes_evaluated").value == 0
 
 
 # ── short and failed reads ──────────────────────────────────────────────

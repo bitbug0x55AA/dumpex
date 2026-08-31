@@ -26,7 +26,7 @@ from dumpex.hunt._request import HuntRequest
 from dumpex.hunt._targeted import CONTEXT_MEASUREMENT_NAMES
 from dumpex.hunt._targeted_record import build_targeted_coverage, targeted_scope_records
 from dumpex.hunt.encoding.config import EncodingConfig
-from dumpex.hunt.encoding.entropy import scan_entropy_windows
+from dumpex.hunt.encoding.entropy import _window_spans, scan_entropy_windows
 from dumpex.output.coverage import CoverageStatus, LimitationCode
 
 import dumpex.hunt.encoding.targeted as targeted
@@ -156,6 +156,29 @@ def test_a_trailing_remainder_under_the_minimum_input_is_not_measured():
     assert measured.windows_total == 4
 
 
+def test_windows_follow_virtual_page_boundaries_and_keep_measurable_edges():
+    config = EncodingConfig(entropy_window_size=4096, entropy_min_input=256,
+                            entropy_max_windows=16, entropy_top_windows=16)
+    base = _BASE + 0x180
+    data = b"\x00" * (4096 * 2)
+    measured = scan_entropy_windows(data, base, 7.2, config)
+
+    windows = sorted(measured.top_windows, key=lambda window: window.base_address)
+    assert [(window.base_address, window.size) for window in windows] == [
+        (base, 4096 - 0x180),
+        (_BASE + 0x1000, 4096),
+        (_BASE + 0x2000, 0x180),
+    ]
+
+
+def test_the_32_mib_ceiling_is_exhaustive_even_when_the_request_is_unaligned():
+    spans, total, exhaustive = _window_spans(
+        32 * 1024 * 1024, _BASE + 256, 4096, 8193, 256)
+
+    assert exhaustive
+    assert total == len(spans) == 8193
+
+
 def test_a_windowed_rescan_locates_the_sub_range_a_single_value_misses(monkeypatch):
     data, payload_va = _sparse_with_payload()
     _ctx, result = _run(monkeypatch, data)
@@ -169,6 +192,25 @@ def test_a_windowed_rescan_locates_the_sub_range_a_single_value_misses(monkeypat
     # allocation's own average is under the threshold.
     assert all(hit.size == result.payload.windowed_entropy.window_size for hit in hits)
     assert any(payload_va <= hit.location.va < payload_va + 0x20000 for hit in hits)
+
+
+def test_a_single_high_entropy_page_inside_4_mib_is_measured_and_retained(monkeypatch):
+    page_offset = 0x2000
+    page = bytes(range(256)) * 16
+    data = bytearray(4 * 1024 * 1024)
+    data[page_offset:page_offset + len(page)] = page
+
+    _ctx, result = _run(monkeypatch, bytes(data))
+    entropy = _closures(result)["entropy"]
+    measured = _measured(entropy)
+    hits = result.payload.entropy.hits
+
+    assert entropy.coverage_status == "complete"
+    assert measured["entropy_windows_above_threshold"][0].value >= 1
+    assert any(
+        hit.location.va == _BASE + page_offset and hit.measured_size == 4096
+        for hit in hits
+    )
 
 
 def test_a_uniformly_high_entropy_range_still_reports_itself_not_its_parts(monkeypatch):

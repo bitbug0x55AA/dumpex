@@ -144,6 +144,35 @@ def test_validate_rejects_evil_without_independent_ground_truth(tmp_path):
         corpus_manager.validate_root(tmp_path)
 
 
+def test_validate_accepts_targeted_minimum_measurements(tmp_path):
+    manifest = _write_private_kind(tmp_path, "evil")
+    manifest["samples"][0]["expected"]["targeted_rescan"] = {
+        "hunter": "obfuscation",
+        "min_measurements": {
+            "entropy": {"entropy_windows_above_threshold": 1},
+        },
+    }
+    path = tmp_path / "evil" / "manifest.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    corpus_manager.validate_root(tmp_path)
+
+
+def test_validate_rejects_non_numeric_targeted_measurement_minimum(tmp_path):
+    manifest = _write_private_kind(tmp_path, "evil")
+    manifest["samples"][0]["expected"]["targeted_rescan"] = {
+        "hunter": "obfuscation",
+        "min_measurements": {
+            "entropy": {"entropy_windows_above_threshold": "one"},
+        },
+    }
+    path = tmp_path / "evil" / "manifest.yaml"
+    path.write_text(yaml.safe_dump(manifest, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(corpus_manager.CorpusError, match="finite numbers"):
+        corpus_manager.validate_root(tmp_path)
+
+
 @pytest.mark.parametrize(
     "unsafe_path",
     ("../outside.dmp", "samples/../../outside.dmp", "C:/outside.dmp"),

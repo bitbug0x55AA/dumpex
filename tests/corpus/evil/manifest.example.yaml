@@ -44,3 +44,6 @@ samples:
         require_applicability_reasons: true
         require_measurements:
           - bytes_evaluated
+        min_measurements:
+          entropy:
+            entropy_windows_above_threshold: 1

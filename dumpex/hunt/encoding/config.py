@@ -20,10 +20,13 @@ ENTROPY_MIN_INPUT         = 256                # fewest bytes a Shannon entropy 
 # encrypted payload inside a mostly-empty multi-megabyte allocation measures
 # well below the threshold as one number and well above it as its own window.
 # A targeted rescan therefore also measures the range in fixed, non-overlapping
-# windows, which is where the sub-range an investigator can act on is named.
-ENTROPY_WINDOW_SIZE       = 64 * 1024          # bytes per measured window
-ENTROPY_MAX_WINDOWS       = 512                # windows measured per range; past this the
-                                                # windows are strided and the coverage is
+# page-sized windows, aligned to their virtual-address boundaries. The two edge
+# windows may be partial when the request itself is not page-aligned. A 32 MiB
+# aligned request has 8192 windows; an unaligned one can span 8193 page fragments.
+ENTROPY_WINDOW_SIZE       = 4 * 1024           # bytes per measured window
+ENTROPY_MAX_WINDOWS       = 8193               # exhaustive through the targeted request
+                                                # ceiling, including two partial edge pages;
+                                                # larger standalone inputs are strided and
                                                 # reported as sampled rather than exhaustive
 ENTROPY_TOP_WINDOWS       = 5                  # highest-entropy windows retained, in
                                                 # descending order -- the first is the

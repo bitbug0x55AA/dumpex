@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 from pathlib import Path, PurePosixPath
 import re
 import shutil
@@ -39,6 +40,70 @@ VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 class CorpusError(ValueError):
     """A corpus violates the public contract or safe filesystem boundaries."""
+
+
+def _validate_targeted_rescan(sample_id: str, assertion: object) -> None:
+    if assertion is None:
+        return
+    if not isinstance(assertion, dict):
+        raise CorpusError(f"{sample_id}: expected.targeted_rescan must be a mapping")
+
+    hunter = assertion.get("hunter")
+    if hunter not in HUNTERS:
+        raise CorpusError(f"{sample_id}: unknown targeted-rescan hunter {hunter!r}")
+
+    coverage = assertion.get("coverage_status")
+    if coverage is not None and coverage not in COVERAGE_STATUSES:
+        raise CorpusError(
+            f"{sample_id}: invalid targeted-rescan coverage_status {coverage!r}"
+        )
+
+    required = assertion.get("require_measurements")
+    if required is not None and (
+        not isinstance(required, list)
+        or not required
+        or any(not isinstance(name, str) or not name for name in required)
+        or len(required) != len(set(required))
+    ):
+        raise CorpusError(
+            f"{sample_id}: targeted-rescan require_measurements must be a non-empty "
+            "list of unique names"
+        )
+
+    applicability = assertion.get("require_applicability_reasons")
+    if applicability is not None and not isinstance(applicability, bool):
+        raise CorpusError(
+            f"{sample_id}: targeted-rescan require_applicability_reasons must be boolean"
+        )
+
+    minimums = assertion.get("min_measurements")
+    if minimums is None:
+        return
+    if not isinstance(minimums, dict) or not minimums:
+        raise CorpusError(
+            f"{sample_id}: targeted-rescan min_measurements must be a non-empty mapping"
+        )
+    for scope, measurements in minimums.items():
+        if not isinstance(scope, str) or not scope:
+            raise CorpusError(
+                f"{sample_id}: targeted-rescan min_measurements scope must be named"
+            )
+        if not isinstance(measurements, dict) or not measurements:
+            raise CorpusError(
+                f"{sample_id}: targeted-rescan min_measurements.{scope} must be a "
+                "non-empty mapping"
+            )
+        for name, minimum in measurements.items():
+            numeric = (
+                isinstance(minimum, (int, float))
+                and not isinstance(minimum, bool)
+                and math.isfinite(minimum)
+            )
+            if not isinstance(name, str) or not name or not numeric:
+                raise CorpusError(
+                    f"{sample_id}: targeted-rescan min_measurements.{scope} must map "
+                    "non-empty measurement names to finite numbers"
+                )
 
 
 def sha256_file(path: Path) -> str:
@@ -243,6 +308,8 @@ def validate_manifest(
                 raise CorpusError(
                     f"{sample_id}/{hunter}: min_score must be a non-negative integer"
                 )
+
+        _validate_targeted_rescan(sample_id, expected.get("targeted_rescan"))
 
     return manifest
 

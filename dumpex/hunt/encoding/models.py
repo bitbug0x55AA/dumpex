@@ -215,7 +215,7 @@ class EntropyHit:
 
     `size` is the extent the value was measured over, and `None` means the
     whole of `region`. A bounded window inside a larger allocation sets it,
-    so a consumer can tell "this 4 MB allocation averages 7.4" from "a 64 KiB
+    so a consumer can tell "this 4 MB allocation averages 7.4" from "a 4 KiB
     window at this address measures 7.4 inside an allocation that averages
     2.1" -- two different leads. `location` locates the measured extent, not
     the allocation, in both cases."""
