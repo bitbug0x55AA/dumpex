@@ -26,7 +26,8 @@ to an intentionally open string vocabulary does not by itself require a bump.
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.13 (current) | [`dumpex-output-v2.13.schema.json`](../../dumpex/schemas/dumpex-output-v2.13.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.14 (current) | [`dumpex-output-v2.14.schema.json`](../../dumpex/schemas/dumpex-output-v2.14.schema.json) |
+| — (historical) | v2.13 | [`dumpex-output-v2.13.schema.json`](../../dumpex/schemas/dumpex-output-v2.13.schema.json) — frozen; no command emits this anymore |
 | — (historical) | v2.12 | [`dumpex-output-v2.12.schema.json`](../../dumpex/schemas/dumpex-output-v2.12.schema.json) — frozen; no command emits this anymore |
 | — (historical) | v2.11 | [`dumpex-output-v2.11.schema.json`](../../dumpex/schemas/dumpex-output-v2.11.schema.json) — frozen; no command emits this anymore |
 | — (historical) | v2.10 | [`dumpex-output-v2.10.schema.json`](../../dumpex/schemas/dumpex-output-v2.10.schema.json) — frozen; no command emits this anymore |
@@ -45,6 +46,7 @@ to an intentionally open string vocabulary does not by itself require a bump.
 
 | Version | Consumer-visible change |
 |---|---|
+| 2.14 | Added `huntSummary.scan_scope` in both hunt modes, and `targeted_scope` on a targeted rescan's hunter details. Added the `coverageLimitation.code` value `TARGETED_SOURCE_NOT_EVALUATED`. A targeted hunter record's `coverage.status` may be `complete` with a non-empty `coverage.limitations`: those entries name coverage sources outside what a targeted rescan evaluates, not gaps in what it did. Full-scope records keep the earlier `complete` implies no limitations relationship. `scan_scope` is cross-checked by the schema rather than merely well-formed: a `targeted` tag must agree with `summary.selected` and with that analyzer's registered source/scopes, and requires `targeted_scope` on the record; a `full` tag forbids it. A `targeted_scope` entry also carries `applicability_reason` and `measurements`, and its `coverage_status` may be `not_applicable` -- the source's own eligibility gate declined the target, which is the boundary of what that source speaks about and not a gap. A consumer must not count it as a coverage failure; `coverage.status` does not, and a rescan whose closures all decline the target reports `not_evaluated`. Added the `coverageLimitation.code` value `TARGETED_SOURCE_NOT_APPLICABLE` |
 | 2.13 | Replaced retired `pid`/`peb` result kinds with `process`, `handles`, and `profile`; updated `sysinfo` records |
 | 2.12 | Added target identity for read/short-read/budget gaps, capture-state fields, skip causes, and partial evidence availability |
 | 2.11 | Added exact hidden-PE candidate address, region offset, and dump-file offset |

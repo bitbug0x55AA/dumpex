@@ -44,7 +44,9 @@ def _entropy_verbose_fact(h) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
     rwx = " [RWX]" if h.region.is_rwx else ""
-    return (f"VA={hex_address(h.location.va)}{rwx} File_offset={fo_str} Size=0x{h.region.size:x} "
+    size_label = "Window_size" if h.size is not None else "Size"
+    return (f"VA={hex_address(h.location.va)}{rwx} File_offset={fo_str} "
+            f"{size_label}=0x{h.measured_size:x} "
             f"Entropy={h.entropy:.3f}bits threshold={h.threshold} Protection={h.region.protect}")
 
 

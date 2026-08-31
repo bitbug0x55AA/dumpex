@@ -21,6 +21,7 @@ from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt.encoding.config import (
     EncodingConfig,
     ENTROPY_PRIVATE_THRESHOLD, ENTROPY_RWX_THRESHOLD, ENTROPY_SCAN_MAX,
+    ENTROPY_MIN_INPUT, ENTROPY_WINDOW_SIZE, ENTROPY_MAX_WINDOWS, ENTROPY_TOP_WINDOWS,
     B64_MIN_LEN, XOR_SCAN_MAX, XOR_SAMPLE_SIZE, XOR_SCORE_MIN,
     XOR_STRUCTURAL_WINDOW,
     DECOMPRESS_MAX_OUTPUT, DECODE_SCAN_MAX,
@@ -59,7 +60,9 @@ def _build_encoding_report(mf: MinidumpFile):
     # own separate copies of these constants directly.
     config = EncodingConfig(
         entropy_private_threshold=ENTROPY_PRIVATE_THRESHOLD, entropy_rwx_threshold=ENTROPY_RWX_THRESHOLD,
-        entropy_scan_max=ENTROPY_SCAN_MAX, b64_min_len=B64_MIN_LEN, xor_scan_max=XOR_SCAN_MAX,
+        entropy_scan_max=ENTROPY_SCAN_MAX, entropy_min_input=ENTROPY_MIN_INPUT,
+        entropy_window_size=ENTROPY_WINDOW_SIZE, entropy_max_windows=ENTROPY_MAX_WINDOWS,
+        entropy_top_windows=ENTROPY_TOP_WINDOWS, b64_min_len=B64_MIN_LEN, xor_scan_max=XOR_SCAN_MAX,
         xor_sample_size=XOR_SAMPLE_SIZE, xor_score_min=XOR_SCORE_MIN,
         xor_structural_window=XOR_STRUCTURAL_WINDOW,
         decompress_max_output=DECOMPRESS_MAX_OUTPUT, decode_scan_max=DECODE_SCAN_MAX,

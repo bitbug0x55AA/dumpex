@@ -49,9 +49,9 @@ def _hit(layer="base64", base=0x300000, is_pe=False, is_shellcode=False, is_rwx=
     return DecodedHit(**kwargs)
 
 
-def _entropy_hit(base=0x400000, entropy=7.5, threshold=7.2):
+def _entropy_hit(base=0x400000, entropy=7.5, threshold=7.2, size=None):
     return EntropyHit(region=_region(base), location=_location(base),
-                       entropy=entropy, threshold=threshold)
+                       entropy=entropy, threshold=threshold, size=size)
 
 
 def _coverage(**overrides):

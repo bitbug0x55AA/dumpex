@@ -412,7 +412,8 @@ def test_hunt_summary_partial_not_evaluated_among_seven_requires_inconclusive(
     # clean, none individually INCONCLUSIVE -- overall must still be
     # INCONCLUSIVE (a partly-unevaluated scope hasn't earned "clean"),
     # not silently allowed to say NOT_DETECTED_IN_SCANNED_SCOPE.
-    good = {"selected": "all", "hunter_count": 7, "detected_count": 0,
+    good = {"selected": "all", "scan_scope": {"kind": "full"}, "hunter_count": 7,
+            "detected_count": 0,
             "inconclusive_count": 0, "not_evaluated_count": 3, "overall_status": "INCONCLUSIVE",
             "highest_verdict_level": "inconclusive", "lead_count": 0, "investigation_actions": []}
     assert list(hunt_summary_validator.iter_errors(good)) == []

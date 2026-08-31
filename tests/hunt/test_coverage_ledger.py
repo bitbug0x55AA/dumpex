@@ -32,7 +32,7 @@ from dumpex.hunt.cs_beacon.config import CSBeaconConfig
 from dumpex.hunt.cs_beacon.scanner import scan_segments
 from dumpex.hunt.encoding.config import EncodingConfig
 from dumpex.hunt.encoding.decoding import scan_decode_layers
-from dumpex.hunt.encoding.entropy import _scan_entropy
+from dumpex.hunt.encoding.entropy import _scan_entropy, scan_entropy_targeted
 from dumpex.hunt.encoding.models import LayerCoverage
 from dumpex.hunt.encoding.sleep_mask import _scan_sleep_mask
 from dumpex.hunt.pipe.memory_scan import scan_pipe_names
@@ -166,6 +166,13 @@ def _run_entropy(region, reader, config=None, captured=()):
     regions = _as_items(region)
     result = _scan_entropy(regions, [], _mf(captured=captured), (), reader,
                             config or _encoding_config())
+    return result.coverage
+
+
+def _run_entropy_targeted(region, reader, config=None, captured=()):
+    regions = _as_items(region)
+    result, _windowed = scan_entropy_targeted(
+        regions, [], _mf(captured=captured), (), reader, config or _encoding_config())
     return result.coverage
 
 
@@ -699,6 +706,7 @@ TRACKER_CONSTRUCTION_SITES = {
     "cs_beacon/scanner.py::scan_segments":          (_run_cs_beacon,  _private_region),
     "encoding/decoding.py::scan_decode_layers":     (_run_decode,     _private_region),
     "encoding/entropy.py::_scan_entropy":           (_run_entropy,    _private_region),
+    "encoding/entropy.py::scan_entropy_targeted":   (_run_entropy_targeted, _private_region),
     "encoding/sleep_mask.py::_scan_sleep_mask":     (_run_sleep_mask, _private_region),
     "pipe/__init__.py::_build_pipe_report":  (_run_pipe_builder, _private_region),
     "pipe/targeted.py::run_targeted_pipe":   (_run_pipe_targeted, _private_region),

@@ -14,7 +14,10 @@ import os
 import pytest
 
 from dumpex.core.memory import open_dump
-from dumpex.hunt import cmd_hunt
+from dumpex.core.va_range import VirtualRange
+from dumpex.hunt import cmd_hunt, execute_targeted
+from dumpex.hunt._registry import REGISTRY
+from dumpex.hunt._request import HuntRequest
 from dumpex.output.records import HUNTERS
 
 
@@ -190,6 +193,138 @@ def test_sample_matches_expected_results(sample):
             assert result.get("score", 0) >= assertion["min_score"], (
                 f"{sample['id']}/{ttp}: expected score >= "
                 f"{assertion['min_score']}, got {result.get('score')}"
+            )
+
+
+# ── oversized queue entry -> originating targeted rescan ───────────────
+#
+# The workflow `--hunt-addr` exists for, replayed end to end against a real
+# dump: a full-scope hunt skips an oversized target, the investigation queue
+# recommends a hunter-specific rescan of exactly that target, and the rescan is
+# run over it. What is asserted is that the rescan is ACTIONABLE and
+# scope-honest -- it explains what each closure did with the bytes, names the
+# gate behind any closure that declined them, and claims completeness for the
+# granted source only. A rescan that finds nothing is a valid outcome; one that
+# explains nothing is the under-informative result this replay exists to catch.
+
+_TARGETED_RESCAN_SAMPLES = [
+    sample for sample in _SAMPLES
+    if sample.get("expected", {}).get("targeted_rescan")
+]
+
+
+def _queued_rescan_target(sample_id, hunter):
+    """The queue's own oversized entry recommending a rescan by ``hunter``, as
+    ``(base_address, size)``.
+
+    Read off the investigation queue rather than the manifest: pinning an
+    address in the manifest would make the replay test a different scan from
+    the one the queue actually recommends, and would silently keep passing if
+    the queue stopped producing the entry at all."""
+    _results, _records, actions, _provenance = _all_hunt_records(sample_id)
+    for action in actions:
+        recommends = any(hunter in recommendation.hunters
+                         for recommendation in action.recommended_actions)
+        oversized = any(relationship.cause == "oversized_skipped"
+                        and relationship.hunter == hunter
+                        for relationship in action.skipped_by)
+        if recommends and oversized:
+            return action.target.base_address, action.target.size
+    return None
+
+
+@lru_cache(maxsize=None)
+def _all_hunt_records(sample_id):
+    sample = _SAMPLE_BY_ID[sample_id]
+    mf = open_dump(_sample_path(sample))
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        return cmd_hunt(mf, "all", verbose=False, collect_records=True)
+
+
+@pytest.mark.parametrize("sample", _TARGETED_RESCAN_SAMPLES,
+                         ids=_sample_ids(_TARGETED_RESCAN_SAMPLES))
+def test_an_oversized_queue_entry_rescans_into_an_actionable_result(sample):
+    assertion = sample["expected"]["targeted_rescan"]
+    hunter = assertion["hunter"]
+    assert hunter in _HUNTERS, f"{sample['id']}: unknown rescan hunter {hunter!r}"
+
+    queued = _queued_rescan_target(sample["id"], hunter)
+    assert queued is not None, (
+        f"{sample['id']}: the full-scope hunt left no oversized {hunter} target in the "
+        f"investigation queue, so there is no rescan for this sample to originate -- "
+        f"either the sample changed or the queue stopped producing the entry"
+    )
+    base_address, size = queued
+
+    source = REGISTRY.targeted_source(hunter)
+    request = HuntRequest.targeted(
+        hunter, source, VirtualRange(base_address=base_address, size=size),
+        scopes=REGISTRY.granted_scopes(hunter, source))
+    mf = open_dump(_sample_path(sample))
+    with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+        execution = execute_targeted(mf, request)
+    record = execution.result.records[0]
+    scopes = record.details.targeted_scope
+
+    if "coverage_status" in assertion:
+        assert record.coverage.status.value == assertion["coverage_status"], (
+            f"{sample['id']}: expected rescan coverage_status "
+            f"{assertion['coverage_status']!r}, got {record.coverage.status.value!r}"
+        )
+
+    # Scope honesty: the rescan speaks for the range it was given and for the
+    # granted source only, and every closure identifies that exact range.
+    for entry in scopes:
+        assert entry.source == source
+        assert int(entry.base_address, 16) == base_address
+        assert entry.size == size
+
+    if assertion.get("require_applicability_reasons", True):
+        for entry in scopes:
+            if entry.coverage_status == "not_applicable":
+                assert entry.applicability_reason, (
+                    f"{sample['id']}/{entry.scope}: a closure that declined the target "
+                    f"must name the eligibility gate that declined it"
+                )
+            else:
+                assert entry.applicability_reason is None
+
+    # Actionability: a closure that reached the bytes says what it did with
+    # them, whether or not it found anything.
+    required = set(assertion.get("require_measurements", ["bytes_evaluated"]))
+    for entry in scopes:
+        if entry.coverage_status in ("not_applicable", "not_evaluated"):
+            continue
+        measured = {measurement.name for measurement in entry.measurements}
+        missing = required - measured
+        assert not missing, (
+            f"{sample['id']}/{entry.scope}: a {entry.coverage_status} closure retained no "
+            f"{sorted(missing)} -- the result states a conclusion without stating what "
+            f"was measured to reach it"
+        )
+
+    # A real sample can pin a minimum observed value, not just the existence of
+    # a measurement name. This catches regressions where the targeted pass runs
+    # and explains itself but still misses the payload the sample exists to
+    # exercise (for example a page-local entropy peak).
+    entries_by_scope = {entry.scope: entry for entry in scopes}
+    for scope, minimums in assertion.get("min_measurements", {}).items():
+        assert scope in entries_by_scope, (
+            f"{sample['id']}: expected targeted scope {scope!r} is not present"
+        )
+        entry = entries_by_scope[scope]
+        for name, minimum in minimums.items():
+            values = [
+                measurement.value for measurement in entry.measurements
+                if measurement.name == name
+                and isinstance(measurement.value, (int, float))
+                and not isinstance(measurement.value, bool)
+            ]
+            assert values, (
+                f"{sample['id']}/{scope}: expected numeric measurement {name!r}"
+            )
+            assert max(values) >= minimum, (
+                f"{sample['id']}/{scope}: expected {name} >= {minimum}, got {values}"
             )
 
 

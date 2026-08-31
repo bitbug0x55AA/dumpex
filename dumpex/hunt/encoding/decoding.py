@@ -17,7 +17,9 @@ from dumpex.hunt.encoding.config import (
     XOR_STRUCTURAL_WINDOW,
     DECOMPRESS_MAX_OUTPUT, DECODE_SCAN_MAX,
 )
-from dumpex.hunt.encoding.models import DecodeResult, DecodedHit, LayerCoverage, region_ref
+from dumpex.hunt.encoding.models import (
+    DecodeCounts, DecodeResult, DecodedHit, LayerCoverage, region_ref,
+)
 
 _B64_PAT = re.compile(
     rb'(?:[A-Za-z0-9+/]{4}){12,}(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?'
@@ -44,7 +46,39 @@ def _is_system_dll(module) -> bool:
 # LAYER 2 — Base64
 # ══════════════════════════════════════════════════════════════════════════
 
-def _scan_base64(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None):
+class _DecodeTally:
+    """The live per-sub-layer work counters one `scan_decode_layers` pass
+    accumulates, frozen into a `DecodeCounts` before it is returned.
+
+    Mutable and passed down into each sub-layer generator because that is where
+    the decisions being counted are made: a candidate accepted by a pre-filter
+    and an attempt actually spent are two different events, several lines
+    apart, and only the generator sees both. `None` is accepted everywhere a
+    tally is taken, so each generator stays directly callable on its own."""
+
+    __slots__ = ("base64_candidates", "base64_attempts", "xor_keys_scored",
+                 "xor_text_candidates", "xor_structural_candidates", "xor_attempts",
+                 "compressed_candidates", "compressed_attempts")
+
+    def __init__(self):
+        for name in self.__slots__:
+            setattr(self, name, 0)
+
+    def bump(self, name: str, by: int = 1) -> None:
+        setattr(self, name, getattr(self, name) + by)
+
+    def freeze(self) -> DecodeCounts:
+        return DecodeCounts(**{name: getattr(self, name) for name in self.__slots__})
+
+
+def _bump(tally, name: str, by: int = 1) -> None:
+    """Count one decision, when a tally is being kept at all."""
+    if tally is not None:
+        tally.bump(name, by)
+
+
+def _scan_base64(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None,
+                 tally=None):
     """
     Yields (offset, raw, decoded, cls) candidates. Bounds decode ATTEMPTS
     (note_attempt) and skips exact-duplicate content (seen_content) here,
@@ -60,8 +94,10 @@ def _scan_base64(data: bytes, region_base: int, budget: ScanBudget, config: Enco
         raw = m.group(0)
         if len(raw) < b64_min_len:
             continue
+        _bump(tally, "base64_candidates")
         if not budget.note_attempt():
             return
+        _bump(tally, "base64_attempts")
         try:
             normalised = raw.replace(b'-', b'+').replace(b'_', b'/')
             pad = len(normalised) % 4
@@ -113,7 +149,8 @@ def _score_xor_key(data: bytes, key: int) -> float:
     return printable / len(data)
 
 
-def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None):
+def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None,
+              tally=None):
     """
     Text/keyword candidate path: scores all 255 keys against a fixed
     prefix sample and keeps only the top 5 whose SAMPLE looks printable
@@ -147,6 +184,7 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: Encodin
         if key % 16 == 0 and not budget.poll():
             return
         score = _score_xor_key(sample, key)
+        _bump(tally, "xor_keys_scored")
         if score >= xor_score_min:
             decoded_sample = sample.translate(_xor_table(key))
             text = decoded_sample.decode('ascii', errors='replace')
@@ -155,6 +193,7 @@ def _scan_xor(data: bytes, region_base: int, budget: ScanBudget, config: Encodin
                 ('http', 'pipe', 'cmd', 'shellcode', 'beacon', 'rundll')
             ):
                 candidates.append((key, score))
+                _bump(tally, "xor_text_candidates")
 
     for key, _ in sorted(candidates, key=lambda x: -x[1])[:5]:
         if budget.exhausted():
@@ -272,7 +311,8 @@ def _xor_derive_shellcode_candidates(data: bytes, budget: ScanBudget):
         yield idx, key
 
 
-def _scan_xor_structural(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None):
+def _scan_xor_structural(data: bytes, region_base: int, budget: ScanBudget,
+                         config: EncodingConfig = None, tally=None):
     """
     Offset-independent structural candidate path -- see module comment
     above. Every (offset, key) the two derivation generators produce has
@@ -302,8 +342,10 @@ def _scan_xor_structural(data: bytes, region_base: int, budget: ScanBudget, conf
         if (offset, key) in tried:
             return None
         tried.add((offset, key))
+        _bump(tally, "xor_structural_candidates")
         if budget.exhausted() or not budget.note_attempt():
             return None
+        _bump(tally, "xor_attempts")
         end = min(n, offset + window)
         decoded = data[offset:end].translate(_xor_table(key))
         if not budget.seen_content(decoded):
@@ -377,7 +419,8 @@ def _bounded_decompress(payload: bytes, wbits: int, max_output: int = None) -> t
     return out, d.eof
 
 
-def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget, config: EncodingConfig = None):
+def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget,
+                     config: EncodingConfig = None, tally=None):
     """
     Scan for GZIP/ZLIB magic bytes and attempt decompression at each one.
 
@@ -406,8 +449,10 @@ def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget, config: 
         idx = data.find(_GZIP_SIG, start)
         if idx == -1:
             break
+        _bump(tally, "compressed_candidates")
         if not budget.note_attempt():
             return
+        _bump(tally, "compressed_attempts")
         try:
             decoded, complete = _bounded_decompress(data[idx:], wbits=47, max_output=max_output)
             if len(decoded) >= 64 and budget.seen_content(decoded):
@@ -425,8 +470,10 @@ def _scan_compressed(data: bytes, region_base: int, budget: ScanBudget, config: 
             idx = data.find(sig, start)
             if idx == -1:
                 break
+            _bump(tally, "compressed_candidates")
             if not budget.note_attempt():
                 return
+            _bump(tally, "compressed_attempts")
             try:
                 decoded, complete = _bounded_decompress(data[idx:], wbits=zlib.MAX_WBITS, max_output=max_output)
                 if len(decoded) >= 64 and budget.seen_content(decoded):
@@ -456,6 +503,11 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
     """
     base64_hits, xor_hits, compressed_hits = [], [], []
     coverage = CoverageTracker()
+    # One tally for the whole pass. It counts work, not findings: a sub-layer
+    # that tried a thousand candidates and kept none is a different result from
+    # one that found no candidate at all, and a retained-hit count alone cannot
+    # tell them apart.
+    tally = _DecodeTally()
 
     for r in regions:
         if budget.exhausted():
@@ -495,7 +547,8 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
         coverage.note_scanned()
         ref = region_ref(r, susp_prots)
 
-        for off, raw, decoded, classification in _scan_base64(data, r.BaseAddress, budget, config):
+        for off, raw, decoded, classification in _scan_base64(
+                data, r.BaseAddress, budget, config, tally):
             # take_hit() is the ONLY gate for whether this candidate is
             # actually kept — its return value MUST be checked (unlike the
             # old note_hit(), whose result could be silently ignored while
@@ -517,7 +570,8 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
             # cosmetic only: obfuscation.structural_payload itself (the
             # score-driving check) partitions the RAW, undeduped hit list
             # in aggregate.py, so scoring never depended on this order.
-            for off, key, decoded, classification in _scan_xor_structural(data, r.BaseAddress, budget, config):
+            for off, key, decoded, classification in _scan_xor_structural(
+                    data, r.BaseAddress, budget, config, tally):
                 if not budget.take_hit(len(decoded)):
                     break
                 abs_va = r.BaseAddress + off
@@ -527,7 +581,8 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
                                             complete=True, key=key,
                                             known_module=addr_to_module(abs_va, modules) is not None))
 
-            for off, key, decoded, classification in _scan_xor(data, r.BaseAddress, budget, config):
+            for off, key, decoded, classification in _scan_xor(
+                    data, r.BaseAddress, budget, config, tally):
                 if not budget.take_hit(len(decoded)):
                     break
                 abs_va = r.BaseAddress + off
@@ -538,7 +593,8 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
                                             known_module=addr_to_module(abs_va, modules) is not None))
 
         if not budget.exhausted():
-            for off, algo, decoded, classification, complete in _scan_compressed(data, r.BaseAddress, budget, config):
+            for off, algo, decoded, classification, complete in _scan_compressed(
+                data, r.BaseAddress, budget, config, tally):
                 if not budget.take_hit(len(decoded)):
                     break
                 # complete=False means decompression hit the output cap
@@ -555,4 +611,5 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
                                                    known_module=addr_to_module(abs_va, modules) is not None))
 
     return DecodeResult(base64=base64_hits, xor=xor_hits, compressed=compressed_hits,
+                        counts=tally.freeze(),
                         coverage=LayerCoverage.from_tracker(coverage))

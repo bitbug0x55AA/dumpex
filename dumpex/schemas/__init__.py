@@ -15,7 +15,7 @@ from importlib import resources
 # version string; schema_path()'s own default stays pinned to v1.1 for
 # backward compatibility with existing callers (see its own docstring) --
 # it is NOT updated in lockstep with this constant.
-CURRENT_SCHEMA = "dumpex-output-v2.13.schema.json"
+CURRENT_SCHEMA = "dumpex-output-v2.14.schema.json"
 
 
 def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
@@ -32,7 +32,7 @@ def schema_path(filename: str = "dumpex-output-v1.1.schema.json"):
 
 
 def current_schema_path():
-    """Path to CURRENT_SCHEMA (the v2.13 contract every command, including
+    """Path to CURRENT_SCHEMA (the v2.14 contract every command, including
     --hunt, now produces) -- usable as a context manager, same as
     schema_path(). Prefer this over schema_path() with no arguments, whose
     default stays pinned to v1.1 for backward compatibility (see its own

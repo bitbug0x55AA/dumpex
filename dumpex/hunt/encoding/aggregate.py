@@ -111,11 +111,26 @@ def build_report(sleep_mask_hits: tuple, entropy_hits: tuple, base64_hits: tuple
 
     # ── Entropy ───────────────────────────────────────────────────────────
     if entropy_hits:
+        # A hit whose `size` is set was measured over a bounded window inside
+        # its region rather than over the whole of it, so the sentence names
+        # what was actually measured. The wording is chosen from the evidence
+        # in hand, not from how the scan was invoked: a hit list containing no
+        # window reads exactly as it always has.
+        windowed = [hit for hit in entropy_hits if getattr(hit, "size", None) is not None]
+        unit = "sub-range(s) of MEM_PRIVATE region(s)" if windowed else "MEM_PRIVATE region(s)"
+        limitations = ["Cannot distinguish malicious encoding from benign "
+                       "high-randomness content (e.g. session keys, compressed media, "
+                       "GUIDs/hashes in bulk)."]
+        if windowed:
+            limitations.append(
+                "A windowed value describes its own window only; the containing "
+                "allocation's average can be far lower, and a window is not evidence "
+                "about the bytes around it.")
         results.append(CheckResult(
             check="obfuscation.entropy_observation",
             evidence=entropy_hits,
             evidence_limit=15,
-            inference=f"{len(entropy_hits)} MEM_PRIVATE region(s) exceed the Shannon-entropy "
+            inference=f"{len(entropy_hits)} {unit} exceed the Shannon-entropy "
                        f"threshold typical of encrypted/compressed/packed content.",
             confidence=CONFIDENCE_LOW,
             rationale="Shannon entropy is a purely statistical property shared by "
@@ -124,9 +139,7 @@ def build_report(sleep_mask_hits: tuple, entropy_hits: tuple, base64_hits: tuple
                        "no information about WHAT the content is. Reported as an "
                        "observation only; never contributes to the obfuscation score on "
                        "its own.",
-            limitations=["Cannot distinguish malicious encoding from benign "
-                         "high-randomness content (e.g. session keys, compressed media, "
-                         "GUIDs/hashes in bulk)."],
+            limitations=limitations,
             tag=TAG_OBSERVATION,
         ))
 

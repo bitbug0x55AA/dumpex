@@ -59,7 +59,10 @@ All five carry a `targeted_adapter` — `dumpex.hunt._run_targeted_obfuscation` 
 `dumpex.hunt.stomping.targeted.run_targeted_stomping` — so
 `resolve_targeted_adapter()` resolves an executor for every granted capability.
 A capability declared without one still fails closed
-(`UnsupportedTargetedExecution`). Injection and hollowing have
+(`UnsupportedTargetedExecution`). All five likewise carry a
+`targeted_report_projector` — `dumpex.hunt._project_targeted_*`, resolving to
+each hunter package's own `targeted.project_targeted_report` — so every granted
+capability can also become a `HunterRecord`. Injection and hollowing have
 `targeted_capability=None`.
 
 ## `AnalyzerSpec`
@@ -89,7 +92,20 @@ A capability declared without one still fails closed
     one positionally-passable `context` parameter, the same way the
     builder/renderer/projector signatures are. A non-`None` adapter requires a
     non-`None` `targeted_capability`.
-12. `builder_arg: "mf" | "context"` — the builder's first positional
+12. `targeted_report_projector: Callable | None` — turns a targeted run's own
+    `ObservationResult` into that analyzer's canonical `Report`, called as
+    `projector(context, result)`. Registered through
+    `_register(..., targeted_report_projector_attr=)` and late-bound through a
+    `dumpex.hunt._project_targeted_*` facade name, exactly like the adapter.
+    Set together with `targeted_adapter` or not at all: an executor whose
+    result nothing can project is unreachable from a command, and a projector
+    with no executor has nothing to project. Each real projector feeds the
+    rescan's evidence to that analyzer's ordinary `aggregate.build_report()`,
+    so scoring, verdict tiers, check construction, and detail projection have
+    one authority per analyzer. Coverage is NOT taken from the resulting
+    report: `dumpex.hunt._targeted_record` rebuilds it from the observation's
+    closures.
+13. `builder_arg: "mf" | "context"` — the builder's first positional
     parameter. `"mf"` (every current spec) receives the raw dump handle;
     `"context"` receives the whole `HuntExecutionContext`, for a builder that
     consumes the shared observation registry or budgets. `_register()`
@@ -149,6 +165,14 @@ or import time. They are not converted into partial dump coverage.
 - `granted_scopes(identity, source)` resolves "the granted set" (empty for an
   unscoped source, obfuscation's three layers, empty for an unknown one) so a
   caller — `HuntRequest`, `#64` — never restates it.
+- `targeted_identities()` is the roster a command surface offers for
+  `--hunt-addr`: every identity with a declared capability AND a registered
+  executor, in `HUNTERS` order. A capability without an executor is not
+  offered. `all` is never a member.
+- `targeted_source(identity)` resolves the one coverage source a targeted
+  invocation of that analyzer runs. There is no public source-selection flag,
+  so an analyzer granting more than one source fails closed
+  (`InvalidAnalyzerSpec`) rather than having one picked for it.
 - `resolve_targeted_adapter(identity, source, scopes: frozenset = frozenset())`
   resolves the grant **and the scope set** through `select_targeted_scopes()`
   (so the executor boundary and the `HuntRequest` boundary agree — a single

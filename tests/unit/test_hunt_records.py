@@ -11,7 +11,7 @@ from dumpex.output.coverage import CoverageReport, CoverageStatus
 from dumpex.output.records import (
     HunterRecord, HuntRegionRef, HuntThreadRef, HuntPeHeaderHit, InjectionDetails,
     HollowingDetails, StompingDetails, PipeDetails, CsBeaconDetails, YaraDetails,
-    ObfuscationDetails,
+    ObfuscationDetails, TargetedScopeRecord,
 )
 
 
@@ -467,3 +467,91 @@ def test_pe_header_hit_valid_false_rejects_empty_reason():
 def test_pe_header_hit_valid_false_rejects_non_string_reason():
     with pytest.raises(ValueError):
         HuntPeHeaderHit(region=_region(), valid=False, reason=123)
+
+
+# ── targeted_scope (targeted `--hunt-addr` rescans only) ────────────────
+
+def _scope_record(**overrides):
+    fields = dict(source="ioc_string_scan", scope=None,
+                  base_address="0x0000000010000000", size=0x2000,
+                  captured_size=0x2000, capture_state="complete",
+                  coverage_status="complete")
+    fields.update(overrides)
+    return TargetedScopeRecord(**fields)
+
+
+@pytest.mark.parametrize("details", [
+    StompingDetails(protection_leads=[], verified_changes=[]),
+    PipeDetails(handle_pipes=[], private_pipes=[], c2_context=[], framework_pipes=[],
+                unbacked_in_rgn=[]),
+    CsBeaconDetails(configs=[], config_count=0),
+    YaraDetails(matches=[], rules_hit=[]),
+    ObfuscationDetails(sleep_mask=[], entropy=[], base64=[], xor=[], compressed=[],
+                        hidden_pe=[], hidden_shellcode=[]),
+])
+def test_full_scope_details_omit_targeted_scope_entirely(details):
+    """Omitted, never `null`: a full-scope result has no targeted scope, and
+    emitting the key would change every existing consumer's document."""
+    assert "targeted_scope" not in details.to_dict()
+
+
+@pytest.mark.parametrize("details_type, kwargs", [
+    (StompingDetails, dict(protection_leads=[], verified_changes=[])),
+    (YaraDetails, dict(matches=[], rules_hit=[])),
+])
+def test_targeted_details_carry_their_scope_entries(details_type, kwargs):
+    details = details_type(targeted_scope=[_scope_record()], **kwargs)
+    assert details.to_dict()["targeted_scope"] == [_scope_record().to_dict()]
+
+
+def test_an_empty_targeted_scope_is_rejected():
+    """`None` and `[]` are different facts -- a targeted rescan always projects
+    at least one closure -- so an empty list is a producer bug, not "targeted
+    with nothing to say"."""
+    with pytest.raises(TypeError):
+        YaraDetails(matches=[], rules_hit=[], targeted_scope=[])
+
+
+def test_targeted_scope_rejects_a_non_record_entry():
+    with pytest.raises(TypeError):
+        YaraDetails(matches=[], rules_hit=[], targeted_scope=[{"source": "segment_scan"}])
+
+
+def test_scope_record_rejects_captured_size_larger_than_the_request():
+    with pytest.raises(ValueError, match="cannot exceed"):
+        _scope_record(captured_size=0x4000)
+
+
+def test_scope_record_rejects_a_complete_evaluation_over_an_incomplete_capture():
+    """Evaluation cannot be complete over bytes the dump does not hold."""
+    with pytest.raises(ValueError, match="requires capture_state"):
+        _scope_record(capture_state="partial", captured_size=0x1000)
+
+
+@pytest.mark.parametrize("size", [0, -1, True])
+def test_scope_record_requires_a_positive_plain_int_size(size):
+    with pytest.raises(ValueError):
+        _scope_record(size=size)
+
+
+def test_scope_record_requires_a_normalized_base_address():
+    with pytest.raises(ValueError):
+        _scope_record(base_address="0x10000000")
+
+
+@pytest.mark.parametrize("field, value", [
+    ("capture_state", "sort_of"),
+    ("coverage_status", "mostly"),
+    ("scope", ""),
+    ("source", ""),
+])
+def test_scope_record_rejects_values_outside_its_closed_vocabulary(field, value):
+    with pytest.raises(ValueError):
+        _scope_record(**{field: value})
+
+
+def test_scope_record_allows_unknown_capture_availability():
+    """A closure that never read cannot measure availability; `None` says so
+    rather than inventing a count."""
+    assert _scope_record(captured_size=None, capture_state="partial",
+                          coverage_status="not_evaluated").to_dict()["captured_size"] is None

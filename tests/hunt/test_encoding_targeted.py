@@ -202,7 +202,7 @@ def test_decode_hit_cap_still_bites_in_targeted_mode(monkeypatch):
     assert dec.budget_outcomes[0].exhausted is True
 
 
-# ── _budget_layer_eligible mirrors the real scanner gates ──────────────
+# ── the eligibility mirrors agree with the real scanner gates ──────────
 
 _SYS_DLL = Module(_BASE, 0x4000, r"C:\Windows\System32\ntdll.dll")
 _APP_DLL = Module(_BASE, 0x4000, r"C:\app\payload.dll")
@@ -219,8 +219,12 @@ _APP_DLL = Module(_BASE, 0x4000, r"C:\app\payload.dll")
     ("MEM_COMMIT", "MEM_IMAGE", "PAGE_READWRITE", 0x2000, (_SYS_DLL,), False, False),
     ("MEM_COMMIT", "MEM_IMAGE", "PAGE_READWRITE", 0x2000, (_APP_DLL,), False, True),
 ])
-def test_budget_layer_eligible_agrees_with_the_real_scan_loop(
+def test_ineligibility_mirrors_agree_with_the_real_scan_loop(
         monkeypatch, state, mtype, protect, size, mods, sleep_ok, decode_ok):
+    # `_ineligible_reasons` decides both a closure's applicability and whether
+    # a spent shared budget is that layer's concern, so it has to agree with
+    # what the real scan loop took into scope -- for every gate, in both
+    # directions.
     region = Region(_BASE, _BASE, size, state, protect, mtype)
     ctx, result = _run(
         monkeypatch, region=region, segment_len=size, modules=mods,
@@ -234,10 +238,28 @@ def test_budget_layer_eligible_agrees_with_the_real_scan_loop(
     from dumpex.core.memory import get_modules
     cap = region_containing(_BASE, ctx.captured_regions())
     module_list = get_modules(ctx.mf)
-    assert targeted._budget_layer_eligible(
-        "sleep_mask", cap, _BASE, size, module_list) is sleep_ok
-    assert targeted._budget_layer_eligible(
-        "decode", cap, _BASE, size, module_list) is decode_ok
+    synthetic = targeted._targeted.SyntheticRegion.from_captured_region(_BASE, size, cap)
+    reasons = targeted._ineligible_reasons(cap, synthetic, _BASE, size, module_list)
+    assert (reasons["sleep_mask"] is None) is sleep_ok
+    assert (reasons["decode"] is None) is decode_ok
+    assert (reasons["entropy"] is None) is (
+        payload.entropy.coverage.eligible_total > 0)
+
+
+def test_every_ineligibility_reason_is_a_rendered_applicability_reason():
+    # The reasons `_ineligible_reasons` can produce, the sentences the console
+    # reads them as, and the closed set TARGETED_SOURCE_NOT_APPLICABLE
+    # validates against are three copies of one vocabulary. A reason missing
+    # from any of them either crashes the adapter or reaches an analyst as an
+    # unexplained "does not apply".
+    from dumpex.output import coverage as coverage_mod
+    produced = {
+        "region_not_committed", "region_type_ineligible",
+        "region_protection_ineligible", "region_module_backed",
+        "region_system_module", "range_below_source_minimum",
+    }
+    assert set(targeted._INAPPLICABLE_NOTES) == produced
+    assert produced <= set(coverage_mod._TARGETED_SOURCE_NOT_APPLICABLE_REASONS)
 
 
 # ── per-layer eligibility gates are independent ────────────────────────
@@ -250,7 +272,8 @@ def test_executable_rw_region_gates_out_sleep_mask_only(monkeypatch):
         captured={_BASE: b"\x00" * size}, requested=VirtualRange(_BASE, size))
 
     cl = _closures(result)
-    assert cl["sleep_mask"].coverage_status == "not_evaluated"
+    assert cl["sleep_mask"].coverage_status == "not_applicable"
+    assert cl["sleep_mask"].applicability_reason == "region_protection_ineligible"
     assert cl["entropy"].coverage_status == "complete"
     assert cl["decode"].coverage_status == "complete"
 
@@ -263,20 +286,97 @@ def test_image_region_gates_out_entropy_and_sleep_mask_but_not_decode(monkeypatc
         captured={_BASE: b"\x00" * size}, requested=VirtualRange(_BASE, size))
 
     cl = _closures(result)
-    assert cl["sleep_mask"].coverage_status == "not_evaluated"
-    assert cl["entropy"].coverage_status == "not_evaluated"
+    assert cl["sleep_mask"].coverage_status == "not_applicable"
+    assert cl["sleep_mask"].applicability_reason == "region_type_ineligible"
+    assert cl["entropy"].coverage_status == "not_applicable"
+    assert cl["entropy"].applicability_reason == "region_type_ineligible"
     assert cl["decode"].coverage_status == "complete"
 
 
-def test_entropy_below_minimum_input_is_not_evaluated(monkeypatch):
+def test_an_inapplicable_layer_carries_a_reason_and_no_read_slice(monkeypatch):
+    size = 0x2000
+    region = Region(_BASE, _BASE, size, "MEM_COMMIT", "PAGE_READWRITE", "MEM_IMAGE")
+    ctx, result = _run(
+        monkeypatch, region=region, segment_len=size,
+        captured={_BASE: b"\x00" * size}, requested=VirtualRange(_BASE, size))
+
+    sm = _closures(result)["sleep_mask"]
+    assert sm.read_slice is None
+    assert sm.captured_bytes == size          # availability is still measured
+    assert any("does not apply" in note or "examines" in note or "not a memory type"
+               in note for note in sm.diagnostics)
+
+
+def test_an_inapplicable_layer_does_not_make_completed_layers_a_coverage_failure(monkeypatch):
+    # The private-corpus case: one layer's eligibility gate declines the target
+    # while the others evaluate it completely. The record must report the
+    # completeness the applicable layers actually reached.
+    size = 0x2000
+    region = Region(_BASE, _BASE, size, "MEM_COMMIT", "PAGE_EXECUTE_READWRITE", "MEM_PRIVATE")
+    ctx, result = _run(
+        monkeypatch, region=region, segment_len=size,
+        captured={_BASE: b"\x00" * size}, requested=VirtualRange(_BASE, size))
+
+    from dumpex.hunt._targeted_record import build_targeted_coverage
+    from dumpex.output.coverage import CoverageStatus, LimitationCode
+
+    coverage = build_targeted_coverage(result, "obfuscation")
+    assert coverage.status is CoverageStatus.COMPLETE
+    inapplicable = [l for l in coverage.limitations
+                    if l.code == LimitationCode.TARGETED_SOURCE_NOT_APPLICABLE]
+    assert [(l.scope, l.detail) for l in inapplicable] == [
+        ("sleep_mask", "region_protection_ineligible")]
+    # ... and never both codes for one closure: they are different facts.
+    assert not [l for l in coverage.limitations
+                if l.code == LimitationCode.TARGETED_SOURCE_NOT_EVALUATED
+                and l.source == "targeted_scan"]
+
+
+def test_every_layer_inapplicable_is_not_evaluated_overall(monkeypatch):
+    size = 0x2000
+    region = Region(_BASE, _BASE, size, "MEM_COMMIT", "PAGE_READONLY", "MEM_MAPPED")
+    ctx, result = _run(
+        monkeypatch, region=region, segment_len=size,
+        captured={_BASE: b"\x00" * size}, requested=VirtualRange(_BASE, size))
+
+    from dumpex.hunt._targeted_record import build_targeted_coverage
+    from dumpex.output.coverage import CoverageStatus
+
+    assert {c.coverage_status for c in result.closures} == {"not_applicable"}
+    # Nothing this analyzer does applies here, so nothing evaluated the bytes.
+    # That is not a completeness claim about them.
+    assert build_targeted_coverage(result, "obfuscation").status \
+        is CoverageStatus.NOT_EVALUATED
+
+
+def test_a_request_shorter_than_the_entropy_minimum_is_inapplicable(monkeypatch):
+    # The requested range itself is shorter than a Shannon value can be
+    # computed over. No capture of THAT range would produce one, so this is a
+    # property of the target: `not_applicable`, naming the extent as the gate.
     size = 200
     ctx, result = _run(
         monkeypatch, region=_private_rw(_BASE, 0x2000), segment_len=size,
         captured={_BASE: b"\x00" * size}, requested=VirtualRange(_BASE, size))
 
     cl = _closures(result)
-    assert cl["entropy"].coverage_status == "not_evaluated"
+    assert cl["entropy"].coverage_status == "not_applicable"
+    assert cl["entropy"].applicability_reason == "range_below_source_minimum"
     assert cl["decode"].coverage_status in ("partial", "complete")
+
+
+def test_a_short_capture_of_a_long_enough_request_is_not_evaluated(monkeypatch):
+    # The requested range clears the minimum; the dump backs less of it than
+    # the minimum. A fuller collection closes exactly this, so it is an
+    # evidence gap -- `not_evaluated`, never a claim that the layer does not
+    # apply to the target.
+    ctx, result = _run(
+        monkeypatch, region=_private_rw(_BASE, 0x2000), segment_len=200,
+        captured={_BASE: b"\x00" * 200}, requested=VirtualRange(_BASE, 0x2000))
+
+    cl = _closures(result)
+    assert cl["entropy"].capture_state == CaptureState.PARTIAL
+    assert cl["entropy"].coverage_status == "not_evaluated"
+    assert cl["entropy"].applicability_reason is None
 
 
 # ── capture semantics ─────────────────────────────────────────────────
@@ -474,7 +574,8 @@ def test_dropped_region_descriptor_is_named_not_hidden(monkeypatch):
 
 def test_budget_prevention_is_not_attributed_to_a_structurally_ineligible_layer(monkeypatch):
     # MEM_IMAGE region + spent budget: sleep-mask can never apply here, so it
-    # must not carry SCAN_BUDGET_EXHAUSTED; decode still does.
+    # must not carry SCAN_BUDGET_EXHAUSTED -- a budget limitation would imply a
+    # bigger-budget rerun could help where it never could. Decode still does.
     def _expired():
         return ScanBudget(max_bytes_read=1, max_attempts=1, max_retained_bytes=1,
                           max_hits=1, deadline=time.monotonic() - 1.0)
@@ -486,7 +587,7 @@ def test_budget_prevention_is_not_attributed_to_a_structurally_ineligible_layer(
         budget_factory=_expired)
 
     cl = _closures(result)
-    assert cl["sleep_mask"].coverage_status == "not_evaluated"
+    assert cl["sleep_mask"].coverage_status == "not_applicable"
     assert LimitationCode.SCAN_BUDGET_EXHAUSTED not in {l.code for l in cl["sleep_mask"].limitations}
     assert cl["sleep_mask"].budget_outcomes == ()
     assert LimitationCode.SCAN_BUDGET_EXHAUSTED in {l.code for l in cl["decode"].limitations}
@@ -497,14 +598,14 @@ def test_unreconciled_layer_ledger_surfaces_as_a_limitation(monkeypatch):
     # closure to partial AND carry SCAN_ITEMS_UNACCOUNTED, at full-scope parity.
     from dumpex.hunt.encoding.models import LayerCoverage, LayerResult
 
-    real_scan = targeted._scan_entropy
+    real_scan = targeted.scan_entropy_targeted
 
     def _leaky(*args, **kwargs):
-        r = real_scan(*args, **kwargs)
+        result, windowed = real_scan(*args, **kwargs)
         bad = LayerCoverage(scanned=1, eligible_total=2)   # one eligible item unaccounted
-        return LayerResult(hits=r.hits, coverage=bad)
+        return LayerResult(hits=result.hits, coverage=bad), windowed
 
-    monkeypatch.setattr(targeted, "_scan_entropy", _leaky)
+    monkeypatch.setattr(targeted, "scan_entropy_targeted", _leaky)
     size = 0x2000
     ctx, result = _run(
         monkeypatch, region=_private_rw(_BASE, size), segment_len=size,

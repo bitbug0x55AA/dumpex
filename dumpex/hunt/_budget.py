@@ -24,6 +24,28 @@ class ScanBudget:
     _seen_hashes: set = field(default_factory=set, init=False, repr=False)
     exhausted_reason: str = field(default="", init=False)
 
+    @property
+    def attempts(self) -> int:
+        """Decode/decompress attempts spent so far, against ``max_attempts``."""
+        return self._attempts
+
+    @property
+    def bytes_read(self) -> int:
+        """Decode/decompress OUTPUT bytes produced so far, against
+        ``max_bytes_read`` -- counted whether or not any of it was kept."""
+        return self._bytes_read
+
+    @property
+    def retained_bytes(self) -> int:
+        """Decoded bytes actually kept in findings so far, against
+        ``max_retained_bytes``."""
+        return self._retained_bytes
+
+    @property
+    def hits(self) -> int:
+        """Hits committed so far, against ``max_hits``."""
+        return self._hits
+
     def exhausted(self) -> bool:
         """
         True once any limit — including the deadline — has been hit.

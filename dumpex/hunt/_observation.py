@@ -39,7 +39,7 @@ from dumpex.core.va_range import CaptureState, ReadSlice, VirtualRange
 from dumpex.hunt import _registry
 from dumpex.hunt._domain import as_tuple, require_recursively_immutable
 from dumpex.output.coverage import CoverageLimitation
-from dumpex.output.records import HUNTERS
+from dumpex.output.records import HUNTERS, TargetedMeasurement
 
 __all__ = [
     "ObservationOutcome",
@@ -51,10 +51,23 @@ __all__ = [
     "ObservationProducerFailed",
     "ObservationBudgetExhausted",
     "COVERAGE_STATUSES",
+    "UNREACHED_STATUSES",
     "DEFAULT_MAX_ENTRIES",
 ]
 
-COVERAGE_STATUSES = ("not_evaluated", "partial", "complete")
+# ``not_applicable`` and ``not_evaluated`` are deliberately separate. A source
+# whose own descriptor-eligibility gate declines the target never applied to
+# it, so there is nothing here it could have missed and nothing a
+# re-collection, a larger budget, or a narrower request would change. A source
+# that WOULD have applied but was stopped by an evidence or execution gap did
+# not get to run, and that is a coverage failure. Collapsing the two makes a
+# result that is merely bounded read as a result that is broken.
+COVERAGE_STATUSES = ("not_applicable", "not_evaluated", "partial", "complete")
+
+# The two statuses under which no byte of the requested range reached the
+# source's algorithm -- so neither carries a ``read_slice``, and both are legal
+# for a range the dump does not back at all.
+UNREACHED_STATUSES = frozenset({"not_applicable", "not_evaluated"})
 
 # One invocation's registry is bounded so a dump with many distinct
 # regions/segments cannot drive unbounded key or event cardinality -- nor,
@@ -215,7 +228,34 @@ class ObservationClosure:
     ``limitations`` is a tuple of
     :class:`dumpex.output.coverage.CoverageLimitation` (structured, never a
     flattened string); ``budget_outcomes`` a tuple of :class:`BudgetOutcome`;
-    ``diagnostics`` a tuple of non-empty strings.
+    ``measurements`` a tuple of
+    :class:`dumpex.output.records.TargetedMeasurement`; ``diagnostics`` a tuple
+    of non-empty strings.
+
+    ``coverage_status`` ``not_applicable`` is this source declining the target:
+    its own descriptor-eligibility gate excluded the range, so no byte of it
+    ever reached the algorithm and there is nothing here the source could have
+    missed. ``applicability_reason`` names the gate and is required for that
+    status, forbidden for every other -- a source that applied has no reason
+    not to have. A not-applicable closure carries no ``read_slice``, and the
+    record's coverage reduction does not let it drag an applicable sibling
+    down: see :func:`dumpex.hunt._targeted_record.build_targeted_coverage`.
+
+    ``measurements`` is what a closure retained about work it completed without
+    producing a hit -- bytes evaluated, values measured, bounds reached. They
+    are observations only: they create no finding, move no score, and say
+    nothing about any other source's coverage.
+
+    ``captured_bytes`` is how many of the requested bytes the dump actually
+    holds -- a measurement, kept separate from ``read_slice`` because a closure
+    that never ran still has one. It is derived from ``read_slice`` when that
+    is present and defaults to ``0`` for an uncaptured range, so only a closure
+    that neither ran nor found the range empty has to supply it; supplying a
+    value that contradicts either is rejected. Without it a
+    ``capture_state="partial"`` closure that ended ``not_evaluated`` (a spent
+    budget, an ineligible descriptor, a range under the algorithm's minimum
+    input) would have to report its availability as unknown, which is exactly
+    the case an investigator needs the number for.
 
     Self-contained consistency: a ``read_slice`` must match ``capture_state``,
     a short read cannot be ``complete``, and ``complete`` requires a complete
@@ -228,8 +268,11 @@ class ObservationClosure:
     capture_state: CaptureState
     scope: "str | None" = None
     read_slice: "ReadSlice | None" = None
+    captured_bytes: "int | None" = None
+    applicability_reason: "str | None" = None
     limitations: tuple = ()
     budget_outcomes: tuple = ()
+    measurements: tuple = ()
     diagnostics: tuple = ()
 
     def __post_init__(self):
@@ -252,8 +295,15 @@ class ObservationClosure:
                            as_tuple(self.limitations, "ObservationClosure.limitations"))
         object.__setattr__(self, "budget_outcomes",
                            as_tuple(self.budget_outcomes, "ObservationClosure.budget_outcomes"))
+        object.__setattr__(self, "measurements",
+                           as_tuple(self.measurements, "ObservationClosure.measurements"))
         object.__setattr__(self, "diagnostics",
                            as_tuple(self.diagnostics, "ObservationClosure.diagnostics"))
+        for measurement in self.measurements:
+            if not isinstance(measurement, TargetedMeasurement):
+                raise ValueError(
+                    "ObservationClosure.measurements entries must be TargetedMeasurement "
+                    f"instances, got {measurement!r}")
         for limitation in self.limitations:
             if not isinstance(limitation, CoverageLimitation):
                 raise ValueError(
@@ -270,8 +320,31 @@ class ObservationClosure:
                 raise ValueError(
                     f"ObservationClosure.diagnostics entries must be non-empty str, got {note!r}")
 
+        if self.captured_bytes is not None and (
+                not isinstance(self.captured_bytes, int)
+                or isinstance(self.captured_bytes, bool) or self.captured_bytes < 0):
+            raise ValueError(
+                f"ObservationClosure.captured_bytes must be None or a non-negative plain "
+                f"int, got {self.captured_bytes!r}")
+        if self.capture_state == CaptureState.NONE:
+            if self.captured_bytes not in (None, 0):
+                raise ValueError(
+                    f"ObservationClosure.captured_bytes must be 0 for capture_state NONE, "
+                    f"got {self.captured_bytes!r}")
+            object.__setattr__(self, "captured_bytes", 0)
+        elif self.captured_bytes == 0:
+            raise ValueError(
+                f"ObservationClosure.captured_bytes 0 contradicts capture_state "
+                f"{self.capture_state} -- a captured range holds bytes")
+
         rs = self.read_slice
         if rs is not None:
+            if self.captured_bytes is None:
+                object.__setattr__(self, "captured_bytes", rs.capture.captured_bytes)
+            elif self.captured_bytes != rs.capture.captured_bytes:
+                raise ValueError(
+                    f"ObservationClosure.captured_bytes ({self.captured_bytes}) must equal "
+                    f"read_slice.capture.captured_bytes ({rs.capture.captured_bytes})")
             if self.capture_state != rs.capture.state:
                 raise ValueError(
                     f"ObservationClosure.capture_state ({self.capture_state}) must equal "
@@ -284,6 +357,19 @@ class ObservationClosure:
             raise ValueError(
                 f"ObservationClosure.coverage_status 'complete' requires capture_state "
                 f"COMPLETE, got {self.capture_state}")
+        if self.coverage_status == "not_applicable":
+            _require_nonempty_str(self.applicability_reason,
+                                  "ObservationClosure.applicability_reason")
+            if rs is not None:
+                raise ValueError(
+                    "ObservationClosure.coverage_status 'not_applicable' cannot carry a "
+                    "read_slice -- a source its own eligibility gate declined never "
+                    "received the bytes")
+        elif self.applicability_reason is not None:
+            raise ValueError(
+                f"ObservationClosure.applicability_reason belongs to coverage_status "
+                f"'not_applicable' only, got {self.coverage_status!r} with "
+                f"{self.applicability_reason!r}")
 
     @property
     def attribution(self) -> tuple:
@@ -352,6 +438,12 @@ class ObservationResult:
             raise ValueError(
                 "ObservationResult: closures of one key carry different CapturedSlice "
                 "values -- the range is captured once and shared by every closure")
+        measured = {c.captured_bytes for c in self.closures if c.captured_bytes is not None}
+        if len(measured) > 1:
+            raise ValueError(
+                f"ObservationResult: closures of one key disagree about captured_bytes "
+                f"{sorted(measured)} -- the range is captured once and shared by every "
+                f"closure")
 
     def _check_closure_source(self, closure: ObservationClosure) -> None:
         vocab = _registry.coverage_sources_for(self.key.analyzer)
@@ -387,11 +479,13 @@ class ObservationResult:
                     f"equal the key's requested_range ({self.key.requested_range})")
         if self.key.requested_range is not None:
             if closure.capture_state == CaptureState.NONE \
-                    and closure.coverage_status != "not_evaluated":
+                    and closure.coverage_status not in UNREACHED_STATUSES:
                 raise ValueError(
                     f"ObservationResult: closure {closure.attribution!r} captured no bytes "
-                    f"so it is 'not_evaluated' -- no bytes reached the algorithm")
-            if closure.coverage_status != "not_evaluated" and rs is None:
+                    f"so it is 'not_evaluated' -- or 'not_applicable', when its own "
+                    f"eligibility gate declined the target first; no bytes reached the "
+                    f"algorithm either way")
+            if closure.coverage_status not in UNREACHED_STATUSES and rs is None:
                 raise ValueError(
                     f"ObservationResult: closure {closure.attribution!r} ran (partial or "
                     f"complete) so it carries the ReadSlice it ran against")

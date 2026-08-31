@@ -133,6 +133,39 @@ def test_console_lines_contain_expected_sections():
     assert "WHY THIS VERDICT" in text
 
 
+def test_entropy_window_facts_name_the_measured_extent_not_the_allocation():
+    from dumpex.hunt.encoding.report_console import _console_finding
+
+    window = _entropy_hit(base=_BASE + 0x10000, size=0x400)
+    result = _check(check="obfuscation.entropy_observation", tag=TAG_OBSERVATION,
+                    confidence=CONFIDENCE_LOW, evidence=(window,), evidence_limit=15)
+    report = EncodingReport(
+        score=0, coverage=_coverage(), results=(result,),
+        evidence=EncodingEvidence(entropy_hits=(window,)))
+
+    wire = finding_from_check_result(result, report)
+    console = _console_finding(result, report)
+    assert "window_size=1024" in wire.facts[0]
+    assert "Window_size=0x400" in console.verbose_facts[0]
+    assert "Size=0x1000" not in console.verbose_facts[0]
+
+
+def test_whole_region_entropy_facts_keep_the_region_extent_form():
+    from dumpex.hunt.encoding.report_console import _console_finding
+
+    whole = _entropy_hit(base=_BASE + 0x10000)
+    result = _check(check="obfuscation.entropy_observation", tag=TAG_OBSERVATION,
+                    confidence=CONFIDENCE_LOW, evidence=(whole,), evidence_limit=15)
+    report = EncodingReport(
+        score=0, coverage=_coverage(), results=(result,),
+        evidence=EncodingEvidence(entropy_hits=(whole,)))
+
+    wire = finding_from_check_result(result, report)
+    console = _console_finding(result, report)
+    assert "window_size=" not in wire.facts[0]
+    assert "Size=0x1000" in console.verbose_facts[0]
+
+
 # ── 2. State-matrix tests ─────────────────────────────────────────────────
 
 def test_detected_state_matches_across_projectors():
