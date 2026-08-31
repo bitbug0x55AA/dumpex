@@ -191,18 +191,30 @@ class HuntExecutionContext:
         without one produce different keys rather than the factory refusing to
         exist for the common unconfigured case. An analyzer with no such
         option gets ``None`` (there is nothing to identify).
+
+        Which options count is mode-dependent, because identity describes the
+        execution that actually occurred. A full-scope run consults the
+        analyzer's whole ``option_names``; a targeted run consults only its
+        capability's ``consumed_options``, the narrower set its granted source
+        really reads. An option the targeted executor never consults therefore
+        cannot split two otherwise identical observations
+        (``stomping``/``ref_dir``), while one it does consult still isolates
+        them (``yara``/``rules_dir``).
         """
         spec = _registry.REGISTRY.get(analyzer)
         if requested_range is None and self.request.is_targeted:
             requested_range = self.request.target_range
+        options = (spec.targeted_capability.consumed_options
+                   if self.request.is_targeted and spec.targeted_capability is not None
+                   else spec.option_names)
 
         cfg = None
-        if "ref_dir" in spec.option_names:
+        if "ref_dir" in options:
             resolved = (config_provenance if config_provenance is not None
                         else self.request.options.ref_dir)
             cfg = resolved if resolved is not None else "ref_dir:unset"
         rules = None
-        if "rules_dir" in spec.option_names:
+        if "rules_dir" in options:
             resolved = (rule_provenance if rule_provenance is not None
                         else self.request.options.rules_dir)
             rules = resolved if resolved is not None else "rules_dir:unset"

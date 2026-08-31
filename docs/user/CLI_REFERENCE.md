@@ -81,6 +81,7 @@ complete and does not change.
 
 | Option | Description |
 |---|---|
+| `--hunt-addr ADDR` | Rescan one virtual-address range with the selected hunter instead of the whole dump; requires `--hunt <TTP>` and `--size SIZE` |
 | `--yara-dir DIR` | Use an explicit directory of `.yar`/`.yara` rules for YARA hunting |
 | `--ref-dir DIR` | Supply reference DLL/EXE files for module-stomping comparison |
 | `--rules-file FILE` | Use an explicit TTP rules YAML/JSON file |
@@ -97,6 +98,62 @@ It is never a silent no-op. Without the flag, `--hunt all` continues to build
 the metadata-only skipped-target investigation queue without additional content
 reads. Only a successful targeted rescan by the originating hunter can close
 that hunter's coverage gap.
+
+### Targeted rescans (`--hunt-addr`)
+
+```bash
+dumpex suspect.dmp --hunt <hunter> --hunt-addr <address> --size <size>
+```
+
+`--hunt-addr` is a modifier, not a command. It asks one hunter to evaluate the
+half-open range `[address, address + size)` instead of the whole dump, reusing
+that hunter's own detection rules, scores, evidence types, and coverage
+vocabulary. It exists to revisit a range a full-scope scan skipped for size —
+it bypasses only the selected scanner's per-region or per-segment size cap.
+Every other budget (time, total bytes, candidates, matches, decode output,
+retained evidence) stays enforced.
+
+Supported hunters: `stomping`, `pipe`, `cs-beacon`, `yara`, `obfuscation`.
+`injection`, `hollowing`, and `--hunt all` are rejected — `all` is a selection
+mode, not an analyzer, and the other two have no targeted-scan capability.
+
+| Rule | Behavior |
+|---|---|
+| `--hunt-addr` without `--hunt` or `--size` | Usage error, exit `2` |
+| Unparsable address or size, non-positive size, an end past the 64-bit address space, or a size over the hunter's request ceiling | Usage error, exit `2` |
+| Unknown, `all`, or targeted-unsupported hunter | Hunt error, exit `1` |
+| `--size` with `--hunt` but no `--hunt-addr` | Usage error, exit `2` — a targeted invocation missing its address, never a silently unbounded whole-dump hunt |
+| A hunt option the selected hunter's targeted rescan does not read (`--ref-dir` for any hunter, `--yara-dir` for any hunter but `yara`) | Usage error, exit `2` — refused rather than recorded in the result and ignored |
+
+Request ceilings are 256 MiB for `stomping`, `pipe`, `cs-beacon`, and `yara`,
+and 32 MiB for `obfuscation`. Both address and size accept `0x`-prefixed
+hexadecimal or plain decimal. Nothing is wrapped, clamped, or inferred: a range
+larger than a ceiling is refused rather than truncated, and a short capture is
+reported as a short read against the range you asked for.
+
+A rescan closes its own granted coverage source and nothing else. The console
+names the hunter's other sources under `NOT COVERED BY THIS RESCAN`, and
+structured output lists each of them as an absent source with its own
+limitation — so a `complete` targeted result for one source is never readable
+as complete coverage for the hunter.
+
+For the same reason, a hunt option that only feeds one of those other sources
+is refused instead of accepted and ignored: `--ref-dir` supplies reference
+modules for stomping's content comparison, which a targeted rescan does not
+run, so `--hunt stomping --hunt-addr` rejects it rather than record a
+directory in the result that nothing read. `--yara-dir` is accepted for
+`--hunt yara`, whose targeted rescan really does resolve rules through it, and
+rejected for every other hunter.
+
+Every conclusion applies to the requested range only. An address the dump holds
+no bytes for is valid input and produces a not-evaluated result, never a clean
+one, and a rescan never closes a coverage gap recorded by an earlier run. The
+console prints the normalized range, one row per coverage closure with capture
+and evaluation reported separately, and a closing statement naming the exact
+scope of the result. Structured output carries the same facts as
+`summary.scan_scope` and `details.targeted_scope` (see
+[Output and Evidence Schema](OUTPUT_SCHEMA.md)); exit codes follow the usual
+coverage mapping — `0` complete, `3` partial, `4` not evaluated.
 
 ## Report options
 
@@ -256,6 +313,7 @@ dumpex sample.dmp --threads
 dumpex sample.dmp --hunt all --json hunt.json
 dumpex sample.dmp --hunt stomping --ref-dir trusted-modules
 dumpex sample.dmp --hunt yara --yara-dir case-yara
+dumpex sample.dmp --hunt obfuscation --hunt-addr 0x7ff600001000 --size 0x400000
 
 dumpex sample.dmp --report --report-tid 0x1234
 dumpex sample.dmp --report --report-addr 0x7ff600001000 --output region.bin

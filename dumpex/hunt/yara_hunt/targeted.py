@@ -138,14 +138,22 @@ def _validate_request(request) -> None:
             f"{sorted(request.targeted_scopes)}")
 
 
-def _not_evaluated_result(key, capture_state: CaptureState, note: str, *,
+def _not_evaluated_result(key, capture, note: str, *,
                           limitations: tuple = (), payload=None) -> ObservationResult:
+    """A not-evaluated result for the whole request.
+
+    ``captured_bytes`` is the measured availability of the requested range,
+    carried even though nothing ran: a closure that never reached its algorithm
+    still knows how much of the range the dump holds, and reporting that as
+    unknown would cost an investigator the one number a re-collection or a
+    chunked rescan is sized from.
+    """
     return ObservationResult(
         key=key,
         closures=(ObservationClosure(
             source=TARGETED_SOURCE, coverage_status="not_evaluated",
-            capture_state=capture_state, limitations=limitations,
-            diagnostics=(note,)),),
+            capture_state=capture.state, captured_bytes=capture.captured_bytes,
+            limitations=limitations, diagnostics=(note,)),),
         payload=payload)
 
 
@@ -301,7 +309,7 @@ def run_targeted_yara(context) -> ObservationResult:
             dropped = (f" ({segment_enum.skipped} segment descriptor(s) were dropped as "
                        f"unrepresentable; the requested base may lie inside one of them)")
         return _not_evaluated_result(
-            key, capture.state,
+            key, capture,
             f"no captured segment contains the requested base "
             f"{requested.base_address:#018x}; the dump holds no bytes to match against"
             + dropped)
@@ -316,7 +324,7 @@ def run_targeted_yara(context) -> ObservationResult:
         # to fix the run -- so the compile gap and the RulesProvenance travel
         # with the not-evaluated closure rather than being dropped with it.
         return _not_evaluated_result(
-            key, capture.state, _prerequisite_note(rules_diag),
+            key, capture, _prerequisite_note(rules_diag),
             limitations=_rule_compile_limitation(rules_diag),
             payload=TargetedYaraEvidence(
                 matches=(), diagnostics=None, rules=rules_diag,
@@ -408,9 +416,45 @@ def run_targeted_yara(context) -> ObservationResult:
 
     closure = ObservationClosure(
         source=TARGETED_SOURCE, coverage_status=status, capture_state=capture.state,
+        captured_bytes=capture.captured_bytes,
         read_slice=read_slice if reached else None,
         limitations=limitations, diagnostics=tuple(diagnostics))
     payload = TargetedYaraEvidence(
         matches=scan_result.matches, diagnostics=diag, rules=rules_diag,
         containing_segment=boundary.containing_target)
     return ObservationResult(key=key, closures=(closure,), payload=payload)
+
+
+def project_targeted_report(context, result) -> "_yara.domain.YaraReport":
+    """The :class:`~dumpex.hunt.yara_hunt.domain.YaraReport` behind one
+    targeted rescan's :class:`~dumpex.output.records.HunterRecord`.
+
+    The rescan's own matches, scan diagnostics, and rules provenance are fed
+    to the SAME ``aggregate.build_report`` full scope uses, so a targeted
+    verdict is scored, classified, and rendered by one authority rather than a
+    parallel targeted-only rule. The report describes one slice: its coverage
+    snapshot is the slice's, never the dump's, and the record's own
+    document-level coverage is rebuilt from the observation's closures (see
+    :mod:`dumpex.hunt._targeted_record`).
+
+    ``context`` is unused here -- YARA's report needs no dump-wide stream fact
+    beyond what the adapter already resolved -- and is accepted so every
+    analyzer's projector has the one registered call shape.
+    """
+    payload = result.payload
+    if payload is None:
+        # No captured segment held the requested base: nothing was matched
+        # and no rules diagnostics were resolved, which is exactly the empty
+        # report's own "never evaluated" shape.
+        return domain.YaraReport()
+    # A prerequisite that stopped the rescan before the matcher ran still goes
+    # through `aggregate.build_report` -- an empty scan rather than a second
+    # place this analyzer's report is constructed, so a derived field added to
+    # `YaraReport` later cannot appear on one path and not the other. The
+    # candidate rules that WERE considered travel with it, so the report's
+    # console/JSON projection still names them.
+    diagnostics = (payload.diagnostics if payload.diagnostics is not None
+                   else domain.ScanDiagnostics())
+    return _yara.aggregate.build_report(
+        scanner.ScanResult(matches=payload.matches, diagnostics=diagnostics),
+        payload.rules)

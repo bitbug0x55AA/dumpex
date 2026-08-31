@@ -24,14 +24,18 @@ from dumpex.commands.profile  import cmd_profile
 from dumpex.commands.sysinfo  import cmd_sysinfo
 from dumpex.commands.report   import cmd_report
 from dumpex.commands.diff     import cmd_diff
-from dumpex.hunt              import cmd_hunt
+from dumpex.hunt              import cmd_hunt, cmd_hunt_targeted
 from dumpex.hunt.summary      import build_hunt_summary
-from dumpex.hunt              import _hunt_coverage_report, full_scope_hunters
+from dumpex.hunt              import (_hunt_coverage_report, full_scope_hunters,
+                                       resolve_targeted_selection, TargetedSelectionError)
+from dumpex.hunt._request     import HuntRequest
+from dumpex.core.va_range     import VirtualRange
+from dumpex.output.records    import hex_address
 from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # All twelve commands are migrated onto the v2 envelope (see dumpex/output/
-# and dumpex-output-v2.13.schema.json); --diff produces a kind="comparison"
+# and dumpex-output-v2.14.schema.json); --diff produces a kind="comparison"
 # result via V2Output.from_evidence() (two dumps), --report produces a
 # kind="report" result (one TriageCardRecord per triage card -- see
 # dumpex.commands.report's own module docstring), --hunt produces a
@@ -41,7 +45,11 @@ from dumpex.output.command_result import CommandResult
 # single atomic cutover that replaces --pid/--peb (kinds "pid"/"peb")
 # with --process/--handles/--profile (kinds "process"/"handles"/
 # "profile") -- see docs/developer/recon_process_sysinfo_handles_contract.md §7.2
-# for why there is no hidden alias between the two.
+# for why there is no hidden alias between the two. v2.14 is the atomic
+# cutover that exposes `--hunt-addr` targeted rescans: every
+# hunt summary carries `scan_scope`, and a targeted result additionally
+# carries one `details.targeted_scope` entry per coverage closure (see
+# docs/developer/hunt_targeted_rescan_contract.md).
 _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "process", "sysinfo", "handles",
                                     "profile", "diff", "extract", "strings", "report", "hunt"})
 
@@ -133,7 +141,8 @@ def main():
     region_group.add_argument("--filter", metavar="PROT",
                               help="Filter --list by protection name")
     region_group.add_argument("-s", "--size", metavar="SIZE",
-                              help="Region size in hex for --extract or --strings")
+                              help="Region size in hex for --extract, --strings, or a "
+                                   "--hunt --hunt-addr targeted rescan")
     region_group.add_argument("-o", "--output", metavar="FILE",
                               help="Extracted bytes for --extract, or region output for --report")
 
@@ -179,6 +188,10 @@ def main():
                             help='Reference-module directory for --hunt stomping')
     hunt_group.add_argument('--rules-file', metavar='FILE', default=None,
                             help='Explicit rules.yaml/.yml/.json for --hunt')
+    hunt_group.add_argument('--hunt-addr', metavar='ADDR', default=None,
+                            help='Rescan ONE virtual-address range with the selected hunter '
+                                 'instead of the whole dump. Requires --hunt <TTP> and '
+                                 '--size SIZE; conclusions apply to that range only')
     hunt_group.add_argument('--triage-skipped', action='store_true',
                             help='Temporarily unavailable; reserved for future analyzer-aware '
                                  'recovery orchestration')
@@ -220,6 +233,84 @@ def main():
     # "no --ref-dir supplied" for a path the user DID supply).
     if args.ref_dir and not os.path.isdir(args.ref_dir):
         parser.error(f"--ref-dir {args.ref_dir!r} is not an existing directory")
+
+    # ── Targeted rescan (--hunt-addr) validation ─────────────────────────
+    # Everything about a targeted invocation is settled here, before the dump
+    # is opened and therefore before any scan work: the flag combination, the
+    # analyzer's capability, and the requested range's arithmetic. A shape or
+    # range failure is an argument error (parser.error, exit 2); an unknown,
+    # `all`, or capability-less analyzer takes the established Hunt error path
+    # (exit 1), the same one cmd_hunt() uses for an unknown TTP.
+    #
+    # The two flags are required together in BOTH directions. `--hunt-addr`
+    # without `--size` cannot infer an extent; `--size` without `--hunt-addr`
+    # is a targeted invocation missing its address, and accepting it would run
+    # an unbounded whole-dump hunt while silently discarding the one option
+    # that said otherwise -- a different scan cost, a different scope, and a
+    # document whose conclusions are about the whole dump. Explicit targeting
+    # is never inferred, and never quietly dropped either.
+    hunt_request = None
+    if args.hunt and args.size and args.hunt_addr is None:
+        parser.error(
+            "--size is only meaningful for --hunt together with --hunt-addr ADDR, which "
+            "selects the one range to rescan. Add --hunt-addr, or drop --size to hunt the "
+            "whole dump")
+    if args.hunt_addr is not None:
+        if not args.hunt:
+            parser.error("--hunt-addr is a --hunt modifier, not a command: it requires "
+                          "--hunt <TTP> --hunt-addr ADDR --size SIZE")
+        if not args.size:
+            parser.error("--hunt-addr requires --size SIZE -- a targeted rescan scans "
+                          "exactly the requested range and never infers its extent")
+        try:
+            selection = resolve_targeted_selection(args.hunt)
+        except TargetedSelectionError as exc:
+            print(RED(f"[!] {exc}"))
+            sys.exit(1)
+        try:
+            hunt_addr = parse_hex_or_int(args.hunt_addr)
+        except ValueError:
+            parser.error(f"--hunt-addr {args.hunt_addr!r} is not a 0x-prefixed hexadecimal "
+                          f"or plain decimal address")
+        try:
+            hunt_size = parse_hex_or_int(args.size)
+        except ValueError:
+            parser.error(f"--size {args.size!r} is not a 0x-prefixed hexadecimal or plain "
+                          f"decimal byte count")
+        if not 0 <= hunt_addr <= 0xffffffffffffffff:
+            parser.error(f"--hunt-addr {hunt_addr:#x} is outside the 64-bit address space")
+        if hunt_size <= 0:
+            parser.error(f"--size {hunt_size} must be a positive byte count")
+        # Checked arithmetic on the half-open end. An end landing exactly on
+        # 2**64 is legal -- it is exclusive and never dereferenced -- and
+        # anything past it is refused rather than wrapped or clamped.
+        if hunt_addr + hunt_size > 1 << 64:
+            parser.error(
+                f"--hunt-addr {hunt_addr:#x} plus --size {hunt_size:#x} runs past the end of "
+                f"the 64-bit address space; a targeted range is never wrapped or clamped")
+        if hunt_size > selection.request_ceiling:
+            parser.error(
+                f"--size {hunt_size:#x} exceeds the {selection.identity} targeted request "
+                f"ceiling of {selection.request_ceiling // (1 << 20)} MiB -- rescan the range "
+                f"in ceiling-sized pieces")
+        # A hunt option the selected analyzer's targeted capability does not
+        # consume is refused rather than accepted and ignored: accepting it
+        # would record a directory in `meta.execution.options` that no part of
+        # the run read, which reads as "the reference files were compared"
+        # when they were not. Which options a targeted invocation reads is the
+        # registry's answer (`TargetedCapability.consumed_options`), carried
+        # here on the selection -- this is not a CLI-owned capability table.
+        for flag, option, value in (("--ref-dir", "ref_dir", args.ref_dir),
+                                     ("--yara-dir", "rules_dir", args.yara_dir)):
+            if value and option not in selection.consumed_options:
+                parser.error(
+                    f"{flag} has no effect on a --hunt {selection.identity} --hunt-addr "
+                    f"rescan, which evaluates {selection.source} only, and is refused "
+                    f"rather than silently ignored")
+        hunt_request = HuntRequest.targeted(
+            selection.identity, selection.source,
+            VirtualRange(base_address=hunt_addr, size=hunt_size),
+            scopes=selection.scopes, ref_dir=args.ref_dir, rules_dir=args.yara_dir)
 
     # Explicit rules.yaml override (--rules-file), if any — must be set
     # before anything calls get_rules() (every hunt module that reads TTP
@@ -267,7 +358,13 @@ def main():
     # Must be derived before the --txt tee block so the filename can use it.
     def _cmd_label() -> str:
         if args.hunt:
-            return f"hunt_{args.hunt.replace('-', '_')}"
+            base = f"hunt_{args.hunt.replace('-', '_')}"
+            # A targeted rescan carries its normalized range in the label, so
+            # two rescans of the same hunter written into one directory land on
+            # different auto-generated filenames instead of colliding.
+            if hunt_request is not None:
+                return f"{base}_addr_0x{hunt_request.target_range.base_address:x}"
+            return base
         if args.modules:    return "modules"
         if args.threads:    return "threads"
         if args.process:    return "process"
@@ -301,6 +398,14 @@ def main():
             opts["ref_dir"] = args.ref_dir
             opts["rules_file"] = args.rules_file
             opts["triage_skipped"] = args.triage_skipped
+            # Recorded only for a targeted invocation, and always as the
+            # NORMALIZED range the scan actually ran against rather than the
+            # raw argument text: a full-scope hunt has no requested range, so
+            # emitting the pair as nulls there would make "not targeted" and
+            # "targeted, unrecorded" the same document.
+            if hunt_request is not None:
+                opts["hunt_addr"] = hex_address(hunt_request.target_range.base_address)
+                opts["size"] = hunt_request.target_range.size
         if args.list:
             opts["filter"] = args.filter
         if args.strings:
@@ -366,7 +471,8 @@ def main():
         # --output is checked exactly once, inside cmd_extract/cmd_report
         # right before the write.
 
-        exit_code = _run(args, mf, out, cmd_label, mf_reference=mf_reference)
+        exit_code = _run(args, mf, out, cmd_label, mf_reference=mf_reference,
+                          hunt_request=hunt_request)
     except BaseException:
         if _tee is not None:
             _tee.abandon()
@@ -382,7 +488,7 @@ def main():
         sys.exit(exit_code)
 
 
-def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
+def _run(args, mf, out, cmd_label, *, mf_reference=None, hunt_request=None) -> "int | None":
     """Returns the process exit code for all twelve v2-routed commands
     (EXIT_OK/EXIT_PARTIAL/EXIT_NOT_EVALUATED — see module docstring), or
     None for every other command (unchanged exit-code behavior: 0 on
@@ -425,6 +531,20 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None) -> "int | None":
             cmd_report(mf, report_tid=args.report_tid, report_addr=args.report_addr,
                        report_string=args.report_string, extract_to=args.output,
                        min_len=args.min_len, force=args.force))
+    elif args.hunt and hunt_request is not None:
+        # ── Targeted rescan (--hunt-addr) ───────────────────────────────
+        # `hunt_request` is already fully validated (main() resolved the
+        # capability through the analyzer registry and checked the range
+        # before the dump was opened), so this branch opens no second
+        # capability decision. One scan feeds console, records, summary, and
+        # the exit code -- the same single-projection rule the full-scope
+        # branch below follows.
+        execution = cmd_hunt_targeted(mf, hunt_request, verbose=args.verbose)
+        if out:
+            # None for every analyzer but yara, exactly as the full-scope
+            # branch's own `execution.provenance.get("yara")`.
+            out.set_yara_provenance(execution.yara_provenance)
+        exit_code = _apply_command_result(execution.result)
     elif args.hunt:
         # collect_records=True: cmd_hunt() builds each selected hunter's
         # Report exactly once and feeds it to BOTH the console renderer

@@ -131,3 +131,137 @@ def test_package_smoke_rejects_an_unlisted_current_schema(capsys):
         package_smoke.validate_current_schema_is_listed("dumpex-output-v99.0.schema.json")
     assert exc_info.value.code == 1
     assert "would never actually be smoke-tested" in capsys.readouterr().out
+
+
+# ── v2.14's own consumer-visible relaxations ────────────────────────────
+# The migration doc's version-summary table is where a pinned consumer learns
+# what changed. A relationship that held across v2.0-v2.13 and no longer does
+# is exactly the kind of change that must appear there and in the schema, not
+# only in a module docstring.
+
+def _version_summary_row(version: str) -> str:
+    doc = (_REPO_ROOT / "docs" / "user" / "OUTPUT_MIGRATION.md").read_text(encoding="utf-8")
+    table = doc.split("| Version | Consumer-visible change |", 1)[1]
+    for line in table.splitlines():
+        if line.startswith(f"| {version} |"):
+            return line
+    raise AssertionError(f"no version-summary row for {version}")
+
+
+def test_the_current_versions_row_names_the_new_limitation_code():
+    assert "TARGETED_SOURCE_NOT_EVALUATED" in _version_summary_row(SCHEMA_VERSION)
+
+
+def test_the_current_versions_row_names_the_complete_with_limitations_relaxation():
+    """`complete` implied an empty `limitations` array in every earlier
+    version; a targeted record breaks that, and a consumer reading
+    `len(limitations) > 0` as "gapped" needs to be told."""
+    row = _version_summary_row(SCHEMA_VERSION)
+    assert "complete" in row and "limitations" in row
+
+
+def test_the_schema_itself_states_the_relaxation():
+    """The migration doc is prose; the schema is what consumers pin."""
+    schema = _load(CURRENT_SCHEMA)
+    hunter_record = schema["$defs"]["hunterRecord"]["description"]
+    assert "targeted_scope" in hunter_record
+    assert "limitations" in hunter_record and "complete" in hunter_record
+    assert "TARGETED_SOURCE_NOT_EVALUATED" in schema["$defs"]["coverageLimitation"]["description"]
+
+
+# ── scan_scope is cross-checked against the rest of the document ─────────
+#
+# The current schema carries a per-analyzer targeted capability table so a
+# consumer can trust `scan_scope`. That table is a copy of the registry's own
+# grants, and a copy can drift: these tests pin it to the registry and to each
+# adapter's real closure scopes, so a future analyzer cannot leave the schema
+# describing a capability nobody registered (or reject a document the producer
+# legitimately emits).
+
+def _hunt_branch(schema):
+    branches = schema["$defs"]["result"]["allOf"]
+    hunt = [b for b in branches
+            if b.get("if", {}).get("properties", {}).get("kind", {}).get("const") == "hunt"]
+    assert len(hunt) == 1, "exactly one kind==hunt branch"
+    return hunt[0]
+
+
+def _targeted_hunter_branches(schema):
+    """{hunter: then-clause} for each per-analyzer targeted branch."""
+    out = {}
+    for sub in _hunt_branch(schema)["then"]["allOf"]:
+        scope = (sub.get("if", {}).get("properties", {}).get("summary", {})
+                 .get("properties", {}).get("scan_scope", {}).get("properties", {}))
+        if scope.get("kind", {}).get("const") != "targeted" or "hunter" not in scope:
+            continue
+        out[scope["hunter"]["const"]] = sub["then"]
+    return out
+
+
+def test_the_schemas_targeted_hunter_set_is_the_registrys_own():
+    from dumpex.hunt import _registry
+
+    assert (tuple(sorted(_targeted_hunter_branches(_load(CURRENT_SCHEMA))))
+            == tuple(sorted(_registry.REGISTRY.targeted_identities())))
+
+
+def test_each_schemas_targeted_source_is_the_registrys_own():
+    from dumpex.hunt import _registry
+
+    for hunter, then in _targeted_hunter_branches(_load(CURRENT_SCHEMA)).items():
+        scan_scope = then["properties"]["summary"]["properties"]["scan_scope"]
+        assert (scan_scope["properties"]["source"]["const"]
+                == _registry.REGISTRY.targeted_source(hunter)), hunter
+
+
+def _adapter_closure_order():
+    """Each analyzer's closures in the adapter's own fixed order. Scoped
+    analyzers name their scopes; the rest project one unscoped closure.
+
+    Read from the adapters, NOT from `TargetedGrant.scopes`: pipe's grant is
+    unscoped while its invocation closes `pipe_name` and `c2_context`
+    independently, so a table built from the grant would reject a real pipe
+    document."""
+    from dumpex.hunt.encoding.targeted import TARGETED_LAYERS
+    from dumpex.hunt.pipe.targeted import TARGETED_SCOPES
+
+    return {"stomping": (None,), "pipe": tuple(TARGETED_SCOPES), "cs-beacon": (None,),
+            "yara": (None,), "obfuscation": tuple(TARGETED_LAYERS)}
+
+
+def test_each_schemas_targeted_scope_set_is_the_adapters_own_exactly():
+    """Pinned as an exact array rather than by membership: a subset claims
+    fewer closures ran than did, and another order is a different document."""
+    order = _adapter_closure_order()
+    for hunter, then in _targeted_hunter_branches(_load(CURRENT_SCHEMA)).items():
+        rule = then["properties"]["summary"]["properties"]["scan_scope"]["properties"]["scopes"]
+        assert rule == {"const": sorted(s for s in order[hunter] if s is not None)}, hunter
+
+
+def _targeted_scope_rule(then):
+    return (then["properties"]["data"]["properties"]["records"]["items"]
+            ["properties"]["details"]["properties"]["targeted_scope"])
+
+
+def test_each_analyzers_closure_count_and_order_are_pinned():
+    """`summary.scan_scope.scopes` is sorted; `details.targeted_scope` follows
+    the adapter's fixed closure order. Both are pinned as produced."""
+    from dumpex.hunt import _registry
+
+    order = _adapter_closure_order()
+    for hunter, then in _targeted_hunter_branches(_load(CURRENT_SCHEMA)).items():
+        rule = _targeted_scope_rule(then)
+        closures = order[hunter]
+        assert rule["minItems"] == rule["maxItems"] == len(closures), hunter
+        assert rule["items"] is False, hunter
+        assert [(item["properties"]["source"]["const"], item["properties"]["scope"]["const"])
+                for item in rule["prefixItems"]] == [
+                    (_registry.REGISTRY.targeted_source(hunter), scope)
+                    for scope in closures], hunter
+
+
+def test_a_targeted_hunter_branch_pins_selected_to_the_same_analyzer():
+    """`selected` already pins the single record and its `hunter`, so pinning
+    `scan_scope.hunter` to `selected` is what closes the identity chain."""
+    for hunter, then in _targeted_hunter_branches(_load(CURRENT_SCHEMA)).items():
+        assert then["properties"]["summary"]["properties"]["selected"]["const"] == hunter

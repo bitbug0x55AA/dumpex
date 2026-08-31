@@ -9,8 +9,52 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
+### Added
+
+- Added `--hunt-addr ADDR`, which rescans one virtual-address range with the
+  selected hunter instead of the whole dump. It requires `--hunt <TTP>` and
+  `--size SIZE`, supports `stomping`, `pipe`, `cs-beacon`, `yara`, and
+  `obfuscation`, and reuses each hunter's own detection rules, scores, and
+  coverage vocabulary. Only the selected scanner's per-region or per-segment
+  size cap is bypassed; every other budget stays enforced. Conclusions apply to
+  the requested range only.
+
+### Changed
+
+- `--size` now requires `--hunt-addr` when used with `--hunt`, and is rejected
+  with a usage error otherwise. It previously had no effect there, which let a
+  targeted invocation missing its address run an unbounded whole-dump hunt
+  while silently discarding the option. `--size` is unchanged for `--extract`
+  and `--strings`.
+- Published schema v2.14. Every hunt summary now carries a `scan_scope` tag
+  naming what the invocation covered, and a targeted rescan's hunter details
+  carry one `targeted_scope` entry per coverage closure. A targeted record's
+  coverage also names every source outside the rescan's grant explicitly, so a
+  complete result for one source cannot read as complete coverage for the
+  hunter. Full-scope hunt details omit `targeted_scope` entirely. Schema v2.13
+  and older are frozen and unchanged.
+- The current schema now cross-checks `summary.scan_scope` against the rest of
+  the document instead of only validating its own shape: a `targeted` tag must
+  agree with `summary.selected` and with the selected analyzer's registered
+  source, must name that analyzer's scope set exactly, and requires
+  `targeted_scope` on the record with one entry per closure in the analyzer's
+  own fixed order; a `full` tag forbids `targeted_scope` entirely.
+- A hunt option the selected hunter's targeted rescan does not read is now a
+  usage error instead of being accepted and ignored. `--hunt stomping
+  --hunt-addr` rejects `--ref-dir`, which supplies reference modules for a
+  content comparison no targeted rescan runs; it previously recorded that
+  directory in `meta.execution.options` for a run that never read it, and let
+  it change the invocation's observation identity. `--yara-dir` stays accepted
+  for `--hunt yara`, whose targeted rescan does resolve rules through it.
+
 ### Fixed
 
+- A targeted `pipe` rescan whose pipe-name budget ran out attributed that one
+  exhaustion to both of its coverage closures, so it appeared twice in
+  `coverage.limitations`, twice in the derived `coverage.reasons`, and twice on
+  the console. The gap is now raised once, by the `pipe_name` closure that owns
+  the budget; the `c2_context` closure it also constrains still reports
+  `partial` and still carries the diagnostic explaining the dependency.
 - Corrected the reported address of a UTF-16LE IOC token in module-stomping
   output. Its `VA` was computed from the match's character position rather than
   its byte position, placing the token at half its true distance into the

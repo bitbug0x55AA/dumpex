@@ -57,7 +57,7 @@ import dataclasses
 from dumpex.core import va_range
 from dumpex.core.memory import get_modules, read_region_spanning
 from dumpex.core.va_range import CaptureState
-from dumpex.rules_pkg.loader import get_rules
+from dumpex.rules_pkg.loader import get_rules, get_rules_source_info
 
 import dumpex.hunt.pipe as _pipe
 from dumpex.hunt import _registry, _targeted
@@ -66,14 +66,16 @@ from dumpex.hunt._coverage import CoverageTracker
 from dumpex.hunt._observation import (
     BudgetOutcome, ObservationClosure, ObservationResult,
 )
-from dumpex.hunt.pipe import memory_scan
+from dumpex.hunt.pipe import correlation, memory_scan
 from dumpex.hunt.pipe.config import (
-    PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION, PIPE_MAX_MATCHES_PER_REGION,
+    PIPE_C2_MAX_CONTEXT_ONLY_PER_REGION, PIPE_CONTEXT_DISTANCE, PIPE_MAX_MATCHES_PER_REGION,
 )
+from dumpex.hunt.pipe.models import HandleScanResult, PipeNameScanResult
 from dumpex.output.coverage import CoverageLimitation, LimitationCode
 
 __all__ = [
-    "run_targeted_pipe", "TargetedPipeEvidence", "TargetedPipeError",
+    "run_targeted_pipe", "project_targeted_report",
+    "TargetedPipeEvidence", "TargetedPipeError",
     "ALGORITHM_VERSION", "TARGETED_SOURCE", "TARGETED_SCOPES",
 ]
 
@@ -181,12 +183,20 @@ def _budget(context, name: str, factory) -> ScanBudget:
     return context.budgets.register(name, factory())
 
 
-def _not_evaluated_result(key, capture_state: CaptureState, note: str,
-                          payload=None) -> ObservationResult:
+def _not_evaluated_result(key, capture, note: str, payload=None) -> ObservationResult:
+    """A not-evaluated result for the whole request.
+
+    ``captured_bytes`` is the measured availability of the requested range,
+    carried even though nothing ran: a closure that never reached its algorithm
+    still knows how much of the range the dump holds, and reporting that as
+    unknown would cost an investigator the one number a re-collection or a
+    chunked rescan is sized from.
+    """
     closures = tuple(
         ObservationClosure(source=TARGETED_SOURCE, scope=scope,
                            coverage_status="not_evaluated",
-                           capture_state=capture_state, diagnostics=(note,))
+                           capture_state=capture.state,
+                           captured_bytes=capture.captured_bytes, diagnostics=(note,))
         for scope in TARGETED_SCOPES)
     return ObservationResult(key=key, closures=closures, payload=payload)
 
@@ -309,19 +319,25 @@ def _limitations(scope: str, cov, *, truncation_limitation,
         out.append(CoverageLimitation(
             code=LimitationCode.SCAN_ITEMS_UNACCOUNTED, source=TARGETED_SOURCE,
             scope=scope, affected_count=unreconciled))
-    # Ordering is fixed, and matches the full-scope projector: c2_context
-    # first, then pipe_name. The `c2_context` closure carries both, because the
-    # pipe-name budget bounds its anchors as well as its own pass. Each is
-    # raised from the TARGETS the scanner recorded at the site the budget
-    # actually blocked work -- never from the budget's final state, so a budget
-    # that ran out on this range's last retained hit is not reported as having
-    # cut it short. A recorded target always follows a real exhaustion, so the
-    # reason those targets travel with is always a real budget reason.
+    # Each budget's exhaustion is raised by the ONE closure that owns that
+    # budget, so a gap has a single owner wherever it is read -- on the
+    # `ObservationResult`, on the record, or by a consumer walking closures
+    # directly. The pipe-name budget does bound `c2_context` as well, because
+    # C2 records are retained against this range's own pipe-name hits, but that
+    # dependency reaches the `c2_context` closure through its own `partial`
+    # status (`_closure_status`) and its own diagnostic, not through a second
+    # copy of a limitation another closure owns.
+    #
+    # Each is raised from the TARGETS the scanner recorded at the site the
+    # budget actually blocked work -- never from the budget's final state, so a
+    # budget that ran out on this range's last retained hit is not reported as
+    # having cut it short. A recorded target always follows a real exhaustion,
+    # so the reason those targets travel with is always a real budget reason.
     if scope == "c2_context" and cov.c2_budget_exhausted_targets:
         out.append(_budget_limitation(
             "c2_context", cov.c2_budget_reason,
             list(cov.c2_budget_exhausted_targets)))
-    if cov.pipe_name_budget_exhausted_targets:
+    if scope == "pipe_name" and cov.pipe_name_budget_exhausted_targets:
         out.append(_budget_limitation(
             "pipe_name", cov.pipe_name_budget_reason,
             list(cov.pipe_name_budget_exhausted_targets)))
@@ -358,7 +374,7 @@ def run_targeted_pipe(context) -> ObservationResult:
             dropped = (f" ({region_enum.skipped} region descriptor(s) were dropped as "
                        f"unrepresentable; the requested base may lie inside one of them)")
         return _not_evaluated_result(
-            key, capture.state,
+            key, capture,
             f"no representable MemoryInfoListStream region contains the requested base "
             f"{requested.base_address:#018x}; source eligibility could not be established"
             + dropped)
@@ -509,7 +525,8 @@ def run_targeted_pipe(context) -> ObservationResult:
                      else cov.c2_budget_exhausted)
         closures.append(ObservationClosure(
             source=TARGETED_SOURCE, scope=scope, coverage_status=status,
-            capture_state=capture.state, read_slice=read_slice if ran else None,
+            capture_state=capture.state, captured_bytes=capture.captured_bytes,
+            read_slice=read_slice if ran else None,
             limitations=limitations,
             budget_outcomes=(BudgetOutcome(name=budget_name, exhausted=exhausted),),
             diagnostics=tuple(diagnostics)))
@@ -550,3 +567,56 @@ def _not_evaluated_note(cov, *, prevented: bool, name_prevented: bool,
                 "pattern was run over it")
     return ("the pipe-name budget ran out while this range was being read, before any "
             "pattern was run over it")
+
+
+def project_targeted_report(context, result):
+    """The :class:`~dumpex.hunt.pipe.domain.PipeReport` behind one targeted
+    rescan's :class:`~dumpex.output.records.HunterRecord`.
+
+    The range's own string leads, C2 records, and scan coverage are fed to the
+    SAME ``aggregate.build_report`` full scope uses, so a targeted verdict is
+    scored and classified by one authority rather than a parallel targeted-only
+    rule. Correlation runs over an EMPTY handle scan and empty thread/module
+    tables: a targeted rescan evaluates ``pipe_name_scan`` alone, so the
+    handle-anchored scored checks have nothing to fire on and the report never
+    asserts a handle source it did not read. ``handle_data_stream`` is
+    ``False`` for the same reason -- not a claim the dump lacks the stream, but
+    the fact that this rescan did not evaluate it.
+
+    The report's own coverage snapshot describes this one range; the record's
+    document-level coverage is rebuilt from the observation's closures (see
+    :mod:`dumpex.hunt._targeted_record`).
+    """
+    payload = result.payload
+    evaluated = any(closure.coverage_status != "not_evaluated"
+                    for closure in result.closures)
+    if payload is None:
+        return _pipe.build_report(memory_info_stream=False, handle_data_stream=False)
+    cov = payload.coverage
+    scan = PipeNameScanResult(string_leads=payload.string_leads,
+                              c2_regions=payload.c2_regions, coverage=cov)
+    # Framework attribution and the ruleset's own content hash come from the
+    # same loader call `_build_pipe_report` makes, so a targeted verdict names
+    # the same rule content a full-scope one does.
+    rules = get_rules(announce=False)
+    rules_source = get_rules_source_info()
+    corr = correlation.correlate(
+        HandleScanResult(), scan, thread_contexts=[], infos=[], modules=[], regions=[],
+        known_framework_pipes=rules["framework_pipes"],
+        context_distance=PIPE_CONTEXT_DISTANCE)
+    return _pipe.build_report(
+        (), scan.string_leads, corr.corroborated_handles, corr.start_address_leads,
+        corr.c2_context, corr.framework_string_hits, corr.unbacked_threads,
+        memory_info_stream=evaluated, handle_data_stream=False,
+        skipped_oversize=cov.skipped_oversize_targets,
+        read_failed=cov.read_failed, read_failed_targets=cov.read_failed_targets,
+        short_reads=cov.short_reads, short_read_targets=cov.short_read_targets,
+        unaccounted=cov.unaccounted, over_accounted=cov.over_accounted,
+        ledger_imbalance=cov.ledger_imbalance,
+        c2_budget_exhausted=cov.c2_budget_exhausted, c2_budget_reason=cov.c2_budget_reason,
+        pipe_name_budget_exhausted=cov.pipe_name_budget_exhausted,
+        pipe_name_budget_reason=cov.pipe_name_budget_reason,
+        pipe_name_budget_exhausted_targets=cov.pipe_name_budget_exhausted_targets,
+        c2_budget_exhausted_targets=cov.c2_budget_exhausted_targets,
+        image_pipe_refs=cov.image_pipe_refs, image_pipe_modules=cov.image_pipe_modules,
+        rule_version=rules_source["sha256"] if rules_source else None)

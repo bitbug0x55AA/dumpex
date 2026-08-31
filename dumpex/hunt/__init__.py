@@ -99,6 +99,50 @@ def _run_targeted_stomping(context):
     return run_targeted_stomping(context)
 
 
+# ── Targeted report projectors (contract §8's own late-bound seam) ──────
+# Each name below is what `_registry.py` resolves an analyzer's
+# `targeted_report_projector` through: given the invocation's
+# `HuntExecutionContext` and its adapter's own `ObservationResult`, return
+# that analyzer's canonical `Report` built from the rescan's evidence by the
+# SAME `aggregate.build_report()` full scope uses. Scoring, verdict tiers,
+# check construction, and detail projection therefore have one authority per
+# analyzer, and a targeted rescan cannot drift into a parallel scoring rule.
+# The record's own coverage is rebuilt from the observation's closures
+# afterwards (`dumpex.hunt._targeted_record`), never from these reports'
+# full-scope-shaped coverage snapshots.
+
+
+def _project_targeted_obfuscation(context, result):
+    """`obfuscation`'s targeted report projector. Lazily imported for the
+    same reason `_run_targeted_obfuscation` above imports its own."""
+    from dumpex.hunt.encoding.targeted import project_targeted_report
+    return project_targeted_report(context, result)
+
+
+def _project_targeted_yara(context, result):
+    """`yara`'s targeted report projector."""
+    from dumpex.hunt.yara_hunt.targeted import project_targeted_report
+    return project_targeted_report(context, result)
+
+
+def _project_targeted_cs_beacon(context, result):
+    """`cs-beacon`'s targeted report projector."""
+    from dumpex.hunt.cs_beacon.targeted import project_targeted_report
+    return project_targeted_report(context, result)
+
+
+def _project_targeted_pipe(context, result):
+    """`pipe`'s targeted report projector."""
+    from dumpex.hunt.pipe.targeted import project_targeted_report
+    return project_targeted_report(context, result)
+
+
+def _project_targeted_stomping(context, result):
+    """`stomping`'s targeted report projector."""
+    from dumpex.hunt.stomping.targeted import project_targeted_report
+    return project_targeted_report(context, result)
+
+
 from dumpex.hunt.summary import build_hunt_summary
 from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations
@@ -127,6 +171,9 @@ from dumpex.output.records import HUNTERS
 from dumpex.hunt import _registry
 from dumpex.hunt._request import HuntOptions, HuntRequest
 from dumpex.hunt._execution import build_execution_context
+from dumpex.hunt._targeted_console import print_targeted_console
+from dumpex.hunt._targeted_record import build_targeted_record
+from dumpex.output.records import hex_address
 
 
 def _option_view(ref_dir: "str | None", yara_dir: "str | None") -> dict:
@@ -474,3 +521,186 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         return results, records, investigation_actions, yara_provenance
     return results
 
+
+
+# ── Targeted (`--hunt-addr`) execution ─────────────────────────────────
+# One invocation names one analyzer and one virtual-address range. Selection,
+# capability, and the request ceiling are all resolved through the analyzer
+# registry -- there is no second hunter/capability allowlist anywhere in the
+# tree, and a command surface asks these functions rather than keeping its own.
+
+class TargetedSelectionError(Exception):
+    """`--hunt <ttp> --hunt-addr` names something no targeted rescan can run:
+    an unknown analyzer, the `all` selection mode, an analyzer with no declared
+    targeted capability, or one whose capability has no registered executor.
+    Carries the finished user-facing sentence, so every command surface reports
+    the same refusal for the same cause."""
+
+
+@dataclass(frozen=True)
+class TargetedSelection:
+    """What a validated `--hunt <ttp> --hunt-addr` selection resolves to: the
+    analyzer, the one coverage source that invocation runs, the full granted
+    scope set for it (empty for an unscoped source), the analyzer's own frozen
+    request-size ceiling in bytes, and the hunt options this targeted
+    invocation actually reads.
+
+    `consumed_options` is the registry's own answer, carried here so a command
+    surface can refuse an option that would have no effect without keeping its
+    own table of which analyzer reads what."""
+    identity: str
+    source: str
+    scopes: frozenset
+    request_ceiling: int
+    consumed_options: frozenset
+
+
+def targeted_hunters() -> tuple:
+    """Every hunter a targeted rescan can name, in `HUNTERS` order -- the
+    registry's own capability-and-executor filter (see
+    `_registry.AnalyzerRegistry.targeted_identities`). Public so a command
+    surface can render the supported set in help and error text without
+    restating it."""
+    return _registry.REGISTRY.targeted_identities()
+
+
+def resolve_targeted_selection(ttp: str) -> TargetedSelection:
+    """Resolve `ttp` to the targeted rescan it names, or raise
+    `TargetedSelectionError`.
+
+    Every refusal happens here, before a dump is opened and therefore before
+    any scan work: `all` is a selection mode rather than an analyzer, an
+    unknown name is unknown, and a real hunter without a registered targeted
+    executor (`injection`/`hollowing` today) cannot run one. The registry's own
+    typed failures are translated into one user-facing sentence each -- the
+    supported set in that sentence is read from the registry, never listed
+    here.
+    """
+    supported = ", ".join(targeted_hunters())
+    if ttp == "all":
+        raise TargetedSelectionError(
+            f"--hunt-addr targets exactly one analyzer; 'all' is a selection mode, not an "
+            f"analyzer. Choose one of: {supported}")
+    try:
+        source = _registry.REGISTRY.targeted_source(ttp)
+        spec = _registry.REGISTRY.select_targeted_scopes(
+            ttp, source, _registry.REGISTRY.granted_scopes(ttp, source))
+    except _registry.UnknownAnalyzerIdentity:
+        raise TargetedSelectionError(
+            f"Unknown TTP '{ttp}'. --hunt-addr supports: {supported}") from None
+    except (_registry.UnsupportedTargetedCapability,
+            _registry.UnpopulatedTargetedGrant,
+            _registry.UnsupportedTargetedSource,
+            _registry.UnsupportedTargetedScope) as exc:
+        raise TargetedSelectionError(
+            f"'{ttp}' has no targeted-scan capability and cannot be run with --hunt-addr "
+            f"({exc}). --hunt-addr supports: {supported}") from None
+    except _registry.InvalidAnalyzerSpec as exc:
+        # A registration-time invariant reaching a command means a registry was
+        # assembled around a spec that bypassed `AnalyzerSpec` construction.
+        # It still leaves through the ordinary user-facing Hunt error path
+        # rather than as a traceback out of the CLI.
+        raise TargetedSelectionError(
+            f"'{ttp}' has a malformed targeted-scan capability and cannot be run with "
+            f"--hunt-addr ({exc}). --hunt-addr supports: {supported}") from None
+    if spec.targeted_adapter is None or spec.targeted_report_projector is None:
+        raise TargetedSelectionError(
+            f"'{ttp}' declares a targeted-scan capability but has no registered executor "
+            f"for it. --hunt-addr supports: {supported}")
+    return TargetedSelection(
+        identity=spec.identity, source=source,
+        scopes=_registry.REGISTRY.granted_scopes(ttp, source),
+        request_ceiling=spec.targeted_capability.request_ceiling,
+        consumed_options=spec.targeted_capability.consumed_options)
+
+
+def targeted_scan_scope(request, result) -> dict:
+    """The `targeted` variant of `summary.scan_scope` -- the normalized range
+    and the capability it ran under, so a consumer can match a result back to
+    the invocation that produced it without parsing a command line.
+
+    `scopes` comes from the observation's ACTUAL closure scopes, not from the
+    request's granted scope set. The two agree for obfuscation, whose grant IS
+    its three layers, but pipe's grant is unscoped while its invocation closes
+    `pipe_name` and `c2_context` independently -- and #66's reconciliation is
+    keyed on `hunter + source + scope + base_address + size`, so a consumer
+    reading `scan_scope` alone must not conclude the run was unscoped. This
+    keeps `scan_scope.scopes` and `details.targeted_scope`'s own scopes in
+    agreement by construction.
+    """
+    return {
+        "kind": "targeted",
+        "hunter": request.selected,
+        "source": request.targeted_source,
+        "scopes": sorted({closure.scope for closure in result.closures
+                          if closure.scope is not None}),
+        "base_address": hex_address(request.target_range.base_address),
+        "size": request.target_range.size,
+    }
+
+
+@dataclass
+class _TargetedExecution:
+    """One targeted invocation's finished output: the `CommandResult` a command
+    surface routes to console exit codes and `--json`, and this invocation's
+    own YARA rule provenance (`None` for every other analyzer), threaded out
+    the same way `_FullScopeExecution` carries it rather than read back from a
+    process-wide global."""
+    result: CommandResult
+    yara_provenance: "dict | None" = None
+    context: object = None
+
+
+def execute_targeted(mf: MinidumpFile, request, *, verbose: bool = False,
+                     render: bool = False) -> _TargetedExecution:
+    """Run one already-validated targeted `HuntRequest` and project it exactly
+    once.
+
+    The request is built and validated by the caller (`HuntRequest.targeted()`
+    resolves the grant and the request ceiling through the registry), so this
+    function opens no second capability decision: it builds the invocation's
+    execution context, resolves the registered adapter, runs it once, and
+    projects the single `ObservationResult` into a record, a summary, and the
+    document-level coverage the exit code derives from.
+
+    `render=False` prints nothing at all -- the same silence guarantee
+    `_execute_full_scope(render=False)` gives `collect_hunt()`.
+    """
+    context = build_execution_context(mf, request)
+    spec, adapter = _registry.REGISTRY.resolve_targeted_adapter(
+        request.selected, request.targeted_source, request.targeted_scopes)
+    # Retained in the invocation's own observation registry under the key the
+    # adapter built, so `context.observations.counts()` reports what actually
+    # happened rather than staying empty. One targeted command calls one
+    # adapter once, so this is instrumentation rather than deduplication --
+    # the registry cannot gate the call itself without knowing the key before
+    # it runs.
+    observation = context.observations.record(adapter(context))
+    projection = build_targeted_record(spec, context, observation)
+    record = projection.record
+
+    if render:
+        print_targeted_console(record, observation, request, verbose)
+
+    summary = build_hunt_summary([record], selected=request.selected,
+                                  full_scope_hunters=full_scope_hunters(),
+                                  scan_scope=targeted_scan_scope(request, observation))
+    # A targeted rescan never builds the skipped-target queue: that queue is
+    # `--hunt all`'s cross-hunter view of a whole dump, and one range's result
+    # is not the evidence for it. The key stays present and empty so the
+    # summary shape does not change with scope.
+    summary["investigation_actions"] = []
+    yara_provenance = (spec.provenance_hook(projection.report)
+                       if spec.provenance_hook is not None else None)
+    return _TargetedExecution(
+        result=CommandResult(kind="hunt", records=[record],
+                             coverage=_hunt_coverage_report([record], summary),
+                             summary=summary),
+        yara_provenance=yara_provenance, context=context)
+
+
+def cmd_hunt_targeted(mf: MinidumpFile, request, verbose: bool = False) -> _TargetedExecution:
+    """The console entry point for a targeted rescan -- renders the one card
+    and returns the same `_TargetedExecution` `execute_targeted()` builds, so
+    console and structured output come from ONE projection of ONE scan."""
+    return execute_targeted(mf, request, verbose=verbose, render=True)

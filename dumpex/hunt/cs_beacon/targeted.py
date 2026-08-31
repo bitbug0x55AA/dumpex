@@ -73,7 +73,8 @@ from dumpex.output.coverage import (
 )
 
 __all__ = [
-    "run_targeted_cs_beacon", "TargetedCSBeaconEvidence", "TargetedCSBeaconError",
+    "run_targeted_cs_beacon", "project_targeted_report",
+    "TargetedCSBeaconEvidence", "TargetedCSBeaconError",
     "ALGORITHM_VERSION", "TARGETED_SOURCE",
 ]
 
@@ -122,6 +123,10 @@ class TargetedCSBeaconEvidence:
     corroborations: object
     diagnostics: object
     containing_segment: object
+    # How many thread contexts this run actually parsed. Carried rather than
+    # re-derived by the report projector: the walk is cheap, but deriving the
+    # same fact twice in one invocation is how the two derivations drift.
+    contexts_parsed: int = 0
 
 
 def _validate_request(request) -> None:
@@ -141,12 +146,21 @@ def _validate_request(request) -> None:
             f"{sorted(request.targeted_scopes)}")
 
 
-def _not_evaluated_result(key, capture_state: CaptureState, note: str) -> ObservationResult:
+def _not_evaluated_result(key, capture, note: str) -> ObservationResult:
+    """A not-evaluated result for the whole request.
+
+    ``captured_bytes`` is the measured availability of the requested range,
+    carried even though nothing ran: a closure that never reached its algorithm
+    still knows how much of the range the dump holds, and reporting that as
+    unknown would cost an investigator the one number a re-collection or a
+    chunked rescan is sized from.
+    """
     return ObservationResult(
         key=key,
         closures=(ObservationClosure(
             source=TARGETED_SOURCE, coverage_status="not_evaluated",
-            capture_state=capture_state, diagnostics=(note,)),),
+            capture_state=capture.state, captured_bytes=capture.captured_bytes,
+            diagnostics=(note,)),),
         payload=None)
 
 
@@ -275,7 +289,7 @@ def run_targeted_cs_beacon(context) -> ObservationResult:
             dropped = (f" ({segment_enum.skipped} segment descriptor(s) were dropped as "
                        f"unrepresentable; the requested base may lie inside one of them)")
         return _not_evaluated_result(
-            key, capture.state,
+            key, capture,
             f"no captured segment contains the requested base "
             f"{requested.base_address:#018x}; the dump holds no bytes to search"
             + dropped)
@@ -350,9 +364,41 @@ def run_targeted_cs_beacon(context) -> ObservationResult:
 
     closure = ObservationClosure(
         source=TARGETED_SOURCE, coverage_status=status, capture_state=capture.state,
+        captured_bytes=capture.captured_bytes,
         read_slice=read_slice if reached else None,
         limitations=limitations, diagnostics=tuple(diagnostics))
     payload = TargetedCSBeaconEvidence(
         hits=hits, corroborations=context_mod.corroborate(hits, regions, thread_contexts),
-        diagnostics=diag, containing_segment=boundary.containing_target)
+        diagnostics=diag, containing_segment=boundary.containing_target,
+        contexts_parsed=len(thread_contexts))
     return ObservationResult(key=key, closures=(closure,), payload=payload)
+
+
+def project_targeted_report(context, result):
+    """The :class:`~dumpex.hunt.cs_beacon.domain.CSBeaconReport` behind one
+    targeted rescan's :class:`~dumpex.output.records.HunterRecord`.
+
+    The range's own config hits, per-hit corroboration, and scan diagnostics
+    are fed to the SAME ``aggregate.build_report`` full scope uses, so a
+    targeted verdict is scored and classified by one authority rather than a
+    parallel targeted-only rule.
+
+    The MemoryInfo and thread-context facts come from the dump exactly as the
+    full-scope builder reads them, because this rescan really did read both:
+    they are corroboration sources it evaluated, not sources it skipped. The
+    parsed-context count rides on the payload rather than being walked a
+    second time here. The
+    record's document-level coverage still comes from the observation's own
+    ``segment_scan`` closure -- corroboration is observational and never gates
+    it (see :mod:`dumpex.hunt._targeted_record`).
+    """
+    payload = result.payload
+    mf = context.mf
+    if payload is None:
+        return _cs.aggregate.build_not_evaluated_report()
+    return _cs.aggregate.build_report(
+        payload.hits, payload.corroborations, scan=payload.diagnostics,
+        mem_info_available=bool(mf.memory_info and mf.memory_info.infos),
+        thread_list_stream_available=bool(mf.threads and mf.threads.threads),
+        threads_total=len(mf.threads.threads) if (mf.threads and mf.threads.threads) else 0,
+        contexts_parsed=payload.contexts_parsed)

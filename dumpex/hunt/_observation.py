@@ -217,6 +217,17 @@ class ObservationClosure:
     flattened string); ``budget_outcomes`` a tuple of :class:`BudgetOutcome`;
     ``diagnostics`` a tuple of non-empty strings.
 
+    ``captured_bytes`` is how many of the requested bytes the dump actually
+    holds -- a measurement, kept separate from ``read_slice`` because a closure
+    that never ran still has one. It is derived from ``read_slice`` when that
+    is present and defaults to ``0`` for an uncaptured range, so only a closure
+    that neither ran nor found the range empty has to supply it; supplying a
+    value that contradicts either is rejected. Without it a
+    ``capture_state="partial"`` closure that ended ``not_evaluated`` (a spent
+    budget, an ineligible descriptor, a range under the algorithm's minimum
+    input) would have to report its availability as unknown, which is exactly
+    the case an investigator needs the number for.
+
     Self-contained consistency: a ``read_slice`` must match ``capture_state``,
     a short read cannot be ``complete``, and ``complete`` requires a complete
     capture. The checks that need the observation's key
@@ -228,6 +239,7 @@ class ObservationClosure:
     capture_state: CaptureState
     scope: "str | None" = None
     read_slice: "ReadSlice | None" = None
+    captured_bytes: "int | None" = None
     limitations: tuple = ()
     budget_outcomes: tuple = ()
     diagnostics: tuple = ()
@@ -270,8 +282,31 @@ class ObservationClosure:
                 raise ValueError(
                     f"ObservationClosure.diagnostics entries must be non-empty str, got {note!r}")
 
+        if self.captured_bytes is not None and (
+                not isinstance(self.captured_bytes, int)
+                or isinstance(self.captured_bytes, bool) or self.captured_bytes < 0):
+            raise ValueError(
+                f"ObservationClosure.captured_bytes must be None or a non-negative plain "
+                f"int, got {self.captured_bytes!r}")
+        if self.capture_state == CaptureState.NONE:
+            if self.captured_bytes not in (None, 0):
+                raise ValueError(
+                    f"ObservationClosure.captured_bytes must be 0 for capture_state NONE, "
+                    f"got {self.captured_bytes!r}")
+            object.__setattr__(self, "captured_bytes", 0)
+        elif self.captured_bytes == 0:
+            raise ValueError(
+                f"ObservationClosure.captured_bytes 0 contradicts capture_state "
+                f"{self.capture_state} -- a captured range holds bytes")
+
         rs = self.read_slice
         if rs is not None:
+            if self.captured_bytes is None:
+                object.__setattr__(self, "captured_bytes", rs.capture.captured_bytes)
+            elif self.captured_bytes != rs.capture.captured_bytes:
+                raise ValueError(
+                    f"ObservationClosure.captured_bytes ({self.captured_bytes}) must equal "
+                    f"read_slice.capture.captured_bytes ({rs.capture.captured_bytes})")
             if self.capture_state != rs.capture.state:
                 raise ValueError(
                     f"ObservationClosure.capture_state ({self.capture_state}) must equal "
@@ -352,6 +387,12 @@ class ObservationResult:
             raise ValueError(
                 "ObservationResult: closures of one key carry different CapturedSlice "
                 "values -- the range is captured once and shared by every closure")
+        measured = {c.captured_bytes for c in self.closures if c.captured_bytes is not None}
+        if len(measured) > 1:
+            raise ValueError(
+                f"ObservationResult: closures of one key disagree about captured_bytes "
+                f"{sorted(measured)} -- the range is captured once and shared by every "
+                f"closure")
 
     def _check_closure_source(self, closure: ObservationClosure) -> None:
         vocab = _registry.coverage_sources_for(self.key.analyzer)

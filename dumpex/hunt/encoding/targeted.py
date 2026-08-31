@@ -60,7 +60,8 @@ from dumpex.hunt.encoding.entropy import _scan_entropy
 from dumpex.hunt.encoding.decoding import _is_system_dll, scan_decode_layers
 
 __all__ = [
-    "run_targeted_encoding", "TargetedEncodingEvidence", "TargetedEncodingError",
+    "run_targeted_encoding", "project_targeted_report",
+    "TargetedEncodingEvidence", "TargetedEncodingError",
     "ALGORITHM_VERSION", "TARGETED_LAYERS",
 ]
 
@@ -279,12 +280,20 @@ def _layer_limitations(layer: str, lc, *, truncation_limitation,
     return tuple(out)
 
 
-def _not_evaluated_result(key, capture_state: CaptureState, note: str,
-                          payload=None) -> ObservationResult:
+def _not_evaluated_result(key, capture, note: str, payload=None) -> ObservationResult:
+    """A not-evaluated result for the whole request.
+
+    ``captured_bytes`` is the measured availability of the requested range,
+    carried even though nothing ran: a closure that never reached its algorithm
+    still knows how much of the range the dump holds, and reporting that as
+    unknown would cost an investigator the one number a re-collection or a
+    chunked rescan is sized from.
+    """
     closures = tuple(
         ObservationClosure(source="encoding_scan", scope=layer,
                            coverage_status="not_evaluated",
-                           capture_state=capture_state, diagnostics=(note,))
+                           capture_state=capture.state,
+                           captured_bytes=capture.captured_bytes, diagnostics=(note,))
         for layer in TARGETED_LAYERS)
     return ObservationResult(key=key, closures=closures, payload=payload)
 
@@ -315,7 +324,7 @@ def run_targeted_encoding(context) -> ObservationResult:
             dropped = (f" ({region_enum.skipped} region descriptor(s) were dropped as "
                        f"unrepresentable; the requested base may lie inside one of them)")
         return _not_evaluated_result(
-            key, capture.state,
+            key, capture,
             f"no representable MemoryInfoListStream region contains the requested base "
             f"{requested.base_address:#018x}; source eligibility could not be established"
             + dropped)
@@ -460,7 +469,7 @@ def run_targeted_encoding(context) -> ObservationResult:
 
         closures.append(ObservationClosure(
             source="encoding_scan", scope=layer, coverage_status=status,
-            capture_state=capture.state,
+            capture_state=capture.state, captured_bytes=capture.captured_bytes,
             read_slice=read_slice if status != "not_evaluated" else None,
             limitations=limitations, budget_outcomes=budget_outcomes,
             diagnostics=tuple(diagnostics)))
@@ -469,3 +478,55 @@ def run_targeted_encoding(context) -> ObservationResult:
         sleep_mask=sm_result, entropy=ent_result, decode=dec_result,
         containing_region=boundary.containing_target)
     return ObservationResult(key=key, closures=tuple(closures), payload=payload)
+
+
+def project_targeted_report(context, result):
+    """The :class:`~dumpex.hunt.encoding.domain.EncodingReport` behind one
+    targeted rescan's :class:`~dumpex.output.records.HunterRecord`.
+
+    All three layers' own hits and per-layer coverage are fed to the SAME
+    ``aggregate.build_report`` full scope uses, so a targeted verdict is
+    scored and classified by one authority rather than a parallel
+    targeted-only rule. The shared decode/sleep-mask budget is read back off
+    the invocation's ledger, so a budget the rescan actually spent is reported
+    as spent.
+
+    ``region_count`` is 1 for a rescan whose containing region resolved and 0
+    otherwise: a targeted request is exactly one region-shaped scan unit, never
+    the dump's region roster. The record's document-level coverage is rebuilt
+    from the observation's per-layer closures (see
+    :mod:`dumpex.hunt._targeted_record`).
+    """
+    payload = result.payload
+    if payload is None:
+        return _encoding.build_report(
+            (), (), (), (), (), memory_info_stream=False, region_count=0,
+            any_region_scanned=False)
+    sm_cov, ent_cov, dec_cov = (payload.sleep_mask.coverage, payload.entropy.coverage,
+                                payload.decode.coverage)
+    budget = context.budgets.get(_BUDGET_NAME) if _BUDGET_NAME in context.budgets else None
+    return _encoding.build_report(
+        tuple(payload.sleep_mask.hits), tuple(payload.entropy.hits),
+        tuple(payload.decode.base64), tuple(payload.decode.xor),
+        tuple(payload.decode.compressed),
+        memory_info_stream=True, region_count=1,
+        any_region_scanned=bool(sm_cov.scanned or ent_cov.scanned or dec_cov.scanned),
+        sleep_mask_oversized=tuple(sm_cov.skipped_oversize_targets),
+        entropy_oversized=tuple(ent_cov.skipped_oversize_targets),
+        decode_oversized=tuple(dec_cov.skipped_oversize_targets),
+        sleep_mask_read_failed=tuple(sm_cov.read_failed_targets),
+        entropy_read_failed=tuple(ent_cov.read_failed_targets),
+        decode_read_failed=tuple(dec_cov.read_failed_targets),
+        sleep_mask_short_read=tuple(sm_cov.short_read_targets),
+        entropy_short_read=tuple(ent_cov.short_read_targets),
+        decode_short_read=tuple(dec_cov.short_read_targets),
+        budget_exhausted=bool(budget is not None and budget.exhausted()),
+        exhausted_reason=(budget.exhausted_reason if budget is not None else ""),
+        sleep_mask_unaccounted=sm_cov.unaccounted, entropy_unaccounted=ent_cov.unaccounted,
+        decode_unaccounted=dec_cov.unaccounted,
+        sleep_mask_over_accounted=sm_cov.over_accounted,
+        entropy_over_accounted=ent_cov.over_accounted,
+        decode_over_accounted=dec_cov.over_accounted,
+        sleep_mask_imbalance=sm_cov.ledger_imbalance,
+        entropy_imbalance=ent_cov.ledger_imbalance,
+        decode_imbalance=dec_cov.ledger_imbalance)

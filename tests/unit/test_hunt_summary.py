@@ -24,7 +24,8 @@ def test_all_detected_variety_matches_hand_computed_counts():
     # pipe_clean -> NOT_DETECTED_IN_SCANNED_SCOPE (1)
     summary = build_hunt_summary(records, selected="all")
     assert summary == {
-        "selected": "all", "hunter_count": 7, "detected_count": 4, "inconclusive_count": 1,
+        "selected": "all", "scan_scope": {"kind": "full"},
+        "hunter_count": 7, "detected_count": 4, "inconclusive_count": 1,
         "not_evaluated_count": 1, "overall_status": "DETECTED",
         "highest_verdict_level": "high", "lead_count": sum(r.lead_count or 0 for r in records),
     }
@@ -164,3 +165,74 @@ def test_single_hunter_rejects_more_than_one_record():
 def test_single_hunter_rejects_mismatched_hunter():
     with pytest.raises(ValueError):
         build_hunt_summary([hollowing_detected()], selected="injection")
+
+
+# ── scan_scope: the closed full/targeted tag ─────────────────────────────
+
+def _targeted_scope(**overrides):
+    scope = {"kind": "targeted", "hunter": "yara", "source": "segment_scan",
+             "scopes": [], "base_address": "0x0000000010000000", "size": 0x2000}
+    scope.update(overrides)
+    return scope
+
+
+def test_scan_scope_defaults_to_the_full_tag():
+    """A summary built without a targeted request covered the whole dump --
+    the tag is present in both modes, so scope is never inferred from an
+    absent field."""
+    summary = build_hunt_summary(all_seven_not_evaluated(), selected="all")
+    assert summary["scan_scope"] == {"kind": "full"}
+
+
+def test_a_targeted_summary_carries_the_requested_range():
+    summary = build_hunt_summary([yara_not_evaluated()], selected="yara",
+                                  scan_scope=_targeted_scope())
+    assert summary["scan_scope"] == _targeted_scope()
+
+
+def test_scan_scope_is_copied_not_aliased():
+    """The summary is a mutable document a caller still adds to; it must not
+    share a dict with the caller's own scope value."""
+    scope = _targeted_scope()
+    summary = build_hunt_summary([yara_not_evaluated()], selected="yara", scan_scope=scope)
+    scope["size"] = 1
+    assert summary["scan_scope"]["size"] == 0x2000
+
+
+@pytest.mark.parametrize("scope", [
+    {"kind": "partial"},
+    {"kind": "full", "hunter": "yara"},
+    _targeted_scope(kind="full"),
+    {k: v for k, v in _targeted_scope().items() if k != "size"},
+    _targeted_scope(hunter="not-a-hunter"),
+    _targeted_scope(size=0),
+    _targeted_scope(size="0x2000"),
+    _targeted_scope(source=""),
+    _targeted_scope(source=None),
+    _targeted_scope(scopes="entropy"),
+    _targeted_scope(scopes=[""]),
+    _targeted_scope(scopes=["entropy", "decode"]),          # unsorted
+    _targeted_scope(scopes=["decode", "decode"]),           # duplicated
+    _targeted_scope(base_address="0x10000000"),             # not fixed-width
+    _targeted_scope(base_address=0x10000000),
+])
+def test_a_malformed_scan_scope_is_rejected(scope):
+    """Both variants are exact key sets: a targeted tag missing its range, or
+    a full tag carrying one, is a producer bug that must not reach the wire."""
+    with pytest.raises((ValueError, TypeError)):
+        build_hunt_summary([yara_not_evaluated()], selected="yara", scan_scope=scope)
+
+
+def test_a_non_dict_scan_scope_is_rejected():
+    with pytest.raises(TypeError):
+        build_hunt_summary([yara_not_evaluated()], selected="yara", scan_scope="targeted")
+
+
+def test_the_scopes_list_is_copied_not_aliased():
+    """`scopes` is the only nested value; a caller mutating its own list must
+    not reach into the summary."""
+    scopes = ["decode", "entropy"]
+    summary = build_hunt_summary([yara_not_evaluated()], selected="yara",
+                                  scan_scope=_targeted_scope(scopes=scopes))
+    scopes.append("sleep_mask")
+    assert summary["scan_scope"]["scopes"] == ["decode", "entropy"]

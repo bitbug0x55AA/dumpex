@@ -295,18 +295,25 @@ def test_a_spent_c2_budget_over_a_range_with_no_anchor_is_not_a_gap(monkeypatch)
 
 def test_a_cut_pipe_name_pass_makes_the_c2_scope_partial(monkeypatch):
     # The C2 pass retains records against THIS range's own pipe-name hits, so a
-    # name pass the pipe-name budget cut short leaves its anchors incomplete --
-    # attributed to the pipe-name budget on both closures, never merged.
+    # name pass the pipe-name budget cut short leaves its anchors incomplete
+    # too. The gap belongs to the closure that owns the budget: `pipe_name`
+    # raises it, and `c2_context` carries the same dependency through its own
+    # status and its own diagnostic rather than a second copy of it.
     monkeypatch.setattr(_pipe, "PIPE_NAME_BUDGET_MAX_HITS", 0)
     ctx, result = _run(monkeypatch, requested=VirtualRange(_BASE, _SIZE))
 
     closures = _closures(result)
     assert closures["pipe_name"].coverage_status == "partial"
     assert closures["c2_context"].coverage_status == "partial"
-    for closure in result.closures:
-        budget = [l for l in closure.limitations
-                  if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED]
-        assert [l.scope for l in budget] == ["pipe_name"]
+
+    def _budget(scope):
+        return [l.scope for l in closures[scope].limitations
+                if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED]
+
+    assert _budget("pipe_name") == ["pipe_name"]
+    assert _budget("c2_context") == []
+    assert any("stopped short of its own budget" in note
+               for note in closures["c2_context"].diagnostics)
 
 
 def test_one_context_shares_one_cumulative_budget_across_two_ranges(monkeypatch):
@@ -369,13 +376,16 @@ def test_a_read_that_outlasts_both_deadlines_leaves_neither_scope_complete(monke
     assert result.payload.string_leads == ()
     for closure in result.closures:
         assert closure.coverage_status == "not_evaluated"
-        budget = [l for l in closure.limitations
-                  if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED]
-        assert [(l.scope, l.detail) for l in budget] == [("pipe_name", "deadline")]
         # A budget the read itself consumed points at a different rerun than one
         # an earlier range had already used up, so the note distinguishes them.
         assert any("while this range was being read" in note
                    for note in closure.diagnostics)
+    # One deadline, raised once, by the one closure whose budget it was.
+    closures = _closures(result)
+    assert [(l.scope, l.detail) for l in closures["pipe_name"].limitations
+            if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED] == [("pipe_name", "deadline")]
+    assert not [l for l in closures["c2_context"].limitations
+                if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED]
 
 
 def test_a_read_crossing_only_the_c2_deadline_leaves_pipe_name_complete(monkeypatch):
@@ -422,10 +432,14 @@ def test_a_range_both_budgets_are_already_spent_for_is_never_read(monkeypatch):
         assert closure.read_slice is None
         assert any("was not read" in note for note in closure.diagnostics)
 
+    # Both budgets are still attributed -- the range is unresolved for both
+    # scopes, which is the fact a rerun with more budget acts on -- and each
+    # exhaustion is raised once, by the closure that owns that budget.
     closures = _closures(result)
     assert [(l.scope, l.detail) for l in closures["c2_context"].limitations
-            if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED] \
-        == [("c2_context", "deadline"), ("pipe_name", "deadline")]
+            if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED] == [("c2_context", "deadline")]
+    assert [(l.scope, l.detail) for l in closures["pipe_name"].limitations
+            if l.code == LimitationCode.SCAN_BUDGET_EXHAUSTED] == [("pipe_name", "deadline")]
 
 
 def test_one_execution_reads_the_range_once_and_never_outside_it(monkeypatch):

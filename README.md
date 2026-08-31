@@ -17,7 +17,8 @@ encoded/obfuscated payloads.
   (`--handles`), dump evidence and analysis-capability coverage
   (`--profile`), modules, threads, and captured memory regions.
 - **TTP hunting** — run focused or complete hunts with explicit evidence,
-  confidence, verdict, and coverage semantics.
+  confidence, verdict, and coverage semantics, or rescan a single
+  virtual-address range with one hunter (`--hunt-addr`).
 - **Alert triage** — build a report around a thread ID, address, or string.
 - **Dump comparison** — identify module, thread, memory-region, and protection
   changes between two dumps.
@@ -101,6 +102,9 @@ dumpex sample.dmp --hunt stomping --ref-dir C:\Windows\System32
 
 # Scan with an analyst-controlled YARA directory
 dumpex sample.dmp --hunt yara --yara-dir case-yara
+
+# Rescan one range a full-scope hunt skipped for size
+dumpex sample.dmp --hunt obfuscation --hunt-addr 0x7ff600001000 --size 0x400000
 
 # Build a report around a suspicious instruction pointer
 dumpex sample.dmp --report --report-addr 0x7ff600001000

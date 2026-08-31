@@ -1205,6 +1205,101 @@ def _require_list_of(value, cls, field_name: str) -> None:
         raise TypeError(f"{field_name} must be a list of {cls.__name__}")
 
 
+_CAPTURE_STATES = ("none", "partial", "complete")
+_COVERAGE_STATUSES = ("not_evaluated", "partial", "complete")
+
+
+@dataclass(frozen=True)
+class TargetedScopeRecord:
+    """One closure of a targeted (``--hunt-addr``) rescan, as it appears in
+    ``details.targeted_scope``.
+
+    Capture and evaluation are two independent facts and stay separate here:
+    ``captured_size``/``capture_state`` describe how much of the requested
+    range the dump actually holds, and ``coverage_status`` describes how far
+    the source's own algorithm got over what it received. A complete capture
+    can still evaluate partially (a retained budget), and a partial capture
+    can be ``not_evaluated`` (the bytes never reached the algorithm's minimum
+    input).
+
+    ``base_address``/``size`` are the REQUESTED range, always -- never the
+    containing descriptor and never the captured prefix -- so one closure's
+    identity is ``(hunter, source, scope, base_address, size)`` regardless of
+    capture outcome. ``scope`` is the closure scope (a layer name) and
+    ``None`` for an unscoped source. ``captured_size`` is ``None`` only when
+    byte availability is genuinely unknown.
+    """
+    source:          str
+    scope:           "str | None"
+    base_address:    str
+    size:            int
+    captured_size:   "int | None"
+    capture_state:   str
+    coverage_status: str
+
+    def __post_init__(self):
+        if not isinstance(self.source, str) or not self.source:
+            raise ValueError(
+                f"TargetedScopeRecord.source must be a non-empty str, got {self.source!r}")
+        if self.scope is not None and (not isinstance(self.scope, str) or not self.scope):
+            raise ValueError(
+                f"TargetedScopeRecord.scope must be None or a non-empty str, got {self.scope!r}")
+        _require_hex_address(self.base_address, "TargetedScopeRecord.base_address")
+        if not isinstance(self.size, int) or isinstance(self.size, bool) or self.size <= 0:
+            raise ValueError(
+                f"TargetedScopeRecord.size must be a positive plain int, got {self.size!r}")
+        _require_optional_nonneg_int(self.captured_size, "TargetedScopeRecord.captured_size")
+        if self.captured_size is not None and self.captured_size > self.size:
+            raise ValueError(
+                f"TargetedScopeRecord.captured_size ({self.captured_size}) cannot exceed the "
+                f"requested size ({self.size})")
+        if self.capture_state not in _CAPTURE_STATES:
+            raise ValueError(
+                f"TargetedScopeRecord.capture_state must be one of {_CAPTURE_STATES}, "
+                f"got {self.capture_state!r}")
+        if self.coverage_status not in _COVERAGE_STATUSES:
+            raise ValueError(
+                f"TargetedScopeRecord.coverage_status must be one of {_COVERAGE_STATUSES}, "
+                f"got {self.coverage_status!r}")
+        if self.coverage_status == "complete" and self.capture_state != "complete":
+            raise ValueError(
+                "TargetedScopeRecord.coverage_status 'complete' requires capture_state "
+                f"'complete', got {self.capture_state!r}")
+
+    def to_dict(self) -> dict:
+        return {
+            "source":          self.source,
+            "scope":           self.scope,
+            "base_address":    self.base_address,
+            "size":            self.size,
+            "captured_size":   self.captured_size,
+            "capture_state":   self.capture_state,
+            "coverage_status": self.coverage_status,
+        }
+
+
+def _require_optional_targeted_scope(value, field_name: str) -> None:
+    """``targeted_scope`` is ``None`` for a full-scope result and a non-empty
+    list of :class:`TargetedScopeRecord` for a targeted one. ``None`` and
+    ``[]`` are different facts -- a targeted rescan always projects at least
+    one closure -- so an empty list is rejected rather than normalized."""
+    if value is None:
+        return
+    if not isinstance(value, list) or not value:
+        raise TypeError(
+            f"{field_name} must be None or a non-empty list of TargetedScopeRecord")
+    _require_list_of(value, TargetedScopeRecord, field_name)
+
+
+def _targeted_scope_dict(details) -> dict:
+    """The ``targeted_scope`` key for a details ``to_dict()``, or no key at
+    all for a full-scope result. A full-scope details object omits the key
+    completely rather than emitting ``null``."""
+    if details.targeted_scope is None:
+        return {}
+    return {"targeted_scope": [item.to_dict() for item in details.targeted_scope]}
+
+
 @dataclass
 class HuntRegionRef:
     """A deterministic, value-based memory-region reference in hunt details.
@@ -1467,31 +1562,43 @@ class HollowingDetails:
 
 @dataclass
 class StompingDetails:
-    """Protection leads and verified changes for ``--hunt stomping``."""
+    """Protection leads and verified changes for ``--hunt stomping``.
+
+    ``targeted_scope`` is present only for a targeted (``--hunt-addr``)
+    rescan; see :func:`_targeted_scope_dict`.
+    """
     protection_leads: list   # list[dict]
     verified_changes: list   # list[dict]
+    targeted_scope:   "list | None" = None   # list[TargetedScopeRecord], targeted only
 
     def __post_init__(self):
         for name in ("protection_leads", "verified_changes"):
             value = getattr(self, name)
             if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
                 raise TypeError(f"StompingDetails.{name} must be a list of dict")
+        _require_optional_targeted_scope(self.targeted_scope, "StompingDetails.targeted_scope")
 
     def to_dict(self) -> dict:
         return {
             "protection_leads": [dict(x) for x in self.protection_leads],
             "verified_changes": [dict(x) for x in self.verified_changes],
+            **_targeted_scope_dict(self),
         }
 
 
 @dataclass
 class PipeDetails:
-    """`--hunt pipe`'s hunter-specific evidence."""
+    """`--hunt pipe`'s hunter-specific evidence.
+
+    ``targeted_scope`` is present only for a targeted (``--hunt-addr``)
+    rescan; see :func:`_targeted_scope_dict`.
+    """
     handle_pipes:    list   # list[dict]
     private_pipes:   list   # list[dict]
     c2_context:      list   # list[dict]
     framework_pipes: list   # list[dict]
     unbacked_in_rgn: list   # list[dict]
+    targeted_scope:  "list | None" = None   # list[TargetedScopeRecord], targeted only
 
     def __post_init__(self):
         for name in ("handle_pipes", "private_pipes", "c2_context", "framework_pipes",
@@ -1499,6 +1606,7 @@ class PipeDetails:
             value = getattr(self, name)
             if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
                 raise TypeError(f"PipeDetails.{name} must be a list of dict")
+        _require_optional_targeted_scope(self.targeted_scope, "PipeDetails.targeted_scope")
 
     def to_dict(self) -> dict:
         return {
@@ -1507,6 +1615,7 @@ class PipeDetails:
             "c2_context":      [dict(x) for x in self.c2_context],
             "framework_pipes": [dict(x) for x in self.framework_pipes],
             "unbacked_in_rgn": [dict(x) for x in self.unbacked_in_rgn],
+            **_targeted_scope_dict(self),
         }
 
 
@@ -1515,10 +1624,12 @@ class CsBeaconDetails:
     """Decoded configuration evidence for ``--hunt cs-beacon``.
 
     Process addresses use normalized hex strings in this typed shape;
-    dump-file offsets remain integers.
+    dump-file offsets remain integers. ``targeted_scope`` is present only for
+    a targeted (``--hunt-addr``) rescan; see :func:`_targeted_scope_dict`.
     """
-    configs:      list   # list[dict]
-    config_count: int
+    configs:        list   # list[dict]
+    config_count:   int
+    targeted_scope: "list | None" = None   # list[TargetedScopeRecord], targeted only
 
     def __post_init__(self):
         if not isinstance(self.configs, list) or any(not isinstance(x, dict) for x in self.configs):
@@ -1528,9 +1639,11 @@ class CsBeaconDetails:
             raise ValueError(
                 f"CsBeaconDetails.config_count ({self.config_count}) must equal "
                 f"len(configs) ({len(self.configs)})")
+        _require_optional_targeted_scope(self.targeted_scope, "CsBeaconDetails.targeted_scope")
 
     def to_dict(self) -> dict:
-        return {"configs": [dict(x) for x in self.configs], "config_count": self.config_count}
+        return {"configs": [dict(x) for x in self.configs], "config_count": self.config_count,
+                **_targeted_scope_dict(self)}
 
 
 @dataclass
@@ -1538,17 +1651,20 @@ class YaraDetails:
     """`--hunt yara`'s hunter-specific evidence. YARA deliberately stays
     off the shared Finding model -- see docs/developer/hunt_architecture.md
     for why `matches` must not be reclassified as `finding`."""
-    matches:    list   # list[dict]
-    rules_hit:  list   # list[str]
+    matches:        list   # list[dict]
+    rules_hit:      list   # list[str]
+    targeted_scope: "list | None" = None   # list[TargetedScopeRecord], targeted only
 
     def __post_init__(self):
         if not isinstance(self.matches, list) or any(not isinstance(x, dict) for x in self.matches):
             raise TypeError("YaraDetails.matches must be a list of dict")
         if not isinstance(self.rules_hit, list) or any(not isinstance(x, str) for x in self.rules_hit):
             raise TypeError("YaraDetails.rules_hit must be a list of str")
+        _require_optional_targeted_scope(self.targeted_scope, "YaraDetails.targeted_scope")
 
     def to_dict(self) -> dict:
-        return {"matches": [dict(x) for x in self.matches], "rules_hit": list(self.rules_hit)}
+        return {"matches": [dict(x) for x in self.matches], "rules_hit": list(self.rules_hit),
+                **_targeted_scope_dict(self)}
 
 
 @dataclass
@@ -1562,6 +1678,7 @@ class ObfuscationDetails:
     compressed:        list   # list[dict]
     hidden_pe:         list   # list[dict]
     hidden_shellcode:  list   # list[dict]
+    targeted_scope:    "list | None" = None   # list[TargetedScopeRecord], targeted only
 
     def __post_init__(self):
         for name in ("sleep_mask", "entropy", "base64", "xor", "compressed", "hidden_pe",
@@ -1569,6 +1686,7 @@ class ObfuscationDetails:
             value = getattr(self, name)
             if not isinstance(value, list) or any(not isinstance(x, dict) for x in value):
                 raise TypeError(f"ObfuscationDetails.{name} must be a list of dict")
+        _require_optional_targeted_scope(self.targeted_scope, "ObfuscationDetails.targeted_scope")
 
     def to_dict(self) -> dict:
         return {
@@ -1579,6 +1697,7 @@ class ObfuscationDetails:
             "compressed":       [dict(x) for x in self.compressed],
             "hidden_pe":        [dict(x) for x in self.hidden_pe],
             "hidden_shellcode": [dict(x) for x in self.hidden_shellcode],
+            **_targeted_scope_dict(self),
         }
 
 

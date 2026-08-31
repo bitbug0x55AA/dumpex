@@ -110,6 +110,8 @@ def _patch_targeted_mappings_for_future_identity(monkeypatch):
         **registry_mod._COVERAGE_SOURCE_NAMES_BY_IDENTITY, _FUTURE_IDENTITY: frozenset({"future_scan"})})
     monkeypatch.setattr(registry_mod, "_EXPECTED_TARGETED_REQUEST_CEILINGS", {
         **registry_mod._EXPECTED_TARGETED_REQUEST_CEILINGS, _FUTURE_IDENTITY: _FUTURE_CEILING})
+    monkeypatch.setattr(registry_mod, "_EXPECTED_TARGETED_CONSUMED_OPTIONS", {
+        **registry_mod._EXPECTED_TARGETED_CONSUMED_OPTIONS, _FUTURE_IDENTITY: frozenset()})
     monkeypatch.setattr(registry_mod, "_APPROVED_TARGETED_IDENTITIES",
                          registry_mod._APPROVED_TARGETED_IDENTITIES | {_FUTURE_IDENTITY})
 

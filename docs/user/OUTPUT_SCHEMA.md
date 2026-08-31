@@ -22,14 +22,14 @@ never replace an input dump.
 
 ## Current contract
 
-All twelve commands emit the same v2.13 envelope. The authoritative schema is
-[`dumpex-output-v2.13.schema.json`](../../dumpex/schemas/dumpex-output-v2.13.schema.json).
+All twelve commands emit the same v2.14 envelope. The authoritative schema is
+[`dumpex-output-v2.14.schema.json`](../../dumpex/schemas/dumpex-output-v2.14.schema.json).
 The schema uses JSON Schema Draft 2020-12 and closes record objects with
 `additionalProperties: false` where their field sets are fixed.
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.13 (current) | [`dumpex-output-v2.13.schema.json`](../../dumpex/schemas/dumpex-output-v2.13.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.14 (current) | [`dumpex-output-v2.14.schema.json`](../../dumpex/schemas/dumpex-output-v2.14.schema.json) |
 
 Use the document's own `meta.schema_version` to select a validator. Do not
 validate archived output against whichever schema happens to be current today.
@@ -41,7 +41,7 @@ Every produced document follows this shape:
 ```jsonc
 {
   "meta": {
-    "schema_version": "2.13",
+    "schema_version": "2.14",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "command, options, timestamps, case metadata" },
     "evidence": [ { "...": "input identity and SHA-256" } ],
@@ -70,7 +70,7 @@ The envelope deliberately separates four concepts:
 
 ### `meta.schema_version`
 
-Selects the exact schema contract. The current producer value is `"2.13"`.
+Selects the exact schema contract. The current producer value is `"2.14"`.
 
 ### `meta.tool`
 
@@ -233,6 +233,89 @@ YARA is intentionally different: its matches and rules hit live in
 `details.matches`/`details.rules_hit`, and the shared finding/confidence fields
 are null or empty according to the schema.
 
+### Hunt scan scope and targeted rescans (v2.14)
+
+`result.summary.scan_scope` names what a hunt invocation covered. It is a
+closed tagged shape present in both modes:
+
+```json
+{"kind": "full"}
+```
+
+```json
+{
+  "kind": "targeted",
+  "hunter": "obfuscation",
+  "source": "encoding_scan",
+  "scopes": ["decode", "entropy", "sleep_mask"],
+  "base_address": "0x0000000010000000",
+  "size": 1048576
+}
+```
+
+A targeted invocation (`--hunt <hunter> --hunt-addr ADDR --size SIZE`) always
+names exactly one analyzer, produces exactly one hunter record, and keeps
+`investigation_actions` empty.
+
+`scopes` is the sorted set of scopes the invocation's own coverage closures
+were attributed under, so it always agrees with that result's
+`details.targeted_scope`. It is not the analyzer's granted scope set: `pipe`'s
+grant is unscoped, yet one pipe rescan closes `pipe_name` and `c2_context`
+independently and `scopes` names both.
+
+That record's `details` additionally carries `targeted_scope`, one entry per
+coverage closure in the analyzer's own fixed closure order — one for
+`stomping`, `yara`, and `cs-beacon`, two for `pipe` (`pipe_name` and
+`c2_context`), and three for `obfuscation` (`sleep_mask`, `entropy`, `decode`):
+
+```json
+{
+  "source": "encoding_scan",
+  "scope": "entropy",
+  "base_address": "0x0000000010000000",
+  "size": 1048576,
+  "captured_size": 524288,
+  "capture_state": "partial",
+  "coverage_status": "partial"
+}
+```
+
+`base_address` and `size` are always the range you requested, never the
+containing region or the captured prefix, so a closure's identity is
+`(hunter, source, scope, base_address, size)` whatever the capture outcome was.
+Capture and evaluation are separate facts: `captured_size`/`capture_state`
+describe byte availability in the dump, `coverage_status` describes how far
+that source's algorithm got. A complete capture can still evaluate partially
+(a retained budget), and a partial capture can be `not_evaluated` when the
+bytes never reached the algorithm's minimum input — in which case
+`captured_size` still reports the real captured prefix, which is what a
+re-collection or a chunked rescan is sized from. `captured_size` is `null`
+only when availability was genuinely never measured.
+
+A full-scope result omits `targeted_scope` entirely rather than emitting
+`null`, so existing full-scope consumers see no change.
+
+A targeted record's `coverage.sources` carries `targeted_scan` plus the
+analyzer's whole published source vocabulary — the same roster a full-scope
+record has — so scope is never inferred from a missing key. The granted source
+the closures ran for is `present`; every source outside that grant is `absent`
+and carries its own `TARGETED_SOURCE_NOT_EVALUATED` sourced to that source
+name.
+
+That matters most on a clean result. A completed targeted `stomping` rescan
+reports `coverage.status: "complete"` and exit `0`, because the requested range
+was fully evaluated for `ioc_string_scan` — but `module_headers`,
+`reference_files`, `section_content_diff`, `modules`, and `memory_info` are all
+listed absent with a limitation each, so `hunter: "stomping"` plus
+`coverage.status: "complete"` cannot be read as "stomping is completely
+covered". A targeted record is therefore the one place `coverage.status` can be
+`complete` while `limitations` is non-empty: those entries are not gaps in the
+scan, they are the boundary of what the result is about.
+
+`TARGETED_SOURCE_NOT_EVALUATED` sourced to `targeted_scan` (optionally scoped
+to a closure) is the other shape: a granted closure that did not run. The
+prerequisite limitations explaining it stay alongside it.
+
 ### Process, handle, and profile records (v2.13)
 
 `processRecord` consolidates process identity from captured sources and keeps
@@ -298,6 +381,10 @@ region content is read, and `coverage_effect` remains
 temporarily unavailable and is rejected before analysis. Historical v2.10-
 v2.13 documents may contain `mode="deep"`, content reason codes, and bounded
 findings; validate those documents against the schema version they declare.
+
+A targeted rescan does not populate this queue and does not resolve an entry in
+one: it is supplementary evidence about the range you asked for, matched back
+to an originating gap by `hunter + source + scope + base_address + size`.
 Deep-mode historical evidence did not close an originating hunter's coverage
 gap, and current gaps likewise require that hunter's successful targeted rescan.
 

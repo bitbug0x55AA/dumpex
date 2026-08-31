@@ -198,3 +198,51 @@ def test_observation_key_needs_no_provenance_for_an_optionless_analyzer():
     ctx = _context()
     key = ctx.observation_key("pipe", algorithm_version="1")
     assert key.config_provenance is None and key.rule_provenance is None
+
+
+# ── which options an observation key is identified by ───────────────────
+#
+# Identity describes the execution that actually occurred, so the option set
+# is mode-dependent: full scope consults the analyzer's whole `option_names`,
+# a targeted run only the `consumed_options` its granted source really reads.
+
+def _targeted_key(analyzer, source, **options):
+    request = HuntRequest.targeted(
+        analyzer, source, VirtualRange(0x10000000, 0x1000), **options)
+    return build_execution_context(_MF(), request).observation_key(
+        analyzer, algorithm_version="1")
+
+
+def test_a_targeted_key_ignores_an_option_that_run_never_reads():
+    """stomping declares `ref_dir` for its reference-file comparison, which no
+    targeted rescan performs. Two rescans of one range differing only in
+    `--ref-dir` are the same execution and must not split into two
+    observations."""
+    unset = _targeted_key("stomping", "ioc_string_scan")
+    configured = _targeted_key("stomping", "ioc_string_scan", ref_dir="/refs")
+    assert unset.config_provenance is None
+    assert unset == configured
+
+
+def test_a_full_scope_key_still_identifies_by_that_same_option():
+    """The narrowing is targeted-only: full scope really does read `ref_dir`,
+    so it keeps isolating those runs."""
+    unset = build_execution_context(
+        _MF(), HuntRequest.full("stomping")).observation_key(
+            "stomping", algorithm_version="1")
+    configured = build_execution_context(
+        _MF(), HuntRequest.full("stomping", ref_dir="/refs")).observation_key(
+            "stomping", algorithm_version="1")
+    assert unset.config_provenance == "ref_dir:unset"
+    assert configured.config_provenance == "/refs"
+    assert unset != configured
+
+
+def test_a_targeted_key_still_identifies_by_an_option_that_run_does_read():
+    """yara resolves rule files through `rules_dir` in both modes, so two
+    targeted rescans run against different rule directories stay distinct
+    observations."""
+    a = _targeted_key("yara", "segment_scan", rules_dir="/a")
+    b = _targeted_key("yara", "segment_scan", rules_dir="/b")
+    assert a.rule_provenance == "/a" and b.rule_provenance == "/b"
+    assert a != b

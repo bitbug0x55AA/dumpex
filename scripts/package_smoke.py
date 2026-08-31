@@ -42,7 +42,7 @@ SCHEMA_FILENAMES = (
     "dumpex-output-v2.7.schema.json", "dumpex-output-v2.8.schema.json",
     "dumpex-output-v2.9.schema.json", "dumpex-output-v2.10.schema.json",
     "dumpex-output-v2.11.schema.json", "dumpex-output-v2.12.schema.json",
-    "dumpex-output-v2.13.schema.json",
+    "dumpex-output-v2.13.schema.json", "dumpex-output-v2.14.schema.json",
 )
 
 

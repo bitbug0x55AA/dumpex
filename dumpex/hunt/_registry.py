@@ -218,10 +218,23 @@ class TargetedCapability:
     a required safety bound frozen by the capability matrix, kept ON the
     capability rather than in a second identity-keyed table). Each
     targeted-capable analyzer carries exactly the grant(s) and ceiling the
-    targeted-rescan capability matrix freezes for it."""
+    targeted-rescan capability matrix freezes for it.
+
+    `consumed_options` is the subset of the analyzer's own `option_names`
+    that a TARGETED invocation actually reads. It is normally narrower than
+    the full-scope set, because a targeted invocation runs one granted source
+    rather than the analyzer's whole pipeline: `stomping` reads `ref_dir` for
+    its reference-file comparison, which no targeted rescan performs, so its
+    targeted set is empty; `yara` reads `rules_dir` in both modes, so its
+    targeted set keeps it. This is the registry's own answer to "does this
+    option influence a targeted run", which a command surface asks instead of
+    keeping its own table, and which `HuntExecutionContext.observation_key()`
+    reads so an option a run never consulted cannot change the observation
+    identity."""
     scan_unit: TargetedScanUnit
     grants: frozenset
     request_ceiling: int = 256 * (1 << 20)
+    consumed_options: frozenset = frozenset()
 
     def __post_init__(self):
         if not isinstance(self.scan_unit, TargetedScanUnit):
@@ -238,6 +251,11 @@ class TargetedCapability:
             raise InvalidAnalyzerSpec(
                 f"TargetedCapability.request_ceiling must be a positive int (bytes), "
                 f"got {self.request_ceiling!r}")
+        if not isinstance(self.consumed_options, frozenset) or not all(
+                isinstance(o, str) for o in self.consumed_options):
+            raise InvalidAnalyzerSpec(
+                f"TargetedCapability.consumed_options must be a frozenset[str], "
+                f"got {self.consumed_options!r}")
 
 
 # Approved first-release targeted-scan identity set (#58) -- checked as an
@@ -285,6 +303,28 @@ _require_equal_sets(
     set(_EXPECTED_TARGETED_REQUEST_CEILINGS), _APPROVED_TARGETED_IDENTITIES,
     "_EXPECTED_TARGETED_REQUEST_CEILINGS must exactly match _APPROVED_TARGETED_IDENTITIES")
 
+# Each targeted-capable analyzer's own frozen `consumed_options` -- the hunt
+# options a TARGETED invocation of it actually reads, bound to identity here
+# for the same reason the ceiling and scan unit are: a spec that silently
+# keeps the empty default (or declares an option its targeted executor never
+# consults) is a construction-time failure rather than a run that records an
+# option it ignored.
+#
+# `stomping` is empty because a targeted rescan runs `ioc_string_scan` alone;
+# `ref_dir` feeds the reference-file comparison, which is a source no targeted
+# invocation evaluates. `yara` keeps `rules_dir` because its targeted executor
+# resolves rule files through it exactly as full scope does.
+_EXPECTED_TARGETED_CONSUMED_OPTIONS = {
+    "pipe": frozenset(),
+    "stomping": frozenset(),
+    "cs-beacon": frozenset(),
+    "yara": frozenset({"rules_dir"}),
+    "obfuscation": frozenset(),
+}
+_require_equal_sets(
+    set(_EXPECTED_TARGETED_CONSUMED_OPTIONS), _APPROVED_TARGETED_IDENTITIES,
+    "_EXPECTED_TARGETED_CONSUMED_OPTIONS must exactly match _APPROVED_TARGETED_IDENTITIES")
+
 # Each targeted-capable analyzer's own real, public coverage-source
 # vocabulary (contract §7.1 failure #5's ".source" gap-closing
 # requirement) -- imported from each hunter's own report_facts.py, never
@@ -302,6 +342,67 @@ _COVERAGE_SOURCE_NAMES_BY_IDENTITY = {
 _require_equal_sets(
     set(_COVERAGE_SOURCE_NAMES_BY_IDENTITY), _APPROVED_TARGETED_IDENTITIES,
     "_COVERAGE_SOURCE_NAMES_BY_IDENTITY must exactly match _APPROVED_TARGETED_IDENTITIES")
+
+# Each targeted-capable analyzer's own coverage sources that a targeted
+# invocation of it NEVER evaluates -- declared, not derived. This is what a
+# targeted record states explicitly so a completed grant cannot read as
+# completed coverage for the whole analyzer.
+#
+# Declared rather than inferred from "which sources did a limitation happen to
+# name", because that inference is exactly backwards: it marks a source absent
+# when it SUCCEEDED (nothing to report) and present when it failed. YARA
+# genuinely resolves and compiles its rule files and genuinely classifies each
+# hit's memory context -- `yara_rules` and `yara_context` are where its verdict
+# comes from -- so YARA declares nothing here, matching the targeted-rescan
+# contract's own capability matrix ("Observational only: none"). CS Beacon
+# likewise reads MemoryInfo and the thread contexts and feeds both into scored
+# corroboration.
+#
+# A source listed here must be one of the identity's real published coverage
+# sources and must never be its granted targeted source. A source the adapter
+# merely consults -- the MemoryInfo lookup that resolves the containing
+# descriptor -- is NOT listed: the rescan read it, and claiming otherwise would
+# invent a gap.
+_UNEVALUATED_TARGETED_SOURCES = {
+    # Handle evidence is a separate scan the targeted pipe adapter never runs.
+    "pipe": frozenset({"handle_data"}),
+    # Module registration, PE headers, reference files, and the section
+    # content diff are stomping's scored path; a targeted IOC string scan
+    # touches none of them.
+    "stomping": frozenset({"modules", "module_headers", "reference_files",
+                            "section_content_diff"}),
+    "cs-beacon": frozenset(),
+    "yara": frozenset(),
+    "obfuscation": frozenset(),
+}
+_require_equal_sets(
+    set(_UNEVALUATED_TARGETED_SOURCES), _APPROVED_TARGETED_IDENTITIES,
+    "_UNEVALUATED_TARGETED_SOURCES must exactly match _APPROVED_TARGETED_IDENTITIES")
+
+
+def _validate_unevaluated_sources(table: dict) -> None:
+    """Every declared never-evaluated source must be one of that identity's
+    real published coverage sources -- a typo'd or invented name would put a
+    source in a record's roster that the analyzer does not have. Extracted as
+    a named function so it is directly unit-testable against a synthetic
+    table, the same way `_validate_scoped_sources` is."""
+    for identity, sources in table.items():
+        if not isinstance(sources, frozenset) or not all(
+                isinstance(name, str) and name for name in sources):
+            raise InvalidAnalyzerSpec(
+                f"_UNEVALUATED_TARGETED_SOURCES[{identity!r}] must be a frozenset of "
+                f"non-empty str, got {sources!r}")
+        published = _COVERAGE_SOURCE_NAMES_BY_IDENTITY[identity]
+        unknown = sources - published
+        if unknown:
+            raise InvalidAnalyzerSpec(
+                f"_UNEVALUATED_TARGETED_SOURCES[{identity!r}] names {sorted(unknown)}, "
+                f"which are not among {identity}'s real coverage sources "
+                f"{sorted(published)}")
+
+
+_validate_unevaluated_sources(_UNEVALUATED_TARGETED_SOURCES)
+
 
 # The one `(source, closed scope vocabulary)` pair with a CLOSED,
 # statically-importable scope vocabulary today -- obfuscation's
@@ -426,6 +527,18 @@ def coverage_sources_for(identity: str) -> frozenset:
     return frozenset(_COVERAGE_SOURCE_NAMES_BY_IDENTITY.get(identity, ()))
 
 
+def unevaluated_targeted_sources(identity: str) -> frozenset:
+    """The coverage sources a targeted invocation of `identity` never
+    evaluates -- the declared set, empty for an analyzer whose whole published
+    vocabulary a targeted rescan does reach (`yara`, `cs-beacon`) and for an
+    identity with no targeted capability at all.
+
+    A targeted record reports these as absent, each with its own
+    `TARGETED_SOURCE_NOT_EVALUATED`, so a complete result for the granted
+    source cannot be read as complete coverage for the analyzer."""
+    return frozenset(_UNEVALUATED_TARGETED_SOURCES.get(identity, ()))
+
+
 def closed_scope_vocab_for(identity: str, source: str) -> "frozenset | None":
     """The CLOSED, importable sub-scope vocabulary for `(identity, source)`,
     or `None` when the source has no such vocabulary (its `scope`, if any, is
@@ -474,12 +587,15 @@ _BUILDER_ARGS = frozenset({"mf", "context"})
 
 @dataclass(frozen=True)
 class AnalyzerSpec:
-    """One analyzer's closed, immutable operational boundary -- exactly
-    the ten matrix columns of contract §3, no more. Deliberately NOT
-    reusing `dumpex.hunt._domain.require_recursively_immutable`: that
-    helper's own leaf-type allowlist rejects any callable outright, and
-    fields 4-6/8 here are exactly that. `AnalyzerSpec.__post_init__`
-    instead validates each field's own shape directly.
+    """One analyzer's closed, immutable operational boundary -- exactly the
+    fields the registry contract's own `AnalyzerSpec` list names, no more.
+    Deliberately NOT reusing
+    `dumpex.hunt._domain.require_recursively_immutable`: that helper's own
+    leaf-type allowlist rejects any callable outright, and the
+    builder/renderer/record_projector/provenance_hook/targeted_adapter/
+    targeted_report_projector fields are exactly that.
+    `AnalyzerSpec.__post_init__` instead validates each field's own shape
+    directly.
 
     Deliberately not a field: execution order (a spec's position is its
     index in the registry's own registration sequence, validated against
@@ -489,8 +605,8 @@ class AnalyzerSpec:
     every callable field is typed as a callable that ACCEPTS a
     `Report`/`mf` argument, never an already-invoked result. This is
     enforced STRUCTURALLY, by field typing (`type`/`frozenset[str]`/`bool`/
-    `TargetedCapability | None`, plus `callable(...)` for the four
-    function fields), not by a runtime scan of a callable's own closure --
+    `TargetedCapability | None`, plus `callable(...)` for every function
+    field), not by a runtime scan of a callable's own closure --
     a `MinidumpFile` itself is none of those types and so cannot occupy
     any field directly, but a closure or `functools.partial` that has
     already CAPTURED an `mf` (e.g. `functools.partial(fn, mf)`) still
@@ -514,6 +630,7 @@ class AnalyzerSpec:
     full_scope_capable: bool
     targeted_capability: "TargetedCapability | None"
     targeted_adapter: "Callable | None" = None
+    targeted_report_projector: "Callable | None" = None
     builder_arg: str = "mf"
 
     def __post_init__(self):
@@ -570,6 +687,18 @@ class AnalyzerSpec:
                     f"{self.identity}: targeted_adapter set with no targeted_capability "
                     f"-- an executor for a capability that does not exist")
             _validate_targeted_adapter_shape(self.identity, self.targeted_adapter)
+        # An executor and the projection of its result are one capability:
+        # an adapter whose ObservationResult nothing can turn into a
+        # HunterRecord is unreachable from a command, and a projector with no
+        # executor has nothing to project.
+        if (self.targeted_adapter is None) != (self.targeted_report_projector is None):
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: targeted_adapter and targeted_report_projector are set "
+                f"together or not at all -- a targeted executor whose result cannot be "
+                f"projected is unreachable from a command")
+        if self.targeted_report_projector is not None:
+            _validate_targeted_report_projector_shape(
+                self.identity, self.targeted_report_projector)
 
     def _validate_targeted_capability_shape(self) -> None:
         # Both lookups below are deliberately unconditional membership
@@ -592,6 +721,46 @@ class AnalyzerSpec:
             raise InvalidAnalyzerSpec(
                 f"{self.identity}: targeted_capability.scan_unit must be "
                 f"{expected_scan_unit!r}, got {self.targeted_capability.scan_unit!r}")
+
+        # An option a targeted invocation consumes must be one the analyzer
+        # declares at all: a capability cannot widen the analyzer's own option
+        # vocabulary, only narrow it for the targeted mode.
+        consumed = self.targeted_capability.consumed_options
+        if not consumed <= self.option_names:
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: targeted_capability.consumed_options "
+                f"{sorted(consumed - self.option_names)} are not in this analyzer's own "
+                f"option_names {sorted(self.option_names)}")
+        if self.identity not in _EXPECTED_TARGETED_CONSUMED_OPTIONS:
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: no expected targeted consumed_options on file -- "
+                f"_EXPECTED_TARGETED_CONSUMED_OPTIONS is missing an entry for this "
+                f"targeted-capable identity")
+        expected_consumed = _EXPECTED_TARGETED_CONSUMED_OPTIONS[self.identity]
+        if consumed != expected_consumed:
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: targeted_capability.consumed_options must be "
+                f"{sorted(expected_consumed)}, got {sorted(consumed)}")
+
+        # One invocation runs exactly one source, and there is no public
+        # source-selection flag, so a capability granting two sources is a
+        # command surface with no way to choose between them. Checked here,
+        # at construction, rather than at the moment a user runs the command:
+        # a spec that cannot be invoked must not register, must not reach the
+        # supported-set roster, and must not surface as a traceback.
+        granted_sources = {grant.source for grant in self.targeted_capability.grants}
+        declared_unevaluated = _UNEVALUATED_TARGETED_SOURCES.get(self.identity, frozenset())
+        overlap = granted_sources & declared_unevaluated
+        if overlap:
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: {sorted(overlap)} is both a targeted grant and declared "
+                f"never-evaluated -- a targeted invocation cannot run a source it also "
+                f"reports as outside its own scope")
+        if len(granted_sources) > 1:
+            raise InvalidAnalyzerSpec(
+                f"{self.identity}: targeted_capability grants {len(granted_sources)} sources "
+                f"{sorted(granted_sources)} -- one targeted invocation runs exactly one "
+                f"source and there is no public source-selection flag")
 
         if self.identity not in _COVERAGE_SOURCE_NAMES_BY_IDENTITY:
             raise InvalidAnalyzerSpec(
@@ -819,6 +988,49 @@ class AnalyzerRegistry:
             return frozenset()
         matching = [g for g in spec.targeted_capability.grants if g.source == source]
         return frozenset().union(*(g.scopes for g in matching)) if matching else frozenset()
+
+    def targeted_identities(self) -> tuple:
+        """Every identity a targeted (`--hunt-addr`) invocation can name, in
+        `HUNTERS` order -- a declared capability, a registered executor, and a
+        single resolvable source, since none of the three alone can run one.
+        This is what a command surface asks instead of keeping its own
+        allowlist; `"all"` is never a member (it is a selection mode, not an
+        analyzer).
+
+        The roster never advertises an analyzer an invocation would then fail
+        on: a spec whose grants cannot resolve to one source is excluded here
+        as well as refused by `targeted_source()`."""
+        return tuple(spec.identity for spec in self._specs
+                     if spec.targeted_capability is not None
+                     and spec.targeted_adapter is not None
+                     and len({grant.source for grant in spec.targeted_capability.grants}) == 1)
+
+    def targeted_source(self, identity: str) -> str:
+        """The single coverage source one targeted invocation of `identity`
+        runs. There is no public source-selection flag, so an analyzer whose
+        capability granted more than one source would leave a command surface
+        guessing -- that fails closed here rather than being resolved by
+        picking one. Raises the same typed identity/capability/grant failures
+        `select_targeted_scopes()` does."""
+        if identity not in self._by_identity:
+            raise UnknownAnalyzerIdentity(identity, set(self._by_identity))
+        spec = self._by_identity[identity]
+        if spec.targeted_capability is None:
+            raise UnsupportedTargetedCapability(identity)
+        grants = spec.targeted_capability.grants
+        if not grants:
+            raise UnpopulatedTargetedGrant(identity)
+        sources = {grant.source for grant in grants}
+        if len(sources) != 1:
+            # `AnalyzerSpec.__post_init__` already refuses a multi-source
+            # grant, so reaching this means a registry assembled around a spec
+            # that bypassed construction. Still fail closed rather than pick
+            # one of the sources for the caller.
+            raise InvalidAnalyzerSpec(
+                f"{identity}: {len(sources)} granted targeted sources "
+                f"{sorted(sources)} -- one invocation runs exactly one source and "
+                f"there is no public source-selection flag")
+        return sources.pop()
 
     def resolve_targeted_adapter(self, identity: str, source: str,
                                  scopes: frozenset = frozenset()) -> "tuple[AnalyzerSpec, Callable]":
@@ -1176,10 +1388,60 @@ def _resolve_and_validate_targeted_adapter(attr_name: str) -> Callable:
     return _late_bound(attr_name)
 
 
+_TARGETED_REPORT_PROJECTOR_PARAMS = ("context", "result")
+
+
+def _validate_targeted_report_projector_shape(identity: str, projector) -> None:
+    """`AnalyzerSpec.targeted_report_projector` gets the same resolve-then-
+    inspect treatment every other callable field gets. The one call shape a
+    targeted executor uses is `projector(context, result)`: the invocation's
+    `HuntExecutionContext` (for the dump-wide stream facts a report's own
+    coverage snapshot needs) and the adapter's own `ObservationResult`.
+
+    Only the `_late_bound()` pass-through wrapper (whose real target
+    `_resolve_and_validate_targeted_report_projector()` already signature-
+    checked) is trusted without inspection, exactly as for the adapter."""
+    if not callable(projector):
+        raise InvalidAnalyzerSpec(
+            f"{identity}: targeted_report_projector must be None or callable, "
+            f"got {projector!r}")
+    if getattr(projector, "_dumpex_late_bound", False):
+        return
+    _check_targeted_report_projector_signature(
+        f"{identity} targeted_report_projector", projector)
+
+
+def _check_targeted_report_projector_signature(label: str, projector) -> None:
+    sig = _safe_signature(projector, label)
+    params = list(sig.parameters.values())
+    if [p.name for p in params] != list(_TARGETED_REPORT_PROJECTOR_PARAMS) or any(
+            p.kind not in _POSITIONALLY_PASSABLE for p in params):
+        raise InvalidAnalyzerSpec(
+            f"{label}: targeted_report_projector must accept exactly the positionally-"
+            f"passable {list(_TARGETED_REPORT_PROJECTOR_PARAMS)}, got "
+            f"{[p.name for p in params]!r}")
+    try:
+        sig.bind(object(), object())
+    except TypeError as exc:
+        raise InvalidAnalyzerSpec(
+            f"{label}: cannot be called as projector(context, result): {exc}")
+
+
+def _resolve_and_validate_targeted_report_projector(attr_name: str) -> Callable:
+    """The registration-time counterpart of
+    `_resolve_and_validate_targeted_adapter` for the targeted report
+    projector: resolve the real target once and check its full signature,
+    while `spec.targeted_report_projector` stays late-bound so a
+    monkeypatched `dumpex.hunt.<attr_name>` still routes."""
+    _check_targeted_report_projector_signature(attr_name, _resolve_callable(attr_name))
+    return _late_bound(attr_name)
+
+
 def _register(identity: str, package: str, report_type: type, builder_attr: str,
               renderer_attr: str, projector_attr: str, option_defaults: dict,
               provenance_hook, full_scope_capable: bool,
               targeted_capability, targeted_adapter_attr: "str | None" = None,
+              targeted_report_projector_attr: "str | None" = None,
               builder_arg: str = "mf") -> AnalyzerSpec:
     return AnalyzerSpec(
         identity=identity,
@@ -1194,6 +1456,10 @@ def _register(identity: str, package: str, report_type: type, builder_attr: str,
         targeted_capability=targeted_capability,
         targeted_adapter=(None if targeted_adapter_attr is None
                           else _resolve_and_validate_targeted_adapter(targeted_adapter_attr)),
+        targeted_report_projector=(
+            None if targeted_report_projector_attr is None
+            else _resolve_and_validate_targeted_report_projector(
+                targeted_report_projector_attr)),
         builder_arg=builder_arg,
     )
 
@@ -1230,8 +1496,10 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.REGION,
                 frozenset({TargetedGrant("ioc_string_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["stomping"]),
-            targeted_adapter_attr="_run_targeted_stomping"),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["stomping"],
+                _EXPECTED_TARGETED_CONSUMED_OPTIONS["stomping"]),
+            targeted_adapter_attr="_run_targeted_stomping",
+            targeted_report_projector_attr="_project_targeted_stomping"),
         _register(
             "pipe", "dumpex.hunt.pipe", PipeReport,
             "_build_pipe_report", "_render_pipe_console",
@@ -1240,8 +1508,10 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.REGION,
                 frozenset({TargetedGrant("pipe_name_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["pipe"]),
-            targeted_adapter_attr="_run_targeted_pipe"),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["pipe"],
+                _EXPECTED_TARGETED_CONSUMED_OPTIONS["pipe"]),
+            targeted_adapter_attr="_run_targeted_pipe",
+            targeted_report_projector_attr="_project_targeted_pipe"),
         _register(
             "cs-beacon", "dumpex.hunt.cs_beacon", CSBeaconReport,
             "_build_cs_beacon_report", "_render_cs_beacon_console",
@@ -1250,8 +1520,10 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.SEGMENT,
                 frozenset({TargetedGrant("segment_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["cs-beacon"]),
-            targeted_adapter_attr="_run_targeted_cs_beacon"),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["cs-beacon"],
+                _EXPECTED_TARGETED_CONSUMED_OPTIONS["cs-beacon"]),
+            targeted_adapter_attr="_run_targeted_cs_beacon",
+            targeted_report_projector_attr="_project_targeted_cs_beacon"),
         _register(
             "yara", "dumpex.hunt.yara_hunt", YaraReport,
             "_build_yara_report", "_render_yara_console",
@@ -1260,8 +1532,10 @@ def _build_registrations() -> tuple:
             targeted_capability=TargetedCapability(
                 TargetedScanUnit.SEGMENT,
                 frozenset({TargetedGrant("segment_scan", frozenset())}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["yara"]),
-            targeted_adapter_attr="_run_targeted_yara"),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["yara"],
+                _EXPECTED_TARGETED_CONSUMED_OPTIONS["yara"]),
+            targeted_adapter_attr="_run_targeted_yara",
+            targeted_report_projector_attr="_project_targeted_yara"),
         _register(
             "obfuscation", "dumpex.hunt.encoding", EncodingReport,
             "_build_encoding_report", "_render_encoding_console",
@@ -1271,8 +1545,10 @@ def _build_registrations() -> tuple:
                 TargetedScanUnit.REGION_LAYER,
                 frozenset({TargetedGrant(
                     "encoding_scan", frozenset({"sleep_mask", "entropy", "decode"}))}),
-                _EXPECTED_TARGETED_REQUEST_CEILINGS["obfuscation"]),
-            targeted_adapter_attr="_run_targeted_obfuscation"),
+                _EXPECTED_TARGETED_REQUEST_CEILINGS["obfuscation"],
+                _EXPECTED_TARGETED_CONSUMED_OPTIONS["obfuscation"]),
+            targeted_adapter_attr="_run_targeted_obfuscation",
+            targeted_report_projector_attr="_project_targeted_obfuscation"),
     )
 
 

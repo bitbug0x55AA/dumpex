@@ -47,13 +47,15 @@ from dumpex.core.memory import get_modules, read_region_spanning
 from dumpex.core.va_range import CaptureState
 from dumpex.rules_pkg.loader import get_rules
 
+import dumpex.hunt.stomping as _stomping
 from dumpex.hunt import _registry, _targeted
 from dumpex.hunt._observation import ObservationClosure, ObservationResult
 from dumpex.hunt.stomping import memory_scan
 from dumpex.output.coverage import CoverageLimitation, LimitationCode
 
 __all__ = [
-    "run_targeted_stomping", "TargetedStompingEvidence", "TargetedStompingError",
+    "run_targeted_stomping", "project_targeted_report",
+    "TargetedStompingEvidence", "TargetedStompingError",
     "ALGORITHM_VERSION", "TARGETED_SOURCE",
 ]
 
@@ -122,13 +124,21 @@ def _validate_request(request) -> None:
             f"{sorted(request.targeted_scopes)}")
 
 
-def _not_evaluated_result(key, capture_state: CaptureState, note: str,
-                          payload=None) -> ObservationResult:
+def _not_evaluated_result(key, capture, note: str, payload=None) -> ObservationResult:
+    """A not-evaluated result for the whole request.
+
+    ``captured_bytes`` is the measured availability of the requested range,
+    carried even though nothing ran: a closure that never reached its algorithm
+    still knows how much of the range the dump holds, and reporting that as
+    unknown would cost an investigator the one number a re-collection or a
+    chunked rescan is sized from.
+    """
     return ObservationResult(
         key=key,
         closures=(ObservationClosure(
             source=TARGETED_SOURCE, coverage_status="not_evaluated",
-            capture_state=capture_state, diagnostics=(note,)),),
+            capture_state=capture.state, captured_bytes=capture.captured_bytes,
+            diagnostics=(note,)),),
         payload=payload)
 
 
@@ -219,7 +229,7 @@ def run_targeted_stomping(context) -> ObservationResult:
             dropped = (f" ({region_enum.skipped} region descriptor(s) were dropped as "
                        f"unrepresentable; the requested base may lie inside one of them)")
         return _not_evaluated_result(
-            key, capture.state,
+            key, capture,
             f"no representable MemoryInfoListStream region contains the requested base "
             f"{requested.base_address:#018x}; source eligibility could not be established"
             + dropped)
@@ -318,6 +328,7 @@ def run_targeted_stomping(context) -> ObservationResult:
 
     closure = ObservationClosure(
         source=TARGETED_SOURCE, coverage_status=status, capture_state=capture.state,
+        captured_bytes=capture.captured_bytes,
         read_slice=read_slice if reached else None,
         limitations=limitations, diagnostics=tuple(diagnostics))
     payload = TargetedStompingEvidence(
@@ -337,3 +348,35 @@ def _not_evaluated_note(cov) -> str:
     if cov.read_failed:
         return "the requested range returned no readable bytes; no string was extracted"
     return "the requested range never reached string extraction"
+
+
+def project_targeted_report(context, result):
+    """The :class:`~dumpex.hunt.stomping.domain.StompingReport` behind one
+    targeted rescan's :class:`~dumpex.output.records.HunterRecord`.
+
+    The range's own IOC hits and scan coverage are fed to the SAME
+    ``aggregate.build_report`` full scope uses, so a targeted result is scored
+    and classified by one authority rather than a parallel targeted-only rule.
+
+    Every module-walk input stays empty and ``module_list_stream`` /
+    ``ref_dir_supplied`` stay ``False``: a targeted rescan evaluates
+    ``ioc_string_scan`` alone, so module registration, PE headers, reference
+    files, and section diffs are sources this run did not read -- not sources
+    it found clean. Their gaps therefore remain open, exactly as the
+    targeted-rescan contract requires of a clean IOC closure.
+    """
+    payload = result.payload
+    evaluated = any(closure.coverage_status != "not_evaluated"
+                    for closure in result.closures)
+    if payload is None:
+        return _stomping.build_report(memory_info_stream=False, module_list_stream=False)
+    cov = payload.coverage
+    return _stomping.build_report(
+        (), (), (), (), (), payload.hits,
+        memory_info_stream=evaluated, module_list_stream=False, ref_dir_supplied=False,
+        ioc_oversized=cov.skipped_oversize_targets,
+        ioc_read_failed=cov.read_failed, ioc_read_failed_targets=cov.read_failed_targets,
+        ioc_short_reads=cov.short_reads, ioc_short_read_targets=cov.short_read_targets,
+        ioc_unaccounted=cov.unaccounted, ioc_over_accounted=cov.over_accounted,
+        ioc_ledger_imbalance=cov.ledger_imbalance,
+        ioc_whitelisted_modules=cov.whitelisted_skipped)

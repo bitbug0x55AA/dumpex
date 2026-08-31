@@ -1,10 +1,10 @@
 # Hunt targeted-rescan contract
 
-Status: **partially implemented**. `--hunt-addr` is not present in the released
-CLI and no targeted scan is reachable from a command yet. The internal
-request/context/observation boundary exists (`dumpex.hunt._request.HuntRequest`,
+Status: **implemented**. `--hunt-addr` is a released CLI modifier and every
+analyzer in the capability matrix below is reachable through it. The internal
+request/context/observation boundary carries it (`dumpex.hunt._request.HuntRequest`,
 `dumpex.hunt._execution.HuntExecutionContext`,
-`dumpex.hunt._observation`). The capability matrix below is registered as
+`dumpex.hunt._observation`). The capability matrix is registered as
 `AnalyzerSpec.targeted_capability` -- grants plus a `request_ceiling` -- and
 `HuntRequest` resolves it through `AnalyzerRegistry.select_targeted_scopes()`
 and enforces the ceiling. An obfuscation targeted request carries all three
@@ -49,9 +49,10 @@ All five targeted executors are implemented, each registered as its analyzer's
   setup -- and a range both budgets are already spent for is never read at all.
   Because
   C2 records are retained against that range's own pipe-name hits, a pipe-name
-  pass its own budget cut short leaves the `c2_context` closure `partial` too,
-  attributed to the pipe-name budget's own `SCAN_BUDGET_EXHAUSTED` rather than
-  merged into the C2 one.
+  pass its own budget cut short leaves the `c2_context` closure `partial` too.
+  That exhaustion is reported once, by the `pipe_name` closure that owns the
+  budget, and never merged into the C2 one; `c2_context` carries the dependency
+  through its own `partial` status and its own diagnostic instead.
 - `dumpex.hunt.stomping.targeted.run_targeted_stomping` runs the unscored
   IOC-string scan over one clipped range, bypassing only `IOC_SCAN_MAX`, and
   returns an `ObservationResult` with a single `ioc_string_scan` closure plus a
@@ -96,9 +97,19 @@ superset, never narrower than what is actually unresolved: naming a narrower
 range would send a rescan past the bytes that stopped early. A rule-set
 residual for YARA would need a new limitation shape and is not in this release.
 
-The CLI flag and the structured output remain outstanding. This is the live
-final design; it does not authorize behavior changes to current full-scope
-`--hunt`.
+The public surface is one atomic cutover, delivered in schema v2.14: the
+`--hunt-addr` CLI modifier, `summary.scan_scope`, and `details.targeted_scope`.
+Command routing resolves selection, capability, and the request ceiling through
+the analyzer registry (`AnalyzerRegistry.targeted_identities()` /
+`targeted_source()` / `select_targeted_scopes()`); there is no CLI-owned hunter
+or capability allowlist. Each analyzer additionally registers a
+`targeted_report_projector`, which feeds the rescan's own evidence to that
+analyzer's ordinary `aggregate.build_report()`, so a targeted verdict is scored
+and classified by the same authority full scope uses.
+`dumpex.hunt._targeted_record` then rebuilds the record's coverage from the
+observation's closures and restates `status`/`verdict_level` to agree with it;
+`dumpex.hunt._targeted_console` renders the one card. None of this changes
+full-scope `--hunt` behavior.
 
 ### The one deliberate full-scope change
 
@@ -167,9 +178,13 @@ reused; no second size option is introduced.
 
 ### Flag relationships
 
-- `--hunt-addr` requires both `--hunt <identity>` and `--size`.
-- `--size` without `--hunt-addr` remains inert for ordinary `--hunt`, exactly as
-  it is now. It is not an error and does not make the invocation targeted.
+- `--hunt-addr` and `--size` are required together in both directions for
+  `--hunt`: `--hunt-addr` needs `--size` because a targeted scan never infers an
+  extent, and `--size` needs `--hunt-addr` because accepting it alone would run
+  an unbounded whole-dump hunt while discarding the option that asked for a
+  bounded one. Both failures are argument errors.
+- `--size` keeps its existing meaning for `--extract` and `--strings`, which are
+  separate commands and unaffected.
 - `--hunt-addr` rejects `--hunt all`; `all` is a selection mode, not an analyzer.
 - `--hunt-addr` rejects an unknown hunter and the known but unsupported
   `injection` and `hollowing` hunters.
@@ -238,6 +253,25 @@ Empty scopes mean there is no finer targetable subdivision. Obfuscation always
 attempts three closures in fixed `sleep_mask`, `entropy`, `decode` order; there
 is no public layer-selection flag. The requested range is captured once and
 shared by all three layers.
+
+Each capability also declares the hunt options a targeted invocation of it
+actually reads (`TargetedCapability.consumed_options`, a subset of that
+analyzer's own `option_names`):
+
+| Hunter | Consumed by a targeted rescan | Declared but full-scope only |
+|---|---|---|
+| `pipe` | — | — |
+| `stomping` | — | `ref_dir` |
+| `cs-beacon` | — | — |
+| `yara` | `rules_dir` | — |
+| `obfuscation` | — | — |
+
+An option outside that set is refused by the command surface rather than
+accepted and recorded in `meta.execution.options`, where a directory nothing
+read would suggest the source it feeds was evaluated. The same set is what
+observation identity is keyed on in targeted mode: an option a run never
+consulted cannot split two otherwise identical observations, while one it did
+still isolates them. Full scope keeps identifying by the whole `option_names`.
 
 For obfuscation the authorized bypass is:
 
@@ -389,11 +423,19 @@ in another result. Cross-boundary signatures are evaluated only within the
 actual contiguous input given to the algorithm; targeted mode must not invent
 bytes across an uncaptured gap or concatenate unrelated descriptors.
 
-When a source does not run, add `TARGETED_SOURCE_NOT_EVALUATED` through the
-required-source derivation path. It is absent-capable (not caller-buildable),
-uses source `targeted_scan`, permits an optional closure scope, and renders a
-reason without claiming one particular cause. Prerequisite limitations remain
-present alongside it.
+When a granted closure does not run, add `TARGETED_SOURCE_NOT_EVALUATED`
+sourced to `targeted_scan`, with the closure's scope when it has one. It is
+absent-capable (not caller-buildable) and renders a reason without claiming one
+particular cause. Prerequisite limitations remain present alongside it.
+
+The same code, sourced to a real coverage source instead, states the boundary
+of the whole invocation: the sources a targeted rescan of that analyzer never
+evaluates. That set is declared per analyzer, never inferred from which sources
+produced a limitation -- an inference that marks a source unevaluated exactly
+when it succeeded. YARA declares none: its rule compilation and match-context
+verification are retained completeness checks, which is where the verdict comes
+from. CS Beacon declares none either: it reads MemoryInfo and the thread
+contexts into scored corroboration.
 
 Targeted coverage sources are deliberately narrow:
 
@@ -408,6 +450,19 @@ Targeted coverage sources are deliberately narrow:
 For stomping in particular, completion of `ioc_string_scan` is independent of
 module/reference comparison. A targeted IOC result cannot assert that stomping
 as a whole was ruled out.
+
+That is stated in the record, not left to omission. A targeted record's
+`coverage.sources` carries the analyzer's whole published source vocabulary:
+the granted source is `present`, and every source outside the grant is `absent`
+with its own `TARGETED_SOURCE_NOT_EVALUATED` sourced to that source name. So a
+targeted record is the one place `coverage.status` may be `complete` while
+`limitations` is non-empty -- those entries bound what the result is ABOUT and
+are not gaps in the scan. Letting them force `partial` instead would make every
+targeted rescan exit 3 and destroy the exit-code mapping below.
+
+A source one of the closures' own limitations already speaks about (YARA's
+`yara_rules` compile gap) is not additionally marked out of scope; the rescan
+reported on it.
 
 ### YARA match-context anchoring
 
@@ -457,7 +512,10 @@ The item is closed and deterministic:
 - `scope`: layer name or `null` for an unscoped source.
 - `base_address`: fixed-width normalized requested address.
 - `size`: requested positive byte count.
-- `captured_size`: actual available bytes, or `null` when unavailable.
+- `captured_size`: actual available bytes, or `null` only when availability was
+  never measured. A closure that never reached its algorithm still reports the
+  real captured prefix -- that is the number a re-collection or a chunked
+  rescan is sized from.
 - `capture_state`: `none`, `partial`, or `complete`.
 - `coverage_status`: `not_evaluated`, `partial`, or `complete`.
 
@@ -467,8 +525,8 @@ completion where scanners are candidate-, window-, hit-, or deadline-bounded.
 
 `targeted_scope` is added only for targeted results. Full-scope detail records
 omit the key completely; they do not emit `targeted_scope: null`. The field is
-optional in the new schema chosen when the feature ships and is never added
-retroactively to v2.13 or any historical schema. Full-scope JSON and golden
+optional in v2.14 and is never added retroactively to v2.13 or any historical
+schema. Full-scope JSON and golden
 fixtures therefore remain byte-for-byte unaffected by this design.
 
 Console output labels the normalized range and prints each closure in the fixed
@@ -476,6 +534,42 @@ order above, clearly separating capture from evaluation and retaining ordinary
 limitations/diagnostics. It does not print a clean banner when coverage is
 partial or not evaluated. JSON uses the typed record conversion; no raw parser
 object is serialized.
+
+Every gap has exactly one owning closure. An adapter raises a budget's
+exhaustion on the closure that owns that budget; a closure the same budget also
+constrains reports the dependency through its own `partial` status and its own
+diagnostic, never through a second copy of the limitation. A consumer therefore
+counts a gap once whether it reads the `ObservationResult`'s closures directly
+or the flattened `HunterRecord.coverage.limitations`. The record's own
+flattening additionally collapses entries equal in full structure, first
+occurrence winning — a backstop against an adapter that breaks the rule above,
+not a routine step, and one that never merges two gaps differing in `detail`,
+`targets`, or `affected_count`.
+
+`summary.scan_scope` is checkable, not merely present. The current schema pins
+a `targeted` tag's `hunter` to `summary.selected` — which already pins the
+single record and its own `hunter` — and pins `source` and `scopes` to that
+analyzer's registered targeted capability. `scopes` is pinned as an exact
+array, not by membership: a subset claims fewer closures ran than did, and
+another order is a different document for a consumer diffing two results.
+
+A `targeted` tag requires `details.targeted_scope` on the record and a `full`
+tag forbids it. The entries themselves are pinned per analyzer with
+`prefixItems` — one entry per closure, in the adapter's own fixed order, each
+naming that closure's `source` and `scope` — with `minItems`/`maxItems` and
+`items: false`, so a dropped closure, an extra one, a reordering, and an
+invented `source`/`scope` are all rejected rather than merely well-formed.
+
+Note the two orders differ and each is pinned as it is produced:
+`scan_scope.scopes` is the sorted, deduplicated set, while
+`details.targeted_scope` follows the adapter's fixed closure order
+(`sleep_mask`, `entropy`, `decode` for obfuscation; `pipe_name`, `c2_context`
+for pipe).
+
+The schema's per-analyzer table is a copy of the registry's grants and of each
+adapter's real closure scopes (never `TargetedGrant.scopes`, which is unscoped
+for pipe while its invocation closes `pipe_name` and `c2_context`
+independently), and is pinned to both by test.
 
 There is currently no Hunt CSV exporter. A future exporter must derive from the
 same `HunterRecord`, coverage, and targeted-scope facts rather than inventing a
@@ -487,7 +581,7 @@ The new limitation codes are:
 
 | Code | Construction | Allowed fields | Meaning |
 |---|---|---|---|
-| `TARGETED_SOURCE_NOT_EVALUATED` | absent-capable | `scope` | a required targeted closure did not run |
+| `TARGETED_SOURCE_NOT_EVALUATED` | absent-capable | `scope` | two shapes, told apart by `source`: `targeted_scan` means a required targeted closure did not run (`scope` names the closure); any other source means one of that analyzer's coverage sources a targeted invocation structurally never evaluates |
 | `SCAN_REGION_EVALUATION_TRUNCATED` | caller-buildable | `scope`, `targets` | evaluation stopped at the first descriptor boundary while capture continued |
 | `SCAN_REGION_SEARCH_INCOMPLETE` | caller-buildable | `scope`, `detail`, `affected_count` | the scan reached the requested bytes but a bounded internal sample (`window_sampled`, `candidate_list_truncated`), a per-target quota that dropped an occurrence (`match_cap_reached`, `context_only_cap_reached`), a deliberately narrowed pattern set (`pattern_set_withheld`), or an ambiguous overlapping capture (`overlapping_capture`) means its negative is not a full-search negative |
 
@@ -524,8 +618,8 @@ uses the existing `exit_code_for(coverage.status)` mapping: complete 0, partial
 
 ## Compatibility invariants
 
-- `--hunt-addr` remains absent until the feature lands atomically with its
-  range, capability, executor, CLI, record, and schema support.
+- `--hunt-addr` landed atomically with its range, capability, executor, CLI,
+  record, and schema support, in schema v2.14.
 - v2.13 and older schemas remain frozen.
 - Current `--hunt <identity>` and `--hunt all` retain their selection,
   detection, scoring, ordering, console/JSON shape, diagnostics, and exit codes.

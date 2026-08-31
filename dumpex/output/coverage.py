@@ -552,6 +552,29 @@ class LimitationCode(str, Enum):
     # `scope` names the scan LAYER; caller_buildable; affected_count carries
     # the range count. No `targets` -- the gap is about the search, not an
     # unread region.
+    TARGETED_SOURCE_NOT_EVALUATED = "TARGETED_SOURCE_NOT_EVALUATED"
+    # ^ Something a targeted rescan reached no conclusion about. Two shapes,
+    # told apart by `source` (see the renderer for the exact wording of each):
+    #
+    #   source == "targeted_scan": one granted closure did not run -- the
+    #   requested range reached neither that source's algorithm nor a usable
+    #   prerequisite. `scope` names the closure scope (obfuscation's
+    #   sleep_mask/entropy/decode), absent for an unscoped source. Derived from
+    #   the closure's own not-evaluated state, so it never accompanies a
+    #   closure that ran.
+    #
+    #   any other source: one of that analyzer's coverage sources a targeted
+    #   invocation of it structurally never evaluates (stomping's module
+    #   registration, PE headers, reference files, and section diffs; pipe's
+    #   handle data). Declared per analyzer, so it is never claimed for a
+    #   source the rescan does read -- and it accompanies a completed closure
+    #   by design, which is what stops a complete grant reading as complete
+    #   coverage for the analyzer.
+    #
+    # Absent-capable, never caller-buildable. Deliberately no cause: an unmet
+    # prerequisite, an ineligible descriptor, and a range that never reached
+    # the minimum input are all the same fact, and each keeps its own
+    # prerequisite limitation alongside.
     SCAN_ITEMS_UNACCOUNTED = "SCAN_ITEMS_UNACCOUNTED"
     # ^ Companion to SCAN_REGION_OVERSIZED_SKIPPED/_READ_FAILED/_SHORT_READ,
     # and the one gap in the family that can never name what it lost: N
@@ -1359,6 +1382,14 @@ def _display_name(source: str) -> str:
     return source
 
 
+def display_source_name(source: str) -> str:
+    """The human-readable name for one coverage source -- the same mapping
+    `render_limitation` uses. Public so a console renderer naming a source
+    outside a limitation's own text cannot drift into a second vocabulary for
+    the same fact."""
+    return _display_name(source)
+
+
 def _render_present_in_but_missing_from(name: str, limitation: "CoverageLimitation") -> str:
     """Shared by SOURCE_ABSENT (when a required source turns out entirely
     absent but a counterpart source's records reveal exactly how many
@@ -1707,6 +1738,36 @@ def _validate_scan_region_search_incomplete_fields(limitation: "CoverageLimitati
         raise ValueError(
             f"CoverageLimitation(code=SCAN_REGION_SEARCH_INCOMPLETE) requires detail to be "
             f"one of {sorted(_SCAN_REGION_SEARCH_INCOMPLETE_REASONS)!r}, got {limitation.detail!r}")
+
+
+# The coverage-source name a targeted rescan reports about ITSELF, as
+# distinct from the analyzer source it was asked to run. Mirrored by
+# `dumpex.hunt._targeted_record.TARGETED_COVERAGE_SOURCE`, which is where the
+# hunt layer builds these limitations.
+_TARGETED_SCAN_SOURCE = "targeted_scan"
+
+
+def _render_targeted_source_not_evaluated(limitation: "CoverageLimitation") -> str:
+    """Two shapes, distinguished by `source`, because they are two different
+    facts an investigator acts on differently.
+
+    `source == "targeted_scan"` is the granted source the rescan WAS asked to
+    run, reporting that it did not run over this range (optionally scoped to
+    one closure).
+
+    Any other `source` is one of the hunter's remaining coverage sources,
+    outside the one grant this invocation covers. The claim is about SCOPE,
+    not about whether the scan happened to touch that stream: a targeted
+    rescan makes a completeness claim for its granted source only, so a
+    complete result for that source neither measures nor closes any other
+    source's gaps. That is what stops a clean targeted stomping IOC scan from
+    reading as "stomping is completely covered"."""
+    if limitation.source == _TARGETED_SCAN_SOURCE:
+        scope = f" ({limitation.scope})" if limitation.scope else ""
+        return (f"The targeted rescan{scope} did not evaluate the requested range -- this "
+                f"source carries no conclusion about it")
+    return (f"{_display_name(limitation.source)} is outside this targeted rescan's granted "
+            f"scope -- the result neither measures nor closes that source's own coverage")
 
 
 def _render_scan_items_unaccounted(limitation: "CoverageLimitation") -> str:
@@ -2632,6 +2693,9 @@ _CODE_SPECS = {
         render=_render_scan_region_search_incomplete, caller_buildable=True,
         validate_fields=_validate_scan_region_search_incomplete_fields,
         allowed_fields=frozenset({"scope", "detail", "affected_count"})),
+    LimitationCode.TARGETED_SOURCE_NOT_EVALUATED: _CodeSpec(
+        render=_render_targeted_source_not_evaluated,
+        absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.SCAN_ITEMS_UNACCOUNTED: _CodeSpec(
         render=_render_scan_items_unaccounted, caller_buildable=True,
         validate_fields=_require_positive_affected_count("SCAN_ITEMS_UNACCOUNTED"),

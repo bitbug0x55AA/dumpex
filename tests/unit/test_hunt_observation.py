@@ -584,3 +584,77 @@ def test_counts_are_exact_even_when_the_event_history_is_truncated():
     assert counts[ObservationOutcome.FAILED] == 1
     assert counts[ObservationOutcome.UNAVAILABLE] == 1
     assert registry.event_overflow == 2
+
+
+# ── captured_bytes: availability a closure that never ran still knows ────
+
+def _capture(size=0x1000, backing=None):
+    requested = VirtualRange(base_address=0x10000000, size=size)
+    if backing == 0:
+        return slice_captured(requested, ())
+    from dumpex.core.va_range import CapturedSegment
+
+    class _Seg:
+        start_virtual_address = 0x10000000
+        start_file_address = 0x2000
+        size = backing if backing is not None else 0x1000
+        end_virtual_address = 0x10000000 + (backing if backing is not None else 0x1000)
+    return slice_captured(requested, (CapturedSegment.from_segment(_Seg()),))
+
+
+def test_captured_bytes_is_derived_from_the_read_slice_when_one_exists():
+    capture = _capture()
+    closure = _closure(read_slice=capture.read_input(0x1000))
+    assert closure.captured_bytes == capture.captured_bytes
+
+
+def test_captured_bytes_contradicting_the_read_slice_is_rejected():
+    capture = _capture()
+    with pytest.raises(ValueError, match="must equal"):
+        _closure(read_slice=capture.read_input(0x1000), captured_bytes=1)
+
+
+def test_an_uncaptured_closure_normalizes_to_zero_captured_bytes():
+    closure = _closure(coverage_status="not_evaluated", capture_state=CaptureState.NONE)
+    assert closure.captured_bytes == 0
+
+
+def test_a_nonzero_captured_bytes_for_an_uncaptured_range_is_rejected():
+    with pytest.raises(ValueError, match="must be 0 for capture_state NONE"):
+        _closure(coverage_status="not_evaluated", capture_state=CaptureState.NONE,
+                 captured_bytes=16)
+
+
+def test_zero_captured_bytes_contradicting_a_captured_state_is_rejected():
+    with pytest.raises(ValueError, match="contradicts capture_state"):
+        _closure(coverage_status="not_evaluated", capture_state=CaptureState.PARTIAL,
+                 captured_bytes=0)
+
+
+@pytest.mark.parametrize("value", [-1, True, "0x100", 1.0])
+def test_captured_bytes_must_be_a_non_negative_plain_int(value):
+    with pytest.raises(ValueError, match="captured_bytes"):
+        _closure(coverage_status="not_evaluated", capture_state=CaptureState.PARTIAL,
+                 captured_bytes=value)
+
+
+def test_a_closure_that_never_ran_still_carries_its_measured_availability():
+    """The case the field exists for: nothing reached the algorithm, but the
+    dump's backing was measured and an investigator needs that number."""
+    closure = _closure(coverage_status="not_evaluated", capture_state=CaptureState.PARTIAL,
+                       captured_bytes=0x800)
+    assert closure.captured_bytes == 0x800
+    assert closure.read_slice is None
+
+
+def test_result_rejects_closures_disagreeing_about_captured_bytes():
+    """Capture is a fact of (dump, requested_range) that every closure of one
+    key shares -- only evaluation is legitimately per-closure."""
+    key = _key(is_targeted=True,
+               requested_range=VirtualRange(base_address=0x10000000, size=0x1000))
+    with pytest.raises(ValueError, match="disagree about captured_bytes"):
+        ObservationResult(key=key, closures=(
+            _closure(scope="pipe_name", coverage_status="not_evaluated",
+                     capture_state=CaptureState.PARTIAL, captured_bytes=0x800),
+            _closure(scope="c2_context", coverage_status="not_evaluated",
+                     capture_state=CaptureState.PARTIAL, captured_bytes=0x400)))

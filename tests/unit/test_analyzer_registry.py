@@ -22,6 +22,7 @@ from dumpex.hunt._registry import (
     UnsupportedTargetedExecution,
     UnsupportedTargetedScope,
     UnsupportedTargetedSource,
+    unevaluated_targeted_sources,
 )
 from dumpex.output.records import HUNTERS
 
@@ -577,14 +578,15 @@ def test_resolve_targeted_adapter_refuses_a_single_obfuscation_layer():
         REGISTRY.resolve_targeted_adapter("obfuscation", "encoding_scan", frozenset({"entropy"}))
 
 
-def _spec_with_grant(identity, scan_unit, grant):
+def _spec_with_grant(identity, scan_unit, *grants, consumed_options=frozenset()):
     real = REGISTRY.get(identity)
     return AnalyzerSpec(
         identity=real.identity, package=real.package, report_type=real.report_type,
         builder=real.builder, renderer=real.renderer, record_projector=real.record_projector,
         option_names=real.option_names, provenance_hook=real.provenance_hook,
         full_scope_capable=real.full_scope_capable,
-        targeted_capability=TargetedCapability(scan_unit, frozenset({grant})),
+        targeted_capability=TargetedCapability(
+            scan_unit, frozenset(grants), consumed_options=consumed_options),
     )
 
 
@@ -630,7 +632,7 @@ def test_resolve_targeted_adapter_returns_a_registered_adapter():
         full_scope_capable=real.full_scope_capable,
         targeted_capability=TargetedCapability(
             TargetedScanUnit.REGION, frozenset({TargetedGrant("pipe_name_scan", frozenset())})),
-        targeted_adapter=adapter,
+        targeted_adapter=adapter, targeted_report_projector=_targeted_projector,
     )
     registry = AnalyzerRegistry._construct_unvalidated((spec,))
     resolved_spec, resolved_adapter = registry.resolve_targeted_adapter("pipe", "pipe_name_scan")
@@ -643,7 +645,15 @@ def test_analyzer_spec_rejects_a_targeted_adapter_without_a_capability():
         AnalyzerSpec(**_valid_kwargs(targeted_capability=None, targeted_adapter=lambda c: None))
 
 
-def _spec_with_adapter(adapter):
+def _targeted_projector(context, result):
+    """A shape-valid `targeted_report_projector` stand-in. A spec carrying an
+    adapter must carry one -- an executor whose result nothing can project is
+    unreachable from a command -- so every adapter-shape case below supplies
+    this one and varies only the adapter."""
+    return None
+
+
+def _spec_with_adapter(adapter, projector=_targeted_projector):
     real = REGISTRY.get("pipe")
     return AnalyzerSpec(
         identity=real.identity, package=real.package, report_type=real.report_type,
@@ -651,7 +661,7 @@ def _spec_with_adapter(adapter):
         option_names=real.option_names, provenance_hook=real.provenance_hook,
         full_scope_capable=real.full_scope_capable,
         targeted_capability=real.targeted_capability,
-        targeted_adapter=adapter,
+        targeted_adapter=adapter, targeted_report_projector=projector,
     )
 
 
@@ -1641,3 +1651,213 @@ def test_registry_by_identity_is_read_only():
     assert isinstance(REGISTRY._by_identity, types.MappingProxyType)
     with pytest.raises(TypeError):
         REGISTRY._by_identity["yara"] = REGISTRY.get("injection")
+
+
+# ── targeted report projector, and the roster a command surface asks ─────
+
+def test_analyzer_spec_rejects_an_adapter_without_a_report_projector():
+    """An executor whose ObservationResult nothing can turn into a
+    HunterRecord is unreachable from a command -- the pair is one capability."""
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_adapter(lambda context: None, projector=None)
+
+
+def test_analyzer_spec_rejects_a_report_projector_without_an_adapter():
+    real = REGISTRY.get("pipe")
+    with pytest.raises(InvalidAnalyzerSpec):
+        AnalyzerSpec(
+            identity=real.identity, package=real.package, report_type=real.report_type,
+            builder=real.builder, renderer=real.renderer,
+            record_projector=real.record_projector, option_names=real.option_names,
+            provenance_hook=real.provenance_hook,
+            full_scope_capable=real.full_scope_capable,
+            targeted_capability=real.targeted_capability,
+            targeted_adapter=None, targeted_report_projector=_targeted_projector)
+
+
+@pytest.mark.parametrize("projector", [
+    lambda: None,                            # zero args
+    lambda context: None,                     # too few
+    lambda context, result, extra: None,      # too many
+    lambda ctx, result: None,                 # wrong first name
+    lambda context, res: None,                # wrong second name
+    lambda *, context, result: None,          # keyword-only
+])
+def test_analyzer_spec_rejects_a_wrong_signature_report_projector(projector):
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_adapter(lambda context: None, projector=projector)
+
+
+def test_analyzer_spec_rejects_a_non_callable_report_projector():
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_adapter(lambda context: None, projector="not callable")
+
+
+def test_targeted_identities_are_capability_and_executor_filtered_in_hunters_order():
+    assert REGISTRY.targeted_identities() == (
+        "stomping", "pipe", "cs-beacon", "yara", "obfuscation")
+
+
+def test_targeted_identities_exclude_a_capability_without_an_executor():
+    """A capability declaration authorizes routing; it does not prove an
+    executor exists, so a command surface must not offer it."""
+    real = REGISTRY.get("pipe")
+    spec = AnalyzerSpec(
+        identity=real.identity, package=real.package, report_type=real.report_type,
+        builder=real.builder, renderer=real.renderer,
+        record_projector=real.record_projector, option_names=real.option_names,
+        provenance_hook=real.provenance_hook, full_scope_capable=real.full_scope_capable,
+        targeted_capability=real.targeted_capability)
+    registry = AnalyzerRegistry._construct_unvalidated((spec,))
+    assert registry.targeted_identities() == ()
+
+
+@pytest.mark.parametrize("identity, source", [
+    ("stomping", "ioc_string_scan"),
+    ("pipe", "pipe_name_scan"),
+    ("cs-beacon", "segment_scan"),
+    ("yara", "segment_scan"),
+    ("obfuscation", "encoding_scan"),
+])
+def test_targeted_source_resolves_each_analyzers_single_granted_source(identity, source):
+    assert REGISTRY.targeted_source(identity) == source
+
+
+def test_targeted_source_refuses_an_analyzer_with_no_capability():
+    with pytest.raises(UnsupportedTargetedCapability):
+        REGISTRY.targeted_source("injection")
+
+
+def test_targeted_source_refuses_an_unknown_identity():
+    with pytest.raises(UnknownAnalyzerIdentity):
+        REGISTRY.targeted_source("all")
+
+
+def test_a_multi_source_targeted_grant_cannot_be_constructed():
+    """There is no public source-selection flag, so an analyzer granting two
+    sources is a command surface with no way to choose between them. Refused at
+    construction, not at the moment a user runs the command."""
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_grant(
+            "stomping", TargetedScanUnit.REGION,
+            TargetedGrant("ioc_string_scan", frozenset()),
+            TargetedGrant("memory_info", frozenset()))
+
+
+def _multi_source_spec():
+    """A spec that bypassed `AnalyzerSpec` construction, standing in for a
+    registry assembled some other way -- the only path by which a multi-source
+    grant can still reach a query."""
+    real = REGISTRY.get("stomping")
+    spec = object.__new__(AnalyzerSpec)
+    for name, value in vars(real).items():
+        object.__setattr__(spec, name, value)
+    object.__setattr__(spec, "targeted_capability", TargetedCapability(
+        TargetedScanUnit.REGION,
+        frozenset({TargetedGrant("ioc_string_scan", frozenset()),
+                   TargetedGrant("memory_info", frozenset())}),
+        real.targeted_capability.request_ceiling))
+    return spec
+
+
+def test_targeted_source_still_fails_closed_on_a_bypassed_multi_source_spec():
+    registry = AnalyzerRegistry._construct_unvalidated((_multi_source_spec(),))
+    with pytest.raises(InvalidAnalyzerSpec):
+        registry.targeted_source("stomping")
+
+
+def test_the_roster_never_advertises_an_analyzer_that_cannot_resolve_one_source():
+    """A supported-set roster that lists an analyzer whose invocation then
+    fails is worse than one that omits it."""
+    registry = AnalyzerRegistry._construct_unvalidated((_multi_source_spec(),))
+    assert registry.targeted_identities() == ()
+
+
+# ── declared never-evaluated sources (targeted scope boundary) ───────────
+
+def test_every_targeted_identity_declares_its_never_evaluated_sources():
+    """The same fail-closed roster shape `_EXPECTED_TARGETED_SCAN_UNITS` uses:
+    a targeted-capable identity with no entry would silently get an empty set,
+    which reads as "this rescan covers everything"."""
+    from dumpex.hunt._registry import (
+        _APPROVED_TARGETED_IDENTITIES, _UNEVALUATED_TARGETED_SOURCES,
+    )
+    assert set(_UNEVALUATED_TARGETED_SOURCES) == _APPROVED_TARGETED_IDENTITIES
+
+
+@pytest.mark.parametrize("identity, expected", [
+    ("stomping", {"modules", "module_headers", "reference_files", "section_content_diff"}),
+    ("pipe", {"handle_data"}),
+    # YARA's rule compilation and match-context classification ARE its verdict,
+    # and CS Beacon reads MemoryInfo and the thread contexts into scored
+    # corroboration -- neither may be claimed unevaluated.
+    ("cs-beacon", set()),
+    ("yara", set()),
+    ("obfuscation", set()),
+])
+def test_declared_never_evaluated_sources_match_the_capability_matrix(identity, expected):
+    assert unevaluated_targeted_sources(identity) == frozenset(expected)
+
+
+def test_declared_never_evaluated_sources_must_be_real_coverage_sources():
+    from dumpex.hunt._registry import _validate_unevaluated_sources
+    with pytest.raises(InvalidAnalyzerSpec):
+        _validate_unevaluated_sources({"stomping": frozenset({"not_a_real_source"})})
+
+
+def test_a_spec_cannot_declare_its_own_grant_never_evaluated(monkeypatch):
+    """One source cannot be both the thing a targeted invocation runs and the
+    thing it reports as outside its own scope."""
+    from dumpex.hunt import _registry
+    monkeypatch.setitem(_registry._UNEVALUATED_TARGETED_SOURCES, "pipe",
+                        frozenset({"pipe_name_scan"}))
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_adapter(lambda context: None)
+
+
+def test_unevaluated_sources_is_empty_for_an_analyzer_with_no_targeted_capability():
+    assert unevaluated_targeted_sources("injection") == frozenset()
+
+
+# ── consumed_options: which hunt options a targeted invocation reads ─────
+
+def test_each_capability_declares_the_options_its_targeted_run_reads():
+    """A targeted invocation runs one granted source, not the analyzer's whole
+    pipeline, so it reads a narrower option set than full scope. stomping's
+    `ref_dir` feeds the reference-file comparison, which no targeted rescan
+    performs; yara's `rules_dir` is read in both modes."""
+    consumed = {spec.identity: spec.targeted_capability.consumed_options
+                for spec in REGISTRY._all_specs()
+                if spec.targeted_capability is not None}
+    assert consumed == {
+        "stomping": frozenset(), "pipe": frozenset(), "cs-beacon": frozenset(),
+        "yara": frozenset({"rules_dir"}), "obfuscation": frozenset()}
+
+
+def test_consumed_options_cannot_widen_the_analyzers_own_option_names():
+    """A capability narrows the analyzer's option vocabulary for targeted mode;
+    it can never add an option the analyzer does not declare at all."""
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_grant(
+            "pipe", TargetedScanUnit.REGION,
+            TargetedGrant("pipe_name_scan", frozenset()),
+            consumed_options=frozenset({"ref_dir"}))
+
+
+def test_consumed_options_must_be_a_frozenset_of_str():
+    with pytest.raises(InvalidAnalyzerSpec):
+        TargetedCapability(
+            TargetedScanUnit.REGION,
+            frozenset({TargetedGrant("pipe_name_scan", frozenset())}),
+            256 * (1 << 20), consumed_options={"rules_dir"})
+
+
+def test_a_capability_that_declares_the_wrong_consumed_options_fails_closed():
+    """Bound to identity the same way the scan unit and the request ceiling
+    are: a spec that silently keeps the empty default for yara -- and so stops
+    isolating two rescans run against different rule directories -- must not
+    register."""
+    with pytest.raises(InvalidAnalyzerSpec):
+        _spec_with_grant(
+            "yara", TargetedScanUnit.SEGMENT,
+            TargetedGrant("segment_scan", frozenset()))
