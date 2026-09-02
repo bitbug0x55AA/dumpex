@@ -155,6 +155,90 @@ scope of the result. Structured output carries the same facts as
 [Output and Evidence Schema](OUTPUT_SCHEMA.md)); exit codes follow the usual
 coverage mapping — `0` complete, `3` partial, `4` not evaluated.
 
+### Rescan commands in the skipped-target queue
+
+`--hunt all` ends with a `SKIPPED TARGET ACTIONS` section listing the ranges a
+hunter left unexamined. Each eligible entry prints the exact command to run
+next — one per skipping hunter that has a targeted capability, with the dump
+path quoted so the line means the same thing in a POSIX shell, PowerShell, and
+`cmd.exe`:
+
+```text
+  [HIGH] 0x00000000007ff000  64 MB  captured
+       Skipped by: pipe/pipe_name_scan:pipe_name (scan budget exhausted),
+       pipe/pipe_name_scan:c2_context (scan budget exhausted),
+       obfuscation/encoding_scan:entropy (scan truncated)
+       Rescan (match the new result back by hunter + source + scope + base_address + size):
+         dumpex --hunt pipe --hunt-addr 0x7ff000 --size 0x4000000 -- "C:\cases\case 7.dmp"
+         dumpex --hunt obfuscation --hunt-addr 0x7ff000 --size 0x2000000 -- "C:\cases\case 7.dmp"
+```
+
+Options come first and the dump path comes last, behind a `--` terminator. A
+dump may legally be named `-case.dmp`, and dumpex reads a leading `-` as an
+option no matter how the shell quoted it, so the terminator is what makes such
+a command run at all; it is used for every command rather than only the ones
+that need it. Add any further options **before** the `--`.
+
+The rules behind that block:
+
+| Situation | What is offered |
+|---|---|
+| One target, several relationships from the same hunter | One command for that hunter. A pipe region that exhausted the budget for both `pipe_name` and `c2_context` is one range and one rescan; its result is reconciled against both relationships |
+| A skipping hunter with no targeted capability (`injection`, `hollowing`) | No command. The hunters are named under `No targeted rescan for:` — their coverage gap on that target stays open |
+| A target whose bytes this dump never captured | No command. The entry says so and recommends recollection: a local scan of a range the dump does not hold reads nothing |
+| A target larger than the hunter's request ceiling | One capped command covering the first ceiling-sized piece, labelled supplementary. Rescanning the remaining pieces is a separate decision, and chunked rescans never add up to coverage of the whole range |
+| A budget limitation that names a reason but no target | No queue entry, and therefore no command. A range is never invented to make one |
+| A dump path no quoting can carry (below) | No command line. The entry prints the arguments without the path and says why; you supply the path quoted for your own shell |
+
+### Dump paths that get arguments instead of a command
+
+A command line is printed only when copying it runs the dump it names. Some
+paths cannot be written so that all three shells read them identically, and for
+those the entry drops the program name and the path and prints the arguments
+alone:
+
+| In the path | Why no quoting fixes it |
+|---|---|
+| `%` | `cmd.exe` expands `%VAR%` inside double quotes |
+| `$` | POSIX shells and PowerShell expand `$VAR` inside double quotes; POSIX also runs `$(...)` there |
+| A backtick | PowerShell's escape character, and POSIX command substitution |
+| `"` | Ends the quoted run, and the escape differs per shell |
+| `!` | `cmd.exe` expands `!VAR!` inside double quotes under delayed expansion |
+| Two consecutive backslashes (a UNC path) | A POSIX shell collapses `\\` to `\` inside double quotes, so `\\server\share` would name `\server\share` |
+| A trailing backslash | Escapes the closing quote in a POSIX shell |
+| A character a terminal acts on | C0 and C1 controls, `DEL`, the bidi marks, overrides and isolates, and the line/paragraph separators. The only way to print one safely is to change it, and a command naming an altered path names a different file — while printing it raw would let a filename reorder or forge the line you read |
+
+This is a refusal, not a best effort. A command line that expands, splits, or
+executes part of a filename would send you to rescan the wrong dump — or run
+whatever the filename embeds — while looking correct, which is worse than
+printing no command at all.
+
+A rescan produces a separate result document. Nothing merges it back into the
+run that recommended it: the queue entry keeps
+`coverage_effect: original_hunter_gap_not_resolved`, and you reconcile the two
+yourself on `hunter + source + scope + base_address + size` — the key
+`summary.scan_scope` carries in the new document. A relationship is closed only
+when the scope that actually failed comes back `complete` in the rescan; a pipe
+rescan that closes `pipe_name` and only partly evaluates `c2_context` closes
+one of its two originating relationships, not both.
+
+Evaluation stops at the end of the descriptor holding the requested base
+address, so a command that crosses a region or segment boundary comes back
+`partial` with `SCAN_REGION_EVALUATION_TRUNCATED` rather than silently claiming
+the whole range. Everything a rescan reports is scoped to the bytes it
+evaluated: a `NOT_DETECTED_IN_SCANNED_SCOPE` result for one range is not a
+statement about the rest of the target, about the hunter's other sources, or
+about the dump.
+
+With `--redact-paths`, the rendered command names the dump by basename, the
+same reduction the flag applies to paths in structured output. The command still
+runs, from the directory holding the dump.
+
+Structured output carries no command string. `--json` gives you the target's
+`base_address` and `size` plus the hunters a rescan can name, in
+`summary.investigation_actions[].recommended_actions`; build the invocation
+from those under your own shell's quoting rules.
+
 ## Report options
 
 | Option | Description |
@@ -178,7 +262,7 @@ filenames when string mode produces several cards.
 | `--force` | Allow replacement of existing output files, never input dumps |
 | `--case-id ID` | Record a case/ticket identifier in JSON metadata |
 | `--analyst NAME` | Record the analyst name/handle in JSON metadata |
-| `--redact-paths` | Reduce filesystem paths to basenames in JSON metadata |
+| `--redact-paths` | Reduce filesystem paths to basenames in JSON metadata and in the rescan commands the skipped-target queue renders |
 
 Dumpex rejects an output path that resolves to an input dump. It also rejects
 collisions among `--output`, `--json`, `--txt`, and `--extract`'s generated

@@ -46,9 +46,38 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   threshold, and whether the windows were measured exhaustively or sampled. A
   range whose own average clears the threshold is still reported as one hit, as
   before.
+- The `--hunt all` skipped-target queue now prints the targeted rescan to run
+  next. Each eligible entry renders one copyable `--hunt-addr` command per
+  skipping hunter that has a targeted capability, with the dump path quoted so
+  the line means the same thing in a POSIX shell, PowerShell, and `cmd.exe`,
+  alongside the `hunter + source + scope + base_address + size`
+  key the new result is matched back by. A hunter with no targeted capability
+  is named as unsupported instead; a target whose bytes this dump never
+  captured is told to recollect rather than rescan; and a target larger than
+  the hunter's request ceiling gets one capped command, labelled supplementary,
+  that does not claim to close the original gap. Structured output carries no
+  command string: the address, size, and hunters are the contract, and quoting
+  belongs to the shell that reads a command line. Options come first and the
+  dump path last, behind a `--` terminator, so a dump legitimately named
+  `-case.dmp` still gets a command that runs. A dump path no single quoting rule
+  can carry through all three shells -- one holding `%`, `$`, a backtick, `"`,
+  `!`, a character a terminal acts on (C0/C1 controls, `DEL`, bidi marks,
+  overrides and isolates, line and paragraph separators), a trailing backslash,
+  or the doubled backslash of a UNC path -- gets the arguments without a command
+  line instead, rather than a line that would expand, split, execute part of the
+  filename, or misrepresent itself on screen.
+  `--redact-paths` reduces the
+  dump path in a rendered command to its basename, so a `--txt` transcript stays
+  as shareable as the structured document.
 
 ### Changed
 
+- `investigation_actions[].recommended_actions` now includes a
+  `targeted_hunter_rescan` entry only when a hunter that skipped the target can
+  actually run one over it, and only when this dump holds bytes to rescan; its
+  `hunters` names that subset rather than every skipping hunter. `skipped_by`
+  is unchanged and still names all of them. Schema v2.14 is unchanged: every
+  archived document stays valid.
 - `--size` now requires `--hunt-addr` when used with `--hunt`, and is rejected
   with a usage error otherwise. It previously had no effect there, which let a
   targeted invocation missing its address run an unbounded whole-dump hunt

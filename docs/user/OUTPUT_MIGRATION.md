@@ -62,6 +62,26 @@ to an intentionally open string vocabulary does not by itself require a bump.
 | 2.1 | Added the `comparison` result kind and envelope support later used by artifacts/diagnostics |
 | 2.0 | Introduced the shared `meta`/`result` envelope for structured commands |
 
+## Producer behavior within v2.14
+
+Not every change to what dumpex emits changes the wire shape. These narrow what
+a v2.14 document contains without changing what a v2.14 document may contain, so
+they need no schema bump and every archived document stays valid — but a
+consumer that inferred a rule from earlier output should read them.
+
+- `investigation_actions[].recommended_actions` includes a
+  `targeted_hunter_rescan` entry only when at least one hunter that skipped the
+  target can actually run a `--hunt-addr` invocation over it, and only when this
+  dump holds bytes to rescan. Its `hunters` names that subset rather than every
+  skipping hunter. Consumers reading it as "who left this gap" must read
+  `skipped_by` instead, which is unchanged and still names all of them; an
+  action with no rescan entry still carries `recollect_dump` or
+  `inspect_metadata`, and `recommended_actions` is still never empty.
+- No investigation action carries a rendered command line, under any key. The
+  address, size, and hunter are the structured inputs; quoting belongs to the
+  shell that reads a command, so a consumer that needs one builds it. This is a
+  fixed property of the contract, not a field awaiting a later release.
+
 ## Important upgrade boundaries
 
 ### v2.12 to v2.13

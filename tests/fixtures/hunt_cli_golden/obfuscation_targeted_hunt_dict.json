@@ -1,0 +1,625 @@
+{
+  "confidence": "none",
+  "coverage": {
+    "limitations": [],
+    "reasons": [],
+    "sources": {
+      "encoding_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "memory_info": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "targeted_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      }
+    },
+    "status": "complete"
+  },
+  "details": {
+    "base64": [],
+    "compressed": [],
+    "entropy": [
+      {
+        "entropy": 8.0,
+        "region": {
+          "allocation_base": "0x0000000010000000",
+          "base_address": "0x0000000010000000",
+          "protect": "PAGE_READWRITE",
+          "size": 8192,
+          "state": "MEM_COMMIT",
+          "type": "MEM_PRIVATE"
+        },
+        "threshold": 7.2
+      }
+    ],
+    "hidden_pe": [],
+    "hidden_shellcode": [],
+    "sleep_mask": [],
+    "targeted_scope": [
+      {
+        "applicability_reason": null,
+        "base_address": "0x0000000010000000",
+        "capture_state": "complete",
+        "captured_size": 8192,
+        "coverage_status": "complete",
+        "measurements": [
+          {
+            "base_address": "0x0000000010000000",
+            "name": "containing_region",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "containing_allocation_base",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000010000000"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_state",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_COMMIT"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_type",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_PRIVATE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_protection",
+            "size": null,
+            "unit": "text",
+            "value": "PAGE_READWRITE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_module",
+            "size": null,
+            "unit": "text",
+            "value": null
+          },
+          {
+            "base_address": "0x0000000010000000",
+            "name": "evaluated_extent",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "captured_bytes",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "capture_file_offset",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000000003000"
+          },
+          {
+            "base_address": null,
+            "name": "bytes_evaluated",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "sleep_mask_keys_recovered",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "sleep_mask_window_coverage",
+            "size": null,
+            "unit": "text",
+            "value": "exhaustive"
+          },
+          {
+            "base_address": null,
+            "name": "sleep_mask_candidate_list",
+            "size": null,
+            "unit": "text",
+            "value": "complete"
+          },
+          {
+            "base_address": null,
+            "name": "budget_attempts_spent",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_attempts_limit",
+            "size": null,
+            "unit": "count",
+            "value": 2000
+          },
+          {
+            "base_address": null,
+            "name": "budget_decoded_bytes_spent",
+            "size": null,
+            "unit": "bytes",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_decoded_bytes_limit",
+            "size": null,
+            "unit": "bytes",
+            "value": 134217728
+          },
+          {
+            "base_address": null,
+            "name": "budget_retained_bytes_spent",
+            "size": null,
+            "unit": "bytes",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_retained_bytes_limit",
+            "size": null,
+            "unit": "bytes",
+            "value": 33554432
+          },
+          {
+            "base_address": null,
+            "name": "budget_hits_spent",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_hits_limit",
+            "size": null,
+            "unit": "count",
+            "value": 500
+          },
+          {
+            "base_address": null,
+            "name": "budget_exhausted_reason",
+            "size": null,
+            "unit": "text",
+            "value": null
+          }
+        ],
+        "scope": "sleep_mask",
+        "size": 8192,
+        "source": "encoding_scan"
+      },
+      {
+        "applicability_reason": null,
+        "base_address": "0x0000000010000000",
+        "capture_state": "complete",
+        "captured_size": 8192,
+        "coverage_status": "complete",
+        "measurements": [
+          {
+            "base_address": "0x0000000010000000",
+            "name": "containing_region",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "containing_allocation_base",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000010000000"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_state",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_COMMIT"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_type",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_PRIVATE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_protection",
+            "size": null,
+            "unit": "text",
+            "value": "PAGE_READWRITE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_module",
+            "size": null,
+            "unit": "text",
+            "value": null
+          },
+          {
+            "base_address": "0x0000000010000000",
+            "name": "evaluated_extent",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "captured_bytes",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "capture_file_offset",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000000003000"
+          },
+          {
+            "base_address": null,
+            "name": "bytes_evaluated",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "whole_range_entropy",
+            "size": null,
+            "unit": "bits_per_byte",
+            "value": 8.0
+          },
+          {
+            "base_address": null,
+            "name": "entropy_threshold",
+            "size": null,
+            "unit": "bits_per_byte",
+            "value": 7.2
+          },
+          {
+            "base_address": null,
+            "name": "entropy_window_size",
+            "size": null,
+            "unit": "bytes",
+            "value": 4096
+          },
+          {
+            "base_address": null,
+            "name": "entropy_windows_total",
+            "size": null,
+            "unit": "count",
+            "value": 2
+          },
+          {
+            "base_address": null,
+            "name": "entropy_windows_evaluated",
+            "size": null,
+            "unit": "count",
+            "value": 2
+          },
+          {
+            "base_address": null,
+            "name": "entropy_windows_above_threshold",
+            "size": null,
+            "unit": "count",
+            "value": 2
+          },
+          {
+            "base_address": null,
+            "name": "entropy_window_coverage",
+            "size": null,
+            "unit": "text",
+            "value": "exhaustive"
+          },
+          {
+            "base_address": "0x0000000010000000",
+            "name": "entropy_top_window",
+            "size": 4096,
+            "unit": "bits_per_byte",
+            "value": 8.0
+          },
+          {
+            "base_address": "0x0000000010001000",
+            "name": "entropy_top_window",
+            "size": 4096,
+            "unit": "bits_per_byte",
+            "value": 8.0
+          },
+          {
+            "base_address": null,
+            "name": "entropy_ranges_retained",
+            "size": null,
+            "unit": "count",
+            "value": 1
+          }
+        ],
+        "scope": "entropy",
+        "size": 8192,
+        "source": "encoding_scan"
+      },
+      {
+        "applicability_reason": null,
+        "base_address": "0x0000000010000000",
+        "capture_state": "complete",
+        "captured_size": 8192,
+        "coverage_status": "complete",
+        "measurements": [
+          {
+            "base_address": "0x0000000010000000",
+            "name": "containing_region",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "containing_allocation_base",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000010000000"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_state",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_COMMIT"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_type",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_PRIVATE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_protection",
+            "size": null,
+            "unit": "text",
+            "value": "PAGE_READWRITE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_module",
+            "size": null,
+            "unit": "text",
+            "value": null
+          },
+          {
+            "base_address": "0x0000000010000000",
+            "name": "evaluated_extent",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "captured_bytes",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "capture_file_offset",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000000003000"
+          },
+          {
+            "base_address": null,
+            "name": "bytes_evaluated",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "base64_candidates",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "base64_attempts",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "xor_keys_scored",
+            "size": null,
+            "unit": "count",
+            "value": 255
+          },
+          {
+            "base_address": null,
+            "name": "xor_text_candidates",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "xor_structural_candidates",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "xor_attempts",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "compressed_candidates",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "compressed_attempts",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "base64_retained",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "xor_retained",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "compressed_retained",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "xor_sublayer",
+            "size": null,
+            "unit": "text",
+            "value": "applied"
+          },
+          {
+            "base_address": null,
+            "name": "budget_attempts_spent",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_attempts_limit",
+            "size": null,
+            "unit": "count",
+            "value": 2000
+          },
+          {
+            "base_address": null,
+            "name": "budget_decoded_bytes_spent",
+            "size": null,
+            "unit": "bytes",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_decoded_bytes_limit",
+            "size": null,
+            "unit": "bytes",
+            "value": 134217728
+          },
+          {
+            "base_address": null,
+            "name": "budget_retained_bytes_spent",
+            "size": null,
+            "unit": "bytes",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_retained_bytes_limit",
+            "size": null,
+            "unit": "bytes",
+            "value": 33554432
+          },
+          {
+            "base_address": null,
+            "name": "budget_hits_spent",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_hits_limit",
+            "size": null,
+            "unit": "count",
+            "value": 500
+          },
+          {
+            "base_address": null,
+            "name": "budget_exhausted_reason",
+            "size": null,
+            "unit": "text",
+            "value": null
+          }
+        ],
+        "scope": "decode",
+        "size": 8192,
+        "source": "encoding_scan"
+      }
+    ],
+    "xor": []
+  },
+  "findings": [
+    {
+      "check": "obfuscation.entropy_observation",
+      "confidence": "low",
+      "evidence_refs": [],
+      "facts": [
+        "VA=0x0000000010000000 entropy=8.000 threshold=7.2 protect=PAGE_READWRITE"
+      ],
+      "id": "finding-1d694199c1f4976ca922a6d410fc6918",
+      "inference": "1 MEM_PRIVATE region(s) exceed the Shannon-entropy threshold typical of encrypted/compressed/packed content.",
+      "iocs": [],
+      "limitations": [
+        "Cannot distinguish malicious encoding from benign high-randomness content (e.g. session keys, compressed media, GUIDs/hashes in bulk)."
+      ],
+      "rationale": "Shannon entropy is a purely statistical property shared by encryption, compression, packed code, media buffers, crypto key material, and plenty of ordinary high-randomness data \u2014 it carries no information about WHAT the content is. Reported as an observation only; never contributes to the obfuscation score on its own.",
+      "rule_id": "obfuscation.entropy_observation",
+      "rule_version": null,
+      "severity": "info",
+      "tag": "observation",
+      "technique_ids": []
+    }
+  ],
+  "hunter": "obfuscation",
+  "lead_count": 0,
+  "max_score": 2,
+  "review_priority": "low",
+  "score": 0,
+  "status": "NOT_DETECTED_IN_SCANNED_SCOPE",
+  "verdict_level": "clean"
+}

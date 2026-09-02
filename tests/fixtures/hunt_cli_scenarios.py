@@ -329,6 +329,84 @@ def _build_obfuscation(monkeypatch, tmp_path) -> BuiltScenario:
 # `pytest -k` run of the parametrized test list scenarios in a stable,
 # reviewable order -- not dict/import order, which is an implementation
 # detail neither consumer should depend on.
+# ── targeted (`--hunt-addr`) scenarios ───────────────────────────────────
+# A targeted invocation is a second public shape of the same `--hunt` surface,
+# and it freezes the same way: one analyzer, one record, one console card. Its
+# `--hunt-addr`/`--size` arguments ride in `extra_argv`, so the shared runner
+# still builds `--hunt <ttp> ...` exactly once and no scenario needs a special
+# case at the call site.
+
+_TARGETED_BASE = 0x10000000
+_TARGETED_SIZE = 0x2000
+_TARGETED_FILE_OFFSET = 0x3000
+
+
+def _targeted_mf(protection="PAGE_EXECUTE_READ", mtype="MEM_IMAGE"):
+    """One committed region, captured in full by one segment -- the shape a
+    targeted rescan is eligible for, with no boundary caveat of its own."""
+    from tests.fixtures.fakes import FakeMF, FakeStream, Region, Segment
+    mf = FakeMF()
+    mf.memory_info = FakeStream(
+        [Region(_TARGETED_BASE, _TARGETED_BASE, _TARGETED_SIZE, "MEM_COMMIT", protection, mtype)],
+        "infos")
+    mf.memory_segments_64 = FakeStream(
+        [Segment(_TARGETED_BASE, _TARGETED_FILE_OFFSET, _TARGETED_SIZE)], "memory_segments")
+    mf.modules = FakeStream([], "modules")
+    return mf
+
+
+def _targeted_argv():
+    return ["--hunt-addr", hex(_TARGETED_BASE), "--size", hex(_TARGETED_SIZE)]
+
+
+def _targeted_reader(payload):
+    def _read(mf, addr, size):
+        offset = addr - _TARGETED_BASE
+        return payload[offset:offset + size]
+    return _read
+
+
+def _build_pipe_targeted(monkeypatch, tmp_path) -> BuiltScenario:
+    """One captured range rescanned for pipe names and C2 context. The bytes
+    carry a private pipe name, so both of pipe's closures have something real
+    to report about the range the analyst named."""
+    import dumpex.hunt.pipe.targeted as pipe_targeted
+    name = b"\\\\.\\pipe\\msagent_1337\x00"
+    payload = (b"\x00" * 0x100 + name).ljust(_TARGETED_SIZE, b"\x00")
+    monkeypatch.setattr(pipe_targeted, "read_region_spanning", _targeted_reader(payload))
+    return BuiltScenario(mf=_targeted_mf(), extra_argv=_targeted_argv())
+
+
+def _check_pipe_targeted(exit_code, doc, body):
+    """The document reports the requested range back under `scan_scope`, which
+    is what a new result is reconciled against -- and pipe closes its two
+    scopes independently even though its grant is unscoped."""
+    scan_scope = doc["result"]["summary"]["scan_scope"]
+    assert scan_scope["kind"] == "targeted"
+    assert scan_scope["hunter"] == "pipe"
+    assert scan_scope["base_address"] == f"0x{_TARGETED_BASE:016x}"
+    assert scan_scope["size"] == _TARGETED_SIZE
+    assert scan_scope["scopes"] == ["c2_context", "pipe_name"]
+
+
+def _build_obfuscation_targeted(monkeypatch, tmp_path) -> BuiltScenario:
+    """The same range rescanned for obfuscation, whose one invocation always
+    attempts all three granted layers."""
+    import dumpex.hunt.encoding.targeted as encoding_targeted
+    payload = (bytes(range(256)) * (_TARGETED_SIZE // 256))[:_TARGETED_SIZE]
+    monkeypatch.setattr(encoding_targeted, "read_region_spanning", _targeted_reader(payload))
+    return BuiltScenario(mf=_targeted_mf(protection="PAGE_READWRITE", mtype="MEM_PRIVATE"),
+                          extra_argv=_targeted_argv())
+
+
+def _check_obfuscation_targeted(exit_code, doc, body):
+    details = doc["result"]["data"]["records"][0]["details"]
+    assert [item["scope"] for item in details["targeted_scope"]] == [
+        "sleep_mask", "entropy", "decode"]
+    assert doc["result"]["summary"]["scan_scope"]["scopes"] == [
+        "decode", "entropy", "sleep_mask"]
+
+
 SCENARIOS = {
     "injection": HuntCliScenario("injection", "injection", _build_injection,
                                   expected_exit_code=3, extra_checks=_check_injection),
@@ -344,4 +422,9 @@ SCENARIOS = {
                                         expected_exit_code=3, extra_checks=_check_cs_beacon_multi),
     "yara": HuntCliScenario("yara", "yara", _build_yara, needs_yara=True),
     "obfuscation": HuntCliScenario("obfuscation", "obfuscation", _build_obfuscation),
+    "pipe_targeted": HuntCliScenario("pipe_targeted", "pipe", _build_pipe_targeted,
+                                      extra_checks=_check_pipe_targeted),
+    "obfuscation_targeted": HuntCliScenario("obfuscation_targeted", "obfuscation",
+                                             _build_obfuscation_targeted,
+                                             extra_checks=_check_obfuscation_targeted),
 }

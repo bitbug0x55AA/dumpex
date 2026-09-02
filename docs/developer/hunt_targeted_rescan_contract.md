@@ -368,6 +368,58 @@ follow-up guidance may offer one capped command only. It must label that command
 supplementary/partial, preserve unresolved `coverage_effect`, and must not imply
 that repeated chunks automatically close the original gap.
 
+## Follow-up command synthesis
+
+`dumpex.hunt._rescan_command` turns an investigation-queue entry into the
+`--hunt-addr` invocation an analyst runs next. It is console presentation:
+`--json` carries the address, size, and eligible hunters, and never a rendered
+command line, because quoting is a property of the shell reading it rather than
+of a result document. A consumer builds its own invocation from those fields.
+
+Synthesis rules, all of which the queue has already applied by the time a
+command is built:
+
+1. One command per hunter, never per relationship. A hunter that skipped one
+   physical range under several sources or scopes -- pipe's `pipe_name` and
+   `c2_context` on one region -- is one range and one rescan.
+2. Eligibility is the registry's `targeted_identities()`, and the ceiling is the
+   registry's `TargetedCapability.request_ceiling`. Neither the queue nor the
+   renderer keeps a hunter table.
+3. A hunter with no targeted capability is named as unsupported rather than
+   omitted: the gap it left is real and no `--hunt-addr` invocation can close
+   it.
+4. A target with `evidence_availability == "not_captured"` gets no command and
+   no `targeted_hunter_rescan` recommendation. Recollection is the recommendation
+   that stands; a rescan of a range the dump does not hold would read nothing.
+5. A limitation naming a reason but no target contributes no queue entry, so it
+   produces no command. A range is never invented to make one.
+6. A command puts its options first and ends with `-- <dump path>`. Dumpex's
+   own parser reads a leading `-` as an option however the shell quoted it, so
+   a path-first line cannot open a dump legitimately named `-case.dmp`. The
+   terminator is unconditional: one shape per entry, and no condition to get
+   wrong.
+7. The dump path is rendered as one shell argument, reduced to a basename under
+   `--redact-paths` so a `--txt` transcript is as shareable as the structured
+   document.
+8. A command line is emitted only when every token means the same thing in a
+   POSIX shell, PowerShell, and `cmd.exe`. `is_renderable_argument()` owns that
+   decision and refuses `%`, `$`, a backtick, `"`, `!`, every character
+   `console_safe()` would rewrite (C0/C1 controls, DEL, the bidi marks,
+   overrides and isolates, and the line/paragraph separators), a trailing
+   backslash, and the doubled backslash of a UNC path; the entry then shows the
+   arguments without the program name or the path. A line that
+   expands, splits, or executes part of a filename resolves to another dump
+   while looking correct, which is strictly worse than showing none.
+
+Reconciliation stays the analyst's, keyed on
+`hunter + source + scope + base_address + size` -- the same key
+`summary.scan_scope` carries. A rescan produces a separate document; nothing
+merges it into the run that recommended it, the originating entry keeps
+`coverage_effect: original_hunter_gap_not_resolved`, and an originating
+relationship is closed only when its own scope came back `complete`. One pipe
+rescan can therefore close one of its two originating relationships and not the
+other.
+
 ## Evidence and coverage semantics
 
 ### Closure and evaluation

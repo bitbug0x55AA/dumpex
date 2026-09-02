@@ -206,6 +206,39 @@ Historical v2.10-v2.13 JSON may contain retired deep-mode IOC/header leads;
 those leads never upgraded the original verdict or coverage. Only the
 originating hunter's successful targeted rescan can close its coverage gap.
 
+The console/`--txt` `SKIPPED TARGET ACTIONS` section prints the rescan to run
+for each eligible entry — one `--hunt-addr` command per skipping hunter that has
+a targeted capability, with the dump path quoted so the line means the same
+thing in a POSIX shell, PowerShell, and `cmd.exe`. Work it top down:
+the queue is already ordered by priority.
+
+- Run the command as printed. It names the range the queue named, capped at the
+  hunter's request ceiling; a capped command is labelled supplementary and
+  covers that piece only. Options come first and the dump path comes last behind
+  a `--`, which is what lets a dump named `-case.dmp` open at all; add any
+  further options before the `--`.
+- Match the new result back on `hunter + source + scope + base_address + size`,
+  which the rescan's own `summary.scan_scope` carries. Nothing merges
+  automatically, and the original entry keeps
+  `coverage_effect: original_hunter_gap_not_resolved`.
+- Close a relationship only when its own scope came back `complete`. One target
+  can carry two relationships from the same hunter — a pipe region that ran out
+  of budget for both `pipe_name` and `c2_context` — and one rescan may close one
+  of them and not the other.
+- `No targeted rescan for: ...` means those hunters have no `--hunt-addr`
+  capability. Their gap stays open; document it rather than reading the
+  remaining commands as full closure.
+- `Rescan: unavailable` means the bytes are not in this dump. Recollect;
+  a local scan would read nothing and must not be recorded as a negative.
+- An entry that prints arguments without a command means this dump's own path
+  holds characters a shell would expand or execute, so no command line could
+  carry it unchanged. Run those arguments against the dump yourself, quoting the
+  path your shell's way; do not reconstruct the line by pasting the path in.
+
+Everything a rescan reports applies to the bytes it evaluated. A
+`NOT_DETECTED_IN_SCANNED_SCOPE` rescan is not a clean verdict for the rest of the
+target, for the hunter's other sources, or for the dump.
+
 The console/`--txt` `CORRELATED REGIONS` section means different hunters placed
 evidence in the same normalized memory region. It is a location correlation,
 not a new verdict, and changes no score, confidence, or coverage.

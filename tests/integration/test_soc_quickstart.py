@@ -78,3 +78,20 @@ def test_quickstart_local_markdown_links_resolve():
         if not path or "://" in path:
             continue
         assert (_QUICKSTART.parent / path).resolve().is_file(), target
+
+
+def test_quickstart_explains_how_to_act_on_a_rendered_rescan_command():
+    """Coverage closure is the analyst-facing half of the targeted rescan: the
+    quickstart has to say how a new result is matched back, when a relationship
+    is actually closed, and which entries offer no command at all."""
+    text = _text()
+    for guidance in (
+        "SKIPPED TARGET ACTIONS",
+        "hunter + source + scope + base_address + size",
+        "coverage_effect: original_hunter_gap_not_resolved",
+        "No targeted rescan for:",
+        "Rescan: unavailable",
+        "holds characters a shell would expand or execute",
+        "which is what lets a dump named `-case.dmp` open at all",
+    ):
+        assert guidance in text, guidance

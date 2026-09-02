@@ -9,6 +9,7 @@ from dumpex.hunt._console import resolve_width, wrap_text, render_kv_block
 from dumpex.hunt.summary import _DETECTED_VERDICT_ORDER
 from dumpex.hunt.region_correlation import RegionCorrelation
 from dumpex.hunt._investigation import InvestigationAction
+from dumpex.hunt._rescan_command import build_rescan_commands, unsupported_rescan_hunters
 from dumpex.output.coverage import _format_bytes
 from dumpex.output.records import HUNTERS, HunterRecord, _HUNT_CONFIDENCES, _HUNT_REVIEW_PRIORITIES
 
@@ -409,7 +410,72 @@ def _bounded_join(items: list, cap: "int | None") -> str:
     return text
 
 
-def _render_investigation_action_entry(action: InvestigationAction, width: int, verbose: bool) -> list:
+# The reconciliation key a new targeted result is matched back to the
+# relationship it was meant to answer -- printed with the commands rather than
+# left to the reader, since a rescan produces a SEPARATE result document and
+# nothing merges it into this one automatically.
+_RESCAN_MATCH_KEY = "hunter + source + scope + base_address + size"
+
+_RESCAN_INDENT = 9
+
+
+def _render_rescan_block(action: InvestigationAction, width: int, dump_path: "str | None") -> list:
+    """The copyable `--hunt-addr` line(s) for one queue entry, the note that
+    caps one of them to its analyzer's request ceiling, and the hunters no
+    targeted rescan can serve.
+
+    A command line is emitted whole, never wrapped: a line broken to fit the
+    terminal is no longer copyable, and a truncated one would run a different
+    range than the entry names. Nothing is printed at all when the dump path is
+    unknown -- an invented path would be worse than no command.
+
+    A path a command line cannot carry through every shell (see
+    `dumpex.hunt._rescan_command.is_renderable_argument`) gets the arguments
+    without it. That is the honest shape: the range, hunter, and size are still
+    exactly what to run, and the one token that would have been wrong or
+    dangerous is left to the analyst rather than guessed at.
+    """
+    unsupported = unsupported_rescan_hunters(action)
+    commands = build_rescan_commands(action, dump_path) if dump_path else ()
+    lines = []
+    if commands:
+        lines.extend(_wrap_block(f"Rescan (match the new result back by {_RESCAN_MATCH_KEY}):",
+                                 width, 7))
+        # Renderability is a property of the dump path alone, so it is the same
+        # answer for every command in this block.
+        renderable = commands[0].renderable
+        if not renderable:
+            lines.extend(_wrap_block(
+                "This dump's path holds characters a shell would expand or execute, so no "
+                "command line below can carry it unchanged. Run these arguments against "
+                "this dump yourself, quoting the path the way your own shell requires:",
+                width, _RESCAN_INDENT))
+        for command in commands:
+            lines.append(" " * _RESCAN_INDENT
+                         + (command.render() if renderable else command.render_arguments()))
+            if command.capped:
+                lines.extend(_wrap_block(
+                    f"supplementary: {command.hunter} accepts "
+                    f"{_format_bytes(command.size)} per request, so this covers the first "
+                    f"{_format_bytes(command.size)} of {_format_bytes(command.target_size)} "
+                    f"only -- rescanning the remaining pieces does not close the original "
+                    f"gap, and evaluation still stops at the end of the descriptor holding "
+                    f"the requested base address.", width, _RESCAN_INDENT + 2))
+    elif action.evidence_availability == "not_captured":
+        lines.extend(_wrap_block(
+            "Rescan: unavailable -- these bytes are not in this dump, so a local scan "
+            "would read nothing. Recollect a fuller dump instead.", width, 7))
+    if unsupported:
+        lines.extend(_wrap_block(
+            f"No targeted rescan for: {', '.join(unsupported)} -- no --hunt-addr capability is "
+            f"registered for {'this hunter' if len(unsupported) == 1 else 'these hunters'}, so "
+            f"{'its' if len(unsupported) == 1 else 'their'} coverage gap on this target stays "
+            f"open.", width, 7))
+    return lines
+
+
+def _render_investigation_action_entry(action: InvestigationAction, width: int, verbose: bool,
+                                        dump_path: "str | None" = None) -> list:
     badge_color = _PRIORITY_COLOR.get(action.priority, DIM)
     badge = badge_color(f"[{action.priority.upper()}]")
     header = (f"  {badge} {_hexaddr(action.target.base_address)}  "
@@ -434,6 +500,7 @@ def _render_investigation_action_entry(action: InvestigationAction, width: int, 
     action_cap = None if verbose else _MAX_SKIPPED_ACTIONS_LIST
     action_texts = [_ACTION_TYPE_LABEL.get(a.type, a.type) for a in action.recommended_actions]
     lines.extend(_wrap_block(f"Next: {_bounded_join(action_texts, action_cap)}", width, 7))
+    lines.extend(_render_rescan_block(action, width, dump_path))
 
     if verbose:
         lines.extend(_wrap_block(
@@ -443,7 +510,8 @@ def _render_investigation_action_entry(action: InvestigationAction, width: int, 
     return lines
 
 
-def _render_investigation_actions(actions: list, width: int, verbose: bool) -> list:
+def _render_investigation_actions(actions: list, width: int, verbose: bool,
+                                   dump_path: "str | None" = None) -> list:
     """Empty (nothing printed, no header) when `actions` is empty -- same
     "no empty section" rule `_render_correlated_regions()` follows."""
     if not actions:
@@ -452,7 +520,7 @@ def _render_investigation_actions(actions: list, width: int, verbose: bool) -> l
     omitted = len(actions) - len(shown)
     lines = [f"  {BOLD('SKIPPED TARGET ACTIONS')}", ""]
     for action in shown:
-        lines.extend(_render_investigation_action_entry(action, width, verbose))
+        lines.extend(_render_investigation_action_entry(action, width, verbose, dump_path))
     if omitted > 0:
         lines.extend(_wrap_block(
             f"... {omitted} additional skipped-target action(s) omitted from this summary "
@@ -491,6 +559,7 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
                          width: "int | None" = None,
                          region_correlations: "list | None" = None,
                          investigation_actions: "list | None" = None,
+                         dump_path: "str | None" = None,
                          verbose: bool = False) -> None:
     """Print the `--hunt all` `HUNT SUMMARY` card. `records` must be the
     same 7-element `list[HunterRecord]` (HUNTERS' own fixed order)
@@ -507,7 +576,11 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
     `investigation_actions` is the optional `list[InvestigationAction]`
     `dumpex.hunt._investigation.build_investigation_queue()` already built
     from these same `records` plus the dump's MemoryInfo list -- `None` or
-    `[]` (the default) omits SKIPPED TARGET ACTIONS entirely. `verbose`
+    `[]` (the default) omits SKIPPED TARGET ACTIONS entirely. `dump_path` is
+    the dump this run was given, already reduced to a basename by the caller
+    when `--redact-paths` is set -- it is what each eligible entry's copyable
+    `--hunt-addr` command names, and `None` omits those commands rather than
+    inventing a path. `verbose`
     controls ONLY that
     section's own presentation (how much of each already-computed entry is
     shown, and how many entries) -- it changes no other section, no
@@ -552,7 +625,8 @@ def render_hunt_summary(records: list, summary: dict, doc_coverage_status: str, 
             print(line)
 
     if investigation_actions:
-        for line in _render_investigation_actions(investigation_actions, w, verbose):
+        for line in _render_investigation_actions(investigation_actions, w, verbose,
+                                                     dump_path):
             print(line)
 
     steps = _build_next_investigation_steps(review_first_ordered, records, summary)

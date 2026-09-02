@@ -30,12 +30,13 @@ from tests.fixtures.hunt_records import (
 
 
 def _capture(records, summary, doc_coverage_status="complete", width=100, region_correlations=None,
-             investigation_actions=None, verbose=False):
+             investigation_actions=None, dump_path=None, verbose=False):
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         render_hunt_summary(records, summary, doc_coverage_status, width=width,
                              region_correlations=region_correlations,
-                             investigation_actions=investigation_actions, verbose=verbose)
+                             investigation_actions=investigation_actions,
+                             dump_path=dump_path, verbose=verbose)
     return buf.getvalue()
 
 
@@ -492,7 +493,8 @@ def test_correlated_regions_are_capped_with_an_omission_notice():
 
 def _action(base=0x1f400130000, size=20 * 1024 * 1024, priority="high",
             reason_codes=("PRIVATE_EXECUTABLE_MEMORY", "MULTIPLE_SCOPES_SKIPPED"),
-            skipped_by=None, evidence_availability="captured", high_action=True):
+            skipped_by=None, evidence_availability="captured", high_action=True,
+            rescan_hunters=("pipe", "obfuscation")):
     t = ScanTarget(kind=ScanTargetKind.MEMORY_REGION, base_address=base, size=size,
                     size_limit=8 * 1024 * 1024,
                     file_offset=(123 if evidence_availability == "captured" else None),
@@ -508,7 +510,9 @@ def _action(base=0x1f400130000, size=20 * 1024 * 1024, priority="high",
         actions.append(RecommendedAction(type="extract_captured_range"))
     else:
         actions.append(RecommendedAction(type="recollect_dump"))
-    actions.append(RecommendedAction(type="targeted_hunter_rescan", hunters=("pipe", "obfuscation")))
+    if rescan_hunters:
+        actions.append(RecommendedAction(type="targeted_hunter_rescan",
+                                          hunters=tuple(rescan_hunters)))
     if priority == "high" and high_action:
         actions.append(RecommendedAction(type="preserve_artifact"))
     return InvestigationAction(
@@ -641,3 +645,147 @@ def test_skipped_target_actions_wraps_at_narrow_width_without_breaking():
     for line in block.splitlines():
         if line.strip():
             assert len(re.sub(r"\x1b\[[0-9;]*m", "", line)) <= 80
+
+
+# ── SKIPPED TARGET ACTIONS: targeted rescan commands ─────────────────────
+
+_DUMP = "/cases/incident.dmp"
+
+
+def _rescan_block(out):
+    return out.split("SKIPPED TARGET ACTIONS", 1)[1].split("NEXT INVESTIGATION", 1)[0]
+
+
+def test_an_eligible_entry_renders_one_copyable_command_per_supported_hunter():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action()
+    out = _capture(records, summary, investigation_actions=[action], dump_path=_DUMP)
+    block = _rescan_block(out)
+    base = f"0x{action.target.base_address:x}"
+    size = f"0x{action.target.size:x}"
+    assert f"dumpex --hunt pipe --hunt-addr {base} --size {size} -- {_DUMP}" in block
+    assert f"dumpex --hunt obfuscation --hunt-addr {base} --size {size} -- {_DUMP}" in block
+
+
+def test_the_command_block_names_the_key_a_new_result_is_matched_back_by():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, investigation_actions=[_action()], dump_path=_DUMP)
+    assert "hunter + source + scope + base_address + size" in _rescan_block(out)
+
+
+def test_no_command_is_rendered_without_a_dump_path():
+    """An invented path would be worse than no command: the section still
+    renders, without one."""
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, investigation_actions=[_action()], dump_path=None)
+    block = _rescan_block(out)
+    assert "SKIPPED TARGET ACTIONS" in out
+    assert "--hunt-addr" not in block
+
+
+def test_a_dump_path_with_a_space_is_quoted_as_one_argument():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, investigation_actions=[_action()],
+                    dump_path=r"C:\Program Files\case 7.dmp")
+    assert '"' + r"C:\Program Files\case 7.dmp" + '"' in _rescan_block(out)
+
+
+def test_a_command_line_is_emitted_whole_even_when_it_exceeds_the_width():
+    """A command broken across lines to fit the terminal is no longer
+    copyable, and a truncated one would name a different range."""
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    long_path = "/cases/" + ("d" * 120) + ".dmp"
+    out = _capture(records, summary, investigation_actions=[_action()],
+                    dump_path=long_path, width=80)
+    assert f"--hunt pipe --hunt-addr 0x{_action().target.base_address:x}" in _rescan_block(out)
+    assert long_path in _rescan_block(out)
+
+
+def test_a_not_captured_target_is_told_to_recollect_rather_than_rescan():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action(evidence_availability="not_captured", priority="low",
+                      reason_codes=(), high_action=False,
+                      skipped_by=(SkipRelationship(hunter="pipe", source="pipe_name_scan",
+                                                    cause="read_failed"),),
+                      rescan_hunters=())
+    out = _capture(records, summary, investigation_actions=[action], dump_path=_DUMP)
+    block = _rescan_block(out)
+    assert "Rescan: unavailable" in block
+    assert "Recollect a fuller dump instead." in block
+    assert "--hunt-addr" not in block
+
+
+def test_hunters_with_no_targeted_capability_are_named_explicitly():
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action(skipped_by=(
+        SkipRelationship(hunter="injection", source="hidden_pe_scan", cause="read_failed"),
+        SkipRelationship(hunter="pipe", source="pipe_name_scan", cause="read_failed"),
+    ), rescan_hunters=("pipe",))
+    out = _capture(records, summary, investigation_actions=[action], dump_path=_DUMP)
+    block = _rescan_block(out)
+    assert "No targeted rescan for: injection" in block
+    assert "--hunt pipe --hunt-addr" in block
+    assert "--hunt injection" not in block
+
+
+def test_a_target_over_its_analyzers_ceiling_gets_one_labelled_supplementary_command():
+    from dumpex.hunt import _registry
+    ceiling = _registry.REGISTRY.get("obfuscation").targeted_capability.request_ceiling
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action(size=ceiling * 2, rescan_hunters=("obfuscation",),
+                      skipped_by=(SkipRelationship(hunter="obfuscation", source="encoding_scan",
+                                                    scope="entropy", cause="read_failed"),))
+    out = _capture(records, summary, investigation_actions=[action], dump_path=_DUMP)
+    block = _rescan_block(out)
+    assert f"--hunt obfuscation --hunt-addr 0x{action.target.base_address:x} " \
+           f"--size 0x{ceiling:x}" in block
+    assert "supplementary" in block
+    assert "does not close the original gap" in block
+
+
+def test_a_dump_path_no_shell_can_carry_gets_arguments_instead_of_a_command():
+    """A path holding a shell metacharacter must never appear in a rendered
+    command line: expanded or substituted, it would send the analyst to rescan
+    a different file, or run whatever the filename embeds. The range, hunter,
+    and size are still exact, so the entry shows those and hands the path back
+    to the analyst."""
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action()
+    out = _capture(records, summary, investigation_actions=[action],
+                    dump_path="/cases/$(id)/incident.dmp")
+    block = _rescan_block(out)
+
+    assert "$(id)" not in block
+    assert "incident.dmp" not in block
+    assert "a shell would expand or execute" in block
+    base = f"0x{action.target.base_address:x}"
+    assert f"--hunt pipe --hunt-addr {base} --size 0x{action.target.size:x}" in block
+    assert f"dumpex /cases" not in block
+
+
+@pytest.mark.parametrize("dump_path", [
+    r"C:\cases\%DEMO%\incident.dmp",
+    r"C:\cases\$env:DEMO\incident.dmp",
+    "/cases/`id`/incident.dmp",
+    "\\\\server\\share\\incident.dmp",
+    "/cases/esc\x1b[31m/incident.dmp",
+])
+def test_no_hostile_dump_path_ever_reaches_a_rendered_command_line(dump_path):
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, investigation_actions=[_action()], dump_path=dump_path)
+    block = _rescan_block(out)
+    # The command line is the thing that must not carry it; the arguments-only
+    # presentation names no path at all.
+    assert "dumpex" not in block
+    for fragment in ("%DEMO%", "$env:", "`id`", "\\\\server", "\x1b"):
+        assert fragment not in block

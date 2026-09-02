@@ -1,0 +1,295 @@
+{
+  "confidence": "none",
+  "coverage": {
+    "limitations": [
+      {
+        "affected_count": null,
+        "available_fields": [],
+        "budget_consumed": null,
+        "budget_limit": null,
+        "code": "TARGETED_SOURCE_NOT_EVALUATED",
+        "counterpart_source": null,
+        "detail": null,
+        "related_sources": [],
+        "related_tids": [],
+        "scope": null,
+        "source": "handle_data",
+        "targets": [],
+        "thread_id": null,
+        "unavailable_fields": []
+      }
+    ],
+    "reasons": [
+      "handle_data is outside this targeted rescan's granted scope -- the result neither measures nor closes that source's own coverage"
+    ],
+    "sources": {
+      "handle_data": {
+        "detail": null,
+        "record_count": null,
+        "state": "absent"
+      },
+      "memory_info": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "pipe_name_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "targeted_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      }
+    },
+    "status": "complete"
+  },
+  "details": {
+    "c2_context": [],
+    "framework_pipes": [],
+    "handle_pipes": [],
+    "private_pipes": [
+      {
+        "encoding": "ascii",
+        "name": "\\.\\pipe\\msagent_1337",
+        "offset": 257,
+        "original_length": 20,
+        "region": {
+          "allocation_base": "0x0000000010000000",
+          "base_address": "0x0000000010000000",
+          "protect": "PAGE_EXECUTE_READ",
+          "size": 8192,
+          "type": "MEM_IMAGE"
+        },
+        "sha256": "d6c2e70f9c9c3c0846775370930f27816544963d398f55aa7d0aa43b0255f06d",
+        "truncated": false
+      }
+    ],
+    "targeted_scope": [
+      {
+        "applicability_reason": null,
+        "base_address": "0x0000000010000000",
+        "capture_state": "complete",
+        "captured_size": 8192,
+        "coverage_status": "complete",
+        "measurements": [
+          {
+            "base_address": "0x0000000010000000",
+            "name": "containing_region",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "containing_allocation_base",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000010000000"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_state",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_COMMIT"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_type",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_IMAGE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_protection",
+            "size": null,
+            "unit": "text",
+            "value": "PAGE_EXECUTE_READ"
+          },
+          {
+            "base_address": null,
+            "name": "containing_module",
+            "size": null,
+            "unit": "text",
+            "value": null
+          },
+          {
+            "base_address": "0x0000000010000000",
+            "name": "evaluated_extent",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "captured_bytes",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "capture_file_offset",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000000003000"
+          },
+          {
+            "base_address": null,
+            "name": "bytes_evaluated",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "pipe_names_retained",
+            "size": null,
+            "unit": "count",
+            "value": 1
+          },
+          {
+            "base_address": null,
+            "name": "budget_state",
+            "size": null,
+            "unit": "text",
+            "value": "available"
+          }
+        ],
+        "scope": "pipe_name",
+        "size": 8192,
+        "source": "pipe_name_scan"
+      },
+      {
+        "applicability_reason": null,
+        "base_address": "0x0000000010000000",
+        "capture_state": "complete",
+        "captured_size": 8192,
+        "coverage_status": "complete",
+        "measurements": [
+          {
+            "base_address": "0x0000000010000000",
+            "name": "containing_region",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "containing_allocation_base",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000010000000"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_state",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_COMMIT"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_type",
+            "size": null,
+            "unit": "text",
+            "value": "MEM_IMAGE"
+          },
+          {
+            "base_address": null,
+            "name": "containing_region_protection",
+            "size": null,
+            "unit": "text",
+            "value": "PAGE_EXECUTE_READ"
+          },
+          {
+            "base_address": null,
+            "name": "containing_module",
+            "size": null,
+            "unit": "text",
+            "value": null
+          },
+          {
+            "base_address": "0x0000000010000000",
+            "name": "evaluated_extent",
+            "size": 8192,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "captured_bytes",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "capture_file_offset",
+            "size": null,
+            "unit": "text",
+            "value": "0x0000000000003000"
+          },
+          {
+            "base_address": null,
+            "name": "bytes_evaluated",
+            "size": null,
+            "unit": "bytes",
+            "value": 8192
+          },
+          {
+            "base_address": null,
+            "name": "c2_records_retained",
+            "size": null,
+            "unit": "count",
+            "value": 0
+          },
+          {
+            "base_address": null,
+            "name": "budget_state",
+            "size": null,
+            "unit": "text",
+            "value": "available"
+          }
+        ],
+        "scope": "c2_context",
+        "size": 8192,
+        "source": "pipe_name_scan"
+      }
+    ],
+    "unbacked_in_rgn": []
+  },
+  "findings": [
+    {
+      "check": "pipe.string_scan_lead",
+      "confidence": "low",
+      "evidence_refs": [],
+      "facts": [
+        "VA=0x0000000010000101 file_offset=0x3101 name='\\\\.\\\\pipe\\\\msagent_1337' region_type=MEM_IMAGE"
+      ],
+      "id": "finding-62c14ab737701cf1b774f18c606c9897",
+      "inference": "1 occurrence(s) of a '\\pipe\\' name found in non-system-DLL memory via byte-pattern scan.",
+      "iocs": [],
+      "limitations": [
+        "Not corroborated by HandleDataStream."
+      ],
+      "rationale": "A string match proves only that these bytes exist somewhere in memory \u2014 not that any handle was ever opened by that name, nor that the name isn't leftover/freed heap data or an unrelated buffer. Reported as a lead for the analyst and to locate regions for C2-context/execution correlation; does NOT contribute to the pipe score on its own.",
+      "rule_id": "pipe.string_scan_lead",
+      "rule_version": null,
+      "severity": "low",
+      "tag": "lead",
+      "technique_ids": []
+    }
+  ],
+  "hunter": "pipe",
+  "lead_count": 1,
+  "max_score": 3,
+  "review_priority": "low",
+  "score": 0,
+  "status": "NOT_DETECTED_IN_SCANNED_SCOPE",
+  "verdict_level": "clean"
+}

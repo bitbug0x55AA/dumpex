@@ -13,7 +13,8 @@ bare module-attribute assignment -- nothing here can leak into a later,
 unrelated test regardless of execution order.
 
 Every scenario (one per hunter, plus `stomping_ioc_hit`/`cs-beacon_multi`
-as second scenarios for those two hunters -- see
+as second scenarios for those two hunters, and `pipe_targeted`/
+`obfuscation_targeted` for the `--hunt-addr` shape of the same surface -- see
 tests/fixtures/hunt_cli_scenarios.py's own docstring for why) is defined
 ONCE in tests/fixtures/hunt_cli_scenarios.py's `SCENARIOS` table and run
 here BOTH normal and `--verbose` via `test_hunt_scenario_cli`'s own
@@ -25,8 +26,9 @@ file diffs against, so the "thing that produces the golden" and "thing
 that checks against it" can never independently drift the way two
 hand-copied fixture constructions could.
 
-6 of the 9 scenarios (injection/hollowing/stomping[+ioc_hit]/pipe/
-cs-beacon[+multi]/obfuscation) render `--verbose` via the shared
+Every scenario but `yara` (injection/hollowing/stomping[+ioc_hit]/
+pipe[+targeted]/cs-beacon[+multi]/obfuscation[+targeted]) renders
+`--verbose` via the shared
 `Finding.print(level=DetailLevel.NORMAL/VERBOSE)` machinery; `yara` does NOT
 share that model (see tests/hunt/test_finding_invariants.py's own
 docstring) and has its own, independent --verbose branch in
