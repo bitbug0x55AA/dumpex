@@ -47,8 +47,28 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   range whose own average clears the threshold is still reported as one hit, as
   before.
 
+- The `--hunt all` skipped-target queue now prints the targeted rescan to run
+  next. Each eligible entry renders one copyable `--hunt-addr` command per
+  skipping hunter that has a targeted capability, quoted for the dump path the
+  run was given, alongside the `hunter + source + scope + base_address + size`
+  key the new result is matched back by. A hunter with no targeted capability
+  is named as unsupported instead; a target whose bytes this dump never
+  captured is told to recollect rather than rescan; and a target larger than
+  the hunter's request ceiling gets one capped command, labelled supplementary,
+  that does not claim to close the original gap. Structured output carries no
+  command string: the address, size, and hunters are the contract, and quoting
+  belongs to the shell that reads a command line. `--redact-paths` reduces the
+  dump path in a rendered command to its basename, so a `--txt` transcript stays
+  as shareable as the structured document.
+
 ### Changed
 
+- `investigation_actions[].recommended_actions` now includes a
+  `targeted_hunter_rescan` entry only when a hunter that skipped the target can
+  actually run one over it, and only when this dump holds bytes to rescan; its
+  `hunters` names that subset rather than every skipping hunter. `skipped_by`
+  is unchanged and still names all of them. Schema v2.14 is unchanged: every
+  archived document stays valid.
 - `--size` now requires `--hunt-addr` when used with `--hunt`, and is rejected
   with a usage error otherwise. It previously had no effect there, which let a
   targeted invocation missing its address run an unbounded whole-dump hunt

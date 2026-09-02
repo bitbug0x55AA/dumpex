@@ -449,6 +449,32 @@ to an originating gap by `hunter + source + scope + base_address + size`.
 Deep-mode historical evidence did not close an originating hunter's coverage
 gap, and current gaps likewise require that hunter's successful targeted rescan.
 
+#### The `targeted_hunter_rescan` recommendation
+
+A `recommended_actions` entry of type `targeted_hunter_rescan` carries
+`hunters`: the hunters that skipped this target **and** can run a `--hunt-addr`
+invocation over it. It is the only action type that carries `hunters`, and the
+list is a subset of `skipped_by`, in the fixed hunter order — a hunter without a
+targeted capability never appears in it, and the entry itself is absent when no
+skipping hunter has one. It is also absent when
+`evidence_availability` is `not_captured`: a local rescan of a range this dump
+holds no bytes for would read nothing, so `recollect_dump` is the recommendation
+that stands. Read `skipped_by`, not `hunters`, for who left the gap.
+
+Everything needed to run one is already in the action: `target.base_address`,
+`target.size`, and the hunter. The document deliberately carries no command
+string — quoting is a property of the shell that reads a command line, not of a
+result — so build the invocation yourself, capping `--size` at the hunter's own
+request ceiling (256 MiB, or 32 MiB for `obfuscation`) and treating a capped
+request as covering that piece only. The console renders the same command for
+the dump path it was given.
+
+Reconcile a rescan against the relationship it was meant to answer, and close
+that relationship only when its own scope came back `complete`. One target may
+carry several relationships from the same hunter — a pipe region whose
+`pipe_name` and `c2_context` budgets both ran out is one range and one rescan —
+and that rescan's per-scope closures decide which of them it actually closed.
+
 ## Artifacts and diagnostics
 
 `artifacts[]` describes files dumpex produced, including their kind, path,

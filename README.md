@@ -18,7 +18,9 @@ encoded/obfuscated payloads.
   (`--profile`), modules, threads, and captured memory regions.
 - **TTP hunting** — run focused or complete hunts with explicit evidence,
   confidence, verdict, and coverage semantics, or rescan a single
-  virtual-address range with one hunter (`--hunt-addr`).
+  virtual-address range with one hunter (`--hunt-addr`). `--hunt all` lists the
+  ranges it skipped and prints the rescan command for each one that can be
+  rescanned.
 - **Alert triage** — build a report around a thread ID, address, or string.
 - **Dump comparison** — identify module, thread, memory-region, and protection
   changes between two dumps.
