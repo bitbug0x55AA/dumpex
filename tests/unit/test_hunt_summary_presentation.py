@@ -664,8 +664,8 @@ def test_an_eligible_entry_renders_one_copyable_command_per_supported_hunter():
     block = _rescan_block(out)
     base = f"0x{action.target.base_address:x}"
     size = f"0x{action.target.size:x}"
-    assert f"dumpex {_DUMP} --hunt pipe --hunt-addr {base} --size {size}" in block
-    assert f"dumpex {_DUMP} --hunt obfuscation --hunt-addr {base} --size {size}" in block
+    assert f"dumpex --hunt pipe --hunt-addr {base} --size {size} -- {_DUMP}" in block
+    assert f"dumpex --hunt obfuscation --hunt-addr {base} --size {size} -- {_DUMP}" in block
 
 
 def test_the_command_block_names_the_key_a_new_result_is_matched_back_by():

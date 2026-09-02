@@ -169,9 +169,15 @@ path quoted so the line means the same thing in a POSIX shell, PowerShell, and
        pipe/pipe_name_scan:c2_context (scan budget exhausted),
        obfuscation/encoding_scan:entropy (scan truncated)
        Rescan (match the new result back by hunter + source + scope + base_address + size):
-         dumpex "C:\cases\case 7.dmp" --hunt pipe --hunt-addr 0x7ff000 --size 0x4000000
-         dumpex "C:\cases\case 7.dmp" --hunt obfuscation --hunt-addr 0x7ff000 --size 0x2000000
+         dumpex --hunt pipe --hunt-addr 0x7ff000 --size 0x4000000 -- "C:\cases\case 7.dmp"
+         dumpex --hunt obfuscation --hunt-addr 0x7ff000 --size 0x2000000 -- "C:\cases\case 7.dmp"
 ```
+
+Options come first and the dump path comes last, behind a `--` terminator. A
+dump may legally be named `-case.dmp`, and dumpex reads a leading `-` as an
+option no matter how the shell quoted it, so the terminator is what makes such
+a command run at all; it is used for every command rather than only the ones
+that need it. Add any further options **before** the `--`.
 
 The rules behind that block:
 
@@ -200,7 +206,7 @@ alone:
 | `!` | `cmd.exe` expands `!VAR!` inside double quotes under delayed expansion |
 | Two consecutive backslashes (a UNC path) | A POSIX shell collapses `\\` to `\` inside double quotes, so `\\server\share` would name `\server\share` |
 | A trailing backslash | Escapes the closing quote in a POSIX shell |
-| A control character | The only way to print one safely is to change it, and a command naming an altered path names a different file |
+| A character a terminal acts on | C0 and C1 controls, `DEL`, the bidi marks, overrides and isolates, and the line/paragraph separators. The only way to print one safely is to change it, and a command naming an altered path names a different file — while printing it raw would let a filename reorder or forge the line you read |
 
 This is a refusal, not a best effort. A command line that expands, splits, or
 executes part of a filename would send you to rescan the wrong dump — or run

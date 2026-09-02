@@ -92,5 +92,6 @@ def test_quickstart_explains_how_to_act_on_a_rendered_rescan_command():
         "No targeted rescan for:",
         "Rescan: unavailable",
         "holds characters a shell would expand or execute",
+        "which is what lets a dump named `-case.dmp` open at all",
     ):
         assert guidance in text, guidance

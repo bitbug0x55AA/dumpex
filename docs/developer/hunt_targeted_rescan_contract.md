@@ -393,14 +393,21 @@ command is built:
    that stands; a rescan of a range the dump does not hold would read nothing.
 5. A limitation naming a reason but no target contributes no queue entry, so it
    produces no command. A range is never invented to make one.
-6. The dump path is rendered as one shell argument, reduced to a basename under
+6. A command puts its options first and ends with `-- <dump path>`. Dumpex's
+   own parser reads a leading `-` as an option however the shell quoted it, so
+   a path-first line cannot open a dump legitimately named `-case.dmp`. The
+   terminator is unconditional: one shape per entry, and no condition to get
+   wrong.
+7. The dump path is rendered as one shell argument, reduced to a basename under
    `--redact-paths` so a `--txt` transcript is as shareable as the structured
    document.
-7. A command line is emitted only when every token means the same thing in a
+8. A command line is emitted only when every token means the same thing in a
    POSIX shell, PowerShell, and `cmd.exe`. `is_renderable_argument()` owns that
-   decision and refuses `%`, `$`, a backtick, `"`, `!`, control characters, a
-   trailing backslash, and the doubled backslash of a UNC path; the entry then
-   shows the arguments without the program name or the path. A line that
+   decision and refuses `%`, `$`, a backtick, `"`, `!`, every character
+   `console_safe()` would rewrite (C0/C1 controls, DEL, the bidi marks,
+   overrides and isolates, and the line/paragraph separators), a trailing
+   backslash, and the doubled backslash of a UNC path; the entry then shows the
+   arguments without the program name or the path. A line that
    expands, splits, or executes part of a filename resolves to another dump
    while looking correct, which is strictly worse than showing none.
 

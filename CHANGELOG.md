@@ -57,11 +57,15 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   the hunter's request ceiling gets one capped command, labelled supplementary,
   that does not claim to close the original gap. Structured output carries no
   command string: the address, size, and hunters are the contract, and quoting
-  belongs to the shell that reads a command line. A dump path no single quoting
-  rule can carry through all three shells -- one holding `%`, `$`, a backtick,
-  `"`, `!`, a control character, a trailing backslash, or the doubled backslash
-  of a UNC path -- gets the arguments without a command line instead, rather
-  than a line that would expand, split, or execute part of the filename.
+  belongs to the shell that reads a command line. Options come first and the
+  dump path last, behind a `--` terminator, so a dump legitimately named
+  `-case.dmp` still gets a command that runs. A dump path no single quoting rule
+  can carry through all three shells -- one holding `%`, `$`, a backtick, `"`,
+  `!`, a character a terminal acts on (C0/C1 controls, `DEL`, bidi marks,
+  overrides and isolates, line and paragraph separators), a trailing backslash,
+  or the doubled backslash of a UNC path -- gets the arguments without a command
+  line instead, rather than a line that would expand, split, execute part of the
+  filename, or misrepresent itself on screen.
   `--redact-paths` reduces the
   dump path in a rendered command to its basename, so a `--txt` transcript stays
   as shareable as the structured document.

@@ -34,8 +34,10 @@ from dataclasses import dataclass
 from dumpex.hunt import _registry
 from dumpex.hunt._investigation import InvestigationAction, InvestigationActionType
 from dumpex.output.records import HUNTERS
+from dumpex.ui.colors import console_safe
 
 __all__ = [
+    "ARGUMENT_TERMINATOR",
     "PROGRAM_NAME",
     "RescanCommand",
     "UnrenderableArgument",
@@ -50,14 +52,23 @@ __all__ = [
 # line has to be the one the packaged tool answers to.
 PROGRAM_NAME = "dumpex"
 
+# Every rendered command puts its options first and ends with `-- <dump path>`.
+# A dump file may legally be named `-case.dmp`, and dumpex's own argument parser
+# reads a leading `-` as an option however the shell quoted it, so a path-first
+# command line for one of those fails with "the following arguments are
+# required: dumpfile". The terminator is unconditional rather than added only
+# for a path that needs it: one shape for every entry, and no condition to get
+# wrong. Further options belong BEFORE the terminator.
+ARGUMENT_TERMINATOR = "--"
+
 # Characters an unquoted token carries through all three shells unchanged.
 # Deliberately minimal, and notably WITHOUT the backslash: a POSIX shell reads
 # an unquoted `\` as an escape, so bare `C:\a\b.dmp` arrives as `C:ab.dmp`.
 # `%` is expanded by cmd.exe, and `@` and `,` are PowerShell operators in
 # leading position. Everything outside this set goes inside double quotes,
 # which is where essentially every Windows path lands. A leading `-` needs no
-# special handling: quoting does not stop dumpex's own argument parser reading
-# a token as a flag, so it would buy nothing here.
+# entry here: quoting does not stop an argument parser reading a token as a
+# flag, which is what `ARGUMENT_TERMINATOR` above is for.
 _BARE_ARGUMENT_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
     ":./_-"
@@ -108,22 +119,32 @@ def is_renderable_argument(value: str) -> bool:
     False for a value carrying any of `_UNQUOTABLE_ARGUMENT_CHARS`; for one
     ending in a backslash, which would escape the closing quote in a POSIX
     shell; for one containing a doubled backslash (`_POSIX_QUOTED_ESCAPE`),
-    which a POSIX shell collapses to one inside double quotes; for a control
-    character, since the only way to print one safely is to replace it, and a
-    command naming an altered path is a command naming a different file; and
-    for the empty string, which is not a path.
+    which a POSIX shell collapses to one inside double quotes; for one holding
+    any character `console_safe()` would rewrite; and for the empty string,
+    which is not a path.
+
+    `console_safe()` is the repository's single answer to "would a terminal act
+    on this text" -- C0 and C1 controls, DEL, the bidi marks, overrides and
+    isolates, and the line/paragraph separators. It is used here as a predicate
+    and never as a transform: its escaped output is a DIFFERENT path, so a
+    command built from it would name a different file, while printing the raw
+    character would let a filename reorder or forge the line an analyst reads.
+    Reusing it also means a character added to its table is refused here the
+    same day, rather than needing a second list to be remembered.
 
     Windows filenames cannot contain `"`, and none of `%`, `$`, a backtick, or
     `!` appears in an ordinary case path, so this refuses almost nothing real
     beyond UNC paths -- and refuses exactly the paths a naively quoted command
-    line would resolve somewhere else, or would execute.
+    line would resolve somewhere else, would execute, or would misrepresent on
+    screen.
     """
     if not isinstance(value, str) or not value:
         return False
     if value.endswith("\\") or _POSIX_QUOTED_ESCAPE in value:
         return False
-    return not any(
-        ch in _UNQUOTABLE_ARGUMENT_CHARS or ch < " " or ch == "\x7f" for ch in value)
+    if console_safe(value) != value:
+        return False
+    return not any(ch in _UNQUOTABLE_ARGUMENT_CHARS for ch in value)
 
 
 def quote_argument(value: str) -> str:
@@ -197,13 +218,21 @@ class RescanCommand:
         return _registry.REGISTRY.targeted_source(self.hunter)
 
     @property
-    def argv(self) -> tuple:
-        """The invocation as separate arguments, before any quoting. Always
-        available, whatever the dump path holds -- this is the structured form,
-        and it is what a caller falls back to describing when the path cannot
-        appear in a command line."""
-        return (PROGRAM_NAME, self.dump_path, "--hunt", self.hunter,
+    def option_argv(self) -> tuple:
+        """The options alone, in the order they are rendered: what to run once
+        the dump is named. Every token here is bare-safe by construction -- a
+        hunter identity, two hex numbers, and the flags themselves -- so this
+        part can always be rendered, whatever the dump path holds."""
+        return ("--hunt", self.hunter,
                 "--hunt-addr", f"0x{self.base_address:x}", "--size", f"0x{self.size:x}")
+
+    @property
+    def argv(self) -> tuple:
+        """The invocation as separate arguments, before any quoting: options
+        first, then `--`, then the dump path. Always available, whatever the
+        path holds -- this is the structured form, and it is what a caller falls
+        back to describing when the path cannot appear in a command line."""
+        return (PROGRAM_NAME, *self.option_argv, ARGUMENT_TERMINATOR, self.dump_path)
 
     @property
     def renderable(self) -> bool:
@@ -221,10 +250,10 @@ class RescanCommand:
         return " ".join(quote_argument(arg) for arg in self.argv)
 
     def render_arguments(self) -> str:
-        """Everything but the program name and the dump path: what to run once
-        the analyst has quoted the path for their own shell. Always available,
-        since none of these tokens can fail to render."""
-        return " ".join(quote_argument(arg) for arg in self.argv[2:])
+        """Everything but the program name, the terminator, and the dump path:
+        what to run once the analyst has quoted the path for their own shell.
+        Always available, since none of these tokens can fail to render."""
+        return " ".join(quote_argument(arg) for arg in self.option_argv)
 
 
 def build_rescan_commands(action: InvestigationAction, dump_path: str) -> tuple:

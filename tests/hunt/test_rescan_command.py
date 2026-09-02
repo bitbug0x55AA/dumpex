@@ -21,8 +21,9 @@ from dumpex.hunt._investigation import (
     build_investigation_queue,
 )
 from dumpex.hunt._rescan_command import (
-    PROGRAM_NAME, RescanCommand, UnrenderableArgument, build_rescan_commands,
-    is_renderable_argument, quote_argument, unsupported_rescan_hunters,
+    ARGUMENT_TERMINATOR, PROGRAM_NAME, RescanCommand, UnrenderableArgument,
+    build_rescan_commands, is_renderable_argument, quote_argument,
+    unsupported_rescan_hunters,
 )
 from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, CoverageStatus, LimitationCode,
@@ -237,7 +238,8 @@ def test_the_rendered_command_is_a_single_copyable_invocation():
     command = RescanCommand(hunter="yara", dump_path=DUMP, base_address=0x7ff000,
                             size=0x100000, target_size=0x100000)
     assert command.render() == (
-        f"{PROGRAM_NAME} {DUMP} --hunt yara --hunt-addr 0x7ff000 --size 0x100000")
+        f"{PROGRAM_NAME} --hunt yara --hunt-addr 0x7ff000 --size 0x100000 "
+        f"{ARGUMENT_TERMINATOR} {DUMP}")
     assert "\n" not in command.render()
 
 
@@ -484,3 +486,100 @@ def test_no_hunter_name_is_written_down_in_the_command_module():
         line for line in source.splitlines() if not line.strip().startswith("#"))
     for hunter in HUNTERS:
         assert f'"{hunter}"' not in code and f"'{hunter}'" not in code, hunter
+
+
+# ── command shape: options first, then the argument terminator ───────────
+
+def test_the_dump_path_comes_last_behind_an_argument_terminator():
+    """A dump may legally be named `-case.dmp`, and dumpex's own parser reads a
+    leading `-` as an option however the shell quoted it. Options first and a
+    closing `-- <path>` is therefore the shape for every command, not just the
+    ones that need it."""
+    command = RescanCommand(hunter="pipe", dump_path="-case.dmp", base_address=0x1000,
+                            size=0x2000, target_size=0x2000)
+    assert command.argv[0] == PROGRAM_NAME
+    assert command.argv[-2:] == (ARGUMENT_TERMINATOR, "-case.dmp")
+    assert command.render() == (
+        "dumpex --hunt pipe --hunt-addr 0x1000 --size 0x2000 -- -case.dmp")
+
+
+def test_every_rendered_command_uses_the_same_shape():
+    for path in ("/cases/incident.dmp", r"C:\cases\incident.dmp", "-case.dmp",
+                 r"C:\Program Files\case 7.dmp"):
+        command = RescanCommand(hunter="yara", dump_path=path, base_address=0x10,
+                                size=0x20, target_size=0x20)
+        assert command.argv[-2] == ARGUMENT_TERMINATOR
+        assert command.argv[-1] == path
+        assert ARGUMENT_TERMINATOR not in command.option_argv
+
+
+def test_the_arguments_only_fallback_carries_no_terminator_and_no_path():
+    """The terminator exists to protect the path; with no path in the line it
+    would only mislead."""
+    command = RescanCommand(hunter="pipe", dump_path="/cases/$(id)/a.dmp",
+                            base_address=0x1000, size=0x2000, target_size=0x2000)
+    assert not command.renderable
+    rendered = command.render_arguments()
+    assert rendered == "--hunt pipe --hunt-addr 0x1000 --size 0x2000"
+    assert ARGUMENT_TERMINATOR not in rendered.split()
+    assert "$(id)" not in rendered
+
+
+@pytest.mark.parametrize("dump_path", [
+    pytest.param("-case.dmp", id="bare-leading-dash"),
+    pytest.param("--case.dmp", id="double-leading-dash"),
+    pytest.param("-", id="single-dash"),
+])
+def test_a_dash_leading_dump_name_is_rendered_rather_than_refused(dump_path):
+    """These are ordinary filenames, not hostile ones: they must still get a
+    command, and the terminator is what makes that command run."""
+    assert is_renderable_argument(dump_path)
+    command = RescanCommand(hunter="pipe", dump_path=dump_path, base_address=0x1000,
+                            size=0x2000, target_size=0x2000)
+    assert command.renderable
+    assert command.render().endswith(f"{ARGUMENT_TERMINATOR} {dump_path}")
+
+
+# ── terminal-hostile characters ──────────────────────────────────────────
+
+@pytest.mark.parametrize("label,path", [
+    ("C0 escape", "case\x1b[31m.dmp"),
+    ("DEL", "case\x7f.dmp"),
+    ("C1 CSI", "case\u009b31m.dmp"),
+    ("C1 low", "case\u0080.dmp"),
+    ("right-to-left override", "case\u202eevil.dmp"),
+    ("left-to-right mark", "case\u200e.dmp"),
+    ("line separator", "case\u2028next.dmp"),
+    ("paragraph separator", "case\u2029next.dmp"),
+    ("first strong isolate", "case\u2068x.dmp"),
+    ("left-to-right isolate", "case\u2066x.dmp"),
+    ("zero width no-break space", "case\ufeff.dmp"),
+])
+def test_a_path_a_terminal_would_act_on_is_refused(label, path):
+    """A bidi override reorders what the analyst reads, so the line on screen
+    need not be the line that runs; a C1 introducer can start a control
+    sequence. Neither may reach the terminal, and escaping them is not an
+    option either -- an escaped path names a different file."""
+    assert not is_renderable_argument(path), label
+    with pytest.raises(UnrenderableArgument):
+        quote_argument(path)
+
+
+def test_terminal_safety_is_delegated_to_the_repositorys_own_answer():
+    """`console_safe()` is the one table of characters a terminal acts on. A
+    second list here would drift from it silently; this pins the delegation so
+    a character added there is refused here without another edit."""
+    from dumpex.ui.colors import _CONSOLE_ESCAPES
+
+    for codepoint in _CONSOLE_ESCAPES:
+        path = f"case{chr(codepoint)}.dmp"
+        assert not is_renderable_argument(path), hex(codepoint)
+
+
+def test_ordinary_non_ascii_paths_are_still_rendered():
+    """The refusal is about characters a terminal acts on, not about non-ASCII
+    text: a case directory named in any script stays perfectly renderable."""
+    for path in ("/cases/\u6848\u4ef6/incident.dmp", "/cases/\u00e9v\u00e9nement/a.dmp",
+                 "/cases/\u0434\u0435\u043b\u043e/a.dmp"):
+        assert is_renderable_argument(path)
+        assert path in quote_argument(path)

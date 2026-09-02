@@ -16,6 +16,7 @@ import pytest
 
 jsonschema = pytest.importorskip("jsonschema")
 
+import dumpex.cli as cli
 import dumpex.hunt.pipe.memory_scan as pipe_memory_scan
 import dumpex.hunt.pipe.targeted as pipe_targeted
 from dumpex.hunt import _registry
@@ -107,7 +108,7 @@ def test_the_rendered_command_runs_and_lands_on_the_range_the_queue_named(
 
     monkeypatch.setattr(pipe_targeted, "read_region_spanning",
                         lambda mf, addr, length: b"\x00" * length)
-    argv_extra = list(command.argv[2:])
+    argv_extra = list(command.option_argv)
     exit_code, rescan_doc, _rescan_console = run_cli(monkeypatch, tmp_path, argv_extra, _mf())
 
     assert not list(validator.iter_errors(rescan_doc))
@@ -118,6 +119,38 @@ def test_the_rendered_command_runs_and_lands_on_the_range_the_queue_named(
     assert scan_scope["source"] == _registry.REGISTRY.targeted_source("pipe")
     assert scan_scope["base_address"] == action["target"]["base_address"]
     assert scan_scope["size"] == size
+
+
+def test_a_rendered_command_for_a_dash_leading_dump_name_actually_runs(
+        monkeypatch, tmp_path, capsys):
+    """A dump named `-case.dmp` is an ordinary file: `--hunt all -- -case.dmp`
+    opens it, so the command that run recommends has to open it too. Driven
+    through the real `cli.main()` argument parser, which is what rejects a
+    leading `-` in a positional however the shell quoted it."""
+    dump = tmp_path / "-case.dmp"
+    dump.write_bytes(b"synthetic dump content")
+    command = RescanCommand(hunter="pipe", dump_path=str(dump), base_address=_BASE,
+                            size=_SIZE, target_size=_SIZE)
+    assert command.renderable
+
+    monkeypatch.setattr(pipe_targeted, "read_region_spanning",
+                        lambda mf, addr, length: b"\x00" * length)
+    monkeypatch.setattr(cli, "open_dump", lambda path: _mf() if path == str(dump)
+                        else pytest.fail(f"opened {path!r}, not the dash-leading dump"))
+    # Exactly the tokens the console prints, minus the program name: argparse
+    # sees the same argv a shell would build from that line.
+    monkeypatch.setattr("sys.argv", ["dumpex", *command.argv[1:]])
+    exit_code = 0
+    try:
+        cli.main()
+    except SystemExit as exc:
+        exit_code = exc.code
+
+    # Exit 2 is argparse's own usage failure -- what a path-first command line
+    # for this dump produces ("the following arguments are required: dumpfile").
+    assert exit_code != 2, (
+        f"the rendered command was rejected as a usage error: {command.render()}")
+    assert "HUNT: TARGETED RESCAN" in capsys.readouterr().out
 
 
 def test_the_document_carries_no_shell_command_anywhere_in_the_queue(monkeypatch, tmp_path):

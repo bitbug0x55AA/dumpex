@@ -214,7 +214,9 @@ the queue is already ordered by priority.
 
 - Run the command as printed. It names the range the queue named, capped at the
   hunter's request ceiling; a capped command is labelled supplementary and
-  covers that piece only.
+  covers that piece only. Options come first and the dump path comes last behind
+  a `--`, which is what lets a dump named `-case.dmp` open at all; add any
+  further options before the `--`.
 - Match the new result back on `hunter + source + scope + base_address + size`,
   which the rescan's own `summary.scan_scope` carries. Nothing merges
   automatically, and the original entry keeps

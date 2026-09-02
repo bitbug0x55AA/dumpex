@@ -82,6 +82,15 @@ def test_cli_reference_documents_the_queues_rescan_commands():
         assert rule in text, rule
 
 
+def test_cli_reference_shows_the_terminator_shape_a_dash_leading_dump_needs():
+    """The `--` is the whole reason a dump named `-case.dmp` can be rescanned,
+    so the reference has to show it in the example and say why."""
+    text = _text()
+    assert "--size 0x4000000 -- " in text
+    assert "may legally be named `-case.dmp`" in text
+    assert "Add any further options **before** the `--`." in text
+
+
 def test_cli_reference_documents_every_path_a_command_line_cannot_carry():
     """A refusal an analyst can hit has to be lookup-able, with the reason. Each
     row here corresponds to a rule in
@@ -96,6 +105,8 @@ def test_cli_reference_documents_every_path_a_command_line_cannot_carry():
         r"collapses `\\` to `\` inside double quotes",
         "Escapes the closing quote in a POSIX shell",
         "names a different file",
+        "bidi marks, overrides and isolates",
+        "reorder or forge the line you read",
     ):
         assert reason in text, reason
     assert "This is a refusal, not a best effort." in text
