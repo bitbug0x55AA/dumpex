@@ -413,8 +413,23 @@ def collect_hunt(mf: MinidumpFile, selected: str, *, yara_dir: str = None,
     return CommandResult(kind="hunt", records=records,
                           coverage=_hunt_coverage_report(records, summary), summary=summary)
 
+
+def _rescan_dump_path(mf: MinidumpFile, redact_paths: bool) -> "str | None":
+    """The dump path a skipped-target entry renders its `--hunt-addr` follow-up
+    command for, or `None` for a MinidumpFile that never came from
+    `open_dump()`. Under `--redact-paths` it is reduced to a basename, the same
+    rule `dumpex.output.envelope` applies to every path it records: the console
+    and `--txt` transcript are as shareable as the structured document, and the
+    command still runs from the directory holding the dump."""
+    path = getattr(mf, "filename", None)
+    if not isinstance(path, str) or not path:
+        return None
+    return os.path.basename(path.rstrip("/\\")) if redact_paths else path
+
+
 def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = None,
-             ref_dir: str = None, collect_records: bool = False):
+             ref_dir: str = None, collect_records: bool = False,
+             redact_paths: bool = False):
     """Run selected hunters, render reports, and return their results.
 
     With collect_records false, return the legacy results dictionary. With it
@@ -424,7 +439,10 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
 
     For hunt-all, the same metadata-only actions and summary feed console and
     structured output. Registry selection preserves fixed order and never skips
-    an analyzer because an earlier analyzer scored zero.
+    an analyzer because an earlier analyzer scored zero. Its skipped-target
+    section renders each eligible entry's targeted rescan for this dump's own
+    path; `redact_paths` reduces that path to a basename, matching what
+    `--redact-paths` does to every path in the structured document.
     """
     # Derived from HUNTERS (already imported above for the record order)
     # rather than repeated as a second literal: a hunter added to /
@@ -515,7 +533,12 @@ def cmd_hunt(mf: MinidumpFile, ttp: str, verbose: bool = False, yara_dir: str = 
         summary_presentation.render_hunt_summary(
             records, summary, doc_coverage.status.value,
             region_correlations=region_correlations,
-            investigation_actions=investigation_actions, verbose=verbose)
+            investigation_actions=investigation_actions,
+            # The path this invocation was given, so a queue entry can render
+            # the targeted rescan an analyst copies verbatim. The section
+            # renders without commands rather than inventing one when the path
+            # is unknown.
+            dump_path=_rescan_dump_path(mf, redact_paths), verbose=verbose)
 
     if collect_records:
         return results, records, investigation_actions, yara_provenance

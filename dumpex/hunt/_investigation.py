@@ -7,11 +7,18 @@ is separate and never treated as suspiciousness.
 
 This pass reads existing records and MemoryInfo metadata only. It performs no
 content reads, so bytes_examined is zero.
+
+Recommendations are advisory and close nothing: a `targeted_hunter_rescan`
+names the hunters the analyzer registry actually grants a `--hunt-addr`
+capability, and only while this dump holds bytes to rescan. Who left the gap
+stays in `skipped_by` either way. `dumpex.hunt._rescan_command` renders the
+command for one of those recommendations.
 """
 from dataclasses import dataclass, field
 from enum import Enum
 
 from dumpex.core.memory import prot_str
+from dumpex.hunt import _registry
 from dumpex.output.coverage import ScanTarget, ScanTargetKind, LimitationCode
 from dumpex.output.records import (
     HUNTERS, HunterRecord,
@@ -276,11 +283,19 @@ class InvestigationActionType(str, Enum):
     CHUNKED_ANALYSIS        = "chunked_analysis"
 
 
-# Only a real hunter-specific targeted rescan (not implemented by this
-# issue -- see its own "Designing the future targeted-rescan engine in
-# full" non-goal) could ever resolve the ORIGINAL hunter's coverage gap;
-# this module never emits any other value.
+# Only a separately executed, complete hunter-specific targeted rescan can
+# resolve the ORIGINAL hunter's coverage gap. Building this queue reads
+# metadata and recommends work; it runs none, so a queue entry never closes
+# anything by existing and this module emits no other value.
 _COVERAGE_EFFECT_GAP_NOT_RESOLVED = "original_hunter_gap_not_resolved"
+
+
+def _targeted_capable_hunters() -> frozenset:
+    """The registry's own roster of hunters a `--hunt-addr` invocation can
+    name. Resolved per call rather than captured at import: the registry is the
+    one analyzer catalog, and reading it at the moment a queue is built keeps
+    this answer in step with what that registry actually grants."""
+    return frozenset(_registry.REGISTRY.targeted_identities())
 
 
 def _require_str(value, name: str) -> str:
@@ -691,7 +706,17 @@ def _recommended_actions(priority: str, evidence_availability: str, hunters: tup
     real, actionable option. `preserve_artifact` ("preserve/export the
     artifact before external analysis") is only offered when there IS a
     local artifact to preserve at all -- captured or partial -- never for
-    a target whose bytes are entirely absent from this dump."""
+    a target whose bytes are entirely absent from this dump.
+
+    `targeted_hunter_rescan` names only the subset of `hunters` the analyzer
+    registry actually grants a `--hunt-addr` capability, and only while this
+    dump holds bytes to rescan. A hunter with no targeted executor cannot
+    close its own gap from this dump at all, and a rescan of a range this
+    dump never captured would read nothing -- recollection is the honest
+    recommendation in both cases, and it is already in this list whenever the
+    bytes are not fully captured. The gap those hunters left is still real:
+    it stays visible in `skipped_by`, and the console names them as
+    rescan-unsupported rather than dropping them silently."""
     actions = [RecommendedAction(type=InvestigationActionType.INSPECT_METADATA.value)]
     has_captured_bytes = evidence_availability in (
         EvidenceAvailability.CAPTURED.value, EvidenceAvailability.PARTIAL.value)
@@ -699,8 +724,11 @@ def _recommended_actions(priority: str, evidence_availability: str, hunters: tup
         actions.append(RecommendedAction(type=InvestigationActionType.EXTRACT_CAPTURED_RANGE.value))
     if evidence_availability != EvidenceAvailability.CAPTURED.value:
         actions.append(RecommendedAction(type=InvestigationActionType.RECOLLECT_DUMP.value))
-    actions.append(RecommendedAction(
-        type=InvestigationActionType.TARGETED_HUNTER_RESCAN.value, hunters=hunters))
+    capable = _targeted_capable_hunters()
+    rescan_hunters = tuple(h for h in hunters if h in capable)
+    if rescan_hunters and has_captured_bytes:
+        actions.append(RecommendedAction(
+            type=InvestigationActionType.TARGETED_HUNTER_RESCAN.value, hunters=rescan_hunters))
     if priority == InvestigationPriority.HIGH.value and has_captured_bytes:
         actions.append(RecommendedAction(type=InvestigationActionType.PRESERVE_ARTIFACT.value))
     return tuple(actions)

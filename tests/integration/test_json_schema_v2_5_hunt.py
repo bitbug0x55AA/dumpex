@@ -736,6 +736,29 @@ def test_investigation_actions_rejects_targeted_hunter_rescan_with_empty_hunters
     assert list(validator.iter_errors(doc))
 
 
+def test_investigation_actions_rejects_a_rendered_shell_command_field(validator):
+    """A rescan recommendation carries the hunters a targeted invocation can
+    name and nothing else: the address and size are already on the target, and
+    a rendered command line is a property of the shell that reads it, never of
+    the result document."""
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    action = summary["investigation_actions"][0]
+    for entry in action["recommended_actions"]:
+        if entry["type"] == "targeted_hunter_rescan":
+            entry["command"] = "dumpex case.dmp --hunt pipe --hunt-addr 0x1000 --size 0x2000"
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
+def test_investigation_actions_rejects_a_command_field_on_the_action_itself(validator):
+    records = _all_records_with_one_skip()
+    summary = hunt_summary_for(records, selected="all")
+    summary["investigation_actions"][0]["rescan_command"] = "dumpex case.dmp --hunt pipe"
+    doc = _envelope(records, summary, coverage_status="partial", options={"hunt": "all"})
+    assert list(validator.iter_errors(doc))
+
+
 def test_investigation_actions_rejects_hunters_field_on_non_rescan_type(validator):
     records = _all_records_with_one_skip()
     summary = hunt_summary_for(records, selected="all")

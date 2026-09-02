@@ -216,7 +216,7 @@ def main():
     output_group.add_argument('--analyst', metavar='NAME', default=None,
                               help='Analyst name recorded in structured output')
     output_group.add_argument('--redact-paths', action='store_true',
-                              help='Reduce filesystem paths to basenames in structured output')
+                              help='Reduce filesystem paths to basenames in structured output and in rendered rescan commands')
     args = parser.parse_args()
 
     run_mode = _selected_run_mode(args)
@@ -556,7 +556,8 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None, hunt_request=None) -> "
         # never recomputed here, which would duplicate the metadata queue.
         _, hunt_records, investigation_actions, yara_provenance = cmd_hunt(
             mf, args.hunt, verbose=args.verbose, yara_dir=args.yara_dir,
-            ref_dir=args.ref_dir, collect_records=True)
+            ref_dir=args.ref_dir, collect_records=True,
+            redact_paths=args.redact_paths)
         # Threaded straight from THIS call's own YaraReport (see cmd_hunt()'s
         # own docstring) -- never dumpex.hunt.yara_hunt.get_yara_provenance()'s
         # process-wide global, which could otherwise attribute a later run's
