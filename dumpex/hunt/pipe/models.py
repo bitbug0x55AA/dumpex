@@ -560,12 +560,21 @@ class HandleScanResult:
     is how the pre-migration `HandleScan` ended up with
     `handle_pipe_hits`/`handle_classified`/`framework_handle_hits` -- three
     parallel lists over the same handles, two of which were the same list.
-    See `dumpex.hunt.pipe.domain.PipeEvidence.framework_handles`."""
+    See `dumpex.hunt.pipe.domain.PipeEvidence.framework_handles`.
+
+    `dropped_descriptors` is how many handle descriptors the
+    HandleDataStream declared but did not deliver -- the tail this scan
+    never saw, and therefore the number of handle objects (pipe or not)
+    whose absence from `handles` proves nothing. Zero for an absent
+    stream and for a complete one alike: nothing is known to be missing
+    in either case."""
     handles: tuple = field(default_factory=tuple)   # tuple[PipeHandleEvidence]
+    dropped_descriptors: int = 0
 
     def __post_init__(self):
         object.__setattr__(self, "handles", _require_typed_tuple(
             self.handles, PipeHandleEvidence, "HandleScanResult.handles"))
+        _require_count(self.dropped_descriptors, "HandleScanResult.dropped_descriptors")
         require_recursively_immutable(self, "HandleScanResult")
 
 

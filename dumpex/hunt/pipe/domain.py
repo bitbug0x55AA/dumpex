@@ -144,7 +144,29 @@ class CoverageSnapshot:
     other signal's coverage.
     """
     memory_info_stream:  bool
+    # A HandleDataStream this run could actually read. FALSE for both of
+    # the ways there isn't one, which `handle_stream_failure` is what
+    # tells apart: None means the dump never carried the stream, and a
+    # detail string means it carried one that would not parse. The two
+    # send an analyst to different next steps, so they are never
+    # collapsed into a single "missing" (see
+    # `dumpex.core.memory.handle_stream_evidence`).
+    #
+    # None or a NON-EMPTY string, never "": an empty detail would be a
+    # third state this pair cannot express -- indistinguishable from
+    # "never captured", and so silently carrying exactly the re-capture
+    # advice that is wrong for a corrupt stream. `--handles` refuses the
+    # same value (SourceObservation rejects an empty detail), and one
+    # dump must not make one command fail loudly and the other quietly
+    # mis-advise.
     handle_data_stream:  bool
+    handle_stream_failure: "str | None" = None
+    # The declared descriptor tail a readable HandleDataStream did not
+    # deliver. Separate from `handle_data_stream` (whether there was a
+    # readable stream at all) because a truncated stream IS readable --
+    # the handle checks ran, over an evidence set missing this many
+    # entries of unknown type and name.
+    handle_stream_truncated:  int = 0
 
     # The pipe-name/C2 region scan's own gaps. Oversized skips keep full
     # region identity (a ScanTarget each -- what --extract/--strings needs
@@ -199,11 +221,40 @@ class CoverageSnapshot:
         for name in ("memory_info_stream", "handle_data_stream",
                      "c2_budget_exhausted", "pipe_name_budget_exhausted"):
             _require_bool(getattr(self, name), f"CoverageSnapshot.{name}")
-        for name in ("read_failed", "short_reads", "image_pipe_refs", "unaccounted",
+        for name in ("handle_stream_truncated",
+                     "read_failed", "short_reads", "image_pipe_refs", "unaccounted",
                      "over_accounted", "ledger_imbalance"):
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in ("c2_budget_reason", "pipe_name_budget_reason"):
             _require_str(getattr(self, name), f"CoverageSnapshot.{name}")
+        if self.handle_stream_failure is not None:
+            _require_str(self.handle_stream_failure, "CoverageSnapshot.handle_stream_failure")
+            if not self.handle_stream_failure:
+                raise ValueError(
+                    "CoverageSnapshot.handle_stream_failure must be None or a non-empty "
+                    "reason -- an empty detail cannot say a stream failed to parse, and "
+                    "would report it as one the dump never carried")
+        # Only a stream this run could read can be known to have dropped a
+        # declared tail. Without this, a snapshot can claim both "no
+        # readable HandleDataStream" and "3 of its descriptors were not
+        # read", which projects as an ABSENT source carrying an
+        # affected_count=3 limitation and prints two mutually exclusive
+        # COVERAGE impacts at once. Unreachable from `_build_pipe_report`
+        # today (no readable stream means no header to read a count off),
+        # but `aggregate.build_report` takes this as a loose keyword
+        # argument and is called directly by `dumpex.hunt.pipe.targeted`.
+        if not self.handle_data_stream and self.handle_stream_truncated:
+            raise ValueError(
+                f"CoverageSnapshot.handle_stream_truncated is "
+                f"{self.handle_stream_truncated} with handle_data_stream=False -- a "
+                f"stream this run could not read is not known to have dropped anything")
+        # A failure detail is what makes `handle_data_stream=False` mean
+        # "captured but unparseable" rather than "never captured"; on a
+        # stream that WAS read it would describe nothing.
+        if self.handle_data_stream and self.handle_stream_failure is not None:
+            raise ValueError(
+                "CoverageSnapshot.handle_stream_failure is set with "
+                "handle_data_stream=True -- a stream this run read did not fail to parse")
         object.__setattr__(self, "skipped_oversize", _require_scan_targets(
             self.skipped_oversize, "CoverageSnapshot.skipped_oversize"))
         object.__setattr__(self, "read_failed_targets", _require_scan_targets(
@@ -257,20 +308,37 @@ class CoverageSnapshot:
         MemoryInfoListStream the scored handle checks still run (the
         string scan simply finds nothing); with MemoryInfoListStream but no
         HandleDataStream the unscored string scan still runs and still
-        produces real leads. Only losing BOTH means nothing was looked at
-        at all.
+        produces real leads.
+
+        A handle stream that was captured and FAILED to parse also counts
+        as evaluated, matching `build_coverage_report`'s own rule that a
+        SOURCE_FAILED member never drives an evaluation group to
+        not_evaluated: evaluation was attempted and hit an error, which is
+        a different answer from "there was nothing to attempt". Following
+        the shared rule rather than a hunter-local exception is also what
+        keeps this boolean and the structured CoverageReport from
+        disagreeing about the same run -- they are two projections of this
+        one snapshot and a consumer joins them by hunter and status.
+        Nothing is presented as clean either way: `complete` is False, so
+        such a run is PARTIAL/INCONCLUSIVE with the parser's own detail as
+        its reason.
 
         This is why `report_facts.project_coverage_report` gives
         `memory_info`/`handle_data` ONE combined evaluation group, unlike
         stomping's AND-of-presence two-group shape.
         """
-        return self.memory_info_stream or self.handle_data_stream
+        return (self.memory_info_stream or self.handle_data_stream
+                or self.handle_stream_failure is not None)
 
     @property
     def complete(self) -> bool:
-        """HandleDataStream is required, plus a region walk that finished:
-        the PRIMARY, scored check is handle-anchored, so without that
-        stream a score of 0 is "never checked", not "checked and clean".
+        """HandleDataStream is required and must have delivered every
+        descriptor it declared, plus a region walk that finished: the
+        PRIMARY, scored check is handle-anchored, so without that stream a
+        score of 0 is "never checked", not "checked and clean" -- and with
+        a truncated one it is "checked as far as the file went". A pipe
+        handle sitting in the dropped tail is absent from the scored
+        checks exactly as if it had never been held.
 
         `memory_info_stream` deliberately does NOT appear here -- only in
         `evaluated` above. A dump captured with MiniDumpWithHandleData but
@@ -280,7 +348,8 @@ class CoverageSnapshot:
         tests/hunt/test_pipe_collect.py::
         test_memory_info_absent_alone_does_not_force_partial).
         """
-        return self.handle_data_stream and self.region_scan_complete
+        return (self.handle_data_stream and not self.handle_stream_truncated
+                and self.region_scan_complete)
 
     @property
     def status(self) -> str:

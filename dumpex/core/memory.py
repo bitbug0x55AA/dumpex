@@ -268,14 +268,104 @@ class ParsedHandleDataStream:
     MINIDUMP_HANDLE_DATA_STREAM) and `.handles` (a list of
     ParsedHandleDescriptor, at most min(header.NumberOfDescriptors,
     MAX_HANDLE_DESCRIPTORS, however many whole descriptors actually fit
-    in the stream's own DataSize) long -- the caller can always recover
-    how many were truncated as header.NumberOfDescriptors -
-    len(handles))."""
+    in the stream's own DataSize) long).
+
+    The caller can always recover how many were truncated as
+    header.NumberOfDescriptors - len(handles) -- through
+    truncated_descriptor_count() below, which is that rule's one
+    implementation and the only place either attribute is read for it."""
     __slots__ = ("header", "handles")
 
     def __init__(self, header, handles):
         self.header  = header
         self.handles = handles
+
+
+class HandleStreamContractError(RuntimeError):
+    """`parse_handle_stream`'s returned object does not expose the shape
+    its readers require -- no `.header`/`.handles` attribute, or a header
+    with no `NumberOfDescriptors` field at all.
+
+    A defect in this module or in the minidump library it parses with,
+    never a property of the dump: every path that produces a
+    ParsedHandleDataStream sets both attributes. Raised rather than
+    absorbed because the alternative answer -- "0 descriptors declared",
+    hence "nothing was truncated" -- is indistinguishable from a complete
+    stream, which is exactly the silent-clean-result outcome the
+    truncation limitation exists to prevent. Same fail-loud reasoning as
+    HandleDescriptorLayoutError above.
+    """
+
+
+def declared_descriptor_count(parsed) -> "int | None":
+    """`header.NumberOfDescriptors` off a parsed HandleDataStream: how
+    many descriptors the stream says its array holds, independent of how
+    many `parse_handle_stream` could actually read.
+
+    None for `parsed is None` (no stream, nothing declared) and for a
+    declared count that is not usable as one -- `None`, a bool, a
+    non-int, or a negative -- which is exactly how `parse_handle_stream`
+    itself treats those values when it bounds its own read. A caller
+    wanting a number reads that None as "nothing is KNOWN to be
+    declared", never as zero descriptors declared.
+
+    A `parsed` object with no `.header`, or a header with no
+    `NumberOfDescriptors` attribute, raises HandleStreamContractError: an
+    attribute that has been renamed or a return shape that has changed
+    must not degrade into a silent "nothing was truncated".
+    """
+    if parsed is None:
+        return None
+    try:
+        header = parsed.header
+    except AttributeError as exc:
+        raise HandleStreamContractError(
+            f"{type(parsed).__name__} exposes no .header -- "
+            f"parse_handle_stream's return shape has changed") from exc
+    try:
+        declared = header.NumberOfDescriptors
+    except AttributeError as exc:
+        raise HandleStreamContractError(
+            f"{type(header).__name__} exposes no NumberOfDescriptors -- the "
+            f"HandleDataStream header layout has changed") from exc
+    if declared is None or isinstance(declared, bool) or not isinstance(declared, int):
+        return None
+    return declared if declared >= 0 else None
+
+
+def truncated_descriptor_count(parsed) -> int:
+    """The descriptor tail a parsed HandleDataStream declared but did not
+    deliver: `header.NumberOfDescriptors - len(handles)`, floored at 0.
+    ParsedHandleDataStream's own docstring states this recovery rule; this
+    is the one implementation of it, shared by every reader
+    (`--handles`, `--profile`, `--hunt pipe`) so a truncated dump cannot
+    be described three different ways in one case file.
+
+    Read off the parsed object, NEVER recomputed from the stream's own
+    declared framing (`(DataSize - SizeOfHeader) // SizeOfDescriptor`,
+    bounded by NumberOfDescriptors and MAX_HANDLE_DESCRIPTORS):
+    parse_handle_stream bounds what it delivers by a FOURTH term that
+    framing omits -- how many bytes the file actually held -- so a
+    recomputation reports a SMALLER gap than reality on exactly the
+    truncated file this count exists for, and none at all when the
+    framing claims room the file never had.
+
+    0 when nothing is known to be missing: no stream, no usable declared
+    count, or a stream that delivered everything it declared. 0 as well
+    when it delivered MORE than it declared -- that is a contradiction in
+    the dump's own numbers, not a negative shortfall, and no descriptor
+    is missing either way.
+    """
+    declared = declared_descriptor_count(parsed)
+    if declared is None:
+        return 0
+    try:
+        delivered = parsed.handles
+    except AttributeError as exc:
+        raise HandleStreamContractError(
+            f"{type(parsed).__name__} exposes no .handles -- "
+            f"parse_handle_stream's return shape has changed") from exc
+    return max(0, declared - len(delivered or ()))
 
 
 def _read_handle_string(rva: int, file_handle, max_bytes: int = MAX_HANDLE_STRING_BYTES):
@@ -719,6 +809,45 @@ def directory_truncated_count(mf: MinidumpFile) -> int:
     missing-attribute tolerance stream_failure()/has_stream_directory()
     apply)."""
     return getattr(mf, "_dumpex_directory_truncated_count", 0) or 0
+
+
+# The one "captured but unusable" sub-case with no parser exception
+# behind it -- see handle_stream_evidence() for when it applies.
+UNPARSED_HANDLE_STREAM_DETAIL = (
+    "the dump declares a HandleDataStream but no parsed stream is available")
+
+
+def handle_stream_evidence(mf: MinidumpFile) -> "tuple[str, object, str | None]":
+    """-> (state, parsed_stream_or_None, failure_detail_or_None), where
+    state is "absent" (the dump never carried a HandleDataStream),
+    "failed" (it carried one that could not be parsed), or "parsed".
+
+    The one place any consumer of handle evidence asks that question, so
+    a dump whose handle stream is CORRUPT can never be described as one
+    captured without handle data. `mf.handles` is None in both cases, so
+    absence of the parsed object alone cannot decide it: the recorded
+    parser failure is consulted FIRST (a stream that raised is failed
+    evidence even if something else later attached an object to
+    `mf.handles`), then the parsed object, and only then the dump's own
+    directory table.
+
+    That last check is what keeps "absent" a positive claim rather than an
+    inference: a directory entry with neither a parsed stream nor a
+    recorded failure means the stream was captured but never made it
+    through the loader -- unreachable through today's `open_dump()`, but
+    if it ever happens it is failed evidence, not "this dump was not
+    captured with handle data". The two send an analyst to different next
+    steps, so this fails closed toward the honest one.
+    """
+    detail = stream_failure(mf, MINIDUMP_STREAM_TYPE.HandleDataStream)
+    if detail is not None:
+        return "failed", None, detail
+    parsed = getattr(mf, "handles", None)
+    if parsed is not None:
+        return "parsed", parsed, None
+    if has_stream_directory(mf, MINIDUMP_STREAM_TYPE.HandleDataStream):
+        return "failed", None, UNPARSED_HANDLE_STREAM_DETAIL
+    return "absent", None, None
 
 
 def observe_stream(mf: MinidumpFile, name: str, stream_type, obj, items: list) -> SourceObservation:

@@ -1,7 +1,16 @@
 """Hunter-level tests for dumpex.hunt.pipe (Named Pipe C2 / Lateral Movement)."""
-from tests.fixtures.fakes import Region, ThreadInfo, Handle, FakeStream, FakeMF, mem_reader
+import pytest
+
+from minidump.constants import MINIDUMP_STREAM_TYPE
+
+from tests.fixtures.fakes import (
+    Region, ThreadInfo, Handle, FakeStream, FakeMF, mem_reader,
+    mf_with_handle_stream, parsed_handle_stream,
+)
 
 import dumpex.hunt.pipe as pipemod
+from dumpex.core.memory import handle_stream_evidence, truncated_descriptor_count
+from dumpex.hunt.pipe import handle_scan
 
 
 # ── empty HandleDataStream -> COMPLETE/CLEAN ───────────────────────────────
@@ -38,6 +47,218 @@ def test_missing_handle_stream_is_partial():
     assert f["score"] == 0
     assert f["coverage_status"] == "partial"
     assert f["status"] == "INCONCLUSIVE"
+
+
+# ── truncated HandleDataStream -> partial, with the dropped tail counted ──
+
+def handle_stream(handle_list, declared=None):
+    """A HandleDataStream carrying `handle_list` and declaring `declared`
+    descriptors -- by default exactly as many as it delivered. Pass more
+    to model a stream whose descriptor array was cut off."""
+    return FakeStream(handle_list, "handles", declared=declared)
+
+
+def mf_with_handles(stream):
+    """A dump whose only interesting stream is `stream`: one ordinary
+    region that reads back empty, so nothing the string scan finds can
+    move the verdict."""
+    regions = [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = stream
+    pipemod.read_region = mem_reader({})
+    return MF()
+
+
+def test_truncated_handle_stream_is_partial_and_keeps_the_head():
+    """A dropped descriptor is simply not in the handle list, so the head
+    still scores -- but the run must say the tail was never read."""
+    delivered = [Handle(0x99, "File", r"\Device\NamedPipe\msagent_42")]
+    f = pipemod._hunt_pipe(mf_with_handles(handle_stream(delivered, declared=4)), verbose=False)
+
+    assert f["score"] >= 1, "the delivered head is still evidence"
+    assert f["coverage_status"] == "partial"
+    assert any("3 declared handle descriptor(s) were not read" in r
+               for r in f["coverage_reasons"])
+
+
+def test_truncation_survives_the_real_parser_end_to_end():
+    """The whole hunter over an object `dumpex.core.memory.parse_handle_stream`
+    actually produced, from real HandleDataStream bytes -- not a
+    hand-shaped stand-in that could agree with the reader while both
+    disagree with what the parser really returns.
+
+    Two named descriptors reach the scan and one of them is a framework
+    pipe, so the delivered head still scores; the header declares five,
+    so three are missing and the run says so."""
+    parsed = parsed_handle_stream(
+        [{"handle": 0x10, "type_name": "File",
+          "object_name": r"\Device\NamedPipe\msagent_42"},
+         {"handle": 0x20, "type_name": "File",
+          "object_name": r"\Device\NamedPipe\ordinary"}],
+        number_of_descriptors=5)
+    assert parsed.header.NumberOfDescriptors == 5
+    assert len(parsed.handles) == 2
+    assert parsed.handles[0].ObjectName == r"\Device\NamedPipe\msagent_42", (
+        "the names must survive the real parse, or the head cannot score")
+
+    f = pipemod._hunt_pipe(mf_with_handles(parsed), verbose=False)
+
+    assert f["score"] >= 1, "the two delivered descriptors are still evidence"
+    assert f["coverage_status"] == "partial"
+    assert any("3 declared handle descriptor(s) were not read" in r
+               for r in f["coverage_reasons"])
+
+
+def test_truncation_is_read_off_the_header_not_recomputed_from_the_framing():
+    """AC2, in the only shape that can falsify it, over real bytes.
+
+    This stream's own framing claims room for five descriptors -- its
+    directory DataSize covers `16 + 5 * 32` -- but the FILE ends after
+    two. Reading `NumberOfDescriptors - len(handles)` off the parsed
+    object gives the true 3; recomputing from the framing gives
+    `5 - min(5, MAX_HANDLE_DESCRIPTORS, (176 - 16) // 32)` == 0, i.e. no
+    truncation at all and a silent complete/exit-0 on a dump that lost
+    handles. Every other truncation fixture stops at the DataSize bound,
+    where both answers agree.
+
+    The descriptors carry no names on purpose: a name would put a string
+    area after the array that the parser's own byte-count bound would
+    then read descriptors out of, which is a different (and fabricated)
+    shape. #86's fourth bound is what this fixture is about."""
+    declared_data_size = 16 + 5 * 32
+    parsed = parsed_handle_stream(
+        [{"handle": 0x10 * (i + 1)} for i in range(2)],
+        number_of_descriptors=5, declared_data_size=declared_data_size)
+    framing_fits = ((declared_data_size - parsed.header.SizeOfHeader)
+                    // parsed.header.SizeOfDescriptor)
+    assert framing_fits == 5, "the framing really does claim room for five"
+    assert len(parsed.handles) == 2, "but the file only ever held two"
+    assert parsed.header.NumberOfDescriptors - framing_fits == 0, (
+        "recomputing from the framing would report no truncation at all")
+
+    assert truncated_descriptor_count(parsed) == 3
+    f = pipemod._hunt_pipe(mf_with_handles(parsed), verbose=False)
+    assert f["coverage_status"] == "partial"
+    assert any("3 declared handle descriptor(s) were not read" in r
+               for r in f["coverage_reasons"])
+
+
+def test_an_untruncated_real_stream_stays_complete():
+    """The same real-parser path with the header and the file in
+    agreement: no gap, no reason, nothing acquired."""
+    parsed = parsed_handle_stream(
+        [{"handle": 0x99, "type_name": "File",
+          "object_name": r"\Device\NamedPipe\ipc"}])
+    assert parsed.header.NumberOfDescriptors == len(parsed.handles) == 1
+
+    f = pipemod._hunt_pipe(mf_with_handles(parsed), verbose=False)
+    assert f["coverage_status"] == "complete"
+    assert f["coverage_reasons"] == []
+
+
+def test_an_unparseable_handle_stream_is_not_reported_as_never_captured():
+    """A dump that DID carry a HandleDataStream whose framing could not be
+    parsed must not be described as one captured without
+    MiniDumpWithHandleData. The two send an analyst to different next
+    steps -- re-capture with handle data, versus treat this dump's stream
+    as corrupt -- and only one of them is available to someone whose dump
+    already has the stream."""
+    mf = mf_with_handle_stream(
+        failure="HandleDataStream SizeOfDescriptor 24 is neither 32 nor 40")
+    mf.memory_info = FakeStream(
+        [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")],
+        "infos")
+    mf.modules     = FakeStream([], "modules")
+    mf.thread_info = FakeStream([], "infos")
+    pipemod.read_region = mem_reader({})
+
+    f = pipemod._hunt_pipe(mf, verbose=False)
+
+    assert f["coverage_status"] == "partial"
+    reasons = " ".join(f["coverage_reasons"])
+    assert "could not be parsed" in reasons
+    assert "SizeOfDescriptor 24" in reasons, "the parser's own detail is what says why"
+    assert "MiniDumpWithHandleData" not in reasons, (
+        "re-capturing with handle data is not the next step for a corrupt stream")
+
+
+def test_a_parse_failure_with_no_detail_is_refused_not_mis_advised():
+    """The one state the (bool, detail) pair cannot express: a recorded
+    parse failure whose detail is empty. Inferring "never captured" from
+    it would print exactly the re-capture advice that is wrong for a
+    corrupt stream, so it is rejected instead.
+
+    `--handles` already refuses the same value -- SourceObservation will
+    not take an empty detail -- and one dump must not make one command
+    fail loudly and the other quietly mis-advise. Unreachable through
+    `open_dump()`, whose recorded detail always carries at least the
+    exception's own type name; enforced here rather than assumed, because
+    `aggregate.build_report` takes this as a loose keyword argument."""
+    mf = mf_with_handle_stream(has_directory=True)
+    # Straight into the failures map: the fixture helper treats an empty
+    # detail as "no failure", which is the very conflation under test.
+    mf._dumpex_stream_failures = {MINIDUMP_STREAM_TYPE.HandleDataStream: ""}
+    mf.memory_info = FakeStream([], "infos")
+    mf.modules      = FakeStream([], "modules")
+    mf.thread_info   = FakeStream([], "infos")
+    pipemod.read_region = mem_reader({})
+
+    assert handle_stream_evidence(mf) == ("failed", None, "")
+    with pytest.raises(ValueError, match="must be None or a non-empty reason"):
+        pipemod._build_pipe_report(mf)
+
+
+def test_a_recorded_parse_failure_discards_handles_that_did_parse():
+    """A dump can carry two HandleDataStream directory entries, one of
+    which parsed. `mf.handles` then holds whichever entry won a
+    last-writer-wins race, so which entry it came from is not knowable --
+    and a recorded parse failure takes precedence, exactly as `--handles`
+    already resolves it.
+
+    The conservative result is pinned here: those handles do not score,
+    and the run says why rather than reading clean."""
+    parsed = parsed_handle_stream(
+        [{"handle": 0x99, "type_name": "File",
+          "object_name": r"\Device\NamedPipe\msagent_42"}])
+    mf = mf_with_handle_stream(parsed=parsed,
+                                failure="HandleDataStream SizeOfHeader 4 is out of bounds")
+    mf.memory_info = FakeStream(
+        [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")],
+        "infos")
+    mf.modules      = FakeStream([], "modules")
+    mf.thread_info   = FakeStream([], "infos")
+    pipemod.read_region = mem_reader({})
+
+    f = pipemod._hunt_pipe(mf, verbose=False)
+
+    assert f["score"] == 0, "a handle from an untrustworthy stream must not score"
+    assert f["handle_pipes"] == []
+    assert f["status"] == "INCONCLUSIVE", "and the result must not read as clean"
+    assert any("could not be parsed" in r for r in f["coverage_reasons"])
+
+
+def test_scan_handles_will_not_run_without_the_stream_to_measure_against():
+    """The handle list alone cannot show a dropped descriptor, so the
+    stream is a required argument: a caller that forgets it must fail
+    loudly rather than silently report a truncated dump as complete."""
+    with pytest.raises(TypeError):
+        handle_scan.scan_handles([], (), )
+
+
+def test_a_descriptor_array_cut_off_entirely_is_not_a_clean_empty_result():
+    """The dangerous shape: a stream declaring handles whose array never
+    arrived must never read like the checked-and-clean empty stream."""
+    f = pipemod._hunt_pipe(mf_with_handles(handle_stream([], declared=7)), verbose=False)
+
+    assert f["score"] == 0
+    assert f["status"] == "INCONCLUSIVE"
+    assert f["coverage_status"] == "partial"
+    assert any("7 declared handle descriptor(s) were not read" in r
+               for r in f["coverage_reasons"])
 
 
 # ── generic (non-framework) pipe + C2 -> Finding matches verdict ──────────

@@ -16,10 +16,13 @@ import json
 import pytest
 
 from tests.fixtures.fakes import Region, Handle, ThreadInfo, FakeStream, FakeMF, mem_reader
+from tests.fixtures.fakes import mf_with_handle_stream
+from tests.hunt.test_pipe import handle_stream
 
 import dumpex.hunt.pipe as pipemod
 import dumpex.hunt.pipe.memory_scan as memory_scan_mod
 from dumpex.hunt.pipe.collect import collect_pipe_record
+from dumpex.output.coverage import exit_code_for
 from dumpex.output.records import HunterRecord, PipeDetails
 
 jsonschema = pytest.importorskip("jsonschema")
@@ -85,6 +88,191 @@ def test_missing_handle_stream_is_partial(hunter_record_validator):
     _assert_matches_console_dict(rec, console_dict)
     assert rec.coverage.status.value == "partial"
     assert any(lim.source == "handle_data" for lim in rec.coverage.limitations)
+    assert rec.coverage.sources["handle_data"].state.value == "absent"
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def _truncated(limitations):
+    return [lim for lim in limitations if lim.code.value == "HANDLE_STREAM_TRUNCATED"]
+
+
+def test_truncated_handle_stream_carries_the_dropped_descriptor_count(hunter_record_validator):
+    """The descriptor tail the stream declared but never delivered, as a
+    structured limitation an analyst can act on. The stream itself was
+    captured, so `handle_data` stays present and reports exactly what it
+    always has -- the limitation is what says the rest never arrived."""
+    delivered = [Handle(0x99, "File", r"\Device\NamedPipe\msagent_42")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream([], "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = handle_stream(delivered, declared=4)
+    pipemod.read_region = mem_reader({})
+
+    console_dict = pipemod._hunt_pipe(MF(), verbose=False)
+    rec = collect_pipe_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == console_dict["coverage_status"] == "partial"
+    limitation = _truncated(rec.coverage.limitations)[0]
+    assert limitation.source == "handle_data"
+    assert limitation.affected_count == 3
+    # The stream was captured, so its own source reports exactly what it
+    # always has; the limitation is what says the rest never arrived.
+    assert rec.coverage.sources["handle_data"].state.value == "present"
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_the_dropped_count_is_descriptors_not_pipe_handles(hunter_record_validator):
+    """`affected_count` counts DESCRIPTORS, across all handle types rather
+    than the pipe subset: what was dropped is unnamed and untyped, so any
+    one of them could have been a pipe handle. Three arrived (one a pipe),
+    two were declared and never read."""
+    delivered = [Handle(0x10, "File", r"\Device\NamedPipe\ipc"),
+                 Handle(0x20, "Event", r"\BaseNamedObjects\evt"),
+                 Handle(0x30, "Key", r"\REGISTRY\MACHINE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream([], "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = handle_stream(delivered, declared=5)
+    pipemod.read_region = mem_reader({})
+
+    rec = collect_pipe_record(MF())
+    assert _truncated(rec.coverage.limitations)[0].affected_count == 2
+    assert len(rec.details.handle_pipes) == 1
+    # The stream's own source reports exactly what it always has.
+    assert rec.coverage.sources["handle_data"].state.value == "present"
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+def test_an_unparseable_handle_stream_is_a_failed_source_not_an_absent_one(
+        hunter_record_validator):
+    """§5.5 case 2, as the pipe hunter's own coverage: the stream WAS
+    captured, so `handle_data` is failed (carrying the parser's own detail
+    via SOURCE_FAILED), never absent. `--handles` reports the same dump the
+    same way; the two commands share one discriminator."""
+    mf = mf_with_handle_stream(failure="HandleDataStream SizeOfHeader 4 is out of bounds")
+    mf.memory_info = FakeStream([], "infos")
+    mf.modules      = FakeStream([], "modules")
+    mf.thread_info   = FakeStream([], "infos")
+    pipemod.read_region = mem_reader({})
+
+    rec = collect_pipe_record(mf)
+
+    observation = rec.coverage.sources["handle_data"]
+    assert observation.state.value == "failed"
+    assert observation.detail == "HandleDataStream SizeOfHeader 4 is out of bounds"
+    assert any(lim.code.value == "SOURCE_FAILED" for lim in rec.coverage.limitations)
+    assert _truncated(rec.coverage.limitations) == [], (
+        "a stream that never parsed is not known to have dropped anything")
+    assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
+
+
+# The complete structured coverage an untruncated `--hunt pipe` run
+# produces, as a literal. Adding truncation reporting must not perturb any
+# of it: not the source keys, not a state, not a record_count, not the
+# limitation list, not the status, and not the exit code derived from it.
+# Asserted as a whole rather than field by field, so a new source key or a
+# changed record_count fails here instead of passing a narrower check.
+_UNTRUNCATED_COVERAGE_SOURCES = {
+    "memory_info":    {"state": "present", "record_count": 1, "detail": None},
+    "handle_data":    {"state": "present", "record_count": 1, "detail": None},
+    "pipe_name_scan": {"state": "present", "record_count": 1, "detail": None},
+}
+
+
+def test_an_untruncated_run_emits_exactly_the_coverage_it_always_has():
+    """The AC3 guard, at full depth: a dump whose HandleDataStream
+    delivered every descriptor it declared must be indistinguishable, in
+    structured coverage and exit code, from the same dump before
+    truncation reporting existed.
+
+    `coverage_status == "complete"` alone cannot show that -- it stays
+    "complete" through a renamed source, a changed record_count, or an
+    extra roster entry, every one of which breaks a consumer indexing
+    `coverage.sources`. The whole mapping is compared instead.
+
+    The console dict and the typed record are checked together because
+    they are two projections of one Report and a consumer may read either.
+    """
+    delivered = [Handle(0x99, "File", r"\Device\NamedPipe\ipc")]
+    regions = [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = handle_stream(delivered, declared=1)
+    pipemod.read_region = mem_reader({})
+
+    console_dict = pipemod._hunt_pipe(MF(), verbose=False)
+    rec = collect_pipe_record(MF())
+    coverage = rec.to_dict()["coverage"]
+
+    assert coverage["sources"] == _UNTRUNCATED_COVERAGE_SOURCES
+    assert coverage["limitations"] == []
+    assert coverage["reasons"] == []
+    assert coverage["status"] == "complete"
+    assert exit_code_for(rec.coverage.status) == 0
+
+    # The v1.1 projection of the same run, which is what the console and
+    # the legacy dict consumers read.
+    assert console_dict["coverage_status"] == "complete"
+    assert console_dict["coverage_reasons"] == []
+    assert console_dict["scan_complete"] is True
+    assert console_dict["budget_exhausted"] is False
+    assert console_dict["status"] == "NOT_DETECTED_IN_SCANNED_SCOPE"
+
+
+def test_a_truncated_run_adds_the_gap_and_changes_nothing_else():
+    """The counterpart: the same dump with three descriptors declared and
+    never delivered differs from the run above by exactly one limitation
+    and the status it forces. The source roster is identical -- every
+    source keeps the state and count it had."""
+    delivered = [Handle(0x99, "File", r"\Device\NamedPipe\ipc")]
+    regions = [Region(0x10000, 0x10000, 0x1000, "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream(regions, "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = handle_stream(delivered, declared=4)
+    pipemod.read_region = mem_reader({})
+
+    coverage = collect_pipe_record(MF()).to_dict()["coverage"]
+
+    assert coverage["sources"] == _UNTRUNCATED_COVERAGE_SOURCES, (
+        "a truncated run publishes the same source roster, so a consumer "
+        "can compare the two runs source by source")
+    assert [(lim["code"], lim["source"], lim["affected_count"])
+            for lim in coverage["limitations"]] == [
+        ("HANDLE_STREAM_TRUNCATED", "handle_data", 3)]
+    assert coverage["status"] == "partial"
+
+
+def test_untruncated_handle_stream_reports_no_truncation(hunter_record_validator):
+    """The regression guard for the untruncated dump: same fixture with
+    the header and the delivered array in agreement stays complete, with
+    no limitation and the same clean verdict."""
+    delivered = [Handle(0x99, "File", r"\Device\NamedPipe\msagent_42")]
+
+    class MF(FakeMF):
+        memory_info = FakeStream([], "infos")
+        modules      = FakeStream([], "modules")
+        thread_info   = FakeStream([], "infos")
+        handles        = handle_stream(delivered, declared=1)
+    pipemod.read_region = mem_reader({})
+
+    console_dict = pipemod._hunt_pipe(MF(), verbose=False)
+    rec = collect_pipe_record(MF())
+
+    _assert_matches_console_dict(rec, console_dict)
+    assert rec.coverage.status.value == console_dict["coverage_status"] == "complete"
+    assert _truncated(rec.coverage.limitations) == []
+    assert set(rec.coverage.sources) == {"memory_info", "handle_data", "pipe_name_scan"}
     assert list(hunter_record_validator.iter_errors(rec.to_dict())) == []
 
 

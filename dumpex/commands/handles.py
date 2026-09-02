@@ -6,10 +6,9 @@ queried. Console verbosity changes presentation only; structured output keeps
 the complete inventory. Access masks remain raw integers, while type-specific
 decoded rights are derived display text and never a verdict.
 """
-from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile
 
-from dumpex.core.memory import stream_failure, has_stream_directory
+from dumpex.core.memory import handle_stream_evidence, truncated_descriptor_count
 from dumpex.output.coverage import (
     build_coverage_report, EvaluationRequirement, SourceObservation, SourceState,
     CoverageLimitation, LimitationCode,
@@ -29,8 +28,6 @@ from dumpex.ui.colors import BOLD, DIM, YELLOW, console_safe
 from dumpex.ui.console_layout import column_width, resolve_width, wrap_text
 
 
-_HANDLE_STREAM = MINIDUMP_STREAM_TYPE.HandleDataStream
-
 _UINT64_MAX = 0xFFFFFFFFFFFFFFFF
 
 # §5.5's five states, collapsed to the three the stream itself can be in
@@ -46,47 +43,6 @@ _ABSENT_CODE_FOR_STREAM_STATE = {
     "failed": LimitationCode.HANDLES_PARSE_FAILED,
     "parsed": LimitationCode.HANDLES_ALL_DESCRIPTORS_INVALID,
 }
-
-# The detail text for the one "failed" sub-case that has no parser
-# exception behind it (see _stream_evidence below). Written here rather
-# than composed at the call site so the two failure paths' wording stays
-# side by side.
-_UNPARSED_STREAM_DETAIL = (
-    "the dump declares a HandleDataStream but no parsed stream is available")
-
-
-
-def _stream_evidence(mf: MinidumpFile) -> "tuple[str, object, str | None]":
-    """-> (state, parsed_stream_or_None, failure_detail_or_None) where
-    state is "absent" (§5.5 case 1), "failed" (case 2), or "parsed"
-    (cases 3-5).
-
-    Absence of `mf.handles` alone cannot decide this: it is None both for
-    a dump that never carried the stream and for one whose stream raised
-    during `open_dump()`'s per-stream isolation. The recorded parser
-    failure is consulted FIRST (a stream that raised is failed evidence
-    even if something else later attached an object to `mf.handles` --
-    presenting records built from it as a clean result is exactly the
-    "do not present a clean zero-handle result" case #42 forbids), then
-    the parsed object, and only then the dump's own directory table.
-
-    That last check is what keeps case 1 a positive claim rather than an
-    inference: a directory entry with neither a parsed stream nor a
-    recorded failure means the stream was captured but never made it
-    through the loader -- unreachable through today's `open_dump()`, but
-    if it ever happens it is failed evidence, not "this dump was not
-    captured with handle data". The two send an analyst to different next
-    steps (§5.5 case 2), so this fails closed toward the honest one."""
-    detail = stream_failure(mf, _HANDLE_STREAM)
-    if detail is not None:
-        return "failed", None, detail
-    parsed = getattr(mf, "handles", None)
-    if parsed is not None:
-        return "parsed", parsed, None
-    if has_stream_directory(mf, _HANDLE_STREAM):
-        return "failed", None, _UNPARSED_STREAM_DETAIL
-    return "absent", None, None
-
 
 def _normalize_handle_value(raw) -> "int | None":
     """§5.2.2: the ONE field whose failure discards a descriptor. `bool`
@@ -197,29 +153,6 @@ def _normalize_descriptors(descriptors) -> "tuple[list, int, int]":
     return [record for _, _, record in keyed], invalid_count, string_failed_count
 
 
-def _truncated_descriptor_count(parsed, kept: int) -> int:
-    """§5.1.1 rule 5's `affected_count`:
-    `header.NumberOfDescriptors - len(handles)`, read off the parser's
-    own returned object.
-
-    Deliberately NOT recomputed from §5.1.1 rule 4's
-    `min(NumberOfDescriptors, MAX_HANDLE_DESCRIPTORS, (DataSize -
-    SizeOfHeader) // SizeOfDescriptor)` formula: the parser bounds
-    `usable` by a FOURTH term the formula omits (how many bytes the file
-    actually had left -- issue #86), so recomputing would report a
-    SMALLER gap than reality on exactly the truncated-file case this
-    limitation exists for.
-
-    `kept` is the descriptor count the parser returned, not the record
-    count: descriptors discarded by normalization are a different fact,
-    counted by HANDLE_DESCRIPTOR_INVALID, and folding them in here would
-    claim they were never read."""
-    declared = getattr(getattr(parsed, "header", None), "NumberOfDescriptors", None)
-    if isinstance(declared, bool) or not isinstance(declared, int):
-        return 0
-    return max(0, declared - kept)
-
-
 def summarize_handles_by_type(records) -> dict:
     """§5.6's `summary.by_type`, also used verbatim for the console's
     "By type:" line so the two can never disagree. Keyed by `type_name`,
@@ -297,11 +230,19 @@ def collect_handles(mf: MinidumpFile) -> CommandResult:
     exit 4 at all. `handles` (the stream itself) is declared as a bare
     completeness check, whose only effect is to surface case 2's
     SOURCE_FAILED detail."""
-    state, parsed, failure_detail = _stream_evidence(mf)
+    state, parsed, failure_detail = handle_stream_evidence(mf)
 
     descriptors = list(getattr(parsed, "handles", None) or []) if state == "parsed" else []
     records, invalid_count, string_failed_count = _normalize_descriptors(descriptors)
-    truncated_count = _truncated_descriptor_count(parsed, len(descriptors)) if state == "parsed" else 0
+    # §5.1.1 rule 5's `affected_count`, off the shared reader
+    # (dumpex.core.memory.truncated_descriptor_count) so --handles,
+    # --profile and --hunt pipe cannot answer it three different ways.
+    # It counts against the descriptors the PARSER returned, not against
+    # the records that survived normalization: a descriptor discarded by
+    # normalization is a different fact, counted by
+    # HANDLE_DESCRIPTOR_INVALID, and folding it in here would claim it
+    # was never read.
+    truncated_count = truncated_descriptor_count(parsed) if state == "parsed" else 0
 
     if state == "absent":
         handles_obs = SourceObservation(name="handles", state=SourceState.ABSENT)

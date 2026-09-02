@@ -8,7 +8,7 @@ from dumpex.hunt._finding import Finding
 from dumpex.hunt.pipe.domain import CoverageSnapshot, PipeReport
 from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, EvaluationRequirement, LimitationCode,
-    build_coverage_report, observe_source,
+    SourceObservation, SourceState, build_coverage_report, observe_source,
 )
 from dumpex.output.records import hex_address
 
@@ -175,6 +175,28 @@ HANDLE_DATA_MISSING_REASON = ("HandleDataStream missing from this dump (needs "
                                "pipe-handle check could not run")
 
 
+def handle_stream_failed_reason(detail: str) -> str:
+    """The companion to HANDLE_DATA_MISSING_REASON for the OTHER way this
+    run ends up with no handle evidence: the dump DID carry a
+    HandleDataStream and it would not parse. Re-capturing with
+    MiniDumpWithHandleData — what the missing-stream reason tells an
+    analyst to do — is not the next step here and must not be implied;
+    the parser's own detail is carried instead, and the companion
+    SOURCE_FAILED limitation carries it in the structured report."""
+    return (f"HandleDataStream present in this dump but could not be parsed "
+            f"({detail}) — the primary, scored pipe-handle check could not run")
+
+
+def handle_stream_truncated_reason(dropped: int) -> str:
+    """The one wording for a HandleDataStream that declared more
+    descriptors than it delivered — rendered into `coverage_reasons` here
+    and into the console's COVERAGE section from that same list, so the
+    gap is described once. The count is the descriptor tail; what those
+    descriptors named is exactly what nothing in this run can say."""
+    return (f"HandleDataStream truncated — {dropped} declared handle descriptor(s) "
+            f"were not read; a pipe handle among them is neither present nor ruled out")
+
+
 def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
     """`(coverage_status, coverage_reasons)` -- the v1.1 shape the
     pre-migration `aggregate.build_report` assembled, reproduced
@@ -191,14 +213,19 @@ def project_coverage_v1(coverage: CoverageSnapshot) -> tuple:
 
     Reason ORDER is part of the output contract (the pre-migration verdict
     line joined these verbatim) and is preserved exactly: stream absences
-    first, then the region walk's own skip/read/short-read gaps, then the
-    two independent budgets.
+    first, then what a present stream did not deliver, then the region
+    walk's own skip/read/short-read gaps, then the two independent
+    budgets.
     """
     reasons = []
     if not coverage.memory_info_stream:
         reasons.append(MEMORY_INFO_MISSING_REASON)
-    if not coverage.handle_data_stream:
+    if coverage.handle_stream_failure is not None:
+        reasons.append(handle_stream_failed_reason(coverage.handle_stream_failure))
+    elif not coverage.handle_data_stream:
         reasons.append(HANDLE_DATA_MISSING_REASON)
+    if coverage.handle_stream_truncated:
+        reasons.append(handle_stream_truncated_reason(coverage.handle_stream_truncated))
     reasons.extend(coverage.region_gap_reasons())
     coverage_status = derive_coverage_status(coverage.evaluated, coverage.complete)
     return coverage_status, reasons
@@ -213,6 +240,27 @@ def _budget_limitation(scope: str, detail: str, targets: tuple) -> CoverageLimit
     return CoverageLimitation(
         code=LimitationCode.SCAN_BUDGET_EXHAUSTED, source="pipe_name_scan",
         scope=scope, detail=detail, **extra)
+
+
+def _handle_data_observation(coverage: CoverageSnapshot) -> SourceObservation:
+    """The `handle_data` source: whether this run had a HandleDataStream to
+    read at all.
+
+    Failed for a stream the dump carried but the parser rejected, carrying
+    the parser's own detail -- `handle_data` is a bare completeness check
+    below, so that state is what raises the SOURCE_FAILED limitation an
+    analyst reads instead of a re-capture instruction that would not help
+    on a dump whose handle data is already there. Absent only when the dump
+    never carried the stream. Present otherwise, with the same
+    `record_count` a present stream has always reported. How many
+    descriptors that stream then delivered is not this observation's
+    subject: the HANDLE_STREAM_TRUNCATED limitation attached to this same
+    source is what reports the shortfall."""
+    if coverage.handle_stream_failure is not None:
+        return SourceObservation(name="handle_data", state=SourceState.FAILED,
+                                  detail=coverage.handle_stream_failure)
+    return observe_source("handle_data", present=coverage.handle_data_stream,
+                           items=["present"] if coverage.handle_data_stream else [])
 
 
 def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
@@ -231,12 +279,24 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     optional minidump stream), mirroring injection's own `hidden_pe_scan`
     pattern, purely so the SCAN_REGION_*/SCAN_BUDGET_EXHAUSTED limitations
     have a source key to attach to and validate against.
+
+    `handle_data` answers every question about the HandleDataStream: which
+    of its three states the dump is in (never captured /
+    captured-but-unparseable / readable), and so whether the scored path
+    could run at all, plus -- through the HANDLE_STREAM_TRUNCATED
+    limitation attached to it -- what a readable one failed to deliver.
+    One source for one stream: the roster is the same three keys on every
+    run, truncated or not, which is what lets a targeted rescan publish
+    that same roster and say per source what it did not evaluate.
+    `--handles` names this stream `handles` in its own coverage; the
+    limitation is accepted under either name (see
+    `dumpex.output.coverage._CodeSpec.alternate_sources`) precisely so
+    neither command has to rename a source to share the fact.
     """
     sources = {
         "memory_info": observe_source("memory_info", present=coverage.memory_info_stream,
                                        items=["present"] if coverage.memory_info_stream else []),
-        "handle_data": observe_source("handle_data", present=coverage.handle_data_stream,
-                                       items=["present"] if coverage.handle_data_stream else []),
+        "handle_data": _handle_data_observation(coverage),
         "pipe_name_scan": observe_source("pipe_name_scan", present=True, items=["scanned"]),
     }
     # "memory_info" is deliberately NOT a completeness_check: this hunter's
@@ -247,6 +307,14 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     # "complete" (confirmed by tests/hunt/test_pipe_collect.py::
     # test_memory_info_absent_alone_does_not_force_partial).
     completeness_checks = ["handle_data"]
+    # Ordered ahead of the region-scan gaps, matching
+    # `project_coverage_v1`'s reason order: what the handle stream did not
+    # deliver is a gap in the PRIMARY, scored evidence, not in the string
+    # scan.
+    if coverage.handle_stream_truncated:
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.HANDLE_STREAM_TRUNCATED, source="handle_data",
+            affected_count=coverage.handle_stream_truncated))
     if coverage.skipped_oversize:
         completeness_checks.append(CoverageLimitation(
             code=LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED, source="pipe_name_scan",

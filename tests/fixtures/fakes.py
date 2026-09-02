@@ -10,10 +10,14 @@ MinidumpModule, MINIDUMP_THREAD, MinidumpThreadInfo,
 MinidumpHandleDescriptor) — see dumpex/core/memory.py for the real
 counterparts.
 """
+import io
 import struct
 
+from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
 from minidump.structures.peb import PEB_OFFSETS
+
+from dumpex.core.memory import parse_handle_stream
 
 
 class Prot:
@@ -85,10 +89,48 @@ class Handle:
         self.PointerCount   = 1
 
 
+# FakeStream's own "caller said nothing" sentinel, distinct from a
+# `declared=None` that deliberately models a header whose
+# NumberOfDescriptors really is None.
+_KEEP = object()
+
+
+class HandleDataStreamHeader:
+    """Stand-in for MINIDUMP_HANDLE_DATA_STREAM, the header
+    `dumpex.core.memory.parse_handle_stream` leaves on the
+    ParsedHandleDataStream it returns.
+
+    `SizeOfHeader`/`SizeOfDescriptor` are the framing terms a descriptor
+    count could be recomputed from, carried so a fixture can make the
+    framing and `NumberOfDescriptors` disagree."""
+    def __init__(self, number_of_descriptors, size_of_header=16, size_of_descriptor=32):
+        self.NumberOfDescriptors = number_of_descriptors
+        self.SizeOfHeader        = size_of_header
+        self.SizeOfDescriptor    = size_of_descriptor
+
+
 class FakeStream:
-    """Stand-in for a MinidumpXxxList wrapper object (`.infos`, `.modules`, `.threads`, `.handles`)."""
-    def __init__(self, items, attr):
+    """Stand-in for a MinidumpXxxList wrapper object (`.infos`, `.modules`, `.threads`, `.handles`).
+
+    A `"handles"` stream also gets a `.header`, because
+    ParsedHandleDataStream always has one and every reader of a handle
+    stream reads `header.NumberOfDescriptors` off it (see
+    `dumpex.core.memory.declared_descriptor_count`, which raises rather
+    than treat a header-less object as declaring nothing). `declared`
+    defaults to the number of handles supplied -- a stream that delivered
+    everything it declared; pass a larger one to model a descriptor array
+    whose tail was cut off, or any non-count (None, a bool, a float, a
+    negative) to model a header whose declared count is unusable.
+
+    For anything asserting on declared-vs-delivered counts, prefer
+    `parsed_handle_stream` below: it goes through the real parser, so the
+    fixture cannot agree with the reader while both disagree with what
+    dumps actually produce."""
+    def __init__(self, items, attr, *, declared=_KEEP):
         setattr(self, attr, items)
+        if attr == "handles":
+            self.header = HandleDataStreamHeader(
+                len(items) if declared is _KEEP else declared)
 
 
 class Segment:
@@ -527,3 +569,102 @@ def cs_beacon_config_bytes(xor_key: int = 0x69) -> bytes:
     terminator = struct.pack('>H', 0)   # fid=0, no type/length follows
     plaintext = beacon_type_field + pubkey_field + terminator
     return bytes(b ^ (xor_key & 0xff) for b in plaintext)
+
+
+# ── Real HandleDataStream bytes ──────────────────────────────────────────
+# The shared builder for the REAL parser path: raw stream bytes fed
+# through dumpex.core.memory.parse_handle_stream, so a test exercises the
+# exact object `open_dump()` puts on `mf.handles` rather than a
+# hand-shaped stand-in that could drift from it. FakeStream above is the
+# cheap stand-in for tests that only need a handle LIST; anything
+# asserting on declared-vs-delivered counts should build a real one here.
+
+# A name spec of BAD_RVA gets a non-zero RVA pointing past the end of the
+# file: the bounded read comes back short, so the parser's own string read
+# returns None -- "unreadable", a different fact from both "no name"
+# (RVA 0) and "" (a successful zero-length read).
+BAD_RVA = object()
+
+
+class HandleStreamLocation:
+    def __init__(self, rva, data_size):
+        self.Rva = rva
+        self.DataSize = data_size
+
+
+class HandleStreamDirectory:
+    def __init__(self, rva, data_size, stream_type=None):
+        self.Location = HandleStreamLocation(rva, data_size)
+        self.StreamType = (MINIDUMP_STREAM_TYPE.HandleDataStream
+                            if stream_type is None else stream_type)
+
+
+def _minidump_string_bytes(s: str) -> bytes:
+    encoded = s.encode("utf-16-le")
+    return struct.pack("<I", len(encoded)) + encoded
+
+
+def build_handle_stream(descriptors, *, size_of_descriptor=32, number_of_descriptors=None,
+                         declared_data_size=None):
+    """Raw HandleDataStream bytes (16-byte header + fixed-size descriptor
+    array + a trailing string area) plus the (rva=0, data_size) framing,
+    with per-name RVA control (a real string, no name at all, or
+    BAD_RVA)."""
+    n = number_of_descriptors if number_of_descriptors is not None else len(descriptors)
+    header = struct.pack("<IIII", 16, size_of_descriptor, n, 0)
+
+    desc_area_size = 16 + len(descriptors) * size_of_descriptor
+    strings_blob = bytearray()
+    desc_bytes = bytearray()
+    unreachable_rva = 0xF000_0000   # far past the end of every fixture body
+    for d in descriptors:
+        rvas = []
+        for key in ("type_name", "object_name"):
+            name = d.get(key)
+            if name is None:
+                rvas.append(0)
+            elif name is BAD_RVA:
+                rvas.append(unreachable_rva)
+            else:
+                rvas.append(desc_area_size + len(strings_blob))
+                strings_blob += _minidump_string_bytes(name)
+        fixed = struct.pack("<QIIIIII", d["handle"], rvas[0], rvas[1],
+                             d.get("attributes", 0), d.get("granted_access", 0),
+                             d.get("handle_count", 1), d.get("pointer_count", 1))
+        if size_of_descriptor == 40:
+            fixed += struct.pack("<II", 0, 0)   # ObjectInfoRva/Reserved0 -- never walked
+        desc_bytes += fixed
+
+    body = header + bytes(desc_bytes) + bytes(strings_blob)
+    data_size = declared_data_size if declared_data_size is not None else desc_area_size
+    return body, data_size
+
+
+def parsed_handle_stream(descriptors, **kwargs):
+    """`descriptors` through the real `parse_handle_stream`.
+
+    `number_of_descriptors` larger than `descriptors` models a stream
+    that declares more than it delivers. Combined with a
+    `declared_data_size` covering all of them, it models the sharper
+    case: framing that claims room the file never had, which is the only
+    shape where reading the shortfall off `header.NumberOfDescriptors`
+    and recomputing it from the framing give different answers."""
+    body, data_size = build_handle_stream(descriptors, **kwargs)
+    return parse_handle_stream(HandleStreamDirectory(rva=0, data_size=data_size),
+                                io.BytesIO(body))
+
+
+def mf_with_handle_stream(*, parsed=None, failure=None, has_directory=None):
+    """A FakeMF in one of the handle stream's three states: never
+    captured, captured-but-unparseable (`failure`), or parsed.
+    `has_directory` defaults to "the dump declares the stream whenever
+    there is anything to declare", which is what open_dump() always
+    produces."""
+    mf = FakeMF()
+    mf.handles = parsed
+    mf._dumpex_stream_failures = (
+        {MINIDUMP_STREAM_TYPE.HandleDataStream: failure} if failure else {})
+    if has_directory is None:
+        has_directory = parsed is not None or failure is not None
+    mf.directories = [HandleStreamDirectory(0, 16)] if has_directory else []
+    return mf

@@ -81,6 +81,32 @@ consumer that inferred a rule from earlier output should read them.
   address, size, and hunter are the structured inputs; quoting belongs to the
   shell that reads a command, so a consumer that needs one builds it. This is a
   fixed property of the contract, not a field awaiting a later release.
+- A `--hunt pipe` run whose HandleDataStream dropped part of its descriptor
+  array carries one `HANDLE_STREAM_TRUNCATED` limitation, sourced to
+  `handle_data`. `coverage.sources` is unchanged, on that run as on any other:
+  the pipe hunter publishes the same three sources whatever went wrong, so a
+  consumer can compare a full-scope record and a later targeted rescan source
+  by source. Note that the same limitation code appears under `--handles` with
+  `source: "handles"` — one stream, named as each command has always named it,
+  and `affected_count` means the same thing in both.
+- The `pipe` hunter's `handle_data` source can now be `failed`, with the
+  parser's own error text in `detail` and a companion `SOURCE_FAILED`
+  limitation. A dump that carried a HandleDataStream which would not parse
+  previously reported that source as `absent`, whose reason text said the dump
+  was captured without handle data. A consumer distinguishing "re-collect with
+  handle data" from "this dump's handle stream is corrupt" reads `state`,
+  exactly as it already does for `--handles`. Nothing changes for a dump whose
+  handle stream is absent, or readable with no recorded parse failure.
+- When a HandleDataStream parse failure is recorded, `--hunt pipe` scores no
+  handle from that stream, and its `details.handle_pipes` is empty even if the
+  dump also carried a parsed stream object. A dump can declare the same stream
+  type at more than one directory index; only one parse outcome is retained per
+  stream type, so which entry a surviving object came from cannot be
+  determined. A consumer must therefore not read an empty `handle_pipes` beside
+  a `failed` `handle_data` as "no pipe handles were held" — the record's
+  `coverage.status` is `partial` and the hunter's own `status` is
+  `INCONCLUSIVE`, never a clean result. `--handles` resolves the same dump the
+  same way.
 
 ## Important upgrade boundaries
 

@@ -361,20 +361,24 @@ def _render_verdict_block(report: PipeReport, coverage_status: str, findings: li
 
 
 def _coverage_impacts(report: PipeReport, coverage_status: str) -> list:
-    """The score/verdict consequences the COVERAGE section spells out --
-    the new home for three notices the pre-migration renderer printed
-    separately (see this module's own docstring).
+    """The score/verdict consequences the COVERAGE section spells out.
 
-    The first replaces the "NOT AVAILABLE — dump was not captured with
-    MiniDumpWithHandleData" check line AND the old verdict line's
-    "— only unscored string leads are available above" clause: without
-    HandleDataStream the scored path never ran, and a score of 0 must not
-    be read as a clean result.
+    The handle-stream notices come first, in the order an analyst has to
+    resolve them: NO READABLE stream means the scored path never ran at
+    all (a score of 0 is then "never checked", and every '\\pipe\\'
+    string found stays an unscored lead), while a TRUNCATED one means it
+    ran over a head -- the dropped descriptors are unnamed, so neither
+    their presence nor their absence as pipe handles is established.
 
-    The second and third replace the two "[~] ... scan budget exhausted"
-    warnings and give the skipped/unreadable regions an actionable next
-    step -- an analyst needs to be told which tool to point at the
-    addresses named just above.
+    The first impact deliberately names no next step: whether the fix is
+    re-capturing with handle data or treating this dump's stream as
+    corrupt depends on which state produced it, and the COVERAGE reason
+    printed directly above is what says which.
+
+    The region-scan and budget notices follow, giving the skipped,
+    unreadable, or unfinished regions an actionable next step -- an
+    analyst needs to be told which tool to point at the addresses named
+    just above.
     """
     coverage = report.coverage
     impacts = []
@@ -383,6 +387,12 @@ def _coverage_impacts(report: PipeReport, coverage_status: str) -> list:
                        "'\\pipe\\' string this run did find stays an unscored lead (a bare "
                        "string never becomes handle evidence), so a score of 0 here is not a "
                        "clean result.")
+    if coverage.handle_stream_truncated:
+        impacts.append("The handle evidence itself is a HEAD, not the set — each of the "
+                        "dropped descriptor(s) counted above could have been a pipe handle, "
+                        "and nothing in this run can say what any of them held (a descriptor "
+                        "that was never read has no name to report). Re-collect the dump with "
+                        "its handle data intact to close it.")
     if coverage.skipped_oversize or coverage.read_failed or coverage.short_reads:
         impacts.append("A pipe name or C2 artifact in memory that was never read cannot be "
                        "ruled out — targeted follow-up needed on the region(s) above: "

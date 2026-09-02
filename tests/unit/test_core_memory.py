@@ -1,12 +1,20 @@
 """Unit tests for dumpex.core.memory's cross-platform path helpers."""
+import types
+
+import pytest
+
 from dumpex.core.memory import (
     module_name_only, verdict_for, _verdict, _search_string_in_memory, StringSearchStats,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS, VERDICT_HIGH_CONFIDENCE_MALICIOUS,
     va_range_captured_bytes, clamped_reader, read_region_clamped, read_region_spanning,
-    has_stream_directory,
+    has_stream_directory, handle_stream_evidence,
+    HandleStreamContractError, declared_descriptor_count, truncated_descriptor_count,
 )
 from minidump.constants import MINIDUMP_STREAM_TYPE
-from tests.fixtures.fakes import FakeMF, FakeStream, Region, Segment, mem_reader
+from tests.fixtures.fakes import (
+    FakeMF, FakeStream, Handle, Region, Segment, mem_reader,
+    mf_with_handle_stream, parsed_handle_stream,
+)
 
 
 def test_module_name_only_extracts_windows_backslash_path_basename():
@@ -507,3 +515,96 @@ def test_has_stream_directory_tolerates_a_dump_object_without_directories():
     # directories list at all -- treated as declaring nothing, never an
     # AttributeError, matching stream_failure()'s own tolerance.
     assert has_stream_directory(FakeMF(), MINIDUMP_STREAM_TYPE.HandleDataStream) is False
+
+
+# ── The one reader of header.NumberOfDescriptors ─────────────────────────
+# `--handles`, `--profile` and `--hunt pipe` all describe the same
+# truncated stream from these two functions, so one dump cannot be
+# reported three different ways in one case file.
+
+def _stream(handles, declared=None):
+    return FakeStream(handles, "handles", declared=declared)
+
+
+@pytest.mark.parametrize("parsed, expected", [
+    (None, 0),                                              # no stream at all
+    (_stream([Handle(0x1, "File", "x")], declared=False), 0),   # no usable declared count
+    (_stream([], declared=0), 0),                            # declared none, delivered none
+    (_stream([Handle(0x1, "File", "x")], declared=1), 0),    # delivered what it declared
+    (_stream([Handle(0x1, "File", "x")], declared=9), 8),
+    (_stream([], declared=3), 3),                            # array cut off entirely
+    # More delivered than declared is a contradiction in the dump's own
+    # numbers, not a negative shortfall: no descriptor is missing.
+    (_stream([Handle(0x10 * (i + 1), "File", "x") for i in range(4)], declared=2), 0),
+])
+def test_truncated_descriptor_count_never_invents_a_gap(parsed, expected):
+    assert truncated_descriptor_count(parsed) == expected
+
+
+def test_truncated_descriptor_count_over_a_really_truncated_file():
+    """The real parser, over a stream whose framing claims room for five
+    descriptors while the file only ever held two -- the shape where
+    reading the shortfall off the header and recomputing it from the
+    framing disagree (3 versus 0)."""
+    parsed = parsed_handle_stream([{"handle": 0x10 * (i + 1)} for i in range(2)],
+                                   number_of_descriptors=5,
+                                   declared_data_size=16 + 5 * 32)
+    assert (parsed.header.NumberOfDescriptors, len(parsed.handles)) == (5, 2)
+    assert truncated_descriptor_count(parsed) == 3
+
+
+@pytest.mark.parametrize("declared", [True, "4", 4.0, None, -1])
+def test_a_declared_count_that_is_not_a_count_states_nothing(declared):
+    """A declared count that is not usable as one says nothing about how
+    many descriptors the stream holds, and a fabricated number would be
+    worse than none -- `bool` included, since it is an int subclass and a
+    stray boolean there is a parse bug, not 0 or 1. Mirrors how
+    parse_handle_stream itself treats those values when it bounds its own
+    read."""
+    parsed = _stream([Handle(0x1, "File", "x")], declared=declared)
+    assert declared_descriptor_count(parsed) is None
+    assert truncated_descriptor_count(parsed) == 0
+
+
+@pytest.mark.parametrize("parsed", [
+    types.SimpleNamespace(handles=[]),                                   # no .header
+    types.SimpleNamespace(header=types.SimpleNamespace(), handles=[]),    # header, no count
+])
+def test_a_stream_shape_the_parser_no_longer_produces_fails_loudly(parsed):
+    """A renamed attribute or a changed return shape must not degrade into
+    "0 declared, so nothing was truncated": that answer is
+    indistinguishable from a complete stream, which is the silent clean
+    result the truncation limitation exists to prevent."""
+    with pytest.raises(HandleStreamContractError):
+        truncated_descriptor_count(parsed)
+
+
+def test_a_stream_missing_only_its_handles_list_also_fails_loudly():
+    parsed = types.SimpleNamespace(header=types.SimpleNamespace(NumberOfDescriptors=3))
+    with pytest.raises(HandleStreamContractError):
+        truncated_descriptor_count(parsed)
+
+
+# ── The one discriminator of the handle stream's three states ────────────
+
+def test_handle_stream_evidence_tells_never_captured_from_unparseable():
+    absent = mf_with_handle_stream()
+    parsed = mf_with_handle_stream(parsed=parsed_handle_stream([{"handle": 0x10}]))
+    failed = mf_with_handle_stream(failure="SizeOfHeader 4 is out of bounds")
+
+    assert handle_stream_evidence(absent) == ("absent", None, None)
+    assert handle_stream_evidence(parsed)[0] == "parsed"
+    assert handle_stream_evidence(failed) == (
+        "failed", None, "SizeOfHeader 4 is out of bounds")
+
+
+def test_a_declared_stream_that_never_arrived_is_failed_not_absent():
+    """A directory entry with neither a parsed stream nor a recorded
+    failure means the stream was captured but never reached the loader.
+    Unreachable through today's open_dump(), and it fails closed toward
+    the honest answer: the dump HAS handle data, so telling an analyst to
+    re-collect with it would be wrong."""
+    mf = mf_with_handle_stream(has_directory=True)
+    state, parsed, detail = handle_stream_evidence(mf)
+    assert (state, parsed) == ("failed", None)
+    assert "no parsed stream is available" in detail

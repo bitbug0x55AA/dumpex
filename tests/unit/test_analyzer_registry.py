@@ -1327,6 +1327,34 @@ def test_pipe_coverage_source_names_match_the_real_evaluated_sources():
     assert frozenset(report.sources) == COVERAGE_SOURCE_NAMES
 
 
+@pytest.mark.parametrize("gap", [
+    dict(handle_stream_truncated=3),
+    dict(handle_data_stream=False, handle_stream_failure="framing is unreadable"),
+    dict(handle_data_stream=False),
+    dict(read_failed=1),
+    dict(c2_budget_exhausted=True, c2_budget_reason="deadline"),
+])
+def test_pipe_publishes_the_same_source_roster_whatever_went_wrong(gap):
+    """A clean snapshot alone cannot prove the roster is stable: a source
+    added on only SOME runs still matches COVERAGE_SOURCE_NAMES when the
+    guard above builds a snapshot that does not trigger it.
+
+    The roster has to be fixed because the targeted registry is built from
+    this same constant. A full-scope run that published a source the
+    registry does not know about would vanish from the targeted rescan
+    that follows it -- neither evaluated nor marked out of scope -- which
+    is exactly what a consumer uses the per-source roster to rule out.
+    """
+    from dumpex.hunt.pipe.domain import CoverageSnapshot
+    from dumpex.hunt.pipe.report_facts import COVERAGE_SOURCE_NAMES, project_coverage_report
+    fields = dict(memory_info_stream=True, handle_data_stream=True)
+    fields.update(gap)
+    snapshot = CoverageSnapshot(**fields)
+    report = project_coverage_report(snapshot)
+    assert frozenset(report.sources) == COVERAGE_SOURCE_NAMES
+    assert {limitation.source for limitation in report.limitations} <= COVERAGE_SOURCE_NAMES
+
+
 def test_stomping_coverage_source_names_match_the_real_evaluated_sources():
     from dumpex.hunt.stomping.domain import CoverageSnapshot
     from dumpex.hunt.stomping.report_facts import COVERAGE_SOURCE_NAMES, project_coverage_report
