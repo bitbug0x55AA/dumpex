@@ -14,16 +14,17 @@ them too.
 import io
 import types
 import re
-import struct
 import contextlib
 
 import pytest
 
 from minidump.constants import MINIDUMP_STREAM_TYPE
 
-from tests.fixtures.fakes import FakeMF
+from tests.fixtures.fakes import (
+    BAD_RVA, mf_with_handle_stream, parsed_handle_stream,
+)
 
-from dumpex.core.memory import parse_handle_stream, ParsedHandleDescriptor, ParsedHandleDataStream
+from dumpex.core.memory import ParsedHandleDescriptor, ParsedHandleDataStream
 from dumpex.commands.handles import (
     collect_handles, cmd_handles, render_handles_console, summarize_handles_by_type,
 )
@@ -35,84 +36,20 @@ from dumpex.output.coverage import (
 
 HANDLE_STREAM = MINIDUMP_STREAM_TYPE.HandleDataStream
 
-# A name spec of BAD_RVA gets a non-zero RVA pointing past the end of the
-# file: the bounded read comes back short, so _read_handle_string()
-# returns None -- §5.2.1's "unreadable", which is a different fact from
-# both "no name" (RVA 0) and "" (a successful zero-length read).
-BAD_RVA = object()
-
 
 # ── Stream builders ──────────────────────────────────────────────────────
-
-class _Location:
-    def __init__(self, rva, data_size):
-        self.Rva = rva
-        self.DataSize = data_size
-
-
-class _Directory:
-    def __init__(self, rva, data_size, stream_type=HANDLE_STREAM):
-        self.Location = _Location(rva, data_size)
-        self.StreamType = stream_type
-
-
-def _minidump_string_bytes(s: str) -> bytes:
-    encoded = s.encode("utf-16-le")
-    return struct.pack("<I", len(encoded)) + encoded
-
-
-def _build_handle_stream(descriptors, *, size_of_descriptor=32, number_of_descriptors=None,
-                          declared_data_size=None):
-    """Raw HandleDataStream bytes (16-byte header + fixed-size descriptor
-    array + a trailing string area) plus the (rva=0, data_size) framing.
-    Mirrors tests/unit/test_handle_stream_parse.py's own builder, with
-    per-name RVA control (a real string, no name at all, or BAD_RVA)."""
-    n = number_of_descriptors if number_of_descriptors is not None else len(descriptors)
-    header = struct.pack("<IIII", 16, size_of_descriptor, n, 0)
-
-    desc_area_size = 16 + len(descriptors) * size_of_descriptor
-    strings_blob = bytearray()
-    desc_bytes = bytearray()
-    unreachable_rva = 0xF000_0000   # far past the end of every fixture body
-    for d in descriptors:
-        rvas = []
-        for key in ("type_name", "object_name"):
-            name = d.get(key)
-            if name is None:
-                rvas.append(0)
-            elif name is BAD_RVA:
-                rvas.append(unreachable_rva)
-            else:
-                rvas.append(desc_area_size + len(strings_blob))
-                strings_blob += _minidump_string_bytes(name)
-        fixed = struct.pack("<QIIIIII", d["handle"], rvas[0], rvas[1],
-                             d.get("attributes", 0), d.get("granted_access", 0),
-                             d.get("handle_count", 1), d.get("pointer_count", 1))
-        if size_of_descriptor == 40:
-            fixed += struct.pack("<II", 0, 0)   # ObjectInfoRva/Reserved0 -- never walked
-        desc_bytes += fixed
-
-    body = header + bytes(desc_bytes) + bytes(strings_blob)
-    data_size = declared_data_size if declared_data_size is not None else desc_area_size
-    return body, data_size
-
+# Real HandleDataStream bytes through the real parser, from the shared
+# builders in tests/fixtures/fakes.py -- the same ones the pipe hunter's
+# own truncation tests drive, so both commands are exercised against one
+# construction of a truncated stream rather than two that could disagree.
 
 def _parsed(descriptors, **kwargs):
-    body, data_size = _build_handle_stream(descriptors, **kwargs)
-    return parse_handle_stream(_Directory(rva=0, data_size=data_size), io.BytesIO(body))
+    return parsed_handle_stream(descriptors, **kwargs)
 
 
 def _mf(*, parsed=None, failure=None, has_directory=None):
-    """A FakeMF in one of §5.5's stream states. `has_directory` defaults
-    to "the dump declares the stream whenever there is anything to
-    declare", which is what open_dump() always produces."""
-    mf = FakeMF()
-    mf.handles = parsed
-    mf._dumpex_stream_failures = {HANDLE_STREAM: failure} if failure else {}
-    if has_directory is None:
-        has_directory = parsed is not None or failure is not None
-    mf.directories = [_Directory(0, 16)] if has_directory else []
-    return mf
+    return mf_with_handle_stream(parsed=parsed, failure=failure,
+                                  has_directory=has_directory)
 
 
 def _mf_with(descriptors, **kwargs):

@@ -11,7 +11,7 @@ from minidump.minidumpfile import MinidumpFile
 
 from dumpex.core.memory import (
     stream_failure, has_stream_directory, directory_truncated_count,
-    DISPATCHED_STREAM_TYPES, STREAM_ATTR_NAMES,
+    declared_descriptor_count, DISPATCHED_STREAM_TYPES, STREAM_ATTR_NAMES,
 )
 from dumpex.output.coverage import (
     build_coverage_report, EvaluationRequirement, SourceRequirement, SourceObservation,
@@ -76,18 +76,16 @@ def _declared_item_count(attr_name: str, obj) -> "int | None":
     dumpex actually parsed -- None for every stream type except
     HandleDataStream, whose ParsedHandleDataStream retains `.header.
     NumberOfDescriptors` specifically so a truncation shortfall can be
-    recovered (dumpex.core.memory.ParsedHandleDataStream's own
-    docstring: "the caller can always recover how many were truncated as
-    header.NumberOfDescriptors - len(handles)"). Not a new parser: this
-    reads an attribute the real parser already exposes, the same "just
-    naming which existing attribute" rule _collection_item_count's own
-    docstring already follows for the item COUNT itself."""
+    recovered.
+
+    Not a new parser, and not a second reading of that field: it defers
+    to dumpex.core.memory.declared_descriptor_count, the one place that
+    attribute is read, so this inventory's shortfall and the
+    HANDLE_STREAM_TRUNCATED limitation --handles/--hunt pipe raise from
+    the same stream always rest on the same number."""
     if attr_name != "handles":
         return None
-    declared = getattr(getattr(obj, "header", None), "NumberOfDescriptors", None)
-    if isinstance(declared, bool) or not isinstance(declared, int) or declared < 0:
-        return None
-    return declared
+    return declared_descriptor_count(obj)
 
 
 def _collection_item_count(attr_name: str, obj) -> "int | None":

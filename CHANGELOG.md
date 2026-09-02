@@ -72,6 +72,30 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Changed
 
+- `--hunt pipe` now reports a truncated `HandleDataStream`. A dump whose
+  descriptor array declares more handles than it delivers carries a
+  `HANDLE_STREAM_TRUNCATED` limitation with the dropped-descriptor count, makes
+  the run's coverage `partial`, and says on the console that the handle
+  evidence is a head rather than the whole set — a pipe handle in the missing
+  tail is neither found nor ruled out. Previously such a handle simply did not
+  appear, with no coverage caveat. A dump whose HandleDataStream is readable
+  and untruncated produces byte-identical output, coverage, and exit code; the
+  only other behavior change is the parse-failure correction below, which
+  applies to a dump whose handle stream would not parse at all.
+- `--hunt pipe` now distinguishes a HandleDataStream that was never captured
+  from one that was captured and could not be parsed. The second previously
+  reported the first's reason — that the dump needs to be re-collected with
+  `MiniDumpWithHandleData` — which is not the next step for a dump whose handle
+  stream is corrupt, and which that analyst cannot act on anyway. The parser's
+  own error text is now reported instead, and the `handle_data` coverage source
+  is `failed` rather than `absent`, matching what `--handles` already reports
+  for the same dump. When a parse failure is recorded, no handle from that
+  stream is scored, even if a parsed stream object is also present — a dump can
+  declare the same stream twice, and which entry survived is not knowable, so
+  the evidence is treated as untrustworthy rather than scored. `--handles`
+  already resolved it that way. See
+  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the consumer
+  impact.
 - `investigation_actions[].recommended_actions` now includes a
   `targeted_hunter_rescan` entry only when a hunter that skipped the target can
   actually run one over it, and only when this dump holds bytes to rescan; its

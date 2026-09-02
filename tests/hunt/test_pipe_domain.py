@@ -14,6 +14,7 @@ from dumpex.hunt._finding import (
     overall_confidence, verdict_level, lead_count, review_priority,
 )
 from dumpex.hunt.pipe import aggregate as pipe_aggregate
+from dumpex.hunt.pipe.report_facts import project_coverage_v1
 from dumpex.hunt.pipe.domain import (
     MAX_SCORE, VERDICT_LEVEL_BY_SCORE, CoverageSnapshot, PipeEvidence, PipeReport,
 )
@@ -764,6 +765,47 @@ def test_handle_data_absent_always_makes_coverage_partial():
     assert coverage.status == "partial"
 
 
+def test_a_stream_that_was_not_read_cannot_have_dropped_a_tail():
+    """Only a stream this run could read can be known to have dropped a
+    declared tail. Without this the snapshot can claim both "no readable
+    HandleDataStream" and "3 of its descriptors were not read", which
+    projects as an ABSENT source carrying an affected_count=3 limitation
+    and prints two mutually exclusive COVERAGE impacts at once."""
+    with pytest.raises(ValueError, match="handle_data_stream=False"):
+        _coverage(handle_data_stream=False, handle_stream_truncated=3)
+
+
+def test_a_stream_that_was_read_cannot_also_carry_a_parse_failure():
+    with pytest.raises(ValueError, match="handle_data_stream=True"):
+        _coverage(handle_stream_failure="framing is unreadable")
+
+
+def test_a_parse_failure_is_not_the_same_gap_as_a_missing_stream():
+    """`handle_data_stream=False` covers both ways there is nothing to
+    read; `handle_stream_failure` is what tells them apart, and each
+    states its own reason."""
+    absent = _coverage(handle_data_stream=False)
+    failed = _coverage(handle_data_stream=False,
+                        handle_stream_failure="SizeOfHeader 4 is out of bounds")
+    assert absent.evaluated is failed.evaluated is True   # memory_info still ran
+    assert absent.complete is failed.complete is False
+    assert project_coverage_v1(absent)[1] != project_coverage_v1(failed)[1]
+
+
+def test_a_truncated_handle_stream_makes_coverage_partial():
+    """A captured stream that delivered only part of its descriptor array
+    was evaluated, but not completely: the handles the scored checks saw
+    are a head, and a pipe handle in the dropped tail is neither found nor
+    ruled out."""
+    coverage = _coverage(handle_stream_truncated=3)
+    assert coverage.evaluated is True
+    assert coverage.complete is False
+    assert coverage.status == "partial"
+    # The region walk itself finished -- truncation is a stream gap, and
+    # must not be laundered into the v1.1 `scan_complete` key.
+    assert coverage.region_scan_complete is True
+
+
 @pytest.mark.parametrize("gap, value", [
     ("skipped_oversize", (_oversize_target(),)),
     ("read_failed", 1),
@@ -858,6 +900,11 @@ def test_handle_scan_result_rejects_raw_minidump_handles():
     with pytest.raises(TypeError, match="HandleScanResult.handles\\[0\\] must be a "
                                           "PipeHandleEvidence"):
         HandleScanResult(handles=(Handle(0x1, "File", r"\Device\NamedPipe\x"),))
+
+
+def test_handle_scan_result_rejects_a_negative_dropped_descriptor_count():
+    with pytest.raises(ValueError, match="dropped_descriptors must be a non-negative int"):
+        HandleScanResult(dropped_descriptors=-1)
 
 
 def test_correlation_result_rejects_the_wrong_evidence_type_per_bucket():

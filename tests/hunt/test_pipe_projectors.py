@@ -18,7 +18,9 @@ from dumpex.hunt.pipe import aggregate as pipe_aggregate
 from dumpex.hunt.pipe.domain import CoverageSnapshot, PipeEvidence, PipeReport
 from dumpex.hunt.pipe.models import CorroboratedHandleEvidence, StartAddressLeadEvidence
 from dumpex.hunt.pipe.report_console import render_console_lines
-from dumpex.hunt.pipe.report_facts import finding_from_check_result, project_coverage_v1
+from dumpex.hunt.pipe.report_facts import (
+    COVERAGE_SOURCE_NAMES, finding_from_check_result, project_coverage_v1,
+)
 from dumpex.hunt.pipe.report_legacy import project_legacy_dict
 from dumpex.hunt.pipe.report_record import project_hunter_record
 
@@ -523,6 +525,8 @@ _GAP_REASONS = [
     (dict(memory_info_stream=False, handle_data_stream=False),
      "MemoryInfoListStream missing from this dump"),
     (dict(handle_data_stream=False), "HandleDataStream missing from this dump"),
+    (dict(handle_stream_truncated=3),
+     "3 declared handle descriptor(s) were not read"),
     (dict(skipped_oversize=(_oversize_target(),)), "1 oversized region(s) skipped"),
     (dict(read_failed=1), "1 region(s) failed to read"),
     (dict(short_reads=1), "1 region(s) returned fewer bytes than declared"),
@@ -563,6 +567,44 @@ def test_oversized_region_names_the_address_and_the_cap():
                       if l.code.value == "SCAN_REGION_OVERSIZED_SKIPPED")
     assert limitation.source == "pipe_name_scan"
     assert limitation.targets[0].base_address == 0x7ff600100000
+
+
+def test_a_truncated_handle_stream_names_the_tail_and_what_it_costs():
+    """The stream was captured, so `handle_data` is present and the scored
+    checks ran; what is missing is the descriptor array's tail. The
+    limitation hangs off that same source -- one stream, one source, on a
+    truncated run as on any other -- and the COVERAGE impact says the
+    handle evidence is a head rather than the set."""
+    coverage = _coverage(handle_stream_truncated=3)
+    record = project_hunter_record(
+        PipeReport(score=0, coverage=coverage, results=(), evidence=PipeEvidence()))
+
+    limitation = next(l for l in record.coverage.limitations
+                      if l.code.value == "HANDLE_STREAM_TRUNCATED")
+    assert limitation.source == "handle_data"
+    assert limitation.affected_count == 3
+    assert record.coverage.sources["handle_data"].state.value == "present"
+    assert frozenset(record.coverage.sources) == COVERAGE_SOURCE_NAMES
+
+    text = strip_ansi("\n".join(render_console_lines(
+        PipeReport(score=0, coverage=coverage, results=(), evidence=PipeEvidence()),
+        verbose=False)))
+    assert "3 declared handle descriptor(s) were not read" in text
+    assert "a HEAD, not the set" in text
+    # The stream IS there, so the absence notice must not fire alongside it.
+    assert "could not run at all" not in text
+
+
+def test_a_captured_stream_with_no_descriptors_is_still_a_clean_answer():
+    """A process can legitimately hold zero handles. That is a
+    checked-and-clean answer, reported exactly as it always has been: the
+    stream is present and no truncation source joins the roster, because
+    nothing was dropped."""
+    record = project_hunter_record(
+        PipeReport(score=0, coverage=_coverage(), results=(), evidence=PipeEvidence()))
+    observation = record.coverage.sources["handle_data"]
+    assert (observation.state.value, observation.record_count) == ("present", 1)
+    assert record.coverage.status.value == "complete"
 
 
 def test_the_two_budgets_are_separate_limitations_distinguished_by_scope():

@@ -294,6 +294,9 @@ def test_pipe_aggregate_receives_only_typed_evidence_and_scalars():
         "handle_pipes", "string_leads", "corroborated_handles",
         "start_address_leads", "c2_context", "framework_string_hits",
         "unbacked_threads", "memory_info_stream", "handle_data_stream",
+        # why there was no readable handle stream, and the declared tail a
+        # readable one did not deliver
+        "handle_stream_failure", "handle_stream_truncated",
         "skipped_oversize", "read_failed", "read_failed_targets",
         "short_reads", "short_read_targets", "c2_budget_exhausted",
         "c2_budget_reason", "pipe_name_budget_exhausted",

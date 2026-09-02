@@ -13,7 +13,8 @@ import time
 from minidump.minidumpfile import MinidumpFile
 from dumpex.rules_pkg.loader import get_rules, get_rules_source_info
 from dumpex.core.memory import (get_modules, get_memory_regions,
-    get_thread_infos, get_thread_contexts, get_handles, read_region)
+    get_thread_infos, get_thread_contexts, get_handles, handle_stream_evidence,
+    read_region)
 from dumpex.hunt._coverage import CoverageTracker
 from dumpex.hunt._budget import ScanBudget
 from dumpex.hunt._runtime import HunterRuntime
@@ -38,15 +39,29 @@ def _build_pipe_report(mf: MinidumpFile):
     regions = get_memory_regions(mf)
     infos   = get_thread_infos(mf)
     thread_contexts = get_thread_contexts(mf)
-    handles = get_handles(mf)
     mem_info_available    = bool(mf.memory_info and mf.memory_info.infos)
-    # Stream PRESENCE, not "the handle list happens to be non-empty" — a
-    # dump captured with MiniDumpWithHandleData can legitimately show a
-    # process holding zero pipe handles (or, in principle, zero handles at
-    # all); that is a checked-and-clean result, not "the stream is
-    # missing". Only `mf.handles is None` means the stream itself wasn't
-    # captured, and only THAT should report a coverage gap.
-    handle_stream_available = mf.handles is not None
+
+    # The handle stream's THREE states, from the one shared discriminator
+    # (`dumpex.core.memory.handle_stream_evidence`), never from
+    # `mf.handles is None`: that is None both for a dump captured without
+    # MiniDumpWithHandleData and for one whose handle stream was captured
+    # and could not be parsed. Collapsing them would tell an analyst
+    # holding a corrupt-stream dump to re-capture with handle data they
+    # already have.
+    #
+    # Only "parsed" is a stream this hunter can read, and only then is a
+    # score of 0 for the handle checks a checked-and-clean result: a dump
+    # captured with MiniDumpWithHandleData can legitimately show a process
+    # holding zero pipe handles (or, in principle, zero handles at all).
+    #
+    # Parsed is still not complete: the stream can declare more
+    # descriptors than it delivered, and `handles` is then a HEAD, not the
+    # set. `scan_handles` reads that tail off the stream's own header
+    # (`hscan.dropped_descriptors`); the list `get_handles` returns cannot
+    # show it, since a dropped descriptor is simply not in it.
+    handle_state, handle_stream, handle_failure = handle_stream_evidence(mf)
+    handle_stream_available = handle_state == "parsed"
+    handles = get_handles(mf) if handle_stream_available else []
 
     # Pipe attribution and C2 context patterns loaded from rules.yaml.
     # Each KNOWN_FRAMEWORK_PIPES entry: (compiled_regex, framework, technique, mitre)
@@ -78,7 +93,7 @@ def _build_pipe_report(mf: MinidumpFile):
     runtime = HunterRuntime(read_region=read_region)
 
     # ── Primary, scored: handle objects ──────────────────────────────────
-    hscan = handle_scan_mod.scan_handles(handles, KNOWN_FRAMEWORK_PIPES)
+    hscan = handle_scan_mod.scan_handles(handles, KNOWN_FRAMEWORK_PIPES, handle_stream)
 
     # ── Collect all pipe name occurrences (string scan — lead only), plus
     # C2-context records for regions that yielded one. TWO INDEPENDENT
@@ -121,6 +136,8 @@ def _build_pipe_report(mf: MinidumpFile):
         corr.corroborated_handles, corr.start_address_leads,
         corr.c2_context, corr.framework_string_hits, corr.unbacked_threads,
         memory_info_stream=mem_info_available, handle_data_stream=handle_stream_available,
+        handle_stream_failure=handle_failure,
+        handle_stream_truncated=hscan.dropped_descriptors,
         skipped_oversize=scan_coverage.skipped_oversize_targets,
         read_failed=scan_coverage.read_failed,
         read_failed_targets=scan_coverage.read_failed_targets,

@@ -2821,3 +2821,62 @@ def test_profile_memory_content_fallback_rejects_an_unusable_detail(detail):
     with pytest.raises(ValueError, match="detail must be None or a non-empty string"):
         CoverageLimitation(code=LimitationCode.PROFILE_MEMORY_CONTENT_FALLBACK,
                             source="memory_content", detail=detail)
+
+
+# ── alternate_sources ────────────────────────────────────────────────────
+
+def test_no_code_with_alternate_sources_is_reachable_through_a_requirement():
+    """`alternate_sources` widens CoverageLimitation's own construction
+    only. SourceRequirement.absent_code and
+    EvaluationRequirement.all_absent_code validate through
+    `_FIXED_SOURCE_CODES`, which carries the canonical name alone -- so a
+    code that were both would accept a source name in one place and refuse
+    it in another, with a message naming only the canonical one."""
+    from dumpex.output.coverage import (
+        _ABSENT_CAPABLE_CODES, _CODE_SPECS, _GROUP_EVALUATION_CODES,
+    )
+    with_alternates = [code for code, spec in _CODE_SPECS.items() if spec.alternate_sources]
+    assert with_alternates, "the rule below is vacuous if nothing uses the field"
+    for code in with_alternates:
+        assert code not in _ABSENT_CAPABLE_CODES, code
+        assert code not in _GROUP_EVALUATION_CODES, code
+
+
+def test_the_alternate_sources_restriction_is_enforced_not_merely_observed():
+    """The same rule against a synthetic table, so the guard itself is
+    tested rather than only the current specs happening to satisfy it."""
+    from dumpex.output.coverage import _CodeSpec, _validate_alternate_sources
+
+    def spec(**kwargs):
+        return {LimitationCode.HANDLE_STREAM_TRUNCATED: _CodeSpec(
+            render=lambda limitation: "", **kwargs)}
+
+    _validate_alternate_sources(spec(fixed_source="a", alternate_sources=frozenset({"b"})))
+    with pytest.raises(ValueError, match="absent_capable/group_capable"):
+        _validate_alternate_sources(spec(fixed_source="a", absent_capable=True,
+                                          alternate_sources=frozenset({"b"})))
+    with pytest.raises(ValueError, match="absent_capable/group_capable"):
+        _validate_alternate_sources(spec(fixed_source="a", group_capable=True,
+                                          alternate_sources=frozenset({"b"})))
+    with pytest.raises(ValueError, match="no fixed_source"):
+        _validate_alternate_sources(spec(alternate_sources=frozenset({"b"})))
+
+
+def test_a_fixed_sentence_still_refuses_a_source_that_is_not_an_alternate():
+    with pytest.raises(ValueError, match="source must be 'handles' or 'handle_data'"):
+        CoverageLimitation(code=LimitationCode.HANDLE_STREAM_TRUNCATED,
+                            source="memory_info", affected_count=1)
+
+
+def test_the_truncation_sentence_reads_identically_under_either_source_name():
+    """The precondition for allowing a second name at all: the rendered
+    text names HandleDataStream literally and interpolates no source, so
+    `--handles` and `--hunt pipe` describe one dump's truncated stream
+    with one sentence."""
+    rendered = {
+        render_limitation(CoverageLimitation(
+            code=LimitationCode.HANDLE_STREAM_TRUNCATED, source=name, affected_count=3))
+        for name in ("handles", "handle_data")
+    }
+    assert rendered == {"HandleDataStream declares more descriptors than dumpex will "
+                        "parse; 3 descriptor(s) were not read"}

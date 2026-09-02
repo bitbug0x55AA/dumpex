@@ -1451,6 +1451,22 @@ class _CodeSpec:
     # requires `source` to match exactly (a mismatch would render a
     # sentence describing a stream other than the one actually observed).
     fixed_source: Optional[str] = None
+    # Further source names the SAME fixed sentence may be attached to,
+    # beyond `fixed_source`. Only ever for a second name denoting the SAME
+    # underlying evidence, where the rendered sentence stays true word for
+    # word -- never a way to point a fixed sentence at different evidence.
+    # `fixed_source` remains the canonical name (it is what
+    # SourceRequirement/EvaluationRequirement validate against), so this
+    # widens construction alone.
+    #
+    # It exists because a code's source name is fixed globally while the
+    # commands that raise it name the same stream differently: --handles
+    # calls the HandleDataStream `handles`, and the pipe hunter has always
+    # called it `handle_data` in its own published coverage vocabulary.
+    # Without this, reporting one shared fact from both would mean renaming
+    # one command's source (breaking its consumers) or minting a duplicate
+    # source key for the stream (an unstable roster).
+    alternate_sources: frozenset = frozenset()
     # PID_SOURCES_ABSENT's exact 3-tuple -- related_sources must equal
     # this precisely, since the rendered sentence names those three
     # streams specifically.
@@ -2976,7 +2992,13 @@ _CODE_SPECS = {
         validate_fields=_require_positive_affected_count("HANDLE_STRING_READ_FAILED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.HANDLE_STREAM_TRUNCATED: _CodeSpec(
-        render=_render_handle_stream_truncated, fixed_source="handles", caller_buildable=True,
+        render=_render_handle_stream_truncated, fixed_source="handles",
+        # The pipe hunter reports the same truncated stream under its own
+        # long-standing source name. The sentence names "HandleDataStream"
+        # literally and interpolates no source, so it reads identically
+        # either way -- see _CodeSpec.alternate_sources.
+        alternate_sources=frozenset({"handle_data"}),
+        caller_buildable=True,
         validate_fields=_require_positive_affected_count("HANDLE_STREAM_TRUNCATED"),
         allowed_fields=frozenset({"affected_count"})),
     # ── --profile (issue #95) ──────────────────────────────────────────
@@ -3018,6 +3040,44 @@ _CODE_SPECS = {
 # any of these groups is decided.
 _FIXED_SOURCE_CODES = {code: spec.fixed_source for code, spec in _CODE_SPECS.items()
                         if spec.fixed_source is not None}
+
+
+def _validate_alternate_sources(specs: dict) -> None:
+    """`alternate_sources` widens ONE of the three places a fixed source is
+    checked: CoverageLimitation's own construction. The other two --
+    SourceRequirement.absent_code and EvaluationRequirement.all_absent_code
+    -- validate through `_FIXED_SOURCE_CODES`, which carries the canonical
+    name alone and would refuse an alternate with a message naming only
+    that one.
+
+    Rather than widen a derivation two auto-derivation paths depend on,
+    the restriction is made explicit and enforced at import: a code with
+    alternate sources must be caller-buildable only. Every code reachable
+    through those two paths is `absent_capable` or `group_capable`, so
+    excluding both keeps the three checks in agreement by construction
+    instead of by the accident that no such code exists yet.
+
+    Extracted as a named function so it is directly unit-testable against a
+    synthetic table, the same way the analyzer registry's own table
+    validators are."""
+    for code, spec in specs.items():
+        if not spec.alternate_sources:
+            continue
+        if spec.fixed_source is None:
+            raise ValueError(
+                f"_CODE_SPECS[{code.value}] declares alternate_sources with no "
+                f"fixed_source -- there is no canonical name for them to be "
+                f"alternates of")
+        if spec.absent_capable or spec.group_capable:
+            raise ValueError(
+                f"_CODE_SPECS[{code.value}] declares alternate_sources and is also "
+                f"absent_capable/group_capable -- SourceRequirement.absent_code and "
+                f"EvaluationRequirement.all_absent_code validate against the canonical "
+                f"fixed_source alone, so the same source name would be accepted on a "
+                f"CoverageLimitation and refused on a Requirement")
+
+
+_validate_alternate_sources(_CODE_SPECS)
 _ABSENT_CAPABLE_CODES = tuple(code for code, spec in _CODE_SPECS.items() if spec.absent_capable)
 _GROUP_EVALUATION_CODES = tuple(code for code, spec in _CODE_SPECS.items() if spec.group_capable)
 _CALLER_BUILDABLE_COMPLETENESS_CODES = tuple(
@@ -3141,10 +3201,12 @@ class CoverageLimitation:
             raise ValueError(
                 f"CoverageLimitation(code={self.code.value}) requires >= "
                 f"{spec.min_related_sources} related_sources")
-        if spec.fixed_source is not None and self.source != spec.fixed_source:
+        if (spec.fixed_source is not None and self.source != spec.fixed_source
+                and self.source not in spec.alternate_sources):
+            accepted = [spec.fixed_source, *sorted(spec.alternate_sources)]
             raise ValueError(
                 f"CoverageLimitation(code={self.code.value}) is a fixed sentence -- source must "
-                f"be {spec.fixed_source!r}, got {self.source!r}")
+                f"be {' or '.join(repr(name) for name in accepted)}, got {self.source!r}")
         if spec.fixed_related_sources is not None and self.related_sources != spec.fixed_related_sources:
             raise ValueError(
                 f"CoverageLimitation(code={self.code.value}) is a fixed sentence naming "
