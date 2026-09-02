@@ -159,8 +159,9 @@ coverage mapping — `0` complete, `3` partial, `4` not evaluated.
 
 `--hunt all` ends with a `SKIPPED TARGET ACTIONS` section listing the ranges a
 hunter left unexamined. Each eligible entry prints the exact command to run
-next — one per skipping hunter that has a targeted capability, quoted for the
-dump path you passed:
+next — one per skipping hunter that has a targeted capability, with the dump
+path quoted so the line means the same thing in a POSIX shell, PowerShell, and
+`cmd.exe`:
 
 ```text
   [HIGH] 0x00000000007ff000  64 MB  captured
@@ -181,6 +182,30 @@ The rules behind that block:
 | A target whose bytes this dump never captured | No command. The entry says so and recommends recollection: a local scan of a range the dump does not hold reads nothing |
 | A target larger than the hunter's request ceiling | One capped command covering the first ceiling-sized piece, labelled supplementary. Rescanning the remaining pieces is a separate decision, and chunked rescans never add up to coverage of the whole range |
 | A budget limitation that names a reason but no target | No queue entry, and therefore no command. A range is never invented to make one |
+| A dump path no quoting can carry (below) | No command line. The entry prints the arguments without the path and says why; you supply the path quoted for your own shell |
+
+### Dump paths that get arguments instead of a command
+
+A command line is printed only when copying it runs the dump it names. Some
+paths cannot be written so that all three shells read them identically, and for
+those the entry drops the program name and the path and prints the arguments
+alone:
+
+| In the path | Why no quoting fixes it |
+|---|---|
+| `%` | `cmd.exe` expands `%VAR%` inside double quotes |
+| `$` | POSIX shells and PowerShell expand `$VAR` inside double quotes; POSIX also runs `$(...)` there |
+| A backtick | PowerShell's escape character, and POSIX command substitution |
+| `"` | Ends the quoted run, and the escape differs per shell |
+| `!` | `cmd.exe` expands `!VAR!` inside double quotes under delayed expansion |
+| Two consecutive backslashes (a UNC path) | A POSIX shell collapses `\\` to `\` inside double quotes, so `\\server\share` would name `\server\share` |
+| A trailing backslash | Escapes the closing quote in a POSIX shell |
+| A control character | The only way to print one safely is to change it, and a command naming an altered path names a different file |
+
+This is a refusal, not a best effort. A command line that expands, splits, or
+executes part of a filename would send you to rescan the wrong dump — or run
+whatever the filename embeds — while looking correct, which is worse than
+printing no command at all.
 
 A rescan produces a separate result document. Nothing merges it back into the
 run that recommended it: the queue entry keeps

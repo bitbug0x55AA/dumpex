@@ -467,7 +467,8 @@ string — quoting is a property of the shell that reads a command line, not of 
 result — so build the invocation yourself, capping `--size` at the hunter's own
 request ceiling (256 MiB, or 32 MiB for `obfuscation`) and treating a capped
 request as covering that piece only. The console renders the same command for
-the dump path it was given.
+the dump path it was given, and shows the arguments without a command line when
+that path holds characters no quoting carries through every shell unchanged.
 
 Reconcile a rescan against the relationship it was meant to answer, and close
 that relationship only when its own scope came back `complete`. One target may

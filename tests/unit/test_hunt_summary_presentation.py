@@ -749,3 +749,43 @@ def test_a_target_over_its_analyzers_ceiling_gets_one_labelled_supplementary_com
            f"--size 0x{ceiling:x}" in block
     assert "supplementary" in block
     assert "does not close the original gap" in block
+
+
+def test_a_dump_path_no_shell_can_carry_gets_arguments_instead_of_a_command():
+    """A path holding a shell metacharacter must never appear in a rendered
+    command line: expanded or substituted, it would send the analyst to rescan
+    a different file, or run whatever the filename embeds. The range, hunter,
+    and size are still exact, so the entry shows those and hands the path back
+    to the analyst."""
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    action = _action()
+    out = _capture(records, summary, investigation_actions=[action],
+                    dump_path="/cases/$(id)/incident.dmp")
+    block = _rescan_block(out)
+
+    assert "$(id)" not in block
+    assert "incident.dmp" not in block
+    assert "a shell would expand or execute" in block
+    base = f"0x{action.target.base_address:x}"
+    assert f"--hunt pipe --hunt-addr {base} --size 0x{action.target.size:x}" in block
+    assert f"dumpex /cases" not in block
+
+
+@pytest.mark.parametrize("dump_path", [
+    r"C:\cases\%DEMO%\incident.dmp",
+    r"C:\cases\$env:DEMO\incident.dmp",
+    "/cases/`id`/incident.dmp",
+    "\\\\server\\share\\incident.dmp",
+    "/cases/esc\x1b[31m/incident.dmp",
+])
+def test_no_hostile_dump_path_ever_reaches_a_rendered_command_line(dump_path):
+    records = _all_clean_records()
+    summary = build_hunt_summary(records, selected="all")
+    out = _capture(records, summary, investigation_actions=[_action()], dump_path=dump_path)
+    block = _rescan_block(out)
+    # The command line is the thing that must not carry it; the arguments-only
+    # presentation names no path at all.
+    assert "dumpex" not in block
+    for fragment in ("%DEMO%", "$env:", "`id`", "\\\\server", "\x1b"):
+        assert fragment not in block

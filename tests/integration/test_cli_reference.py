@@ -82,5 +82,24 @@ def test_cli_reference_documents_the_queues_rescan_commands():
         assert rule in text, rule
 
 
+def test_cli_reference_documents_every_path_a_command_line_cannot_carry():
+    """A refusal an analyst can hit has to be lookup-able, with the reason. Each
+    row here corresponds to a rule in
+    `dumpex.hunt._rescan_command.is_renderable_argument`."""
+    text = _text()
+    assert "### Dump paths that get arguments instead of a command" in text
+    for reason in (
+        "`cmd.exe` expands `%VAR%` inside double quotes",
+        "expand `$VAR` inside double quotes",
+        "PowerShell's escape character",
+        "delayed expansion",
+        r"collapses `\\` to `\` inside double quotes",
+        "Escapes the closing quote in a POSIX shell",
+        "names a different file",
+    ):
+        assert reason in text, reason
+    assert "This is a refusal, not a best effort." in text
+
+
 def test_cli_reference_states_that_redact_paths_covers_rendered_commands():
     assert "`--redact-paths`, the rendered command names the dump by basename" in _text()

@@ -208,7 +208,8 @@ originating hunter's successful targeted rescan can close its coverage gap.
 
 The console/`--txt` `SKIPPED TARGET ACTIONS` section prints the rescan to run
 for each eligible entry — one `--hunt-addr` command per skipping hunter that has
-a targeted capability, quoted for the dump path you passed. Work it top down:
+a targeted capability, with the dump path quoted so the line means the same
+thing in a POSIX shell, PowerShell, and `cmd.exe`. Work it top down:
 the queue is already ordered by priority.
 
 - Run the command as printed. It names the range the queue named, capped at the
@@ -227,6 +228,10 @@ the queue is already ordered by priority.
   remaining commands as full closure.
 - `Rescan: unavailable` means the bytes are not in this dump. Recollect;
   a local scan would read nothing and must not be recorded as a negative.
+- An entry that prints arguments without a command means this dump's own path
+  holds characters a shell would expand or execute, so no command line could
+  carry it unchanged. Run those arguments against the dump yourself, quoting the
+  path your shell's way; do not reconstruct the line by pasting the path in.
 
 Everything a rescan reports applies to the bytes it evaluated. A
 `NOT_DETECTED_IN_SCANNED_SCOPE` rescan is not a clean verdict for the rest of the

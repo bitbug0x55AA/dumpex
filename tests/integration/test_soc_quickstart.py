@@ -91,5 +91,6 @@ def test_quickstart_explains_how_to_act_on_a_rendered_rescan_command():
         "coverage_effect: original_hunter_gap_not_resolved",
         "No targeted rescan for:",
         "Rescan: unavailable",
+        "holds characters a shell would expand or execute",
     ):
         assert guidance in text, guidance

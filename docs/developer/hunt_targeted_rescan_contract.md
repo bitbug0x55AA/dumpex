@@ -396,6 +396,13 @@ command is built:
 6. The dump path is rendered as one shell argument, reduced to a basename under
    `--redact-paths` so a `--txt` transcript is as shareable as the structured
    document.
+7. A command line is emitted only when every token means the same thing in a
+   POSIX shell, PowerShell, and `cmd.exe`. `is_renderable_argument()` owns that
+   decision and refuses `%`, `$`, a backtick, `"`, `!`, control characters, a
+   trailing backslash, and the doubled backslash of a UNC path; the entry then
+   shows the arguments without the program name or the path. A line that
+   expands, splits, or executes part of a filename resolves to another dump
+   while looking correct, which is strictly worse than showing none.
 
 Reconciliation stays the analyst's, keyed on
 `hunter + source + scope + base_address + size` -- the same key

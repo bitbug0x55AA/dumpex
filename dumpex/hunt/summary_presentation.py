@@ -428,6 +428,12 @@ def _render_rescan_block(action: InvestigationAction, width: int, dump_path: "st
     terminal is no longer copyable, and a truncated one would run a different
     range than the entry names. Nothing is printed at all when the dump path is
     unknown -- an invented path would be worse than no command.
+
+    A path a command line cannot carry through every shell (see
+    `dumpex.hunt._rescan_command.is_renderable_argument`) gets the arguments
+    without it. That is the honest shape: the range, hunter, and size are still
+    exactly what to run, and the one token that would have been wrong or
+    dangerous is left to the analyst rather than guessed at.
     """
     unsupported = unsupported_rescan_hunters(action)
     commands = build_rescan_commands(action, dump_path) if dump_path else ()
@@ -435,8 +441,18 @@ def _render_rescan_block(action: InvestigationAction, width: int, dump_path: "st
     if commands:
         lines.extend(_wrap_block(f"Rescan (match the new result back by {_RESCAN_MATCH_KEY}):",
                                  width, 7))
+        # Renderability is a property of the dump path alone, so it is the same
+        # answer for every command in this block.
+        renderable = commands[0].renderable
+        if not renderable:
+            lines.extend(_wrap_block(
+                "This dump's path holds characters a shell would expand or execute, so no "
+                "command line below can carry it unchanged. Run these arguments against "
+                "this dump yourself, quoting the path the way your own shell requires:",
+                width, _RESCAN_INDENT))
         for command in commands:
-            lines.append(" " * _RESCAN_INDENT + command.render())
+            lines.append(" " * _RESCAN_INDENT
+                         + (command.render() if renderable else command.render_arguments()))
             if command.capped:
                 lines.extend(_wrap_block(
                     f"supplementary: {command.hunter} accepts "

@@ -20,17 +20,26 @@ command covering the first ceiling-sized piece of the range. That command is
 supplementary: it closes nothing beyond the piece it names, repeating it over
 later pieces does not close the original gap, and the queue entry's
 ``coverage_effect`` stays unresolved either way.
+
+Rendering a command line is refused outright for a dump path no single quoting
+rule can carry through POSIX shells, PowerShell, and ``cmd.exe`` alike -- see
+:func:`is_renderable_argument`. A command is offered only when copying it runs
+the dump it names; otherwise the entry shows the arguments without the path and
+the analyst supplies it under their own shell's rules. There is no third option
+here: emitting a line that reads correctly but resolves to another file (or
+executes a substitution embedded in a filename) is worse than emitting none.
 """
 from dataclasses import dataclass
 
 from dumpex.hunt import _registry
 from dumpex.hunt._investigation import InvestigationAction, InvestigationActionType
 from dumpex.output.records import HUNTERS
-from dumpex.ui.colors import console_safe
 
 __all__ = [
     "PROGRAM_NAME",
     "RescanCommand",
+    "UnrenderableArgument",
+    "is_renderable_argument",
     "quote_argument",
     "build_rescan_commands",
     "unsupported_rescan_hunters",
@@ -41,38 +50,101 @@ __all__ = [
 # line has to be the one the packaged tool answers to.
 PROGRAM_NAME = "dumpex"
 
-# Characters that survive an unquoted argument identically in POSIX shells,
-# PowerShell, and cmd.exe. A path built only from these is rendered bare;
-# anything else -- a space above all -- takes double quotes.
-_SAFE_ARGUMENT_CHARS = frozenset(
+# Characters an unquoted token carries through all three shells unchanged.
+# Deliberately minimal, and notably WITHOUT the backslash: a POSIX shell reads
+# an unquoted `\` as an escape, so bare `C:\a\b.dmp` arrives as `C:ab.dmp`.
+# `%` is expanded by cmd.exe, and `@` and `,` are PowerShell operators in
+# leading position. Everything outside this set goes inside double quotes,
+# which is where essentially every Windows path lands. A leading `-` needs no
+# special handling: quoting does not stop dumpex's own argument parser reading
+# a token as a flag, so it would buy nothing here.
+_BARE_ARGUMENT_CHARS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
-    "@%+=:,./_-\\"
+    ":./_-"
 )
+
+# Characters double quotes do NOT neutralize in at least one of the three
+# shells, so a token holding one cannot be rendered at all:
+#
+#   %   cmd.exe expands %VAR% inside double quotes.
+#   $   POSIX shells and PowerShell both expand $VAR inside double quotes, and
+#       POSIX additionally runs $(...) command substitution there.
+#   `   PowerShell's escape character, and POSIX command substitution.
+#   "   ends the quoted run; the escape differs per shell (POSIX and cmd.exe
+#       take a backslash, PowerShell a backtick or a doubled quote), so no
+#       single spelling is correct everywhere.
+#   !   cmd.exe expands !VAR! inside double quotes under delayed expansion.
+#
+# This is a fixed, closed set: widening it means finding a spelling all three
+# shells read identically, not deciding one shell matters less.
+_UNQUOTABLE_ARGUMENT_CHARS = frozenset("%$`\"!")
+
+# Inside double quotes a POSIX shell still treats a backslash as an escape when
+# the next character is one of `$`, a backtick, `"`, `\`, or a newline. The
+# first three and the newline are already refused outright above, which leaves
+# the doubled backslash: `"\\srv\share"` reaches the program as `\srv\share`.
+# That is exactly a UNC path, so a UNC dump path gets the arguments-only
+# presentation rather than a command line naming a different location.
+_POSIX_QUOTED_ESCAPE = "\\\\"
+
+
+class UnrenderableArgument(ValueError):
+    """`quote_argument()` was handed a value no shell-independent quoting can
+    carry. Raised rather than returning a best effort: a caller must choose to
+    show something other than a command line, never emit one that resolves
+    somewhere else."""
+
+    def __init__(self, value):
+        self.value = value
+        super().__init__(
+            "no single quoting rule carries this value through POSIX shells, "
+            "PowerShell, and cmd.exe alike")
+
+
+def is_renderable_argument(value: str) -> bool:
+    """Whether `value` can appear in a command line that means the same thing in
+    a POSIX shell, PowerShell, and `cmd.exe`.
+
+    False for a value carrying any of `_UNQUOTABLE_ARGUMENT_CHARS`; for one
+    ending in a backslash, which would escape the closing quote in a POSIX
+    shell; for one containing a doubled backslash (`_POSIX_QUOTED_ESCAPE`),
+    which a POSIX shell collapses to one inside double quotes; for a control
+    character, since the only way to print one safely is to replace it, and a
+    command naming an altered path is a command naming a different file; and
+    for the empty string, which is not a path.
+
+    Windows filenames cannot contain `"`, and none of `%`, `$`, a backtick, or
+    `!` appears in an ordinary case path, so this refuses almost nothing real
+    beyond UNC paths -- and refuses exactly the paths a naively quoted command
+    line would resolve somewhere else, or would execute.
+    """
+    if not isinstance(value, str) or not value:
+        return False
+    if value.endswith("\\") or _POSIX_QUOTED_ESCAPE in value:
+        return False
+    return not any(
+        ch in _UNQUOTABLE_ARGUMENT_CHARS or ch < " " or ch == "\x7f" for ch in value)
 
 
 def quote_argument(value: str) -> str:
-    """`value` as one shell argument: bare when every character is safe
-    unquoted, double-quoted otherwise, with any embedded `"` backslash-escaped.
+    """`value` as one command-line token, bare when every character survives
+    unquoted and double-quoted otherwise.
 
     Double quotes rather than POSIX single quotes because the same line has to
     survive `cmd.exe` and PowerShell, where single quotes are either not quote
     characters at all or do not accept the escape POSIX expects, and because a
-    Windows dump path's own backslashes stay literal inside double quotes in
-    all three. A path holding a metacharacter double quotes do not neutralize
-    (`$` in POSIX shells, a backtick in PowerShell) is still rendered
-    faithfully: the analyst reads back the path they passed, and re-quotes it
-    for their own shell if it needs it.
+    Windows path's own backslashes stay literal inside double quotes in all
+    three. Within what `is_renderable_argument()` admits, no escaping is needed
+    at all: everything double quotes fail to neutralize in any one of the three
+    shells is refused instead.
 
-    Control characters are stripped by `console_safe` before quoting -- a dump
-    path is argv text rather than dump content, but nothing this function
-    returns is allowed to move a terminal cursor.
+    Raises `UnrenderableArgument` for anything else.
     """
-    text = console_safe(value)
-    if not text:
-        return '""'
-    if all(ch in _SAFE_ARGUMENT_CHARS for ch in text):
-        return text
-    return '"' + text.replace('"', '\\"') + '"'
+    if not is_renderable_argument(value):
+        raise UnrenderableArgument(value)
+    if all(ch in _BARE_ARGUMENT_CHARS for ch in value):
+        return value
+    return '"' + value + '"'
 
 
 def _request_ceiling(hunter: str) -> int:
@@ -126,13 +198,33 @@ class RescanCommand:
 
     @property
     def argv(self) -> tuple:
-        """The invocation as separate arguments, before any quoting."""
+        """The invocation as separate arguments, before any quoting. Always
+        available, whatever the dump path holds -- this is the structured form,
+        and it is what a caller falls back to describing when the path cannot
+        appear in a command line."""
         return (PROGRAM_NAME, self.dump_path, "--hunt", self.hunter,
                 "--hunt-addr", f"0x{self.base_address:x}", "--size", f"0x{self.size:x}")
 
+    @property
+    def renderable(self) -> bool:
+        """Whether `render()` can produce a line that runs this dump in a POSIX
+        shell, PowerShell, and `cmd.exe` alike. Only the dump path can fail:
+        the program name, the hunter, and two hex numbers are bare-safe by
+        construction."""
+        return is_renderable_argument(self.dump_path)
+
     def render(self) -> str:
-        """The command as one copyable line."""
+        """The command as one copyable line, identical in meaning in all three
+        shells. Raises `UnrenderableArgument` when the dump path cannot appear
+        in one -- check `renderable` first and show `render_arguments()`
+        instead."""
         return " ".join(quote_argument(arg) for arg in self.argv)
+
+    def render_arguments(self) -> str:
+        """Everything but the program name and the dump path: what to run once
+        the analyst has quoted the path for their own shell. Always available,
+        since none of these tokens can fail to render."""
+        return " ".join(quote_argument(arg) for arg in self.argv[2:])
 
 
 def build_rescan_commands(action: InvestigationAction, dump_path: str) -> tuple:
