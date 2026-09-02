@@ -1,0 +1,94 @@
+
+══════════════════════════════════════════
+  HUNT: TARGETED RESCAN — obfuscation
+══════════════════════════════════════════
+
+  Hunter  obfuscation
+  Source  encoding_scan
+  Start   0x0000000010000000
+  End     0x0000000010002000  (exclusive)
+  Size    0x2000  (8192 bytes)
+
+  VERDICT     NOT DETECTED (in scanned scope) — in the requested range
+  Confidence  none
+  Score       0/2
+  Coverage    COMPLETE
+  Review      low
+
+  REQUESTED RANGE
+
+  [✓] encoding_scan / sleep_mask
+      capture     complete (8192 byte(s) available)
+      evaluation  complete
+      the whole requested range is captured in this dump
+      measured
+        bytes evaluated              8192 byte(s)
+        sleep mask keys recovered    0
+        sleep mask window coverage   exhaustive
+        sleep mask candidate list    complete
+        budget attempts spent        0
+        budget attempts limit        2000
+        budget decoded bytes spent   0 byte(s)
+        budget decoded bytes limit   134217728 byte(s)
+        budget retained bytes spent  0 byte(s)
+        budget retained bytes limit  33554432 byte(s)
+        budget hits spent            0
+        budget hits limit            500
+        budget exhausted reason      —
+
+  [✓] encoding_scan / entropy
+      capture     complete (8192 byte(s) available)
+      evaluation  complete
+      the whole requested range is captured in this dump
+      measured
+        bytes evaluated                  8192 byte(s)
+        whole range entropy              8.00 bits/byte
+        entropy threshold                7.20 bits/byte
+        entropy window size              4096 byte(s)
+        entropy windows total            2
+        entropy windows evaluated        2
+        entropy windows above threshold  2
+        entropy window coverage          exhaustive
+        entropy top window               8.00 bits/byte  @ 0x0000000010000000, 4096 byte(s)  (+1 more, --verbose)
+        entropy ranges retained          1
+
+  [✓] encoding_scan / decode
+      capture     complete (8192 byte(s) available)
+      evaluation  complete
+      the whole requested range is captured in this dump
+      measured
+        bytes evaluated              8192 byte(s)
+        base64 candidates            0
+        base64 attempts              0
+        xor keys scored              255
+        xor text candidates          0
+        xor structural candidates    0
+        xor attempts                 0
+        compressed candidates        0
+        compressed attempts          0
+        base64 retained              0
+        xor retained                 0
+        compressed retained          0
+        xor sublayer                 applied
+        budget attempts spent        0
+        budget attempts limit        2000
+        budget decoded bytes spent   0 byte(s)
+        budget decoded bytes limit   134217728 byte(s)
+        budget retained bytes spent  0 byte(s)
+        budget retained bytes limit  33554432 byte(s)
+        budget hits spent            0
+        budget hits limit            500
+        budget exhausted reason      —
+
+  KEY SIGNALS
+
+  [i] CONTEXT    obfuscation.entropy_observation
+      1 MEM_PRIVATE region(s) exceed the Shannon-entropy threshold typical of
+      encrypted/compressed/packed content.
+
+  SCOPE
+
+  Every conclusion above applies to [0x0000000010000000, 0x0000000010002000) only. obfuscation
+  evaluated that range completely through encoding_scan. Nothing here is a statement about any other
+  address, about any other source, or about a coverage gap recorded by an earlier run.
+

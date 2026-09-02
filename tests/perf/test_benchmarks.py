@@ -276,3 +276,135 @@ def test_handle_type_summary_stays_linear_at_the_descriptor_cap():
     assert elapsed < 5.0, (
         f"summarizing {MAX_HANDLE_DESCRIPTORS} distinct handle type names took "
         f"{elapsed:.2f}s -- the per-bucket label scan is back")
+
+
+# ── Targeted rescan: the largest range the CLI accepts stays bounded ──────
+# `--hunt-addr` lets an analyst name a range the full-scope walk refused as
+# oversized, so the request ceiling in the analyzer registry is the only size
+# bound left. Obfuscation carries the lowest ceiling (32 MiB) precisely because
+# its sleep-mask and decode layers retain buffers, so a rescan at exactly that
+# ceiling is the worst case for both time and retained memory. The input is a
+# mostly-empty range with high-entropy sub-ranges: the shape that makes the
+# window pass do real work while the whole-range statistic stays low.
+
+_TARGETED_BASE = 0x30000000
+
+
+def _ceiling(identity):
+    from dumpex.hunt import _registry
+    return _registry.REGISTRY.get(identity).targeted_capability.request_ceiling
+
+
+def _mostly_empty_with_entropy_islands(size, island_size=1 << 20, islands=4):
+    """Deterministic synthetic bytes: zeros with `islands` high-entropy runs
+    spaced evenly through the range. Seeded, so the same buffer every run."""
+    import random
+    data = bytearray(size)
+    rng = random.Random(0xDEC0DE)
+    stride = size // islands
+    for i in range(islands):
+        start = i * stride
+        data[start:start + island_size] = rng.randbytes(island_size)
+    return bytes(data)
+
+
+def _run_targeted_obfuscation(monkeypatch, size, payload):
+    import dumpex.hunt.encoding.targeted as encoding_targeted
+    from dumpex.core.va_range import VirtualRange
+    from dumpex.hunt._execution import build_execution_context
+    from dumpex.hunt._request import HuntRequest
+
+    region = Region(_TARGETED_BASE, _TARGETED_BASE, size, "MEM_COMMIT",
+                    "PAGE_READWRITE", "MEM_PRIVATE")
+    segment = Segment(_TARGETED_BASE, 0x1000, size)
+
+    class MF(FakeMF):
+        memory_info = FakeStream([region], "infos")
+        memory_segments_64 = FakeStream([segment], "memory_segments")
+        modules = FakeStream([], "modules")
+
+    reads = []
+
+    def _read(mf, addr, length):
+        reads.append((addr, length))
+        offset = addr - _TARGETED_BASE
+        return payload[offset:offset + length]
+
+    monkeypatch.setattr(encoding_targeted, "read_region_spanning", _read)
+    request = HuntRequest.targeted("obfuscation", "encoding_scan",
+                                    VirtualRange(_TARGETED_BASE, size))
+    ctx = build_execution_context(MF(), request)
+    return encoding_targeted.run_targeted_encoding(ctx), reads
+
+
+
+
+def _measurements(closure):
+    """Every measurement on one closure, grouped by name -- `entropy_top_window`
+    is repeated once per retained window, so a plain dict would lose the count
+    this test is about."""
+    grouped = {}
+    for m in closure.measurements:
+        grouped.setdefault(m.name, []).append(m)
+    return grouped
+
+
+def test_targeted_obfuscation_at_the_request_ceiling_stays_bounded_in_time_and_retention(
+        monkeypatch):
+    """One rescan at exactly the largest range the CLI accepts: the window pass
+    is deterministic in the range's own size, every layer's spend stays inside
+    its frozen limit, and what the result retains is capped independently of how
+    much of the range is high-entropy."""
+    size = _ceiling("obfuscation")
+    payload = _mostly_empty_with_entropy_islands(size, island_size=1 << 20, islands=8)
+
+    start = time.perf_counter()
+    result, _reads = _run_targeted_obfuscation(monkeypatch, size, payload)
+    elapsed = time.perf_counter() - start
+
+    assert [c.scope for c in result.closures] == ["sleep_mask", "entropy", "decode"]
+    # Generous against the real cost while still catching a budget that stopped
+    # being enforced at the largest range the CLI will accept.
+    assert elapsed < 120.0, (
+        f"a {size >> 20} MiB targeted obfuscation rescan took {elapsed:.1f}s -- "
+        f"a retained-bytes, attempt, or window budget is no longer bounding it")
+
+    entropy = _measurements(next(c for c in result.closures if c.scope == "entropy"))
+    window_size = entropy["entropy_window_size"][0].value
+    total = entropy["entropy_windows_total"][0].value
+    # Deterministic in the requested size alone -- never in how much of the
+    # range happens to be above the threshold.
+    assert total == size // window_size
+    assert entropy["entropy_windows_evaluated"][0].value == total
+    above = entropy["entropy_windows_above_threshold"][0].value
+    retained = entropy["entropy_ranges_retained"][0].value
+    assert above > 0, "the synthetic islands must exercise the above-threshold path"
+    assert retained <= above
+    # Retention is capped, not proportional: thousands of qualifying windows
+    # still reach the result as a handful of retained ones.
+    assert len(entropy["entropy_top_window"]) == retained
+    assert retained <= 16, f"{retained} entropy windows retained at the request ceiling"
+
+    for closure in result.closures:
+        grouped = _measurements(closure)
+        if "budget_attempts_limit" not in grouped:
+            continue
+        for spend, limit in (("budget_attempts", "budget_attempts_limit"),
+                              ("budget_decoded_bytes", "budget_decoded_bytes_limit"),
+                              ("budget_retained_bytes", "budget_retained_bytes_limit"),
+                              ("budget_hits", "budget_hits_limit")):
+            assert grouped[f"{spend}_spent"][0].value <= grouped[limit][0].value, (
+                f"{closure.scope}: {spend} exceeded its own frozen limit")
+
+
+def test_targeted_obfuscation_reads_the_requested_range_once(monkeypatch):
+    """Every layer, and the entropy window pass inside one of them, works from
+    the one captured buffer: a rescan costs one read of the requested range, not
+    one per layer or one per window."""
+    size = 4 << 20
+    payload = _mostly_empty_with_entropy_islands(size, island_size=1 << 19, islands=2)
+
+    _result, reads = _run_targeted_obfuscation(monkeypatch, size, payload)
+
+    assert len(reads) == 1, f"the requested range was read {len(reads)} times"
+    assert reads[0] == (_TARGETED_BASE, size)

@@ -1,0 +1,53 @@
+
+══════════════════════════════════════════
+  HUNT: TARGETED RESCAN — pipe
+══════════════════════════════════════════
+
+  Hunter  pipe
+  Source  pipe_name_scan
+  Start   0x0000000010000000
+  End     0x0000000010002000  (exclusive)
+  Size    0x2000  (8192 bytes)
+
+  VERDICT     NOT DETECTED (in scanned scope) — in the requested range
+  Confidence  none
+  Score       0/3
+  Coverage    COMPLETE
+  Review      low
+
+  REQUESTED RANGE
+
+  [✓] pipe_name_scan / pipe_name
+      capture     complete (8192 byte(s) available)
+      evaluation  complete
+      the whole requested range is captured in this dump
+      measured
+        bytes evaluated      8192 byte(s)
+        pipe names retained  1
+        budget state         available
+
+  [✓] pipe_name_scan / c2_context
+      capture     complete (8192 byte(s) available)
+      evaluation  complete
+      the whole requested range is captured in this dump
+      measured
+        bytes evaluated      8192 byte(s)
+        c2 records retained  0
+        budget state         available
+
+  KEY SIGNALS
+
+  [~] LEAD       pipe.string_scan_lead
+      1 occurrence(s) of a '\pipe\' name found in non-system-DLL memory via byte-pattern scan.
+
+  NOT COVERED BY THIS RESCAN
+
+  pipe also reports on handle_data. This rescan covers its granted source only, so it neither
+  measures nor closes their coverage.
+
+  SCOPE
+
+  Every conclusion above applies to [0x0000000010000000, 0x0000000010002000) only. pipe evaluated
+  that range completely through pipe_name_scan. Nothing here is a statement about any other address,
+  about any other source, or about a coverage gap recorded by an earlier run.
+
