@@ -1244,8 +1244,22 @@ def test_hunt_all_default_investigation_queue_remains_metadata_only(
         monkeypatch, tmp_path, label="baseline")
 
     assert exit_code == cli.EXIT_PARTIAL == 3
-    assert doc["result"]["coverage"] == {
-        "status": "partial", "reasons": [], "sources": {}, "limitations": []}
+    coverage = dict(doc["result"]["coverage"])
+    missed = coverage.pop("missed_bytes")
+    assert coverage == {"status": "partial", "reasons": [], "sources": {}, "limitations": []}
+    # The document-level rollup measures the RECORDS' gaps, not its own
+    # (deliberately empty) limitations. Every gap this dump produces names
+    # a region it captured no bytes for, so each is measured and each
+    # measures zero -- an exact "nothing capturable was missed", not an
+    # unknown. How MANY such gaps there are depends on which hunters this
+    # build can run (yara needs yara-python), so the count is not pinned
+    # here; what is pinned is that they are all measured and all zero.
+    assert missed["state"] == "exact"
+    assert missed["bytes"] == 0
+    assert missed["complete"] is True
+    assert missed["unquantified_gaps"] == 0
+    assert missed["distinct_ranges"] == 0
+    assert missed["quantified_gaps"] >= 1
     assert doc["result"]["summary"]["overall_status"] == "INCONCLUSIVE"
     assert doc["meta"]["execution"]["options"]["triage_skipped"] is False
     actions = doc["result"]["summary"]["investigation_actions"]

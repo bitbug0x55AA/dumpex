@@ -20,19 +20,29 @@
             "base_address": "0x0000000001230000",
             "capture_state": "none",
             "captured_size": 0,
+            "examined_size": 0,
             "file_offset": null,
             "kind": "memory_region",
             "protection": "PAGE_EXECUTE_READ",
             "size": 4096,
             "size_limit": null,
             "state": "MEM_COMMIT",
-            "type": "MEM_PRIVATE"
+            "type": "MEM_PRIVATE",
+            "unexamined_size": 0
           }
         ],
         "thread_id": null,
         "unavailable_fields": []
       }
     ],
+    "missed_bytes": {
+      "bytes": 0,
+      "complete": true,
+      "distinct_ranges": 0,
+      "quantified_gaps": 1,
+      "state": "exact",
+      "unquantified_gaps": 0
+    },
     "reasons": [
       "1 region(s) returned fewer bytes than declared (short read) -- not fully scanned: 0x0000000001230000 (4 KB)"
     ],

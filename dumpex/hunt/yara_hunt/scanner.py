@@ -11,7 +11,7 @@ import time
 from typing import NamedTuple
 from minidump.minidumpfile import MinidumpFile
 from dumpex.core.memory import addr_to_module
-from dumpex.hunt._coverage import segment_scan_target
+from dumpex.hunt._coverage import budget_stop_targets, segment_scan_target
 from dumpex.hunt._domain import as_tuple, require_recursively_immutable
 from dumpex.hunt.yara_hunt.config import YaraConfig, SCOPE_PRIVATE_OR_UNBACKED
 from dumpex.hunt.yara_hunt.domain import ScanDiagnostics
@@ -164,21 +164,33 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
     budget_exhausted_stop_index = None
     budget_exhausted_kind = None
     budget_exhausted_consumed = None
+    # Whether the FIRST segment of each stop's target run had already been
+    # taken up when the stop happened. Every later segment in the run was
+    # provably never reached; only this one can have been partly examined,
+    # and only it is therefore unmeasurable (see budget_stop_targets).
+    budget_exhausted_first_started = False
 
     def _mark_truncated():
         nonlocal truncated, truncated_stop_index
         truncated = True
         if truncated_stop_index is None:
+            # The hit cap is only ever reached while walking a segment's
+            # own matches, so this segment was always already under way.
             truncated_stop_index = seg_index
 
-    def _mark_budget_exhausted(kind: str, consumed: int, current_segment_affected: bool = True):
+    def _mark_budget_exhausted(kind: str, consumed: int, current_segment_affected: bool = True,
+                                current_segment_started: bool = True):
         nonlocal budget_exhausted, budget_exhausted_stop_index, budget_exhausted_kind, \
-            budget_exhausted_consumed
+            budget_exhausted_consumed, budget_exhausted_first_started
         budget_exhausted = True
         if budget_exhausted_stop_index is None:
             budget_exhausted_stop_index = seg_index if current_segment_affected else seg_index + 1
             budget_exhausted_kind = kind
             budget_exhausted_consumed = consumed
+            # A stop attributed to LATER segments only starts its run at
+            # one nothing had touched, whatever the current segment's own
+            # state was.
+            budget_exhausted_first_started = current_segment_started and current_segment_affected
 
     total_bytes_scanned = 0
     scan_start = monotonic()
@@ -205,16 +217,22 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             break
         _now = monotonic()
         if _now > scan_deadline:
-            _mark_budget_exhausted("scan_deadline_seconds", _elapsed_seconds(_now))
+            _mark_budget_exhausted("scan_deadline_seconds", _elapsed_seconds(_now),
+                                    current_segment_started=False)
             break
         if total_bytes_scanned > config.max_total_bytes_scanned:
-            _mark_budget_exhausted("max_total_bytes_scanned", total_bytes_scanned)
+            _mark_budget_exhausted("max_total_bytes_scanned", total_bytes_scanned,
+                                    current_segment_started=False)
             break
         if seg.size > config.max_seg_scan:
-            skipped_targets.append(segment_scan_target(seg, config.max_seg_scan))
+            # Skipped without a read: none of its captured bytes were
+            # examined, so the whole capture is this gap's exact extent.
+            skipped_targets.append(
+                segment_scan_target(seg, config.max_seg_scan, examined_size=0))
             continue
         if total_bytes_scanned + seg.size > config.max_total_bytes_scanned:
-            _mark_budget_exhausted("max_total_bytes_scanned", total_bytes_scanned)
+            _mark_budget_exhausted("max_total_bytes_scanned", total_bytes_scanned,
+                                    current_segment_started=False)
             break
         try:
             # Clipped to the segment's own declared extent, never trusted at
@@ -226,7 +244,7 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             data = reader.read(seg.start_virtual_address, seg.size)[:seg.size]
         except Exception:
             read_failed += 1
-            read_failed_targets.append(segment_scan_target(seg))
+            read_failed_targets.append(segment_scan_target(seg, examined_size=0))
             continue
         total_bytes_scanned += len(data)
         if total_bytes_scanned > config.max_total_bytes_scanned:
@@ -236,11 +254,13 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             # is a failed read rather than a short one -- a short read
             # ANNOTATES a segment that was otherwise scanned.
             read_failed += 1
-            read_failed_targets.append(segment_scan_target(seg))
+            read_failed_targets.append(segment_scan_target(seg, examined_size=0))
             continue
         if len(data) < seg.size:
             short_reads += 1
-            short_read_targets.append(segment_scan_target(seg))
+            # The prefix that DID come back is matched against every rule,
+            # so only the bytes past it went unexamined.
+            short_read_targets.append(segment_scan_target(seg, examined_size=len(data)))
         scanned += 1
 
         for rule_index, (fname, compiled) in enumerate(rule_files):
@@ -371,10 +391,16 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
             if truncated or budget_exhausted:
                 break
 
-    truncated_targets = ([segment_scan_target(s) for s in segs[truncated_stop_index:]]
+    # The segment the cap/budget stopped on carries no byte-level stop
+    # cursor here -- yara matches a segment against a rule file as one
+    # atomic unit, so "how far into it the scan got" is not a byte
+    # position -- which is exactly why its extent stays unmeasured while
+    # every segment behind it in the run is exact.
+    truncated_targets = (budget_stop_targets(segs[truncated_stop_index:], first_started=True)
                           if truncated_stop_index is not None else [])
     budget_exhausted_targets = (
-        [segment_scan_target(s) for s in segs[budget_exhausted_stop_index:]]
+        budget_stop_targets(segs[budget_exhausted_stop_index:],
+                             first_started=budget_exhausted_first_started)
         if budget_exhausted_stop_index is not None else [])
     truncated_budget_limit = config.max_total_hits if truncated else None
     _budget_limits_by_kind = {

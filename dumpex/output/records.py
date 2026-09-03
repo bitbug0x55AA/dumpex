@@ -1923,6 +1923,12 @@ class HunterRecord:
                 "reasons":     self.coverage.reasons,
                 "sources":     {name: obs.to_dict() for name, obs in self.coverage.sources.items()},
                 "limitations": [lim.to_dict() for lim in self.coverage.limitations],
+                # How much captured memory this hunter's gaps add up to:
+                # the very ranges `limitations`' own targets name, unioned,
+                # so the aggregate and the per-target `unexamined_size`
+                # values beside it are one set of numbers rather than two,
+                # and memory two gaps both name is counted once.
+                "missed_bytes": self.coverage.missed_bytes.to_dict(),
             },
             "findings": list(self.findings),
             "details":  self.details.to_dict(),

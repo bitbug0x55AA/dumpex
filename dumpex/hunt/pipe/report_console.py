@@ -12,14 +12,14 @@ from dumpex.hunt._finding import (
 )
 from dumpex.hunt._console import resolve_width, render_kv_block
 from dumpex.hunt._report_console import (
-    header_lines, render_key_signal_compact, render_why_this_verdict, render_coverage,
-    with_verbose_facts, wrap_block, TAG_RANK,
+    coverage_kv_value, header_lines, render_key_signal_compact, render_why_this_verdict,
+    render_coverage, with_verbose_facts, wrap_block, TAG_RANK,
 )
 from dumpex.hunt.pipe.domain import PipeReport
 from dumpex.hunt.pipe.patterns import canonical_pipe_name
 from dumpex.hunt.pipe.report_facts import (
     _FACT_ITEM_RENDERERS, _file_offset_text, _proximity_text, finding_from_check_result,
-    project_coverage_v1,
+    project_coverage_report, project_coverage_v1,
 )
 from dumpex.output.records import hex_address
 
@@ -313,7 +313,8 @@ def _evidence_detail_lines(report: PipeReport, w: int) -> list:
 
 # ── Verdict block / coverage impacts ──────────────────────────────────────
 
-def _render_verdict_block(report: PipeReport, coverage_status: str, findings: list) -> list:
+def _render_verdict_block(report: PipeReport, coverage_status: str, findings: list,
+                           coverage_report) -> list:
     """The verdict-first key/value block.
 
     Each DETECTED tier names the signal that actually earned it rather
@@ -354,7 +355,7 @@ def _render_verdict_block(report: PipeReport, coverage_status: str, findings: li
         ("Confidence", report.confidence),
         ("Score",      f"{score}/{report.max_score}  "
                        + DIM("(handle-anchored; bare pipe strings are unscored leads)")),
-        ("Coverage",   coverage_status.replace("_", " ").upper()),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
         ("Review",     report.review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -443,7 +444,8 @@ def render_console_lines(report: PipeReport, verbose: bool = False,
     if verbose:
         lines.extend(_scan_detail_lines(report))
 
-    lines.extend(_render_verdict_block(report, coverage_status, findings))
+    lines.extend(_render_verdict_block(report, coverage_status, findings,
+                                        project_coverage_report(report.coverage)))
     lines.append("")
 
     ordered = _ordered_for_display(findings)

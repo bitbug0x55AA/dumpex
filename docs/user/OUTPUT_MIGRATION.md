@@ -26,7 +26,8 @@ to an intentionally open string vocabulary does not by itself require a bump.
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.14 (current) | [`dumpex-output-v2.14.schema.json`](../../dumpex/schemas/dumpex-output-v2.14.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.15 (current) | [`dumpex-output-v2.15.schema.json`](../../dumpex/schemas/dumpex-output-v2.15.schema.json) |
+| — (historical) | v2.14 | [`dumpex-output-v2.14.schema.json`](../../dumpex/schemas/dumpex-output-v2.14.schema.json) — frozen; no command emits this anymore |
 | — (historical) | v2.13 | [`dumpex-output-v2.13.schema.json`](../../dumpex/schemas/dumpex-output-v2.13.schema.json) — frozen; no command emits this anymore |
 | — (historical) | v2.12 | [`dumpex-output-v2.12.schema.json`](../../dumpex/schemas/dumpex-output-v2.12.schema.json) — frozen; no command emits this anymore |
 | — (historical) | v2.11 | [`dumpex-output-v2.11.schema.json`](../../dumpex/schemas/dumpex-output-v2.11.schema.json) — frozen; no command emits this anymore |
@@ -46,6 +47,7 @@ to an intentionally open string vocabulary does not by itself require a bump.
 
 | Version | Consumer-visible change |
 |---|---|
+| 2.15 | Added `coverage.missed_bytes` on every result and every hunter record: how much captured in-scope memory that run's own coverage gaps add up to, so a `partial` can be told from a `partial`. `state` labels the figure -- `exact` (every gap's extent is established), `lower_bound` (some gap could not be measured, so `bytes` is a floor under the real total), or `unknown` (no gap's extent is established, and `bytes` is `null`). A consumer thresholding on `bytes` must read `state` first: `null` and a lower bound each mean something other than "this much was missed", and `0` with state `exact` is the only shape that says nothing capturable was missed. `complete` is true exactly when `unquantified_gaps` is `0`. `bytes` measures memory, not gap records: the unexamined address ranges are unioned, so one physical region named by several gaps at once (obfuscation's three scan layers skip overlapping region sets; a `--hunt all` run reaches the same region once per analyzer) is counted once and the figure can never exceed what the dump captured. `quantified_gaps` counts the gap records and `distinct_ranges` the merged ranges they cover; neither counts bytes, and neither does a limitation's own `affected_count`. Added `examined_size` and `unexamined_size` on `scanTarget` -- how many of that target's captured bytes were examined, and the remainder that was not -- both `null` when the extent was never established, which is not the same claim as `0`. The aggregate is the union of exactly those per-target ranges, so the two cannot disagree about any one target and the total never counts memory two gaps both name twice. `coverage.status` keeps its three values and its meaning, `derive_status` is unchanged, and no verdict, score, confidence, or exit code moves: this grades a `partial`, it does not redefine when one is reported |
 | 2.14 | Added `huntSummary.scan_scope` in both hunt modes, and `targeted_scope` on a targeted rescan's hunter details. Added the `coverageLimitation.code` value `TARGETED_SOURCE_NOT_EVALUATED`. A targeted hunter record's `coverage.status` may be `complete` with a non-empty `coverage.limitations`: those entries name coverage sources outside what a targeted rescan evaluates, not gaps in what it did. Full-scope records keep the earlier `complete` implies no limitations relationship. `scan_scope` is cross-checked by the schema rather than merely well-formed: a `targeted` tag must agree with `summary.selected` and with that analyzer's registered source/scopes, and requires `targeted_scope` on the record; a `full` tag forbids it. A `targeted_scope` entry also carries `applicability_reason` and `measurements`, and its `coverage_status` may be `not_applicable` -- the source's own eligibility gate declined the target, which is the boundary of what that source speaks about and not a gap. A consumer must not count it as a coverage failure; `coverage.status` does not, and a rescan whose closures all decline the target reports `not_evaluated`. Added the `coverageLimitation.code` value `TARGETED_SOURCE_NOT_APPLICABLE` |
 | 2.13 | Replaced retired `pid`/`peb` result kinds with `process`, `handles`, and `profile`; updated `sysinfo` records |
 | 2.12 | Added target identity for read/short-read/budget gaps, capture-state fields, skip causes, and partial evidence availability |
@@ -62,10 +64,10 @@ to an intentionally open string vocabulary does not by itself require a bump.
 | 2.1 | Added the `comparison` result kind and envelope support later used by artifacts/diagnostics |
 | 2.0 | Introduced the shared `meta`/`result` envelope for structured commands |
 
-## Producer behavior within v2.14
+## Producer behavior within v2.15
 
 Not every change to what dumpex emits changes the wire shape. These narrow what
-a v2.14 document contains without changing what a v2.14 document may contain, so
+a v2.15 document contains without changing what a v2.15 document may contain, so
 they need no schema bump and every archived document stays valid — but a
 consumer that inferred a rule from earlier output should read them.
 

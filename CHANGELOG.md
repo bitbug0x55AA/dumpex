@@ -11,6 +11,28 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Added
 
+- Coverage now says how much memory a partial hunt actually missed, not only
+  that it was partial. Every result and every hunter record carries
+  `coverage.missed_bytes`, and the console coverage line gains a clause —
+  `Coverage    PARTIAL — 3 MB unscanned across 4 target(s)` — that separates a
+  negative result worth recollecting for from one that essentially stands. The
+  figure counts what the dump actually holds for each skipped region or
+  segment, never the address space it declares, so a region the capture never
+  backed contributes zero rather than inflating the total; that case still
+  needs a re-collection, which `capture_state` already says. It measures
+  memory rather than gap records: the unexamined ranges are unioned, so one
+  region that several scan layers each skipped, or that several hunters each
+  skipped, is counted once and the total can never exceed what the dump holds.
+  `distinct_ranges` reports how many ranges the figure spans, which is what
+  separates one region skipped three times from three skipped regions.
+  A gap whose extent the run cannot establish is counted, never estimated:
+  `state` reads `exact`, `lower_bound` (labelled as a floor, never rendered as
+  a total), or `unknown` (no figure at all, so a consumer thresholding on the
+  number cannot read it as zero). `scanTarget` gains `examined_size` and
+  `unexamined_size` alongside it, and the aggregate is the union of exactly
+  those per-target ranges, so the per-target and total figures cannot disagree. Schema v2.15. Nothing about
+  when `partial` is reported changes, and no verdict, score, confidence value,
+  `coverage.reasons` string, or exit code moves.
 - Added `--hunt-addr ADDR`, which rescans one virtual-address range with the
   selected hunter instead of the whole dump. It requires `--hunt <TTP>` and
   `--size SIZE`, supports `stomping`, `pipe`, `cs-beacon`, `yara`, and
@@ -113,7 +135,9 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   coverage also names every source outside the rescan's grant explicitly, so a
   complete result for one source cannot read as complete coverage for the
   hunter. Full-scope hunt details omit `targeted_scope` entirely. Schema v2.13
-  and older are frozen and unchanged.
+  and older are frozen and unchanged. This release ships v2.15 as the emitted
+  contract (see the missed-byte entry above); v2.14 is packaged and frozen
+  alongside the earlier versions.
 - The current schema now cross-checks `summary.scan_scope` against the rest of
   the document instead of only validating its own shape: a `targeted` tag must
   agree with `summary.selected` and with the selected analyzer's registered

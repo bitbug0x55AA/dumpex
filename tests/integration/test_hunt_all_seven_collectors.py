@@ -81,8 +81,14 @@ def test_all_seven_collectors_feed_the_real_summary_reducer_and_validate(validat
         "result": {
             "kind": "hunt",
             "execution_status": "completed",
+            # `missed_bytes` is required on every v2.15 coverage object;
+            # this hand-built envelope exists to validate the RECORDS, so
+            # it carries the shape a run with no measurable gap reports.
             "coverage": {"status": "not_evaluated" if summary["overall_status"] == "NOT_EVALUATED"
-                         else "partial", "reasons": [], "sources": {}, "limitations": []},
+                         else "partial", "reasons": [], "sources": {}, "limitations": [],
+                         "missed_bytes": {"state": "exact", "bytes": 0, "complete": True,
+                                           "quantified_gaps": 0, "unquantified_gaps": 0,
+                                           "distinct_ranges": 0}},
             "summary": summary,
             "data": {"records": [r.to_dict() for r in records]},
         },

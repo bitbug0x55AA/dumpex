@@ -19,6 +19,14 @@
         "unavailable_fields": []
       }
     ],
+    "missed_bytes": {
+      "bytes": 0,
+      "complete": true,
+      "distinct_ranges": 0,
+      "quantified_gaps": 0,
+      "state": "exact",
+      "unquantified_gaps": 0
+    },
     "reasons": [
       "No per-thread CONTEXT (RIP/EIP) available -- live-execution correlation could not run"
     ],

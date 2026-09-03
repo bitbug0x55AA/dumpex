@@ -9,6 +9,7 @@ import dataclasses
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._console import wrap_text
 from dumpex.hunt._finding import Finding, TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION
+from dumpex.output.coverage import format_missed_bytes_clause
 
 # ── Signal tag -> icon/label/sort-rank, and coverage-status -> icon ──────
 # Byte-identical across both pilots' report_console.py before this
@@ -30,6 +31,25 @@ def header_lines(title: str) -> list:
     effect -- a pure projector must not print directly."""
     bar = BOLD("══════════════════════════════════════════")
     return ["", bar, BOLD(f"  HUNT: {title}"), bar, ""]
+
+
+def coverage_kv_value(coverage_status: str, coverage_report) -> str:
+    """The Coverage row of a hunter card's key/value block: the status
+    word, plus how much captured memory the run's gaps add up to.
+
+    The clause is what separates a `partial` that missed one unreadable
+    4 KB region from one that missed gigabytes across forty oversized
+    ones -- the same word, and opposite answers to whether the dump is
+    worth recollecting. It is omitted entirely when no gap costs
+    capturable bytes, so a `complete` scan (and a `partial` whose reasons
+    are not about unread memory) reads exactly as it did before.
+
+    `coverage_report` is REQUIRED, with no default: a renderer that
+    forgot to pass it would silently drop the quantification from that
+    hunter's card and nothing would fail."""
+    text = coverage_status.replace("_", " ").upper()
+    clause = format_missed_bytes_clause(coverage_report.missed_bytes)
+    return f"{text} — {clause}" if clause else text
 
 
 def wrap_block(text: str, width: int, indent: int) -> list:

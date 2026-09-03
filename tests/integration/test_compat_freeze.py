@@ -735,6 +735,18 @@ def _lim(code, source, **kw):
     return d
 
 
+# Every scenario in BOTH tables below reports this same aggregate, and
+# that is the assertion, not a placeholder: none of these seven recon
+# commands has a coverage gap that costs capturable memory. An absent
+# stream, a stream present but incomplete, a thread list that disagrees
+# with its counterpart -- each makes coverage `partial` while missing no
+# bytes a re-collection would recover, and the aggregate must say exactly
+# zero rather than invent a gap to match the status word.
+_NO_MISSED_BYTES = {"state": "exact", "bytes": 0, "complete": True,
+                     "quantified_gaps": 0, "unquantified_gaps": 0,
+                     "distinct_ranges": 0}
+
+
 _COVERAGE_SOURCES_AND_LIMITATIONS = {
     "list_absent": (
         {"memory_info": _src("absent")},
@@ -915,7 +927,8 @@ def test_compat_freeze(monkeypatch, tmp_path, capsys, name, argv, mf_builder, ex
 
     sources, limitations = _COVERAGE_SOURCES_AND_LIMITATIONS[name]
     result = dict(result)
-    result["coverage"] = dict(result["coverage"], sources=sources, limitations=limitations)
+    result["coverage"] = dict(result["coverage"], sources=sources, limitations=limitations,
+                               missed_bytes=_NO_MISSED_BYTES)
 
     expected_doc = {"meta": _expected_meta(argv[0]), "result": result,
                      "artifacts": [], "diagnostics": {"warnings": [], "errors": []}}
@@ -1288,6 +1301,8 @@ def test_recon_v213_compat_freeze(monkeypatch, tmp_path, capsys, name, argv, mf_
     # scenarios genuinely pass --verbose and must see it reflected here.
     if "--verbose" in argv:
         expected_meta["execution"]["options"]["verbose"] = True
+    result = dict(result)
+    result["coverage"] = dict(result["coverage"], missed_bytes=_NO_MISSED_BYTES)
     expected_doc = {"meta": expected_meta, "result": result,
                      "artifacts": [], "diagnostics": {"warnings": [], "errors": []}}
     expected_console = console + "  [·] JSON written → <TMP_DIR>" + os.sep \

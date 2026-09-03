@@ -1,0 +1,100 @@
+{
+  "confidence": "none",
+  "coverage": {
+    "limitations": [
+      {
+        "affected_count": null,
+        "available_fields": [],
+        "budget_consumed": null,
+        "budget_limit": null,
+        "code": "SOURCE_ABSENT",
+        "counterpart_source": null,
+        "detail": null,
+        "related_sources": [],
+        "related_tids": [],
+        "scope": "dump",
+        "source": "handle_data",
+        "targets": [],
+        "thread_id": null,
+        "unavailable_fields": []
+      },
+      {
+        "affected_count": 1,
+        "available_fields": [],
+        "budget_consumed": null,
+        "budget_limit": null,
+        "code": "SCAN_REGION_OVERSIZED_SKIPPED",
+        "counterpart_source": null,
+        "detail": null,
+        "related_sources": [],
+        "related_tids": [],
+        "scope": null,
+        "source": "pipe_name_scan",
+        "targets": [
+          {
+            "allocation_base": "0x0000000004000000",
+            "base_address": "0x0000000004000000",
+            "capture_state": "complete",
+            "captured_size": 16777216,
+            "examined_size": 0,
+            "file_offset": 4096,
+            "kind": "memory_region",
+            "protection": "PAGE_READWRITE",
+            "size": 16777216,
+            "size_limit": 8388608,
+            "state": "MEM_COMMIT",
+            "type": "MEM_PRIVATE",
+            "unexamined_size": 16777216
+          }
+        ],
+        "thread_id": null,
+        "unavailable_fields": []
+      }
+    ],
+    "missed_bytes": {
+      "bytes": 16777216,
+      "complete": true,
+      "distinct_ranges": 1,
+      "quantified_gaps": 1,
+      "state": "exact",
+      "unquantified_gaps": 0
+    },
+    "reasons": [
+      "handle_data not present in this dump",
+      "1 oversized region(s) skipped: 0x0000000004000000 (16 MB > 8 MB limit)"
+    ],
+    "sources": {
+      "handle_data": {
+        "detail": null,
+        "record_count": null,
+        "state": "absent"
+      },
+      "memory_info": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      },
+      "pipe_name_scan": {
+        "detail": null,
+        "record_count": 1,
+        "state": "present"
+      }
+    },
+    "status": "partial"
+  },
+  "details": {
+    "c2_context": [],
+    "framework_pipes": [],
+    "handle_pipes": [],
+    "private_pipes": [],
+    "unbacked_in_rgn": []
+  },
+  "findings": [],
+  "hunter": "pipe",
+  "lead_count": 0,
+  "max_score": 3,
+  "review_priority": "none",
+  "score": 0,
+  "status": "INCONCLUSIVE",
+  "verdict_level": "inconclusive"
+}

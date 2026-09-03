@@ -1139,6 +1139,23 @@ def _format_bytes(n: int) -> str:
     return f"{n} bytes"
 
 
+def _format_scaled_bytes(n: int) -> str:
+    """Byte formatting for a SUMMED quantity, which is round only by
+    accident -- `_format_bytes` above is exact-unit by design, so it falls
+    back to nine digits for a total like 3355443 where "3.2 MB" is what an
+    analyst actually reads a recollect decision off.
+
+    One decimal place, and never a unit the value has less than one whole
+    of: 900 KB stays "900 KB" rather than becoming "0.9 MB". A trailing
+    ".0" is dropped, so an exactly-round total renders the same way
+    `_format_bytes` renders it."""
+    for unit, scale in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if n >= scale:
+            value = n / scale
+            return f"{value:.1f}".rstrip("0").rstrip(".") + f" {unit}"
+    return f"{n} bytes"
+
+
 @dataclass(frozen=True)
 class ScanTarget:
     """ONE region/segment a scan did not examine, with enough identity for
@@ -1198,6 +1215,15 @@ class ScanTarget:
     type: "str | None" = None              # e.g. "MEM_PRIVATE"
     protection: "str | None" = None        # e.g. "PAGE_READWRITE"
     captured_size: "int | None" = None     # bytes of `size` actually present in the .dmp
+    # How many of `captured_size` bytes the scan that recorded this gap
+    # actually examined, counting from `base_address`. `0` for a target
+    # nothing looked at (an oversized skip, a read that raised, a target a
+    # budget never reached); the returned length for a short read; the
+    # stop cursor for a scan a budget ended partway through the target.
+    # `None` means the extent was never established -- which is NOT the
+    # same claim as 0, and is what makes this target's unexamined byte
+    # count unquantifiable rather than exact (see `unexamined_bytes`).
+    examined_size: "int | None" = None
 
     def __post_init__(self):
         object.__setattr__(self, "kind", ScanTargetKind(self.kind))
@@ -1237,6 +1263,20 @@ class ScanTarget:
             raise ValueError(
                 "ScanTarget.captured_size > 0 requires file_offset to be set -- some bytes "
                 "captured means the start address must itself resolve to a file offset")
+        _require_optional_nonnegative_int(self.examined_size, "ScanTarget.examined_size")
+        # An examined extent is a claim about captured bytes, so it needs
+        # a captured total to be a claim about anything at all, and cannot
+        # exceed it: a scan cannot have examined bytes this dump does not
+        # hold.
+        if self.examined_size is not None and self.captured_size is None:
+            raise ValueError(
+                "ScanTarget.examined_size requires captured_size -- how much of a target was "
+                "examined is meaningless without how much of it the dump actually holds")
+        if (self.examined_size is not None and self.captured_size is not None
+                and self.examined_size > self.captured_size):
+            raise ValueError(
+                f"ScanTarget.examined_size ({self.examined_size}) must not exceed captured_size "
+                f"({self.captured_size}) -- at most the captured bytes can have been examined")
         if self.kind == ScanTargetKind.MEMORY_SEGMENT and any(
                 v is not None for v in (self.allocation_base, self.state,
                                          self.type, self.protection)):
@@ -1259,6 +1299,26 @@ class ScanTarget:
             return "complete"
         return "partial"
 
+    @property
+    def unexamined_bytes(self) -> "int | None":
+        """Captured bytes of this target no scan looked at -- derived from
+        `captured_size` and `examined_size` so it can never disagree with
+        either. `None` means the extent is not established (one of the two
+        is missing), which a consumer must treat as unquantified rather
+        than as zero.
+
+        A target the dump captured nothing for is exactly 0 whatever a
+        scan did or did not examine: there were no bytes here to miss.
+        That is not a gap of unknown size -- what this target needs is a
+        re-collection, which `capture_state` already says, and counting it
+        as an unmeasured shortfall would put an unanswerable question next
+        to a status word that has a perfectly good answer."""
+        if self.captured_size == 0:
+            return 0
+        if self.captured_size is None or self.examined_size is None:
+            return None
+        return self.captured_size - self.examined_size
+
     def to_dict(self) -> dict:
         """Addresses follow dumpex's fixed-width hex convention;
         `file_offset` stays a plain byte offset (it is a position inside
@@ -1275,6 +1335,8 @@ class ScanTarget:
             "protection":      self.protection,
             "captured_size":   self.captured_size,
             "capture_state":   self.capture_state,
+            "examined_size":   self.examined_size,
+            "unexamined_size": self.unexamined_bytes,
         }
 
     def describe(self) -> str:
@@ -1343,6 +1405,309 @@ def format_scan_target_preview(targets, limit: int = _TARGET_PREVIEW_LIMIT) -> s
     if remaining:
         return f"{listed}, +{remaining} more (see coverage.limitations[].targets in --json output)"
     return listed
+
+
+# ── How much memory a partial scan actually missed ────────────────────────
+# `coverage.status` grades a run as complete/partial/not_evaluated. On its
+# own `partial` cannot separate one unreadable 12 KB region from forty
+# oversized ones adding up to gigabytes, and those two decide opposite
+# things about whether the dump is worth recollecting. The model below
+# grades a `partial` by BYTES, over the gaps that are already recorded --
+# it never changes when `partial` is reported.
+#
+# Two rules keep it honest:
+#
+#   * The basis is `ScanTarget.captured_size` (what the .dmp actually
+#     holds for a target), never a declared `RegionSize` that can claim
+#     more address space than was ever written. The number answers "how
+#     much could have been examined from the evidence in hand", which is
+#     the question the recollect-or-not decision turns on.
+#
+#   * A gap whose byte extent is not established is COUNTED, never
+#     estimated. An aggregate carrying such a gap is a lower bound and
+#     says so; an aggregate that is nothing but such gaps reports no byte
+#     figure at all. Zero is reserved for "nothing was missed".
+#
+#   * The byte figure measures MEMORY, so it is a union of address ranges
+#     and never a sum over gap records. One physical region can be named
+#     by several gaps at once -- obfuscation runs three layers with
+#     different size caps over overlapping region sets, so a single
+#     oversized region is skipped by two or three of them and appears in
+#     one limitation per layer; yara can report the same unreached
+#     segment run under both a hit cap and a budget; a cs-beacon segment
+#     can be short-read AND stopped inside. Adding those up would charge
+#     the same bytes two and three times and could report more missed
+#     memory than the dump captured. `quantified_gaps` counts the gap
+#     records; `distinct_ranges` counts the physical ranges they cover.
+
+
+class MemoryGapKind(str, Enum):
+    """How a limitation code's gap converts into unexamined captured
+    bytes.
+
+    A code with no kind at all is not a claim about dump bytes going
+    unexamined -- an absent or unparseable stream, a reference file that
+    was not supplied, or a cap on how many RESULTS were retained from
+    memory the search did cover. Those are real coverage gaps; they are
+    not missed memory, and summarize_missed_bytes() neither counts them
+    nor lets them make an otherwise-exact aggregate read as a lower
+    bound.
+
+    A search that read its bytes and did not apply everything to them IS
+    counted, as UNMEASURED: the bytes were not examined for the thing
+    being looked for, and how many of them were skipped is not something
+    a rule/segment pairing or a window stride expresses as a byte range.
+    Counting it keeps the aggregate from claiming an exactness the run
+    does not have; measuring it would be invention."""
+    # The gap's extent is whatever its targets themselves record as
+    # unexamined -- `ScanTarget.unexamined_bytes`, the same value that
+    # goes on the wire as `unexamined_size`, never a second rule derived
+    # from the code. Which is the point: the aggregate is those very
+    # ranges unioned, so it and the per-target figures beside it cannot
+    # disagree.
+    #
+    # It follows that the PRODUCER must record the extent, including for a
+    # gap whose own name makes it obvious (an oversized skip, a read that
+    # raised, a target a budget never reached -- all `examined_size=0`).
+    # Inferring 0 here instead would let a producer that recorded nothing
+    # publish an "exact" total beside a target reporting an unknown one.
+    TARGET_EXTENT = "target_extent"
+    # Real unexamined memory the code has no target vocabulary for: the
+    # gap is counted, its byte extent is not derivable at all.
+    UNMEASURED    = "unmeasured"
+
+
+class MissedBytesState(str, Enum):
+    EXACT       = "exact"        # every gap's extent is established
+    LOWER_BOUND = "lower_bound"  # some extents established, some not
+    UNKNOWN     = "unknown"      # gaps exist, no extent among them is established
+
+
+@dataclass(frozen=True)
+class MissedBytes:
+    """Captured in-scope memory a run did not examine, aggregated across
+    one CoverageReport's limitations.
+
+    `known_bytes` measures the memory covered by the gaps whose extent
+    the retained evidence proves -- their address ranges unioned, so
+    memory two gaps both name is counted once. `unquantified_gaps` counts
+    the rest, kept as a separate count and never folded into the byte
+    figure, because `affected_count` counts targets and relationships, not
+    bytes. `state` is the label a
+    consumer must read before using `known_bytes`: an EXACT total, a
+    LOWER_BOUND, or UNKNOWN (no figure at all).
+
+    `known_bytes` is a union over address ranges, so `quantified_gaps`
+    and `distinct_ranges` differ exactly when several gap records name the
+    same memory: one region skipped by three scan layers is 3 gaps and 1
+    range, and the byte figure counts it once.
+
+    A `complete` scan produces MissedBytes() -- state EXACT, zero bytes,
+    zero gaps -- and a scan that is `partial` for a reason that costs no
+    capturable bytes produces the same thing. Neither invents a gap."""
+    known_bytes:       int = 0
+    quantified_gaps:   int = 0
+    unquantified_gaps: int = 0
+    # Physical address ranges `known_bytes` spans, after merging the ones
+    # several gap records name in common. Never greater than
+    # `quantified_gaps`, and smaller whenever gaps overlap.
+    distinct_ranges:   int = 0
+
+    def __post_init__(self):
+        _require_optional_nonnegative_int(self.known_bytes, "MissedBytes.known_bytes")
+        _require_optional_nonnegative_int(self.quantified_gaps, "MissedBytes.quantified_gaps")
+        _require_optional_nonnegative_int(self.unquantified_gaps, "MissedBytes.unquantified_gaps")
+        _require_optional_nonnegative_int(self.distinct_ranges, "MissedBytes.distinct_ranges")
+        if self.known_bytes and not self.quantified_gaps:
+            raise ValueError(
+                f"MissedBytes.known_bytes ({self.known_bytes}) requires at least one "
+                f"quantified gap -- bytes belonging to no gap have nothing to describe")
+        if self.known_bytes and not self.distinct_ranges:
+            raise ValueError(
+                f"MissedBytes.known_bytes ({self.known_bytes}) requires at least one distinct "
+                f"range -- the byte figure IS the measure of those ranges")
+        if self.distinct_ranges > self.quantified_gaps:
+            raise ValueError(
+                f"MissedBytes.distinct_ranges ({self.distinct_ranges}) cannot exceed "
+                f"quantified_gaps ({self.quantified_gaps}) -- merging gap records can only "
+                f"reduce how many ranges they cover")
+
+    @property
+    def state(self) -> "MissedBytesState":
+        if not self.unquantified_gaps:
+            return MissedBytesState.EXACT
+        if self.quantified_gaps:
+            return MissedBytesState.LOWER_BOUND
+        return MissedBytesState.UNKNOWN
+
+    @property
+    def complete(self) -> bool:
+        """Every gap in this aggregate has an established byte extent, so
+        `known_bytes` is the whole of what was missed rather than a floor
+        under it."""
+        return not self.unquantified_gaps
+
+    @property
+    def gap_count(self) -> int:
+        return self.quantified_gaps + self.unquantified_gaps
+
+    def to_dict(self) -> dict:
+        """`bytes` is null in the UNKNOWN state rather than 0: nothing
+        about the missed extent is established there, and a consumer
+        thresholding on the number must not read that as "nothing was
+        missed". In the LOWER_BOUND state the number is real but partial,
+        which `state` is what says."""
+        return {
+            "state":             self.state.value,
+            "bytes":             None if self.state is MissedBytesState.UNKNOWN
+                                  else self.known_bytes,
+            "complete":          self.complete,
+            "quantified_gaps":   self.quantified_gaps,
+            "unquantified_gaps": self.unquantified_gaps,
+            "distinct_ranges":   self.distinct_ranges,
+        }
+
+
+def _limitation_gap_count(limitation: "CoverageLimitation") -> int:
+    """How many gaps one limitation stands for when none of them can be
+    itemized -- its own `affected_count`, or a single gap for a code that
+    carries no count at all. A count is a count of targets/relationships,
+    never of bytes."""
+    return limitation.affected_count if limitation.affected_count else 1
+
+
+def _unexamined_range(target: ScanTarget) -> "tuple | None":
+    """The `[start, end)` virtual-address range of this target's captured
+    bytes that went unexamined, or `None` when the extent is not
+    established.
+
+    Length is `target.unexamined_bytes` and nothing else -- the very value
+    published as `unexamined_size` -- so a limitation's contribution to
+    the aggregate is always exactly what its own targets report. There is
+    no per-code shortcut that could let an "exact" total stand beside a
+    target claiming an unknown extent.
+
+    `captured_size` counts the contiguous capture starting at
+    `base_address` (see dumpex.core.memory.va_range_captured_bytes), and
+    the examined bytes are that capture's own prefix, so the unexamined
+    remainder is the suffix `[base + examined, base + captured)`. A
+    zero-length range is legitimate and stays quantified: a fully examined
+    or entirely uncaptured target missed exactly nothing, which is an
+    answer, not an absence of one."""
+    length = target.unexamined_bytes
+    if length is None:
+        return None
+    start = target.base_address + (target.captured_size - length)
+    return (start, start + length)
+
+
+def _union_length(ranges) -> "tuple":
+    """`(bytes, count)` for a list of `[start, end)` ranges: how much
+    distinct memory they cover once overlapping and touching ones are
+    merged, and how many merged ranges that is.
+
+    Merging is what keeps the figure a measure of MEMORY rather than a
+    tally of gap records -- see this section's own header comment for the
+    three ways one physical range legitimately reaches several gaps.
+    Empty ranges cover nothing and merge into nothing, so they are dropped
+    here rather than inflating the range count."""
+    ordered = sorted(r for r in ranges if r[1] > r[0])
+    total = count = 0
+    current_start = current_end = None
+    for start, end in ordered:
+        if current_end is None or start > current_end:
+            if current_end is not None:
+                total += current_end - current_start
+                count += 1
+            current_start, current_end = start, end
+        elif end > current_end:
+            current_end = end
+    if current_end is not None:
+        total += current_end - current_start
+        count += 1
+    return total, count
+
+
+def summarize_missed_bytes(limitations) -> MissedBytes:
+    """Aggregate unexamined captured memory over a list of
+    CoverageLimitations.
+
+    Derived from the same targets the limitations already carry, so this
+    aggregate and the per-target `unexamined_size` values on the wire
+    cannot disagree about any single target -- and unioned across them, so
+    the total is what a re-collection would actually have to recover
+    rather than a sum that charges shared memory once per gap record that
+    names it. Pure arithmetic over objects already retained for reporting:
+    no dump is re-read for it."""
+    ranges, quantified, unquantified = [], 0, 0
+    for limitation in limitations:
+        kind = _CODE_SPECS[limitation.code].memory_gap
+        if kind is None:
+            continue
+        if kind is MemoryGapKind.UNMEASURED or not limitation.targets:
+            unquantified += _limitation_gap_count(limitation)
+            continue
+        # Every target-bearing code requires `affected_count` to equal
+        # `len(targets)` once targets is non-empty, so a limitation that
+        # names any target names all of them -- there is no partly-itemized
+        # list to account for separately.
+        for target in limitation.targets:
+            extent = _unexamined_range(target)
+            if extent is None:
+                unquantified += 1
+            else:
+                ranges.append(extent)
+                quantified += 1
+    known, distinct = _union_length(ranges)
+    return MissedBytes(known_bytes=known, quantified_gaps=quantified,
+                        unquantified_gaps=unquantified, distinct_ranges=distinct)
+
+
+def combine_missed_bytes(reports) -> MissedBytes:
+    """One aggregate over several CoverageReports -- what a document-level
+    rollup whose own `limitations` are deliberately empty reports about the
+    parts underneath it.
+
+    Unioned, not summed, for the same reason a single report's is: several
+    analyzers legitimately walk the same regions, so the same skipped
+    region reaches this function once per analyzer that skipped it, and a
+    sum would report a multiple of the memory a re-collection has to
+    recover.
+
+    Takes the reports that OWN their gaps, never another rollup: a report
+    carrying `missed_bytes_rollup` has no limitations to read, so it would
+    contribute nothing and silently zero out whatever it stands for."""
+    reports = list(reports)
+    rollups = [r for r in reports if r.missed_bytes_rollup is not None]
+    if rollups:
+        raise ValueError(
+            f"combine_missed_bytes() got {len(rollups)} report(s) carrying a rollup instead of "
+            f"limitations -- a rollup has no gaps to measure and would contribute zero. Pass "
+            f"the reports that own the gaps")
+    return summarize_missed_bytes(
+        [limitation for report in reports for limitation in report.limitations])
+
+
+def format_missed_bytes_clause(missed: MissedBytes) -> "str | None":
+    """The coverage line's trailing clause, or None when there is nothing
+    to add (no gap costs capturable bytes, so the status word alone is the
+    whole story).
+
+    An EXACT aggregate is stated as a total. A LOWER_BOUND is prefixed
+    "at least" and names the gaps it could not measure. An aggregate with
+    no measured bytes names no quantity at all -- there is none to name,
+    and a rendered "0 bytes" beside an unmeasured gap would read as an
+    answer where there is none."""
+    if not missed.distinct_ranges:
+        if missed.complete:
+            return None
+        return f"unscanned extent unmeasured across {missed.unquantified_gaps} gap(s)"
+    measured = (f"{_format_scaled_bytes(missed.known_bytes)} unscanned across "
+                 f"{missed.distinct_ranges} range(s)")
+    if missed.complete:
+        return measured
+    return (f"at least {measured}, plus {missed.unquantified_gaps} gap(s) "
+            f"of unmeasured extent")
 
 
 # PID_SOURCES_ABSENT's rendered sentence names these three sources
@@ -1515,6 +1880,16 @@ class _CodeSpec:
     # "scope" since it's a real, rendered part of its text
     # (threads.py passes scope="thread" explicitly).
     allowed_fields: frozenset = frozenset()
+    # How this code's gap converts into unexamined captured bytes (see
+    # MemoryGapKind). `None` -- the default, and what the large majority of
+    # codes keep -- means the code makes no claim about dump bytes going
+    # unexamined: an absent or unparseable stream, a reference file that
+    # was not supplied, a cap on how many RESULTS were retained, or a
+    # search that read its bytes and simply did not apply everything to
+    # them. Those are real coverage gaps; they are not missed memory, and
+    # summarize_missed_bytes() neither counts them nor lets them make an
+    # otherwise-exact aggregate read as a lower bound.
+    memory_gap: Optional["MemoryGapKind"] = None
 
 
 def _render_source_absent(limitation: "CoverageLimitation") -> str:
@@ -2663,31 +3038,42 @@ _CODE_SPECS = {
     LimitationCode.REPORT_STRING_SCAN_INCOMPLETE: _CodeSpec(
         render=_render_report_string_scan_incomplete, fixed_source="string_search",
         caller_buildable=True, validate_fields=_validate_report_string_scan_incomplete_fields,
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.REPORT_STRING_SCAN_TRUNCATED: _CodeSpec(
         render=_render_report_string_scan_truncated, fixed_source="string_search",
         caller_buildable=True, validate_fields=_validate_report_string_scan_truncated_fields,
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.PE_HEADER_READ_FAILED: _CodeSpec(
         render=_render_pe_header_read_failed, fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("PE_HEADER_READ_FAILED"),
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.PE_HEADER_SHORT_READ: _CodeSpec(
         render=_render_pe_header_short_read, fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("PE_HEADER_SHORT_READ"),
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.PE_HEADER_SCAN_TRUNCATED: _CodeSpec(
         render=_render_pe_header_scan_truncated, fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_validate_pe_scan_gap_fields("PE_HEADER_SCAN_TRUNCATED"),
+        # The candidate search stopped partway through the region, so what
+        # went unsearched is a suffix whose length the scan does not retain.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.PE_HEADER_SCAN_NOT_STARTED: _CodeSpec(
         render=_render_pe_header_scan_not_started, fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_validate_pe_scan_gap_fields("PE_HEADER_SCAN_NOT_STARTED"),
+        # This region's candidate search never issued a single read, so the
+        # whole captured region is unexamined -- the distinction from
+        # PE_HEADER_SCAN_TRUNCATED that makes it exactly measurable.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.PE_HEADER_EVIDENCE_CAPPED: _CodeSpec(
@@ -2709,6 +3095,7 @@ _CODE_SPECS = {
         render=_render_module_header_read_failed, fixed_source="module_headers",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("MODULE_HEADER_READ_FAILED"),
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.MODULE_HEADER_PARSE_FAILED: _CodeSpec(
         render=_render_module_header_parse_failed, fixed_source="module_headers",
@@ -2739,11 +3126,13 @@ _CODE_SPECS = {
         render=_render_stomping_section_memory_read_failed, fixed_source="section_content_diff",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_SECTION_MEMORY_READ_FAILED"),
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.STOMPING_SHORT_READ: _CodeSpec(
         render=_render_stomping_short_read, fixed_source="section_content_diff",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_SHORT_READ"),
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.STOMPING_RELOCATION_FAILED: _CodeSpec(
         render=_render_stomping_relocation_failed, fixed_source="section_content_diff",
@@ -2753,28 +3142,50 @@ _CODE_SPECS = {
     LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED: _CodeSpec(
         render=_render_scan_region_oversized_skipped, caller_buildable=True,
         validate_fields=_validate_scan_region_oversized_skipped_fields,
+        # A region skipped for exceeding a cap was never read at all, and
+        # `targets` is mandatory here, so this code's missed bytes are
+        # always exactly the captured size of everything it names.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"scope", "affected_count", "targets"})),
     LimitationCode.SCAN_REGION_READ_FAILED: _CodeSpec(
         render=_render_scan_region_read_failed, caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("SCAN_REGION_READ_FAILED"),
+        # Nothing usable came back at all, so none of the captured bytes
+        # were examined -- unlike its SHORT_READ companion, where a prefix
+        # was.
         # "scope" (issue #28): obfuscation attaches this per SCAN LAYER
         # (sleep_mask/entropy/decode), the same reason
         # SCAN_REGION_OVERSIZED_SKIPPED already needs it -- every other
         # source using this code (pipe/cs-beacon/yara/stomping) simply
         # never sets it, same as before.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_REGION_SHORT_READ: _CodeSpec(
         render=_render_scan_region_short_read, caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("SCAN_REGION_SHORT_READ"),
+        # The readable prefix WAS scanned, so the missed extent is the
+        # captured size minus the bytes the read actually returned -- which
+        # only a target carrying that returned length can supply.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED: _CodeSpec(
         render=_render_scan_region_evaluation_truncated, caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count(
             "SCAN_REGION_EVALUATION_TRUNCATED"),
+        # Evaluation stopped at a descriptor boundary inside the requested
+        # range: everything up to the boundary was examined, so the extent
+        # is the unexamined suffix, never the whole target.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_REGION_SEARCH_INCOMPLETE: _CodeSpec(
         render=_render_scan_region_search_incomplete, caller_buildable=True,
         validate_fields=_validate_scan_region_search_incomplete_fields,
+        # The scan reached these bytes and could not search them
+        # exhaustively -- a strided window sample, a match quota, a
+        # withheld pattern set. What went unexamined is real and is not a
+        # byte range the scan retains, the same shape (and the same
+        # treatment) as YARA_MATCH_FAILED.
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"scope", "detail", "affected_count"})),
     LimitationCode.TARGETED_SOURCE_NOT_EVALUATED: _CodeSpec(
         render=_render_targeted_source_not_evaluated,
@@ -2787,15 +3198,24 @@ _CODE_SPECS = {
     LimitationCode.SCAN_ITEMS_UNACCOUNTED: _CodeSpec(
         render=_render_scan_items_unaccounted, caller_buildable=True,
         validate_fields=_require_positive_affected_count("SCAN_ITEMS_UNACCOUNTED"),
-        # No "targets": structurally unavailable for this code.
+        # No "targets": structurally unavailable for this code -- an item
+        # nobody reconciled is precisely one whose identity was never
+        # captured, so its byte extent can never be established either.
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count", "scope"})),
     LimitationCode.SCAN_BUDGET_EXHAUSTED: _CodeSpec(
         render=_render_scan_budget_exhausted, caller_buildable=True,
         validate_fields=_validate_scan_budget_exhausted_fields,
+        # A budget can end a scan before a target starts (nothing examined)
+        # or partway through one (a prefix examined). The two are told
+        # apart only by the target's own examined extent, so a target that
+        # carries none stays unquantified rather than being charged whole.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"scope", "detail", "affected_count", "targets"})),
     LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
         render=_render_cs_beacon_scan_budget_exhausted, fixed_source="segment_scan",
         caller_buildable=True, validate_fields=_validate_cs_beacon_scan_budget_exhausted_fields,
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"detail", "affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_RULE_COMPILE_FAILED: _CodeSpec(
@@ -2807,11 +3227,19 @@ _CODE_SPECS = {
         render=_render_yara_match_failed, fixed_source="segment_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("YARA_MATCH_FAILED"),
+        # One rule file's match call raised over a segment the scan had
+        # already read and matched against its other rule files. What went
+        # unexamined is a rule/segment pairing, not a byte range, so the
+        # gap is counted and left unmeasured rather than charged the whole
+        # segment -- which would claim bytes other rules did examine.
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.YARA_MATCH_TIMED_OUT: _CodeSpec(
         render=_render_yara_match_timed_out, fixed_source="segment_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("YARA_MATCH_TIMED_OUT"),
+        # Same shape as YARA_MATCH_FAILED -- see there.
+        memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.YARA_HIT_CAP_REACHED: _CodeSpec(
         render=_render_yara_hit_cap_reached,
@@ -2819,6 +3247,10 @@ _CODE_SPECS = {
         validate_fields=_compose(
             _require_optional_targets_matching_count("YARA_HIT_CAP_REACHED"),
             _validate_optional_budget_fields(_YARA_BUDGET_KINDS)),
+        # The first target is the segment mid-processing when the cap was
+        # reached; the rest never started. Only the ones carrying an
+        # examined extent are counted exactly.
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
@@ -2833,6 +3265,7 @@ _CODE_SPECS = {
         validate_fields=_compose(
             _require_optional_affected_count_and_targets("YARA_SCAN_BUDGET_EXHAUSTED"),
             _validate_optional_budget_fields(_YARA_BUDGET_KINDS)),
+        memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED: _CodeSpec(
@@ -3285,12 +3718,32 @@ class CoverageReport:
     status: str
     sources: dict = field(default_factory=dict)       # {name: SourceObservation}
     limitations: list = field(default_factory=list)   # list[CoverageLimitation]
+    # For a DOCUMENT-LEVEL rollup only: the missed-memory aggregate its
+    # own parts measured. `--hunt`'s document coverage deliberately holds
+    # no limitations of its own (every gap lives on the HunterRecord that
+    # owns it, and hunter source names are not namespaced, so the reports
+    # are never combined -- see dumpex.hunt._hunt_coverage_report), which
+    # would otherwise make its aggregate an exact zero however much the
+    # hunters missed. A report that DOES carry limitations derives the
+    # aggregate from them and must not also be handed one; the two would
+    # be independent sources of truth for the same number.
+    missed_bytes_rollup: "MissedBytes | None" = None
 
     def __post_init__(self):
         try:
             self.status = CoverageStatus(self.status)
         except ValueError:
             raise ValueError(f"unknown coverage status: {self.status!r}") from None
+        if self.missed_bytes_rollup is not None:
+            if type(self.missed_bytes_rollup) is not MissedBytes:
+                raise TypeError(
+                    f"CoverageReport.missed_bytes_rollup must be a MissedBytes, got "
+                    f"{type(self.missed_bytes_rollup).__name__}")
+            if self.limitations:
+                raise ValueError(
+                    "CoverageReport.missed_bytes_rollup is only for a document-level rollup "
+                    "with no limitations of its own -- a report carrying limitations derives "
+                    "its aggregate from them, and must not also be given one")
 
     @property
     def reasons(self) -> list:
@@ -3303,6 +3756,21 @@ class CoverageReport:
         `coverage.sources`/`coverage.limitations` are new, additive
         fields alongside it; see envelope.Result/collector.py.)"""
         return [render_limitation(l) for l in self.limitations]
+
+    @property
+    def missed_bytes(self):
+        """How much captured in-scope memory this run did not examine.
+
+        Derived from the very targets `limitations` already carries (see
+        summarize_missed_bytes), so the aggregate and the per-target
+        extents beside it cannot disagree -- except on a document-level
+        rollup that holds no limitations of its own, which supplies the
+        aggregate its parts measured instead. It grades a `partial`; it
+        never decides whether one is reported, and a `complete` report
+        derives an exact zero rather than being given one."""
+        if self.missed_bytes_rollup is not None:
+            return self.missed_bytes_rollup
+        return summarize_missed_bytes(self.limitations)
 
 
 @dataclass(frozen=True)
@@ -3824,10 +4292,35 @@ def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
     "nothing was evaluated at all"); COMPLETE iff EVERY report is
     COMPLETE; PARTIAL otherwise (covers both "some entities not_evaluated,
     others fine" and "every entity evaluated but at least one is only
-    partial")."""
+    partial").
+
+    Refuses a memory-gap limitation that carries TARGETS. `--diff`
+    combines reports built over TWO evidence files, and the merged
+    report's `missed_bytes` unions target virtual addresses: the same VA
+    skipped in both dumps would merge into one range and the figure would
+    report half of what was missed. Under-reporting a gap is the one
+    direction this metric must never be wrong in, so the merge refuses
+    rather than producing it.
+
+    A memory gap with no targets is unaffected and stays welcome -- it
+    contributes a COUNT, which no address space can make wrong, which is
+    why --report's own same-dump combine of REPORT_STRING_SCAN_INCOMPLETE/
+    _TRUNCATED goes through. No caller builds a target-bearing one here
+    today (comparison.py's limitations are all auto-derived source-state
+    codes); this is what makes the first one that does a failure rather
+    than a quiet halving."""
     reports = list(reports)
     if not reports:
         raise ValueError("combine_coverage_reports() requires at least one CoverageReport")
+    located_gaps = sorted({lim.code.value for r in reports for lim in r.limitations
+                           if lim.targets and _CODE_SPECS[lim.code].memory_gap is not None})
+    if located_gaps:
+        raise ValueError(
+            f"combine_coverage_reports() cannot merge address-bearing memory-gap "
+            f"limitation(s) {located_gaps!r}: the reports it combines can span different "
+            f"evidence files, and unioning their virtual addresses as one space would "
+            f"under-report coverage.missed_bytes. Report such a gap on the per-entity report "
+            f"that owns it, or give this function an address space to key on")
 
     sources = {}
     limitations = []

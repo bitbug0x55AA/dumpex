@@ -216,7 +216,7 @@ def _scan_entropy(regions, modules, mf, susp_prots, read_region, config: Encodin
             coverage.note_read_failed(region_scan_target(mf, r))
             continue
         if len(data) < r.RegionSize:
-            coverage.note_short_read(region_scan_target(mf, r))
+            coverage.note_short_read(region_scan_target(mf, r), got=len(data))
         if len(data) < ENTROPY_MIN_INPUT:
             # Read fine, just too little data for a meaningful Shannon
             # entropy -- an outcome, not a gap.
@@ -279,7 +279,7 @@ def scan_entropy_targeted(regions, modules, mf, susp_prots, read_region,
             coverage.note_read_failed(region_scan_target(mf, r))
             continue
         if len(data) < r.RegionSize:
-            coverage.note_short_read(region_scan_target(mf, r))
+            coverage.note_short_read(region_scan_target(mf, r), got=len(data))
         if len(data) < config.entropy_min_input:
             # Read fine, just too little data for a meaningful Shannon
             # entropy -- an outcome, not a gap.

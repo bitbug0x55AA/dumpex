@@ -44,7 +44,8 @@ from collections import Counter
 
 from dumpex.hunt._console import resolve_width, render_kv_block
 from dumpex.hunt._report_console import (
-    COVERAGE_ICON, TAG_ICON, TAG_LABEL, LABEL_WIDTH, header_lines, wrap_block,
+    COVERAGE_ICON, TAG_ICON, TAG_LABEL, LABEL_WIDTH, coverage_kv_value, header_lines,
+    wrap_block,
 )
 from dumpex.hunt._ui import (
     DETECTED, INCONCLUSIVE, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, _status_text,
@@ -96,7 +97,7 @@ def _verdict_rows(record) -> list:
         ("VERDICT",    _status_text(record.status, _VERDICT_REASON.get(record.status, ""))),
         ("Confidence", record.confidence or "—"),
         ("Score",      f"{record.score}/{max_score}"),
-        ("Coverage",   record.coverage.status.value.replace("_", " ").upper()),
+        ("Coverage",   coverage_kv_value(record.coverage.status.value, record.coverage)),
         ("Review",     record.review_priority or "—"),
     ]
 

@@ -10,11 +10,13 @@ from dumpex.hunt._finding import (
 )
 from dumpex.hunt._console import resolve_width, render_kv_block
 from dumpex.hunt._report_console import (
-    header_lines, sorted_for_display, render_key_signal_compact,
+    coverage_kv_value, header_lines, sorted_for_display, render_key_signal_compact,
     render_why_this_verdict, render_coverage, with_verbose_facts,
 )
 from dumpex.hunt.injection.domain import InjectionReport
-from dumpex.hunt.injection.report_facts import finding_from_check_result, project_coverage_v1
+from dumpex.hunt.injection.report_facts import (
+    finding_from_check_result, project_coverage_report, project_coverage_v1,
+)
 
 
 # ── Verbose-only evidence-item fact rendering (console policy only) ──────
@@ -114,7 +116,7 @@ def _coverage_only_impacts(findings: list, coverage_reasons: list) -> list:
 
 def _render_verdict_block(status: str, score: int, max_score: int, confidence: str,
                            coverage_status: str, review_priority: str,
-                           findings: list) -> list:
+                           findings: list, coverage_report) -> list:
     if status == NOT_EVALUATED:
         verdict_text = _status_text(status, "no required stream present in this dump")
     else:
@@ -128,7 +130,7 @@ def _render_verdict_block(status: str, score: int, max_score: int, confidence: s
         ("VERDICT",    verdict_text),
         ("Confidence", confidence),
         ("Score",      f"{score}/{max_score}"),
-        ("Coverage",   coverage_status.replace("_", " ").upper()),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
         ("Review",     review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -152,7 +154,8 @@ def render_console_lines(report: InjectionReport, verbose: bool = False,
 
     lines.extend(_render_verdict_block(report.status, report.score, report.max_score,
                                         report.confidence, coverage_status,
-                                        report.review_priority, findings))
+                                        report.review_priority, findings,
+                                        project_coverage_report(report.coverage)))
     lines.append("")
 
     ordered = sorted_for_display(findings, exclude_checks=_COVERAGE_ONLY_CHECKS)

@@ -19,7 +19,7 @@ __all__ = [
     "EvidenceInput", "build_meta_v2", "Result", "Envelope",
 ]
 
-SCHEMA_VERSION = "2.14"
+SCHEMA_VERSION = "2.15"
 
 # CLI options whose VALUE is a filesystem path -- same redaction concern
 # as dumpex.ui.structured's _PATH_OPTION_KEYS, kept as its own copy here
@@ -378,6 +378,12 @@ class Result:
     coverage_reasons:    list = field(default_factory=list)
     coverage_sources:    dict = field(default_factory=dict)
     coverage_limitations: list = field(default_factory=list)
+    # The already-serialized MissedBytes aggregate for this whole result
+    # (dumpex.output.coverage.MissedBytes.to_dict). Stored rather than
+    # re-derived: `coverage_limitations` above is a list of plain dicts by
+    # the time it gets here, and re-deriving from dicts would be a second,
+    # drift-prone implementation of the same range union.
+    coverage_missed_bytes: dict = field(default_factory=dict)
     summary:             dict = field(default_factory=dict)
     records:             list = field(default_factory=list)
 
@@ -390,6 +396,7 @@ class Result:
                 "reasons":      list(self.coverage_reasons),
                 "sources":      dict(self.coverage_sources),
                 "limitations":  list(self.coverage_limitations),
+                "missed_bytes": dict(self.coverage_missed_bytes),
             },
             "summary": dict(self.summary),
             "data":    {"records": list(self.records)},

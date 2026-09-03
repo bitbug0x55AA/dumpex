@@ -23,7 +23,7 @@ Analyzer-specific coverage reduction (which ``LayerCoverage`` /
 ``ScanDiagnostics`` state maps to which status) and payload shapes stay in each
 analyzer's own targeted module.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from dumpex.core.memory import addr_to_module, module_name_only
 from dumpex.core.va_range import (
@@ -233,7 +233,12 @@ def unexamined_suffix_target(read_slice: ReadSlice) -> "ScanTarget | None":
     against, so a suffix the dump still backs -- including one past the
     evaluated descriptor's end, in an adjacent segment -- keeps the .dmp
     location an investigator would extract it from. Both describe an
-    uncaptured suffix as exactly that: no offset, nothing captured."""
+    uncaptured suffix as exactly that: no offset, nothing captured.
+
+    ``examined_size`` is 0 by construction: this target IS the part no byte
+    of which reached the scanner, so the whole of whatever it captures is
+    the gap. Recording it is what lets ``coverage.missed_bytes`` report the
+    exact figure already established here instead of an unmeasured one."""
     suffix = read_slice.unread_suffix
     if suffix is None:
         return None
@@ -245,17 +250,37 @@ def unexamined_suffix_target(read_slice: ReadSlice) -> "ScanTarget | None":
         file_offset=(backing.file_offset_at(suffix.base_address)
                      if backing is not None else None),
         captured_size=max(0, capture.captured_bytes - read_slice.read_bytes),
+        examined_size=0,
     )
 
 
-def evaluation_truncated_limitation(source: str, scope: "str | None",
-                                    requested_target) -> CoverageLimitation:
+def evaluation_truncated_limitation(
+        source: str, scope: "str | None",
+        boundary: "TargetedRegionBoundary | TargetedSegmentBoundary") -> CoverageLimitation:
     """The ``SCAN_REGION_EVALUATION_TRUNCATED`` limitation for one closure whose
     evaluation stopped at the containing descriptor's end while capture
-    continued across the whole requested range."""
+    continued across the whole requested range.
+
+    Either boundary kind: the descriptor a rescan is anchored to is a
+    MemoryInfo region for obfuscation/pipe/stomping and a captured segment for
+    CS Beacon/YARA, and the only two fields read here -- ``eval_range`` and
+    ``requested_target`` -- are carried by both, with the same meaning.
+
+    The target is the whole request, and the part of it that WAS evaluated is
+    exactly ``eval_range`` -- the request clipped to that descriptor -- so the
+    gap is the captured suffix beyond it and the extent is known here without
+    consulting the scan at all. A budget that additionally stopped the scan
+    INSIDE ``eval_range`` is a separate limitation carrying its own residual
+    target; the two overlap, and ``summarize_missed_bytes`` unions them rather
+    than adding them, so neither has to account for the other."""
+    examined = boundary.eval_range.size
+    captured = boundary.requested_target.captured_size
+    if captured is not None:
+        examined = min(examined, captured)
     return CoverageLimitation(
         code=LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED, source=source,
-        scope=scope, affected_count=1, targets=(requested_target,))
+        scope=scope, affected_count=1,
+        targets=(replace(boundary.requested_target, examined_size=examined),))
 
 
 def truncation_diagnostic(region_range: VirtualRange, requested: VirtualRange,

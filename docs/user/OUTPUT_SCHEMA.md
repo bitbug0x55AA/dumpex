@@ -41,7 +41,7 @@ Every produced document follows this shape:
 ```jsonc
 {
   "meta": {
-    "schema_version": "2.14",
+    "schema_version": "2.15",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "command, options, timestamps, case metadata" },
     "evidence": [ { "...": "input identity and SHA-256" } ],
@@ -50,7 +50,12 @@ Every produced document follows this shape:
   "result": {
     "kind": "modules",
     "execution_status": "completed",
-    "coverage": { "status": "complete", "reasons": [], "sources": {}, "limitations": [] },
+    "coverage": {
+      "status": "complete", "reasons": [], "sources": {}, "limitations": [],
+      "missed_bytes": { "state": "exact", "bytes": 0, "complete": true,
+                        "quantified_gaps": 0, "unquantified_gaps": 0,
+                        "distinct_ranges": 0 }
+    },
     "summary": { "...": "kind-specific counts or rollup" },
     "data": { "records": [] }
   },
@@ -126,10 +131,67 @@ The supporting fields are:
 - `reasons`: ordered human-readable explanations.
 - `sources`: source name to `{state, record_count, detail}` observations.
 - `limitations`: structured, machine-readable gaps.
+- `missed_bytes`: how much captured in-scope memory those gaps add up to.
 
 Source states are `absent`, `present_empty`, `present`, or `failed`.
 `present_empty` is positive evidence that a captured source contained zero
 records; it is not interchangeable with `absent`.
+
+#### `coverage.missed_bytes`
+
+`partial` alone cannot separate one unreadable 12 KB region from forty
+oversized ones adding up to gigabytes, and those decide opposite things about
+whether the dump is worth recollecting. `missed_bytes` grades a `partial`:
+
+```json
+{"state": "exact", "bytes": 3355443, "complete": true,
+ "quantified_gaps": 4, "unquantified_gaps": 0, "distinct_ranges": 3}
+```
+
+Read `state` before `bytes`:
+
+| `state` | `bytes` | Meaning |
+|---|---|---|
+| `exact` | the total | Every gap's byte extent is established |
+| `lower_bound` | a floor | Some gaps could not be measured; the real total is higher |
+| `unknown` | `null` | No gap's extent is established; there is no figure to give |
+
+`bytes: 0` with `state: "exact"` is the only shape that means nothing
+capturable was missed. `complete` is true exactly when `unquantified_gaps` is
+`0`, which is exactly when `state` is `exact`.
+
+`bytes` measures **memory**, so it is a union of address ranges rather than a
+sum over gap records. One physical region is routinely named by several gaps at
+once — obfuscation runs three scan layers with different size caps over
+overlapping region sets, so one oversized region is skipped by two or three of
+them and appears in one limitation per layer; a `--hunt all` run reaches the
+same region once per analyzer that skipped it. Those are counted once.
+`quantified_gaps` counts the gap records whose extent is established and
+`distinct_ranges` the merged ranges they cover, so `distinct_ranges` is what
+tells "one region skipped by three layers" from "three regions skipped".
+Neither counts bytes, and neither does a limitation's own `affected_count`.
+
+The basis is what the dump actually holds for each target, not the address
+space it declares. A region the dump never captured contributes zero: there
+were no bytes there to miss, and what it needs is a re-collection, which
+`capture_state` already says. A gap whose extent the run does not retain — a
+short read that kept no returned length, a budget that stopped partway through
+a region with no stop cursor — is counted, never estimated.
+
+At the document level, `result.coverage.missed_bytes` for `--hunt` is measured
+across the hunter records rather than from `result.coverage.limitations`, which
+is empty by design: it is the union of what the selected hunters missed. Read
+that literally — a region one analyzer skipped counts in full even when another
+examined every byte of it, because the figure is memory with at least one
+unanswered question against it, not memory nothing read. The remedy also
+depends on the gap: an oversized skip names bytes this dump already holds, so
+`--hunt-addr` over the listed addresses closes it, while only a target whose
+`capture_state` is `none` needs a fuller collection.
+
+This grades a `partial`; it does not decide when one is reported.
+`coverage.status`, verdicts, scores, confidence values, and exit codes are all
+unaffected, and a gap is never invented to match a status word: a scan that is
+`partial` for a reason costing no capturable bytes reports an exact zero.
 
 Exit codes mirror document-level coverage for the current commands: `0` for
 `complete`, `3` for `partial`, and `4` for `not_evaluated`. Exit code does not
@@ -408,6 +470,15 @@ A `scanTarget` identifies a physical range with normalized base address, size,
 capture state, captured size/file offset, and MemoryInfo context when available.
 `file_offset: null` means the bytes are not present in the dump; it is not
 offset zero.
+
+`examined_size` is how many of that target's captured bytes the scan actually
+looked at — `0` for a region nothing read, the returned length for a short
+read, a stop cursor for a scan a budget ended partway through — and
+`unexamined_size` is the remainder. Both are `null` when the extent was never
+established, which is not the same claim as `0`; those are the gaps
+`coverage.missed_bytes` counts instead of measuring. The aggregate is the union
+of exactly these per-target ranges, so the two cannot disagree about any single
+target and the total never double-counts memory two gaps both name.
 
 `SCAN_ITEMS_UNACCOUNTED` is the one scan-coverage code that reports a count with
 no `targets`. It means that many regions or segments failed to reconcile against

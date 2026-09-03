@@ -312,7 +312,7 @@ def run_targeted_stomping(context) -> ObservationResult:
 
     truncation_limitation = (
         _targeted.evaluation_truncated_limitation(
-            TARGETED_SOURCE, None, boundary.requested_target)
+            TARGETED_SOURCE, None, boundary)
         if boundary.truncated and reached else None)
     limitations = _limitations(
         cov, truncation_limitation=truncation_limitation,

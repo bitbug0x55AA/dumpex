@@ -259,7 +259,14 @@ def test_set_command_result_minimal_produces_expected_shape(tmp_path):
     assert doc["result"]["kind"] == "modules"
     assert doc["result"]["execution_status"] == "completed"
     assert doc["result"]["coverage"] == {
-        "status": "complete", "reasons": [], "sources": {}, "limitations": []}
+        "status": "complete", "reasons": [], "sources": {}, "limitations": [],
+        # A complete result reports an exact zero rather than omitting the
+        # aggregate: "nothing was missed" is a measurement, and a missing
+        # field is indistinguishable from an unmeasured one to a consumer
+        # thresholding on it.
+        "missed_bytes": {"state": "exact", "bytes": 0, "complete": True,
+                          "quantified_gaps": 0, "unquantified_gaps": 0,
+                          "distinct_ranges": 0}}
     assert doc["result"]["summary"] == {"count": 2}
     assert doc["result"]["data"]["records"] == [{"name": "a.dll"}, {"name": "b.dll"}]
     assert doc["artifacts"] == []

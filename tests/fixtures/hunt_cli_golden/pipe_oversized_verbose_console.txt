@@ -1,0 +1,27 @@
+
+══════════════════════════════════════════
+  HUNT: Named Pipe C2 / Lateral Movement
+══════════════════════════════════════════
+
+  Scan detail:
+    Committed memory regions scanned for '\pipe\' name strings (unscored lead only)
+
+  VERDICT     INCONCLUSIVE — partial coverage
+  Confidence  none
+  Score       0/3  (handle-anchored; bare pipe strings are unscored leads)
+  Coverage    PARTIAL — 16 MB unscanned across 1 range(s)
+  Review      none
+
+  COVERAGE
+
+  [~] PARTIAL
+      HandleDataStream missing from this dump (needs MiniDumpWithHandleData) — the primary, scored
+      pipe-handle check could not run
+      1 oversized region(s) skipped: 0x0000000004000000 (16 MB > 8 MB limit)
+      Impact: The primary, scored pipe-handle check could not run at all — any '\pipe\' string this
+      run did find stays an unscored lead (a bare string never becomes handle evidence), so a score
+      of 0 here is not a clean result.
+      Impact: A pipe name or C2 artifact in memory that was never read cannot be ruled out —
+      targeted follow-up needed on the region(s) above: --extract / --strings that VA, or re-scan it
+      with an external scanner.
+

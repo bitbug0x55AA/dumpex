@@ -12,8 +12,8 @@ from dumpex.hunt._finding import (
 )
 from dumpex.hunt._console import resolve_width, render_kv_block
 from dumpex.hunt._report_console import (
-    header_lines, render_key_signal_compact, render_why_this_verdict, render_coverage,
-    with_verbose_facts, wrap_block, TAG_RANK,
+    coverage_kv_value, header_lines, render_key_signal_compact, render_why_this_verdict,
+    render_coverage, with_verbose_facts, wrap_block, TAG_RANK,
 )
 from dumpex.hunt.hollowing.domain import HollowingReport
 from dumpex.hunt.hollowing.models import (
@@ -22,7 +22,7 @@ from dumpex.hunt.hollowing.models import (
 )
 from dumpex.hunt.hollowing.report_facts import (
     _FACT_ITEM_RENDERERS, file_offset_text, finding_from_check_result, header_preview,
-    project_coverage_v1,
+    project_coverage_report, project_coverage_v1,
 )
 
 
@@ -264,7 +264,7 @@ def _second_signal_text(report: HollowingReport) -> str:
 
 
 def _render_verdict_block(report: HollowingReport, coverage_status: str,
-                           findings: list) -> list:
+                           findings: list, coverage_report) -> list:
     """The verdict-first key/value block. Reproduces the pre-migration
     verdict TEXT decisions exactly -- score 2 is all three structural
     signals correlating at one address, score 1 is MEM_PRIVATE plus
@@ -296,7 +296,7 @@ def _render_verdict_block(report: HollowingReport, coverage_status: str,
         ("Score",      f"{score}/{report.max_score}  "
                        + DIM("(requires MEM_PRIVATE at the image base correlated with a "
                              "second structural anomaly; single signals are leads only)")),
-        ("Coverage",   coverage_status.replace("_", " ").upper()),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
         ("Review",     report.review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -366,7 +366,8 @@ def render_console_lines(report: HollowingReport, verbose: bool = False,
     level = DetailLevel.VERBOSE if verbose else DetailLevel.NORMAL
 
     lines = list(header_lines("Process Hollowing"))
-    lines.extend(_render_verdict_block(report, coverage_status, findings))
+    lines.extend(_render_verdict_block(report, coverage_status, findings,
+                                        project_coverage_report(report.coverage)))
     lines.append("")
 
     ordered = _ordered_for_display(findings)

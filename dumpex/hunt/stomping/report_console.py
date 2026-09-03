@@ -12,12 +12,13 @@ from dumpex.hunt._finding import (
 )
 from dumpex.hunt._console import resolve_width, render_kv_block
 from dumpex.hunt._report_console import (
-    header_lines, sorted_for_display, render_key_signal_compact,
+    coverage_kv_value, header_lines, sorted_for_display, render_key_signal_compact,
     render_why_this_verdict, render_coverage, with_verbose_facts,
 )
 from dumpex.hunt.stomping.domain import StompingReport
 from dumpex.hunt.stomping.report_facts import (
-    _FACT_ITEM_RENDERERS, finding_from_check_result, project_coverage_v1,
+    _FACT_ITEM_RENDERERS, finding_from_check_result, project_coverage_report,
+    project_coverage_v1,
 )
 from dumpex.output.records import hex_address
 
@@ -230,7 +231,8 @@ def _scan_detail_lines(report: StompingReport) -> list:
     return lines
 
 
-def _render_verdict_block(report: StompingReport, coverage_status: str, findings: list) -> list:
+def _render_verdict_block(report: StompingReport, coverage_status: str, findings: list,
+                           coverage_report) -> list:
     """Reproduces the pre-migration verdict TEXT decisions exactly.
 
     score==1 is a verified, relocation-normalized byte difference with NO
@@ -266,7 +268,7 @@ def _render_verdict_block(report: StompingReport, coverage_status: str, findings
         ("Confidence", report.confidence),
         ("Score",      f"{score}/{report.max_score}  "
                        + DIM("(only a verified content-diff scores; requires --ref-dir)")),
-        ("Coverage",   coverage_status.replace("_", " ").upper()),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
         ("Review",     report.review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -332,7 +334,8 @@ def render_console_lines(report: StompingReport, verbose: bool = False,
     if verbose:
         lines.extend(_scan_detail_lines(report))
 
-    lines.extend(_render_verdict_block(report, coverage_status, findings))
+    lines.extend(_render_verdict_block(report, coverage_status, findings,
+                                        project_coverage_report(report.coverage)))
     lines.append("")
 
     ordered = sorted_for_display(findings, exclude_checks=_COVERAGE_ONLY_CHECKS)

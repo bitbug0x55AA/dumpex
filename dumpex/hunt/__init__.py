@@ -148,7 +148,7 @@ from dumpex.hunt import summary_presentation
 from dumpex.hunt.region_correlation import build_region_correlations
 from dumpex.hunt._investigation import build_investigation_queue
 from dumpex.output.command_result import CommandResult
-from dumpex.output.coverage import CoverageReport
+from dumpex.output.coverage import CoverageReport, combine_missed_bytes
 from dumpex.output.records import HUNTERS
 
 # Imported last, after every facade builder/renderer/collect import above:
@@ -264,12 +264,22 @@ def _hunt_coverage_report(records: "list", summary: dict) -> CoverageReport:
     "NOT_EVALUATED"` -- the one relationship
     dumpex-output-v2.12.schema.json's own kind=="hunt" branch enforces as
     a biconditional between `coverage.status` and `summary.overall_status`.
+
+    `missed_bytes` is the one thing this rollup cannot derive from its
+    own (deliberately empty) `limitations`, so it is measured across the
+    records and handed over: a document whose hunters missed gigabytes
+    would otherwise report an exact zero -- the one shape that means
+    "nothing capturable was missed" -- to every consumer thresholding on
+    it. Unioned rather than summed, because several analyzers legitimately
+    walk the same regions and a region two of them skipped is still one
+    region a re-collection has to recover.
     """
+    rollup = combine_missed_bytes([record.coverage for record in records])
     if summary["overall_status"] == "NOT_EVALUATED":
-        return CoverageReport(status="not_evaluated")
+        return CoverageReport(status="not_evaluated", missed_bytes_rollup=rollup)
     if any(record.coverage.status != "complete" for record in records):
-        return CoverageReport(status="partial")
-    return CoverageReport(status="complete")
+        return CoverageReport(status="partial", missed_bytes_rollup=rollup)
+    return CoverageReport(status="complete", missed_bytes_rollup=rollup)
 
 
 def _investigation_actions_json(records: "list", selected: str, mf: MinidumpFile) -> list:

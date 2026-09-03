@@ -36,6 +36,16 @@ def _load(filename: str):
         return json.load(fh)
 
 
+def _validator_for(schema: dict, ref: str):
+    """A validator for one `$def` of a loaded schema, so a relationship
+    the schema claims to enforce can be checked against real documents
+    rather than by reading its `allOf` back out."""
+    jsonschema = pytest.importorskip("jsonschema")
+    wrapper = {"$schema": schema["$schema"], "$ref": ref, "$defs": schema["$defs"]}
+    jsonschema.Draft202012Validator.check_schema(wrapper)
+    return jsonschema.Draft202012Validator(wrapper)
+
+
 # ── every packaged schema is self-consistent ─────────────────────────────
 
 @pytest.mark.parametrize("filename", sorted(_packaged_schemas().values()))
@@ -137,7 +147,10 @@ def test_package_smoke_rejects_an_unlisted_current_schema(capsys):
 # The migration doc's version-summary table is where a pinned consumer learns
 # what changed. A relationship that held across v2.0-v2.13 and no longer does
 # is exactly the kind of change that must appear there and in the schema, not
-# only in a module docstring.
+# only in a module docstring. These rows are pinned to the version that
+# introduced them rather than to whichever version is current: a later bump
+# does not move the release a consumer has to read to learn about the
+# relaxation.
 
 def _version_summary_row(version: str) -> str:
     doc = (_REPO_ROOT / "docs" / "user" / "OUTPUT_MIGRATION.md").read_text(encoding="utf-8")
@@ -148,16 +161,107 @@ def _version_summary_row(version: str) -> str:
     raise AssertionError(f"no version-summary row for {version}")
 
 
-def test_the_current_versions_row_names_the_new_limitation_code():
-    assert "TARGETED_SOURCE_NOT_EVALUATED" in _version_summary_row(SCHEMA_VERSION)
+def test_v2_14s_row_names_the_new_limitation_code():
+    assert "TARGETED_SOURCE_NOT_EVALUATED" in _version_summary_row("2.14")
 
 
-def test_the_current_versions_row_names_the_complete_with_limitations_relaxation():
+def test_v2_14s_row_names_the_complete_with_limitations_relaxation():
     """`complete` implied an empty `limitations` array in every earlier
     version; a targeted record breaks that, and a consumer reading
     `len(limitations) > 0` as "gapped" needs to be told."""
-    row = _version_summary_row(SCHEMA_VERSION)
+    row = _version_summary_row("2.14")
     assert "complete" in row and "limitations" in row
+
+
+# ── v2.15's missed-byte quantification ──────────────────────────────────
+
+def test_the_current_versions_row_names_the_missed_byte_states():
+    """A consumer thresholding on `bytes` has to be told, in the doc it
+    pins against, that the number is a total only in one of the three
+    states -- otherwise a lower bound or a null reads as a total."""
+    row = _version_summary_row(SCHEMA_VERSION)
+    assert "missed_bytes" in row
+    for state in ("exact", "lower_bound", "unknown"):
+        assert state in row
+
+
+def test_the_current_versions_row_states_that_no_verdict_moves():
+    """The one thing a consumer most needs to know about a coverage
+    change is whether it moved any result. This one does not."""
+    row = _version_summary_row(SCHEMA_VERSION)
+    assert "coverage.status" in row and "exit code" in row
+
+
+def test_the_schema_itself_defines_the_missed_byte_states():
+    """The migration doc is prose; the schema is what consumers pin."""
+    schema = _load(CURRENT_SCHEMA)
+    missed = schema["$defs"]["missedBytes"]
+    assert missed["properties"]["state"]["enum"] == ["exact", "lower_bound", "unknown"]
+    # `bytes` must be nullable: "unknown" reports no figure at all rather
+    # than a 0 a consumer would read as "nothing was missed".
+    assert missed["properties"]["bytes"]["type"] == ["integer", "null"]
+    assert set(missed["required"]) == {
+        "state", "bytes", "complete", "quantified_gaps", "unquantified_gaps",
+        "distinct_ranges"}
+    scan_target = schema["$defs"]["scanTarget"]
+    for field in ("examined_size", "unexamined_size"):
+        assert field in scan_target["required"]
+        assert scan_target["properties"][field]["type"] == ["integer", "null"]
+
+
+def test_both_coverage_objects_require_the_aggregate():
+    """A hunter record's own coverage and the document-level rollup both
+    grade a partial, so a consumer reading either finds it -- and finds it
+    always, rather than having to handle a producer that stopped emitting
+    it as if it meant zero."""
+    schema = _load(CURRENT_SCHEMA)
+    for owner in ("result", "hunterRecord"):
+        coverage = schema["$defs"][owner]["properties"]["coverage"]
+        assert coverage["properties"]["missed_bytes"] == {"$ref": "#/$defs/missedBytes"}
+        assert "missed_bytes" in coverage["required"]
+
+
+def test_the_schema_enforces_the_relationships_its_description_states():
+    """`state`, `complete`, `bytes` and `unquantified_gaps` are one fact in
+    four spellings. A consumer branching on any one of them relies on the
+    others agreeing, so the schema checks it rather than asserting it in
+    prose."""
+    schema = _load(CURRENT_SCHEMA)
+    validator = _validator_for(schema, "#/$defs/missedBytes")
+
+    def _doc(**kw):
+        base = {"state": "exact", "bytes": 0, "complete": True,
+                "quantified_gaps": 0, "unquantified_gaps": 0, "distinct_ranges": 0}
+        base.update(kw)
+        return base
+
+    assert validator.is_valid(_doc())
+    assert validator.is_valid(_doc(state="unknown", bytes=None, complete=False,
+                                    unquantified_gaps=2))
+    assert validator.is_valid(_doc(state="lower_bound", bytes=4096, complete=False,
+                                    quantified_gaps=1, unquantified_gaps=1,
+                                    distinct_ranges=1))
+    # "unknown" with a byte figure would be the exact confusion `state`
+    # exists to prevent.
+    assert not validator.is_valid(_doc(state="unknown", bytes=0, complete=False,
+                                        unquantified_gaps=1))
+    # "exact" is the only state that may claim completeness, and it must.
+    assert not validator.is_valid(_doc(state="exact", complete=False))
+    assert not validator.is_valid(_doc(state="lower_bound", bytes=4096, complete=True,
+                                        quantified_gaps=1, unquantified_gaps=1,
+                                        distinct_ranges=1))
+    # An exact aggregate cannot be hiding unmeasured gaps.
+    assert not validator.is_valid(_doc(unquantified_gaps=1))
+    # A lower bound is a bound on something: with nothing measured the
+    # producer reports "unknown", so this state is unreachable and a
+    # consumer must never have to handle it.
+    assert not validator.is_valid(_doc(state="lower_bound", bytes=0, complete=False,
+                                        quantified_gaps=0, unquantified_gaps=1))
+    # Bytes belong to gaps, and gaps cover ranges. A figure with neither
+    # describes memory that came from nowhere.
+    assert not validator.is_valid(_doc(bytes=4096))
+    assert not validator.is_valid(_doc(bytes=4096, quantified_gaps=1))
+    assert validator.is_valid(_doc(bytes=4096, quantified_gaps=1, distinct_ranges=1))
 
 
 def test_the_schema_itself_states_the_relaxation():

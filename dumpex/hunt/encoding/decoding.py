@@ -543,7 +543,7 @@ def scan_decode_layers(regions, modules, mf, read_region, config: EncodingConfig
             coverage.note_read_failed(region_scan_target(mf, r))
             continue
         if len(data) < r.RegionSize:
-            coverage.note_short_read(region_scan_target(mf, r))
+            coverage.note_short_read(region_scan_target(mf, r), got=len(data))
         coverage.note_scanned()
         ref = region_ref(r, susp_prots)
 
