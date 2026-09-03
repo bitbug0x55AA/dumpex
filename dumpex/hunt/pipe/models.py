@@ -661,7 +661,10 @@ class PipeScanCoverage:
     # `unaccounted` below.
     scanned:                    int = 0
     eligible_total:             int = 0
-    eligible_bytes:             int = 0
+    # Captured bytes the regions behind `eligible_total` add up to --
+    # the scale an unscanned proportion is read against (see
+    # dumpex.output.coverage.CoverageReport.eligible_bytes).
+    eligible_bytes:             "int | None" = None
     not_applicable:             int = 0
     budget_skipped:             int = 0
     unaccounted:                int = 0
@@ -685,9 +688,10 @@ class PipeScanCoverage:
                     f"exhaustion is not a size-cap skip, got a cap on target(s) at {capped!r}")
             object.__setattr__(self, name, targets)
         for name in ("read_failed", "short_reads", "image_pipe_refs",
-                     "scanned", "eligible_total", "eligible_bytes", "not_applicable",
+                     "scanned", "eligible_total", "not_applicable",
                      "budget_skipped", "unaccounted", "over_accounted"):
             _require_count(getattr(self, name), f"PipeScanCoverage.{name}")
+        _require_optional_count(self.eligible_bytes, "PipeScanCoverage.eligible_bytes")
         for name in ("c2_budget_exhausted", "pipe_name_budget_exhausted",
                      "match_cap_hit", "context_only_cap_hit"):
             _require_bool(getattr(self, name), f"PipeScanCoverage.{name}")

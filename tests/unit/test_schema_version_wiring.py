@@ -202,7 +202,17 @@ def test_the_schema_itself_defines_the_missed_byte_states():
     assert missed["properties"]["bytes"]["type"] == ["integer", "null"]
     assert set(missed["required"]) == {
         "state", "bytes", "complete", "quantified_gaps", "unquantified_gaps",
-        "distinct_ranges"}
+        "distinct_ranges", "eligible_bytes", "unscanned_pass_bytes", "unscanned_fraction"}
+    # Both sides of the proportion are nullable: a producer that
+    # established no denominator reports no scale and no fraction, which
+    # is a different claim from a run that took nothing into scope.
+    assert missed["properties"]["eligible_bytes"]["type"] == ["integer", "null"]
+    # The numerator the fraction is built from shares the denominator's
+    # per-pass basis and is always present, unlike `bytes`, which measures
+    # memory and is null in the UNKNOWN state.
+    assert missed["properties"]["unscanned_pass_bytes"]["type"] == "integer"
+    assert missed["properties"]["unscanned_fraction"]["type"] == ["number", "null"]
+    assert missed["properties"]["unscanned_fraction"]["maximum"] == 1
     scan_target = schema["$defs"]["scanTarget"]
     for field in ("examined_size", "unexamined_size"):
         assert field in scan_target["required"]
@@ -231,7 +241,8 @@ def test_the_schema_enforces_the_relationships_its_description_states():
 
     def _doc(**kw):
         base = {"state": "exact", "bytes": 0, "complete": True,
-                "quantified_gaps": 0, "unquantified_gaps": 0, "distinct_ranges": 0}
+                "quantified_gaps": 0, "unquantified_gaps": 0, "distinct_ranges": 0,
+                "eligible_bytes": None, "unscanned_pass_bytes": 0, "unscanned_fraction": None}
         base.update(kw)
         return base
 
@@ -262,6 +273,76 @@ def test_the_schema_enforces_the_relationships_its_description_states():
     assert not validator.is_valid(_doc(bytes=4096))
     assert not validator.is_valid(_doc(bytes=4096, quantified_gaps=1))
     assert validator.is_valid(_doc(bytes=4096, quantified_gaps=1, distinct_ranges=1))
+
+
+def test_the_schema_enforces_what_a_proportion_may_be_stated_against():
+    """The fraction is the byte figure divided by a scale, so every shape
+    where there is no supportable scale -- or no measured numerator -- has
+    to report no fraction rather than a number a consumer would threshold
+    on."""
+    schema = _load(CURRENT_SCHEMA)
+    validator = _validator_for(schema, "#/$defs/missedBytes")
+
+    def _doc(**kw):
+        base = {"state": "exact", "bytes": 0, "complete": True,
+                "quantified_gaps": 0, "unquantified_gaps": 0, "distinct_ranges": 0,
+                "eligible_bytes": None, "unscanned_pass_bytes": 0, "unscanned_fraction": None}
+        base.update(kw)
+        return base
+
+    # A complete scan over real in-scope work: 0% unscanned is an answer,
+    # and the scale it is 0% of is stated.
+    assert validator.is_valid(_doc(eligible_bytes=4096, unscanned_fraction=0.0))
+    assert validator.is_valid(_doc(state="lower_bound", bytes=4096, complete=False,
+                                    quantified_gaps=1, unquantified_gaps=1,
+                                    distinct_ranges=1, eligible_bytes=8192,
+                                    unscanned_pass_bytes=4096, unscanned_fraction=0.5))
+    # No denominator, and a zero one, leave nothing for a proportion to be
+    # of -- neither may carry a number.
+    assert not validator.is_valid(_doc(unscanned_fraction=0.0))
+    assert not validator.is_valid(_doc(eligible_bytes=0, unscanned_fraction=0.0))
+    # Nothing measured: a fraction here would report a run whose budget
+    # stopped it somewhere unknown as having missed a definite share.
+    assert not validator.is_valid(_doc(state="unknown", bytes=None, complete=False,
+                                        unquantified_gaps=2, eligible_bytes=4096,
+                                        unscanned_fraction=0.0))
+    # A run cannot miss a larger share of its scope than all of it.
+    assert not validator.is_valid(_doc(bytes=4096, quantified_gaps=1, distinct_ranges=1,
+                                        eligible_bytes=4096, unscanned_pass_bytes=4096,
+                                        unscanned_fraction=1.5))
+    # ... nor more per-pass BYTES than its scope holds. The full
+    # `unscanned_pass_bytes <= eligible_bytes` is not expressible as such;
+    # what is, and what catches the degenerate end of it, is that a run
+    # reporting missed pass-bytes cannot also report a scope of zero.
+    assert validator.is_valid(_doc(bytes=4096, quantified_gaps=1, distinct_ranges=1,
+                                    eligible_bytes=8192, unscanned_pass_bytes=4096,
+                                    unscanned_fraction=0.5))
+    assert not validator.is_valid(_doc(bytes=4096, quantified_gaps=1, distinct_ranges=1,
+                                        eligible_bytes=0, unscanned_pass_bytes=4096,
+                                        unscanned_fraction=None))
+
+
+def test_a_not_evaluated_coverage_object_may_not_carry_a_scale():
+    """A hunter that evaluated nothing has no in-scope memory for a gap to
+    be a proportion of. The producer short-circuits it; this is the half a
+    consumer can actually pin."""
+    schema = _load(CURRENT_SCHEMA)
+    for owner in ("result", "hunterRecord"):
+        validator = _validator_for(schema, f"#/$defs/{owner}/properties/coverage")
+        missed = {"state": "exact", "bytes": 0, "complete": True, "quantified_gaps": 0,
+                   "unquantified_gaps": 0, "distinct_ranges": 0, "eligible_bytes": None,
+                   "unscanned_pass_bytes": 0, "unscanned_fraction": None}
+
+        def _coverage(status, **kw):
+            return {"status": status, "reasons": [], "sources": {}, "limitations": [],
+                     "missed_bytes": {**missed, **kw}}
+
+        assert validator.is_valid(_coverage("not_evaluated"))
+        assert validator.is_valid(_coverage("complete", eligible_bytes=4096,
+                                             unscanned_fraction=0.0))
+        assert not validator.is_valid(_coverage("not_evaluated", eligible_bytes=4096,
+                                                 unscanned_fraction=0.0))
+        assert not validator.is_valid(_coverage("not_evaluated", eligible_bytes=0))
 
 
 def test_the_schema_itself_states_the_relaxation():

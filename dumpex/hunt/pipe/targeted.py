@@ -654,6 +654,7 @@ def project_targeted_report(context, result):
         corr.c2_context, corr.framework_string_hits, corr.unbacked_threads,
         memory_info_stream=evaluated, handle_data_stream=False,
         skipped_oversize=cov.skipped_oversize_targets,
+        eligible_bytes=cov.eligible_bytes,
         read_failed=cov.read_failed, read_failed_targets=cov.read_failed_targets,
         short_reads=cov.short_reads, short_read_targets=cov.short_read_targets,
         unaccounted=cov.unaccounted, over_accounted=cov.over_accounted,

@@ -310,4 +310,5 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
             affected_count=coverage.contexts_missing))
     return build_coverage_report(
         coverage_sources, evaluation_sources=("memory_info", "thread_info"),
-        completeness_checks=completeness_checks)
+        completeness_checks=completeness_checks,
+        eligible_bytes=coverage.pe_eligible_bytes)

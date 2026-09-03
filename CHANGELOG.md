@@ -11,6 +11,38 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Added
 
+- A hunt now reports how much of its own scanning work did not happen, not
+  only how many bytes it missed. `coverage.missed_bytes` gains
+  `eligible_bytes`, `unscanned_pass_bytes` and `unscanned_fraction`, and the
+  console coverage line states the share alongside the byte figure —
+  `Coverage    PARTIAL — 3.2 MB unscanned across 3 range(s) (0.03% of 11.4 GB
+  eligible)`. An absolute figure ranks two runs against each other; a share is
+  what lets one run be judged on its own, and lets a triage pipeline apply a
+  single threshold across dumps of any size. A `complete` scan states its share
+  too — `0% of 11.4 GB eligible` and `0% of 8 KB eligible` are the same two
+  words for a negative worth trusting and one worth almost nothing.
+  The share measures scanning work **per pass**: a hunter that runs three
+  passes over one region had three passes' worth of work to do, so a region
+  every pass skipped reports 100% while a region only one of two passes skipped
+  reports 50%. Gap extents are unioned within a pass and summed across passes,
+  and a pass's scope covers items a whole-scan budget never reached, so the
+  share can never exceed 100%. The byte figure keeps its own basis — memory
+  with at least one unanswered question, which is what a re-collection has to
+  recover — and is deliberately not the numerator; `limitations[].scope` names
+  the pass each gap belongs to. The scale belongs to the hunter, not the dump:
+  two hunters over one dump legitimately report different denominators, and the
+  `--hunt` document-level rollup states none at all. Every hunter publishes one
+  except `hollowing`, whose gaps never describe unexamined bytes. Both fields
+  are `null` wherever a proportion would not be supportable — a producer that
+  measures no eligibility, a scan loop that took items into scope without
+  measuring them, a hunter that evaluated nothing, and a run whose gaps have no
+  measured extent — so a budget that stopped a scan somewhere unmeasured never
+  renders as `0%` unscanned, and an exact-looking percentage never stands
+  beside an unmeasured gap: a lower bound is labelled as one. The console
+  reserves both saturating values for what they mean, rendering anything that
+  would round into them as `<0.01%` or `>99.99%`. Schema v2.16. Nothing about
+  when `partial` is reported changes, and no verdict, score, confidence value,
+  `coverage.reasons` string, or exit code moves.
 - Coverage now says how much memory a partial hunt actually missed, not only
   that it was partial. Every result and every hunter record carries
   `coverage.missed_bytes`, and the console coverage line gains a clause —

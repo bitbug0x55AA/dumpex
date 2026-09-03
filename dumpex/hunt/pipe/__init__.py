@@ -139,6 +139,7 @@ def _build_pipe_report(mf: MinidumpFile):
         handle_stream_failure=handle_failure,
         handle_stream_truncated=hscan.dropped_descriptors,
         skipped_oversize=scan_coverage.skipped_oversize_targets,
+        eligible_bytes=scan_coverage.eligible_bytes,
         read_failed=scan_coverage.read_failed,
         read_failed_targets=scan_coverage.read_failed_targets,
         short_reads=scan_coverage.short_reads,

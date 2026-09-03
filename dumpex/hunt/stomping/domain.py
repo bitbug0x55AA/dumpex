@@ -78,6 +78,14 @@ def _require_count(value, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a non-negative int, got {value}")
 
 
+def _require_optional_count(value, field_name: str) -> None:
+    """A count, or None for a quantity a scan did not measure -- see
+    `CoverageSnapshot.eligible_bytes`, where None and 0 are opposite
+    claims."""
+    if value is not None:
+        _require_count(value, field_name)
+
+
 def _require_scan_targets(value, field_name: str) -> tuple:
     items = as_tuple(value, field_name)
     for index, item in enumerate(items):
@@ -184,6 +192,16 @@ class CoverageSnapshot:
     # full region identity (a ScanTarget each); read failures/short reads
     # are counts, matching every other hunter's own generic gap reporting.
     ioc_oversized:   tuple = field(default_factory=tuple)   # tuple[ScanTarget]
+    # Captured bytes that sub-scan took into scope -- the scale its gaps
+    # are read against (see dumpex.output.coverage.CoverageReport.
+    # eligible_bytes). This is the IOC region scan's scope and ONLY that:
+    # the module-header reads and the section content diff walk sections
+    # rather than regions, and the memory they touch is not added here.
+    # That leaves the scale itself a floor whenever one of those passes
+    # reports a gap -- but those gaps carry no byte extent either, so they
+    # push `state` to `lower_bound` and the rendered proportion to an "at
+    # least", which is the same qualifier the understated scale needs.
+    ioc_eligible_bytes: "int | None" = None
     ioc_read_failed: int = 0
     ioc_read_failed_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget] -- issue #28
     ioc_short_reads: int = 0
@@ -217,6 +235,7 @@ class CoverageSnapshot:
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         object.__setattr__(self, "ioc_oversized", _require_scan_targets(
             self.ioc_oversized, "CoverageSnapshot.ioc_oversized"))
+        _require_optional_count(self.ioc_eligible_bytes, "CoverageSnapshot.ioc_eligible_bytes")
         object.__setattr__(self, "ioc_read_failed_targets", _require_scan_targets(
             self.ioc_read_failed_targets, "CoverageSnapshot.ioc_read_failed_targets"))
         object.__setattr__(self, "ioc_short_read_targets", _require_scan_targets(

@@ -294,6 +294,9 @@ def test_a_region_the_dump_never_captured_contributes_no_bytes(scan_name):
     coverage = run(region, _fixed_reader(b"\x00" * region.RegionSize), captured=[])
 
     assert coverage.eligible_total == 1
+    # In scope and worth exactly nothing to a rescan: a MEASURED zero, so
+    # the scan reports a denominator of 0 rather than reading as one that
+    # measured no eligibility at all.
     assert coverage.eligible_bytes == 0
 
 
@@ -413,8 +416,8 @@ def test_a_zero_length_item_is_filtered_not_dispositioned(scan_name):
 
 @pytest.mark.parametrize("scan_name", sorted(_all_scans()))
 def test_each_eligible_item_is_counted_exactly_once(scan_name):
-    """No double-count across a multi-item walk, and `eligible_bytes`
-    sums the same set of items `eligible_total` counts."""
+    """No double-count across a multi-item walk, and the eligible byte
+    total measures the same set of items `eligible_total` counts."""
     run, make_region = _all_scans()[scan_name]
     items = [make_region(base=BASE + i * 0x10000, size=0x2000) for i in range(4)]
     captured = [_captured(base=item.BaseAddress, size=0x2000) for item in items]

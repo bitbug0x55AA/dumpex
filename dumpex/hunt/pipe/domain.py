@@ -70,6 +70,14 @@ def _require_count(value, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a non-negative int, got {value}")
 
 
+def _require_optional_count(value, field_name: str) -> None:
+    """A count, or None for a quantity a scan did not measure -- see
+    `CoverageSnapshot.eligible_bytes`, where None and 0 are opposite
+    claims."""
+    if value is not None:
+        _require_count(value, field_name)
+
+
 def _require_scan_targets(value, field_name: str) -> tuple:
     items = as_tuple(value, field_name)
     for index, item in enumerate(items):
@@ -173,6 +181,10 @@ class CoverageSnapshot:
     # to act on the gap); read failures/short reads are counts, matching
     # every other hunter's own generic gap reporting.
     skipped_oversize: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
+    # Captured bytes the walk took into scope -- the scale those gaps
+    # are read against (see dumpex.output.coverage.CoverageReport.
+    # eligible_bytes).
+    eligible_bytes:   "int | None" = None
     read_failed:      int = 0
     read_failed_targets: tuple = field(default_factory=tuple)   # tuple[ScanTarget]
     short_reads:      int = 0
@@ -227,6 +239,7 @@ class CoverageSnapshot:
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in ("c2_budget_reason", "pipe_name_budget_reason"):
             _require_str(getattr(self, name), f"CoverageSnapshot.{name}")
+        _require_optional_count(self.eligible_bytes, "CoverageSnapshot.eligible_bytes")
         if self.handle_stream_failure is not None:
             _require_str(self.handle_stream_failure, "CoverageSnapshot.handle_stream_failure")
             if not self.handle_stream_failure:

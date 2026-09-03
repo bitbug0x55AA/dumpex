@@ -673,6 +673,12 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
     scan_truncated_by_kind = {}    # budget_kind -> list[ScanTarget] -- issue #28 P5 follow-up
     scan_not_started = 0
     scan_not_started_by_kind = {}  # budget_kind -> list[ScanTarget] -- issue #28 P5 follow-up
+    # Captured bytes this search had in front of it: accumulated as each
+    # region clears the filters below, which is where it enters this
+    # pass's scope. A region the whole-hunt budget then abandoned is
+    # counted here too, because it entered the scope before the budget
+    # ended the search and it is reported as a gap on the way out.
+    eligible_bytes = 0
     for r in get_memory_regions(mf):
         if prot_str(r.State) != "MEM_COMMIT":
             continue
@@ -694,6 +700,10 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
         owner = addr_to_module(r.BaseAddress, modules)
         if prot_str(r.Type) == "MEM_IMAGE" and owner is not None:
             continue   # inside a known module — not a hidden-PE candidate at all
+        # Past every filter: this region is IN SCOPE for the search. What
+        # the DUMP holds for it, never the declared RegionSize, so the
+        # scale matches the basis its own gaps are measured on.
+        eligible_bytes += va_range_captured_bytes(mf, r.BaseAddress, r.RegionSize)
         def _keep(offset: int, data: bytes, region=r, owner=owner) -> None:
             """Validate ONE candidate and keep it if there is an evidence
             slot for it. Done here, as each candidate is found, rather than
@@ -792,7 +802,8 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
                                budget_consumed=budget.limit_for_kind(kind), targets=tuple(targets))
             for kind, targets in by_kind.items())
 
-    return HiddenPeScan(hits=tuple(hits), read_failed=read_failed,
+    return HiddenPeScan(hits=tuple(hits), eligible_bytes=eligible_bytes,
+                         read_failed=read_failed,
                          read_failed_targets=tuple(read_failed_targets),
                          short_reads=short_reads,
                          short_read_targets=tuple(short_read_targets),

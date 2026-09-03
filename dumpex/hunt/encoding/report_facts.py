@@ -7,7 +7,9 @@ from dumpex.hunt._coverage import (
     derive_coverage_status, UNACCOUNTED_LABEL, OVER_ACCOUNTED_LABEL, UNBALANCED_LABEL,
 )
 from dumpex.hunt._finding import Finding
-from dumpex.hunt.encoding.domain import CoverageSnapshot, EncodingReport
+from dumpex.hunt.encoding.domain import (
+    OVERSIZE_SCAN_LAYERS, CoverageSnapshot, EncodingReport,
+)
 from dumpex.output.coverage import (
     CoverageLimitation, CoverageReport, EvaluationRequirement, LimitationCode,
     build_coverage_report, format_scan_target_preview, observe_source, scan_target_noun,
@@ -227,4 +229,10 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
             scope=layer, affected_count=count))
     return build_coverage_report(
         sources, evaluation_sources=EvaluationRequirement(("memory_info",)),
-        completeness_checks=completeness_checks)
+        completeness_checks=completeness_checks,
+        eligible_bytes=coverage.eligible_bytes,
+        # This hunter is the one producer whose `scope` names a real scan
+        # pass rather than a budget kind, and it walks the same regions
+        # once per layer -- so its gaps have to be counted per layer, the
+        # same way its scope total is.
+        pass_scopes=OVERSIZE_SCAN_LAYERS)

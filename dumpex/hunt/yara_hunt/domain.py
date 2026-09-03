@@ -53,6 +53,12 @@ class ScanDiagnostics:
     """
     segment_count:              int = 0
     scanned:                     int = 0
+    # Captured bytes this scan pass had in front of it -- the scale its
+    # gaps are read against (see dumpex.output.coverage.CoverageReport.
+    # eligible_bytes). Counts the segments a budget never reached as well
+    # as the ones the walk got to, because both are work this pass had
+    # scope for and both are reported as gaps.
+    eligible_bytes:              "int | None" = None
     skipped_oversize_targets:   tuple = field(default_factory=tuple)
     read_failed_targets:        tuple = field(default_factory=tuple)
     short_read_targets:         tuple = field(default_factory=tuple)
@@ -75,6 +81,7 @@ class ScanDiagnostics:
     def __post_init__(self):
         _require_count(self.segment_count, "ScanDiagnostics.segment_count")
         _require_count(self.scanned, "ScanDiagnostics.scanned")
+        _require_optional_count(self.eligible_bytes, "ScanDiagnostics.eligible_bytes")
         object.__setattr__(self, "skipped_oversize_targets", _require_scan_targets(
             self.skipped_oversize_targets, "ScanDiagnostics.skipped_oversize_targets"))
         object.__setattr__(self, "read_failed_targets", _require_scan_targets(

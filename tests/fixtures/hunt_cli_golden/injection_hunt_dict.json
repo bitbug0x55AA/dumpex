@@ -39,9 +39,12 @@
       "bytes": 0,
       "complete": true,
       "distinct_ranges": 0,
+      "eligible_bytes": 0,
       "quantified_gaps": 1,
       "state": "exact",
-      "unquantified_gaps": 0
+      "unquantified_gaps": 0,
+      "unscanned_fraction": null,
+      "unscanned_pass_bytes": 0
     },
     "reasons": [
       "1 region(s) returned fewer bytes than requested while checking for hidden PE headers (short read) -- not fully examined: 0x00007ff700002000 (4 KB)"

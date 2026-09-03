@@ -355,4 +355,5 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
 
     return build_coverage_report(
         sources, evaluation_sources=EvaluationRequirement(("memory_info", "handle_data")),
-        completeness_checks=completeness_checks)
+        completeness_checks=completeness_checks,
+        eligible_bytes=coverage.eligible_bytes)

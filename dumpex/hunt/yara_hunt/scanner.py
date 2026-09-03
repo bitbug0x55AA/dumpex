@@ -426,6 +426,14 @@ def scan_segments(mf: MinidumpFile, segs: list, rule_files: list, modules: list,
 
     diagnostics = ScanDiagnostics(
         segment_count=segment_count, scanned=scanned,
+        # What this one scan pass had in front of it: every segment left
+        # after the zero-length filter above, whether the walk reached it
+        # or a budget ended the loop first. A segment a budget never
+        # reached is still work this pass had scope for, and it is exactly
+        # what `budget_exhausted_targets`/`truncated_targets` go on to
+        # report -- counting it keeps every gap inside the scale it is
+        # measured against (see dumpex.output.coverage.MissedBytes).
+        eligible_bytes=sum(seg.size for seg in segs),
         skipped_oversize_targets=tuple(skipped_targets),
         read_failed_targets=tuple(read_failed_targets),
         short_read_targets=tuple(short_read_targets),

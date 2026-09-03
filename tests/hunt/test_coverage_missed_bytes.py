@@ -562,8 +562,14 @@ def test_a_partial_that_missed_no_capturable_bytes_invents_none(monkeypatch):
     coverage = _pipe_coverage(report)
 
     assert coverage.status.value == "partial"
-    assert coverage.missed_bytes == MissedBytes()
-    assert _coverage_line(report).strip() == "Coverage    PARTIAL"
+    # The scale IS established -- the region walk took 4 KB into scope --
+    # and 0% of it went unscanned. That is an answer, and a different one
+    # from "no gap was measured": this run is partial for a missing
+    # stream, and the line says so without inventing a byte figure.
+    assert coverage.missed_bytes == MissedBytes(eligible_bytes=4096)
+    assert coverage.missed_bytes.unscanned_fraction == 0.0
+    assert (_coverage_line(report).strip()
+            == "Coverage    PARTIAL — 0 bytes unscanned (0% of 4 KB eligible)")
 
 
 def test_derive_status_is_untouched_by_any_of_this():

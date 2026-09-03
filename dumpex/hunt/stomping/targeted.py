@@ -428,6 +428,7 @@ def project_targeted_report(context, result):
         (), (), (), (), (), payload.hits,
         memory_info_stream=evaluated, module_list_stream=False, ref_dir_supplied=False,
         ioc_oversized=cov.skipped_oversize_targets,
+        ioc_eligible_bytes=cov.eligible_bytes,
         ioc_read_failed=cov.read_failed, ioc_read_failed_targets=cov.read_failed_targets,
         ioc_short_reads=cov.short_reads, ioc_short_read_targets=cov.short_read_targets,
         ioc_unaccounted=cov.unaccounted, ioc_over_accounted=cov.over_accounted,

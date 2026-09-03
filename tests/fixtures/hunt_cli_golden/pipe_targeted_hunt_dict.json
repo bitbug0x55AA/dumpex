@@ -23,9 +23,12 @@
       "bytes": 0,
       "complete": true,
       "distinct_ranges": 0,
+      "eligible_bytes": null,
       "quantified_gaps": 0,
       "state": "exact",
-      "unquantified_gaps": 0
+      "unquantified_gaps": 0,
+      "unscanned_fraction": null,
+      "unscanned_pass_bytes": 0
     },
     "reasons": [
       "handle_data is outside this targeted rescan's granted scope -- the result neither measures nor closes that source's own coverage"

@@ -27,9 +27,12 @@
         "bytes": 0,
         "complete": true,
         "distinct_ranges": 0,
+        "eligible_bytes": null,
         "quantified_gaps": 0,
         "state": "exact",
-        "unquantified_gaps": 0
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
       },
       "reasons": [
         "Neither MemoryInfoListStream nor ThreadInfoListStream present in this dump"
@@ -136,9 +139,12 @@
         "bytes": 0,
         "complete": true,
         "distinct_ranges": 0,
+        "eligible_bytes": null,
         "quantified_gaps": 0,
         "state": "exact",
-        "unquantified_gaps": 0
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
       },
       "reasons": [
         "PEB could not be parsed (missing sysinfo or thread list in dump)"
@@ -211,9 +217,12 @@
         "bytes": 0,
         "complete": true,
         "distinct_ranges": 0,
+        "eligible_bytes": null,
         "quantified_gaps": 0,
         "state": "exact",
-        "unquantified_gaps": 0
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
       },
       "reasons": [
         "MemoryInfoListStream not present in this dump",
@@ -294,9 +303,12 @@
         "bytes": 0,
         "complete": true,
         "distinct_ranges": 0,
+        "eligible_bytes": null,
         "quantified_gaps": 0,
         "state": "exact",
-        "unquantified_gaps": 0
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
       },
       "reasons": [
         "Neither MemoryInfoListStream nor handle_data present in this dump"
@@ -361,9 +373,12 @@
         "bytes": 0,
         "complete": true,
         "distinct_ranges": 0,
+        "eligible_bytes": null,
         "quantified_gaps": 0,
         "state": "exact",
-        "unquantified_gaps": 0
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
       },
       "reasons": [
         "memory64_list not present in this dump"
@@ -415,9 +430,12 @@
         "bytes": 0,
         "complete": true,
         "distinct_ranges": 0,
+        "eligible_bytes": null,
         "quantified_gaps": 0,
         "state": "exact",
-        "unquantified_gaps": 0
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
       },
       "reasons": [
         "yara_scan not present in this dump"
@@ -469,9 +487,12 @@
         "bytes": 0,
         "complete": true,
         "distinct_ranges": 0,
+        "eligible_bytes": null,
         "quantified_gaps": 0,
         "state": "exact",
-        "unquantified_gaps": 0
+        "unquantified_gaps": 0,
+        "unscanned_fraction": null,
+        "unscanned_pass_bytes": 0
       },
       "reasons": [
         "MemoryInfoListStream not present in this dump"

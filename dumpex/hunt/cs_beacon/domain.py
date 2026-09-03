@@ -142,7 +142,13 @@ class ScanDiagnostics:
     # tuples above are the outcomes those eligible segments reached.
     scanned:                     int = 0
     eligible_total:              int = 0
-    eligible_bytes:              int = 0
+    # Captured bytes the segments behind `eligible_total` add up to,
+    # PLUS the segments a budget stop left unwalked -- the scale an
+    # unscanned proportion is read against (see dumpex.output.coverage.
+    # CoverageReport.eligible_bytes). The second half is what keeps every
+    # gap this scan reports inside the scope it is measured against; see
+    # dumpex.hunt._coverage.CoverageTracker.note_unreached_extent.
+    eligible_bytes:              "int | None" = None
     not_applicable:              int = 0
     budget_skipped:              int = 0
     unaccounted:                 int = 0
@@ -153,9 +159,10 @@ class ScanDiagnostics:
         _require_count(self.total_candidates, "ScanDiagnostics.total_candidates")
         _require_count(self.total_decoded_bytes, "ScanDiagnostics.total_decoded_bytes")
         _require_count(self.total_scanned_bytes, "ScanDiagnostics.total_scanned_bytes")
-        for name in ("scanned", "eligible_total", "eligible_bytes", "not_applicable",
+        for name in ("scanned", "eligible_total", "not_applicable",
                      "budget_skipped", "unaccounted", "over_accounted"):
             _require_count(getattr(self, name), f"ScanDiagnostics.{name}")
+        _require_optional_count(self.eligible_bytes, "ScanDiagnostics.eligible_bytes")
         object.__setattr__(self, "skipped_oversize_targets", _require_scan_targets(
             self.skipped_oversize_targets, "ScanDiagnostics.skipped_oversize_targets"))
         object.__setattr__(self, "read_failed_targets", _require_scan_targets(

@@ -161,6 +161,25 @@ def budget_stop_targets(segments, *, first_started: bool,
     return targets
 
 
+def merge_eligible_bytes(*totals) -> "int | None":
+    """One denominator for a hunter whose scan passes each measured their
+    own (see CoverageTracker.eligible_bytes).
+
+    Summed, never unioned: each pass had its own work in front of it, and
+    a region two passes both accepted is two passes' worth of scope. The
+    numerator counts the same way, one pass at a time, which is what makes
+    the ratio the share of the work that did not happen rather than two
+    numbers from different bases.
+
+    `None` as soon as ANY pass failed to measure its scope: a hunter's
+    denominator that quietly covered only the passes that DID measure
+    would understate the scale and overstate the proportion, which is the
+    one direction this figure must never be wrong in."""
+    if any(total is None for total in totals):
+        return None
+    return sum(totals)
+
+
 def derive_coverage_status(evaluated: bool, complete: bool) -> str:
     """
     "not_evaluated"  — the hunter had none of the data sources it needed
@@ -272,14 +291,6 @@ class CoverageTracker:
     DISPOSITION_COUNTERS = ("scanned", "not_applicable", "budget_skipped", "read_failed")
 
     total:            int = 0   # eligible items found (before any skip/fail)
-    # Captured bytes those eligible items add up to, accumulated at the
-    # same call as `total` -- what expressing partial coverage as a
-    # FRACTION of eligible memory needs, rather than as a bare item count.
-    # Callers pass what the DUMP actually holds for the item
-    # (`va_range_captured_bytes()` for a MemoryInfo region, a segment's own
-    # size for a segment-table entry), never a declared `RegionSize` that
-    # can claim more address space than was ever written to the .dmp.
-    eligible_bytes:   int = 0
     scanned:          int = 0   # disposition: items actually read and analyzed
     # disposition: read fine, but nothing about the ITEM was analyzable
     # (e.g. too few bytes to compute a meaningful entropy over) -- an
@@ -336,6 +347,24 @@ class CoverageTracker:
     _open_item:          bool = field(default=False, init=False, repr=False, compare=False)
     _unaccounted:        int = field(default=0, init=False, repr=False, compare=False)
     _stray_dispositions: int = field(default=0, init=False, repr=False, compare=False)
+    # Captured bytes the eligible items add up to, as ONE integer per
+    # scan pass: the denominator of an unscanned proportion counts the
+    # work a pass had in front of it, so a region two passes both accepted
+    # is two passes' worth of it. Summing is therefore the measurement,
+    # not an approximation of one -- see
+    # dumpex.output.coverage.MissedBytes.eligible_bytes for why a union
+    # across passes would report the wrong quantity, and why nothing here
+    # retains an address.
+    _eligible_bytes:     int = field(default=0, init=False, repr=False, compare=False)
+    # Eligible items taken into scope with no captured size reported. The
+    # ledger's own fail-closed rule, applied to the byte side: an item
+    # nobody measured is one the total cannot represent, so the whole
+    # total stops being publishable rather than quietly standing for the
+    # subset that was measured. Without this, a loop that measures no
+    # sizes at all reports a total of 0 -- which downstream reads as the
+    # positive assertion "this pass had no capturable memory in front of
+    # it", not as the absence of a measurement.
+    _unsized_eligible:   int = field(default=0, init=False, repr=False, compare=False)
 
     @property
     def skipped_oversize(self) -> int:
@@ -343,15 +372,41 @@ class CoverageTracker:
         the same fact, so there is nothing for them to drift apart on."""
         return len(self.skipped_oversize_targets)
 
-    def note_eligible(self, size_bytes: int = 0):
+    @property
+    def eligible_bytes(self) -> "int | None":
+        """Captured bytes this pass took into scope -- the per-pass
+        quantity a hunter sums across its passes to publish a denominator
+        (see dumpex.output.coverage.CoverageReport.eligible_bytes).
+
+        `None`, never 0, as soon as ANY eligible item arrived without a
+        size: the two say opposite things downstream, and 0 is the
+        positive claim that this pass had nothing capturable in front of
+        it. A partly-measured total is the absence of a measurement, not a
+        smaller one."""
+        if self._unsized_eligible:
+            return None
+        return self._eligible_bytes
+
+    def note_eligible(self, size_bytes: "int | None" = None):
         """One item passed this scan's own filters and is now IN SCOPE:
         the loop owes it exactly one disposition before the iteration
         ends. Call this ONCE per item, after the filter block and before
         any disposition -- an item filtered out before this call was never
         in scope and is not a coverage gap.
 
-        `size_bytes` is that item's captured size, accumulated into
-        `eligible_bytes`."""
+        `size_bytes` is what the DUMP actually holds for the item
+        (`va_range_captured_bytes()` for a MemoryInfo region, a segment's
+        own size for a segment-table entry), never a declared `RegionSize`
+        that can claim more address space than was ever written to the
+        .dmp -- the same basis a gap's own unexamined extent is measured
+        on, so the two are a ratio rather than two unrelated numbers.
+
+        `0` and the default `None` are different: `0` is a measured
+        nothing (an item the dump captured no bytes of, which is in scope
+        and worth nothing to a rescan), while `None` is no measurement at
+        all and withdraws this pass's whole byte total. A loop may
+        legitimately record the ITEM ledger without the byte one; it just
+        cannot then have a scale read off it."""
         if self._open_item:
             # The previous item's iteration ended without a disposition.
             # Charged here, to that item, rather than inferred later from
@@ -359,8 +414,25 @@ class CoverageTracker:
             # opposite direction would cancel out.
             self._unaccounted += 1
         self.total += 1
-        self.eligible_bytes += int(size_bytes)
+        if size_bytes is None:
+            self._unsized_eligible += 1
+        else:
+            self._eligible_bytes += int(size_bytes)
         self._open_item = True
+
+    def note_unreached_extent(self, size_bytes: int):
+        """Captured bytes this pass had scope for but never walked -- the
+        items a whole-scan budget left behind when it ended the loop early
+        (see budget_stop_targets).
+
+        They never became eligible, so the ledger has nothing to reconcile
+        for them, and they are exactly the case in which a pass's reported
+        gaps are NOT a subset of what it took into scope. Counting them
+        here is what keeps the denominator covering every gap the pass
+        reports, and so keeps the proportion at or below 1. A caller that
+        reports such targets must call this for them; one whose gaps are
+        all eligible items never needs it."""
+        self._eligible_bytes += int(size_bytes)
 
     def _note_disposition(self, caller: str):
         """Close the open eligible item, or -- when none is open -- record

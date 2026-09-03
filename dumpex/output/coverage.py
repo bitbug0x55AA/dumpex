@@ -1439,6 +1439,43 @@ def format_scan_target_preview(targets, limit: int = _TARGET_PREVIEW_LIMIT) -> s
 #     the same bytes two and three times and could report more missed
 #     memory than the dump captured. `quantified_gaps` counts the gap
 #     records; `distinct_ranges` counts the physical ranges they cover.
+#
+#   * A byte count alone ranks two runs against each other and says
+#     nothing about either on its own -- 3.2 MB unscanned is a rounding
+#     error out of 11.4 GB and almost the whole hunt out of 3.4 MB. So the
+#     model also carries a SCALE, and a second measure to read against it.
+#     Those two (`eligible_bytes` and `unscanned_pass_bytes`) count
+#     SCANNING WORK, PER PASS -- deliberately NOT the same basis as
+#     `known_bytes` above, and never divided into it:
+#
+#       - a hunter that walks the same region with three passes had three
+#         passes' worth of work to do, so that region contributes three
+#         times to the scope;
+#       - a pass's own gaps are unioned within the pass (it can name the
+#         same bytes under two codes -- see the run above) and summed
+#         across passes, so memory two passes both missed costs two
+#         passes' work.
+#
+#     That pairing is the only one right in both directions. Dividing the
+#     memory-basis `known_bytes` by a per-pass scope would report a region
+#     EVERY pass skipped as two-thirds scanned; measuring both sides as
+#     memory would report a region only one of three passes skipped as
+#     wholly unscanned. `known_bytes` answers "what would a re-collection
+#     have to recover", the ratio answers "how much of this hunt's own
+#     work did not happen", and both are published rather than reconciled.
+#
+#     The fraction inherits the numerator's own qualifier -- exact when
+#     every gap is measured, a floor when some are not, absent when none
+#     is. Absent is also the answer when no denominator was established
+#     and when nothing was evaluated: never 0%, which is what a run that
+#     missed nothing looks like.
+#
+#   * Which gaps belong to which pass is DECLARED by the producer, never
+#     inferred. `CoverageLimitation.scope` is a budget kind or a signal
+#     name for every producer but one -- yara reports a single unreached
+#     run of segments under both a hit cap and a deadline -- so splitting
+#     on it would count one pass's work once per code that described it.
+#     See `_pass_key` and `build_coverage_report`'s `pass_scopes`.
 
 
 class MemoryGapKind(str, Enum):
@@ -1504,7 +1541,30 @@ class MissedBytes:
 
     A `complete` scan produces MissedBytes() -- state EXACT, zero bytes,
     zero gaps -- and a scan that is `partial` for a reason that costs no
-    capturable bytes produces the same thing. Neither invents a gap."""
+    capturable bytes produces the same thing. Neither invents a gap.
+
+    `eligible_bytes` and `unscanned_pass_bytes` are the ratio, and they
+    are measured PER SCAN PASS rather than as memory. A run that walks the
+    same region with three passes had three passes' worth of work in front
+    of it, and a region only one pass skipped is one pass's worth of work
+    not done -- so the share is 1/3, which is what an analyst deciding
+    whether to recollect actually needs. Measuring both sides as memory
+    instead would report that region as wholly unscanned, and measuring
+    only the denominator that way would report a region EVERY pass skipped
+    as two-thirds scanned. Both sides count the same thing, one pass at a
+    time, which is the only pairing that is right in both cases.
+
+    `known_bytes` keeps its own, different basis (memory with at least one
+    unanswered question, unioned across passes) and is not the numerator
+    here. The two answer different questions and are published side by
+    side rather than reconciled: `known_bytes` is what a re-collection
+    would have to recover, `unscanned_pass_bytes` is how much of the
+    hunt's own work did not happen.
+
+    `None` means no denominator was established -- a run that measures no
+    eligibility, or one that never evaluated anything -- and is the only
+    honest answer there; `unscanned_fraction` is then `None` too, never a
+    degenerate 0."""
     known_bytes:       int = 0
     quantified_gaps:   int = 0
     unquantified_gaps: int = 0
@@ -1512,6 +1572,15 @@ class MissedBytes:
     # several gap records name in common. Never greater than
     # `quantified_gaps`, and smaller whenever gaps overlap.
     distinct_ranges:   int = 0
+    # Captured bytes each scan pass had in front of it, summed over the
+    # passes -- including anything a pass reported as never reached, which
+    # is what keeps every gap inside the scope it is measured against.
+    eligible_bytes:    "int | None" = None
+    # The same quantity for the gaps: bytes a pass did not examine, summed
+    # over the passes, so memory two passes both missed counts twice
+    # exactly as it cost two passes' work. Never `known_bytes`, which
+    # unions the same gaps into memory instead.
+    unscanned_pass_bytes: int = 0
 
     def __post_init__(self):
         _require_optional_nonnegative_int(self.known_bytes, "MissedBytes.known_bytes")
@@ -1531,6 +1600,23 @@ class MissedBytes:
                 f"MissedBytes.distinct_ranges ({self.distinct_ranges}) cannot exceed "
                 f"quantified_gaps ({self.quantified_gaps}) -- merging gap records can only "
                 f"reduce how many ranges they cover")
+        _require_optional_nonnegative_int(self.unscanned_pass_bytes,
+                                           "MissedBytes.unscanned_pass_bytes")
+        if self.unscanned_pass_bytes and not self.quantified_gaps:
+            raise ValueError(
+                f"MissedBytes.unscanned_pass_bytes ({self.unscanned_pass_bytes}) requires at "
+                f"least one quantified gap -- bytes belonging to no gap have nothing to "
+                f"describe")
+        if self.eligible_bytes is not None:
+            _require_optional_nonnegative_int(self.eligible_bytes, "MissedBytes.eligible_bytes")
+            if self.unscanned_pass_bytes > self.eligible_bytes:
+                raise ValueError(
+                    f"MissedBytes.unscanned_pass_bytes ({self.unscanned_pass_bytes}) exceeds "
+                    f"eligible_bytes ({self.eligible_bytes}): a pass cannot leave more bytes "
+                    f"unexamined than it had in front of it. Both sides count per pass, and a "
+                    f"pass's own denominator covers the items it never reached as well as the "
+                    f"ones it walked -- a numerator above it means one side was measured on a "
+                    f"basis the other was not")
 
     @property
     def state(self) -> "MissedBytesState":
@@ -1551,21 +1637,93 @@ class MissedBytes:
     def gap_count(self) -> int:
         return self.quantified_gaps + self.unquantified_gaps
 
+    @property
+    def unscanned_fraction(self) -> "float | None":
+        """`unscanned_pass_bytes` as a proportion of `eligible_bytes` --
+        what makes one run judgeable on its own, where the byte count
+        alone only ranks it against another.
+
+        Deliberately NOT `known_bytes / eligible_bytes`: both sides here
+        count per scan pass, so
+        a region one of three passes skipped reads as a third of that
+        region's work undone rather than as the whole region. Pairing the
+        memory-basis `known_bytes` with a per-pass denominator would
+        instead report a region EVERY pass skipped as two-thirds scanned,
+        which is the one direction this figure must never be wrong in.
+
+        `None` whenever the ratio would be a claim the run cannot
+        support:
+
+          * no denominator was established (`eligible_bytes is None`);
+          * the run took no capturable memory into scope at all, so there
+            is nothing for a proportion to be OF; or
+          * the numerator is UNKNOWN -- gaps exist and not one of them has
+            a measured extent. Zero is what "nothing was missed" looks
+            like, and a scan whose budget stopped it somewhere unmeasured
+            must never render as `0%` unscanned; or
+          * the two were measured on bases that do not correspond, which
+            withdraws the denominator at the point it is derived (see
+            summarize_missed_bytes).
+
+        In the LOWER_BOUND state the ratio IS returned and is a floor
+        under the real proportion, exactly as `known_bytes` is a floor
+        under the real total -- `state`/`complete` is what says which,
+        here as for the byte figure."""
+        if self.eligible_bytes is None or not self.eligible_bytes:
+            return None
+        if self.state is MissedBytesState.UNKNOWN:
+            return None
+        return self.unscanned_pass_bytes / self.eligible_bytes
+
     def to_dict(self) -> dict:
         """`bytes` is null in the UNKNOWN state rather than 0: nothing
         about the missed extent is established there, and a consumer
         thresholding on the number must not read that as "nothing was
         missed". In the LOWER_BOUND state the number is real but partial,
-        which `state` is what says."""
+        which `state` is what says.
+
+        `unscanned_fraction` is `unscanned_pass_bytes / eligible_bytes`,
+        carries `state`'s own qualifier, and is null wherever the ratio is
+        not a supportable claim (see the property). It is deliberately not
+        `bytes / eligible_bytes`: `bytes` measures memory and these two
+        measure pass-work, and the two bases must not be divided into each
+        other."""
         return {
-            "state":             self.state.value,
-            "bytes":             None if self.state is MissedBytesState.UNKNOWN
-                                  else self.known_bytes,
-            "complete":          self.complete,
-            "quantified_gaps":   self.quantified_gaps,
-            "unquantified_gaps": self.unquantified_gaps,
-            "distinct_ranges":   self.distinct_ranges,
+            "state":               self.state.value,
+            "bytes":               None if self.state is MissedBytesState.UNKNOWN
+                                    else self.known_bytes,
+            "complete":            self.complete,
+            "quantified_gaps":     self.quantified_gaps,
+            "unquantified_gaps":   self.unquantified_gaps,
+            "distinct_ranges":     self.distinct_ranges,
+            "eligible_bytes":      self.eligible_bytes,
+            "unscanned_pass_bytes": self.unscanned_pass_bytes,
+            "unscanned_fraction":  self.unscanned_fraction,
         }
+
+
+def _pass_key(limitation: "CoverageLimitation", pass_scopes: frozenset) -> tuple:
+    """Which scan pass a gap belongs to, for the per-pass numerator.
+
+    `source` names the scan. `scope` refines it into separate passes ONLY
+    for the scope values the producer declared as passes -- it is not a
+    pass identity in general, and must never be treated as one. Most
+    producers use it for a budget kind or a signal name: yara reports one
+    unreached run of segments under both `max_total_hits` and
+    `scan_deadline_seconds`, cs_beacon and injection scope their budget
+    gaps by kind, pipe by which signal ran out. Splitting on those would
+    count one pass's work once per code that described it, and the
+    resulting numerator can exceed the pass's own scope.
+
+    Undeclared scopes therefore collapse into their source's single pass,
+    where the ranges are unioned -- which is exactly right for a scan that
+    has one pass and names it several ways. A producer with genuinely
+    separate passes over the same memory (obfuscation's sleep_mask /
+    entropy / decode) declares them, and must, because its denominator
+    counts that memory once per pass."""
+    if limitation.scope in pass_scopes:
+        return (limitation.source, limitation.scope)
+    return (limitation.source, None)
 
 
 def _limitation_gap_count(limitation: "CoverageLimitation") -> int:
@@ -1628,7 +1786,7 @@ def _union_length(ranges) -> "tuple":
     return total, count
 
 
-def summarize_missed_bytes(limitations) -> MissedBytes:
+def summarize_missed_bytes(limitations, eligible_bytes=None, pass_scopes=()) -> MissedBytes:
     """Aggregate unexamined captured memory over a list of
     CoverageLimitations.
 
@@ -1638,8 +1796,39 @@ def summarize_missed_bytes(limitations) -> MissedBytes:
     the total is what a re-collection would actually have to recover
     rather than a sum that charges shared memory once per gap record that
     names it. Pure arithmetic over objects already retained for reporting:
-    no dump is re-read for it."""
+    no dump is re-read for it.
+
+    `eligible_bytes` is what the run's scan passes had in front of them,
+    summed over the passes (see dumpex.hunt._coverage.CoverageTracker.
+    eligible_bytes), and becomes the denominator. Left `None`, no
+    denominator is established and no fraction is reported -- which is
+    what every producer that measures no eligibility gets, rather than a
+    ratio derived from the gaps alone.
+
+    The numerator beside it is measured the same way, and separately from
+    `known_bytes`: gaps are grouped by the pass that reported them, the
+    ranges within a pass are UNIONED (one pass can name the same bytes
+    under two codes at once -- a segment both short-read and stopped
+    inside, a run of segments left by both a hit cap and a budget), and
+    the per-pass totals are then SUMMED. So memory two passes both missed
+    costs two passes' work and counts twice, while memory one pass named
+    twice counts once.
+
+    `pass_scopes` is the producer's declaration of which `scope` values
+    name separate passes; everything else belongs to its source's single
+    pass. See `_pass_key` for why this cannot be inferred.
+
+    A numerator that still comes out above the denominator means the two
+    were measured on bases that do not correspond -- a producer that
+    declared the wrong passes, or published a scope that does not cover
+    its own gaps. The scale is WITHDRAWN rather than published wrong or
+    raised through: the gaps and the byte figure are facts this run
+    established and stay on the wire, while a proportion derived from a
+    mismatch is not a fact at all, and a hunt that found something must
+    not be lost to an accounting error in the figure that grades it."""
     ranges, quantified, unquantified = [], 0, 0
+    by_pass = {}
+    pass_scopes = frozenset(pass_scopes)
     for limitation in limitations:
         kind = _CODE_SPECS[limitation.code].memory_gap
         if kind is None:
@@ -1657,10 +1846,15 @@ def summarize_missed_bytes(limitations) -> MissedBytes:
                 unquantified += 1
             else:
                 ranges.append(extent)
+                by_pass.setdefault(_pass_key(limitation, pass_scopes), []).append(extent)
                 quantified += 1
     known, distinct = _union_length(ranges)
+    per_pass = sum(_union_length(extents)[0] for extents in by_pass.values())
+    if eligible_bytes is not None and per_pass > eligible_bytes:
+        eligible_bytes = None
     return MissedBytes(known_bytes=known, quantified_gaps=quantified,
-                        unquantified_gaps=unquantified, distinct_ranges=distinct)
+                        unquantified_gaps=unquantified, distinct_ranges=distinct,
+                        eligible_bytes=eligible_bytes, unscanned_pass_bytes=per_pass)
 
 
 def combine_missed_bytes(reports) -> MissedBytes:
@@ -1676,7 +1870,19 @@ def combine_missed_bytes(reports) -> MissedBytes:
 
     Takes the reports that OWN their gaps, never another rollup: a report
     carrying `missed_bytes_rollup` has no limitations to read, so it would
-    contribute nothing and silently zero out whatever it stands for."""
+    contribute nothing and silently zero out whatever it stands for.
+
+    Carries no denominator, so a rollup reports no unscanned fraction.
+    (Its `unscanned_pass_bytes` is likewise the sum of what its parts'
+    passes missed, and means nothing without the scale that goes with it.)
+    Eligibility is each hunter's own -- its filters decide what its
+    negative result speaks about -- and not every hunter publishes one, so
+    a combined denominator would be short by whatever the silent ones took
+    into scope while the numerator already counts their gaps. That
+    understates the scale and overstates the proportion. The per-hunter
+    fractions on the records underneath are the answer to "how much of
+    what THIS hunter looked at went unscanned"; there is no dump-wide
+    eligible set for them to roll up into."""
     reports = list(reports)
     rollups = [r for r in reports if r.missed_bytes_rollup is not None]
     if rollups:
@@ -1688,6 +1894,73 @@ def combine_missed_bytes(reports) -> MissedBytes:
         [limitation for report in reports for limitation in report.limitations])
 
 
+def format_unscanned_percent(fraction: float) -> str:
+    """A proportion as a percentage an analyst can threshold on at a
+    glance: two decimals below 1%, one below 10%, none above.
+
+    Both saturating values are reserved for the thing they actually mean,
+    and neither is ever reached by rounding:
+
+      * "0%" only for an exactly-zero fraction. Anything smaller than the
+        finest step renders "<0.01%" -- the whole point of the figure is
+        telling a run that missed almost nothing from one that missed
+        almost everything, and a real gap shown as `0%` says the opposite
+        of what it means.
+      * "100%" only for a fraction of exactly 1, where nothing in scope
+        was examined by every pass over it. A run that got through all but
+        a sliver renders ">99.99%", for the same reason pointed the other
+        way: "nothing was reached" and "almost everything was" are the two
+        answers this figure exists to separate."""
+    percent = fraction * 100
+    if percent >= 100:
+        return "100%"
+    if percent == 0:
+        return "0%"
+    # Coarsest precision that still lands the value inside its own band,
+    # decided on the ROUNDED figure rather than the raw one so 9.99 and
+    # 10.0 do not render as "10.0%" and "10%". A figure that would round
+    # up into the reserved 100 is re-rendered finer instead of allowed to
+    # claim it; one still saturating at two decimals says so instead.
+    for places, floor in ((0, 10), (1, 1), (2, 0)):
+        rendered = f"{percent:.{places}f}"
+        value = float(rendered)
+        if value >= 100:
+            continue
+        if value >= floor:
+            return f"{rendered}%" if value else "<0.01%"
+    return ">99.99%"
+
+
+def _eligible_scale_clause(missed: MissedBytes) -> str:
+    """The parenthesized proportion appended to a measured total, or "" when
+    the run established no scale to state one against.
+
+    The percentage is `unscanned_pass_bytes / eligible_bytes` -- the
+    share of the hunt's own scanning work that did not happen -- while the
+    byte figure beside it is `known_bytes`, the memory a re-collection
+    would have to recover. The two answer different questions on purpose,
+    so the clause names the scale the percentage belongs to rather than
+    implying the byte figure was divided by it.
+
+    The qualifier tracks the numerator's own: a LOWER_BOUND total yields a
+    lower-bound percentage, said in the same words the byte figure uses
+    rather than left to be inferred from a `state` the console does not
+    print. It covers the SCALE as well, which can itself be a floor -- a
+    hunter whose eligible total comes from one of its scans while another
+    reports gaps of unmeasured extent (stomping) understates both sides.
+    Both directions still leave the ratio a lower bound: unmeasured work
+    inside the scope raises the numerator alone, and unmeasured work
+    outside it raises both, which moves a ratio that is at most 1 upward
+    either way."""
+    fraction = missed.unscanned_fraction
+    if fraction is None:
+        return ""
+    percent = format_unscanned_percent(fraction)
+    qualifier = "" if missed.complete else "at least "
+    return (f" ({qualifier}{percent} of "
+            f"{_format_scaled_bytes(missed.eligible_bytes)} eligible)")
+
+
 def format_missed_bytes_clause(missed: MissedBytes) -> "str | None":
     """The coverage line's trailing clause, or None when there is nothing
     to add (no gap costs capturable bytes, so the status word alone is the
@@ -1697,13 +1970,31 @@ def format_missed_bytes_clause(missed: MissedBytes) -> "str | None":
     "at least" and names the gaps it could not measure. An aggregate with
     no measured bytes names no quantity at all -- there is none to name,
     and a rendered "0 bytes" beside an unmeasured gap would read as an
-    answer where there is none."""
+    answer where there is none.
+
+    A measured total additionally carries its proportion of the memory the
+    run took into scope, whenever the run established one. That is what
+    makes the same clause readable without a second dump-sized fact from
+    somewhere else: 3.2 MB unscanned is a rounding error out of 11.4 GB
+    and almost the whole hunt out of 3.4 MB.
+
+    A run that missed nothing still gets a clause once it has a scale,
+    because the scale is the whole strength of a clean result: "nothing
+    unscanned" over 11.4 GB and over 8 KB are the same words for a
+    negative worth trusting and one worth almost nothing. A producer with
+    no scale keeps the bare status word it always had."""
     if not missed.distinct_ranges:
         if missed.complete:
-            return None
+            if missed.unscanned_fraction is None:
+                return None
+            return (f"0 bytes unscanned "
+                    f"({format_unscanned_percent(missed.unscanned_fraction)} of "
+                    f"{_format_scaled_bytes(missed.eligible_bytes)} eligible)")
         return f"unscanned extent unmeasured across {missed.unquantified_gaps} gap(s)"
+
     measured = (f"{_format_scaled_bytes(missed.known_bytes)} unscanned across "
-                 f"{missed.distinct_ranges} range(s)")
+                 f"{missed.distinct_ranges} range(s)"
+                 f"{_eligible_scale_clause(missed)}")
     if missed.complete:
         return measured
     return (f"at least {measured}, plus {missed.unquantified_gaps} gap(s) "
@@ -3728,12 +4019,34 @@ class CoverageReport:
     # aggregate from them and must not also be handed one; the two would
     # be independent sources of truth for the same number.
     missed_bytes_rollup: "MissedBytes | None" = None
+    # Captured bytes this run's scan passes had in front of them, summed
+    # over the passes, as those passes' own ledgers measured it (see
+    # dumpex.hunt._coverage.CoverageTracker.eligible_bytes). Summed and
+    # not deduplicated: a region several passes each accepted is several
+    # passes' worth of work, and the numerator it scales counts the same
+    # way.
+    #
+    # None and 0 are different answers, which is why the default is None:
+    # None means this producer measures no eligibility at all (every recon
+    # command), and reports no proportion. 0 means a scan that DOES
+    # measure it had nothing capturable in front of it.
+    eligible_bytes: "int | None" = None
+    # Which `scope` values on this report's limitations name a separate
+    # scan pass, as the producer declares them -- see _pass_key, and note
+    # that `scope` is a budget or signal name for every producer but one.
+    # Empty means each source is one pass, which is the common case and
+    # the safe reading of a scope nobody claimed.
+    pass_scopes: tuple = ()
 
     def __post_init__(self):
         try:
             self.status = CoverageStatus(self.status)
         except ValueError:
             raise ValueError(f"unknown coverage status: {self.status!r}") from None
+        _require_optional_nonnegative_int(self.eligible_bytes,
+                                           "CoverageReport.eligible_bytes")
+        self.pass_scopes = _normalize_non_empty_str_tuple(
+            self.pass_scopes, "CoverageReport.pass_scopes")
         if self.missed_bytes_rollup is not None:
             if type(self.missed_bytes_rollup) is not MissedBytes:
                 raise TypeError(
@@ -3744,6 +4057,16 @@ class CoverageReport:
                     "CoverageReport.missed_bytes_rollup is only for a document-level rollup "
                     "with no limitations of its own -- a report carrying limitations derives "
                     "its aggregate from them, and must not also be given one")
+            # `is not None`, never truthiness: a ZERO eligible total is a
+            # measurement ("this scan had nothing capturable in front of
+            # it"), not the absence of one, and it is just as incompatible
+            # with a rollup as a positive one.
+            if self.eligible_bytes is not None:
+                raise ValueError(
+                    "CoverageReport.missed_bytes_rollup and eligible_bytes are mutually "
+                    "exclusive: a rollup carries the aggregate its parts already measured, "
+                    "and a denominator applied to it would rescale a figure this report did "
+                    "not derive")
 
     @property
     def reasons(self) -> list:
@@ -3770,7 +4093,16 @@ class CoverageReport:
         derives an exact zero rather than being given one."""
         if self.missed_bytes_rollup is not None:
             return self.missed_bytes_rollup
-        return summarize_missed_bytes(self.limitations)
+        if self.status is CoverageStatus.NOT_EVALUATED:
+            # Nothing ran, so there is no in-scope memory for a gap to be a
+            # proportion OF. A report can still carry both a gap and an
+            # eligible set here -- a scan whose own prerequisites were met
+            # inside a hunter that had nothing else to evaluate -- and
+            # dividing them would publish a confident 100%/0% for a run
+            # that reached no verdict at all.
+            return summarize_missed_bytes(self.limitations)
+        return summarize_missed_bytes(self.limitations, eligible_bytes=self.eligible_bytes,
+                                       pass_scopes=self.pass_scopes)
 
 
 @dataclass(frozen=True)
@@ -4072,6 +4404,8 @@ def build_coverage_report(
     evaluation_groups: "list[EvaluationRequirement] | None" = None,
     completeness_checks: "list | None" = None,
     retain_completeness_checks_when_not_evaluated: bool = False,
+    eligible_bytes: "int | None" = None,
+    pass_scopes: tuple = (),
 ) -> CoverageReport:
     """
     The single reduction rule every command's coverage status derives
@@ -4142,6 +4476,26 @@ def build_coverage_report(
         way (an ABSENT one is still not re-surfaced -- it would only
         repeat what the group limitation already said; a FAILED one is
         still re-surfaced, exactly as today).
+
+      - `eligible_bytes`: the captured bytes this run's scan passes had
+        in front of them, summed over the passes, from those passes' own
+        coverage ledgers (see dumpex.hunt._coverage.CoverageTracker.
+        eligible_bytes). A pass that reports targets it never reached
+        counts those too (see `note_unreached_extent`), so every gap a
+        pass reports is inside the scope it is measured against.
+        It is the DENOMINATOR of `coverage.missed_bytes`' unscanned
+        proportion and nothing else: it does not affect `status`, the
+        limitations, or the exit code. Omitted (the default) means this
+        producer measures no eligibility, and its missed bytes are
+        reported without a proportion -- `0` is the different claim that a
+        scan which does measure it had nothing capturable in front of it.
+
+      - `pass_scopes`: the `scope` values on this producer's own
+        limitations that name a SEPARATE scan pass rather than a budget
+        kind or a signal. Only a producer that walks the same memory more
+        than once needs it, and such a producer must supply it: its
+        `eligible_bytes` counts that memory once per pass, so its gaps
+        have to be counted the same way. See `_pass_key`.
 
     Status: evaluation_sources/evaluation_groups (if any group is
     non-empty) all SOURCE_ABSENT -> not_evaluated. Else: any limitation ->
@@ -4240,7 +4594,8 @@ def build_coverage_report(
         return CoverageReport(
             status=CoverageStatus.NOT_EVALUATED, sources=sources,
             limitations=absent_group_limitations + retained_prebuilt_limitations
-                        + extra_failed_limitations)
+                        + extra_failed_limitations,
+            eligible_bytes=eligible_bytes, pass_scopes=pass_scopes)
 
     limitations = []
     for check in completeness_checks:
@@ -4254,7 +4609,8 @@ def build_coverage_report(
             limitations.append(limitation)
 
     status = CoverageStatus.PARTIAL if limitations else CoverageStatus.COMPLETE
-    return CoverageReport(status=status, sources=sources, limitations=limitations)
+    return CoverageReport(status=status, sources=sources, limitations=limitations,
+                           eligible_bytes=eligible_bytes, pass_scopes=pass_scopes)
 
 
 def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
@@ -4312,6 +4668,17 @@ def combine_coverage_reports(reports: "list[CoverageReport]") -> CoverageReport:
     reports = list(reports)
     if not reports:
         raise ValueError("combine_coverage_reports() requires at least one CoverageReport")
+    # `is not None`, never truthiness -- see CoverageReport.eligible_bytes.
+    # A zero total that fell through this check would be dropped by the
+    # merge below and re-emerge as "no eligibility was measured", turning a
+    # denominator of 0 into a null: the one downgrade this refusal exists
+    # to prevent, applied to the one value that looks falsy.
+    if any(r.eligible_bytes is not None for r in reports):
+        raise ValueError(
+            "combine_coverage_reports() cannot merge reports carrying eligible_bytes: the "
+            "reports it combines can span different evidence files and different scan "
+            "passes, so adding their scopes would report a denominator no single run had. "
+            "Keep the eligible total on the per-entity report that measured it")
     located_gaps = sorted({lim.code.value for r in reports for lim in r.limitations
                            if lim.targets and _CODE_SPECS[lim.code].memory_gap is not None})
     if located_gaps:

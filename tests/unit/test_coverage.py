@@ -322,9 +322,9 @@ def test_dispositions_recorded_without_note_eligible_fail_closed_too():
 
 
 def test_note_eligible_accumulates_bytes_alongside_the_item_count():
-    """`eligible_bytes` accumulates at the same call as `total`, so
-    expressing partial coverage as a fraction of eligible memory needs no
-    second pass over the scan loops."""
+    """The byte ledger accumulates at the same call as `total`, as ONE
+    integer: expressing partial coverage as a fraction of eligible memory
+    needs no second pass over the scan loops and no retained addresses."""
     tracker = CoverageTracker()
     tracker.note_eligible(4096)
     tracker.note_scanned()
@@ -333,11 +333,67 @@ def test_note_eligible_accumulates_bytes_alongside_the_item_count():
 
     assert tracker.total == 2
     assert tracker.eligible_bytes == 4096 + 64 * 1024
-    # Default 0 for a caller that has no size to report -- an item count
-    # is still a complete ledger on its own.
-    bare = CoverageTracker()
-    bare.note_eligible()
-    assert (bare.total, bare.eligible_bytes) == (1, 0)
+
+
+def test_the_byte_total_measures_this_passs_own_work():
+    """One pass, one region, counted once. A hunter that walks the same
+    region with several passes sums those passes' totals, because each of
+    them had that region's bytes in front of it -- see
+    `merge_eligible_bytes`."""
+    tracker = CoverageTracker()
+    for _ in range(3):
+        tracker.note_eligible(4096)
+        tracker.note_scanned()
+
+    assert tracker.total == 3
+    assert tracker.eligible_bytes == 3 * 4096
+
+
+def test_a_measured_zero_is_not_the_absence_of_a_measurement():
+    """`note_eligible(0)` is a region the dump captured no bytes of: in
+    scope, and worth nothing to a rescan. `note_eligible()` is a loop that
+    recorded no size at all. The first reports a denominator of 0, the
+    second reports none."""
+    measured = CoverageTracker()
+    measured.note_eligible(0)
+    measured.note_scanned()
+    assert measured.eligible_bytes == 0
+
+    unmeasured = CoverageTracker()
+    unmeasured.note_eligible()
+    unmeasured.note_scanned()
+    assert unmeasured.total == 1
+    assert unmeasured.eligible_bytes is None
+
+
+def test_one_unsized_item_withdraws_the_whole_byte_total():
+    """Fail closed per PASS, not per item: publishing the measured items
+    alone would understate the scale by exactly the ones that went
+    unrecorded, and overstate the proportion read against it."""
+    tracker = CoverageTracker()
+    tracker.note_eligible(4096)
+    tracker.note_scanned()
+    assert tracker.eligible_bytes == 4096
+
+    tracker.note_eligible()          # same loop, one item it could not measure
+    tracker.note_scanned()
+    assert tracker.eligible_bytes is None
+
+
+def test_memory_a_budget_never_reached_joins_this_passs_scope():
+    """A whole-scan budget ends the loop before the remaining items are
+    walked, so they never become eligible -- but they are still work this
+    pass had in front of it, and it is about to report them as gaps.
+    Counting them keeps every gap inside the scale it is measured
+    against."""
+    tracker = CoverageTracker()
+    tracker.note_eligible(4096)
+    tracker.note_scanned()
+    tracker.note_unreached_extent(8192)
+
+    assert tracker.total == 1, "an unreached item owes the ledger nothing"
+    assert tracker.reconciled is True
+    assert tracker.eligible_bytes == 4096 + 8192
 
 
 def test_the_tracker_has_no_per_item_timeout_surface():

@@ -467,7 +467,10 @@ class IocCoverage:
     # `unaccounted` below.
     scanned:                  int = 0
     eligible_total:           int = 0
-    eligible_bytes:           int = 0
+    # Captured bytes the regions behind `eligible_total` add up to --
+    # the scale an unscanned proportion is read against (see
+    # dumpex.output.coverage.CoverageReport.eligible_bytes).
+    eligible_bytes:           "int | None" = None
     not_applicable:           int = 0
     budget_skipped:           int = 0
     unaccounted:              int = 0
@@ -478,9 +481,10 @@ class IocCoverage:
             self.skipped_oversize_targets, ScanTarget, "IocCoverage.skipped_oversize_targets"))
         _require_count(self.read_failed, "IocCoverage.read_failed")
         _require_count(self.short_reads, "IocCoverage.short_reads")
-        for name in ("scanned", "eligible_total", "eligible_bytes", "not_applicable",
+        for name in ("scanned", "eligible_total", "not_applicable",
                      "budget_skipped", "unaccounted", "over_accounted"):
             _require_count(getattr(self, name), f"IocCoverage.{name}")
+        _require_optional_count(self.eligible_bytes, "IocCoverage.eligible_bytes")
         object.__setattr__(self, "read_failed_targets", _require_typed_tuple(
             self.read_failed_targets, ScanTarget, "IocCoverage.read_failed_targets"))
         object.__setattr__(self, "short_read_targets", _require_typed_tuple(

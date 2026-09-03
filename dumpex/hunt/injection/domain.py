@@ -475,6 +475,10 @@ class CoverageSnapshot:
     thread_list_stream: bool
     threads_total:   int = 0
     contexts_parsed: int = 0
+    # Captured bytes the hidden-PE search had in front of it -- the scale
+    # its gaps are read against (see dumpex.output.coverage.
+    # CoverageReport.eligible_bytes).
+    pe_eligible_bytes: "int | None" = None
     pe_read_failed:  int = 0
     pe_read_failed_targets: tuple = field(default_factory=tuple)    # tuple[ScanTarget] -- issue #28
     pe_short_reads:  int = 0
@@ -495,7 +499,8 @@ class CoverageSnapshot:
         for name in ("threads_total", "contexts_parsed", "pe_read_failed", "pe_short_reads",
                      "pe_scan_truncated", "pe_scan_not_started", "pe_evidence_capped"):
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
-        for name in ("region_count", "thread_info_count", "module_count"):
+        for name in ("region_count", "thread_info_count", "module_count",
+                     "pe_eligible_bytes"):
             _require_optional_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in ("pe_read_failed_targets", "pe_short_reads_targets"):
             object.__setattr__(self, name, _require_scan_targets(

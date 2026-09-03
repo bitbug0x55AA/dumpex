@@ -35,14 +35,26 @@ def header_lines(title: str) -> list:
 
 def coverage_kv_value(coverage_status: str, coverage_report) -> str:
     """The Coverage row of a hunter card's key/value block: the status
-    word, plus how much captured memory the run's gaps add up to.
+    word, plus how much captured memory the run's gaps add up to and what
+    share of the memory it took into scope that is.
 
     The clause is what separates a `partial` that missed one unreadable
     4 KB region from one that missed gigabytes across forty oversized
     ones -- the same word, and opposite answers to whether the dump is
-    worth recollecting. It is omitted entirely when no gap costs
-    capturable bytes, so a `complete` scan (and a `partial` whose reasons
-    are not about unread memory) reads exactly as it did before.
+    worth recollecting. The share beside it is what makes that figure
+    readable without a second, dump-sized fact from somewhere else: 0.03%
+    means a DETECTED verdict stands on nearly full coverage, 94% means
+    most of this hunter's scanning work never happened. The two measure
+    different things on purpose -- the bytes are memory a re-collection
+    would have to recover, the share is work this hunt did not do, counted
+    per scan pass -- so the clause names the scale the percentage belongs
+    to rather than implying one was divided by the other.
+
+    A run with a scale always gets a clause, including a clean one: `0% of
+    11.4 GB eligible` and `0% of 8 KB eligible` are the same status word
+    over a negative worth trusting and one worth almost nothing. A
+    producer that measures no eligibility keeps the bare status word it
+    always had.
 
     `coverage_report` is REQUIRED, with no default: a renderer that
     forgot to pass it would silently drop the quantification from that
