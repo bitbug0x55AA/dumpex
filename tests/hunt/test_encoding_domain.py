@@ -535,8 +535,13 @@ def test_layer_coverage_from_tracker_snapshots_the_trackers_current_state():
     tracker = _tracker(scanned=3, read_failed=1, short_reads=2, budget_exhausted=True,
                        skipped_oversize_targets=[target])
     snapshot = LayerCoverage.from_tracker(tracker)
+    # `eligible_bytes=0` is the tracker's own answer, carried across
+    # rather than defaulted: this layer measured its scope and took
+    # nothing into it. The field defaults to None -- "no scope was
+    # measured" -- so a hand-built snapshot states the difference.
     assert snapshot == LayerCoverage(scanned=3, read_failed=1, short_reads=2,
-                                     budget_exhausted=True, skipped_oversize_targets=(target,))
+                                     budget_exhausted=True, skipped_oversize_targets=(target,),
+                                     eligible_bytes=0)
     assert isinstance(snapshot.skipped_oversize_targets, tuple)
 
 

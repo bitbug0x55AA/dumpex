@@ -228,7 +228,8 @@ def project_coverage_report(coverage: CoverageSnapshot, *, has_hits: bool = Fals
                 code=LimitationCode.THREAD_CONTEXT_PARTIAL, source="thread_context",
                 affected_count=coverage.contexts_missing))
 
-    return build_coverage_report(sources, completeness_checks=completeness_checks)
+    return build_coverage_report(sources, completeness_checks=completeness_checks,
+                                  eligible_bytes=scan.eligible_bytes)
 
 
 # ── Public-output field sanitization (shared by report_legacy.py and ─────

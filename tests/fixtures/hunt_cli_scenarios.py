@@ -434,12 +434,19 @@ def _build_pipe_oversized(monkeypatch, tmp_path) -> BuiltScenario:
 
 def _check_pipe_oversized(exit_code, doc, body):
     """The point of this fixture: a coverage line that quantifies the gap,
-    and a structured aggregate that agrees with it."""
+    and a structured aggregate that agrees with it.
+
+    The one region the walk took into scope is the one it skipped, so the
+    pipe-name pass's whole scope went unexamined -- a negative result worth
+    nothing, which the proportion is what says out loud."""
     record = doc["result"]["data"]["records"][0]
     missed = record["coverage"]["missed_bytes"]
     assert missed == {"state": "exact", "bytes": 16 * 1024 * 1024, "complete": True,
-                       "quantified_gaps": 1, "unquantified_gaps": 0, "distinct_ranges": 1}
-    assert "16 MB unscanned across 1 range(s)" in body
+                       "quantified_gaps": 1, "unquantified_gaps": 0, "distinct_ranges": 1,
+                       "eligible_bytes": 16 * 1024 * 1024,
+                       "unscanned_pass_bytes": 16 * 1024 * 1024,
+                       "unscanned_fraction": 1.0}
+    assert "16 MB unscanned across 1 range(s) (100% of 16 MB eligible)" in body
     # The quantification is a field beside the reasons, never a new
     # sentence inside them.
     assert not any("unscanned" in reason for reason in record["coverage"]["reasons"])

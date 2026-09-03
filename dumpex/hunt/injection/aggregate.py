@@ -122,6 +122,7 @@ def build_report(rwx: tuple, hidden_pe_scan, validated_pe_hits: tuple, mz_only_h
         memory_info_stream=memory_info_stream, thread_info_stream=thread_info_stream,
         module_list_stream=module_list_stream, thread_list_stream=thread_list_stream,
         threads_total=threads_total, contexts_parsed=contexts_parsed,
+        pe_eligible_bytes=hidden_pe_scan.eligible_bytes,
         pe_read_failed=hidden_pe_scan.read_failed,
         pe_read_failed_targets=hidden_pe_scan.read_failed_targets,
         pe_short_reads=hidden_pe_scan.short_reads,

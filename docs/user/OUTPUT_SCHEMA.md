@@ -41,7 +41,7 @@ Every produced document follows this shape:
 ```jsonc
 {
   "meta": {
-    "schema_version": "2.15",
+    "schema_version": "2.16",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "command, options, timestamps, case metadata" },
     "evidence": [ { "...": "input identity and SHA-256" } ],
@@ -54,7 +54,8 @@ Every produced document follows this shape:
       "status": "complete", "reasons": [], "sources": {}, "limitations": [],
       "missed_bytes": { "state": "exact", "bytes": 0, "complete": true,
                         "quantified_gaps": 0, "unquantified_gaps": 0,
-                        "distinct_ranges": 0 }
+                        "distinct_ranges": 0, "eligible_bytes": null,
+                        "unscanned_fraction": null }
     },
     "summary": { "...": "kind-specific counts or rollup" },
     "data": { "records": [] }
@@ -131,7 +132,8 @@ The supporting fields are:
 - `reasons`: ordered human-readable explanations.
 - `sources`: source name to `{state, record_count, detail}` observations.
 - `limitations`: structured, machine-readable gaps.
-- `missed_bytes`: how much captured in-scope memory those gaps add up to.
+- `missed_bytes`: how much captured in-scope memory those gaps add up to, and
+  what share of the run's own scanning work did not happen.
 
 Source states are `absent`, `present_empty`, `present`, or `failed`.
 `present_empty` is positive evidence that a captured source contained zero
@@ -145,7 +147,9 @@ whether the dump is worth recollecting. `missed_bytes` grades a `partial`:
 
 ```json
 {"state": "exact", "bytes": 3355443, "complete": true,
- "quantified_gaps": 4, "unquantified_gaps": 0, "distinct_ranges": 3}
+ "quantified_gaps": 4, "unquantified_gaps": 0, "distinct_ranges": 3,
+ "eligible_bytes": 12241512530, "unscanned_pass_bytes": 3355443,
+ "unscanned_fraction": 0.000274}
 ```
 
 Read `state` before `bytes`:
@@ -171,6 +175,97 @@ same region once per analyzer that skipped it. Those are counted once.
 tells "one region skipped by three layers" from "three regions skipped".
 Neither counts bytes, and neither does a limitation's own `affected_count`.
 
+##### The scale: `eligible_bytes`, `unscanned_pass_bytes`, `unscanned_fraction`
+
+An absolute byte count ranks two runs against each other and says nothing about
+either on its own. 3.2 MB unscanned is a rounding error out of 11.4 GB and
+almost the whole hunt out of 3.4 MB, and only the second is worth recollecting
+for:
+
+```text
+Coverage    PARTIAL — 3.2 MB unscanned across 3 range(s) (0.03% of 11.4 GB eligible)
+Coverage    PARTIAL — 3.2 MB unscanned across 3 range(s) (94% of 3.4 MB eligible)
+```
+
+These three fields share a basis that `bytes` does not: they measure **scanning
+work, per pass**, where `bytes` measures **memory**.
+
+- `eligible_bytes` is what each scan pass had in front of it after its own
+  filters, summed over the passes. A hunter that runs three passes over one
+  region had three passes' worth of work to do, so that region contributes
+  three times. It also counts items a whole-scan budget left unreached, which
+  is what keeps every gap a pass reports inside the scope it is measured
+  against.
+- `unscanned_pass_bytes` is the same quantity for the gaps: bytes a pass did
+  not examine. Ranges are unioned *within* a pass — one pass can name the same
+  bytes under two codes at once, such as a segment both short-read and stopped
+  inside — and summed *across* passes, because memory two passes both missed
+  cost two passes' work.
+- `unscanned_fraction` is exactly `unscanned_pass_bytes / eligible_bytes`, and
+  carries `state`'s own qualifier: an exact proportion under `exact`, a floor
+  under the real one under `lower_bound`.
+
+**`bytes` is deliberately not the numerator.** It unions the same gaps into
+memory — what a re-collection would have to recover — and dividing it by a
+per-pass scope would report a region *every* pass skipped as two thirds
+scanned. Concretely, for obfuscation's three passes over one 16 MB region that
+all three skip: `bytes` is 16 MB, `unscanned_pass_bytes` is 48 MB,
+`eligible_bytes` is 48 MB, and the fraction is `1.0` — none of that region was
+examined by anything, and the figure says so. For a 3 MB region that only the
+2 MB-capped decode pass skips while entropy reads it in full, the fraction is
+`0.5`: half this hunter's work over that region happened.
+
+The scope is a property of the **hunter**, not of the dump — it reflects that
+hunter's own filters (committed, private, non-module-backed, and so on), so two
+hunters over one dump legitimately report different denominators, and neither
+is the dump's file size or the address space of every region walked.
+
+The fraction lets a triage pipeline apply one threshold across dumps of any
+size — treat a `partial` under 1% as effectively complete, escalate above 20% —
+which an absolute count cannot support without per-case tuning. Read
+`limitations[].scope` for which pass left a given gap: re-running one pass over
+the listed addresses (`--hunt-addr`) and recollecting the dump are very
+different remedies.
+
+Both `eligible_bytes` and `unscanned_fraction` are `null` where no proportion
+is supportable:
+
+| Shape | `eligible_bytes` | `unscanned_fraction` |
+|---|---|---|
+| A producer that measures no eligibility (every recon command) | `null` | `null` |
+| A scan loop that took items into scope without measuring them | `null` | `null` |
+| `coverage.status` is `not_evaluated` | `null` | `null` |
+| `state` is `unknown` — no gap has a measured extent | the scale | `null` |
+| The run had no capturable memory in front of it | `0` | `null` |
+| A `complete` scan over real in-scope work | the scale | `0` |
+
+`null` and `0` are different answers and neither may stand in for the other:
+`0` says a scan measured its scope and found no capturable memory in it, while
+`null` says no scope was measured at all. A hunter whose scan loop records
+items without their sizes withdraws its whole total rather than publishing the
+measured subset, which would shrink the denominator by exactly the items that
+went unrecorded.
+
+`0` is reserved for a run that missed nothing. A budget that stopped a scan
+somewhere unmeasured never renders as `0` unscanned; it reports no fraction at
+all. The console applies the same rule at both ends: it prints `0%` only for an
+exactly-zero fraction and `100%` only for exactly 1, rendering anything that
+would round into either as `<0.01%` or `>99.99%`.
+
+**Which hunters publish a scale.** All of them except `hollowing`.
+`obfuscation`, `pipe`, `stomping` and `cs-beacon` take it from the eligibility
+ledger their scan loops already run; `yara` and `injection` declare their
+scope from the segment or region list their loop walks, without a ledger.
+`stomping`'s denominator covers its IOC-string region scan only — its
+module-header and section-content passes report gaps that carry no byte extent
+at all, so they push `state` to `lower_bound` and the percentage to an "at
+least" rather than enlarging the scale.
+
+`hollowing` is a different case and not a gap: none of the limitation codes it
+can emit describes unexamined dump bytes, so its `bytes` is always `0` and
+there is nothing for a denominator to scale. `null` on that record is the
+complete answer, not a missing one.
+
 The basis is what the dump actually holds for each target, not the address
 space it declares. A region the dump never captured contributes zero: there
 were no bytes there to miss, and what it needs is a re-collection, which
@@ -187,6 +282,12 @@ unanswered question against it, not memory nothing read. The remedy also
 depends on the gap: an oversized skip names bytes this dump already holds, so
 `--hunt-addr` over the listed addresses closes it, while only a target whose
 `capture_state` is `none` needs a fuller collection.
+
+That rollup carries no scale — `eligible_bytes` and `unscanned_fraction` are
+both `null` there. Eligibility is each hunter's own, measured against that
+hunter's own passes, so adding the denominators would report work no single
+hunter had in front of it. The per-hunter fractions on the records underneath
+are the answer to "how much of this hunter's scanning work did not happen".
 
 This grades a `partial`; it does not decide when one is reported.
 `coverage.status`, verdicts, scores, confidence values, and exit codes are all

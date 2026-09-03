@@ -6,9 +6,12 @@
       "bytes": 0,
       "complete": true,
       "distinct_ranges": 0,
+      "eligible_bytes": 525,
       "quantified_gaps": 0,
       "state": "exact",
-      "unquantified_gaps": 0
+      "unquantified_gaps": 0,
+      "unscanned_fraction": 0.0,
+      "unscanned_pass_bytes": 0
     },
     "reasons": [],
     "sources": {

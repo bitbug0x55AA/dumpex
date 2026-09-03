@@ -304,6 +304,9 @@ def test_pipe_aggregate_receives_only_typed_evidence_and_scalars():
         "c2_budget_exhausted_targets", "image_pipe_refs", "image_pipe_modules",
         # the ledger's two directions, scalar counts
         "rule_version", "unaccounted", "over_accounted", "ledger_imbalance",
+        # the captured bytes this walk had in front of it, as one scalar
+        # count -- the ledger's own quantity, not a dump-derived object
+        "eligible_bytes",
     }
     parameter_names = set(inspect.signature(pipe_aggregate.build_report).parameters)
     unexpected = parameter_names - allowed
@@ -331,6 +334,9 @@ def test_encoding_aggregate_receives_only_typed_evidence_and_scalars():
         "sleep_mask_unaccounted", "entropy_unaccounted", "decode_unaccounted",
         "sleep_mask_over_accounted", "entropy_over_accounted", "decode_over_accounted",
         "sleep_mask_imbalance", "entropy_imbalance", "decode_imbalance",
+        # the captured bytes this walk had in front of it, as one scalar
+        # count -- the ledger's own quantity, not a dump-derived object
+        "eligible_bytes",
     }
     parameter_names = set(inspect.signature(encoding_aggregate.build_report).parameters)
     unexpected = parameter_names - allowed
@@ -360,6 +366,9 @@ def test_stomping_aggregate_receives_only_typed_evidence_and_scalars():
         "ioc_whitelisted_modules",
         "ioc_unaccounted", "ioc_over_accounted",   # the ledger's two directions
         "ioc_ledger_imbalance",
+        # the captured bytes this walk had in front of it, as one scalar
+        # count -- the ledger's own quantity, not a dump-derived object
+        "ioc_eligible_bytes",
     }
     parameter_names = set(inspect.signature(stomping_aggregate.build_report).parameters)
     unexpected = parameter_names - allowed

@@ -38,6 +38,14 @@ def _require_count(value, field_name: str) -> None:
         raise ValueError(f"{field_name} must be a non-negative int, got {value}")
 
 
+def _require_optional_count(value, field_name: str) -> None:
+    """A count, or None for a quantity this layer did not measure -- see
+    `LayerCoverage.eligible_bytes`, where None and 0 are opposite
+    claims."""
+    if value is not None:
+        _require_count(value, field_name)
+
+
 def _require_typed_tuple(value, expected, field_name: str) -> tuple:
     """Normalize to a tuple, require every item to be exactly `expected`,
     and require the whole tuple to be recursively immutable -- the same
@@ -267,7 +275,11 @@ class LayerCoverage:
     instead of reporting a clean, complete scan."""
     scanned: int = 0
     eligible_total: int = 0   # items this layer took into scope
-    eligible_bytes: int = 0   # and how many CAPTURED bytes they add up to
+    # Captured bytes those items add up to -- this layer's own share of
+    # the work the hunter had in front of it. `None` when the layer took
+    # items into scope without measuring them (see
+    # dumpex.hunt._coverage.CoverageTracker.eligible_bytes).
+    eligible_bytes: "int | None" = None
     not_applicable: int = 0   # read fine, nothing analyzable in it
     budget_skipped: int = 0   # read fine, no budget left to examine it
     unaccounted:    int = 0   # in scope, no outcome recorded
@@ -290,7 +302,7 @@ class LayerCoverage:
     def __post_init__(self):
         _require_count(self.scanned, "LayerCoverage.scanned")
         _require_count(self.eligible_total, "LayerCoverage.eligible_total")
-        _require_count(self.eligible_bytes, "LayerCoverage.eligible_bytes")
+        _require_optional_count(self.eligible_bytes, "LayerCoverage.eligible_bytes")
         _require_count(self.not_applicable, "LayerCoverage.not_applicable")
         _require_count(self.budget_skipped, "LayerCoverage.budget_skipped")
         _require_count(self.unaccounted, "LayerCoverage.unaccounted")

@@ -142,13 +142,16 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
 
 
 # The aggregate a run with no measurable gap reports. `missed_bytes` is
-# REQUIRED on every coverage object in v2.15, so a hand-built document
-# needs one to be a valid document at all -- which is the point: a
-# producer that stopped emitting it would otherwise validate clean while
-# a consumer thresholding on it read nothing.
+# REQUIRED on every coverage object, so a hand-built document needs one to
+# be a valid document at all -- which is the point: a producer that
+# stopped emitting it would otherwise validate clean while a consumer
+# thresholding on it read nothing. The denominator is null here: a
+# hand-built document publishes no eligibility, and a proportion of
+# nothing is not something to invent.
 _NO_MISSED_BYTES = {"state": "exact", "bytes": 0, "complete": True,
                      "quantified_gaps": 0, "unquantified_gaps": 0,
-                     "distinct_ranges": 0}
+                     "distinct_ranges": 0, "eligible_bytes": None,
+                     "unscanned_pass_bytes": 0, "unscanned_fraction": None}
 
 
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):

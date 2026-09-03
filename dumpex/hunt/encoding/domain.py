@@ -129,6 +129,13 @@ class CoverageSnapshot:
     memory_info_stream: bool
     region_count: "int | None" = None
     any_region_scanned: bool = False
+    # Captured bytes ALL THREE layers took into scope, summed. Summed and
+    # not deduplicated: each layer had its own work in front of it, so a
+    # region two layers both accepted is two layers' worth of scope, and
+    # the gap total it scales is counted the same way, one layer at a time
+    # (see dumpex.output.coverage.MissedBytes.eligible_bytes). `None` when
+    # any layer took items into scope without measuring them.
+    eligible_bytes: "int | None" = None
     sleep_mask_oversized: tuple = field(default_factory=tuple)
     entropy_oversized:    tuple = field(default_factory=tuple)
     decode_oversized:     tuple = field(default_factory=tuple)
@@ -180,6 +187,7 @@ class CoverageSnapshot:
         _require_bool(self.memory_info_stream, "CoverageSnapshot.memory_info_stream")
         _require_optional_count(self.region_count, "CoverageSnapshot.region_count")
         _require_bool(self.any_region_scanned, "CoverageSnapshot.any_region_scanned")
+        _require_optional_count(self.eligible_bytes, "CoverageSnapshot.eligible_bytes")
         for name in self._LEDGER_COUNT_FIELDS:
             _require_count(getattr(self, name), f"CoverageSnapshot.{name}")
         for name in self._TARGET_TUPLE_FIELDS:

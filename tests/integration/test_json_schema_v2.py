@@ -638,13 +638,16 @@ def test_profile_no_defensible_profile_is_not_evaluated_and_validates(validator)
 # just "happens to accept everything real code produces."
 
 # The aggregate a run with no measurable gap reports. `missed_bytes` is
-# REQUIRED on every coverage object in v2.15, so a hand-built document
-# needs one to be a valid document at all -- which is the point: a
-# producer that stopped emitting it would otherwise validate clean while
-# a consumer thresholding on it read nothing.
+# REQUIRED on every coverage object, so a hand-built document needs one to
+# be a valid document at all -- which is the point: a producer that
+# stopped emitting it would otherwise validate clean while a consumer
+# thresholding on it read nothing. The denominator is null here: a
+# hand-built document publishes no eligibility, and a proportion of
+# nothing is not something to invent.
 _NO_MISSED_BYTES = {"state": "exact", "bytes": 0, "complete": True,
                      "quantified_gaps": 0, "unquantified_gaps": 0,
-                     "distinct_ranges": 0}
+                     "distinct_ranges": 0, "eligible_bytes": None,
+                     "unscanned_pass_bytes": 0, "unscanned_fraction": None}
 
 
 def _minimal_valid_doc(kind="modules"):

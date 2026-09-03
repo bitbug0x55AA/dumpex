@@ -17,6 +17,7 @@ from minidump.minidumpfile import MinidumpFile
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.memory import get_modules, get_memory_regions, read_region
 from dumpex.hunt._budget import ScanBudget
+from dumpex.hunt._coverage import merge_eligible_bytes
 
 from dumpex.hunt.encoding.config import (
     EncodingConfig,
@@ -104,6 +105,8 @@ def _build_encoding_report(mf: MinidumpFile):
         tuple(decode_result.base64), tuple(decode_result.xor), tuple(decode_result.compressed),
         memory_info_stream=mem_info_available, region_count=len(regions),
         any_region_scanned=bool(sm_cov.scanned or ent_cov.scanned or dec_cov.scanned),
+        eligible_bytes=merge_eligible_bytes(
+            sm_cov.eligible_bytes, ent_cov.eligible_bytes, dec_cov.eligible_bytes),
         sleep_mask_oversized=tuple(sm_cov.skipped_oversize_targets),
         entropy_oversized=tuple(ent_cov.skipped_oversize_targets),
         decode_oversized=tuple(dec_cov.skipped_oversize_targets),

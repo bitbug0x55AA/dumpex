@@ -742,9 +742,15 @@ def _lim(code, source, **kw):
 # with its counterpart -- each makes coverage `partial` while missing no
 # bytes a re-collection would recover, and the aggregate must say exactly
 # zero rather than invent a gap to match the status word.
+#
+# The scale is null for all of them, and that is equally the assertion:
+# none of these commands runs an eligibility ledger over memory, so none
+# publishes a denominator, and a proportion no producer measured must not
+# appear as `0%` of something.
 _NO_MISSED_BYTES = {"state": "exact", "bytes": 0, "complete": True,
                      "quantified_gaps": 0, "unquantified_gaps": 0,
-                     "distinct_ranges": 0}
+                     "distinct_ranges": 0, "eligible_bytes": None,
+                     "unscanned_pass_bytes": 0, "unscanned_fraction": None}
 
 
 _COVERAGE_SOURCES_AND_LIMITATIONS = {

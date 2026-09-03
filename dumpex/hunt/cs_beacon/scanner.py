@@ -400,6 +400,14 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                              first_started=budget_exhausted_first_started,
                              first_examined=budget_stop_offset)
         if budget_exhausted_stop_index is not None else [])
+    # The stop ends the walk before these segments are reached, so they
+    # never became eligible and the ledger has nothing to reconcile for
+    # them -- but they ARE memory this scan had scope for, and they are
+    # the gaps it goes on to report. Counting them into the scope total is
+    # what keeps every reported gap inside the scale it is measured
+    # against (see CoverageTracker.note_unreached_extent).
+    for target in budget_exhausted_targets:
+        coverage_counts.note_unreached_extent(target.captured_size or 0)
     # max(0, ...) on scan_deadline_seconds: it can be configured NEGATIVE
     # as a test-only "already expired" technique, and a real budget can
     # never be negative. `budget_exhausted_consumed` (issue #28 review

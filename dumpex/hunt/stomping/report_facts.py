@@ -303,7 +303,8 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
         sources,
         evaluation_groups=[EvaluationRequirement(("memory_info",)),
                            EvaluationRequirement(("modules",))],
-        completeness_checks=completeness_checks)
+        completeness_checks=completeness_checks,
+        eligible_bytes=coverage.ioc_eligible_bytes)
 
     # The IOC-string scan's own gaps are appended to the ALREADY-BUILT
     # report, never folded into `completeness_checks` above like every
@@ -358,4 +359,5 @@ def project_coverage_report(coverage: CoverageSnapshot) -> CoverageReport:
     status = (CoverageStatus.PARTIAL if report.status == CoverageStatus.COMPLETE
               else report.status)
     return CoverageReport(status=status, sources=report.sources,
-                           limitations=[*report.limitations, *ioc_limitations])
+                           limitations=[*report.limitations, *ioc_limitations],
+                           eligible_bytes=report.eligible_bytes)

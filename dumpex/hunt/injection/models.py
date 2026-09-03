@@ -238,6 +238,10 @@ class HiddenPeScan:
     do not make ordinary noisy dumps partial. Hits are copied to a tuple.
     """
     hits: tuple              # tuple[HiddenPeEvidence, ...] once constructed
+    # Captured bytes this search had in front of it -- the scale its gaps
+    # are read against (see dumpex.output.coverage.CoverageReport.
+    # eligible_bytes). None when nothing measured it.
+    eligible_bytes: "int | None" = None
     read_failed: int = 0
     read_failed_targets: tuple = ()      # tuple[ScanTarget, ...] -- issue #28
     short_reads: int = 0

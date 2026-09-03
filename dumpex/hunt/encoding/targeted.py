@@ -76,6 +76,7 @@ from dumpex.rules_pkg.loader import get_rules
 import dumpex.hunt.encoding as _encoding
 from dumpex.hunt import _registry, _targeted
 from dumpex.hunt._budget import ScanBudget
+from dumpex.hunt._coverage import merge_eligible_bytes
 from dumpex.hunt._observation import (
     BudgetOutcome, ObservationClosure, ObservationResult,
 )
@@ -870,6 +871,8 @@ def project_targeted_report(context, result):
         tuple(payload.decode.compressed),
         memory_info_stream=True, region_count=1,
         any_region_scanned=bool(sm_cov.scanned or ent_cov.scanned or dec_cov.scanned),
+        eligible_bytes=merge_eligible_bytes(
+            sm_cov.eligible_bytes, ent_cov.eligible_bytes, dec_cov.eligible_bytes),
         sleep_mask_oversized=tuple(sm_cov.skipped_oversize_targets),
         entropy_oversized=tuple(ent_cov.skipped_oversize_targets),
         decode_oversized=tuple(dec_cov.skipped_oversize_targets),

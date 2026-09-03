@@ -141,7 +141,8 @@ def project_coverage_report(report: YaraReport) -> CoverageReport:
             code=LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED, source="yara_context",
             affected_count=unverified_count))
 
-    return build_coverage_report(sources, completeness_checks=completeness_checks)
+    return build_coverage_report(sources, completeness_checks=completeness_checks,
+                                  eligible_bytes=scan.eligible_bytes)
 
 
 # ── v1.1 legacy `coverage` dict (7 booleans) -- unchanged shape ──────────

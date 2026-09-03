@@ -263,10 +263,12 @@ def test_set_command_result_minimal_produces_expected_shape(tmp_path):
         # A complete result reports an exact zero rather than omitting the
         # aggregate: "nothing was missed" is a measurement, and a missing
         # field is indistinguishable from an unmeasured one to a consumer
-        # thresholding on it.
+        # thresholding on it. The scale stays null: this command runs no
+        # eligibility ledger, so there is no proportion to state.
         "missed_bytes": {"state": "exact", "bytes": 0, "complete": True,
                           "quantified_gaps": 0, "unquantified_gaps": 0,
-                          "distinct_ranges": 0}}
+                          "distinct_ranges": 0, "eligible_bytes": None,
+                          "unscanned_pass_bytes": 0, "unscanned_fraction": None}}
     assert doc["result"]["summary"] == {"count": 2}
     assert doc["result"]["data"]["records"] == [{"name": "a.dll"}, {"name": "b.dll"}]
     assert doc["artifacts"] == []

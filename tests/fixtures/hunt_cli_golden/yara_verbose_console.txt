@@ -6,7 +6,7 @@
   VERDICT     MEDIUM — 1 distinct rule(s) matched
   Confidence  —
   Score       1/—
-  Coverage    COMPLETE
+  Coverage    COMPLETE — 0 bytes unscanned (0% of 525 bytes eligible)
   Review      —
 
   KEY SIGNALS

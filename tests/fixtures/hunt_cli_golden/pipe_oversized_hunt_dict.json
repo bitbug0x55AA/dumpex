@@ -55,9 +55,12 @@
       "bytes": 16777216,
       "complete": true,
       "distinct_ranges": 1,
+      "eligible_bytes": 16777216,
       "quantified_gaps": 1,
       "state": "exact",
-      "unquantified_gaps": 0
+      "unquantified_gaps": 0,
+      "unscanned_fraction": 1.0,
+      "unscanned_pass_bytes": 16777216
     },
     "reasons": [
       "handle_data not present in this dump",
