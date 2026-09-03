@@ -637,6 +637,16 @@ def test_profile_no_defensible_profile_is_not_evaluated_and_validates(validator)
 # actually rejects the malformed shapes it claims to guard against, not
 # just "happens to accept everything real code produces."
 
+# The aggregate a run with no measurable gap reports. `missed_bytes` is
+# REQUIRED on every coverage object in v2.15, so a hand-built document
+# needs one to be a valid document at all -- which is the point: a
+# producer that stopped emitting it would otherwise validate clean while
+# a consumer thresholding on it read nothing.
+_NO_MISSED_BYTES = {"state": "exact", "bytes": 0, "complete": True,
+                     "quantified_gaps": 0, "unquantified_gaps": 0,
+                     "distinct_ranges": 0}
+
+
 def _minimal_valid_doc(kind="modules"):
     return {
         "meta": {
@@ -649,7 +659,8 @@ def _minimal_valid_doc(kind="modules"):
         "result": {
             "kind": kind,
             "execution_status": "completed",
-            "coverage": {"status": "complete", "reasons": []},
+            "coverage": {"status": "complete", "reasons": [],
+                          "missed_bytes": _NO_MISSED_BYTES},
             "summary": {"count": 1},
             "data": {"records": [_minimal_module_record()]},
         },
@@ -1627,7 +1638,8 @@ def _scan_target(kind, base_address="0x0000000000001000", size=100, size_limit=5
     return {"kind": kind, "base_address": base_address, "size": size,
             "size_limit": size_limit, "file_offset": None, "allocation_base": None,
             "state": None, "type": None, "protection": None,
-            "captured_size": None, "capture_state": None}
+            "captured_size": None, "capture_state": None,
+            "examined_size": None, "unexamined_size": None}
 
 
 def _oversized_skipped_doc(source, scope, kind):

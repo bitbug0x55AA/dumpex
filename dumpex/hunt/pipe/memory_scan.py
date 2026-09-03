@@ -228,7 +228,14 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # make a claim for this region; no scan work runs. Attributed to
             # BOTH scopes -- the conservative contract, since neither signal
             # can vouch for the range.
-            target = region_scan_target(mf, r)
+            #
+            # `examined_size=0` because this path runs BEFORE the region is
+            # read: nothing looked at any of it, so its whole capture is an
+            # exact gap. The two budget lists also collect regions whose
+            # matching merely could not FINISH (below), and those genuinely
+            # have no knowable extent -- the extent lives per target, so the
+            # two cases stay apart inside one list.
+            target = region_scan_target(mf, r, examined_size=0)
             pipe_name_budget_affected.append(target)
             c2_budget_affected.append(target)
             coverage_counts.note_budget_skipped()
@@ -257,7 +264,7 @@ def scan_pipe_names(mf: MinidumpFile, read_region, regions: list, modules: list,
             # WAS returned (a real pipe name/C2 string can still be found
             # in the readable portion), but this region must not silently
             # count toward a "complete" scan.
-            coverage_counts.note_short_read(region_scan_target(mf, r))
+            coverage_counts.note_short_read(region_scan_target(mf, r), got=len(data))
         # Resolved ONCE per region, here, rather than per hit or at render
         # time -- every projection reads these already-resolved strings.
         region = region_ref(r)

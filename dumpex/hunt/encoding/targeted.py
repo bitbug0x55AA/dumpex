@@ -767,7 +767,7 @@ def run_targeted_encoding(context) -> ObservationResult:
 
         truncation_limitation = (
             _targeted.evaluation_truncated_limitation(
-                "encoding_scan", layer, boundary.requested_target)
+                "encoding_scan", layer, boundary)
             if layer_truncated else None)
         limitations = _layer_limitations(
             layer, lc, truncation_limitation=truncation_limitation,

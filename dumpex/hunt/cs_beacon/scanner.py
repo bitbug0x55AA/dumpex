@@ -18,7 +18,9 @@ import math
 import time
 
 from dumpex.core.memory import _get_region_at
-from dumpex.hunt._coverage import CoverageTracker, segment_scan_target
+from dumpex.hunt._coverage import (
+    CoverageTracker, budget_stop_targets, segment_scan_target,
+)
 from dumpex.hunt.cs_beacon.config import CSBeaconConfig
 from dumpex.hunt.cs_beacon.domain import ScanDiagnostics
 from dumpex.hunt.cs_beacon.models import ConfigEvidence, config_field_from_parsed, region_ref
@@ -162,6 +164,11 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
     # time is measured directly rather than assumed to equal the
     # configured deadline.
     budget_exhausted_consumed = None
+    # Whether the first segment of `budget_exhausted_targets` had already
+    # been entered when the budget tripped -- the one segment of that run
+    # whose unexamined byte extent is not simply its whole capture (see
+    # dumpex.hunt._coverage.budget_stop_targets).
+    budget_exhausted_first_started = False
     # Where inside the current segment the marker walk had reached when a
     # budget ended it. `_cs_scan_segment` walks the buffer once per XOR key in
     # a fixed order, so once the LAST key's pass is under way every offset
@@ -174,14 +181,21 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
     scan_deadline = scan_start + config.scan_deadline_seconds
 
     def _mark_budget_exhausted(reason: str, kind: str, consumed: int, stop_index: "int | None" = None,
-                               stop_offset: "int | None" = None):
+                               stop_offset: "int | None" = None, stop_started: bool = True):
         # `stop_index` defaults to the CURRENT segment (still mid-
         # processing, or not started yet) -- overridden to `seg_index + 1`
         # at the one call site where `seg` has already been fully
         # candidate-scanned by the time its own deadline recheck fires
         # (only LATER segments are actually unstarted there).
+        #
+        # `stop_started` says which of those two the CURRENT segment is:
+        # the whole-scan checks at the top of the loop run before the
+        # segment is read at all, while the per-candidate checks run with
+        # its marker walk already under way. Only the second can have
+        # examined part of it, and only the second is therefore not
+        # chargeable in full.
         nonlocal budget_exhausted, budget_reason, budget_exhausted_stop_index, budget_exhausted_kind, \
-            budget_exhausted_consumed, budget_stop_offset
+            budget_exhausted_consumed, budget_stop_offset, budget_exhausted_first_started
         budget_exhausted = True
         budget_reason = reason
         if budget_exhausted_stop_index is None:
@@ -189,6 +203,10 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
             budget_exhausted_kind = kind
             budget_exhausted_consumed = consumed
             budget_stop_offset = stop_offset
+            # Overriding `stop_index` moves the run past the current
+            # segment entirely, so whatever that segment's own state was,
+            # the run starts at one nothing had touched.
+            budget_exhausted_first_started = stop_started and stop_index is None
 
     def _elapsed_seconds(now: float) -> int:
         # Ceiling, and floored at 0 -- mirrors budget_exhausted_limit's own
@@ -232,7 +250,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                 f"{total_scanned_bytes} byte(s) scanned, "
                 f"{len(hits)} hit(s) found — scan deadline reached "
                 f"before all segments were examined",
-                "scan_deadline_seconds", _elapsed_seconds(_now))
+                "scan_deadline_seconds", _elapsed_seconds(_now), stop_started=False)
             break
         # Checked against the PLANNED read size (total_scanned_bytes +
         # seg.size), not just the already-accumulated total — a pure
@@ -246,7 +264,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
                 f"{total_scanned_bytes} byte(s) scanned across "
                 f"{total_candidates} candidate(s), {len(hits)} hit(s) "
                 f"found — total scanned-bytes budget exhausted",
-                "max_total_scanned_bytes", total_scanned_bytes)
+                "max_total_scanned_bytes", total_scanned_bytes, stop_started=False)
             break
         # Past both whole-scan budget checks above, so this segment IS in
         # scope and every path out of the iteration from here on owes the
@@ -292,7 +310,7 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
             # signature. Still scan what WAS returned (a partial read can
             # still contain a hit), but this segment must not silently
             # count toward a "complete" scan.
-            coverage_counts.note_short_read(segment_scan_target(seg))
+            coverage_counts.note_short_read(segment_scan_target(seg), got=len(data))
         # Recorded before the candidate scan below, not after it: that
         # scan can `break` out on an exhausted budget, and a disposition
         # placed after the loop would be skipped on exactly that path.
@@ -378,7 +396,9 @@ def scan_segments(mf, segs: list, config: CSBeaconConfig, regions: list,
     # finished cleanly), unlike yara_hunt's own equivalent targets, which
     # are always non-empty in practice.
     budget_exhausted_targets = (
-        [segment_scan_target(s) for s in segs[budget_exhausted_stop_index:]]
+        budget_stop_targets(segs[budget_exhausted_stop_index:],
+                             first_started=budget_exhausted_first_started,
+                             first_examined=budget_stop_offset)
         if budget_exhausted_stop_index is not None else [])
     # max(0, ...) on scan_deadline_seconds: it can be configured NEGATIVE
     # as a test-only "already expired" technique, and a real budget can

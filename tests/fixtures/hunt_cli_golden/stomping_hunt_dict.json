@@ -2,6 +2,14 @@
   "confidence": "medium",
   "coverage": {
     "limitations": [],
+    "missed_bytes": {
+      "bytes": 0,
+      "complete": true,
+      "distinct_ranges": 0,
+      "quantified_gaps": 0,
+      "state": "exact",
+      "unquantified_gaps": 0
+    },
     "reasons": [],
     "sources": {
       "ioc_string_scan": {

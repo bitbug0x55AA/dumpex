@@ -14,7 +14,9 @@ from dumpex.core.va_range import (
 )
 from dumpex.hunt._observation import ObservationClosure, ObservationKey, ObservationResult
 from dumpex.hunt._targeted_console import render_targeted_console_lines
-from dumpex.output.coverage import CoverageLimitation, LimitationCode, render_limitation
+from dumpex.output.coverage import (
+    CoverageLimitation, LimitationCode, render_limitation, summarize_missed_bytes,
+)
 from dumpex.output.records import TargetedMeasurement
 from dumpex.ui.structured import _ANSI_RE
 
@@ -35,6 +37,10 @@ class _Coverage:
         self.status = type("Status", (), {"value": status})()
         self.limitations = list(limitations)
         self.reasons = [render_limitation(l) for l in self.limitations]
+        # Derived from the same limitations the real CoverageReport
+        # derives it from, so this stand-in cannot claim a byte total its
+        # own gaps do not support.
+        self.missed_bytes = summarize_missed_bytes(self.limitations)
 
 
 def _gap(detail="window_sampled"):

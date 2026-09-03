@@ -638,6 +638,9 @@ def _remainder_scan_target(mf: MinidumpFile, region, examined_until: int) -> Sca
         type=prot_str(region.Type),
         protection=prot_str(region.Protect),
         captured_size=va_range_captured_bytes(mf, remainder_base, remainder_size),
+        # The target IS the remainder, so nothing inside it was searched:
+        # the prefix that was is deliberately not part of this range.
+        examined_size=0,
     )
 
 
@@ -733,9 +736,22 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
         # a bare count before it ever reaches HiddenPeScan/CoverageLimitation.
         if gaps.read_failed:
             read_failed += 1
-            read_failed_targets.append(region_scan_target(mf, r))
+            # Nothing usable came back from this region, so none of its
+            # captured bytes were examined -- the exact basis, recorded on
+            # the target rather than left for a reader to infer.
+            read_failed_targets.append(region_scan_target(mf, r, examined_size=0))
         if gaps.short_read:
             short_reads += 1
+            # No examined extent. A CANDIDATE's own validation read can
+            # come back short while the window search carries on to the
+            # next candidate, and the window then closes by advancing
+            # `examined_until` past bytes that read never got -- so it is
+            # a high-water mark with holes below it, not a count of bytes
+            # examined. (A discovery read that comes back short ends the
+            # region instead, and leaves the mark exact.) Passing it here
+            # would claim the holes were searched and UNDERSTATE the miss,
+            # the one direction this metric must never be wrong in, so the
+            # gap is reported as unmeasured instead.
             short_read_targets.append(region_scan_target(mf, r))
         # `not_started` further splits `truncated` into two distinct
         # facts an investigator needs to tell apart (issue #28): a region
@@ -751,8 +767,11 @@ def _hunt_hidden_pe(mf: MinidumpFile, read_region, module_list_available: bool =
             # by it never needs a "no kind" bucket.
             if gaps.not_started:
                 scan_not_started += 1
+                # The budget was already spent when this region's turn came
+                # up, so its search never issued a read: the whole capture
+                # is unexamined, exactly.
                 scan_not_started_by_kind.setdefault(gaps.budget_kind, []).append(
-                    region_scan_target(mf, r))
+                    region_scan_target(mf, r, examined_size=0))
             else:
                 scan_truncated += 1
                 # The UNEXAMINED REMAINDER, not the whole region (issue

@@ -214,6 +214,10 @@ def _budget_residual_targets(diag, read_slice, unexamined, containing) -> list:
         file_offset=(backing.file_offset_at(residual.base_address)
                      if backing is not None else None),
         captured_size=max(0, read_slice.capture.captured_bytes - diag.budget_stop_offset),
+        # This target starts AT the stop cursor, so none of it was walked:
+        # the byte-exact figure the docstring above claims, recorded where
+        # coverage.missed_bytes can read it.
+        examined_size=0,
     )]
 
 
@@ -338,7 +342,7 @@ def run_targeted_cs_beacon(context) -> ObservationResult:
     budget_targets = _budget_residual_targets(diag, read_slice, unexamined, containing)
     truncation_limitation = (
         _targeted.evaluation_truncated_limitation(
-            TARGETED_SOURCE, None, boundary.requested_target)
+            TARGETED_SOURCE, None, boundary)
         if boundary.truncated and reached else None)
     limitations = _limitations(
         diag, truncation_limitation=truncation_limitation,

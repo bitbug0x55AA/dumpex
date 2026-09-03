@@ -35,7 +35,7 @@ from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # All twelve commands are migrated onto the v2 envelope (see dumpex/output/
-# and dumpex-output-v2.14.schema.json); --diff produces a kind="comparison"
+# and dumpex-output-v2.15.schema.json); --diff produces a kind="comparison"
 # result via V2Output.from_evidence() (two dumps), --report produces a
 # kind="report" result (one TriageCardRecord per triage card -- see
 # dumpex.commands.report's own module docstring), --hunt produces a
@@ -49,7 +49,9 @@ from dumpex.output.command_result import CommandResult
 # cutover that exposes `--hunt-addr` targeted rescans: every
 # hunt summary carries `scan_scope`, and a targeted result additionally
 # carries one `details.targeted_scope` entry per coverage closure (see
-# docs/developer/hunt_targeted_rescan_contract.md).
+# docs/developer/hunt_targeted_rescan_contract.md). v2.15 adds
+# `coverage.missed_bytes` to every result and hunter record, grading a
+# partial by how much captured memory its gaps add up to.
 _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "process", "sysinfo", "handles",
                                     "profile", "diff", "extract", "strings", "report", "hunt"})
 

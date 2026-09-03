@@ -96,13 +96,21 @@ def test_boundary_targets_name_the_whole_request_and_the_whole_allocation():
 def test_evaluation_truncated_limitation_shape():
     region = _region()
     b = _targeted.resolve_region_boundary(_MF(), VirtualRange(0x10000, 0x100000), region)
-    lim = _targeted.evaluation_truncated_limitation("encoding_scan", "entropy",
-                                                    b.requested_target)
+    lim = _targeted.evaluation_truncated_limitation("encoding_scan", "entropy", b)
     assert lim.code == LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED
     assert lim.source == "encoding_scan"
     assert lim.scope == "entropy"
     assert lim.affected_count == 1
-    assert lim.targets == (b.requested_target,)
+    # The whole request, carrying what was evaluated of it: the clip to the
+    # containing descriptor. Everything past that is the gap, and saying so
+    # here is what keeps `coverage.missed_bytes` exact instead of unmeasured.
+    target = lim.targets[0]
+    assert target.base_address == b.requested_target.base_address
+    assert target.size == b.requested_target.size
+    assert target.examined_size == min(b.eval_range.size,
+                                        b.requested_target.captured_size)
+    assert target.unexamined_bytes == (b.requested_target.captured_size
+                                        - target.examined_size)
 
 
 def test_diagnostics_mention_both_boundaries_where_relevant():

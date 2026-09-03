@@ -407,6 +407,44 @@ def _check_obfuscation_targeted(exit_code, doc, body):
         "decode", "entropy", "sleep_mask"]
 
 
+def _build_pipe_oversized(monkeypatch, tmp_path) -> BuiltScenario:
+    """One fully captured region past the pipe scan's own size cap.
+
+    Every other scenario's skipped regions are ones this dump holds no
+    bytes for, so their coverage costs exactly zero capturable memory and
+    the coverage line stays a bare status word. This one is the opposite
+    case and the one an analyst actually has to act on: real captured
+    memory, genuinely unscanned, which is what puts a byte figure on the
+    line. The region is declared in the segment table but its bytes are
+    never read -- the scan skips it on size before any read is issued, so
+    nothing here depends on materializing 16 MB.
+    """
+    from tests.fixtures.fakes import FakeMF, FakeStream, Region, Segment
+    region_base = 0x4000000
+    size = 16 * 1024 * 1024
+    regions = [Region(region_base, region_base, size, "MEM_COMMIT",
+                       "PAGE_READWRITE", "MEM_PRIVATE")]
+    mf = FakeMF()
+    mf.memory_info = FakeStream(regions, "infos")
+    mf.memory_segments_64 = FakeStream([Segment(region_base, 0x1000, size)],
+                                        "memory_segments")
+    mf.modules = FakeStream([], "modules")
+    return BuiltScenario(mf=mf)
+
+
+def _check_pipe_oversized(exit_code, doc, body):
+    """The point of this fixture: a coverage line that quantifies the gap,
+    and a structured aggregate that agrees with it."""
+    record = doc["result"]["data"]["records"][0]
+    missed = record["coverage"]["missed_bytes"]
+    assert missed == {"state": "exact", "bytes": 16 * 1024 * 1024, "complete": True,
+                       "quantified_gaps": 1, "unquantified_gaps": 0, "distinct_ranges": 1}
+    assert "16 MB unscanned across 1 range(s)" in body
+    # The quantification is a field beside the reasons, never a new
+    # sentence inside them.
+    assert not any("unscanned" in reason for reason in record["coverage"]["reasons"])
+
+
 SCENARIOS = {
     "injection": HuntCliScenario("injection", "injection", _build_injection,
                                   expected_exit_code=3, extra_checks=_check_injection),
@@ -417,6 +455,9 @@ SCENARIOS = {
                                          extra_checks=_check_stomping_ioc_hit),
     "pipe": HuntCliScenario("pipe", "pipe", _build_pipe,
                              expected_exit_code=3, extra_checks=_check_pipe),
+    "pipe_oversized": HuntCliScenario("pipe_oversized", "pipe", _build_pipe_oversized,
+                                       expected_exit_code=3,
+                                       extra_checks=_check_pipe_oversized),
     "cs-beacon": HuntCliScenario("cs-beacon", "cs-beacon", _build_cs_beacon),
     "cs-beacon_multi": HuntCliScenario("cs-beacon_multi", "cs-beacon", _build_cs_beacon_multi,
                                         expected_exit_code=3, extra_checks=_check_cs_beacon_multi),

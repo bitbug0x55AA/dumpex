@@ -1922,6 +1922,10 @@ def test_scan_target_to_dict_uses_fixed_width_hex_and_byte_offsets():
         "protection": "PAGE_EXECUTE_READWRITE",
         "captured_size": None,
         "capture_state": None,
+        # Null, not 0: this target's examined extent was never established,
+        # which is a different claim from "none of it was examined".
+        "examined_size": None,
+        "unexamined_size": None,
     }
 
 

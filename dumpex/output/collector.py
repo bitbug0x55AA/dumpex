@@ -89,6 +89,7 @@ class V2Output:
             coverage_sources={name: obs.to_dict()
                                for name, obs in result.coverage.sources.items()},
             coverage_limitations=[lim.to_dict() for lim in result.coverage.limitations],
+            coverage_missed_bytes=result.coverage.missed_bytes.to_dict(),
             summary=dict(result.summary) if result.summary else {"count": len(record_dicts)},
             records=record_dicts,
         )

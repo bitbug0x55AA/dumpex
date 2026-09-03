@@ -121,10 +121,11 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
         hunter_record_validator_v2_4):
     # The frozen historical schema must keep validating a real v2.4-era
     # record -- i.e. the current shape minus everything added after v2.4:
-    # the seven v2.5 finding fields, and the three v2.11 hidden-PE hit
+    # the seven v2.5 finding fields, the three v2.11 hidden-PE hit
     # location fields (`va`/`region_offset`/`file_offset`, added with the
-    # whole-region candidate search, issue #26). Stripped rather than
-    # hand-written so this stays a test of the REAL record's shape.
+    # whole-region candidate search, issue #26), and v2.15's
+    # `coverage.missed_bytes`. Stripped rather than hand-written so this
+    # stays a test of the REAL record's shape.
     d = injection_detected().to_dict()
     for f in d["findings"]:
         for key in ("id", "severity", "technique_ids", "evidence_refs", "iocs",
@@ -135,8 +136,19 @@ def test_a_genuine_v2_4_era_finding_shape_still_validates_against_the_v2_4_schem
         for hit in d["details"][pe_list]:
             for key in ("va", "region_offset", "file_offset"):
                 del hit[key]
+    del d["coverage"]["missed_bytes"]
     errors = list(hunter_record_validator_v2_4.iter_errors(d))
     assert errors == []
+
+
+# The aggregate a run with no measurable gap reports. `missed_bytes` is
+# REQUIRED on every coverage object in v2.15, so a hand-built document
+# needs one to be a valid document at all -- which is the point: a
+# producer that stopped emitting it would otherwise validate clean while
+# a consumer thresholding on it read nothing.
+_NO_MISSED_BYTES = {"state": "exact", "bytes": 0, "complete": True,
+                     "quantified_gaps": 0, "unquantified_gaps": 0,
+                     "distinct_ranges": 0}
 
 
 def _envelope(records, summary, coverage_status="complete", command="hunt", options=None):
@@ -151,7 +163,8 @@ def _envelope(records, summary, coverage_status="complete", command="hunt", opti
         "result": {
             "kind": "hunt",
             "execution_status": "completed",
-            "coverage": {"status": coverage_status, "reasons": [], "sources": {}, "limitations": []},
+            "coverage": {"status": coverage_status, "reasons": [], "sources": {},
+                          "limitations": [], "missed_bytes": _NO_MISSED_BYTES},
             "summary": summary,
             "data": {"records": [r.to_dict() for r in records]},
         },

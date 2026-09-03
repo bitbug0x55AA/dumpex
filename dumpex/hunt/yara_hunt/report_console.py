@@ -7,10 +7,14 @@ rendered from the completed report rather than during scanning.
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._ui import DETECTED, NOT_EVALUATED, INCONCLUSIVE, _status_text
 from dumpex.hunt._console import resolve_width, render_kv_block
-from dumpex.hunt._report_console import header_lines, render_coverage, wrap_block
+from dumpex.hunt._report_console import (
+    coverage_kv_value, header_lines, render_coverage, wrap_block,
+)
 from dumpex.hunt.yara_hunt.domain import YaraReport
 from dumpex.hunt.yara_hunt.models import RuleMatchEvidence
-from dumpex.hunt.yara_hunt.report_facts import project_coverage_reasons
+from dumpex.hunt.yara_hunt.report_facts import (
+    project_coverage_reasons, project_coverage_report,
+)
 from dumpex.output.records import hex_address
 
 # Normal-mode per-rule region preview cap -- mirrors the pre-migration
@@ -201,7 +205,7 @@ def _render_verdict_block(report: YaraReport, coverage_status: str, reasons: lis
         ("VERDICT",    verdict_text),
         ("Confidence", "—"),
         ("Score",      f"{score}/—"),
-        ("Coverage",   coverage_status.replace("_", " ").upper()),
+        ("Coverage",   coverage_kv_value(coverage_status, project_coverage_report(report))),
         ("Review",     "—"),
     ]
     return render_kv_block(pairs, indent=2)

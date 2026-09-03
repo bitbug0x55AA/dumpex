@@ -389,7 +389,7 @@ def run_targeted_yara(context) -> ObservationResult:
                       else [])
     truncation_limitation = (
         _targeted.evaluation_truncated_limitation(
-            TARGETED_SOURCE, None, boundary.requested_target)
+            TARGETED_SOURCE, None, boundary)
         if boundary.truncated and reached else None)
     limitations = _limitations(
         diag, rules_diag, scan_result.matches,

@@ -274,7 +274,12 @@ def test_hunt_encoding_reports_partial_coverage_when_budget_runs_out_during_vali
             if self.exhausted():
                 return False
             if self._countdown <= 0:
-                self.exhausted_reason = self.exhausted_reason or "test-exhausted"
+                # One of ScanBudget's own reasons rather than an invented
+                # string: this budget's exhaustion reaches a real
+                # SCAN_BUDGET_EXHAUSTED limitation, whose `detail`
+                # vocabulary is closed, so a made-up value would fail
+                # construction instead of exercising the budget path.
+                self.exhausted_reason = self.exhausted_reason or "max_attempts"
                 return False
             self._countdown -= 1
             return True

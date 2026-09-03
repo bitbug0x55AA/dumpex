@@ -499,7 +499,7 @@ def run_targeted_pipe(context) -> ObservationResult:
 
         truncation_limitation = (
             _targeted.evaluation_truncated_limitation(
-                TARGETED_SOURCE, scope, boundary.requested_target)
+                TARGETED_SOURCE, scope, boundary)
             if boundary.truncated and ran else None)
         limitations = _limitations(
             scope, cov, truncation_limitation=truncation_limitation,

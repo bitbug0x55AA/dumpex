@@ -21,7 +21,9 @@ from dumpex.hunt.injection.report_facts import (
 from dumpex.hunt.injection.report_legacy import project_legacy_dict
 from dumpex.hunt.injection.report_record import project_hunter_record
 from dumpex.hunt.injection.report_console import render_console_lines, print_console
-from dumpex.output.coverage import EXIT_PARTIAL, SourceState, exit_code_for
+from dumpex.output.coverage import (
+    EXIT_PARTIAL, ScanTarget, ScanTargetKind, SourceState, exit_code_for,
+)
 
 
 # ── Report builders ────────────────────────────────────────────────────────
@@ -430,9 +432,19 @@ def _golden_scenario_report() -> InjectionReport:
             allocation_base=_GOLDEN_ALLOC, regions=[rwx_ev.region, pe_hit.region])],
         correlation=correlation,
     )
+    # The short read names the region it happened in, exactly as the CLI
+    # scenario behind this same golden does -- a count with no target
+    # renders a differently-worded coverage line, so a snapshot that drops
+    # the target no longer reproduces the fixture it is checked against.
     coverage = CoverageSnapshot(memory_info_stream=True, thread_info_stream=True,
                                  module_list_stream=True, thread_list_stream=True,
                                  threads_total=1, contexts_parsed=1, pe_short_reads=1,
+                                 pe_short_reads_targets=(ScanTarget(
+                                     kind=ScanTargetKind.MEMORY_REGION,
+                                     base_address=_GOLDEN_ALLOC + 0x2000, size=4096,
+                                     allocation_base=_GOLDEN_ALLOC, state="MEM_COMMIT",
+                                     type="MEM_PRIVATE", protection="PAGE_READWRITE",
+                                     captured_size=0),),
                                  region_count=2, thread_info_count=1, module_count=1)
     results = (
         _check(check="injection.rwx_regions", tag=TAG_LEAD, confidence=CONFIDENCE_MEDIUM,
@@ -546,7 +558,7 @@ def test_golden_scenario_hunter_record_matches_production():
     # elsewhere in this file, keeps the em dash).
     assert record.coverage.reasons == [
         "1 region(s) returned fewer bytes than requested while checking for hidden PE "
-        "headers (short read) -- not fully examined"
+        "headers (short read) -- not fully examined: 0x00007ff700002000 (4 KB)"
     ]
 
     details = record.details.to_dict()

@@ -4,7 +4,7 @@ Trackers record source presence and scan gaps without conflating absent,
 present-empty, failed, short, or truncated states. Status reduction preserves the
 rule that incomplete observation cannot produce a clean negative verdict.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from dumpex.hunt._ui import (
     DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, INCONCLUSIVE,
@@ -24,7 +24,8 @@ UNBALANCED_LABEL = ("unaccounted for: the scan's recorded outcomes do not add up
                      "to the items it took into scope")
 
 
-def region_scan_target(mf, region, size_limit: "int | None" = None) -> ScanTarget:
+def region_scan_target(mf, region, size_limit: "int | None" = None, *,
+                        examined_size: "int | None" = None) -> ScanTarget:
     """A ScanTarget for one MemoryInfoListStream region. The ONE place a
     raw minidump region becomes a target reference -- pipe's memory scan,
     stomping's unscored IOC-string scan, all three of obfuscation's layer
@@ -39,6 +40,16 @@ def region_scan_target(mf, region, size_limit: "int | None" = None) -> ScanTarge
     actually attempted and failed to read, read short, or ran out of scan
     budget on: there is no cap being exceeded there, just an I/O failure
     or a budget exhaustion.
+
+    `examined_size` is how many of the region's captured bytes this scan
+    actually looked at before the gap -- 0 for a region nothing read, the
+    returned length for a short read, a stop cursor for a scan a budget
+    ended partway through. Left at its default `None` it means the extent
+    was never established, and the region's unexamined byte count stays
+    unquantified rather than being assumed to be the whole region. The
+    disposition methods on CoverageTracker below stamp it for the cases
+    they alone can prove, so a caller that goes through them does not pass
+    it here.
 
     `file_offset` is looked up per target rather than for every region
     walked: this only runs on the skip/failure path, which is rare by
@@ -65,10 +76,12 @@ def region_scan_target(mf, region, size_limit: "int | None" = None) -> ScanTarge
         # way it answers "how much of this region can actually be
         # extracted from the dump already in hand".
         captured_size=va_range_captured_bytes(mf, base, size),
+        examined_size=examined_size,
     )
 
 
-def segment_scan_target(segment, size_limit: "int | None" = None) -> ScanTarget:
+def segment_scan_target(segment, size_limit: "int | None" = None, *,
+                         examined_size: "int | None" = None) -> ScanTarget:
     """A ScanTarget for one memory-segment-table entry (CS Beacon/YARA
     scan over Memory64List/MemoryList). A segment carries no MemoryInfo,
     so state/type/protection stay unset -- but its own
@@ -87,7 +100,10 @@ def segment_scan_target(segment, size_limit: "int | None" = None) -> ScanTarget:
     whether the bytes exist in the file -- `va_range_captured_bytes()`
     would trivially confirm the same "fully captured" answer by re-
     walking the very table this segment came from, so it is set directly
-    here instead."""
+    here instead.
+
+    `examined_size` follows region_scan_target()'s own convention -- see
+    that function's docstring."""
     return ScanTarget(
         kind=ScanTargetKind.MEMORY_SEGMENT,
         base_address=segment.start_virtual_address,
@@ -95,7 +111,54 @@ def segment_scan_target(segment, size_limit: "int | None" = None) -> ScanTarget:
         size_limit=size_limit,
         file_offset=segment.start_file_address,
         captured_size=segment.size,
+        examined_size=examined_size,
     )
+
+
+def with_examined_extent(target: ScanTarget, examined: "int | None") -> ScanTarget:
+    """`target` with how much of it a scan examined stamped on, so the byte
+    extent of the gap travels with the target that names it (see
+    dumpex.output.coverage.ScanTarget.unexamined_bytes) instead of being
+    re-derived by whoever reads the gap later.
+
+    A target that already carries an extent keeps it: the caller knew
+    something more specific than its disposition does. A target with no
+    captured size keeps none either -- how much of it was examined is
+    meaningless without how much of it the dump holds.
+
+    A read that returned MORE than the dump's own segment table backs for
+    the target is clamped to that capture, not refused: the two numbers
+    count different things (bytes a reader handed back, bytes the table
+    claims), and the quantity being derived here -- captured bytes left
+    unexamined -- is exactly zero either way. The clamp changes no answer;
+    it only keeps a reader/table disagreement from turning an answerable
+    gap into an unmeasurable one."""
+    if examined is None or target.examined_size is not None:
+        return target
+    if target.captured_size is None:
+        return target
+    return replace(target, examined_size=min(max(examined, 0), target.captured_size))
+
+
+def budget_stop_targets(segments, *, first_started: bool,
+                         first_examined: "int | None" = None) -> list:
+    """ScanTargets for the segments a whole-scan budget left behind, with
+    each one's examined extent set to what the stop position proves.
+
+    A budget stop names a run of segments starting at wherever the scan
+    was when it stopped. Every segment AFTER that position was never
+    reached, so exactly none of its captured bytes were examined and its
+    whole capture is an exact gap. The segment AT that position is the
+    only ambiguous one: `first_started` says whether the scan had already
+    begun working on it, and `first_examined` how far it had got. A
+    started segment with no stop cursor keeps no extent at all -- its gap
+    is real and its size is not knowable, which is not the same claim as
+    the whole segment being missed."""
+    targets = []
+    for index, segment in enumerate(segments):
+        examined = first_examined if (index == 0 and first_started) else 0
+        targets.append(segment_scan_target(segment, examined_size=examined))
+    return targets
 
 
 def derive_coverage_status(evaluated: bool, complete: bool) -> str:
@@ -329,16 +392,20 @@ class CoverageTracker:
                 f"note_skipped_oversize() requires a ScanTarget identifying the skipped "
                 f"region/segment, got {type(target).__name__}")
         self._note_disposition("note_skipped_oversize")
-        self.skipped_oversize_targets.append(target)
+        # Skipped for exceeding a cap: the read was never issued, so none
+        # of the captured bytes were examined and the whole of them is the
+        # gap's exact extent.
+        self.skipped_oversize_targets.append(with_examined_extent(target, 0))
 
-    def _note_target(self, target: "ScanTarget | None", targets: list, caller: str):
+    def _note_target(self, target: "ScanTarget | None", targets: list, caller: str,
+                      examined: "int | None" = None):
         if target is None:
             return
         if type(target) is not ScanTarget:
             raise TypeError(
                 f"{caller}() target, when given, must be a ScanTarget identifying the "
                 f"region/segment, got {type(target).__name__}")
-        targets.append(target)
+        targets.append(with_examined_extent(target, examined))
 
     def note_read_failed(self, target: "ScanTarget | None" = None):
         """Disposition: the read raised, or came back with nothing usable
@@ -347,16 +414,26 @@ class CoverageTracker:
         a note_short_read() annotation."""
         self._note_disposition("note_read_failed")
         self.read_failed += 1
-        self._note_target(target, self.read_failed_targets, "note_read_failed")
+        # Nothing usable came back, so nothing was examined -- the same
+        # exact basis an oversized skip has, for the opposite reason.
+        self._note_target(target, self.read_failed_targets, "note_read_failed", examined=0)
 
-    def note_short_read(self, target: "ScanTarget | None" = None):
+    def note_short_read(self, target: "ScanTarget | None" = None, *,
+                         got: "int | None" = None):
         """ANNOTATION, not a disposition: fewer bytes came back than the
         item declared, and the readable prefix IS being scanned. The same
         item therefore also takes a note_scanned() disposition -- this
         call deliberately does not close it, and must not be counted
-        against `total` a second time."""
+        against `total` a second time.
+
+        `got` is how many bytes the read actually returned. Unlike every
+        other gap this tracker records, a short read's unexamined extent is
+        NOT the whole captured item -- the prefix was scanned -- so the
+        returned length is the only thing that makes the remainder
+        measurable. Omit it and the gap is still recorded, just as an
+        unmeasured one."""
         self.short_reads += 1
-        self._note_target(target, self.short_read_targets, "note_short_read")
+        self._note_target(target, self.short_read_targets, "note_short_read", examined=got)
 
     def note_not_applicable(self):
         """Disposition: read fine, but there was nothing analyzable to do
