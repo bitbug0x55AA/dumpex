@@ -13,86 +13,26 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Added
 
-- A hunt now reports how much of its own scanning work did not happen, not
-  only how many bytes it missed. `coverage.missed_bytes` gains
-  `eligible_bytes`, `unscanned_pass_bytes` and `unscanned_fraction`, and the
-  console coverage line states the share alongside the byte figure —
-  `Coverage    PARTIAL — 3.2 MB unscanned across 3 range(s) (0.03% of 11.4 GB
-  eligible)`. An absolute figure ranks two runs against each other; a share is
-  what lets one run be judged on its own, and lets a triage pipeline apply a
-  single threshold across dumps of any size. A `complete` scan states its share
-  too — `0% of 11.4 GB eligible` and `0% of 8 KB eligible` are the same two
-  words for a negative worth trusting and one worth almost nothing.
-  The share measures scanning work **per pass**: a hunter that runs three
-  passes over one region had three passes' worth of work to do, so a region
-  every pass skipped reports 100% while a region only one of two passes skipped
-  reports 50%. Gap extents are unioned within a pass and summed across passes,
-  and a pass's scope covers items a whole-scan budget never reached, so the
-  share can never exceed 100%. The byte figure keeps its own basis — memory
-  with at least one unanswered question, which is what a re-collection has to
-  recover — and is deliberately not the numerator. Pass identity is declared by
-  each producer rather than inferred from `limitations[].scope`, which may name
-  a budget or signal instead. The scale belongs to the hunter, not the dump: two
-  hunters over one dump legitimately report different denominators, and the
-  `--hunt` document-level rollup states none at all. Every hunter publishes one
-  except `hollowing`, whose gaps never describe unexamined bytes. Both fields are
-  `null` wherever a proportion would not be supportable — a producer that
-  measures no eligibility, a scan loop that took items into scope without
-  measuring them, a hunter that evaluated nothing, and a run whose gaps have no
-  measured extent — so a budget that stopped a scan somewhere unmeasured never
-  renders as `0%` unscanned, and an exact-looking percentage never stands beside
-  an unmeasured gap: a lower bound is labelled as one. The console reserves both
-  saturating values for what they mean, rendering anything that would round into
-  them as `<0.01%` or `>99.99%`. Schema v2.16. Nothing about when `partial` is
-  reported changes, and no verdict, score, confidence value,
-  `coverage.reasons` string, or exit code moves.
 - Coverage now says how much memory a partial hunt actually missed, not only
-  that it was partial. Every result and every hunter record carries
-  `coverage.missed_bytes`, and the console coverage line gains a clause —
-  `Coverage    PARTIAL — 3 MB unscanned across 4 target(s)` — that separates a
-  negative result worth recollecting for from one that essentially stands. The
-  figure counts what the dump actually holds for each skipped region or
-  segment, never the address space it declares, so a region the capture never
-  backed contributes zero rather than inflating the total; that case still
-  needs a re-collection, which `capture_state` already says. It measures
-  memory rather than gap records: the unexamined ranges are unioned, so one
-  region that several scan layers each skipped, or that several hunters each
-  skipped, is counted once and the total can never exceed what the dump holds.
-  `distinct_ranges` reports how many ranges the figure spans, which is what
-  separates one region skipped three times from three skipped regions.
-  A gap whose extent the run cannot establish is counted, never estimated:
-  `state` reads `exact`, `lower_bound` (labelled as a floor, never rendered as
-  a total), or `unknown` (no figure at all, so a consumer thresholding on the
-  number cannot read it as zero). `scanTarget` gains `examined_size` and
-  `unexamined_size` alongside it, and the aggregate is the union of exactly
-  those per-target ranges, so the per-target and total figures cannot disagree.
-  Schema v2.15. Nothing about when `partial` is reported changes, and no verdict,
-  score, confidence value, `coverage.reasons` string, or exit code moves.
+  that it was partial. Schema v2.15 adds `coverage.missed_bytes` to every result
+  and hunter record, including the missed range count and whether the byte
+  figure is exact, a lower bound, or unknown. The console reports the figure,
+  and scan targets expose their examined and unexamined sizes.
+- Schema v2.16 adds `eligible_bytes`, `unscanned_pass_bytes`, and
+  `unscanned_fraction` to show the share of each hunter's scanning work that did
+  not happen. The console reports the share alongside missed bytes without
+  changing coverage status, verdicts, scores, confidence, or exit codes.
 
 ### Changed
 
 - `--hunt pipe` now reports a truncated `HandleDataStream`. A dump whose
-  descriptor array declares more handles than it delivers carries a
-  `HANDLE_STREAM_TRUNCATED` limitation with the dropped-descriptor count, makes
-  the run's coverage `partial`, and says on the console that the handle
-  evidence is a head rather than the whole set — a pipe handle in the missing
-  tail is neither found nor ruled out. Previously such a handle simply did not
-  appear, with no coverage caveat. A dump whose HandleDataStream is readable
-  and untruncated produces byte-identical output, coverage, and exit code; the
-  only other behavior change is the parse-failure correction below, which
-  applies to a dump whose handle stream would not parse at all.
+  descriptor array declares more handles than it delivers now carries a
+  `HANDLE_STREAM_TRUNCATED` limitation with the dropped-descriptor count and
+  reports partial coverage instead of silently omitting the missing tail.
 - `--hunt pipe` now distinguishes a HandleDataStream that was never captured
-  from one that was captured and could not be parsed. The second previously
-  reported the first's reason — that the dump needs to be re-collected with
-  `MiniDumpWithHandleData` — which is not the next step for a dump whose handle
-  stream is corrupt, and which that analyst cannot act on anyway. The parser's
-  own error text is now reported instead, and the `handle_data` coverage source
-  is `failed` rather than `absent`, matching what `--handles` already reports
-  for the same dump. When a parse failure is recorded, no handle from that
-  stream is scored, even if a parsed stream object is also present — a dump can
-  declare the same stream twice, and which entry survived is not knowable, so
-  the evidence is treated as untrustworthy rather than scored. `--handles`
-  already resolved it that way. See
+  from one that was captured but could not be parsed. Parse failures now report
+  the parser error as a failed source and prevent that stream's handles from
+  being scored, matching `--handles`. See
   [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the consumer
   impact.
 
@@ -107,57 +47,18 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   coverage vocabulary. Only the selected scanner's per-region or per-segment
   size cap is bypassed; every other budget stays enforced. Conclusions apply to
   the requested range only.
-- A targeted rescan now separates "this source does not apply to the requested
-  range" from "this source could not evaluate it". A closure whose own
-  descriptor-eligibility gate declined the target reports `not_applicable` with
-  the gate that declined it, rather than the same `not_evaluated` a missing
-  capture, a read failure, or a spent budget produces. A minimum input splits
-  the same way: a requested range shorter than the algorithm can be applied to
-  is `not_applicable` (a larger `--size` is what changes it), while a range
-  that clears the minimum but is only partly captured stays `not_evaluated`
-  (a fuller collection is). Only the second is a
-  coverage failure, so one inapplicable layer no longer forces the layers that
-  did apply to read as `PARTIAL` / `INCONCLUSIVE`.
-- A targeted closure that finished without a hit now records what it did: bytes
-  evaluated, values measured, bounds reached, per-decode-sub-layer candidate and
-  attempt counts, and what that layer alone spent against each of the shared
-  budget's four limits. The measurements appear in `details.targeted_scope` and
-  on the console card, and `--verbose` adds the structural context the range
-  sits in — containing allocation, module attribution, capture file offset —
-  plus every entry of a bounded ranked list. They are observations only: they
-  create no finding, move no score, and make no claim about any other source's
-  coverage.
+- Targeted rescans distinguish a source that does not apply to the requested
+  range (`not_applicable`) from one that could not evaluate it
+  (`not_evaluated`). They also report per-source measurements and, with
+  `--verbose`, the range's structural context.
 - A targeted `obfuscation` rescan now measures entropy in bounded windows as
-  well as over the whole range. A single Shannon value over a sparse oversized
-  allocation is an average its zero-filled majority dominates, so a bounded
-  encrypted payload inside it reads as low-entropy; the rescan now reports the
-  highest-entropy sub-ranges with their addresses, how many windows crossed the
-  threshold, and whether the windows were measured exhaustively or sampled. A
-  range whose own average clears the threshold is still reported as one hit, as
-  before.
+  well as over the whole range, reporting the highest-entropy sub-ranges and
+  whether window coverage was exhaustive or sampled.
 - The `--hunt all` skipped-target queue now prints the targeted rescan to run
-  next. Each eligible entry renders one copyable `--hunt-addr` command per
-  skipping hunter that has a targeted capability, with the dump path quoted so
-  the line means the same thing in a POSIX shell, PowerShell, and `cmd.exe`,
-  alongside the `hunter + source + scope + base_address + size`
-  key the new result is matched back by. A hunter with no targeted capability
-  is named as unsupported instead; a target whose bytes this dump never
-  captured is told to recollect rather than rescan; and a target larger than
-  the hunter's request ceiling gets one capped command, labelled supplementary,
-  that does not claim to close the original gap. Structured output carries no
-  command string: the address, size, and hunters are the contract, and quoting
-  belongs to the shell that reads a command line. Options come first and the
-  dump path last, behind a `--` terminator, so a dump legitimately named
-  `-case.dmp` still gets a command that runs. A dump path no single quoting rule
-  can carry through all three shells -- one holding `%`, `$`, a backtick, `"`,
-  `!`, a character a terminal acts on (C0/C1 controls, `DEL`, bidi marks,
-  overrides and isolates, line and paragraph separators), a trailing backslash,
-  or the doubled backslash of a UNC path -- gets the arguments without a command
-  line instead, rather than a line that would expand, split, execute part of the
-  filename, or misrepresent itself on screen.
-  `--redact-paths` reduces the
-  dump path in a rendered command to its basename, so a `--txt` transcript stays
-  as shareable as the structured document.
+  next for each capable hunter. Targets that require recollection or an
+  unsupported hunter are labelled instead, and unsafe-to-render paths receive
+  arguments rather than a misleading command line. `--redact-paths` also
+  reduces paths in rendered commands to basenames.
 
 ### Changed
 
@@ -168,51 +69,23 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   is unchanged and still names all of them. Schema v2.14 is unchanged: every
   archived document stays valid.
 - `--size` now requires `--hunt-addr` when used with `--hunt`, and is rejected
-  with a usage error otherwise. It previously had no effect there, which let a
-  targeted invocation missing its address run an unbounded whole-dump hunt
-  while silently discarding the option. `--size` is unchanged for `--extract`
-  and `--strings`.
+  with a usage error otherwise. Hunt options that the selected targeted scanner
+  does not use are also rejected instead of being silently ignored. `--size`
+  is unchanged for `--extract` and `--strings`.
 - Published schema v2.14. Every hunt summary now carries a `scan_scope` tag
-  naming what the invocation covered, and a targeted rescan's hunter details
-  carry one `targeted_scope` entry per coverage closure. A targeted record's
-  coverage also names every source outside the rescan's grant explicitly, so a
-  complete result for one source cannot read as complete coverage for the
-  hunter. Full-scope hunt details omit `targeted_scope` entirely. Schema v2.13
-  and older are frozen and unchanged.
-- The current schema now cross-checks `summary.scan_scope` against the rest of
-  the document instead of only validating its own shape: a `targeted` tag must
-  agree with `summary.selected` and with the selected analyzer's registered
-  source, must name that analyzer's scope set exactly, and requires
-  `targeted_scope` on the record with one entry per closure in the analyzer's
-  own fixed order; a `full` tag forbids `targeted_scope` entirely.
-- A `targeted_scope` entry now carries `applicability_reason` and
-  `measurements`, and its `coverage_status` may be `not_applicable`. A consumer
-  must not count `not_applicable` as a coverage failure: the record's own
-  `coverage.status` does not, and a rescan whose closures all decline the target
-  reports `not_evaluated`. These are same-version additions to the still
-  unreleased v2.14 targeted shapes; schema v2.13 and older stay frozen, and
-  full-scope documents are unaffected.
-- A hunt option the selected hunter's targeted rescan does not read is now a
-  usage error instead of being accepted and ignored. `--hunt stomping
-  --hunt-addr` rejects `--ref-dir`, which supplies reference modules for a
-  content comparison no targeted rescan runs; it previously recorded that
-  directory in `meta.execution.options` for a run that never read it, and let
-  it change the invocation's observation identity. `--yara-dir` stays accepted
-  for `--hunt yara`, whose targeted rescan does resolve rules through it.
+  naming what the invocation covered, and targeted hunter details carry
+  per-source applicability, measurements, and coverage in `targeted_scope`.
+  Sources outside the targeted grant remain explicit, and schema validation
+  rejects inconsistent full/targeted scope combinations. Schema v2.13 and older
+  remain frozen.
 
 ### Fixed
 
 - A targeted `pipe` rescan whose pipe-name budget ran out attributed that one
-  exhaustion to both of its coverage closures, so it appeared twice in
-  `coverage.limitations`, twice in the derived `coverage.reasons`, and twice on
-  the console. The gap is now raised once, by the `pipe_name` closure that owns
-  the budget; the `c2_context` closure it also constrains still reports
-  `partial` and still carries the diagnostic explaining the dependency.
+  exhaustion to both coverage closures. The gap is now reported once by its
+  owning `pipe_name` closure while `c2_context` still reports partial coverage.
 - Corrected the reported address of a UTF-16LE IOC token in module-stomping
-  output. Its `VA` was computed from the match's character position rather than
-  its byte position, placing the token at half its true distance into the
-  string. ASCII and URL-run tokens are unaffected; which tokens match, the hit
-  counts, the weak/strong classification, and the score are unchanged.
+  output. Matching, classification, and scoring are unchanged.
 
 ## 3.5.2 — 2026-08-27
 
@@ -413,7 +286,7 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Compatibility notes
 
-- Current commands emit schema v2.13.
+- Current commands emit schema v2.16.
 - Historical schema files remain packaged and frozen for archived evidence.
 - Validate a document using its own `meta.schema_version`.
 - See [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) before upgrading a
