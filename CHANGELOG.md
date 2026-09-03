@@ -9,6 +9,8 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
+## 3.6.1 — 2026-09-03
+
 ### Added
 
 - A hunt now reports how much of its own scanning work did not happen, not
@@ -28,20 +30,21 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   and a pass's scope covers items a whole-scan budget never reached, so the
   share can never exceed 100%. The byte figure keeps its own basis — memory
   with at least one unanswered question, which is what a re-collection has to
-  recover — and is deliberately not the numerator; `limitations[].scope` names
-  the pass each gap belongs to. The scale belongs to the hunter, not the dump:
-  two hunters over one dump legitimately report different denominators, and the
+  recover — and is deliberately not the numerator. Pass identity is declared by
+  each producer rather than inferred from `limitations[].scope`, which may name
+  a budget or signal instead. The scale belongs to the hunter, not the dump: two
+  hunters over one dump legitimately report different denominators, and the
   `--hunt` document-level rollup states none at all. Every hunter publishes one
-  except `hollowing`, whose gaps never describe unexamined bytes. Both fields
-  are `null` wherever a proportion would not be supportable — a producer that
+  except `hollowing`, whose gaps never describe unexamined bytes. Both fields are
+  `null` wherever a proportion would not be supportable — a producer that
   measures no eligibility, a scan loop that took items into scope without
   measuring them, a hunter that evaluated nothing, and a run whose gaps have no
   measured extent — so a budget that stopped a scan somewhere unmeasured never
-  renders as `0%` unscanned, and an exact-looking percentage never stands
-  beside an unmeasured gap: a lower bound is labelled as one. The console
-  reserves both saturating values for what they mean, rendering anything that
-  would round into them as `<0.01%` or `>99.99%`. Schema v2.16. Nothing about
-  when `partial` is reported changes, and no verdict, score, confidence value,
+  renders as `0%` unscanned, and an exact-looking percentage never stands beside
+  an unmeasured gap: a lower bound is labelled as one. The console reserves both
+  saturating values for what they mean, rendering anything that would round into
+  them as `<0.01%` or `>99.99%`. Schema v2.16. Nothing about when `partial` is
+  reported changes, and no verdict, score, confidence value,
   `coverage.reasons` string, or exit code moves.
 - Coverage now says how much memory a partial hunt actually missed, not only
   that it was partial. Every result and every hunter record carries
@@ -62,9 +65,41 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   a total), or `unknown` (no figure at all, so a consumer thresholding on the
   number cannot read it as zero). `scanTarget` gains `examined_size` and
   `unexamined_size` alongside it, and the aggregate is the union of exactly
-  those per-target ranges, so the per-target and total figures cannot disagree. Schema v2.15. Nothing about
-  when `partial` is reported changes, and no verdict, score, confidence value,
-  `coverage.reasons` string, or exit code moves.
+  those per-target ranges, so the per-target and total figures cannot disagree.
+  Schema v2.15. Nothing about when `partial` is reported changes, and no verdict,
+  score, confidence value, `coverage.reasons` string, or exit code moves.
+
+### Changed
+
+- `--hunt pipe` now reports a truncated `HandleDataStream`. A dump whose
+  descriptor array declares more handles than it delivers carries a
+  `HANDLE_STREAM_TRUNCATED` limitation with the dropped-descriptor count, makes
+  the run's coverage `partial`, and says on the console that the handle
+  evidence is a head rather than the whole set — a pipe handle in the missing
+  tail is neither found nor ruled out. Previously such a handle simply did not
+  appear, with no coverage caveat. A dump whose HandleDataStream is readable
+  and untruncated produces byte-identical output, coverage, and exit code; the
+  only other behavior change is the parse-failure correction below, which
+  applies to a dump whose handle stream would not parse at all.
+- `--hunt pipe` now distinguishes a HandleDataStream that was never captured
+  from one that was captured and could not be parsed. The second previously
+  reported the first's reason — that the dump needs to be re-collected with
+  `MiniDumpWithHandleData` — which is not the next step for a dump whose handle
+  stream is corrupt, and which that analyst cannot act on anyway. The parser's
+  own error text is now reported instead, and the `handle_data` coverage source
+  is `failed` rather than `absent`, matching what `--handles` already reports
+  for the same dump. When a parse failure is recorded, no handle from that
+  stream is scored, even if a parsed stream object is also present — a dump can
+  declare the same stream twice, and which entry survived is not knowable, so
+  the evidence is treated as untrustworthy rather than scored. `--handles`
+  already resolved it that way. See
+  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the consumer
+  impact.
+
+## 3.6.0 — 2026-09-02
+
+### Added
+
 - Added `--hunt-addr ADDR`, which rescans one virtual-address range with the
   selected hunter instead of the whole dump. It requires `--hunt <TTP>` and
   `--size SIZE`, supports `stomping`, `pipe`, `cs-beacon`, `yara`, and
@@ -126,30 +161,6 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Changed
 
-- `--hunt pipe` now reports a truncated `HandleDataStream`. A dump whose
-  descriptor array declares more handles than it delivers carries a
-  `HANDLE_STREAM_TRUNCATED` limitation with the dropped-descriptor count, makes
-  the run's coverage `partial`, and says on the console that the handle
-  evidence is a head rather than the whole set — a pipe handle in the missing
-  tail is neither found nor ruled out. Previously such a handle simply did not
-  appear, with no coverage caveat. A dump whose HandleDataStream is readable
-  and untruncated produces byte-identical output, coverage, and exit code; the
-  only other behavior change is the parse-failure correction below, which
-  applies to a dump whose handle stream would not parse at all.
-- `--hunt pipe` now distinguishes a HandleDataStream that was never captured
-  from one that was captured and could not be parsed. The second previously
-  reported the first's reason — that the dump needs to be re-collected with
-  `MiniDumpWithHandleData` — which is not the next step for a dump whose handle
-  stream is corrupt, and which that analyst cannot act on anyway. The parser's
-  own error text is now reported instead, and the `handle_data` coverage source
-  is `failed` rather than `absent`, matching what `--handles` already reports
-  for the same dump. When a parse failure is recorded, no handle from that
-  stream is scored, even if a parsed stream object is also present — a dump can
-  declare the same stream twice, and which entry survived is not knowable, so
-  the evidence is treated as untrustworthy rather than scored. `--handles`
-  already resolved it that way. See
-  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the consumer
-  impact.
 - `investigation_actions[].recommended_actions` now includes a
   `targeted_hunter_rescan` entry only when a hunter that skipped the target can
   actually run one over it, and only when this dump holds bytes to rescan; its
@@ -167,9 +178,7 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   coverage also names every source outside the rescan's grant explicitly, so a
   complete result for one source cannot read as complete coverage for the
   hunter. Full-scope hunt details omit `targeted_scope` entirely. Schema v2.13
-  and older are frozen and unchanged. This release ships v2.15 as the emitted
-  contract (see the missed-byte entry above); v2.14 is packaged and frozen
-  alongside the earlier versions.
+  and older are frozen and unchanged.
 - The current schema now cross-checks `summary.scan_scope` against the rest of
   the document instead of only validating its own shape: a `targeted` tag must
   agree with `summary.selected` and with the selected analyzer's registered
