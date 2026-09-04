@@ -28,6 +28,7 @@ workflow/reference pages.
 | [Targeted rescan contract](developer/hunt_targeted_rescan_contract.md) | Planned; not in current CLI | Final targeted hunter range-rescan design |
 | [Recon process/sysinfo/handles contract](developer/recon_process_sysinfo_handles_contract.md) | Implemented | Current recon records, evidence, coverage, and compatibility contract |
 | [Recon profile contract](developer/recon_profile_contract.md) | Implemented | Current `--profile` record and capability-map contract |
+| [Entropy full-scope page-pass evaluation](developer/hunt_entropy_full_scope_page_pass_evaluation.md) | Decided; not implemented | Why full-scope entropy stays whole-region and localization stays targeted-only: measurements, benign-noise cost, and the coverage semantics a future page pass would need |
 
 Live developer documents keep only current architecture decisions, current
 behavior contracts, non-obvious safety and compatibility invariants, and final
