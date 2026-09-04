@@ -34,6 +34,22 @@ ENTROPY_TOP_WINDOWS       = 5                  # highest-entropy windows retaine
 
 B64_MIN_LEN               = 80                 # minimum Base64 string length
 
+# ── Base64 console preview bounds (display only) ─────────────────────────
+# How much of a retained Base64 hit a --verbose console line quotes. These
+# bound TERMINAL OUTPUT, not evidence: the complete encoded string and the
+# complete decoded payload stay on the hit and in --json's own
+# `details.base64[]`, and a preview is built from those retained bytes
+# without reading the dump again. Encoded content is Base64's own ASCII
+# alphabet, so its bound counts characters; decoded content is arbitrary
+# bytes, so its bounds count bytes. Text and hex have separate bounds
+# because a hex rendering costs two columns per byte.
+B64_PREVIEW_ENCODED_CHARS = 64    # leading Base64 characters quoted
+B64_PREVIEW_TEXT_BYTES    = 96    # leading decoded bytes quoted as escaped text
+B64_PREVIEW_HEX_BYTES     = 32    # leading decoded bytes quoted as hex
+B64_PREVIEW_MAX_HITS      = 20    # hits carrying content previews; every retained
+                                   # hit still gets its VA/offset/type/size line, so
+                                   # this bounds preview volume without hiding a hit
+
 XOR_SCAN_MAX              = 512 * 1024         # max region for single-byte XOR BF
 XOR_SAMPLE_SIZE           = 4096               # bytes sampled before full decode (text/
                                                 # keyword candidate path only -- see

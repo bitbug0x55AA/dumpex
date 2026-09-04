@@ -3,7 +3,7 @@
 Verbose evidence is a console-only projection; wire-shaped facts remain
 stable for legacy and structured output.
 """
-from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
+from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD, console_safe
 from dumpex.hunt._ui import NOT_DETECTED_IN_SCANNED_SCOPE, NOT_EVALUATED, _status_text
 from dumpex.hunt._finding import (
     DetailLevel, leads_suffix, render_finding_lines, TAG_DETECTION, TAG_LEAD,
@@ -13,12 +13,17 @@ from dumpex.hunt._report_console import (
     coverage_kv_value, header_lines, sorted_for_display, render_key_signal_compact,
     render_why_this_verdict, render_coverage, with_verbose_facts,
 )
+from dumpex.hunt.encoding.config import (
+    B64_PREVIEW_ENCODED_CHARS, B64_PREVIEW_HEX_BYTES, B64_PREVIEW_MAX_HITS,
+    B64_PREVIEW_TEXT_BYTES,
+)
 from dumpex.hunt.encoding.domain import EncodingReport
 from dumpex.hunt.encoding.report_facts import (
     _shellcode_item_fact, _structural_pe_item_fact, finding_from_check_result,
     project_coverage_report, project_coverage_v1,
 )
 from dumpex.output.records import hex_address
+from dumpex.ui.byte_preview import UNIT_CHARS, content_digest, hex_preview, text_preview
 
 
 # ── Verbose-only evidence-item fact rendering (console policy only) ──────
@@ -29,15 +34,30 @@ from dumpex.output.records import hex_address
 # zero-padded 16-hex-digit form as the wire fact, the structured record,
 # and `--json` `details`.
 
+def _ioc_strings_text(ioc_strings, limit: int) -> str:
+    r"""The leading `limit` IOC strings as a trailing ` IOC_strings=...`
+    field, or "" when the classification found none.
+
+    IOC strings are cut out of decoded content, so they are dump-derived
+    text with the same terminal-injection reach as the content they came
+    from -- the URL pattern's own `\S` admits ESC, and a matched URL can
+    therefore carry an ANSI sequence. Every value goes through
+    `console_safe()` here, so quoting an IOC can no longer colour the
+    output, move the cursor, or reorder the line around it. The exact
+    strings stay in `--json`.
+    """
+    if not ioc_strings:
+        return ""
+    return " IOC_strings=" + ", ".join(console_safe(v) for v in ioc_strings[:limit])
+
+
 def _sleep_mask_verbose_fact(h) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
     fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} Region_size=0x{h.region.size:x} "
             f"XOR_key={h.key.hex()} rotation_offset={h.key_offset} "
             f"Decoded_type={h.classification.kind.upper()}")
-    if h.classification.ioc_strings:
-        fact += f" IOC_strings={', '.join(h.classification.ioc_strings[:4])}"
-    return fact
+    return fact + _ioc_strings_text(h.classification.ioc_strings, 4)
 
 
 def _entropy_verbose_fact(h) -> str:
@@ -50,15 +70,76 @@ def _entropy_verbose_fact(h) -> str:
             f"Entropy={h.entropy:.3f}bits threshold={h.threshold} Protection={h.region.protect}")
 
 
-def _base64_verbose_fact(h) -> str:
+# Decoded content an analyst reads as text; every other classification is
+# rendered as hex instead. A preview follows the classification the hit
+# already carries -- it never re-inspects the bytes to decide.
+_TEXT_KINDS = ("plaintext", "ioc_text")
+
+
+def _pe_metadata_text(pe) -> str:
+    """The PE fields already parsed onto the hit's own classification, as
+    the context a bounded hex prefix on its own cannot give. Absent
+    fields are omitted rather than printed as a placeholder: a header
+    dumpex could not read a field out of has nothing to say about it."""
+    if pe is None:
+        return ""
+    parts = []
+    if pe.machine_name:
+        parts.append(f"PE_machine={pe.machine_name}")
+    elif pe.machine is not None:
+        parts.append(f"PE_machine=0x{pe.machine:04x}")
+    if pe.number_of_sections is not None:
+        parts.append(f"PE_sections={pe.number_of_sections}")
+    if pe.size_of_image is not None:
+        parts.append(f"PE_image_size=0x{pe.size_of_image:x}")
+    return (" " + " ".join(parts)) if parts else ""
+
+
+def _decoded_preview_text(h) -> str:
+    """The decoded payload as a bounded preview plus, where the preview
+    alone does not identify the content, its SHA-256.
+
+    The digest is printed whenever the preview is a partial view of the
+    payload -- truncated text, or hex of any length, which shows a prefix
+    of bytes that a reader cannot compare by eye -- and omitted only when
+    the quoted text IS the whole decoded content."""
+    decoded = h.decoded
+    if h.classification.kind in _TEXT_KINDS:
+        preview = f"Decoded_preview={text_preview(decoded, B64_PREVIEW_TEXT_BYTES)}"
+        complete = len(decoded) <= B64_PREVIEW_TEXT_BYTES
+    else:
+        preview = (f"Decoded_hex={hex_preview(decoded, B64_PREVIEW_HEX_BYTES)}"
+                   f"{_pe_metadata_text(h.classification.pe_info)}")
+        complete = False
+    return preview if complete else f"{preview} Decoded_sha256={content_digest(decoded)}"
+
+
+def _base64_verbose_fact(h, with_preview: bool = True) -> str:
     fo = h.location.file_offset
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
     fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} "
             f"Decoded_type={h.classification.kind.upper()} "
             f"Decoded_size={len(h.decoded)}bytes B64_length={len(h.raw)}chars")
-    if h.classification.ioc_strings:
-        fact += f" IOC_strings={', '.join(h.classification.ioc_strings[:3])}"
-    return fact
+    if with_preview:
+        fact += (f" Encoded_preview="
+                 f"{text_preview(h.raw, B64_PREVIEW_ENCODED_CHARS, UNIT_CHARS)}"
+                 f" {_decoded_preview_text(h)}")
+    return fact + _ioc_strings_text(h.classification.ioc_strings, 3)
+
+
+def _base64_verbose_facts(items: tuple) -> tuple:
+    """One fact per retained hit, the leading `B64_PREVIEW_MAX_HITS` of
+    them carrying content previews. Every hit keeps its own line -- the
+    bound applies to how much CONTENT the console quotes, not to how many
+    hits it reports -- and a trailing line names the bound whenever it
+    actually trims anything, so a reader is never left to infer from a
+    missing preview that a hit had no content."""
+    facts = [_base64_verbose_fact(h, with_preview=i < B64_PREVIEW_MAX_HITS)
+             for i, h in enumerate(items)]
+    if len(items) > B64_PREVIEW_MAX_HITS:
+        facts.append(f"Content previews bounded to the first {B64_PREVIEW_MAX_HITS} of "
+                     f"{len(items)} hits — see --json for every hit's raw and decoded bytes")
+    return tuple(facts)
 
 
 def _xor_verbose_fact(h) -> str:
@@ -66,9 +147,7 @@ def _xor_verbose_fact(h) -> str:
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
     fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} XOR_key=0x{h.key:02x} "
             f"Decoded_type={h.classification.kind.upper()}")
-    if h.classification.ioc_strings:
-        fact += f" IOC_strings={', '.join(h.classification.ioc_strings[:3])}"
-    return fact
+    return fact + _ioc_strings_text(h.classification.ioc_strings, 3)
 
 
 def _compressed_verbose_fact(h) -> str:
@@ -76,15 +155,12 @@ def _compressed_verbose_fact(h) -> str:
     fo_str = f"0x{fo:x}" if fo is not None else "(not captured)"
     fact = (f"VA={hex_address(h.location.va)} File_offset={fo_str} Algorithm={h.layer.upper()} "
             f"Decoded_type={h.classification.kind.upper()} Decoded_size={len(h.decoded)}bytes")
-    if h.classification.ioc_strings:
-        fact += f" IOC_strings={', '.join(h.classification.ioc_strings[:3])}"
-    return fact
+    return fact + _ioc_strings_text(h.classification.ioc_strings, 3)
 
 
 _VERBOSE_ITEM_RENDERERS = {
     "obfuscation.sleep_mask_confirmed":    _sleep_mask_verbose_fact,
     "obfuscation.entropy_observation":     _entropy_verbose_fact,
-    "obfuscation.base64_observation":      _base64_verbose_fact,
     "obfuscation.xor_observation":         _xor_verbose_fact,
     "obfuscation.compressed_observation":  _compressed_verbose_fact,
 }
@@ -98,6 +174,11 @@ _VERBOSE_ITEM_RENDERERS = {
 # kept in step by hand.
 
 def _verbose_facts_for(result, report: EncodingReport) -> tuple:
+    # base64_observation is rendered from the whole evidence tuple rather
+    # than item by item: a hit's fact depends on its position in that
+    # tuple, since only the leading hits carry a content preview.
+    if result.check == "obfuscation.base64_observation":
+        return _base64_verbose_facts(result.evidence)
     if result.check == "obfuscation.structural_payload":
         return tuple(_structural_pe_item_fact(item, report) for item in result.evidence)
     if result.check == "obfuscation.shellcode_bootstrap_lead":
