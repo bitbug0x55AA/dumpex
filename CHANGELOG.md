@@ -11,6 +11,19 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Changed
 
+- `--hunt obfuscation --verbose` now shows the Base64 content dumpex decoded,
+  not only its size and classification. Every retained hit adds a bounded
+  preview of the original Base64 string and of the decoded payload: readable
+  text is quoted and escaped, PE and other binary content is shown as a hex
+  prefix with its parsed header fields, and a SHA-256 of the whole decoded
+  payload accompanies anything the preview only partly shows. Truncation is
+  explicit, stating how much was left out. Decoded bytes cannot emit ANSI
+  escapes or otherwise drive the terminal, and the IOC strings every
+  obfuscation verbose line quotes are escaped the same way -- a URL cut out of
+  decoded content can no longer carry an escape sequence into the terminal.
+  Previews are console-only: retained evidence, `details.base64[]`'s `raw` and
+  `decoded`, scores, confidence, verdicts, coverage, finding ids, and exit
+  codes are unchanged.
 - A hunter's console `Coverage` row now separates the two things a coverage
   status covers. A finished byte scan reads as `byte scan 100% complete
   (165.2 MB eligible)` rather than as a count of zero unscanned bytes, and a

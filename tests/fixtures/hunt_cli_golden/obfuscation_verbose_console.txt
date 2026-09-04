@@ -40,6 +40,11 @@
     Facts:
       - VA=0x0000000000300000 File_offset=(not captured) Decoded_type=PE Decoded_size=1184bytes
         B64_length=1580chars
+        Encoded_preview="TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"[+1516chars
+        omitted]
+        Decoded_hex=4d5a000000000000000000000000000000000000000000000000000000000000[+1152bytes
+        omitted] PE_machine=AMD64 PE_sections=1 PE_image_size=0x2000
+        Decoded_sha256=dd7ae74e129c754446a0aa8a5be017fb8c6be91b50382aea7bdaa7d423461ef6
     Limitations:
       - IOC-style strings inside decoded content are a lead, not proof — see
         obfuscation.base64_observation facts / stomping-style string caveats.
