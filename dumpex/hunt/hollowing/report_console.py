@@ -264,7 +264,7 @@ def _second_signal_text(report: HollowingReport) -> str:
 
 
 def _render_verdict_block(report: HollowingReport, coverage_status: str,
-                           findings: list, coverage_report) -> list:
+                           findings: list, coverage_report, width: int) -> list:
     """The verdict-first key/value block. Reproduces the pre-migration
     verdict TEXT decisions exactly -- score 2 is all three structural
     signals correlating at one address, score 1 is MEM_PRIVATE plus
@@ -296,7 +296,7 @@ def _render_verdict_block(report: HollowingReport, coverage_status: str,
         ("Score",      f"{score}/{report.max_score}  "
                        + DIM("(requires MEM_PRIVATE at the image base correlated with a "
                              "second structural anomaly; single signals are leads only)")),
-        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report, width)),
         ("Review",     report.review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -367,7 +367,7 @@ def render_console_lines(report: HollowingReport, verbose: bool = False,
 
     lines = list(header_lines("Process Hollowing"))
     lines.extend(_render_verdict_block(report, coverage_status, findings,
-                                        project_coverage_report(report.coverage)))
+                                        project_coverage_report(report.coverage), w))
     lines.append("")
 
     ordered = _ordered_for_display(findings)

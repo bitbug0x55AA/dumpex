@@ -9,7 +9,7 @@
   VERDICT     HIGH CONFIDENCE C2 PIPE / LATERAL MOVEMENT — handle-confirmed pipe with BOTH nearby C2 context and live RIP/EIP execution
   Confidence  high
   Score       3/3  (handle-anchored; bare pipe strings are unscored leads)
-  Coverage    PARTIAL
+  Coverage    PARTIAL — 1 region(s) short-read
   Review      high
 
   KEY SIGNALS

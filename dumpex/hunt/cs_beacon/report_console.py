@@ -314,7 +314,7 @@ def _beacon_configs_lines(report: CSBeaconReport, w: int, verbose: bool) -> list
 # ── Verdict block / coverage impacts ──────────────────────────────────
 
 def _render_verdict_block(report: CSBeaconReport, coverage_status: str, findings: list,
-                           coverage_report) -> list:
+                           coverage_report, width: int) -> list:
     status, score = report.status, report.score
     if status == NOT_EVALUATED:
         verdict_text = _status_text(status, "Memory64ListStream missing from this dump")
@@ -333,7 +333,7 @@ def _render_verdict_block(report: CSBeaconReport, coverage_status: str, findings
         ("VERDICT",    verdict_text),
         ("Confidence", report.confidence),
         ("Score",      f"{score}/{report.max_score}"),
-        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report, width)),
         ("Review",     report.review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -385,7 +385,7 @@ def render_console_lines(report: CSBeaconReport, verbose: bool = False,
     lines.extend(_render_verdict_block(report, coverage_status, findings,
                                         project_coverage_report(
                                             report.coverage, has_hits=has_hits,
-                                            any_corroborated=report.any_corroborated)))
+                                            any_corroborated=report.any_corroborated), w))
     lines.append("")
 
     ordered = _ordered_for_display(report, findings)

@@ -1982,14 +1982,25 @@ def format_missed_bytes_clause(missed: MissedBytes) -> "str | None":
     because the scale is the whole strength of a clean result: "nothing
     unscanned" over 11.4 GB and over 8 KB are the same words for a
     negative worth trusting and one worth almost nothing. A producer with
-    no scale keeps the bare status word it always had."""
+    no scale keeps the bare status word it always had.
+
+    That all-clear reads as a finished BYTE SCAN rather than as a count of
+    zero, because the status word beside it grades every kind of evidence
+    and this clause grades one: a run whose scanning workload completed
+    can still be `partial` for a stream, a reference file, or a CONTEXT it
+    never got, and a count of zero next to `PARTIAL` reads as a
+    contradiction rather than as the two different facts it states. The
+    percentage is fixed rather than rendered because reaching this branch
+    IS the claim: `distinct_ranges` and `unscanned_pass_bytes` drop empty
+    ranges by the same rule, so no distinct range means no unscanned pass
+    bytes. What the byte scan finishing does NOT settle is named beside
+    it by `format_evidence_gap_clause`."""
     if not missed.distinct_ranges:
         if missed.complete:
             if missed.unscanned_fraction is None:
                 return None
-            return (f"0 bytes unscanned "
-                    f"({format_unscanned_percent(missed.unscanned_fraction)} of "
-                    f"{_format_scaled_bytes(missed.eligible_bytes)} eligible)")
+            return (f"byte scan 100% complete "
+                    f"({_format_scaled_bytes(missed.eligible_bytes)} eligible)")
         return f"unscanned extent unmeasured across {missed.unquantified_gaps} gap(s)"
 
     measured = (f"{_format_scaled_bytes(missed.known_bytes)} unscanned across "
@@ -1999,6 +2010,83 @@ def format_missed_bytes_clause(missed: MissedBytes) -> "str | None":
         return measured
     return (f"at least {measured}, plus {missed.unquantified_gaps} gap(s) "
             f"of unmeasured extent")
+
+
+def summarize_limitation(limitation: "CoverageLimitation") -> str:
+    """One gap in the few words a one-line coverage summary can carry --
+    the short companion to `render_limitation`, selected by the same code
+    so the two can differ in length but never in fact.
+
+    A code that declares no summary falls back to its full sentence. That
+    line runs long, and it still names the concrete gap; a generic stand-in
+    ("other evidence incomplete") would fit and would leave the reader
+    exactly where the bare status word already left them."""
+    spec = _CODE_SPECS[limitation.code]
+    if spec.summary is None:
+        return render_limitation(limitation)
+    return spec.summary(limitation)
+
+
+def _stated_as_bytes(limitation: "CoverageLimitation") -> bool:
+    """Whether the byte figure STATES this gap, rather than merely
+    counting it.
+
+    Only real bytes state one. `known_bytes` names memory a re-collection
+    would have to recover, and a limitation that put some of it there is
+    described by the figure that reports it. Everything else reaches
+    `format_missed_bytes_clause` as a bare "N gap(s)" -- a code whose
+    extent is not derivable at all (`MemoryGapKind.UNMEASURED`), a target
+    that records no extent, a target whose measured extent is a real zero
+    over memory the dump never captured -- and a count says as little
+    about what went uncovered as the status word it sits beside. Those are
+    named instead.
+
+    A zero-extent target leaves no trace in the figure at all, by the same
+    rule `_union_length` drops it: merging an empty range into a total
+    changes neither the bytes nor the range count."""
+    kind = _CODE_SPECS[limitation.code].memory_gap
+    if kind is None or kind is MemoryGapKind.UNMEASURED:
+        return False
+    return any(_has_unexamined_bytes(target) for target in limitation.targets)
+
+
+def _has_unexamined_bytes(target: ScanTarget) -> bool:
+    """Whether this target puts real bytes into the aggregate: an extent
+    that is both established and non-empty."""
+    extent = _unexamined_range(target)
+    return extent is not None and extent[1] > extent[0]
+
+
+def unstated_gaps(limitations) -> list:
+    """The limitations the byte figure does not state, in the producer's
+    own order -- which is the order the COVERAGE section lists them in.
+
+    Completing a byte scan is not the same claim as having every piece of
+    evidence a hunter needs, and the status word does not separate the
+    two: a run that read every eligible byte is still `partial` when the
+    dump carried no per-thread CONTEXT, no HandleDataStream, or no
+    reference file to compare against. These are the gaps a coverage line
+    has to name itself, or leave an investigator reading a byte figure
+    that contradicts the word beside it."""
+    return [l for l in limitations if not _stated_as_bytes(l)]
+
+
+def format_evidence_gap_clause(gaps, named: int) -> "str | None":
+    """`gaps` (from `unstated_gaps`) as a coverage-line clause: the first
+    `named` of them summarized, the rest counted with a pointer to the
+    section that carries them in full.
+
+    `named` is the caller's, because how many summaries fit is a question
+    about the terminal the line is being drawn on, not about the gaps.
+    At least one is always named: a `partial` whose only stated reason is
+    "+3 more" says exactly what the bare status word already said."""
+    if not gaps:
+        return None
+    shown = [summarize_limitation(gap) for gap in gaps[:max(1, named)]]
+    remaining = len(gaps) - len(shown)
+    if remaining:
+        shown.append(f"+{remaining} more (see COVERAGE)")
+    return "; ".join(shown)
 
 
 # PID_SOURCES_ABSENT's rendered sentence names these three sources
@@ -2181,6 +2269,13 @@ class _CodeSpec:
     # summarize_missed_bytes() neither counts them nor lets them make an
     # otherwise-exact aggregate read as a lower bound.
     memory_gap: Optional["MemoryGapKind"] = None
+    # The same gap in the few words a verdict card's one-line Coverage row
+    # can carry, beside the byte figure -- `render`'s own sentence explains
+    # the consequence at COVERAGE-section length and does not fit there.
+    # A code with no summary falls back to that full sentence rather than
+    # to a generic phrase: a long line still names the concrete gap, and
+    # "other evidence incomplete" does not (see summarize_limitation).
+    summary: Optional[Callable[["CoverageLimitation"], str]] = None
 
 
 def _render_source_absent(limitation: "CoverageLimitation") -> str:
@@ -3072,6 +3167,91 @@ def _render_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
     return lambda limitation: text
 
 
+# ── Card summaries ────────────────────────────────────────────────────────
+# A second, much shorter statement of the SAME gap, for the one-line
+# Coverage row on a hunter's verdict card. Selected by code exactly the way
+# the full sentence is, so the two can name a gap differently in length but
+# never in fact.
+#
+# The shape is a noun phrase naming what went uncovered, with the count the
+# gap already carries: "per-thread CONTEXT unavailable", "3 section(s)
+# without a reference file". No consequence clause -- that is the full
+# sentence's job in the COVERAGE section, which the card sits above.
+
+
+def _summary_fixed_text(text: str) -> Callable[["CoverageLimitation"], str]:
+    """Factory mirroring `_render_fixed_text` for the codes whose card
+    summary interpolates nothing."""
+    return lambda limitation: text
+
+
+def _summary_source_absent(limitation: "CoverageLimitation") -> str:
+    return f"{_display_name(limitation.source)} not present"
+
+
+def _summary_source_failed(limitation: "CoverageLimitation") -> str:
+    return f"{_display_name(limitation.source)} could not be read"
+
+
+def _summary_source_key_mismatch(limitation: "CoverageLimitation") -> str:
+    count = limitation.affected_count if limitation.affected_count is not None else "some"
+    scope = limitation.scope or "item"
+    return f"{count} {scope}(s) missing from {_display_name(limitation.source)}"
+
+
+def _summary_source_group_absent(limitation: "CoverageLimitation") -> str:
+    names = [_display_name(s) for s in limitation.related_sources]
+    if len(names) == 2:
+        return f"neither {names[0]} nor {names[1]} present"
+    return f"none of {', '.join(names)} present"
+
+
+def _summary_handle_stream_truncated(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} handle descriptor(s) unread"
+
+
+def _summary_thread_context_partial(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} thread(s) without CONTEXT"
+
+
+def _summary_counted(template: str) -> Callable[["CoverageLimitation"], str]:
+    """Factory for the many codes whose summary is a count plus a fixed
+    noun phrase -- `template` takes the count as its one `{}` slot."""
+    return lambda limitation: template.format(limitation.affected_count)
+
+
+def _summary_scan_region_oversized_skipped(limitation: "CoverageLimitation") -> str:
+    # Same noun derivation the full sentence uses: this code is attached to
+    # segment targets as well as region ones, and the summary must not
+    # mislabel what was skipped either.
+    return (f"{limitation.affected_count} oversized "
+            f"{scan_target_noun(limitation.targets)} skipped")
+
+
+def _summary_scan_items_unaccounted(limitation: "CoverageLimitation") -> str:
+    return f"{limitation.affected_count} item(s) with no confirmed outcome"
+
+
+def _summary_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
+    return f"scan budget exhausted ({limitation.detail})"
+
+
+def _summary_yara_hit_cap_reached(limitation: "CoverageLimitation") -> str:
+    return f"hit cap reached, {limitation.affected_count} segment(s) unfinished"
+
+
+def _summary_yara_scan_budget_exhausted(limitation: "CoverageLimitation") -> str:
+    if not limitation.affected_count:
+        return "scan budget exhausted after the last segment"
+    return f"scan budget exhausted, {limitation.affected_count} segment(s) unfinished"
+
+
+def _summary_targeted_source_not_evaluated(limitation: "CoverageLimitation") -> str:
+    if limitation.source == _TARGETED_SCAN_SOURCE:
+        return "requested range not evaluated"
+    return f"{_display_name(limitation.source)} outside the granted scope"
+
+
 def _validate_source_absent_fields(limitation: "CoverageLimitation") -> None:
     # affected_count only means anything paired with a counterpart (it's
     # "N present in counterpart but missing from source") -- a bare count
@@ -3237,29 +3417,35 @@ def _validate_pid_exception_tid_fallback_against_sources(limitation: "CoverageLi
 
 _CODE_SPECS = {
     LimitationCode.SOURCE_ABSENT: _CodeSpec(
-        render=_render_source_absent, absent_capable=True,
+        render=_render_source_absent, summary=_summary_source_absent, absent_capable=True,
         validate_fields=_validate_source_absent_fields,
         validate_against_sources=_validate_source_absent_against_sources,
         allowed_fields=frozenset({
             "scope", "affected_count", "unavailable_fields", "available_fields",
             "counterpart_source"})),
     LimitationCode.SOURCE_FAILED: _CodeSpec(
-        render=_render_source_failed, validate_fields=_validate_source_failed_fields,
+        render=_render_source_failed, summary=_summary_source_failed,
+        validate_fields=_validate_source_failed_fields,
         allowed_fields=frozenset({
             "scope", "detail", "unavailable_fields", "available_fields"})),
     LimitationCode.SOURCE_KEY_MISMATCH: _CodeSpec(
-        render=_render_source_key_mismatch, caller_buildable=True,
+        render=_render_source_key_mismatch, summary=_summary_source_key_mismatch,
+        caller_buildable=True,
         validate_against_sources=_validate_source_key_mismatch_against_sources,
         allowed_fields=frozenset({
             "scope", "affected_count", "unavailable_fields", "counterpart_source"})),
     LimitationCode.SOURCE_GROUP_ABSENT: _CodeSpec(
-        render=_render_source_group_absent, min_related_sources=2, group_capable=True,
+        render=_render_source_group_absent, summary=_summary_source_group_absent,
+        min_related_sources=2, group_capable=True,
         allowed_fields=frozenset({"scope", "related_sources"})),
     LimitationCode.MODULE_CLASSIFICATION_UNAVAILABLE: _CodeSpec(
-        render=_render_module_classification_unavailable, fixed_source="modules",
+        render=_render_module_classification_unavailable,
+        summary=_summary_fixed_text("module classification unavailable"),
+        fixed_source="modules",
         absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.PEB_UNAVAILABLE: _CodeSpec(
         render=_render_fixed_text("PEB could not be parsed (missing sysinfo or thread list in dump)"),
+        summary=_summary_fixed_text("PEB unavailable"),
         fixed_source="peb", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.PID_SOURCES_ABSENT: _CodeSpec(
         render=_render_pid_sources_absent, fixed_source=_PID_SOURCES_ABSENT_SOURCES[0],
@@ -3337,19 +3523,25 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.PE_HEADER_READ_FAILED: _CodeSpec(
-        render=_render_pe_header_read_failed, fixed_source="hidden_pe_scan",
+        render=_render_pe_header_read_failed,
+        summary=_summary_counted("{} region(s) unread by the hidden-PE scan"),
+        fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("PE_HEADER_READ_FAILED"),
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.PE_HEADER_SHORT_READ: _CodeSpec(
-        render=_render_pe_header_short_read, fixed_source="hidden_pe_scan",
+        render=_render_pe_header_short_read,
+        summary=_summary_counted("{} region(s) short-read by the hidden-PE scan"),
+        fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("PE_HEADER_SHORT_READ"),
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.PE_HEADER_SCAN_TRUNCATED: _CodeSpec(
-        render=_render_pe_header_scan_truncated, fixed_source="hidden_pe_scan",
+        render=_render_pe_header_scan_truncated,
+        summary=_summary_counted("{} region(s) part-searched for a hidden PE"),
+        fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_validate_pe_scan_gap_fields("PE_HEADER_SCAN_TRUNCATED"),
         # The candidate search stopped partway through the region, so what
@@ -3358,7 +3550,9 @@ _CODE_SPECS = {
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.PE_HEADER_SCAN_NOT_STARTED: _CodeSpec(
-        render=_render_pe_header_scan_not_started, fixed_source="hidden_pe_scan",
+        render=_render_pe_header_scan_not_started,
+        summary=_summary_counted("{} region(s) never searched for a hidden PE"),
+        fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_validate_pe_scan_gap_fields("PE_HEADER_SCAN_NOT_STARTED"),
         # This region's candidate search never issued a single read, so the
@@ -3368,7 +3562,9 @@ _CODE_SPECS = {
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.PE_HEADER_EVIDENCE_CAPPED: _CodeSpec(
-        render=_render_pe_header_evidence_capped, fixed_source="hidden_pe_scan",
+        render=_render_pe_header_evidence_capped,
+        summary=_summary_counted("{} hidden-PE hit(s) not retained"),
+        fixed_source="hidden_pe_scan",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("PE_HEADER_EVIDENCE_CAPPED"),
         allowed_fields=frozenset({"affected_count"})),
@@ -3376,20 +3572,26 @@ _CODE_SPECS = {
         render=_render_fixed_text(
             "No per-thread CONTEXT (RIP/EIP) available -- live-execution correlation "
             "could not run"),
+        summary=_summary_fixed_text("per-thread CONTEXT unavailable"),
         fixed_source="thread_context", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.THREAD_CONTEXT_PARTIAL: _CodeSpec(
-        render=_render_thread_context_partial, fixed_source="thread_context",
+        render=_render_thread_context_partial, summary=_summary_thread_context_partial,
+        fixed_source="thread_context",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("THREAD_CONTEXT_PARTIAL"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.MODULE_HEADER_READ_FAILED: _CodeSpec(
-        render=_render_module_header_read_failed, fixed_source="module_headers",
+        render=_render_module_header_read_failed,
+        summary=_summary_counted("{} module header(s) unread"),
+        fixed_source="module_headers",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("MODULE_HEADER_READ_FAILED"),
         memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.MODULE_HEADER_PARSE_FAILED: _CodeSpec(
-        render=_render_module_header_parse_failed, fixed_source="module_headers",
+        render=_render_module_header_parse_failed,
+        summary=_summary_counted("{} module header(s) unparsable"),
+        fixed_source="module_headers",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("MODULE_HEADER_PARSE_FAILED"),
         allowed_fields=frozenset({"affected_count"})),
@@ -3397,41 +3599,55 @@ _CODE_SPECS = {
         render=_render_fixed_text(
             "--ref-dir not supplied -- verified content comparison (the only scored "
             "signal) was not performed for any module"),
+        summary=_summary_fixed_text("no --ref-dir supplied"),
         fixed_source="reference_files", absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.STOMPING_REFERENCE_MISSING: _CodeSpec(
-        render=_render_stomping_reference_missing, fixed_source="reference_files",
+        render=_render_stomping_reference_missing,
+        summary=_summary_counted("{} section(s) without a reference file"),
+        fixed_source="reference_files",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_REFERENCE_MISSING"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.STOMPING_REFERENCE_MISMATCH: _CodeSpec(
-        render=_render_stomping_reference_mismatch, fixed_source="reference_files",
+        render=_render_stomping_reference_mismatch,
+        summary=_summary_counted("{} section(s) with a mismatched reference build"),
+        fixed_source="reference_files",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_REFERENCE_MISMATCH"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.STOMPING_REFERENCE_READ_FAILED: _CodeSpec(
-        render=_render_stomping_reference_read_failed, fixed_source="reference_files",
+        render=_render_stomping_reference_read_failed,
+        summary=_summary_counted("{} reference file(s) unread"),
+        fixed_source="reference_files",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_REFERENCE_READ_FAILED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.STOMPING_SECTION_MEMORY_READ_FAILED: _CodeSpec(
-        render=_render_stomping_section_memory_read_failed, fixed_source="section_content_diff",
+        render=_render_stomping_section_memory_read_failed,
+        summary=_summary_counted("{} section(s) unread from memory"),
+        fixed_source="section_content_diff",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_SECTION_MEMORY_READ_FAILED"),
         memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.STOMPING_SHORT_READ: _CodeSpec(
-        render=_render_stomping_short_read, fixed_source="section_content_diff",
+        render=_render_stomping_short_read,
+        summary=_summary_counted("{} section(s) with nothing comparable to read"),
+        fixed_source="section_content_diff",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_SHORT_READ"),
         memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.STOMPING_RELOCATION_FAILED: _CodeSpec(
-        render=_render_stomping_relocation_failed, fixed_source="section_content_diff",
+        render=_render_stomping_relocation_failed,
+        summary=_summary_counted("{} section(s) not relocation-normalized"),
+        fixed_source="section_content_diff",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("STOMPING_RELOCATION_FAILED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.SCAN_REGION_OVERSIZED_SKIPPED: _CodeSpec(
-        render=_render_scan_region_oversized_skipped, caller_buildable=True,
+        render=_render_scan_region_oversized_skipped,
+        summary=_summary_scan_region_oversized_skipped, caller_buildable=True,
         validate_fields=_validate_scan_region_oversized_skipped_fields,
         # A region skipped for exceeding a cap was never read at all, and
         # `targets` is mandatory here, so this code's missed bytes are
@@ -3439,7 +3655,8 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"scope", "affected_count", "targets"})),
     LimitationCode.SCAN_REGION_READ_FAILED: _CodeSpec(
-        render=_render_scan_region_read_failed, caller_buildable=True,
+        render=_render_scan_region_read_failed,
+        summary=_summary_counted("{} region(s) failed to read"), caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("SCAN_REGION_READ_FAILED"),
         # Nothing usable came back at all, so none of the captured bytes
         # were examined -- unlike its SHORT_READ companion, where a prefix
@@ -3452,7 +3669,8 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_REGION_SHORT_READ: _CodeSpec(
-        render=_render_scan_region_short_read, caller_buildable=True,
+        render=_render_scan_region_short_read,
+        summary=_summary_counted("{} region(s) short-read"), caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("SCAN_REGION_SHORT_READ"),
         # The readable prefix WAS scanned, so the missed extent is the
         # captured size minus the bytes the read actually returned -- which
@@ -3460,7 +3678,9 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_REGION_EVALUATION_TRUNCATED: _CodeSpec(
-        render=_render_scan_region_evaluation_truncated, caller_buildable=True,
+        render=_render_scan_region_evaluation_truncated,
+        summary=_summary_counted("{} range(s) evaluated only to a boundary"),
+        caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count(
             "SCAN_REGION_EVALUATION_TRUNCATED"),
         # Evaluation stopped at a descriptor boundary inside the requested
@@ -3469,7 +3689,9 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"affected_count", "targets", "scope"})),
     LimitationCode.SCAN_REGION_SEARCH_INCOMPLETE: _CodeSpec(
-        render=_render_scan_region_search_incomplete, caller_buildable=True,
+        render=_render_scan_region_search_incomplete,
+        summary=_summary_counted("{} range(s) not searched exhaustively"),
+        caller_buildable=True,
         validate_fields=_validate_scan_region_search_incomplete_fields,
         # The scan reached these bytes and could not search them
         # exhaustively -- a strided window sample, a match quota, a
@@ -3480,14 +3702,18 @@ _CODE_SPECS = {
         allowed_fields=frozenset({"scope", "detail", "affected_count"})),
     LimitationCode.TARGETED_SOURCE_NOT_EVALUATED: _CodeSpec(
         render=_render_targeted_source_not_evaluated,
+        summary=_summary_targeted_source_not_evaluated,
         absent_capable=True, allowed_fields=frozenset({"scope"})),
     LimitationCode.TARGETED_SOURCE_NOT_APPLICABLE: _CodeSpec(
-        render=_render_targeted_source_not_applicable, fixed_source=_TARGETED_SCAN_SOURCE,
+        render=_render_targeted_source_not_applicable,
+        summary=_summary_fixed_text("rescan does not apply to this range"),
+        fixed_source=_TARGETED_SCAN_SOURCE,
         caller_buildable=True,
         validate_fields=_validate_targeted_source_not_applicable_fields,
         allowed_fields=frozenset({"scope", "detail"})),
     LimitationCode.SCAN_ITEMS_UNACCOUNTED: _CodeSpec(
-        render=_render_scan_items_unaccounted, caller_buildable=True,
+        render=_render_scan_items_unaccounted, summary=_summary_scan_items_unaccounted,
+        caller_buildable=True,
         validate_fields=_require_positive_affected_count("SCAN_ITEMS_UNACCOUNTED"),
         # No "targets": structurally unavailable for this code -- an item
         # nobody reconciled is precisely one whose identity was never
@@ -3495,7 +3721,8 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count", "scope"})),
     LimitationCode.SCAN_BUDGET_EXHAUSTED: _CodeSpec(
-        render=_render_scan_budget_exhausted, caller_buildable=True,
+        render=_render_scan_budget_exhausted, summary=_summary_scan_budget_exhausted,
+        caller_buildable=True,
         validate_fields=_validate_scan_budget_exhausted_fields,
         # A budget can end a scan before a target starts (nothing examined)
         # or partway through one (a prefix examined). The two are told
@@ -3504,18 +3731,22 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"scope", "detail", "affected_count", "targets"})),
     LimitationCode.CS_BEACON_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
-        render=_render_cs_beacon_scan_budget_exhausted, fixed_source="segment_scan",
+        render=_render_cs_beacon_scan_budget_exhausted, summary=_summary_scan_budget_exhausted,
+        fixed_source="segment_scan",
         caller_buildable=True, validate_fields=_validate_cs_beacon_scan_budget_exhausted_fields,
         memory_gap=MemoryGapKind.TARGET_EXTENT,
         allowed_fields=frozenset({"detail", "affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_RULE_COMPILE_FAILED: _CodeSpec(
-        render=_render_yara_rule_compile_failed, fixed_source="yara_rules",
+        render=_render_yara_rule_compile_failed,
+        summary=_summary_counted("{} rule file(s) failed to compile"),
+        fixed_source="yara_rules",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("YARA_RULE_COMPILE_FAILED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.YARA_MATCH_FAILED: _CodeSpec(
-        render=_render_yara_match_failed, fixed_source="segment_scan",
+        render=_render_yara_match_failed,
+        summary=_summary_counted("{} match() call(s) failed"), fixed_source="segment_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("YARA_MATCH_FAILED"),
         # One rule file's match call raised over a segment the scan had
@@ -3526,14 +3757,15 @@ _CODE_SPECS = {
         memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.YARA_MATCH_TIMED_OUT: _CodeSpec(
-        render=_render_yara_match_timed_out, fixed_source="segment_scan",
+        render=_render_yara_match_timed_out,
+        summary=_summary_counted("{} match() call(s) timed out"), fixed_source="segment_scan",
         caller_buildable=True,
         validate_fields=_require_optional_targets_matching_count("YARA_MATCH_TIMED_OUT"),
         # Same shape as YARA_MATCH_FAILED -- see there.
         memory_gap=MemoryGapKind.UNMEASURED,
         allowed_fields=frozenset({"affected_count", "targets"})),
     LimitationCode.YARA_HIT_CAP_REACHED: _CodeSpec(
-        render=_render_yara_hit_cap_reached,
+        render=_render_yara_hit_cap_reached, summary=_summary_yara_hit_cap_reached,
         fixed_source="segment_scan", caller_buildable=True,
         validate_fields=_compose(
             _require_optional_targets_matching_count("YARA_HIT_CAP_REACHED"),
@@ -3545,7 +3777,7 @@ _CODE_SPECS = {
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_SCAN_BUDGET_EXHAUSTED: _CodeSpec(
-        render=_render_yara_scan_budget_exhausted,
+        render=_render_yara_scan_budget_exhausted, summary=_summary_yara_scan_budget_exhausted,
         fixed_source="segment_scan", caller_buildable=True,
         # Unlike YARA_HIT_CAP_REACHED/MATCH_FAILED/MATCH_TIMED_OUT (whose
         # targets are always non-empty in practice, so affected_count
@@ -3560,12 +3792,16 @@ _CODE_SPECS = {
         allowed_fields=frozenset({"affected_count", "targets", "scope",
                                    "budget_limit", "budget_consumed"})),
     LimitationCode.YARA_MATCH_CONTEXT_UNVERIFIED: _CodeSpec(
-        render=_render_yara_match_context_unverified, fixed_source="yara_context",
+        render=_render_yara_match_context_unverified,
+        summary=_summary_counted("{} match(es) left unclassified"),
+        fixed_source="yara_context",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("YARA_MATCH_CONTEXT_UNVERIFIED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.ENCODING_ALL_REGIONS_FILTERED: _CodeSpec(
-        render=_render_encoding_all_regions_filtered, fixed_source="encoding_scan",
+        render=_render_encoding_all_regions_filtered,
+        summary=_summary_counted("all {} region(s) filtered out before scanning"),
+        fixed_source="encoding_scan",
         caller_buildable=True,
         validate_fields=_require_positive_affected_count("ENCODING_ALL_REGIONS_FILTERED"),
         allowed_fields=frozenset({"affected_count"})),
@@ -3716,7 +3952,8 @@ _CODE_SPECS = {
         validate_fields=_require_positive_affected_count("HANDLE_STRING_READ_FAILED"),
         allowed_fields=frozenset({"affected_count"})),
     LimitationCode.HANDLE_STREAM_TRUNCATED: _CodeSpec(
-        render=_render_handle_stream_truncated, fixed_source="handles",
+        render=_render_handle_stream_truncated, summary=_summary_handle_stream_truncated,
+        fixed_source="handles",
         # The pipe hunter reports the same truncated stream under its own
         # long-standing source name. The sentence names "HandleDataStream"
         # literally and interpolates no source, so it reads identically

@@ -252,6 +252,46 @@ all. The console applies the same rule at both ends: it prints `0%` only for an
 exactly-zero fraction and `100%` only for exactly 1, rendering anything that
 would round into either as `<0.01%` or `>99.99%`.
 
+##### The console row states two dimensions
+
+`coverage.status` grades **all** of a hunter's evidence, and `missed_bytes`
+grades one part of it. Completing a byte scan is not the same claim as having
+every stream, reference file and per-thread CONTEXT the hunter needed, so a run
+that examined every eligible byte is still `partial` when the dump did not
+carry them. The verdict card's `Coverage` row therefore names the finished
+workload as finished and states the concrete gap beside it:
+
+```text
+Coverage    PARTIAL — byte scan 100% complete (165.2 MB eligible); per-thread CONTEXT unavailable
+Coverage    PARTIAL — 2.4 MB unscanned across 2 range(s) (1.5% of 165.2 MB eligible); handle_data
+            not present
+```
+
+The second clause names the gaps the byte figure does not **state**. Only real
+bytes state a gap: `bytes` names memory a re-collection would have to recover,
+and a limitation that put some of it there is described by the figure that
+reports it. Everything else reaches the byte clause as a bare "N gap(s)" — a
+code whose extent is not derivable at all, a target that recorded no returned
+length, a target whose measured extent is a real zero because the dump captured
+nothing there — and a count says as little about what went uncovered as the
+status word beside it. Those are named:
+
+```text
+Coverage    PARTIAL — unscanned extent unmeasured across 3 gap(s); 3 item(s) with no confirmed
+            outcome
+```
+
+The row is bounded by the terminal it is drawn on. It wraps into the value's own
+column rather than running off the right edge, it names a second gap only while
+it still fits the two lines it gets, and it counts whatever is left. The first
+gap is named whatever it costs: a `partial` whose only stated reason is
+`+3 more` says exactly what the bare status word already said. The `COVERAGE`
+section below the card lists every gap in full, and `coverage.limitations`
+carries them all in the structured output.
+
+`complete` has no gaps to name; a `not_evaluated` run has no coverage to
+explain, and the prerequisite it lacked is already the `VERDICT` row's own text.
+
 **Which hunters publish a scale.** All of them except `hollowing`.
 `obfuscation`, `pipe`, `stomping` and `cs-beacon` take it from the eligibility
 ledger their scan loops already run; `yara` and `injection` declare their

@@ -232,7 +232,7 @@ def _scan_detail_lines(report: StompingReport) -> list:
 
 
 def _render_verdict_block(report: StompingReport, coverage_status: str, findings: list,
-                           coverage_report) -> list:
+                           coverage_report, width: int) -> list:
     """Reproduces the pre-migration verdict TEXT decisions exactly.
 
     score==1 is a verified, relocation-normalized byte difference with NO
@@ -268,7 +268,7 @@ def _render_verdict_block(report: StompingReport, coverage_status: str, findings
         ("Confidence", report.confidence),
         ("Score",      f"{score}/{report.max_score}  "
                        + DIM("(only a verified content-diff scores; requires --ref-dir)")),
-        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report, width)),
         ("Review",     report.review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -335,7 +335,7 @@ def render_console_lines(report: StompingReport, verbose: bool = False,
         lines.extend(_scan_detail_lines(report))
 
     lines.extend(_render_verdict_block(report, coverage_status, findings,
-                                        project_coverage_report(report.coverage)))
+                                        project_coverage_report(report.coverage), w))
     lines.append("")
 
     ordered = sorted_for_display(findings, exclude_checks=_COVERAGE_ONLY_CHECKS)

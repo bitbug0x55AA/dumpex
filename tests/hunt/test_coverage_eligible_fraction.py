@@ -443,16 +443,17 @@ def test_a_run_with_no_scale_renders_exactly_as_it_did_without_one():
 
 
 def test_a_clean_result_states_how_much_work_it_stands_on():
-    """A `complete` scan reports 0% -- on the console as well as in the
-    structured output. The scale is the whole strength of a clean result:
-    the same two words cover a negative over 11.4 GB and a negative over
-    8 KB, and only one of them is worth anything."""
+    """A `complete` scan reports 0% in the structured output and a
+    finished scan on the console. The scale is the whole strength of a
+    clean result: the same words cover a negative over 11.4 GB and a
+    negative over 8 KB, and only one of them is worth anything."""
     strong = summarize_missed_bytes([], eligible_bytes=12241512530)
     assert strong.unscanned_fraction == 0.0
-    assert format_missed_bytes_clause(strong) == "0 bytes unscanned (0% of 11.4 GB eligible)"
+    assert (format_missed_bytes_clause(strong)
+            == "byte scan 100% complete (11.4 GB eligible)")
 
     weak = summarize_missed_bytes([], eligible_bytes=8 * _KB)
-    assert format_missed_bytes_clause(weak) == "0 bytes unscanned (0% of 8 KB eligible)"
+    assert format_missed_bytes_clause(weak) == "byte scan 100% complete (8 KB eligible)"
 
     # No scale, nothing missed: the bare status word, exactly as before.
     assert format_missed_bytes_clause(summarize_missed_bytes([])) is None

@@ -314,7 +314,7 @@ def _evidence_detail_lines(report: PipeReport, w: int) -> list:
 # ── Verdict block / coverage impacts ──────────────────────────────────────
 
 def _render_verdict_block(report: PipeReport, coverage_status: str, findings: list,
-                           coverage_report) -> list:
+                           coverage_report, width: int) -> list:
     """The verdict-first key/value block.
 
     Each DETECTED tier names the signal that actually earned it rather
@@ -355,7 +355,7 @@ def _render_verdict_block(report: PipeReport, coverage_status: str, findings: li
         ("Confidence", report.confidence),
         ("Score",      f"{score}/{report.max_score}  "
                        + DIM("(handle-anchored; bare pipe strings are unscored leads)")),
-        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report, width)),
         ("Review",     report.review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -445,7 +445,7 @@ def render_console_lines(report: PipeReport, verbose: bool = False,
         lines.extend(_scan_detail_lines(report))
 
     lines.extend(_render_verdict_block(report, coverage_status, findings,
-                                        project_coverage_report(report.coverage)))
+                                        project_coverage_report(report.coverage), w))
     lines.append("")
 
     ordered = _ordered_for_display(findings)

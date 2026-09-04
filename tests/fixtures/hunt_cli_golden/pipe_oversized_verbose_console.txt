@@ -9,7 +9,8 @@
   VERDICT     INCONCLUSIVE — partial coverage
   Confidence  none
   Score       0/3  (handle-anchored; bare pipe strings are unscored leads)
-  Coverage    PARTIAL — 16 MB unscanned across 1 range(s) (100% of 16 MB eligible)
+  Coverage    PARTIAL — 16 MB unscanned across 1 range(s) (100% of 16 MB eligible); handle_data not
+              present
   Review      none
 
   COVERAGE
