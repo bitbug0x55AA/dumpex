@@ -116,7 +116,7 @@ def _coverage_only_impacts(findings: list, coverage_reasons: list) -> list:
 
 def _render_verdict_block(status: str, score: int, max_score: int, confidence: str,
                            coverage_status: str, review_priority: str,
-                           findings: list, coverage_report) -> list:
+                           findings: list, coverage_report, width: int) -> list:
     if status == NOT_EVALUATED:
         verdict_text = _status_text(status, "no required stream present in this dump")
     else:
@@ -130,7 +130,7 @@ def _render_verdict_block(status: str, score: int, max_score: int, confidence: s
         ("VERDICT",    verdict_text),
         ("Confidence", confidence),
         ("Score",      f"{score}/{max_score}"),
-        ("Coverage",   coverage_kv_value(coverage_status, coverage_report)),
+        ("Coverage",   coverage_kv_value(coverage_status, coverage_report, width)),
         ("Review",     review_priority),
     ]
     return render_kv_block(pairs, indent=2)
@@ -155,7 +155,7 @@ def render_console_lines(report: InjectionReport, verbose: bool = False,
     lines.extend(_render_verdict_block(report.status, report.score, report.max_score,
                                         report.confidence, coverage_status,
                                         report.review_priority, findings,
-                                        project_coverage_report(report.coverage)))
+                                        project_coverage_report(report.coverage), w))
     lines.append("")
 
     ordered = sorted_for_display(findings, exclude_checks=_COVERAGE_ONLY_CHECKS)

@@ -6,7 +6,7 @@
   VERDICT     COBALT STRIKE — 2 beacon config(s) found in memory (structural validity only)
   Confidence  medium
   Score       1/2
-  Coverage    PARTIAL — 0 bytes unscanned (0% of 1.1 KB eligible)
+  Coverage    PARTIAL — byte scan 100% complete (1.1 KB eligible); per-thread CONTEXT unavailable
   Review      high
 
   KEY SIGNALS

@@ -6,7 +6,7 @@
   VERDICT     HIGH CONFIDENCE INJECTION
   Confidence  high
   Score       3/3
-  Coverage    PARTIAL
+  Coverage    PARTIAL — 1 region(s) short-read by the hidden-PE scan
   Review      high
 
   KEY SIGNALS

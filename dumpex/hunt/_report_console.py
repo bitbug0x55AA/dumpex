@@ -9,7 +9,9 @@ import dataclasses
 from dumpex.ui.colors import RED, GREEN, YELLOW, DIM, BOLD
 from dumpex.hunt._console import wrap_text
 from dumpex.hunt._finding import Finding, TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION
-from dumpex.output.coverage import format_missed_bytes_clause
+from dumpex.output.coverage import (
+    format_evidence_gap_clause, format_missed_bytes_clause, unstated_gaps,
+)
 
 # ── Signal tag -> icon/label/sort-rank, and coverage-status -> icon ──────
 # Byte-identical across both pilots' report_console.py before this
@@ -33,35 +35,87 @@ def header_lines(title: str) -> list:
     return ["", bar, BOLD(f"  HUNT: {title}"), bar, ""]
 
 
-def coverage_kv_value(coverage_status: str, coverage_report) -> str:
-    """The Coverage row of a hunter card's key/value block: the status
-    word, plus how much captured memory the run's gaps add up to and what
-    share of the memory it took into scope that is.
+# The verdict card's key/value geometry: two spaces of indent, the widest
+# label ("Confidence"), two spaces of gutter. Every hunter's verdict block
+# and the targeted rescan's render the same five labels through
+# `render_kv_block(pairs, indent=2)`, so a value starts in the same column
+# on every card -- which is what the Coverage row wraps against.
+# test_coverage_partial_reasons.py checks the cards against this rather
+# than letting a card and this constant drift apart silently.
+VERDICT_KV_INDENT = 2
+VERDICT_KV_LABEL_WIDTH = len("Confidence")
+VERDICT_VALUE_COLUMN = VERDICT_KV_INDENT + VERDICT_KV_LABEL_WIDTH + 2
 
-    The clause is what separates a `partial` that missed one unreadable
-    4 KB region from one that missed gigabytes across forty oversized
-    ones -- the same word, and opposite answers to whether the dump is
-    worth recollecting. The share beside it is what makes that figure
-    readable without a second, dump-sized fact from somewhere else: 0.03%
-    means a DETECTED verdict stands on nearly full coverage, 94% means
-    most of this hunter's scanning work never happened. The two measure
-    different things on purpose -- the bytes are memory a re-collection
-    would have to recover, the share is work this hunt did not do, counted
-    per scan pass -- so the clause names the scale the percentage belongs
-    to rather than implying one was divided by the other.
+# How many evidence gaps the Coverage row names before it counts the rest,
+# and how many lines it may take to do it. The row is a triage summary
+# over a COVERAGE section that carries every gap in full, so a second
+# summary earns its place only while the row still fits in its two lines.
+# The first is named whatever it costs: a `partial` whose only stated
+# reason is "+3 more" says exactly what the bare status word already said.
+EVIDENCE_GAPS_NAMED_MAX = 2
+COVERAGE_ROW_MAX_LINES = 2
 
-    A run with a scale always gets a clause, including a clean one: `0% of
-    11.4 GB eligible` and `0% of 8 KB eligible` are the same status word
-    over a negative worth trusting and one worth almost nothing. A
-    producer that measures no eligibility keeps the bare status word it
-    always had.
 
-    `coverage_report` is REQUIRED, with no default: a renderer that
-    forgot to pass it would silently drop the quantification from that
-    hunter's card and nothing would fail."""
+def coverage_kv_value(coverage_status: str, coverage_report, width: int) -> list:
+    """The Coverage row of a hunter card's key/value block, as the lines
+    it wraps to: the status word, then the run's two coverage dimensions
+    -- how much of its byte-scanning workload it got through, and which
+    evidence it needed and did not have.
+
+    The byte clause is what separates a `partial` that missed one
+    unreadable 4 KB region from one that missed gigabytes across forty
+    oversized ones -- the same word, and opposite answers to whether the
+    dump is worth recollecting. The share beside it is what makes that
+    figure readable without a second, dump-sized fact from somewhere else:
+    0.03% means a DETECTED verdict stands on nearly full coverage, 94%
+    means most of this hunter's scanning work never happened. The two
+    measure different things on purpose -- the bytes are memory a
+    re-collection would have to recover, the share is work this hunt did
+    not do, counted per scan pass -- so the clause names the scale the
+    percentage belongs to rather than implying one was divided by the
+    other.
+
+    A run with a scale always gets that clause, including a clean one:
+    `100% complete (11.4 GB eligible)` and `100% complete (8 KB eligible)`
+    are the same status word over a negative worth trusting and one worth
+    almost nothing. A producer that measures no eligibility keeps the bare
+    status word it always had.
+
+    The evidence clause beside it is the other dimension, and only a
+    `partial` carries one. `partial` is the one status word its own
+    quantification under-determines: a finished byte scan does not make a
+    hunter's evidence complete, so the row states both rather than leaving
+    a completed workload standing next to `PARTIAL` as an apparent
+    contradiction. `complete` has no gaps to name, and a `not_evaluated`
+    run has no coverage to explain -- the prerequisite it lacked is
+    already the VERDICT row's own text, one line above.
+
+    Both clauses are prose, so the value is wrapped to `width` and
+    returned as lines rather than run past the right edge of the terminal
+    -- `render_kv_block` holds the continuations in the value's own
+    column. `width` and `coverage_report` are both REQUIRED, with no
+    default: a renderer that forgot either would silently drop the
+    quantification from that hunter's card, or draw a row nothing bounds,
+    and nothing would fail."""
     text = coverage_status.replace("_", " ").upper()
-    clause = format_missed_bytes_clause(coverage_report.missed_bytes)
-    return f"{text} — {clause}" if clause else text
+    byte_clause = format_missed_bytes_clause(coverage_report.missed_bytes)
+    gaps = (unstated_gaps(coverage_report.limitations)
+             if coverage_status == "partial" else [])
+    columns = max(1, width - VERDICT_VALUE_COLUMN)
+
+    def row(named: int) -> list:
+        clauses = [clause for clause in (byte_clause,
+                                          format_evidence_gap_clause(gaps, named)) if clause]
+        value = f"{text} — {'; '.join(clauses)}" if clauses else text
+        return wrap_text(value, columns, hang_indent=0)
+
+    lines = row(1)
+    for named in range(2, min(len(gaps), EVIDENCE_GAPS_NAMED_MAX) + 1):
+        candidate = row(named)
+        if len(candidate) > COVERAGE_ROW_MAX_LINES:
+            break
+        lines = candidate
+    return lines
 
 
 def wrap_block(text: str, width: int, indent: int) -> list:

@@ -87,7 +87,7 @@ def _range_rows(request) -> list:
     ]
 
 
-def _verdict_rows(record) -> list:
+def _verdict_rows(record, width: int) -> list:
     """The same verdict-card rows every hunter prints, so an analyst reads a
     targeted result in the shape they already know. ``—`` marks a field the
     analyzer genuinely does not have (YARA's confidence/review/max score), never
@@ -97,7 +97,8 @@ def _verdict_rows(record) -> list:
         ("VERDICT",    _status_text(record.status, _VERDICT_REASON.get(record.status, ""))),
         ("Confidence", record.confidence or "—"),
         ("Score",      f"{record.score}/{max_score}"),
-        ("Coverage",   coverage_kv_value(record.coverage.status.value, record.coverage)),
+        ("Coverage",   coverage_kv_value(record.coverage.status.value, record.coverage,
+                                          width)),
         ("Review",     record.review_priority or "—"),
     ]
 
@@ -331,7 +332,7 @@ def render_targeted_console_lines(record, result, request, verbose: bool = False
     lines = list(header_lines(f"TARGETED RESCAN — {request.selected}"))
     lines.extend(render_kv_block(_range_rows(request)))
     lines.append("")
-    lines.extend(render_kv_block(_verdict_rows(record)))
+    lines.extend(render_kv_block(_verdict_rows(record, w)))
     lines.append("")
     lines.extend(_closure_lines(result, w, verbose))
     lines.extend(_finding_lines(record, w, verbose))

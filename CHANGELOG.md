@@ -9,6 +9,21 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
+### Changed
+
+- A hunter's console `Coverage` row now separates the two things a coverage
+  status covers. A finished byte scan reads as `byte scan 100% complete
+  (165.2 MB eligible)` rather than as a count of zero unscanned bytes, and a
+  `partial` names the concrete evidence it is short of — `per-thread CONTEXT
+  unavailable`, `handle_data not present`, `2 module header(s) unparsable` —
+  beside whatever the byte figure says. A gap the byte figure could only count
+  and not measure is named the same way, instead of being left to
+  `unscanned extent unmeasured across 3 gap(s)`. `PARTIAL` no longer appears
+  alone, or next to a zero that reads as contradicting it. The row wraps into
+  its own column instead of running past the terminal, names a second gap only
+  while it still fits, and counts the rest. Coverage status, verdicts, scores,
+  confidence, `coverage.reasons`, JSON output, and exit codes are unchanged.
+
 ## 3.6.1 — 2026-09-03
 
 ### Added

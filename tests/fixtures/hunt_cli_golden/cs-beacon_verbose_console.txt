@@ -6,7 +6,7 @@
   VERDICT     COBALT STRIKE — 1 beacon config(s) found in memory (context-corroborated)
   Confidence  high
   Score       2/2
-  Coverage    COMPLETE — 0 bytes unscanned (0% of 550 bytes eligible)
+  Coverage    COMPLETE — byte scan 100% complete (550 bytes eligible)
   Review      high
 
   KEY SIGNALS

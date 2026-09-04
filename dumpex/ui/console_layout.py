@@ -113,11 +113,28 @@ def render_kv_block(pairs: list, indent: int = 2, label_width: "int | None" = No
     value)` pair, labels left-padded to a common column so values line
     up. `label_width` defaults to the longest label in `pairs`; a caller
     with several blocks it wants visually aligned to the SAME column
-    (none currently do) can pass a fixed value instead."""
+    (none currently do) can pass a fixed value instead.
+
+    A value may be a plain string, which is emitted verbatim on one line
+    however long it is, or a LIST of lines for a row the caller has
+    already wrapped: the first goes after the label and the rest are
+    padded to the value column, so the whole value reads as one block
+    under one label.
+
+    Wrapping stays the CALLER's: it is the caller that knows the width it
+    is drawing to, and which of its rows carry text worth breaking rather
+    than an identifier that must not be. This function only guarantees
+    that lines it is handed stay in the value's own column."""
     if label_width is None:
         label_width = max((len(k) for k, _ in pairs), default=0)
     pad = " " * indent
-    return [f"{pad}{label:<{label_width}}  {value}" for label, value in pairs]
+    lines = []
+    for label, value in pairs:
+        prefix = f"{pad}{label:<{label_width}}  "
+        value_lines = [value] if isinstance(value, str) else (list(value) or [""])
+        lines.append(prefix + value_lines[0])
+        lines.extend(" " * len(prefix) + line for line in value_lines[1:])
+    return lines
 
 
 def column_width(header: str, cells, *, minimum: int = 0, cap: "int | None" = None) -> int:

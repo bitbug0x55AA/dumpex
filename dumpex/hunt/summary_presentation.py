@@ -266,9 +266,9 @@ def _render_kv_wrapped(pairs: list, width: int) -> list:
     'Evidence' entry, one value_line per hunter) aligned under the same
     column, no label repeated. Mirrors `render_kv_block()`'s own aligned-
     label convention (`_CORRELATION_LABEL_WIDTH` = the longest label,
-    'Allocation') but adds per-value wrapping, which `render_kv_block()`
-    itself deliberately does not do (no existing caller needed it before
-    CORRELATED REGIONS' own multi-hunter Evidence lines)."""
+    'Allocation') and does the wrapping itself: `render_kv_block()` holds
+    already-wrapped lines in a value's column but never breaks text of its
+    own, since it is the caller that knows the width."""
     lines = []
     pad = " " * _CORRELATION_INDENT
     for label, value_lines in pairs:

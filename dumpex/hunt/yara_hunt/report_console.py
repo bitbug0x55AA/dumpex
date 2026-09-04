@@ -177,7 +177,8 @@ def _render_why_this_verdict(rule: str, matches: tuple, w: int) -> list:
     return lines
 
 
-def _render_verdict_block(report: YaraReport, coverage_status: str, reasons: list) -> list:
+def _render_verdict_block(report: YaraReport, coverage_status: str, reasons: list,
+                           width: int) -> list:
     status, score = report.status, report.score
     if status == NOT_EVALUATED:
         verdict_text = _status_text(NOT_EVALUATED, reasons[0] if reasons else "")
@@ -205,7 +206,8 @@ def _render_verdict_block(report: YaraReport, coverage_status: str, reasons: lis
         ("VERDICT",    verdict_text),
         ("Confidence", "—"),
         ("Score",      f"{score}/—"),
-        ("Coverage",   coverage_kv_value(coverage_status, project_coverage_report(report))),
+        ("Coverage",   coverage_kv_value(coverage_status, project_coverage_report(report),
+                                          width)),
         ("Review",     "—"),
     ]
     return render_kv_block(pairs, indent=2)
@@ -254,7 +256,7 @@ def render_console_lines(report: YaraReport, verbose: bool = False,
     coverage_status, reasons = project_coverage_reasons(report)
 
     lines = list(header_lines("YARA Memory Scan"))
-    lines.extend(_render_verdict_block(report, coverage_status, reasons))
+    lines.extend(_render_verdict_block(report, coverage_status, reasons, w))
     lines.append("")
 
     if report.status == NOT_EVALUATED:
