@@ -11,6 +11,19 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Changed
 
+- `--hunt all` no longer reads an absent memory range as a corroborated one. A
+  target whose bytes this dump never captured, named only by scanners that each
+  failed to read it, now stays `LOW` and carries no `MULTIPLE_SCOPES_SKIPPED`
+  reason: several scanners failing on the same missing bytes is one capture
+  condition, not four independent observations. Private executable memory, RWX
+  protection, and correlated region evidence still raise a not-captured target's
+  priority exactly as before. `SKIPPED TARGET ACTIONS` is also ordered by
+  evidence availability within each priority level, so captured and partially
+  captured targets lead their level ahead of targets that need a fresh
+  collection, and the console's bounded action list shows what can be acted on
+  from the dump in hand. Coverage status, limitations, missed bytes, capture
+  state, `evidence_availability`, `skipped_by`, recommended actions,
+  targeted-rescan capability, and exit codes are unchanged.
 - `--hunt obfuscation --verbose` now shows the Base64 content dumpex decoded,
   not only its size and classification. Every retained hit adds a bounded
   preview of the original Base64 string and of the decoded payload: readable

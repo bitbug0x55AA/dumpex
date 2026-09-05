@@ -348,12 +348,15 @@ def _render_correlated_regions(correlations: list, records: list, width: int) ->
 # ── SKIPPED TARGET ACTIONS ────────────────────────────────────────────────
 # The default, metadata-only investigation queue (issue #19) --
 # `dumpex.hunt._investigation.build_investigation_queue()` already sorted
-# `actions` by priority/skip-count/address; this section only TRUNCATES
-# and formats that order for the console, exactly like CORRELATED REGIONS
-# above never re-sorts `correlations`. `verbose` controls ONLY how much of
-# each entry's own already-computed skipped_by/reason/action lists gets
-# printed -- never which actions appear, their order, or the JSON, which
-# is always the complete, unabridged list regardless of console verbosity
+# `actions` by priority/evidence-availability/skip-count/address -- the
+# availability rank is what puts each tier's locally actionable targets
+# inside the bounded window below rather than behind targets that need a
+# recollection. This section only TRUNCATES and formats that order for the
+# console, exactly like CORRELATED REGIONS above never re-sorts
+# `correlations`. `verbose` controls ONLY how much of each entry's own
+# already-computed skipped_by/reason/action lists gets printed -- never
+# which actions appear, their order, or the JSON, which is always the
+# complete, unabridged list regardless of console verbosity
 # (see this module's own docstring and the `InvestigationAction` module's
 # docstring for why priority/evidence/actions are all pre-derived, never
 # re-computed here).

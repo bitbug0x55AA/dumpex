@@ -648,6 +648,24 @@ Each action contains:
 - `recommended_actions`: structured next steps;
 - `coverage_effect`.
 
+Entries are ordered by `priority`, then — within one priority level only — by
+`evidence_availability` (`captured`, then `partial`, then `not_captured`), then
+by relationship count and base address. Priority says how important a target is;
+availability says whether this dump can answer anything about it. The second key
+therefore orders a level's own members and never moves a target across levels, so
+each level leads with the targets that can be extracted or rescanned now rather
+than with the ones awaiting a fresh collection. The console truncates that order;
+the JSON array is always the complete queue.
+
+`priority_reason_codes` carries independent signals only. Several distinct scopes
+naming one target is `MULTIPLE_SCOPES_SKIPPED` — except when the dump holds none
+of the target's bytes and every relationship is a failed read, which is one
+capture condition recorded once per scanner rather than several observations.
+That case adds no reason code and raises no priority. Private executable memory,
+RWX protection, and correlated region evidence are separate facts about the
+target, so a not-captured target carrying any of them keeps the priority they
+earn it. `skipped_by` lists every relationship either way.
+
 The current queue is metadata-only: `triage.mode` is `metadata`, no skipped-
 region content is read, and `coverage_effect` remains
 `original_hunter_gap_not_resolved`. The reserved `--triage-skipped` option is
