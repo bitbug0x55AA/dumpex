@@ -9,33 +9,21 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Unreleased
 
-### Changed
+## 3.6.2 — 2026-09-05
 
-- `--hunt obfuscation --verbose` now shows the Base64 content dumpex decoded,
-  not only its size and classification. Every retained hit adds a bounded
-  preview of the original Base64 string and of the decoded payload: readable
-  text is quoted and escaped, PE and other binary content is shown as a hex
-  prefix with its parsed header fields, and a SHA-256 of the whole decoded
-  payload accompanies anything the preview only partly shows. Truncation is
-  explicit, stating how much was left out. Decoded bytes cannot emit ANSI
-  escapes or otherwise drive the terminal, and the IOC strings every
-  obfuscation verbose line quotes are escaped the same way -- a URL cut out of
-  decoded content can no longer carry an escape sequence into the terminal.
-  Previews are console-only: retained evidence, `details.base64[]`'s `raw` and
-  `decoded`, scores, confidence, verdicts, coverage, finding ids, and exit
-  codes are unchanged.
-- A hunter's console `Coverage` row now separates the two things a coverage
-  status covers. A finished byte scan reads as `byte scan 100% complete
-  (165.2 MB eligible)` rather than as a count of zero unscanned bytes, and a
-  `partial` names the concrete evidence it is short of — `per-thread CONTEXT
-  unavailable`, `handle_data not present`, `2 module header(s) unparsable` —
-  beside whatever the byte figure says. A gap the byte figure could only count
-  and not measure is named the same way, instead of being left to
-  `unscanned extent unmeasured across 3 gap(s)`. `PARTIAL` no longer appears
-  alone, or next to a zero that reads as contradicting it. The row wraps into
-  its own column instead of running past the terminal, names a second gap only
-  while it still fits, and counts the rest. Coverage status, verdicts, scores,
-  confidence, `coverage.reasons`, JSON output, and exit codes are unchanged.
+### Fixed
+
+- `--hunt all` no longer treats several scanners failing to read the same
+  uncaptured memory range as corroborating evidence. Skipped-target actions now
+  also prefer targets that can be investigated from the current dump over
+  targets that require a new collection.
+- `--hunt obfuscation --verbose` now shows bounded, terminal-safe previews of
+  retained Base64 strings and their decoded content. Text is escaped for safe
+  display, while binary and PE content is shown as hex with a SHA-256 when
+  appropriate.
+- Hunt console `Coverage` rows now distinguish completed byte scanning from
+  missing contextual evidence, explain partial coverage without contradictory
+  zero-gap wording, and wrap cleanly within the terminal width.
 
 ## 3.6.1 — 2026-09-03
 

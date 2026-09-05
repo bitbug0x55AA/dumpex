@@ -3,7 +3,13 @@
 Actions are deduplicated by physical base address and size across hunters,
 sources, scopes, and region or segment target kinds. Priority combines
 execution-like memory facts with cross-hunter correlation; evidence availability
-is separate and never treated as suspiciousness.
+is separate and never treated as suspiciousness. Several scopes failing to read
+a range this dump never captured is one capture condition seen several times,
+so it is not the cross-scope correlation priority rests on.
+
+The queue is ordered by priority, then -- within a tier only -- by how much of
+the target this dump holds, so the locally actionable targets lead each tier
+without any of them outranking a more important target.
 
 This pass reads existing records and MemoryInfo metadata only. It performs no
 content reads, so bytes_examined is zero.
@@ -756,6 +762,34 @@ def _evidence_availability_for(target: ScanTarget) -> str:
             else EvidenceAvailability.NOT_CAPTURED.value)
 
 
+# The skip causes that are mechanical consequences of a target's bytes
+# being absent from this dump rather than decisions a scan made about the
+# target: every scanner reaching an uncaptured range fails its read there.
+_ABSENT_BYTES_SKIP_CAUSES = frozenset({SkipCause.READ_FAILED.value})
+
+
+def _is_shared_absence_fanout(evidence_availability: str, skipped_by: tuple) -> bool:
+    """True when the several scopes naming this target are one capture
+    condition observed several times rather than several independent
+    observations: this dump holds none of the target's bytes, and every
+    relationship is a read that failed for exactly that reason.
+    `MULTIPLE_SCOPES_SKIPPED` is a cross-scope CORRELATION signal, so it
+    must not fire here -- the scopes agree about the dump, not about the
+    target.
+
+    Deliberately narrow. A partially or fully captured target's read
+    failures are real per-scope outcomes, and a relationship carrying any
+    other cause (an oversized skip, a spent budget, a match failure) is a
+    decision some scan made about this target; either one leaves the
+    correlation signal intact. Nothing else routes through here, so a
+    not-captured target that is private-executable, RWX, or independently
+    correlated keeps the priority those facts earn it, and every
+    relationship stays in `skipped_by` either way."""
+    if evidence_availability != EvidenceAvailability.NOT_CAPTURED.value:
+        return False
+    return all(s.cause in _ABSENT_BYTES_SKIP_CAUSES for s in skipped_by)
+
+
 def _dedup_key(target: ScanTarget):
     """The PHYSICAL identity of a skipped/gap target (issue #28 P4
     follow-up) -- deliberately `(base_address, size)` ONLY. `kind` is
@@ -832,9 +866,33 @@ def _merge_target_group(targets: list, memory_regions: list) -> ScanTarget:
     )
 
 
+_PRIORITY_SORT_RANK = {
+    InvestigationPriority.HIGH.value:   0,
+    InvestigationPriority.MEDIUM.value: 1,
+    InvestigationPriority.LOW.value:    2,
+}
+
+_AVAILABILITY_SORT_RANK = {
+    EvidenceAvailability.CAPTURED.value:     0,
+    EvidenceAvailability.PARTIAL.value:      1,
+    EvidenceAvailability.NOT_CAPTURED.value: 2,
+}
+
+
 def _sort_key(action: InvestigationAction):
-    priority_rank = {"high": 0, "medium": 1, "low": 2}[action.priority]
-    return (priority_rank, -len(action.skipped_by), action.target.base_address)
+    """Priority first, evidence availability second. Priority answers how
+    important a target is; evidence availability answers whether anything
+    can be done with it from this dump, so it orders WITHIN a tier and
+    never across one -- a captured LOW target still sits below a
+    not-captured HIGH one. Inside a tier the locally actionable targets
+    come first: the console shows a bounded number of actions, and
+    recollection is the slowest response available. Skip count and base
+    address break the remaining ties, keeping the order total and
+    reproducible."""
+    return (_PRIORITY_SORT_RANK[action.priority],
+            _AVAILABILITY_SORT_RANK[action.evidence_availability],
+            -len(action.skipped_by),
+            action.target.base_address)
 
 
 def build_investigation_queue(records: list, memory_regions: list) -> list:
@@ -907,6 +965,7 @@ def build_investigation_queue(records: list, memory_regions: list) -> list:
             reason_codes.append(InvestigationReasonCode.RWX_PROTECTION.value)
 
         has_correlation = False
+        evidence_availability = _evidence_availability_for(target)
         # Distinct (hunter, source, scope) count, NOT len(skipped_by):
         # `cause` is part of skip_key (see above), so the SAME hunter/
         # source/scope can legitimately contribute more than one
@@ -915,8 +974,13 @@ def build_investigation_queue(records: list, memory_regions: list) -> list:
         # within the SAME region). That is not a cross-hunter/cross-scope
         # correlation signal -- only genuinely distinct scopes skipping the
         # same physical target are.
+        # A target whose bytes this dump never captured is exempt: several
+        # scopes failing to read absent bytes is one capture condition
+        # counted several times, not corroboration (see
+        # `_is_shared_absence_fanout()`).
         distinct_scopes = {(s.hunter, s.source, s.scope) for s in skipped_by}
-        if len(distinct_scopes) > 1:
+        if (len(distinct_scopes) > 1
+                and not _is_shared_absence_fanout(evidence_availability, skipped_by)):
             reason_codes.append(InvestigationReasonCode.MULTIPLE_SCOPES_SKIPPED.value)
             has_correlation = True
         if (target.kind == ScanTargetKind.MEMORY_REGION
@@ -925,7 +989,6 @@ def build_investigation_queue(records: list, memory_regions: list) -> list:
             has_correlation = True
 
         priority = _derive_priority(has_exec, has_correlation)
-        evidence_availability = _evidence_availability_for(target)
         hunters = tuple(h for h in HUNTERS if any(s.hunter == h for s in skipped_by))
 
         actions.append(InvestigationAction(

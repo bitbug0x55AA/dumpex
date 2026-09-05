@@ -38,6 +38,61 @@ rescan memory or independently recalculate detection, score, confidence,
 coverage, or limitation state. Cross-hunter summary code likewise reduces the
 already-projected records rather than interpreting raw hunter evidence again.
 
+## Console projection invariants
+
+Console output may make retained evidence easier to inspect, but presentation
+must not change the report it projects. In particular, verbosity, wrapping,
+preview limits, and display escaping cannot change classification, finding
+tags or IDs, scores, confidence, verdicts, review priority, coverage, structured
+records, or exit behavior.
+
+### Coverage has two presentation dimensions
+
+`coverage.status` describes all evidence required by a hunter. Byte-scan
+progress describes only the measurable memory workload, so a scan can be 100%
+complete over eligible bytes while the overall status remains `partial`
+because a stream, reference file, parsed header, or per-thread CONTEXT is
+unavailable. The verdict card must state both facts rather than rendering a
+bare `PARTIAL` or pairing it with a contradictory-looking zero-byte gap.
+
+A byte figure describes a limitation only when it measures real unexamined
+bytes. A limitation with no measurable extent, or a target for which the dump
+captured zero bytes, remains a named/countable evidence gap instead of being
+silently absorbed into the byte summary. Coverage presentation is bounded to
+the available terminal width; additional reasons remain available in the full
+`COVERAGE` section and in structured `coverage.limitations`.
+
+The public examples and field interpretation are documented in
+[Output and Evidence Schema](../user/OUTPUT_SCHEMA.md#the-console-row-states-two-dimensions).
+
+### Dump-derived previews are bounded and terminal-safe
+
+Every string derived from a dump must pass through the console-safety
+projection before it is printed. This includes IOC strings extracted from
+decoded content: an IOC recognizer may accept control bytes inside a matched
+value, so escaping only the surrounding content preview is insufficient.
+Structured output retains the original value.
+
+Reusable byte previews live in `dumpex.ui.byte_preview`. They operate only on
+bytes already retained by the report, never read the dump again, and follow
+these rules:
+
+- each preview shows a fixed-size leading byte prefix and explicitly reports
+  the omitted byte or character count;
+- UTF-8 text uses deterministic visible escapes for invalid bytes and for
+  characters that could control or reorder terminal output;
+- binary content uses lowercase hex, which is inert in a terminal;
+- a SHA-256 covers the complete value whenever a text preview is truncated or
+  the content is rendered as binary.
+
+The obfuscation Base64 console projector applies separate bounds to the encoded
+string, decoded text, decoded hex, and number of hits carrying content
+previews. Every retained hit still keeps its VA, file offset, classification,
+and size line. `plaintext` and `ioc_text` use escaped text; PE, shellcode,
+binary, and high-entropy content use hex; PE output also reuses metadata already
+parsed onto the classification. Full `raw` and `decoded` evidence remains in
+the report and structured output.
+
 ## YARA is deliberately different
 
 YARA exposes rule-oriented evidence. `matches` preserves match instances and
@@ -61,6 +116,27 @@ record owns its closed payload. Coverage is serialized from the hunter's
 authoritative coverage facts, and summary output is produced by the shared
 deterministic reducer. JSON and console code must not maintain parallel copies
 of those decisions.
+
+## Cross-hunter investigation queue ordering
+
+The `--hunt all` investigation queue keeps suspicion priority and evidence
+availability as independent axes. Entries are ordered first by priority and,
+within one priority level, by availability (`captured`, `partial`, then
+`not_captured`). This makes the console's bounded action list lead with work
+that can be performed from the current dump without allowing availability to
+promote a less suspicious target across priority levels.
+
+Priority reason codes must represent independent signals. Several scanners
+recording failed reads against the same range whose bytes were never captured
+are repeating one capture condition, not corroborating one another; that case
+does not earn `MULTIPLE_SCOPES_SKIPPED`. Independent facts such as executable
+private memory, RWX protection, or cross-hunter region correlation still raise
+the target's priority even when its bytes were not captured. All contributing
+relationships remain in `skipped_by` regardless of whether they add a priority
+reason.
+
+The public queue fields, ordering, and follow-up workflow are documented in
+[Output and Evidence Schema](../user/OUTPUT_SCHEMA.md#hunt-investigation-actions).
 
 Private-corpus handling is governed by `tests/corpus/README.md`; this ADR does
 not duplicate that policy.

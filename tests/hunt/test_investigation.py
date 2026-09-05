@@ -11,7 +11,7 @@ import pytest
 from dumpex.hunt._investigation import (
     build_investigation_queue, InvestigationAction, SkipRelationship, TriageInfo,
     ContentFinding, MAX_FINDINGS_PER_TARGET, MAX_FINDING_VALUE_LEN,
-    RecommendedAction, _derive_priority, _has_exec_signal,
+    RecommendedAction, _derive_priority, _has_exec_signal, _sort_key,
 )
 from dumpex.output.coverage import (
     ScanTarget, ScanTargetKind, CoverageLimitation, LimitationCode,
@@ -67,7 +67,7 @@ def stomping_record(limitations=(), protection_leads=(), status="DETECTED", lead
         findings=[], details=details)
 
 
-def injection_record(rwx=(), status="DETECTED", lead_count=1):
+def injection_record(rwx=(), status="DETECTED", lead_count=1, limitations=()):
     details = InjectionDetails(
         rwx=list(rwx), hidden_pe_validated=[], hidden_pe_unvalidated=[],
         suspicious_validated_pe_hits=[], informational_validated_pe_hits=[],
@@ -77,7 +77,10 @@ def injection_record(rwx=(), status="DETECTED", lead_count=1):
     return HunterRecord(hunter="injection", status=status, score=3 if detected else 0, max_score=3,
         verdict_level="high" if detected else "clean", confidence="high" if detected else "none",
         lead_count=lead_count, review_priority="high" if detected else "none",
-        coverage=CoverageReport(status=CoverageStatus.COMPLETE), findings=[], details=details)
+        coverage=CoverageReport(
+            status=CoverageStatus.PARTIAL if limitations else CoverageStatus.COMPLETE,
+            limitations=list(limitations)),
+        findings=[], details=details)
 
 
 # ── input validation ─────────────────────────────────────────────────────
@@ -578,6 +581,141 @@ def test_correlated_region_evidence_bumps_priority():
     assert actions[0].priority == "medium"
 
 
+# ── a shared capture failure is not cross-scope correlation ──────────────
+
+def absent_target(base, size=12 * 1024, type_="MEM_MAPPED", protection="PAGE_READWRITE"):
+    """A target this dump holds no bytes of at all."""
+    return target(base=base, size=size, size_limit=None, file_offset=None,
+                  captured_size=0, type_=type_, protection=protection)
+
+
+def four_read_failure_records(t):
+    """The same target named by four distinct scopes across three hunters,
+    every one of them recording a read that failed."""
+    return [
+        pipe_record([limitation("pipe_name_scan", [t],
+                                 code=LimitationCode.SCAN_REGION_READ_FAILED)]),
+        obfuscation_record([
+            limitation("encoding_scan", [t], scope="decode",
+                       code=LimitationCode.SCAN_REGION_READ_FAILED),
+            limitation("encoding_scan", [t], scope="entropy",
+                       code=LimitationCode.SCAN_REGION_READ_FAILED),
+        ]),
+        injection_record(limitations=[
+            limitation("hidden_pe_scan", [t], code=LimitationCode.PE_HEADER_READ_FAILED)]),
+    ]
+
+
+def test_not_captured_target_read_failed_by_many_scopes_stays_low():
+    """Four scopes failing to read bytes this dump never captured is one
+    capture condition counted four times. It is not corroboration, so it
+    raises neither MULTIPLE_SCOPES_SKIPPED nor priority."""
+    t = absent_target(0x10000)
+    actions = build_investigation_queue(four_read_failure_records(t), [])
+    assert len(actions) == 1
+    action = actions[0]
+    assert action.evidence_availability == "not_captured"
+    assert {s.cause for s in action.skipped_by} == {"read_failed"}
+    assert action.priority == "low"
+    assert action.priority_reason_codes == ()
+
+
+def test_low_priority_absent_target_keeps_every_relationship_and_recollect():
+    # The suppressed reason code costs the action nothing else: who left
+    # each gap, and that recollection is the only way to close it, both
+    # stay on the action.
+    t = absent_target(0x10000)
+    action = build_investigation_queue(four_read_failure_records(t), [])[0]
+    assert {(s.hunter, s.source, s.scope) for s in action.skipped_by} == {
+        ("pipe", "pipe_name_scan", None),
+        ("obfuscation", "encoding_scan", "decode"),
+        ("obfuscation", "encoding_scan", "entropy"),
+        ("injection", "hidden_pe_scan", None),
+    }
+    assert [a.type for a in action.recommended_actions] == [
+        "inspect_metadata", "recollect_dump"]
+
+
+def test_not_captured_private_executable_memory_keeps_its_medium_priority():
+    # Absent bytes say nothing about the target either way: RWX private
+    # memory is still RWX private memory, and still earns MEDIUM on its
+    # own metadata.
+    t = absent_target(0x20000, type_="MEM_PRIVATE", protection="PAGE_EXECUTE_READWRITE")
+    action = build_investigation_queue(four_read_failure_records(t), [])[0]
+    assert action.priority == "medium"
+    assert "PRIVATE_EXECUTABLE_MEMORY" in action.priority_reason_codes
+    assert "RWX_PROTECTION" in action.priority_reason_codes
+    assert "MULTIPLE_SCOPES_SKIPPED" not in action.priority_reason_codes
+
+
+def test_not_captured_correlated_region_evidence_still_raises_priority():
+    # Correlated evidence from hunters that DETECTED something in this
+    # region is independent of any read attempt, so it survives where the
+    # read-failure fan-out does not.
+    from tests.fixtures.hunt_records import region as region_ref
+
+    base = 0x30000
+    t = absent_target(base)
+    ref = region_ref(addr=f"0x{base:016x}", size=t.size)
+    records = [
+        pipe_record([limitation("pipe_name_scan", [t],
+                                 code=LimitationCode.SCAN_REGION_READ_FAILED)]),
+        obfuscation_record([limitation("encoding_scan", [t], scope="entropy",
+                                        code=LimitationCode.SCAN_REGION_READ_FAILED)]),
+        injection_record(rwx=[ref]),
+        stomping_record(protection_leads=[
+            {"module": "a.dll", "va_start": f"0x{base:016x}",
+             "region": {"base_address": f"0x{base:016x}", "size": t.size,
+                        "allocation_base": None}}]),
+    ]
+    action = build_investigation_queue(records, [
+        Region(base, base, t.size, "MEM_COMMIT", "PAGE_READWRITE", "MEM_MAPPED")])[0]
+    assert action.evidence_availability == "not_captured"
+    assert "CORRELATED_REGION_EVIDENCE" in action.priority_reason_codes
+    assert "MULTIPLE_SCOPES_SKIPPED" not in action.priority_reason_codes
+    assert action.priority == "medium"
+
+
+def test_captured_target_read_failed_by_many_scopes_still_correlates():
+    # The bytes are here, so each scope's read failure is its own outcome
+    # rather than a restatement of the dump's capture extent.
+    t = target(base=0x40000, size=12 * 1024, size_limit=None, file_offset=64,
+               captured_size=12 * 1024, type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    action = build_investigation_queue(four_read_failure_records(t), [])[0]
+    assert action.evidence_availability == "captured"
+    assert "MULTIPLE_SCOPES_SKIPPED" in action.priority_reason_codes
+    assert action.priority == "medium"
+
+
+def test_partially_captured_target_read_failed_by_many_scopes_still_correlates():
+    t = target(base=0x50000, size=12 * 1024, size_limit=None, file_offset=64,
+               captured_size=4 * 1024, type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    action = build_investigation_queue(four_read_failure_records(t), [])[0]
+    assert action.evidence_availability == "partial"
+    assert "MULTIPLE_SCOPES_SKIPPED" in action.priority_reason_codes
+    assert action.priority == "medium"
+
+
+def test_absent_target_with_a_non_read_failure_cause_still_correlates():
+    # An oversized skip is a decision a scan made about this target, not a
+    # consequence of the dump's capture extent, so the scopes disagree
+    # about more than availability and the correlation signal stands.
+    base = 0x60000
+    read_failed = absent_target(base)
+    oversized = target(base=base, size=12 * 1024, size_limit=8 * 1024, file_offset=None,
+                       captured_size=0, type_="MEM_MAPPED", protection="PAGE_READWRITE")
+    records = [
+        pipe_record([limitation("pipe_name_scan", [read_failed],
+                                 code=LimitationCode.SCAN_REGION_READ_FAILED)]),
+        obfuscation_record([limitation("encoding_scan", [oversized], scope="entropy")]),
+    ]
+    action = build_investigation_queue(records, [])[0]
+    assert action.evidence_availability == "not_captured"
+    assert {s.cause for s in action.skipped_by} == {"read_failed", "oversized_skipped"}
+    assert "MULTIPLE_SCOPES_SKIPPED" in action.priority_reason_codes
+    assert action.priority == "medium"
+
+
 # ── evidence_availability ────────────────────────────────────────────────
 
 def test_evidence_availability_captured_vs_not():
@@ -715,6 +853,59 @@ def test_sort_order_priority_then_skip_count_then_address():
     assert [a.target.base_address for a in actions] == [0x300, 0x100]
     assert actions[0].priority == "high"
     assert actions[1].priority == "low"
+
+
+def _sortable_action(base, priority, availability, skip_count):
+    skips = tuple(SkipRelationship(hunter="pipe", source=f"scan_{i}", cause="read_failed")
+                  for i in range(skip_count))
+    return InvestigationAction(
+        target=target(base=base, size=0x1000, size_limit=None, file_offset=1,
+                      captured_size=0x1000),
+        skipped_by=skips, priority=priority, priority_reason_codes=(),
+        evidence_availability=availability, triage=TriageInfo(),
+        recommended_actions=(RecommendedAction(type="inspect_metadata"),))
+
+
+def test_sort_key_ranks_availability_within_but_never_across_priority():
+    """Actionability orders a tier's own members and nothing else: the
+    absent HIGH target still outranks every MEDIUM, and the captured LOW
+    target stays last however many relationships it carries."""
+    ordered = sorted([
+        _sortable_action(0x100, "medium", "not_captured", 4),
+        _sortable_action(0x500, "low", "captured", 9),
+        _sortable_action(0x300, "medium", "captured", 1),
+        _sortable_action(0x400, "high", "not_captured", 1),
+        _sortable_action(0x200, "medium", "partial", 2),
+    ], key=_sort_key)
+    assert [a.target.base_address for a in ordered] == [0x400, 0x300, 0x200, 0x100, 0x500]
+
+
+def test_queue_puts_an_extractable_target_ahead_of_an_absent_one_at_equal_priority():
+    # Both are MEDIUM on their own private-executable metadata. The absent
+    # one has the lower address AND more relationships -- the two tie-breaks
+    # that follow availability -- so only availability can put the
+    # extractable target first, which is what keeps it inside the console's
+    # bounded action window.
+    extractable = target(base=0x71000, size=0x1000, size_limit=None, file_offset=64,
+                         captured_size=0x1000, type_="MEM_PRIVATE",
+                         protection="PAGE_EXECUTE_READWRITE")
+    absent = absent_target(0x70000, size=0x1000, type_="MEM_PRIVATE",
+                           protection="PAGE_EXECUTE_READWRITE")
+    records = [
+        pipe_record([limitation("pipe_name_scan", [extractable, absent],
+                                 code=LimitationCode.SCAN_REGION_READ_FAILED)]),
+        obfuscation_record([
+            limitation("encoding_scan", [absent], scope="decode",
+                       code=LimitationCode.SCAN_REGION_READ_FAILED),
+            limitation("encoding_scan", [absent], scope="entropy",
+                       code=LimitationCode.SCAN_REGION_READ_FAILED),
+        ]),
+    ]
+    actions = build_investigation_queue(records, [])
+    assert [a.priority for a in actions] == ["medium", "medium"]
+    assert [a.evidence_availability for a in actions] == ["captured", "not_captured"]
+    assert [a.target.base_address for a in actions] == [0x71000, 0x70000]
+    assert [len(a.skipped_by) for a in actions] == [1, 3]
 
 
 def test_result_is_deterministic_across_calls():
