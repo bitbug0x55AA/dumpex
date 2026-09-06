@@ -175,14 +175,73 @@ def test_v2_14s_row_names_the_complete_with_limitations_relaxation():
 
 # ── v2.15's missed-byte quantification ──────────────────────────────────
 
-def test_the_current_versions_row_names_the_missed_byte_states():
+def test_v2_15s_row_names_the_missed_byte_states():
     """A consumer thresholding on `bytes` has to be told, in the doc it
     pins against, that the number is a total only in one of the three
-    states -- otherwise a lower bound or a null reads as a total."""
-    row = _version_summary_row(SCHEMA_VERSION)
+    states -- otherwise a lower bound or a null reads as a total. Pinned
+    to the version that introduced the field, like every other row test
+    above: a later bump does not move the release a consumer reads to
+    learn about it."""
+    row = _version_summary_row("2.15")
     assert "missed_bytes" in row
     for state in ("exact", "lower_bound", "unknown"):
         assert state in row
+
+
+# ── v2.17's report enrichment ───────────────────────────────────────────
+
+def test_the_current_versions_row_names_the_enrichment_evidence_states():
+    """The three states are the only thing standing between an empty
+    enrichment subset and a consumer reading it as a process-wide
+    negative, so the doc a consumer pins against has to name all three."""
+    row = _version_summary_row(SCHEMA_VERSION)
+    assert "process_enrichment" in row
+    for state in ("missing", "partial", "complete"):
+        assert state in row
+
+
+def test_the_current_versions_row_names_every_card_scoped_projection():
+    row = _version_summary_row(SCHEMA_VERSION)
+    for projection in ("exception_context", "allocation_neighborhood", "handle_correlation",
+                       "string_context"):
+        assert projection in row
+
+
+def test_the_schema_itself_defines_the_enrichment_evidence_states():
+    """The migration doc is prose; the schema is what consumers pin."""
+    schema = _load(CURRENT_SCHEMA)
+    section = schema["$defs"]["enrichmentSection"]
+    assert section["properties"]["status"]["enum"] == ["missing", "partial", "complete"]
+    assert section["properties"]["scope"]["enum"] == ["process", "card"]
+    assert set(section["required"]) == {
+        "name", "scope", "status", "total", "included", "cap", "truncated", "provenance",
+        "limitations"}
+    # `total` and `cap` are nullable: an undeterminable eligible
+    # population and an uncapped section each report no number rather
+    # than a 0 a consumer would read as "nothing was eligible".
+    assert section["properties"]["total"]["type"] == ["integer", "null"]
+    assert section["properties"]["cap"]["type"] == ["integer", "null"]
+
+
+def test_every_card_scoped_projection_is_required_on_a_triage_card():
+    """Required-and-nullable, not optional: a consumer must be able to
+    tell "this producer built no projection" from "this key is missing
+    because the producer is older"."""
+    card = _load(CURRENT_SCHEMA)["$defs"]["triageCardRecord"]
+    for projection in ("exception_context", "allocation_neighborhood", "handle_correlation",
+                       "string_context"):
+        assert projection in card["required"]
+        assert {"type": "null"} in card["properties"][projection]["anyOf"]
+
+
+def test_enrichment_is_absent_from_the_triage_cards_judgment_fields():
+    """Enrichment is captured evidence: the closed finding vocabulary and
+    the verdict tiers are exactly what they were before it existed."""
+    card = _load(CURRENT_SCHEMA)["$defs"]["triageCardRecord"]
+    assert card["properties"]["findings"]["items"]["enum"] == [
+        "unbacked_thread", "rwx_private", "injected_pe", "ioc_strings"]
+    assert card["properties"]["verdict"]["enum"] == [
+        "CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_MALICIOUS"]
 
 
 def test_the_current_versions_row_states_that_no_verdict_moves():

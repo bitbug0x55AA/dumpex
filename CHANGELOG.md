@@ -7,7 +7,20 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
-## Unreleased
+## 3.7.0 — 2026-09-06
+
+### Added
+
+- `--report` now includes bounded process and session context plus per-card
+  exception, allocation-neighborhood, correlated-handle, and nearby-string
+  context. Each section distinguishes unavailable, incomplete, completed-empty,
+  and truncated evidence without changing report findings or verdicts.
+- `--report-string` now limits multi-card generation to 32 cards and a 256 MB
+  cumulative card-read budget. Shared-region hits are consolidated, while hits
+  left untriaged by the budget are counted explicitly and make the run partial.
+- Published output schema v2.17 for the new report context and accounting fields.
+  See [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the structured
+  compatibility details.
 
 ## 3.6.2 — 2026-09-05
 
@@ -302,7 +315,7 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Compatibility notes
 
-- Current commands emit schema v2.16.
+- Current commands emit schema v2.17.
 - Historical schema files remain packaged and frozen for archived evidence.
 - Validate a document using its own `meta.schema_version`.
 - See [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) before upgrading a

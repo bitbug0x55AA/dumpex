@@ -28,6 +28,15 @@ from dumpex.output.coverage import (
 )
 from dumpex.output.command_result import CommandResult
 from dumpex.commands.extract import build_extract_artifact
+from dumpex.commands.report_enrichment import (
+    CONSOLE_CORRELATED_HANDLES, CONSOLE_HANDLE_TYPE_ROWS, CONSOLE_NEIGHBOR_REGIONS,
+    CONSOLE_STRING_CONTEXT, collect_allocation_neighborhood, collect_exception_context,
+    collect_handle_correlation, collect_process_enrichment, collect_string_context,
+    HandleSegmentIndex, MAX_REPORT_CARDS, MAX_REPORT_SCAN_BYTES, RegionEvidence,
+)
+from dumpex.output.records import (
+    ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL,
+)
 
 # _get_region_at, _extract_strings_from_data, _hexdump_context,
 # _search_string_in_memory, and verdict_for all come from the core.memory
@@ -68,6 +77,13 @@ class ContentScanResult(NamedTuple):
     A read exception is captured as string_scan_error. Exceptions in analysis of
     successfully returned bytes propagate as programming failures rather than
     being mislabeled as unreadable evidence.
+
+    `strings` is every (offset, encoding, text) triple the one content read
+    produced, and `ioc_offsets` the offsets among them that matched
+    IOC_PATTERNS. Both stay in-process: they exist so an enrichment
+    projection can re-select over the SAME extraction rather than read or
+    scan the range a second time, and neither is serialized -- ioc_strings
+    and notable_strings remain the published subsets.
     """
     mz_header_detected: "bool | None"
     has_injected_pe: "bool | None"
@@ -75,6 +91,8 @@ class ContentScanResult(NamedTuple):
     notable_strings: tuple
     string_scan: "dict | None"
     string_scan_error: "str | None"
+    strings: tuple = ()
+    ioc_offsets: frozenset = frozenset()
 
 
 def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: int,
@@ -153,13 +171,16 @@ def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: 
     return ContentScanResult(
         mz_header_detected=mz_header_detected, has_injected_pe=has_injected_pe,
         ioc_strings=tuple(ioc_strings), notable_strings=tuple(notable_strings),
-        string_scan=string_scan, string_scan_error=None)
+        string_scan=string_scan, string_scan_error=None,
+        strings=tuple(strings), ioc_offsets=frozenset(off for off, _enc, _s in ioc_hits))
 
 
 def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len: int,
                           extract_to: "str | None", force: bool, suspicious_prots,
                           modules: list, regions: list, infos: list, tid_map: dict,
-                          modules_available: bool, string_hit_tuple=None):
+                          modules_available: bool, string_hit_tuple=None,
+                          handle_records=(), handle_summary=None, query=None,
+                          region_evidence=None, handle_index=None, resolved_region=None):
     """Sections 1-4 + verdict + optional extract from today's single-shot
     cmd_report, unchanged in logic (including the exact MECE
     reconciliation rule for tid_unbacked_detail) -- just building a
@@ -173,7 +194,16 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
     notable_strings).
 
     Section 4's string/IOC scan and the optional `--output` extraction are
-    capped by the current module-level `MAX_REGION_READ` value."""
+    capped by the current module-level `MAX_REGION_READ` value.
+
+    `handle_records`/`handle_summary` are the process-wide handle
+    collection this run already performed (see collect_report), reused for
+    this card's own bounded correlation rather than collected again per
+    card. `query` is the --report-string needle for a string_hit card, so
+    the searched text and the exact captured string stay distinguishable
+    in the card's string context. Every enrichment section built below is
+    captured context only: none of them touches `dims`, `findings`, the
+    verdict, the coverage report, or the exit code."""
     tid_int  = tid
     addr_int = addr
 
@@ -239,7 +269,14 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
 
     # ── 2. Memory region ─────────────────────────────────────────────
     if target_addr is not None:
-        region = _get_region_at(target_addr, regions)
+        # `resolved_region` is the region the caller already resolved this
+        # anchor to. Re-resolving it here would be a second, independent
+        # decision over an overlapping region table -- `_get_region_at`
+        # answers with the FIRST region covering an address, which need
+        # not be the one the caller measured, budgeted, and rebased the
+        # hit offset against. One anchor gets one region.
+        region = (resolved_region if resolved_region is not None
+                  else _get_region_at(target_addr, regions))
         if not region:
             diagnostics.append(Diagnostic(SEVERITY_WARNING,
                 f"No committed region found at 0x{target_addr:x}", code="REPORT_REGION_NOT_FOUND"))
@@ -392,6 +429,31 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
                                             code="REPORT_EXTRACT_FAILED"))
             artifact = None
 
+    # ── Card enrichment (bounded, evidence-only) ──────────────────────
+    scanned_strings = scan.strings if (region is not None and string_scan is not None) else None
+    exception_context = collect_exception_context(
+        mf, anchor_tid=tid_int,
+        region_base=(region.BaseAddress if region is not None else None),
+        region_size=(region.RegionSize if region is not None else 0),
+        region_evidence=region_evidence, modules=modules)
+    allocation_neighborhood = collect_allocation_neighborhood(
+        region_evidence, anchor_address=target_addr, modules=modules)
+    content_partial = bool(string_scan and string_scan["truncated"])
+    content_clamped = bool(string_scan and string_scan["clamped"])
+    handle_correlation = (
+        collect_handle_correlation(handle_index, scanned_strings,
+                                    handle_summary=handle_summary,
+                                    content_partial=content_partial,
+                                    content_clamped=content_clamped)
+        if handle_summary is not None and handle_index is not None else None)
+    string_context = collect_string_context(
+        anchor_address=target_addr,
+        region_base=(region.BaseAddress if region is not None else None),
+        region_size=(region.RegionSize if region is not None else 0),
+        string_scan=string_scan, scanned_strings=scanned_strings,
+        ioc_offsets=(scan.ioc_offsets if region is not None else frozenset()),
+        query=query, string_hit=string_hit_dict)
+
     record = TriageCardRecord(
         anchor_tid=tid_int,
         anchor_address=hex_address(target_addr) if target_addr is not None else None,
@@ -402,7 +464,10 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         thread_region_correlation_excluded=thread_region_correlation_excluded,
         findings=findings, finding_details=finding_details, verdict=verdict,
         artifact_id=artifact_id, extract_read_clamped=extract_read_clamped,
-        extract_read_truncated=extract_read_truncated)
+        extract_read_truncated=extract_read_truncated,
+        exception_context=exception_context,
+        allocation_neighborhood=allocation_neighborhood,
+        handle_correlation=handle_correlation, string_context=string_context)
 
     sources = {
         "thread_info": observe_source("thread_info", present=bool(mf.thread_info), items=infos),
@@ -503,12 +568,14 @@ def _combine_with_aggregate(coverages: list, records: list, search_stats: String
     return combine_coverage_reports(all_reports)
 
 
-def _execution_status_for(records, diagnostics, search_stats: StringSearchStats = _NO_SEARCH_STATS):
+def _execution_status_for(records, diagnostics, search_stats: StringSearchStats = _NO_SEARCH_STATS,
+                           budget_skipped: int = 0):
     """MAX_REGION_READ clamping (a self-imposed scan-budget cutoff, at
     either the per-card Section 4 scan level or the whole-run
-    --report-string search level) and a per-card --output extract write
-    failure are all about whether THIS COMMAND finished its own intended
-    work, not about whether the evidence it looked at was complete -- see
+    --report-string search level), a per-card --output extract write
+    failure, and the invocation budget leaving hits untriaged are all
+    about whether THIS COMMAND finished its own intended work, not about
+    whether the evidence it looked at was complete -- see
     OUTPUT_SCHEMA.md's own three-concepts-separate rule. Distinct from
     coverage.status, which `_build_aggregate_coverage_report` above
     governs instead (a short/failed read is an evidence gap; a deliberate
@@ -517,7 +584,7 @@ def _execution_status_for(records, diagnostics, search_stats: StringSearchStats 
     any_extract_clamped = any(r.extract_read_clamped for r in records)
     any_extract_failed = any(d.code == "REPORT_EXTRACT_FAILED" for d in diagnostics)
     if (any_scan_clamped or any_extract_clamped or any_extract_failed
-            or search_stats.clamped):
+            or search_stats.clamped or budget_skipped):
         return EXECUTION_PARTIAL
     return EXECUTION_COMPLETED
 
@@ -538,6 +605,16 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
     _build_aggregate_coverage_report() derives, which no single per-card
     report can express on its own."""
     suspicious_prots = get_rules()["suspicious_protections"]
+
+    # One process-wide enrichment per invocation, and one handle
+    # collection shared by every card built below -- the scope split the
+    # sections themselves declare. Collecting it per card would repeat the
+    # same process/handle work N times for --report-string and publish N
+    # copies of one process-wide fact.
+    process_enrichment, handle_records = collect_process_enrichment(mf)
+    handle_summary = process_enrichment.handles
+    region_evidence = RegionEvidence.from_dump(mf)
+    handle_index = HandleSegmentIndex.from_records(handle_records)
 
     modules_available = bool(mf.modules)
     modules = get_modules(mf)
@@ -570,18 +647,49 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                          "hits_private": 0, "hits_image": 0, "image_hit_modules": [],
                          "skipped_unreadable_regions": search_stats.skipped,
                          "truncated_regions": search_stats.truncated,
-                         "clamped_regions": search_stats.clamped},
+                         "clamped_regions": search_stats.clamped,
+                         "cards_skipped_for_budget": 0, "hits_skipped_for_budget": 0,
+                         "hits_sharing_a_region": 0,
+                         "process_enrichment": process_enrichment.to_dict()},
                 diagnostics=diagnostics)
+
+        # The search reports a hit against the region it read. Everything
+        # downstream -- whether the hit is actionable, which region is
+        # budgeted, which region is carded -- is about the region that
+        # actually covers the hit ADDRESS, and on an overlapping region
+        # table those are different regions. Resolving once, here, is what
+        # keeps the summary's own classification and the card it produces
+        # from describing two different regions.
+        resolved_hits = []
+        for r, off, enc in hits:
+            hit_va = r.BaseAddress + off
+            final = _get_region_at(hit_va, regions) or r
+            resolved_hits.append((final, hit_va - final.BaseAddress, enc))
 
         private_hits = []
         image_hits   = []
-        for r, off, enc in hits:
-            mtype = prot_str(r.Type)
-            mod   = addr_to_module(r.BaseAddress, modules)
+        for final, off, enc in resolved_hits:
+            mtype = prot_str(final.Type)
+            mod   = addr_to_module(final.BaseAddress, modules)
             if "MEM_IMAGE" in mtype and mod:
-                image_hits.append((r, off, enc, mod))
+                image_hits.append((final, off, enc, mod))
             else:
-                private_hits.append((r, off, enc))
+                private_hits.append((final, off, enc))
+
+        # One card per covering region: a second hit inside a region
+        # already carded would read and triage the same bytes again under
+        # a different anchor. Grouping happens before the budget and
+        # counting after it, because whether a hit is "already covered by
+        # a card" is only knowable once it is known which groups got one.
+        hit_groups = []          # [final region, anchor offset, encoding, hit count]
+        group_of_base = {}
+        for final, off, enc in private_hits:
+            position = group_of_base.get(final.BaseAddress)
+            if position is None:
+                group_of_base[final.BaseAddress] = len(hit_groups)
+                hit_groups.append([final, off, enc, 1])
+            else:
+                hit_groups[position][3] += 1
 
         diagnostics = []
         if report_tid:
@@ -601,9 +709,13 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
             "skipped_unreadable_regions": search_stats.skipped,
             "truncated_regions": search_stats.truncated,
             "clamped_regions": search_stats.clamped,
+            "cards_skipped_for_budget": 0,
+            "hits_skipped_for_budget": 0,
+            "hits_sharing_a_region": 0,
+            "process_enrichment": process_enrichment.to_dict(),
         }
 
-        if not private_hits:
+        if not hit_groups:
             diagnostics.append(Diagnostic(SEVERITY_WARNING,
                 "All hits are in known system modules -- no actionable regions to triage.",
                 code="REPORT_STRING_HITS_ALL_IMAGE"))
@@ -617,29 +729,75 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         records = []
         coverages = []
         artifacts = []
-        for i, (r, off, enc) in enumerate(private_hits, 1):
+        # How many groups there are is the dump's to decide, so the loop
+        # carries the run's own budget: the per-card caps bound one card
+        # and say nothing about how many there are. A hit left untriaged
+        # is reported as exactly that -- never folded into the hit counts,
+        # which keep naming everything the search found.
+        scan_bytes_used = 0
+        carded_groups = 0
+        for final, off, enc, _hit_count in hit_groups:
+            # Exactly what this card will ask read_region() for: its
+            # content scan, plus the same span again when --output makes
+            # it extract. Charging the search's own region here instead
+            # would let a small region's size pay for a large one's read.
+            projected = min(final.RegionSize, MAX_REGION_READ) * (2 if extract_to else 1)
+            if records and (len(records) >= MAX_REPORT_CARDS
+                            or scan_bytes_used + projected > MAX_REPORT_SCAN_BYTES):
+                break
+            scan_bytes_used += projected
+            carded_groups += 1
             # Multiple hit regions must not all extract to the same
             # literal path -- disambiguate per region, same as today.
             this_extract_to = extract_to
-            if extract_to and len(private_hits) > 1:
+            if extract_to and len(hit_groups) > 1:
                 ep = Path(extract_to)
-                this_extract_to = str(ep.with_name(f"{ep.stem}_0x{r.BaseAddress:x}{ep.suffix}"))
+                this_extract_to = str(
+                    ep.with_name(f"{ep.stem}_0x{final.BaseAddress:x}{ep.suffix}"))
             record, coverage, card_diagnostics, artifact = _collect_triage_card(
-                mf, tid=None, addr=r.BaseAddress, anchor_source=TRIAGE_ANCHOR_STRING_HIT,
+                mf, tid=None, addr=final.BaseAddress, anchor_source=TRIAGE_ANCHOR_STRING_HIT,
                 min_len=min_len, extract_to=this_extract_to, force=force,
                 suspicious_prots=suspicious_prots, modules=modules, regions=regions,
                 infos=infos, tid_map=tid_map, modules_available=modules_available,
-                string_hit_tuple=(off, enc))
+                string_hit_tuple=(off, enc), handle_records=handle_records,
+                handle_summary=handle_summary, query=report_string,
+                region_evidence=region_evidence, handle_index=handle_index,
+                resolved_region=final)
             records.append(record)
             coverages.append(coverage)
             diagnostics.extend(card_diagnostics)
             if artifact is not None:
                 artifacts.append(artifact)
 
+        # A hit is "covered by another hit's card" only when its group
+        # actually got one. A group the budget skipped covers nothing, so
+        # every hit in it is unanalyzed -- counting those as shared would
+        # tell an analyst they are already represented somewhere.
+        carded = hit_groups[:carded_groups]
+        skipped = hit_groups[carded_groups:]
+        merged_hits = sum(count - 1 for *_rest, count in carded)
+        skipped_hits = sum(count for *_rest, count in skipped)
+
         summary["card_count"] = len(records)
+        summary["cards_skipped_for_budget"] = len(skipped)
+        summary["hits_skipped_for_budget"] = skipped_hits
+        summary["hits_sharing_a_region"] = merged_hits
+        if merged_hits:
+            diagnostics.append(Diagnostic(SEVERITY_WARNING,
+                f"{merged_hits} hit(s) fall inside a region another hit is already carded "
+                f"for -- this dump's region table overlaps, and each region is triaged once.",
+                code="REPORT_STRING_HITS_SHARE_A_REGION"))
+        if skipped:
+            diagnostics.append(Diagnostic(SEVERITY_WARNING,
+                f"{len(skipped)} actionable hit region(s) covering {skipped_hits} hit(s) were "
+                f"not triaged: this invocation reached its own budget of {MAX_REPORT_CARDS} "
+                f"card(s) / {MAX_REPORT_SCAN_BYTES // (1024 * 1024)} MB of content reads. "
+                f"Re-run with --report-addr against a specific region to triage one of them.",
+                code="REPORT_CARD_BUDGET_REACHED"))
         return CommandResult(kind="report", records=records,
                               coverage=_combine_with_aggregate(coverages, records, search_stats),
-                              execution_status=_execution_status_for(records, diagnostics, search_stats),
+                              execution_status=_execution_status_for(
+                                  records, diagnostics, search_stats, len(skipped)),
                               summary=summary, diagnostics=diagnostics, artifacts=artifacts)
 
     # ── TID/address mode: exactly one card ────────────────────────────
@@ -651,7 +809,9 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         mf, tid=tid_int, addr=addr_int, anchor_source=anchor_source, min_len=min_len,
         extract_to=extract_to, force=force, suspicious_prots=suspicious_prots,
         modules=modules, regions=regions, infos=infos, tid_map=tid_map,
-        modules_available=modules_available)
+        modules_available=modules_available, handle_records=handle_records,
+        handle_summary=handle_summary, region_evidence=region_evidence,
+        handle_index=handle_index)
 
     mode_parts = []
     if tid_int is not None:
@@ -663,6 +823,10 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         "query_tid": report_tid, "query_addr": report_addr, "total_hits": None,
         "hits_private": None, "hits_image": None, "image_hit_modules": [],
         "skipped_unreadable_regions": 0, "truncated_regions": 0, "clamped_regions": 0,
+        "cards_skipped_for_budget": 0,
+        "hits_skipped_for_budget": 0,
+        "hits_sharing_a_region": 0,
+        "process_enrichment": process_enrichment.to_dict(),
     }
     return CommandResult(kind="report", records=[record],
                           coverage=_combine_with_aggregate([coverage], [record], _NO_SEARCH_STATS),
@@ -835,6 +999,16 @@ def _render_card(mf, card, min_len: int) -> None:
             print(RED(f"  [!] Could not read region: {card.string_scan_error}"))
         print()
 
+    # ── 5-8. Card enrichment ──────────────────────────────────────────
+    if card.exception_context is not None:
+        _render_exception_context(card.exception_context)
+    if card.allocation_neighborhood is not None:
+        _render_allocation_neighborhood(card.allocation_neighborhood)
+    if card.handle_correlation is not None:
+        _render_handle_correlation(card.handle_correlation)
+    if card.string_context is not None:
+        _render_string_context(card.string_context)
+
     # ── Verdict (MECE) ────────────────────────────────────────────────
     print(BOLD("[ VERDICT ]"))
     print("─" * 50)
@@ -844,6 +1018,286 @@ def _render_card(mf, card, min_len: int) -> None:
             label = INDICATOR_DIMS.get(key, key)
             print(f"  {BOLD('►')} {YELLOW(label)}")
             print(f"    {DIM(card.finding_details[key])}")
+
+
+# ── Enrichment console projection ─────────────────────────────────────
+# Every block below renders from the same records and summary dict the
+# JSON document carries -- no console-only derivation, and no enrichment
+# fact structured output does not also publish. A console preview is
+# smaller than the retained set on purpose; whenever it is, the omission
+# is printed, and it is worded differently from a data-level truncation so
+# the two stay distinguishable.
+
+_ENRICHMENT_STATE_TEXT = {
+    ENRICHMENT_MISSING:  "not evaluated",
+    ENRICHMENT_PARTIAL:  "partial",
+    ENRICHMENT_COMPLETE: "complete",
+}
+
+
+def _print_section_state(section: dict, *, indent: str = "  ") -> None:
+    """The scope/state/count line every enrichment block closes with, plus
+    each limitation the section recorded."""
+    state = _ENRICHMENT_STATE_TEXT[section["status"]]
+    counts = str(section["included"])
+    if section["total"] is not None:
+        counts = f"{section['included']} of {section['total']}"
+    cap = section["cap"] if section["cap"] is not None else "none"
+    print(indent + DIM(f"scope: {section['scope']}   evidence: {state}   "
+                       f"kept: {counts}   cap: {cap}"))
+    if section["truncated"]:
+        print(indent + YELLOW(f"[~] retained set cut at the cap of {cap} "
+                              f"— the full retained subset is in --json"))
+    for limitation in section["limitations"]:
+        print(indent + YELLOW("[~] " + console_safe(limitation)))
+
+
+def _print_console_omission(shown: int, kept: int, indent: str = "  ") -> None:
+    if kept > shown:
+        print(indent + DIM(f"[·] console shows {shown} of {kept} retained entries "
+                           f"— the rest are in --json"))
+
+
+def _render_process_enrichment(enrichment: dict) -> None:
+    # This block owns its own leading blank line, so suppressing the whole
+    # function leaves the surrounding output exactly as it would be
+    # without any enrichment at all -- which is what the compatibility
+    # freeze suite relies on to compare the frozen surface.
+    print()
+    print(BOLD("[ P ] PROCESS CONTEXT"))
+    print("─" * 50)
+    section = enrichment["section"]
+    if section["status"] == ENRICHMENT_MISSING:
+        print(DIM("  [·] No process identity evidence in this dump."))
+    else:
+        pid = enrichment["pid"]
+        pid_text = str(pid) if pid is not None else DIM("(not captured)")
+        print(f"  {'PID':<22} {pid_text}")
+        name = enrichment["process_name"]
+        name_text = console_safe(name) if name else DIM("(not captured)")
+        if name and enrichment["process_name_truncated"]:
+            name_text += DIM(" [truncated]")
+        print(f"  {'Process':<22} {name_text}")
+        path = enrichment["process_path"]
+        if path:
+            source = enrichment["path_source"]
+            cut = DIM(" [truncated]") if enrichment["process_path_truncated"] else ""
+            print(f"  {'Path':<22} {console_safe(path)}{cut}  {DIM('← from ' + source)}")
+        command_line = enrichment["command_line"]
+        if command_line:
+            cut = DIM(" [truncated]") if enrichment["command_line_truncated"] else ""
+            print(f"  {'Command Line':<22} {console_safe(command_line)}{cut}")
+        started = enrichment["process_start_utc"]
+        if started:
+            print(f"  {'Started (UTC)':<22} {started}")
+        base = enrichment["image_base_address"]
+        if base:
+            print(f"  {'Image Base':<22} 0x{int(base, 16):016x}")
+    # Printed apart from the section's own limitations: a source
+    # disagreement is not a coverage gap, and rendering the two in one
+    # list would invite reading it as one.
+    conflicts = enrichment["identity_conflicts"]
+    if conflicts:
+        print("  " + BOLD("Identity conflicts (captured sources disagree)"))
+        for conflict in conflicts:
+            print("    " + YELLOW("[!] " + console_safe(conflict["message"])))
+            print("        " + DIM(conflict["code"]))
+        hidden = enrichment["identity_conflicts_total"] - len(conflicts)
+        if hidden > 0:
+            print(DIM(f"    [·] {hidden} further conflict(s) are reported by --process"))
+    _print_section_state(section)
+    print()
+
+    environment = enrichment["environment"]
+    print("  " + BOLD("Session (allowlisted environment)"))
+    if environment["entries"]:
+        for entry in environment["entries"]:
+            mark = DIM(" [truncated]") if entry["truncated"] else ""
+            print(f"    {entry['name']:<24} {console_safe(entry['value'])}{mark}")
+    elif environment["section"]["status"] == ENRICHMENT_MISSING:
+        print(DIM("    [·] Environment block not read — see the note below."))
+    else:
+        print(DIM("    [·] No allowlisted variable was captured in this block."))
+    _print_section_state(environment["section"], indent="    ")
+    print()
+
+    handles = enrichment["handles"]
+    print("  " + BOLD("Handles"))
+    if handles["section"]["status"] == ENRICHMENT_MISSING:
+        print(DIM("    [·] No handle evidence — see the note below."))
+    else:
+        shown = handles["by_type"][:CONSOLE_HANDLE_TYPE_ROWS]
+        census = "  ".join(console_safe(row["type_name"]) + "=" + str(row["count"])
+                           for row in shown)
+        print(f"    {'Total':<24} {handles['total_handles']}")
+        print(f"    {'By type':<24} {census if census else DIM('(none)')}")
+        _print_console_omission(len(shown), len(handles["by_type"]), indent="    ")
+    _print_section_state(handles["section"], indent="    ")
+    print()
+
+    token = enrichment["token"]
+    parser_state = token["parser_state"]
+    stream_text = "declared" if token["stream_present"] else "not declared"
+    if parser_state:
+        stream_text += DIM("  (parser: " + parser_state + ")")
+    print("  " + BOLD("Token"))
+    print(f"    {'Capability':<24} {token['status']}")
+    print(f"    {'Stream':<24} {stream_text}")
+    print("    " + DIM(console_safe(token["detail"])))
+    print()
+
+
+def _address_context_text(context) -> str:
+    """One resolved address as a single console phrase. An address the
+    region table does not describe says so rather than rendering blanks
+    that read as "no protection"."""
+    if context.region_base is None:
+        owner = context.module_owner
+        if owner:
+            return "in " + console_safe(owner) + ", no captured region describes it"
+        return "no captured region describes this address"
+    parts = [f"region 0x{int(context.region_base, 16):x}"]
+    if context.protection:
+        parts.append(context.protection)
+    if context.type:
+        parts.append(context.type)
+    parts.append(console_safe(context.module_owner) if context.module_owner
+                 else "no module owner")
+    return "  ".join(parts)
+
+
+def _render_exception_context(context) -> None:
+    print(BOLD("[ 5 ] EXCEPTION CONTEXT"))
+    print("─" * 50)
+    section = context.section.to_dict()
+    if not context.entries:
+        if section["status"] == ENRICHMENT_MISSING:
+            print(DIM("  [·] No exception evidence was evaluated."))
+        else:
+            print(DIM("  [·] No exception record relates to this anchor."))
+    for entry in context.entries:
+        name = entry.exception_code_name or DIM("(code not recognized by the parser)")
+        code = entry.exception_code or DIM("(no usable code captured)")
+        print(f"  {RED('►')} {code}  {name}")
+        tid_text = f"0x{entry.thread_id:x}" if entry.thread_id is not None else "(not captured)"
+        address = entry.exception_address
+        address_text = f"0x{int(address, 16):016x}" if address else "(not captured)"
+        print(f"      TID={tid_text}  Address={address_text}")
+        if entry.address_context is not None:
+            print("      " + DIM("at: " + _address_context_text(entry.address_context)))
+        if entry.access_type is not None or entry.referenced_address is not None:
+            access = entry.access_type or "access type not decodable"
+            referenced = (f"0x{int(entry.referenced_address, 16):016x}"
+                          if entry.referenced_address else "(not captured)")
+            print(f"      Tried to {access} {referenced}")
+            if entry.referenced_context is not None:
+                print("      " + DIM("that address: "
+                                     + _address_context_text(entry.referenced_context)))
+        print("      " + DIM("selected: " + entry.selection_reason))
+        if entry.parameters:
+            more = " …" if entry.parameters_truncated else ""
+            print("      " + DIM("Information: " + ", ".join(entry.parameters) + more))
+    print(DIM("  Exception state is execution evidence, not a maliciousness finding."))
+    _print_section_state(section)
+    print()
+
+
+def _render_allocation_neighborhood(neighborhood) -> None:
+    print(BOLD("[ 6 ] ALLOCATION NEIGHBORHOOD"))
+    print("─" * 50)
+    section = neighborhood.section.to_dict()
+    if not neighborhood.entries:
+        if section["status"] == ENRICHMENT_MISSING:
+            print(DIM("  [·] No region table was evaluated."))
+        else:
+            print(DIM("  [·] No region in the table contains this anchor."))
+    else:
+        base = neighborhood.allocation_base
+        base_text = f"0x{int(base, 16):016x}" if base else DIM("(not recorded)")
+        print(f"  {'Allocation base':<22} {base_text}")
+        shown = neighborhood.entries[:CONSOLE_NEIGHBOR_REGIONS]
+        for entry in shown:
+            marker = RED("►") if entry.relation == "anchor" else " "
+            gap = "adjacent" if entry.distance == 0 else f"gap {entry.distance:#x}"
+            protection = entry.protection or "?"
+            mem_type = entry.type or "?"
+            print(f"  {marker} 0x{int(entry.base_address, 16):016x}  "
+                  f"{entry.size // 1024:>7} KB  {protection:<24} {mem_type:<14} "
+                  f"{DIM(entry.relation)} {DIM(gap)}")
+            # Only a resolved owner earns a line. An unowned region is the
+            # common case for a dump with no module list, and repeating
+            # that for every row would double the block for no evidence;
+            # the null is in --json either way.
+            if entry.module_owner:
+                print("      " + DIM("owner: " + console_safe(entry.module_owner)))
+        _print_console_omission(len(shown), len(neighborhood.entries))
+        print(DIM("  Adjacency is memory layout, not a relationship to the anchor."))
+    _print_section_state(section)
+    print()
+
+
+def _hex_or_none(value) -> "str | None":
+    return None if value is None else f"0x{value:x}"
+
+
+def _render_handle_correlation(correlation) -> None:
+    print(BOLD("[ 7 ] CORRELATED HANDLES"))
+    print("─" * 50)
+    section = correlation.section.to_dict()
+    if not correlation.entries:
+        if section["status"] == ENRICHMENT_MISSING:
+            print(DIM("  [·] No handle evidence was evaluated for this card."))
+        else:
+            print(DIM("  [·] No handle object name appears in this card's captured text."))
+    else:
+        shown = correlation.entries[:CONSOLE_CORRELATED_HANDLES]
+        for entry in shown:
+            type_text = console_safe(entry.type_name) if entry.type_name else "(unnamed type)"
+            cut = DIM(" [truncated]") if entry.object_name_truncated else ""
+            print(f"  ►  {entry.handle}  {type_text:<16} "
+                  f"{console_safe(entry.object_name)}{cut}")
+            counters = "  ".join(
+                f"{label}={value}" for label, value in
+                (("access", _hex_or_none(entry.granted_access)),
+                 ("attributes", _hex_or_none(entry.attributes)),
+                 ("handles", entry.handle_count), ("pointers", entry.pointer_count))
+                if value is not None)
+            if counters:
+                print("      " + DIM(counters))
+            print("      " + DIM("selected: " + entry.selection_reason))
+        _print_console_omission(len(shown), len(correlation.entries))
+        print(DIM("  A shared name is two captures of the same text, not proof of use."))
+    print(DIM("  Full inventory: --handles"))
+    _print_section_state(section)
+    print()
+
+
+def _render_string_context(context) -> None:
+    print(BOLD("[ 8 ] STRING CONTEXT AROUND THE ANCHOR"))
+    print("─" * 50)
+    section = context.section.to_dict()
+    print(DIM(f"  Examined 0x{int(context.examined_base_address, 16):x} "
+              f"+ {context.bytes_read} of {context.requested_bytes} requested byte(s); "
+              f"{context.total_strings} string(s) extracted"))
+    print(DIM(f"  Distances measured from "
+              f"0x{int(context.distance_anchor_address, 16):x}"))
+    if context.query_text is not None:
+        print(DIM("  Searched for: " + console_safe(context.query_text)))
+    if not context.entries:
+        print(DIM("  [·] No string was retained from the examined range."))
+    else:
+        shown = context.entries[:CONSOLE_STRING_CONTEXT]
+        for entry in shown:
+            distance = "anchor" if entry.distance is None else f"distance {entry.distance:#x}"
+            mark = DIM(" [truncated]") if entry.text_truncated else ""
+            encoding = CYAN("[" + entry.encoding + "]")
+            print(f"    {encoding:<14} 0x{int(entry.address, 16):016x}  "
+                  f"{DIM(entry.selection_reason + ' ' + distance)}")
+            print(f"      {console_safe(entry.text)}{mark}")
+        _print_console_omission(len(shown), len(context.entries))
+    print(DIM("  Proximity is layout: an adjacent string is not a reference to the anchor."))
+    _print_section_state(section)
+    print()
 
 
 def _render_verdict_text(verdict: str, score: int) -> str:
@@ -874,6 +1328,12 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     collect time)."""
     for reason in coverage.reasons:
         print(YELLOW(f"  [~] {reason}"))
+
+    # One process-wide block per invocation, before any card: its scope is
+    # the whole dump, so repeating it per card would publish one fact N
+    # times and invite an analyst to read it as card-specific.
+    if summary.get("process_enrichment") is not None:
+        _render_process_enrichment(summary["process_enrichment"])
 
     if summary["mode"] == "string":
         print(f"\n{BOLD('Searching memory for:')} {CYAN(repr(summary['query_string']))}")
@@ -907,6 +1367,13 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
         if summary["card_count"] == 0:
             print(DIM("  [·] All hits are in known system modules — no actionable regions to triage."))
             return
+
+        if summary.get("cards_skipped_for_budget"):
+            print(YELLOW(
+                f"  [~] {summary['cards_skipped_for_budget']} actionable hit region(s) "
+                f"covering {summary['hits_skipped_for_budget']} hit(s) were not triaged — "
+                f"this run reached its own card/read budget. Use --report-addr on a specific "
+                f"region to triage one of them.\n"))
 
         if summary["query_tid"]:
             print(DIM(f"  [·] --report-tid 0x{summary['query_tid']} was also given, but a TID has no "
