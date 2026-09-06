@@ -349,6 +349,26 @@ anchor with thread, region, module backing, protection, strings, PE/header
 context, verdict dimensions, and coverage. A string not found during an
 incomplete scan is not a clean result.
 
+Each run also prints bounded context around its anchors. One process block
+covers the whole invocation: process identity and session, an allowlisted slice
+of the environment block, a per-type handle census, and whether the dump's
+TokenStream can contribute anything. Each card then adds its own exception
+context, allocation neighborhood, correlated handles, and anchor-aware string
+context.
+
+A `--report-string` run builds at most 32 cards and reads at most 256 MB of
+content across them; any actionable hit left untriaged is counted in the output
+and in a warning, and `--report-addr` triages a specific region on its own.
+
+Every one of those sections states its scope, how much it evaluated, how much it
+kept, and under which cap, so three different situations stay apart: the stream
+was not in the dump (`not evaluated`), the evidence was incomplete (`partial`),
+and a bounded evaluation found nothing eligible (`complete`, 0 kept). None of
+this context changes a card's findings, verdict, coverage, or the exit code, and
+the console shows a preview of each section while `--json` carries the full
+retained set. Complete inventories stay with the Recon commands: `--handles` for
+handles, `--sysinfo` for the environment block.
+
 ### `--extract` and `--strings`
 
 Both resolve the region containing the requested address and operate only on

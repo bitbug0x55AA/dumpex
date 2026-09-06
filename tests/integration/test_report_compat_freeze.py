@@ -56,6 +56,7 @@ def _run(monkeypatch, tmp_path, argv_extra, *, modules=None, threads=None, regio
          read_map=None):
     monkeypatch.setattr(cli, "datetime", _FrozenDateTimeModule)
     monkeypatch.setattr(collector_mod, "datetime", _FrozenDateTimeModule)
+    _silence_enrichment(monkeypatch)
     configure_rules_source(None)   # force a fresh "Rules loaded" print, like a real process
 
     dump_path = str(tmp_path / "test.dmp")
@@ -83,6 +84,32 @@ def _run(monkeypatch, tmp_path, argv_extra, *, modules=None, threads=None, regio
         exit_code = exc.code
     doc = json.loads(open(out_json, encoding="utf-8").read())
     return exit_code, doc
+
+
+# The frozen surface is sections 1-4, the banner, the string-search
+# preamble, and the verdict block. Report enrichment prints its own
+# process-wide block before the first banner and its own card blocks
+# between section 4 and the verdict; those are a separately versioned
+# addition with their own tests (tests/unit/test_report_enrichment.py and
+# tests/integration/test_report_enrichment_output.py).
+#
+# They are suppressed at their own render functions rather than stripped
+# out of the captured text afterwards: each block owns every line it
+# prints, including its leading blank, so silencing the five renderers
+# leaves exactly the output a build without enrichment would produce.
+# Matching on block text instead would re-break the moment an enrichment
+# line began with a character the matcher used as a boundary.
+_ENRICHMENT_RENDERERS = (
+    "_render_process_enrichment", "_render_exception_context",
+    "_render_allocation_neighborhood", "_render_handle_correlation",
+    "_render_string_context",
+)
+
+
+def _silence_enrichment(monkeypatch) -> None:
+    for name in _ENRICHMENT_RENDERERS:
+        assert hasattr(report_mod, name), f"{name} is no longer a report console renderer"
+        monkeypatch.setattr(report_mod, name, lambda *args, **kwargs: None)
 
 
 def _split_console_body(console_text: str) -> str:

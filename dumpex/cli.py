@@ -35,7 +35,7 @@ from dumpex.output.command_result import CommandResult
 
 # ── v2 structured-output routing ────────────────────────────────────────
 # All twelve commands are migrated onto the v2 envelope (see dumpex/output/
-# and dumpex-output-v2.16.schema.json); --diff produces a kind="comparison"
+# and dumpex-output-v2.17.schema.json); --diff produces a kind="comparison"
 # result via V2Output.from_evidence() (two dumps), --report produces a
 # kind="report" result (one TriageCardRecord per triage card -- see
 # dumpex.commands.report's own module docstring), --hunt produces a
@@ -55,7 +55,12 @@ from dumpex.output.command_result import CommandResult
 # scale that reading is against -- `eligible_bytes`,
 # `unscanned_pass_bytes` and `unscanned_fraction`, all three counting
 # scanning work per scan pass -- so a single run can be judged on its own
-# rather than only ranked against another.
+# rather than only ranked against another. v2.17 adds --report enrichment:
+# one process-wide `summary.process_enrichment` and four card-scoped
+# projections per triage card, each carrying its own scope, evidence
+# state, counts, cap, provenance and limitations. Enrichment is captured
+# evidence only -- it produces no finding, verdict, coverage, or
+# exit-code change.
 _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "process", "sysinfo", "handles",
                                     "profile", "diff", "extract", "strings", "report", "hunt"})
 

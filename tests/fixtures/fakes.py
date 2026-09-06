@@ -252,6 +252,44 @@ class ExceptionStream:
         self.ThreadId = thread_id
 
 
+class ExceptionRecordDetail:
+    """Stand-in for MINIDUMP_EXCEPTION, the record ExceptionStream entries
+    carry. `code_name` is the decoded enum member the real parser
+    produces; leaving it None models a code the parser does not
+    recognize, which it files under its own EXCEPTION_UNKNOWN placeholder
+    while keeping the raw value."""
+    def __init__(self, code_raw, *, code_name=None, flags=0, address=0, information=()):
+        self.ExceptionCode_raw   = code_raw
+        self.ExceptionCode        = EnumVal(code_name or "EXCEPTION_UNKNOWN")
+        self.ExceptionFlags        = flags
+        self.ExceptionAddress       = address
+        self.ExceptionInformation    = list(information)
+
+
+class ExceptionStreamEntry:
+    """Stand-in for one MINIDUMP_EXCEPTION_STREAM record."""
+    def __init__(self, thread_id, record):
+        self.ThreadId        = thread_id
+        self.ExceptionRecord  = record
+
+
+class ExceptionListStream:
+    """Stand-in for MinidumpFile.exception as open_dump() populates it --
+    an ExceptionList, whose `exception_records` is the chain the dump
+    captured. Distinct from ExceptionStream above, which models only the
+    single ThreadId field --process's own tests need."""
+    def __init__(self, entries=()):
+        self.exception_records = list(entries)
+
+
+class DirectoryEntry:
+    """One MINIDUMP_DIRECTORY row, reduced to the StreamType
+    `has_stream_directory()` reads. Enough to model "the dump declares
+    this stream" for a stream type dumpex has no parser for."""
+    def __init__(self, stream_type):
+        self.StreamType = stream_type
+
+
 # Content for the on-disk file backing FakeMF.filename (created once per
 # session by tests/conftest.py's _fake_dump_file_on_disk). Fixed bytes, so
 # --sysinfo's dump_file_size_bytes/dump_sha256 are identical on every run

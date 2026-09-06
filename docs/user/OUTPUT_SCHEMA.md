@@ -22,14 +22,14 @@ never replace an input dump.
 
 ## Current contract
 
-All twelve commands emit the same v2.14 envelope. The authoritative schema is
-[`dumpex-output-v2.14.schema.json`](../../dumpex/schemas/dumpex-output-v2.14.schema.json).
+All twelve commands emit the same v2.17 envelope. The authoritative schema is
+[`dumpex-output-v2.17.schema.json`](../../dumpex/schemas/dumpex-output-v2.17.schema.json).
 The schema uses JSON Schema Draft 2020-12 and closes record objects with
 `additionalProperties: false` where their field sets are fixed.
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.14 (current) | [`dumpex-output-v2.14.schema.json`](../../dumpex/schemas/dumpex-output-v2.14.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.17 (current) | [`dumpex-output-v2.17.schema.json`](../../dumpex/schemas/dumpex-output-v2.17.schema.json) |
 
 Use the document's own `meta.schema_version` to select a validator. Do not
 validate archived output against whichever schema happens to be current today.
@@ -406,6 +406,262 @@ The command-level fields remain independent:
 
 A string not found during an incomplete search is not a clean conclusion.
 Unreadable, truncated, or clamped search regions remain coverage limitations.
+
+#### The invocation budget
+
+`--report-string` builds one card per actionable hit, and the hit count is a
+property of the dump, so per-card caps alone leave a run's total cost unbounded.
+A run therefore carries its own budget: at most 32 cards, and at most 256 MB of
+cumulative content reads across them. The first card is always built however
+large it is — a budget that could answer a direct question with nothing would be
+worse than the cost it avoids.
+
+A hit the budget leaves untriaged is reported, never folded away. The hit
+counters keep naming everything the search found, `cards_skipped_for_budget`
+counts what was not triaged, the run reports `execution_status: partial`, and a
+`REPORT_CARD_BUDGET_REACHED` diagnostic points at `--report-addr` for triaging a
+specific region. Truncation follows the search's own hit order, so the same dump
+always yields the same retained cards.
+
+#### One anchor, one region
+
+The search reports a hit against the region it read; everything downstream is
+about the region that *covers* the hit address. On a dump whose region table
+overlaps those are not the same region, so the covering region is resolved
+**once**, up front, and every later decision uses it:
+
+```
+search hit → hit address → covering region
+           → image/private classification
+           → grouping (one card per region)
+           → budget charge
+           → the card itself
+```
+
+Classifying on the search's own region while carding the covering one would let
+the summary call a hit actionable and then hand back a card saying it belongs to
+a registered system module — or drop a genuinely private hit into the image
+bucket and never card it at all. Resolving twice would additionally let a small
+region's size pay for a large region's read, and publish an offset measured from
+one base against another. The hit offset is rebased onto the card's own region,
+so `string_hit.address == region.base_address + string_hit.offset` always holds
+and points at the real virtual address.
+
+Two hits inside one covering region produce one card. Whether a hit is *covered
+by another hit's card* is only knowable after the budget has decided, so
+grouping happens before the budget and counting after it:
+
+- a group that received a card contributes its extra hits to
+  `hits_sharing_a_region`, with a `REPORT_STRING_HITS_SHARE_A_REGION` diagnostic;
+- a group the budget skipped covers nothing, so **all** its hits count as
+  unanalyzed — `cards_skipped_for_budget` counts those regions and
+  `hits_skipped_for_budget` the hits inside them. They are never reported as
+  represented somewhere else.
+
+The counters account for every hit:
+
+```
+hits_private + hits_image                                     == total_hits
+card_count + hits_sharing_a_region + hits_skipped_for_budget  == hits_private
+```
+
+### Report enrichment (v2.17)
+
+A report also carries bounded context around its anchors, so an analyst can
+tell who produced the evidence, what execution state referenced it, and which
+nearby or correlated objects deserve follow-up without leaving the report.
+
+`result.summary.process_enrichment` is **one object per invocation**, shared by
+every card in the run:
+
+| Field | Content |
+|---|---|
+| `pid`, `process_name`, `process_path`, `path_source`, `command_line`, `process_start_utc`, `image_base_address`, `module_match_state` | Process identity, from the same canonical boundary `--process` uses |
+| `environment` | The allowlisted session slice of the environment block |
+| `handles` | `total_handles` plus a bounded per-type census |
+| `token` | Whether the dump's TokenStream can contribute anything |
+
+Every `triageCardRecord` carries four **card-scoped** projections about that one
+anchor: `exception_context`, `allocation_neighborhood`, `handle_correlation`,
+and `string_context`.
+
+#### Every section states what it evaluated
+
+Each projection carries an `enrichmentSection`:
+
+| Field | Meaning |
+|---|---|
+| `scope` | `process` (one per run) or `card` (one per anchor) |
+| `status` | `missing`, `partial`, or `complete` |
+| `total` | The eligible population it selected from, or `null` when that is not determinable |
+| `included` | How many items it retained |
+| `cap` | The retention cap that applied |
+| `truncated` | Whether the cap cut the retained set |
+| `provenance` | The streams or collectors the section was built from |
+| `limitations` | What the section could not establish |
+
+The three states answer different questions, and a consumer must not collapse
+them:
+
+- **`missing`** — the stream or pages this section needs are not in the dump.
+  Nothing was evaluated, `total` is `null`, and the empty subset carries no
+  negative about the process.
+- **`partial`** — some required evidence was usable and some was not. The subset
+  is real but incomplete.
+- **`complete` with `included: 0`** — a bounded evaluation ran to its own end and
+  found no eligible item. This is a result, not a gap.
+
+Wherever `total` is known, `truncated` is exactly `included < total`: an
+eligible item is dropped only by the declared `cap`, never silently. Console
+output previews fewer entries than the retained set and says so in different
+words, so a console omission and a data-level truncation stay distinguishable.
+
+#### What each projection means
+
+`exception_context` is only as complete as the region view behind it: when that
+view dropped a descriptor **and** an address here resolved to no captured
+region, the section reports `partial` rather than claiming the address lies
+outside every captured region — it may lie in exactly the span that went
+missing.
+
+`exception_context` retains the exception records related to this anchor —
+`anchor_thread` (the record's own thread is the anchor TID), `anchor_region`
+(the faulting address is inside the anchor's region), or `process_exception`
+(the dump's first record, kept as process crash context). An access violation
+or in-page error additionally decodes into `access_type` (`read`, `write`, or
+`execute`) and `referenced_address`, read positionally out of the parameters
+those two codes define that way; every other code's parameters are published
+raw rather than guessed at, with an unusable element rendered `0x?` **in place**
+so it cannot relabel the value after it. `address_context` and
+`referenced_context` resolve the faulting and referenced addresses against the
+same region table and module list the card itself uses.
+
+Every retained record states that its capture reason is unknown: the dump
+represents no way to tell a breakpoint a debugger injected from a fault the
+process took. An exception is execution state, never in itself a maliciousness
+observation.
+
+Registers (RIP/EIP, RSP/ESP) and a comparison between the ExceptionStream's own
+thread context and the ordinary thread context are **not** in this contract.
+Reading them means parsing the raw `CONTEXT` blob the stream's
+`ThreadContext` descriptor points at, which no shipped collector exposes; the
+report will not add a parser of its own for it.
+
+`allocation_neighborhood` names the anchor's own region, the rest of its
+allocation, and the nearest regions **outside** that allocation on each side,
+with the byte `distance` to the anchor region and each neighbour's
+`module_owner`. The outward walk steps over the anchor's own subregions rather
+than stopping at them — a multi-page reservation would otherwise hide every
+region beyond it, which is the boundary this section exists to show — and the
+cap reserves those out-of-allocation neighbours ahead of the allocation's own
+subregions, which are more numerous and more interchangeable. `total` counts
+every region the selection considered, so `truncated` is honest about what the
+cap cut.
+
+Adjacency is memory layout: a neighbor is a place to look next, not evidence of
+a relationship to the anchor. A region descriptor the region model cannot
+represent is absent from the table this section describes, so the section
+reports `partial` and names how many were dropped. A `missing` section
+distinguishes a `MemoryInfoListStream` that was never collected from one the
+dump declares but no parsed stream is available for, and from one that failed to
+parse — its `limitations` say which.
+
+Selection is bounded per card, not per region table: the region table is
+enumerated and indexed by allocation base once per invocation, and each card
+walks outward from its own position in that index until the caps are met.
+
+A base address is a region's identity in that view, so it holds at most one
+descriptor per base. A dump that declares the same base twice keeps the first
+(narrowest) one, and the section reports `partial` naming how many repeats were
+dropped — a malformed region table degrades the neighborhood, it does not stop
+the report.
+
+`handle_correlation` retains handles whose object name also appears in the text
+this card examined — the same name captured independently in two places in one
+dump. The match is on the object name's **last** path segment only: a namespace
+prefix (`Device`, `BaseNamedObjects`, `REGISTRY`) is shared by thousands of
+unrelated objects, so matching on any segment would correlate unrelated objects
+and crowd out real ones. Every collected handle is compared — the comparison is
+one set lookup per record, and a prefix cut would be a biased one, since the
+collector orders records by ascending handle value. Entries are deduplicated by
+`handle`, which is a record's whole identity, so a malformed dump declaring one
+handle value twice yields one entry, and each carries the raw `attributes`,
+`handle_count`, and `pointer_count` so a correlated handle can be assessed
+without a second `--handles` run. It is not proof that the anchor uses the
+handle, a generic handle fact carries no maliciousness on its own, and the
+complete inventory is still `--handles`.
+
+This section rests on two bodies of evidence and is `complete` only when both
+are. An unread handle name, a partial handle inventory, or a short region read
+each make it `partial`: in every one of those cases a non-match may be a
+non-read rather than an absence. A read the card's own scan cap ended (rather
+than the dump) stays `complete` under this repository's clamp-versus-truncation
+rule but is always stated, because the compared range is smaller than the region
+either way.
+
+`object_name_truncated` matters more here than elsewhere: the match is made
+against the whole captured name, so a truncated published value can lack the
+segment that selected it. Every dump-derived string in these sections obeys the
+same 200-character cap and carries its own truncation flag — object names, type
+names, and the `module_owner` on both neighbour regions and resolved addresses.
+
+The handle inventory is indexed by identifying segment once per invocation, so
+correlating a card is a lookup per captured segment rather than a pass over
+every handle: a run's correlation work follows the text its cards examined, not
+cards multiplied by handles.
+
+`string_context` re-selects the strings the card's single content read already
+produced: the query hit first, then IOC-pattern matches, then remaining strings
+by absolute distance from `distance_anchor_address`, with the virtual address as
+the tie-breaker. IOC membership is read off the card's own scan result rather
+than re-matched, selection streams over the strings keeping only the cap's worth
+of candidates, and a record is built only for a string that survives — so the
+work is bounded by the cap, not by how many strings the region holds. No region
+is read or scanned a second time, and no entry describes bytes outside
+`examined_base_address + bytes_read`.
+
+One captured string yields at most one entry. The string enclosing the search
+hit is published as the `query_match` entry and is never re-emitted as adjacent
+context — it *is* the anchor, so labelling it adjacent would be false and would
+also spend a retention slot on a duplicate. `query_text` carries the needle that
+was searched for, separately from that entry's own `text`, which is the string
+actually captured at the hit; an embedded needle means the two differ. The exact
+hit location stays on the card's own `string_hit`. Proximity is
+layout, not a claim that an adjacent string is referenced or executed by
+anything at the anchor.
+
+`token` reports a directory fact and a parser fact separately.
+`stream_present: false` means the dump captured no token evidence;
+`stream_present: true` with `parser_state: "unparsed"` means it captured token
+evidence dumpex has no parser for. Those are different problems with different
+answers, so they never collapse into one silence.
+
+#### Enrichment is context, not judgment
+
+None of it reaches `findings`, `finding_details`, or `verdict`, adds a
+`coverage.limitations` entry, or changes `coverage.status`, `execution_status`,
+or the exit code. A retention cap is this command's own policy, not an evidence
+gap, and is reported by the section that applied it and nowhere else.
+
+The report publishes an allowlisted session slice of the environment block
+(`COMPUTERNAME`, `USERDOMAIN`, `USERNAME`, `SESSIONNAME`, `OS`,
+`PROCESSOR_ARCHITECTURE`, `NUMBER_OF_PROCESSORS`), bounded to 200 characters per
+value. The complete environment inventory remains `--sysinfo`. `process_path`,
+`command_line`, and `process_name` all go through the same 200-character cap and
+carry their own truncation flags — a PEB string is bounded only by the
+`UNICODE_STRING` that carried it, and a captured path with no separator in it is
+its own basename.
+
+Identity conflicts the process-identity boundary already resolved are published
+in `identity_conflicts`, **not** in the section's `limitations`. The split is
+deliberate: a limitation says evidence was missing and drives the section's
+evidence state, while a conflict says two sources were both captured and both
+read and simply disagree — which leaves the evaluation `complete`. A module
+registered at a base other than the PEB's own is a conflict; a path-source
+fallback, where the preferred source was unavailable, is the one diagnostic
+family that stays a limitation. `identity_conflicts_total` counts every conflict
+the boundary reported, including any the cap dropped. Neither ever becomes a
+finding.
 
 ### Hunt records
 

@@ -2466,11 +2466,50 @@ def test_memory_diff_record_null_base_address_rejected_by_schema(memory_diff_rec
 
 # ── report kind (Phase E, PR3) ─────────────────────────────────────────────
 
+def _minimal_valid_enrichment_section(name, scope, **overrides):
+    section = {"name": name, "scope": scope, "status": "complete", "total": 0, "included": 0,
+               "cap": 4, "truncated": False, "provenance": [], "limitations": []}
+    section.update(overrides)
+    return section
+
+
+def _minimal_valid_process_enrichment():
+    """The process-wide enrichment every v2.17 report summary carries. A
+    dump with no identity, environment, handle, or token evidence still
+    produces one: each section reports `missing` rather than being
+    omitted, which is exactly the distinction the contract exists for."""
+    return {
+        "section": _minimal_valid_enrichment_section(
+            "process", "process", status="missing", total=None, cap=1),
+        "pid": None, "process_name": None, "process_path": None, "path_source": None,
+        "command_line": None, "process_start_utc": None, "image_base_address": None,
+        "module_match_state": "unavailable",
+        "environment": {
+            "section": _minimal_valid_enrichment_section(
+                "environment", "process", status="missing", total=None, cap=7),
+            "entries": []},
+        "handles": {
+            "section": _minimal_valid_enrichment_section(
+                "handles", "process", status="missing", total=None, cap=12),
+            "total_handles": None, "by_type": []},
+        "token": {"stream_present": False, "parser_state": None, "status": "unavailable",
+                  "detail": "the dump declares no TokenStream"},
+        "process_path_truncated": False,
+        "command_line_truncated": False,
+        "process_name_truncated": False,
+        "identity_conflicts": [],
+        "identity_conflicts_total": 0,
+    }
+
+
 def _minimal_valid_report_summary():
     return {"mode": "addr", "card_count": 1, "query_string": None, "query_tid": None,
             "query_addr": "0x1000", "total_hits": None, "hits_private": None,
             "hits_image": None, "image_hit_modules": [], "skipped_unreadable_regions": 0,
-            "truncated_regions": 0, "clamped_regions": 0}
+            "truncated_regions": 0, "clamped_regions": 0,
+            "cards_skipped_for_budget": 0, "hits_skipped_for_budget": 0,
+            "hits_sharing_a_region": 0,
+            "process_enrichment": _minimal_valid_process_enrichment()}
 
 
 def _minimal_valid_triage_card_record():
@@ -2482,6 +2521,19 @@ def _minimal_valid_triage_card_record():
         "thread_region_correlation_excluded": False,
         "findings": [], "finding_details": {}, "verdict": "CLEAN",
         "artifact_id": None, "extract_read_clamped": None, "extract_read_truncated": None,
+        "exception_context": {
+            "section": _minimal_valid_enrichment_section(
+                "exception", "card", status="missing", total=None),
+            "entries": []},
+        "allocation_neighborhood": {
+            "section": _minimal_valid_enrichment_section(
+                "allocation", "card", status="missing", total=None, cap=7),
+            "allocation_base": None, "entries": []},
+        "handle_correlation": {
+            "section": _minimal_valid_enrichment_section(
+                "handle_correlation", "card", status="missing", total=None, cap=8),
+            "entries": []},
+        "string_context": None,
     }
 
 
@@ -2500,6 +2552,257 @@ def _minimal_valid_report_doc():
 
 def test_minimal_valid_report_doc_passes_schema(validator):
     assert validator.is_valid(_minimal_valid_report_doc())
+
+
+# ── report enrichment: what the wire contract must REJECT ──────────────
+# The Python record types police these same rules at construction time,
+# but a consumer pins the schema, not __post_init__. Each test below
+# breaks exactly one enrichment rule in an otherwise valid document.
+
+def _report_doc_with_card(**card_overrides):
+    doc = _minimal_valid_report_doc()
+    doc["result"]["data"]["records"][0].update(card_overrides)
+    return doc
+
+
+def _string_context(**overrides):
+    context = {
+        "section": _minimal_valid_enrichment_section("string_context", "card", cap=12),
+        "anchor_address": "0x0000000000001000",
+        "distance_anchor_address": "0x0000000000001000",
+        "query_text": None,
+        "examined_base_address": "0x0000000000001000",
+        "examined_size": 4096, "requested_bytes": 4096, "bytes_read": 4096,
+        "total_strings": 0, "entries": [],
+    }
+    context.update(overrides)
+    return context
+
+
+def _string_entry(**overrides):
+    entry = {"address": "0x0000000000001010", "offset": 16, "encoding": "ASCII",
+             "text": "some captured string", "text_truncated": False,
+             "selection_reason": "adjacent_to_anchor", "distance": 16}
+    entry.update(overrides)
+    return entry
+
+
+def test_an_unknown_enrichment_status_is_rejected_by_schema(validator):
+    section = _minimal_valid_enrichment_section("exception", "card", status="unknown")
+    doc = _report_doc_with_card(exception_context={"section": section, "entries": []})
+    assert not validator.is_valid(doc)
+
+
+def test_an_unknown_enrichment_scope_is_rejected_by_schema(validator):
+    section = _minimal_valid_enrichment_section("exception", "module")
+    doc = _report_doc_with_card(exception_context={"section": section, "entries": []})
+    assert not validator.is_valid(doc)
+
+
+def test_an_extra_property_on_an_enrichment_section_is_rejected_by_schema(validator):
+    section = _minimal_valid_enrichment_section("exception", "card")
+    section["confidence"] = "high"
+    doc = _report_doc_with_card(exception_context={"section": section, "entries": []})
+    assert not validator.is_valid(doc)
+
+
+def test_an_unknown_string_context_selection_reason_is_rejected_by_schema(validator):
+    context = _string_context(
+        section=_minimal_valid_enrichment_section("string_context", "card", total=1,
+                                                  included=1, cap=12),
+        entries=[_string_entry(selection_reason="looked_interesting")])
+    doc = _report_doc_with_card(string_context=context)
+    assert not validator.is_valid(doc)
+
+
+def test_a_query_match_entry_carrying_a_distance_is_rejected_by_schema(validator):
+    """The query hit IS the anchor, so it has no distance from itself."""
+    context = _string_context(
+        section=_minimal_valid_enrichment_section("string_context", "card", total=1,
+                                                  included=1, cap=12),
+        query_text="needle",
+        entries=[_string_entry(selection_reason="query_match", distance=0)])
+    doc = _report_doc_with_card(string_context=context)
+    assert not validator.is_valid(doc)
+
+
+def test_an_adjacent_entry_without_a_distance_is_rejected_by_schema(validator):
+    context = _string_context(
+        section=_minimal_valid_enrichment_section("string_context", "card", total=1,
+                                                  included=1, cap=12),
+        entries=[_string_entry(distance=None)])
+    doc = _report_doc_with_card(string_context=context)
+    assert not validator.is_valid(doc)
+
+
+def test_an_anchor_neighbour_at_a_nonzero_distance_is_rejected_by_schema(validator):
+    """The anchor region is at distance 0 from itself by definition."""
+    neighbourhood = {
+        "section": _minimal_valid_enrichment_section("allocation", "card", total=1,
+                                                     included=1, cap=9),
+        "allocation_base": "0x0000000000001000",
+        "entries": [{"base_address": "0x0000000000001000", "size": 4096,
+                     "state": "MEM_COMMIT", "type": "MEM_PRIVATE",
+                     "protection": "PAGE_READWRITE",
+                     "allocation_base": "0x0000000000001000", "relation": "anchor",
+                     "distance": 4096, "module_owner": None,
+                     "module_owner_truncated": False}],
+    }
+    doc = _report_doc_with_card(allocation_neighborhood=neighbourhood)
+    assert not validator.is_valid(doc)
+
+
+def test_an_unknown_neighbour_relation_is_rejected_by_schema(validator):
+    neighbourhood = {
+        "section": _minimal_valid_enrichment_section("allocation", "card", total=1,
+                                                     included=1, cap=9),
+        "allocation_base": None,
+        "entries": [{"base_address": "0x0000000000001000", "size": 4096,
+                     "state": "MEM_COMMIT", "type": "MEM_PRIVATE",
+                     "protection": "PAGE_READWRITE", "allocation_base": None,
+                     "relation": "nearby", "distance": 0, "module_owner": None,
+                     "module_owner_truncated": False}],
+    }
+    doc = _report_doc_with_card(allocation_neighborhood=neighbourhood)
+    assert not validator.is_valid(doc)
+
+
+def test_an_undeclared_token_stream_carrying_a_parser_state_is_rejected_by_schema(validator):
+    """`stream_present` and `parser_state` are one fact each and must
+    agree: a stream the dump never declared has no parse outcome."""
+    doc = _minimal_valid_report_doc()
+    token = doc["result"]["summary"]["process_enrichment"]["token"]
+    token["stream_present"] = False
+    token["parser_state"] = "unparsed"
+    assert not validator.is_valid(doc)
+
+
+def test_a_declared_token_stream_without_a_parser_state_is_rejected_by_schema(validator):
+    doc = _minimal_valid_report_doc()
+    token = doc["result"]["summary"]["process_enrichment"]["token"]
+    token["stream_present"] = True
+    token["parser_state"] = None
+    assert not validator.is_valid(doc)
+
+
+def test_an_unknown_identity_conflict_severity_is_rejected_by_schema(validator):
+    doc = _minimal_valid_report_doc()
+    enrichment = doc["result"]["summary"]["process_enrichment"]
+    enrichment["identity_conflicts"] = [
+        {"code": "PROCESS_MODULE_BASE_CONFLICT", "severity": "critical",
+         "message": "two sources disagree"}]
+    enrichment["identity_conflicts_total"] = 1
+    assert not validator.is_valid(doc)
+
+
+def test_an_over_long_process_name_is_rejected_by_schema(validator):
+    """`process_name` is a captured string, not a short derived label: a
+    path with no separator in it is its own basename."""
+    doc = _minimal_valid_report_doc()
+    doc["result"]["summary"]["process_enrichment"]["process_name"] = "e" * 201
+    assert not validator.is_valid(doc)
+
+
+def test_an_unknown_handle_selection_reason_is_rejected_by_schema(validator):
+    correlation = {
+        "section": _minimal_valid_enrichment_section("handle_correlation", "card", total=1,
+                                                     included=1, cap=8),
+        "entries": [{"handle": "0x0000000000000040", "type_name": "File",
+                     "object_name": "\\Device\\NamedPipe\\x", "granted_access": 1,
+                     "selection_reason": "looked_related", "object_name_truncated": False,
+                     "type_name_truncated": False, "attributes": None,
+                     "handle_count": None, "pointer_count": None}],
+    }
+    doc = _report_doc_with_card(handle_correlation=correlation)
+    assert not validator.is_valid(doc)
+
+
+def test_an_unresolved_address_context_carrying_region_facts_is_rejected_by_schema(validator):
+    """Region facts require a resolved region: an address the table does
+    not describe has no protection to report."""
+    exception_context = {
+        "section": _minimal_valid_enrichment_section("exception", "card", total=1,
+                                                     included=1, cap=4),
+        "entries": [{
+            "index": 0, "thread_id": 17, "exception_code": "0xc0000005",
+            "exception_code_name": "EXCEPTION_ACCESS_VIOLATION", "exception_flags": 0,
+            "exception_address": "0x0000000000001010", "parameters": [],
+            "parameters_truncated": False, "selection_reason": "anchor_region",
+            "access_type": "write", "referenced_address": None,
+            "address_context": {"address": "0x0000000000001010", "region_base": None,
+                                "region_size": None, "protection": "PAGE_READWRITE",
+                                "type": None, "module_owner": None,
+                                "module_owner_truncated": False},
+            "referenced_context": None}],
+    }
+    doc = _report_doc_with_card(exception_context=exception_context)
+    assert not validator.is_valid(doc)
+
+
+def test_an_unknown_access_type_is_rejected_by_schema(validator):
+    exception_context = {
+        "section": _minimal_valid_enrichment_section("exception", "card", total=1,
+                                                     included=1, cap=4),
+        "entries": [{
+            "index": 0, "thread_id": 17, "exception_code": "0xc0000005",
+            "exception_code_name": "EXCEPTION_ACCESS_VIOLATION", "exception_flags": 0,
+            "exception_address": "0x0000000000001010", "parameters": [],
+            "parameters_truncated": False, "selection_reason": "anchor_region",
+            "access_type": "append", "referenced_address": None,
+            "address_context": None, "referenced_context": None}],
+    }
+    doc = _report_doc_with_card(exception_context=exception_context)
+    assert not validator.is_valid(doc)
+
+
+def test_a_valid_enriched_card_with_every_projection_populated_passes(validator):
+    """The guard against every rejection above passing for the wrong
+    reason."""
+    doc = _report_doc_with_card(
+        string_context=_string_context(
+            section=_minimal_valid_enrichment_section("string_context", "card", total=1,
+                                                      included=1, cap=12),
+            entries=[_string_entry()]),
+        allocation_neighborhood={
+            "section": _minimal_valid_enrichment_section("allocation", "card", total=1,
+                                                         included=1, cap=9),
+            "allocation_base": "0x0000000000001000",
+            "entries": [{"base_address": "0x0000000000001000", "size": 4096,
+                         "state": "MEM_COMMIT", "type": "MEM_PRIVATE",
+                         "protection": "PAGE_READWRITE",
+                         "allocation_base": "0x0000000000001000", "relation": "anchor",
+                         "distance": 0, "module_owner": None,
+                         "module_owner_truncated": False}]},
+        handle_correlation={
+            "section": _minimal_valid_enrichment_section("handle_correlation", "card",
+                                                         total=1, included=1, cap=8),
+            "entries": [{"handle": "0x0000000000000040", "type_name": "File",
+                         "object_name": "\\Device\\NamedPipe\\x",
+                         "granted_access": 1,
+                         "selection_reason": "object_name_in_anchor_strings",
+                         "object_name_truncated": False, "type_name_truncated": False,
+                         "attributes": 0, "handle_count": 1, "pointer_count": 1}]},
+        exception_context={
+            "section": _minimal_valid_enrichment_section("exception", "card", total=1,
+                                                         included=1, cap=4),
+            "entries": [{
+                "index": 0, "thread_id": 17, "exception_code": "0xc0000005",
+                "exception_code_name": "EXCEPTION_ACCESS_VIOLATION", "exception_flags": 0,
+                "exception_address": "0x0000000000001010", "parameters": ["0x1", "0x?"],
+                "parameters_truncated": False, "selection_reason": "anchor_region",
+                "access_type": "write", "referenced_address": "0x000000000000dead",
+                "address_context": {"address": "0x0000000000001010",
+                                    "region_base": "0x0000000000001000",
+                                    "region_size": 4096, "protection": "PAGE_READWRITE",
+                                    "type": "MEM_PRIVATE", "module_owner": None,
+                                    "module_owner_truncated": False},
+                "referenced_context": {"address": "0x000000000000dead",
+                                       "region_base": None, "region_size": None,
+                                       "protection": None, "type": None,
+                                       "module_owner": None,
+                                       "module_owner_truncated": False}}]},
+    )
+    assert validator.is_valid(doc)
 
 
 def test_report_summary_missing_query_tid_is_rejected_by_schema(validator):
@@ -2525,6 +2828,10 @@ def test_report_summary_string_mode_with_all_fields_set_passes(validator):
         "query_addr": None, "total_hits": 1, "hits_private": 1, "hits_image": 0,
         "image_hit_modules": [], "skipped_unreadable_regions": 0,
         "truncated_regions": 0, "clamped_regions": 0,
+        "cards_skipped_for_budget": 0,
+        "hits_skipped_for_budget": 0,
+        "hits_sharing_a_region": 0,
+        "process_enrichment": _minimal_valid_process_enrichment(),
     }
     doc["result"]["data"]["records"] = [{
         **_minimal_valid_triage_card_record(),
