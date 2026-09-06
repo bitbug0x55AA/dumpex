@@ -156,8 +156,8 @@ def test_environment_publishes_only_allowlisted_names(monkeypatch):
     mf = _with_environment(_mf(), _environment_block(
         "COMPUTERNAME=WORKSTATION7",
         "USERNAME=analyst",
-        "PATH=C:\\Windows;C:\\Users\\analyst\\bin",
-        "APPDATA=C:\\Users\\analyst\\AppData\\Roaming",
+        "PATH=C:\\Windows;D:\\SyntheticTools\\bin",
+        "APPDATA=D:\\SyntheticApplicationData\\Roaming",
         "SECRET_TOKEN=hunter2"))
     enrichment, _handles = collect_process_enrichment(mf)
     environment = enrichment.environment
