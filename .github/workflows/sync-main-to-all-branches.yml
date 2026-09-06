@@ -1,6 +1,7 @@
 name: Sync main to all branches
 
-# Automatic sync starts only from a main commit that passed the required CI.
+# Automatic sync starts once for each main commit, then waits for that exact
+# commit to pass the required CI before it changes any branch.
 # By default it performs fast-forwards only: ahead or diverged branches are
 # held for a human, pushes never use force, and a branch that moves during the
 # sync is rejected rather than overwritten. Concurrency prevents sync runs
@@ -9,12 +10,9 @@ name: Sync main to all branches
 # GITHUB_TOKEN pushes do not trigger other workflows, so checks on an open
 # pull request still describe its pre-sync tree.
 on:
-  # Each required workflow can start the gate; pending siblings defer the
-  # sync until the last required workflow completes. workflow_run uses the
-  # workflow file on the default branch.
-  workflow_run:
-    workflows: ["Tests", "Repository Leak Scan"]
-    types: [completed]
+  # A push is the single source event for a main commit. Triggering from each
+  # required workflow's completion would create two Sync runs for one commit.
+  push:
     branches: [main]
 
   workflow_dispatch:
@@ -32,8 +30,9 @@ permissions:
   contents: write
   actions: read
 
-# Never let two syncs interleave; queue the second one instead of
-# cancelling it, so no verified commit is silently skipped.
+# Never let two syncs interleave. A queued run whose commit has been
+# superseded exits cleanly; syncing the newer main tip also carries every
+# ancestor commit forward.
 concurrency:
   group: sync-main-to-all-branches
   cancel-in-progress: false
@@ -42,14 +41,7 @@ jobs:
   sync:
     name: Fast-forward every branch to verified main
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    # A failed, cancelled or skipped CI run never reaches the job at all.
-    # The preflight step below still re-checks every workflow for this
-    # commit, because this condition only sees the one that triggered us.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+    timeout-minutes: 30
 
     steps:
       - name: Check out main with full history
@@ -64,11 +56,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          SELF_RUN_ID: ${{ github.run_id }}
           EVENT_NAME: ${{ github.event_name }}
-          TRIGGER_SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
           ALLOW_UNVERIFIED: ${{ inputs.allow_unverified }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUIRED_WORKFLOWS: "Tests,Repository Leak Scan"
+          POLL_SECONDS: "15"
+          MAX_POLLS: "80"
         run: |
           set -euo pipefail
 
@@ -109,41 +103,72 @@ jobs:
             stop "\`main\` has advanced to \`${main_tip:0:8}\` since \`${sha:0:8}\` was verified. That commit's own CI run will drive the sync."
           fi
 
-          # Run-level state for this exact commit, across every workflow,
-          # excluding this run. `commits/$sha/status` is useless here: this
-          # repository posts no commit statuses, only check runs, so that
-          # endpoint reports "pending" forever.
-          # gh's built-in --jq keeps this off the standalone jq binary, and
-          # this run is excluded in awk below rather than inside the filter
-          # expression, so the run id is never interpolated into a query.
-          if ! runs="$(gh api "repos/$REPO/actions/runs?head_sha=$sha&per_page=100" \
-                --jq '.workflow_runs[] | "\(.id)\t\(.name)\t\(.status)\t\(.conclusion // "-")"' 2>/dev/null)"; then
-            echo "Could not read the CI state of $sha from the Actions API." >&2
+          # This run starts alongside CI, so wait here instead of creating a
+          # separate Sync run for every required workflow completion. Only
+          # push runs on main count: a PR or manual run for the same SHA is
+          # not verification of the commit as it landed on main.
+          IFS=',' read -r -a required <<< "$REQUIRED_WORKFLOWS"
+          verified=""
+
+          for ((poll = 1; poll <= MAX_POLLS; poll++)); do
+            git fetch origin '+refs/heads/main:refs/remotes/origin/main' --quiet
+            current_tip="$(git rev-parse refs/remotes/origin/main)"
+            if [[ "$current_tip" != "$sha" ]]; then
+              stop "\`main\` has advanced to \`${current_tip:0:8}\` while \`${sha:0:8}\` was waiting for CI. The newer commit's Sync run will take over."
+            fi
+
+            if ! runs="$(gh api "repos/$REPO/actions/runs?head_sha=$sha&branch=main&event=push&per_page=100" \
+                  --jq '.workflow_runs[] | "\(.id)\t\(.name)\t\(.status)\t\(.conclusion // "-")"' 2>/dev/null)"; then
+              echo "Could not read the CI state of $sha from the Actions API." >&2
+              exit 1
+            fi
+
+            pending=()
+            failed=()
+            passed=()
+            for workflow in "${required[@]}"; do
+              # The API is newest-first. If a workflow was re-run, use its
+              # current/latest record and ignore older attempts.
+              row="$(awk -F'\t' -v wanted="$workflow" '$2 == wanted { print; exit }' <<< "$runs")"
+              if [[ -z "$row" ]]; then
+                pending+=("$workflow (not started)")
+                continue
+              fi
+
+              IFS=$'\t' read -r _ _ status conclusion <<< "$row"
+              if [[ "$status" != "completed" ]]; then
+                pending+=("$workflow")
+              elif [[ "$conclusion" == "success" || "$conclusion" == "skipped" || "$conclusion" == "neutral" ]]; then
+                passed+=("$workflow")
+              else
+                failed+=("$workflow ($conclusion)")
+              fi
+            done
+
+            if (( ${#failed[@]} > 0 )); then
+              # Deliberately a green exit. main being red is already reported
+              # by the workflow that went red; a second red badge here would
+              # be noise about a failure the first one already owns.
+              failed_list="$(IFS=', '; echo "${failed[*]}")"
+              stop "\`main\` is not green at \`${sha:0:8}\` — $failed_list. Nothing was synced."
+            fi
+
+            if (( ${#pending[@]} == 0 )); then
+              verified="$(IFS=', '; echo "${passed[*]}")"
+              break
+            fi
+
+            pending_list="$(IFS=', '; echo "${pending[*]}")"
+            echo "Waiting for ${sha:0:8} CI ($poll/$MAX_POLLS): $pending_list"
+            sleep "$POLL_SECONDS"
+          done
+
+          if [[ -z "$verified" ]]; then
+            echo "Timed out waiting for required CI on $sha: $pending_list" >&2
             exit 1
           fi
 
-          rows="$(awk -F'\t' -v self="$SELF_RUN_ID" '$1 != self' <<<"$runs")"
-
-          if [[ -z "$rows" ]]; then
-            echo "No workflow runs at all are recorded for $sha; refusing to treat it as verified." >&2
-            echo "Re-run this workflow manually with allow_unverified if that is intentional." >&2
-            exit 1
-          fi
-
-          pending="$(awk -F'\t' '$3 != "completed" { print $2 }' <<<"$rows" | paste -sd', ' -)"
-          if [[ -n "$pending" ]]; then
-            stop "Still running for \`${sha:0:8}\`: $pending. Whichever workflow finishes last will drive the sync."
-          fi
-
-          failed="$(awk -F'\t' '$4 != "success" && $4 != "skipped" && $4 != "neutral" { print $2" ("$4")" }' <<<"$rows" | paste -sd', ' -)"
-          if [[ -n "$failed" ]]; then
-            # Deliberately a green exit. main being red is already reported
-            # by the workflow that went red; a second red badge here would
-            # be noise about a failure the first one already owns.
-            stop "\`main\` is not green at \`${sha:0:8}\` — $failed. Nothing was synced."
-          fi
-
-          echo "main is verified green at $sha across: $(cut -f2 <<<"$rows" | paste -sd', ' -)"
+          echo "main is verified green at $sha across: $verified"
           {
             echo "sha=$sha"
             echo "proceed=true"
