@@ -7,37 +7,20 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
-## Unreleased
+## 3.7.0 — 2026-09-06
 
 ### Added
 
-- `--report` now carries bounded process, exception, allocation-neighborhood,
-  handle, and string context around each anchor. One process block per run
-  reports process identity and session, an allowlisted slice of the environment
-  block, a per-type handle census, and whether the dump's TokenStream can
-  contribute anything; each triage card adds its own exception context,
-  allocation neighborhood, correlated handles, and anchor-aware string context.
-  Schema v2.17 adds `result.summary.process_enrichment` and four card-scoped
-  projections on every triage card. Every section states its scope, evidence
-  state, eligible and retained counts, cap, truncation, provenance, and
-  limitations, so a missing stream, incomplete evidence, and a completed
-  evaluation with no eligible item stay distinguishable. None of it changes any
-  report finding, verdict, coverage status, or exit code.
-  The allocation neighborhood reaches past the anchor's own allocation so the
-  regions bounding a private reservation are always shown, an access violation
-  is decoded into its access type and referenced address with both addresses
-  resolved to a region and module, and correlated handles carry their raw
-  attribute, handle, and pointer counts. `--report-string` bounds a whole
-  invocation, not only each card: at most 32 cards and 256 MB of cumulative
-  content reads, with any hit left untriaged counted in
-  `summary.cards_skipped_for_budget` and reported as a partial run. The region
-  covering a hit is resolved once and drives its classification, grouping,
-  budget and card alike, so a summary's actionable/system-module split always
-  describes the same regions the cards do, a card reads the region its budget
-  was charged for, and the hit's real address is published. Hits sharing one
-  covering region yield one card, counted in `summary.hits_sharing_a_region`;
-  hits in a region the budget skipped are counted as unanalyzed in
-  `summary.hits_skipped_for_budget` rather than as covered elsewhere.
+- `--report` now includes bounded process and session context plus per-card
+  exception, allocation-neighborhood, correlated-handle, and nearby-string
+  context. Each section distinguishes unavailable, incomplete, completed-empty,
+  and truncated evidence without changing report findings or verdicts.
+- `--report-string` now limits multi-card generation to 32 cards and a 256 MB
+  cumulative card-read budget. Shared-region hits are consolidated, while hits
+  left untriaged by the budget are counted explicitly and make the run partial.
+- Published output schema v2.17 for the new report context and accounting fields.
+  See [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the structured
+  compatibility details.
 
 ## 3.6.2 — 2026-09-05
 
@@ -332,7 +315,7 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ## Compatibility notes
 
-- Current commands emit schema v2.16.
+- Current commands emit schema v2.17.
 - Historical schema files remain packaged and frozen for archived evidence.
 - Validate a document using its own `meta.schema_version`.
 - See [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) before upgrading a

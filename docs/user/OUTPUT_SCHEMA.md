@@ -41,7 +41,7 @@ Every produced document follows this shape:
 ```jsonc
 {
   "meta": {
-    "schema_version": "2.16",
+    "schema_version": "2.17",
     "tool": { "name": "dumpex", "version": "<installed version>" },
     "execution": { "...": "command, options, timestamps, case metadata" },
     "evidence": [ { "...": "input identity and SHA-256" } ],
