@@ -46,6 +46,45 @@ the shared virtual-address/capture primitives. It does not introduce a second
 report-only interpretation of process identity, handle parsing, or captured
 memory ranges.
 
+## Console detail-level contract
+
+`--verbose` changes presentation only. Default and verbose reports run the same
+collectors over the same captured bytes and produce the same typed records,
+coverage, execution status, diagnostics, artifacts, and exit code. `--txt`
+uses the requested console detail level; JSON always carries the complete
+retained record set.
+
+Default output remains self-contained while limiting routine detail. It keeps
+the anchor, region, thread, string and IOC evidence, findings, verdict,
+coverage, diagnostics, every incomplete enrichment state, and every identity
+conflict. Process, session, handle-census, and token details are summarized;
+populated collections use bounded previews, and a complete section with no
+eligible entries does not repeat an empty counts row.
+
+Verbose output expands every retained handle-type census row,
+allocation-neighborhood entry, correlated handle, and nearby-string entry. It
+also shows each section's scope, evidence state, counts, cap, provenance, and
+each entry's selection reason. A renderer must not re-run collection or infer
+new evidence at either level.
+
+Two omission notices have distinct meanings:
+
+- A console preview omits retained rows. The notice says they remain available
+  from `--verbose` and JSON.
+- A retention cap drops eligible rows before projection. The notice says the
+  rows are absent from every console level and JSON.
+
+Where the console renders a dump-derived value that reached its retained-text
+cap, it must expose the truncation beside that value. Ordinary fields use a
+bracketed field-specific marker; the packed handle-type census uses a trailing
+ellipsis on the affected name. If an affected census row is outside the current
+preview, the notice describes it as retained rather than as displayed.
+
+The process block reports whether the process image base matched the captured
+module list. `unregistered` and `unavailable` are visible at both detail levels:
+the process section may otherwise be complete even when no module list was
+available for that separate comparison.
+
 ## Evidence-state contract
 
 Every enrichment section uses the same three states:
@@ -145,6 +184,7 @@ cards that were built.
 
 The focused collector and projection tests live in
 `tests/unit/test_report_enrichment.py` and
-`tests/integration/test_report_enrichment_output.py`. Schema compatibility is
-covered by `tests/integration/test_json_schema_v2.py` and
-`tests/integration/test_report_compat_freeze.py`.
+`tests/integration/test_report_enrichment_output.py`; console detail-level
+projection is covered by `tests/integration/test_report_verbose_detail.py`.
+Schema compatibility is covered by `tests/integration/test_json_schema_v2.py`
+and `tests/integration/test_report_compat_freeze.py`.
