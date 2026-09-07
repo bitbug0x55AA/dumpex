@@ -857,7 +857,7 @@ def _backed_by_text(module_context: str, backing_module: "str | None") -> str:
     return YELLOW("module classification unavailable")
 
 
-def _render_card(mf, card, min_len: int) -> None:
+def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
     # ── 1. Thread analysis ────────────────────────────────────────────
     if card.anchor_tid is not None:
         print(BOLD("[ 1 ] THREAD ANALYSIS"))
@@ -1001,13 +1001,13 @@ def _render_card(mf, card, min_len: int) -> None:
 
     # ── 5-8. Card enrichment ──────────────────────────────────────────
     if card.exception_context is not None:
-        _render_exception_context(card.exception_context)
+        _render_exception_context(card.exception_context, verbose)
     if card.allocation_neighborhood is not None:
-        _render_allocation_neighborhood(card.allocation_neighborhood)
+        _render_allocation_neighborhood(card.allocation_neighborhood, verbose)
     if card.handle_correlation is not None:
-        _render_handle_correlation(card.handle_correlation)
+        _render_handle_correlation(card.handle_correlation, verbose)
     if card.string_context is not None:
-        _render_string_context(card.string_context)
+        _render_string_context(card.string_context, verbose)
 
     # ── Verdict (MECE) ────────────────────────────────────────────────
     print(BOLD("[ VERDICT ]"))
@@ -1027,6 +1027,15 @@ def _render_card(mf, card, min_len: int) -> None:
 # smaller than the retained set on purpose; whenever it is, the omission
 # is printed, and it is worded differently from a data-level truncation so
 # the two stay distinguishable.
+#
+# `verbose` selects between two projections of that one retained set and
+# nothing else. The default keeps each block to what an analyst acts on:
+# the anchor facts, every incomplete evidence state, every actionable
+# conflict, and a bounded preview of each populated section. Verbose
+# prints every retained row plus the per-section envelope and the
+# selection reasons behind it. Neither level reads the dump again, calls a
+# collector, or widens a retention cap: what verbose shows was already
+# retained, and what a cap dropped no level can show.
 
 _ENRICHMENT_STATE_TEXT = {
     ENRICHMENT_MISSING:  "not evaluated",
@@ -1034,31 +1043,111 @@ _ENRICHMENT_STATE_TEXT = {
     ENRICHMENT_COMPLETE: "complete",
 }
 
+# Whether the process image base could be placed in the captured module
+# list. "resolved" is the routine positive; the other two are results an
+# analyst acts on, and neither is implied by the process section's own
+# evidence state -- a dump with a PEB path and a start time evaluates
+# completely whether or not it carried a module list to match against.
+_MODULE_MATCH_RESOLVED = "resolved"
 
-def _print_section_state(section: dict, *, indent: str = "  ") -> None:
-    """The scope/state/count line every enrichment block closes with, plus
-    each limitation the section recorded."""
+
+def _module_match_text(state: str) -> str:
+    """One module-match state as a console phrase. An unrecognized state
+    prints as itself rather than as nothing: the value came from the
+    identity snapshot, and dropping it would report an unknown answer as
+    no answer."""
+    if state == _MODULE_MATCH_RESOLVED:
+        return GREEN("resolved") + DIM(" — the image base is in a captured module")
+    if state == "unregistered":
+        return RED("unregistered — the image base is in no captured module")
+    if state == "unavailable":
+        return YELLOW("unavailable — no usable module list to match against")
+    return console_safe(state)
+
+
+def _print_section_state(section: dict, *, indent: str = "  ", verbose: bool = False) -> None:
+    """The state line every enrichment block closes with, plus each
+    limitation the section recorded.
+
+    Verbose states the full envelope: scope, evidence state, counts, cap,
+    and the streams the section was built from. The default states only
+    what an analyst has to act on -- which evidence state this is, and how
+    much it kept -- because scope and cap are properties of the section's
+    own definition, not of this dump. A completed evaluation that found
+    nothing eligible states nothing at all: the block's own sentence above
+    it is already the completed-negative result, and a `kept: 0 of 0` line
+    under it only repeats that. Truncation and limitations print at both
+    levels: an incomplete evidence state is never a detail."""
     state = _ENRICHMENT_STATE_TEXT[section["status"]]
     counts = str(section["included"])
     if section["total"] is not None:
         counts = f"{section['included']} of {section['total']}"
     cap = section["cap"] if section["cap"] is not None else "none"
-    print(indent + DIM(f"scope: {section['scope']}   evidence: {state}   "
-                       f"kept: {counts}   cap: {cap}"))
+    routine_negative = (section["status"] == ENRICHMENT_COMPLETE
+                        and section["included"] == 0 and not section["truncated"])
+    if verbose:
+        print(indent + DIM(f"scope: {section['scope']}   evidence: {state}   "
+                           f"kept: {counts}   cap: {cap}"))
+        if section["provenance"]:
+            print(indent + DIM("built from: "
+                               + ", ".join(console_safe(p) for p in section["provenance"])))
+    elif section["status"] == ENRICHMENT_MISSING:
+        print(indent + DIM(f"evidence: {state}"))
+    elif not routine_negative:
+        print(indent + DIM(f"evidence: {state}   kept: {counts}"))
     if section["truncated"]:
-        print(indent + YELLOW(f"[~] retained set cut at the cap of {cap} "
-                              f"— the full retained subset is in --json"))
+        print(indent + YELLOW(_truncation_text(section)))
     for limitation in section["limitations"]:
         print(indent + YELLOW("[~] " + console_safe(limitation)))
 
 
+def _truncation_text(section: dict) -> str:
+    """A collection cut, worded so it can never be read as a console
+    preview. What the cap dropped was never retained: no detail level and
+    no structured document can produce it, and only a differently bounded
+    run could."""
+    cap = section["cap"] if section["cap"] is not None else "none"
+    total = section["total"]
+    if total is None:
+        return (f"[~] retained set cut at the cap of {cap} — the eligible entries beyond "
+                f"it were not retained and are in neither the console nor --json")
+    dropped = total - section["included"]
+    entries = "entry" if dropped == 1 else "entries"
+    return (f"[~] retained set cut at the cap of {cap}: kept {section['included']} of "
+            f"{total} eligible — {dropped} eligible {entries} were not retained and are "
+            f"in neither the console nor --json")
+
+
+# The cut point a capped value carries when it sits in a packed line with
+# no room for a bracketed mark. Written where the retained text ends, so
+# it names which of several values on one line was cut.
+CAP_ELLIPSIS = "…"
+
+
+def _cap_mark(*fields) -> str:
+    """The mark a rendered value that reached the retained-text cap
+    carries, naming which field was cut when a line renders more than one
+    dump-derived value. A capped value is a prefix of what the dump held;
+    unmarked, it reads as the whole thing.
+
+    `fields` are (label, truncated) pairs in the order they appear on the
+    line."""
+    cut = [label for label, truncated in fields if truncated]
+    if not cut:
+        return ""
+    return DIM(" [truncated: " + ", ".join(cut) + "]")
+
+
 def _print_console_omission(shown: int, kept: int, indent: str = "  ") -> None:
+    """A console preview shorter than the retained set. Every omitted row
+    is still retained, so both --verbose and --json can produce it."""
     if kept > shown:
         print(indent + DIM(f"[·] console shows {shown} of {kept} retained entries "
-                           f"— the rest are in --json"))
+                           f"— use --verbose for all of them; --json carries the same "
+                           f"retained set"))
 
 
-def _render_process_enrichment(enrichment: dict) -> None:
+def _render_process_enrichment(enrichment: dict, verbose: bool = False) -> None:
     # This block owns its own leading blank line, so suppressing the whole
     # function leaves the surrounding output exactly as it would be
     # without any enrichment at all -- which is what the compatibility
@@ -1087,12 +1176,19 @@ def _render_process_enrichment(enrichment: dict) -> None:
         if command_line:
             cut = DIM(" [truncated]") if enrichment["command_line_truncated"] else ""
             print(f"  {'Command Line':<22} {console_safe(command_line)}{cut}")
-        started = enrichment["process_start_utc"]
-        if started:
-            print(f"  {'Started (UTC)':<22} {started}")
-        base = enrichment["image_base_address"]
-        if base:
-            print(f"  {'Image Base':<22} 0x{int(base, 16):016x}")
+        match_state = enrichment["module_match_state"]
+        if match_state is not None and (verbose or match_state != _MODULE_MATCH_RESOLVED):
+            print(f"  {'Module match':<22} {_module_match_text(match_state)}")
+        # Run metadata rather than identity: neither carries a
+        # completeness flag of its own, so folding them into the verbose
+        # level hides no incomplete evidence state.
+        if verbose:
+            started = enrichment["process_start_utc"]
+            if started:
+                print(f"  {'Started (UTC)':<22} {started}")
+            base = enrichment["image_base_address"]
+            if base:
+                print(f"  {'Image Base':<22} 0x{int(base, 16):016x}")
     # Printed apart from the section's own limitations: a source
     # disagreement is not a coverage gap, and rendering the two in one
     # list would invite reading it as one.
@@ -1101,24 +1197,39 @@ def _render_process_enrichment(enrichment: dict) -> None:
         print("  " + BOLD("Identity conflicts (captured sources disagree)"))
         for conflict in conflicts:
             print("    " + YELLOW("[!] " + console_safe(conflict["message"])))
-            print("        " + DIM(conflict["code"]))
+            if verbose:
+                print("        " + DIM(conflict["code"]))
         hidden = enrichment["identity_conflicts_total"] - len(conflicts)
         if hidden > 0:
             print(DIM(f"    [·] {hidden} further conflict(s) are reported by --process"))
-    _print_section_state(section)
+    _print_section_state(section, verbose=verbose)
     print()
 
     environment = enrichment["environment"]
     print("  " + BOLD("Session (allowlisted environment)"))
     if environment["entries"]:
-        for entry in environment["entries"]:
-            mark = DIM(" [truncated]") if entry["truncated"] else ""
-            print(f"    {entry['name']:<24} {console_safe(entry['value'])}{mark}")
+        if verbose:
+            for entry in environment["entries"]:
+                mark = DIM(" [truncated]") if entry["truncated"] else ""
+                print(f"    {entry['name']:<24} {console_safe(entry['value'])}{mark}")
+        else:
+            # Which variables were captured places the session; their
+            # values are routine session strings that lengthen every run.
+            # The count of shortened values travels with the names, so a
+            # value that hit the retained-text cap stays visible without
+            # printing any value at all.
+            names = "  ".join(entry["name"] for entry in environment["entries"])
+            print(f"    {'Captured':<24} {names}")
+            cut = sum(1 for entry in environment["entries"] if entry["truncated"])
+            if cut:
+                print(DIM(f"    [~] {cut} captured value(s) reached the retained-text cap"))
+            print(DIM("    [·] values not shown — use --verbose for them; --json "
+                      "carries the same retained set"))
     elif environment["section"]["status"] == ENRICHMENT_MISSING:
         print(DIM("    [·] Environment block not read — see the note below."))
     else:
         print(DIM("    [·] No allowlisted variable was captured in this block."))
-    _print_section_state(environment["section"], indent="    ")
+    _print_section_state(environment["section"], indent="    ", verbose=verbose)
     print()
 
     handles = enrichment["handles"]
@@ -1126,23 +1237,47 @@ def _render_process_enrichment(enrichment: dict) -> None:
     if handles["section"]["status"] == ENRICHMENT_MISSING:
         print(DIM("    [·] No handle evidence — see the note below."))
     else:
-        shown = handles["by_type"][:CONSOLE_HANDLE_TYPE_ROWS]
-        census = "  ".join(console_safe(row["type_name"]) + "=" + str(row["count"])
+        rows = handles["by_type"]
+        shown = rows if verbose else rows[:CONSOLE_HANDLE_TYPE_ROWS]
+        # The census packs its names onto one line, so a capped name
+        # carries its own cut point instead of a bracketed mark: the
+        # trailing "…" sits exactly where the retained text ends, which
+        # also says WHICH name was cut when several share the line.
+        census = "  ".join(console_safe(row["type_name"])
+                           + (CAP_ELLIPSIS if row["type_name_truncated"] else "")
+                           + "=" + str(row["count"])
                            for row in shown)
         print(f"    {'Total':<24} {handles['total_handles']}")
         print(f"    {'By type':<24} {census if census else DIM('(none)')}")
-        _print_console_omission(len(shown), len(handles["by_type"]), indent="    ")
-    _print_section_state(handles["section"], indent="    ")
+        # Two separate facts. A cut name on the line above is a prefix an
+        # analyst is reading right now; a cut name among the rows this
+        # level does not print is retained but never displayed, so
+        # claiming it is "shown" as a prefix would describe output that
+        # is not on screen.
+        shown_capped = sum(1 for row in shown if row["type_name_truncated"])
+        hidden_capped = sum(1 for row in rows[len(shown):] if row["type_name_truncated"])
+        if shown_capped:
+            print(YELLOW(f"    [~] {shown_capped} type name(s) above reached the "
+                         f"retained-text cap — a trailing {CAP_ELLIPSIS} marks each one"))
+        if hidden_capped:
+            print(YELLOW(f"    [~] {hidden_capped} retained type name(s) not shown here "
+                         f"also reached the retained-text cap"))
+        _print_console_omission(len(shown), len(rows), indent="    ")
+    _print_section_state(handles["section"], indent="    ", verbose=verbose)
     print()
 
     token = enrichment["token"]
-    parser_state = token["parser_state"]
-    stream_text = "declared" if token["stream_present"] else "not declared"
-    if parser_state:
-        stream_text += DIM("  (parser: " + parser_state + ")")
     print("  " + BOLD("Token"))
     print(f"    {'Capability':<24} {token['status']}")
-    print(f"    {'Stream':<24} {stream_text}")
+    # The capability status is the actionable fact -- whether this dump
+    # can say anything about the token at all. Which stream declared it
+    # and how the parser fared explain that status rather than add to it.
+    if verbose:
+        parser_state = token["parser_state"]
+        stream_text = "declared" if token["stream_present"] else "not declared"
+        if parser_state:
+            stream_text += DIM("  (parser: " + parser_state + ")")
+        print(f"    {'Stream':<24} {stream_text}")
     print("    " + DIM(console_safe(token["detail"])))
     print()
 
@@ -1151,22 +1286,23 @@ def _address_context_text(context) -> str:
     """One resolved address as a single console phrase. An address the
     region table does not describe says so rather than rendering blanks
     that read as "no protection"."""
+    mark = _cap_mark(("module owner", context.module_owner_truncated))
     if context.region_base is None:
         owner = context.module_owner
         if owner:
-            return "in " + console_safe(owner) + ", no captured region describes it"
+            return "in " + console_safe(owner) + mark + ", no captured region describes it"
         return "no captured region describes this address"
     parts = [f"region 0x{int(context.region_base, 16):x}"]
     if context.protection:
         parts.append(context.protection)
     if context.type:
         parts.append(context.type)
-    parts.append(console_safe(context.module_owner) if context.module_owner
+    parts.append(console_safe(context.module_owner) + mark if context.module_owner
                  else "no module owner")
     return "  ".join(parts)
 
 
-def _render_exception_context(context) -> None:
+def _render_exception_context(context, verbose: bool = False) -> None:
     print(BOLD("[ 5 ] EXCEPTION CONTEXT"))
     print("─" * 50)
     section = context.section.to_dict()
@@ -1183,26 +1319,27 @@ def _render_exception_context(context) -> None:
         address = entry.exception_address
         address_text = f"0x{int(address, 16):016x}" if address else "(not captured)"
         print(f"      TID={tid_text}  Address={address_text}")
-        if entry.address_context is not None:
+        if verbose and entry.address_context is not None:
             print("      " + DIM("at: " + _address_context_text(entry.address_context)))
         if entry.access_type is not None or entry.referenced_address is not None:
             access = entry.access_type or "access type not decodable"
             referenced = (f"0x{int(entry.referenced_address, 16):016x}"
                           if entry.referenced_address else "(not captured)")
             print(f"      Tried to {access} {referenced}")
-            if entry.referenced_context is not None:
+            if verbose and entry.referenced_context is not None:
                 print("      " + DIM("that address: "
                                      + _address_context_text(entry.referenced_context)))
-        print("      " + DIM("selected: " + entry.selection_reason))
+        if verbose:
+            print("      " + DIM("selected: " + entry.selection_reason))
         if entry.parameters:
             more = " …" if entry.parameters_truncated else ""
             print("      " + DIM("Information: " + ", ".join(entry.parameters) + more))
     print(DIM("  Exception state is execution evidence, not a maliciousness finding."))
-    _print_section_state(section)
+    _print_section_state(section, verbose=verbose)
     print()
 
 
-def _render_allocation_neighborhood(neighborhood) -> None:
+def _render_allocation_neighborhood(neighborhood, verbose: bool = False) -> None:
     print(BOLD("[ 6 ] ALLOCATION NEIGHBORHOOD"))
     print("─" * 50)
     section = neighborhood.section.to_dict()
@@ -1215,7 +1352,8 @@ def _render_allocation_neighborhood(neighborhood) -> None:
         base = neighborhood.allocation_base
         base_text = f"0x{int(base, 16):016x}" if base else DIM("(not recorded)")
         print(f"  {'Allocation base':<22} {base_text}")
-        shown = neighborhood.entries[:CONSOLE_NEIGHBOR_REGIONS]
+        shown = (list(neighborhood.entries) if verbose
+                 else neighborhood.entries[:CONSOLE_NEIGHBOR_REGIONS])
         for entry in shown:
             marker = RED("►") if entry.relation == "anchor" else " "
             gap = "adjacent" if entry.distance == 0 else f"gap {entry.distance:#x}"
@@ -1224,15 +1362,17 @@ def _render_allocation_neighborhood(neighborhood) -> None:
             print(f"  {marker} 0x{int(entry.base_address, 16):016x}  "
                   f"{entry.size // 1024:>7} KB  {protection:<24} {mem_type:<14} "
                   f"{DIM(entry.relation)} {DIM(gap)}")
-            # Only a resolved owner earns a line. An unowned region is the
-            # common case for a dump with no module list, and repeating
-            # that for every row would double the block for no evidence;
-            # the null is in --json either way.
-            if entry.module_owner:
-                print("      " + DIM("owner: " + console_safe(entry.module_owner)))
+            # A neighbour's owning module is verbose detail, and only a
+            # resolved owner earns a line even there. An unowned region is
+            # the common case for a dump with no module list, and
+            # repeating that for every row would double the block for no
+            # evidence; the null is in --json either way.
+            if verbose and entry.module_owner:
+                print("      " + DIM("owner: " + console_safe(entry.module_owner))
+                      + _cap_mark(("module owner", entry.module_owner_truncated)))
         _print_console_omission(len(shown), len(neighborhood.entries))
         print(DIM("  Adjacency is memory layout, not a relationship to the anchor."))
-    _print_section_state(section)
+    _print_section_state(section, verbose=verbose)
     print()
 
 
@@ -1240,7 +1380,7 @@ def _hex_or_none(value) -> "str | None":
     return None if value is None else f"0x{value:x}"
 
 
-def _render_handle_correlation(correlation) -> None:
+def _render_handle_correlation(correlation, verbose: bool = False) -> None:
     print(BOLD("[ 7 ] CORRELATED HANDLES"))
     print("─" * 50)
     section = correlation.section.to_dict()
@@ -1250,53 +1390,65 @@ def _render_handle_correlation(correlation) -> None:
         else:
             print(DIM("  [·] No handle object name appears in this card's captured text."))
     else:
-        shown = correlation.entries[:CONSOLE_CORRELATED_HANDLES]
+        shown = (list(correlation.entries) if verbose
+                 else correlation.entries[:CONSOLE_CORRELATED_HANDLES])
         for entry in shown:
             type_text = console_safe(entry.type_name) if entry.type_name else "(unnamed type)"
-            cut = DIM(" [truncated]") if entry.object_name_truncated else ""
+            # One mark for the whole row, naming each field it applies to:
+            # two bare marks on a line carrying two dump-derived values
+            # could not say which value was cut.
+            cut = _cap_mark(("type name", entry.type_name_truncated),
+                            ("object name", entry.object_name_truncated))
             print(f"  ►  {entry.handle}  {type_text:<16} "
                   f"{console_safe(entry.object_name)}{cut}")
-            counters = "  ".join(
-                f"{label}={value}" for label, value in
-                (("access", _hex_or_none(entry.granted_access)),
-                 ("attributes", _hex_or_none(entry.attributes)),
-                 ("handles", entry.handle_count), ("pointers", entry.pointer_count))
-                if value is not None)
-            if counters:
-                print("      " + DIM(counters))
-            print("      " + DIM("selected: " + entry.selection_reason))
+            if verbose:
+                counters = "  ".join(
+                    f"{label}={value}" for label, value in
+                    (("access", _hex_or_none(entry.granted_access)),
+                     ("attributes", _hex_or_none(entry.attributes)),
+                     ("handles", entry.handle_count), ("pointers", entry.pointer_count))
+                    if value is not None)
+                if counters:
+                    print("      " + DIM(counters))
+                print("      " + DIM("selected: " + entry.selection_reason))
         _print_console_omission(len(shown), len(correlation.entries))
         print(DIM("  A shared name is two captures of the same text, not proof of use."))
     print(DIM("  Full inventory: --handles"))
-    _print_section_state(section)
+    _print_section_state(section, verbose=verbose)
     print()
 
 
-def _render_string_context(context) -> None:
+def _render_string_context(context, verbose: bool = False) -> None:
     print(BOLD("[ 8 ] STRING CONTEXT AROUND THE ANCHOR"))
     print("─" * 50)
     section = context.section.to_dict()
+    # The read line prints at both detail levels: `bytes_read` short of
+    # `requested_bytes` is a partial read, and a partial read is an
+    # evidence state rather than a detail.
     print(DIM(f"  Examined 0x{int(context.examined_base_address, 16):x} "
               f"+ {context.bytes_read} of {context.requested_bytes} requested byte(s); "
               f"{context.total_strings} string(s) extracted"))
-    print(DIM(f"  Distances measured from "
-              f"0x{int(context.distance_anchor_address, 16):x}"))
+    if verbose:
+        print(DIM(f"  Distances measured from "
+                  f"0x{int(context.distance_anchor_address, 16):x}"))
     if context.query_text is not None:
         print(DIM("  Searched for: " + console_safe(context.query_text)))
     if not context.entries:
         print(DIM("  [·] No string was retained from the examined range."))
     else:
-        shown = context.entries[:CONSOLE_STRING_CONTEXT]
+        shown = (list(context.entries) if verbose
+                 else context.entries[:CONSOLE_STRING_CONTEXT])
         for entry in shown:
             distance = "anchor" if entry.distance is None else f"distance {entry.distance:#x}"
             mark = DIM(" [truncated]") if entry.text_truncated else ""
             encoding = CYAN("[" + entry.encoding + "]")
+            reason = (entry.selection_reason + " ") if verbose else ""
             print(f"    {encoding:<14} 0x{int(entry.address, 16):016x}  "
-                  f"{DIM(entry.selection_reason + ' ' + distance)}")
+                  f"{DIM(reason + distance)}")
             print(f"      {console_safe(entry.text)}{mark}")
         _print_console_omission(len(shown), len(context.entries))
     print(DIM("  Proximity is layout: an adjacent string is not a reference to the anchor."))
-    _print_section_state(section)
+    _print_section_state(section, verbose=verbose)
     print()
 
 
@@ -1315,7 +1467,8 @@ def _render_verdict_text(verdict: str, score: int) -> str:
     return RED(f"HIGH CONFIDENCE MALICIOUS — {score} independent indicators")
 
 
-def render_report_console(records, coverage, diagnostics, artifacts, summary, mf, min_len: int) -> None:
+def render_report_console(records, coverage, diagnostics, artifacts, summary, mf,
+                          min_len: int, verbose: bool = False) -> None:
     """Reproduces today's exact, pre-migration console text -- see
     dumpex.commands.report's own git history / the Phase E plan's capture
     script for the byte-for-byte ground truth this was built against.
@@ -1325,7 +1478,13 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     and the network-pattern hexdump context is read from each
     ReportIocString's own bounded context_hex, never re-read from `mf`
     (see _collect_triage_card's own note on why that's computed once at
-    collect time)."""
+    collect time).
+
+    `verbose` is presentation only: it selects how much of the already
+    collected `records`/`summary` the enrichment blocks project, and
+    changes no finding, verdict, coverage, diagnostic, artifact, or exit
+    code. Sections 1-4 and the verdict block render identically at both
+    levels."""
     for reason in coverage.reasons:
         print(YELLOW(f"  [~] {reason}"))
 
@@ -1333,7 +1492,7 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     # the whole dump, so repeating it per card would publish one fact N
     # times and invite an analyst to read it as card-specific.
     if summary.get("process_enrichment") is not None:
-        _render_process_enrichment(summary["process_enrichment"])
+        _render_process_enrichment(summary["process_enrichment"], verbose)
 
     if summary["mode"] == "string":
         print(f"\n{BOLD('Searching memory for:')} {CYAN(repr(summary['query_string']))}")
@@ -1386,7 +1545,7 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
                 print(BOLD(f"  Triaging hit {i}/{len(records)} — region 0x{int(card.region.base_address, 16):x}"))
                 print(BOLD(f"{'═'*55}"))
             _print_card_banner(mf, card, None, None)
-            _render_card(mf, card, min_len)
+            _render_card(mf, card, min_len, verbose)
             _print_extract_result(records, artifacts, card)
             print()   # unconditional trailing blank line -- matches today's
                        # cmd_report, which ends every single-shot invocation
@@ -1397,7 +1556,7 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     # tid/addr mode -- exactly one card
     card = records[0]
     _print_card_banner(mf, card, summary["query_tid"], summary["query_addr"])
-    _render_card(mf, card, min_len)
+    _render_card(mf, card, min_len, verbose)
     _print_extract_result(records, artifacts, card)
     print()
 
@@ -1420,11 +1579,11 @@ def _print_extract_result(records, artifacts, card) -> None:
 
 def cmd_report(mf: MinidumpFile, report_tid: str = None, report_addr: str = None,
                report_string: str = None, extract_to: str = None, min_len: int = 6,
-               force: bool = False) -> CommandResult:
-    """\n    Alert triage card: given a TID, address, or string from an EDR alert / TI feed,\n    correlate thread, memory, and string evidence into a structured verdict.\n    Verdict uses MECE dimensions — each dimension scored at most once.\n\n    --report-string: search all memory for the string, then run triage on each\n                    matching region. Useful when the anchor is a C2 IP, domain,\n                    or known malware string from threat intelligence.\n    """
+               force: bool = False, verbose: bool = False) -> CommandResult:
+    """\n    Alert triage card: given a TID, address, or string from an EDR alert / TI feed,\n    correlate thread, memory, and string evidence into a structured verdict.\n    Verdict uses MECE dimensions — each dimension scored at most once.\n\n    --report-string: search all memory for the string, then run triage on each\n                    matching region. Useful when the anchor is a C2 IP, domain,\n                    or known malware string from threat intelligence.\n\n    verbose expands the console projection of the enrichment this run already\n    retained; collection, caps, records, and the exit code are the same either\n    way.\n    """
     result = collect_report(mf, report_tid=report_tid, report_addr=report_addr,
                              report_string=report_string, extract_to=extract_to,
                              min_len=min_len, force=force)
     render_report_console(result.records, result.coverage, result.diagnostics,
-                           result.artifacts, result.summary, mf, min_len)
+                           result.artifacts, result.summary, mf, min_len, verbose)
     return result
