@@ -69,6 +69,10 @@ def test_help_groups_commands_and_modifiers_and_hides_legacy_names(
     # #98: --verbose now also gates the --handles projection, and the
     # help text has to say so -- passing it used to be silently ignored.
     assert "--handles" in collapsed_verbose_help()
+    # --report has two console detail levels the flag selects between, so
+    # the help text names it too.
+    assert "--report" in collapsed_verbose_help()
+    assert "expands every retained enrichment row" in collapsed_verbose_help()
     assert "Temporarily unavailable; reserved for future" in collapsed_help
     assert "recovery orchestration" in collapsed_help
     # --sysinfo's own help text must reflect the removed Process section /

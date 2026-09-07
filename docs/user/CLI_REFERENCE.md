@@ -71,7 +71,7 @@ baseline. The older hidden `--diff-mode` alias remains accepted.
 
 | Option | Applies to | Description |
 |---|---|---|
-| `--verbose` | `--process`, `--handles`, `--sysinfo`, `--diff`, `--hunt` | Print additional console detail |
+| `--verbose` | `--process`, `--handles`, `--sysinfo`, `--report`, `--diff`, `--hunt` | Print additional console detail |
 
 `--verbose` does not change JSON records, coverage, limitations, summary, or
 exit code. `--profile` accepts and records it but its own output is already
@@ -360,14 +360,42 @@ A `--report-string` run builds at most 32 cards and reads at most 256 MB of
 content across them; any actionable hit left untriaged is counted in the output
 and in a warning, and `--report-addr` triages a specific region on its own.
 
-Every one of those sections states its scope, how much it evaluated, how much it
-kept, and under which cap, so three different situations stay apart: the stream
+Every one of those sections keeps three different situations apart: the stream
 was not in the dump (`not evaluated`), the evidence was incomplete (`partial`),
-and a bounded evaluation found nothing eligible (`complete`, 0 kept). None of
-this context changes a card's findings, verdict, coverage, or the exit code, and
-the console shows a preview of each section while `--json` carries the full
-retained set. Complete inventories stay with the Recon commands: `--handles` for
-handles, `--sysinfo` for the environment block.
+and a bounded evaluation found nothing eligible (a completed negative). None of
+this context changes a card's findings, verdict, coverage, or the exit code.
+
+`--report` has two console detail levels over that one collection. The default
+is self-contained and short: the anchor, region, thread, string and IOC
+evidence, the findings and verdict, coverage and diagnostics, every incomplete
+evidence state, every identity conflict, and a bounded preview of each populated
+enrichment section. Adding `--verbose` expands the same retained evidence —
+every retained handle-type census row, allocation-neighborhood entry,
+correlated handle, and nearby-string entry, plus each section's scope, evidence
+state, counts, cap, provenance, and the reason each entry was selected.
+
+Verbosity is presentation only. Both levels run the same collectors over the
+same bytes and publish the same records, coverage, execution status,
+diagnostics, artifacts, and exit code; `--txt` writes whichever level was asked
+for. Two console notices say different things and must not be read as one:
+
+- *console shows N of M retained entries* — the remaining entries were retained.
+  `--verbose` and `--json` both carry them.
+- *retained set cut at the cap of N* — eligible entries were dropped before
+  anything was retained. They are in neither the console nor `--json`, at any
+  detail level.
+
+Any dump-derived value that reached dumpex's retained-text cap is marked where
+the console shows it, at either level: a bracketed mark naming the field that
+was cut, or a trailing `…` on the name it belongs to in the packed handle-type
+census. A capped census name the level does not print is reported as retained
+rather than as shown. The process block also states whether the image base could
+be matched against the captured module list; `unregistered` and `unavailable`
+show by default, because the process section can evaluate completely without a
+module list to match against.
+
+Complete inventories stay with the Recon commands: `--handles` for handles,
+`--sysinfo` for the environment block.
 
 ### `--extract` and `--strings`
 
@@ -422,6 +450,7 @@ dumpex sample.dmp --hunt obfuscation --hunt-addr 0x7ff600001000 --size 0x400000
 dumpex sample.dmp --report --report-tid 0x1234
 dumpex sample.dmp --report --report-addr 0x7ff600001000 --output region.bin
 dumpex sample.dmp --report --report-string "powershell" --json report.json
+dumpex sample.dmp --report --report-addr 0x7ff600001000 --verbose
 ```
 
 ### Extraction, strings, and comparison

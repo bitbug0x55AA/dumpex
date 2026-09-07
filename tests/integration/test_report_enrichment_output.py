@@ -2,12 +2,14 @@
 
 Runs the real `cli.main()` against a FakeMF and asserts what an analyst
 and a consumer each see: one process-wide block per invocation, four
-card-scoped blocks per card, every section stating its own scope,
-evidence state, counts, cap and truncation, dump-derived text escaped at
-the console boundary, and a document that validates against the current
-schema with the exit code and verdict semantics unchanged.
+card-scoped blocks per card, every section stating its own evidence state
+and truncation, dump-derived text escaped at the console boundary, and a
+document that validates against the current schema with the exit code and
+verdict semantics unchanged.
 
-Collector-level semantics are tests/unit/test_report_enrichment.py.
+How much of each section the two console detail levels project is
+tests/integration/test_report_verbose_detail.py; collector-level
+semantics are tests/unit/test_report_enrichment.py.
 """
 import datetime
 import json
@@ -137,8 +139,11 @@ def test_every_enrichment_block_is_printed_for_an_address_card(monkeypatch, tmp_
 
 
 def test_every_console_block_states_its_scope_state_and_counts(monkeypatch, tmp_path, capsys):
+    """The full scope/state/count/cap envelope is verbose detail: scope and
+    cap describe the section's own definition, not this dump."""
     mf, dump_path = _enriched(tmp_path)
-    _run(monkeypatch, tmp_path, mf, dump_path, ["--report-addr", hex(REGION_BASE)])
+    _run(monkeypatch, tmp_path, mf, dump_path,
+         ["--report-addr", hex(REGION_BASE), "--verbose"])
     out = capsys.readouterr().out
 
     assert "scope: process   evidence:" in out
@@ -192,7 +197,8 @@ def test_the_console_says_when_it_shows_less_than_was_retained(monkeypatch, tmp_
     out = capsys.readouterr().out
 
     assert f"console shows {CONSOLE_STRING_CONTEXT} of" in out
-    assert "the rest are in --json" in out
+    assert "use --verbose for all of them" in out
+    assert "--json carries the same retained set" in out
 
 
 def test_console_omission_and_data_truncation_are_worded_differently(
@@ -207,6 +213,9 @@ def test_console_omission_and_data_truncation_are_worded_differently(
 
     assert "console shows" in out
     assert f"retained set cut at the cap of {MAX_CORRELATED_HANDLES}" in out
+    # A cap drops eligible records before anything is retained, so no
+    # detail level and no document can produce them.
+    assert "are in neither the console nor --json" in out
 
 
 def test_dump_derived_names_are_escaped_at_the_console_boundary(

@@ -7,6 +7,42 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## Unreleased
+
+### Fixed
+
+- `--report --verbose` is no longer silently ignored. The flag now reaches the
+  report console and expands the enrichment the run already retained: every
+  retained handle-type census row, allocation-neighborhood entry, correlated
+  handle, and nearby-string entry, plus each section's scope, counts, cap,
+  provenance, and the selection reason behind every entry.
+- Default `--report` output is shorter. Routine process, session, handle-census,
+  and token detail is summarized, a completed evaluation with nothing eligible
+  no longer repeats itself in a counts line, and populated sections show a
+  bounded preview. Anchors, findings, verdict, coverage, diagnostics, every
+  incomplete evidence state, and every identity conflict stay in the default
+  output.
+- Report console notices now separate a console preview from a retention cut. A
+  preview says the omitted rows are available from `--verbose` and `--json`; a
+  cap says the eligible entries it dropped were never retained and are in
+  neither. Neither `--verbose` nor `--json` can recover a capped entry.
+- A report value that reached the retained-text cap is now marked wherever the
+  console shows it: a bracketed mark naming the field that was cut, or, in the
+  packed handle-type census, a trailing `…` on the name it belongs to. Handle
+  type names, correlated handle object and type names, and the module owner of a
+  neighbouring region or an exception address used to render as if they were
+  complete. A capped name among the census rows a detail level does not print is
+  reported as retained rather than as shown.
+- The report process block now states whether the process image base could be
+  matched against the captured module list. `unregistered` and `unavailable`
+  print at both detail levels: a dump with a PID, a PEB path, and a start time
+  evaluates completely whether or not it carried a module list, so the section's
+  evidence state alone never carried that.
+
+Verbosity is presentation only: both levels run the same collection, read the
+dump the same number of times, and publish the same records, coverage,
+diagnostics, artifacts, and exit code.
+
 ## 3.7.0 — 2026-09-06
 
 ### Added

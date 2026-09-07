@@ -185,12 +185,14 @@ def main():
     display_group = parser.add_argument_group("display options")
     display_group.add_argument('--verbose', action='store_true',
                                help='Show additional detail for --process, --sysinfo, --handles, '
-                                    '--diff or --hunt (--process: adds the retired --peb-only '
-                                    'fields under peb_extended, plus the import table and the '
-                                    'identity checks; --handles: shows every captured handle row '
-                                    'instead of folding routine anonymous ones; --sysinfo: prints '
-                                    'environment variable values, which may contain secrets). '
-                                    'Console detail only -- --json always carries every record.')
+                                    '--report, --diff or --hunt (--process: adds the retired '
+                                    '--peb-only fields under peb_extended, plus the import table '
+                                    'and the identity checks; --handles: shows every captured '
+                                    'handle row instead of folding routine anonymous ones; '
+                                    '--sysinfo: prints environment variable values, which may '
+                                    'contain secrets; --report: expands every retained enrichment '
+                                    'row and its per-section detail). Console detail only -- '
+                                    '--json always carries every record.')
 
     hunt_group = parser.add_argument_group("hunt options")
     hunt_group.add_argument('--yara-dir', metavar='DIR', default=None,
@@ -541,7 +543,7 @@ def _run(args, mf, out, cmd_label, *, mf_reference=None, hunt_request=None) -> "
         exit_code = _apply_command_result(
             cmd_report(mf, report_tid=args.report_tid, report_addr=args.report_addr,
                        report_string=args.report_string, extract_to=args.output,
-                       min_len=args.min_len, force=args.force))
+                       min_len=args.min_len, force=args.force, verbose=args.verbose))
     elif args.hunt and hunt_request is not None:
         # ── Targeted rescan (--hunt-addr) ───────────────────────────────
         # `hunt_request` is already fully validated (main() resolved the
