@@ -1,10 +1,15 @@
 # Canonical PE image profile and coverage contract
 
-Status: **frozen contract; not implemented**. Nothing in this document
-changes shipped behavior. It is the normative definition that the report
-PE projection, the candidate-image resolver, and a later `--process` PE
-projection implement against, so that no consumer invents its own PE
-semantics.
+Status: **frozen contract; partially implemented**. The internal
+memory-sourced collector implements the raw-profile and staged-acquisition
+subset of this contract, but is not connected to any shipped production
+path. Cache reuse (§7), consistency observations (§8), projections (§9),
+disk-reference collection (§5.1.1), and consumer migrations remain future
+work. Shipped behavior is unchanged.
+
+It is the normative definition that the report PE projection, the
+candidate-image resolver, and a later `--process` PE projection implement
+against, so that no consumer invents its own PE semantics.
 
 Today, PE facts are produced by `dumpex.core.pe_utils.parse_pe_header()`
 and consumed independently by `dumpex.core.process_info`'s
