@@ -2,10 +2,12 @@
 
 Status: **frozen contract; partially implemented**. The internal
 memory-sourced collector implements the raw-profile and staged-acquisition
-subset of this contract, but is not connected to any shipped production
-path. Cache reuse (§7), consistency observations (§8), projections (§9),
-disk-reference collection (§5.1.1), and consumer migrations remain future
-work. Shipped behavior is unchanged.
+subset of this contract (§2–§6), and the internal correlation layer
+implements the derived consistency observations and the correlation
+observations of §8 -- neither is connected to any shipped production
+path. Cache reuse (§7), projections (§9), disk-reference collection
+(§5.1.1), and consumer migrations remain future work. Shipped behavior is
+unchanged.
 
 It is the normative definition that the report PE projection, the
 candidate-image resolver, and a later `--process` PE projection implement
@@ -44,7 +46,7 @@ Read alongside:
 - §5 Coverage, provenance, and component state
 - §6 Staged acquisition and bounded stops
 - §7 Cache identity and reuse
-- §8 Derived main-image consistency observations
+- §8 Derived main-image consistency observations and the correlation layer
 - §9 Projection rules
 - §10 Resource and safety constraints
 - §11 What exists today and what is new work
@@ -2132,6 +2134,160 @@ it as a mandatory observation would mandate a row that can only ever be
 `unavailable`.
 
 Adding it requires extending §0.2 first, and is a separate piece of work.
+
+### 8.8 The main-image correlation layer
+
+§8.3's five are the cross-surface observations every consumer needs.
+`dumpex.core.pe_correlation` produces them **and** the correlation layer
+below: the size cross-checks against the ModuleList record and the
+section table, one set of observations per section, one per directory
+descriptor, the entry point's memory-evidence context, and the identity
+comparisons that exist only where a second attributable source does.
+
+The layer is additive, not a redefinition. Every observation it adds is
+evaluated by §8.3's three-valued rule over established facts, may never
+say anything §8.2 forbids, and obeys §1.2's first rule: a missing
+ModuleList entry, a missing MemoryInfo region, a lossy region or segment
+table, and an unwritten page each yield `unavailable`, never a PE defect
+and never a `conflict`. The layer scores nothing and emits no Finding.
+
+#### 8.8.1 Evidence inputs
+
+| Input | Source | Absent means |
+|---|---|---|
+| The profile | §2–§5 | — |
+| Captured regions | `enumerate_captured_regions()` (§8.6) | `unavailable` for every region-dependent observation |
+| Captured segments | `enumerate_captured_segments()` (§8.6) | `unavailable` for every capture-state fact |
+| ModuleList record | the `MODULE` entry registered at exactly `actual_base` — its `SizeOfImage`, `TimeDateStamp`, `CheckSum` | `unavailable` for `size_vs_modulelist` and the identity comparisons |
+
+A `CapturedEnumeration` whose `skipped` count is non-zero is lossy: a
+descriptor the value model could not represent might have been the one
+covering the address in question, so every observation that walks that
+table is `unavailable`, and every per-address context drawn from it —
+a section's live protections, a directory's or the entry point's capture
+state, the entry point's region facts — is withheld (empty or `null`),
+not taken from the surviving descriptors (§8.6.2's rule, applied
+everywhere the table is read). `size_vs_image_extent` still separates
+"lossy" from "absent" in its reason, since the two have different
+remedies.
+
+#### 8.8.2 Correlation coverage
+
+The layer reports a plain tally — how many observations were `consistent`,
+`conflict`, and `unavailable`. It is **not** a coverage status, **not** a
+`PROCESS_MAIN_IMAGE_*` limitation, and changes no exit code and no legacy
+`--process` field coverage. Until a public cutover contract adopts it, it
+is a diagnostic count.
+
+#### 8.8.3 Size cross-checks
+
+| Observation | Compares | `conflict` when |
+|---|---|---|
+| `size_vs_modulelist` | `SizeOfImage`, `MODULE.SizeOfImage` | the two differ **and** still differ after each is rounded up to `SectionAlignment` |
+| `size_vs_section_extent` | `SizeOfImage`, the section table's own extent | a decoded section reaches past `SizeOfImage` |
+
+`size_vs_modulelist` normalizes documented alignment before it declares a
+conflict. When `SectionAlignment` is not established a raw mismatch it
+cannot normalize is `unavailable`, not `conflict`. Alignment
+normalization is used **only** here — the section-extent check below
+compares raw values.
+
+`size_vs_section_extent` is `conflict` on a decoded section whose own
+`[VirtualAddress, VirtualAddress + VirtualSize)` reaches past
+`SizeOfImage` — the raw extent, never an alignment-rounded one — whatever
+the table's completeness, since a decoded fact settles it (§8.5's rows
+4–5 reasoning). Sections that all fit are `consistent` only once the
+table is `complete`; while it is `partial` an undecoded section could
+still exceed the size, so the result is `unavailable`. A `SizeOfImage`
+**larger** than the section extent is legal padding and never a conflict.
+
+#### 8.8.4 Per-section observations
+
+For each decoded section, in section-table order:
+
+| Observation | `conflict` when |
+|---|---|
+| `section_range_overflow` | `actual_base + VirtualAddress + VirtualSize` runs past the 64-bit space (§2.6) |
+| `section_image_bound` | `[VirtualAddress, VirtualAddress + VirtualSize)` is not inside `[0, SizeOfImage)` |
+| `section_overlap` | the section's mapped interval overlaps another decoded section's; `unavailable` while the table is `partial` and no overlap is yet seen |
+
+A `section_overlap` conflict names the lowest-index section it overlaps
+and the exact intersecting RVA range in its operands, so the conflict is
+explained without a consumer recomputing the relationship.
+
+The section's declared R/W/X bits are surfaced from `Characteristics`
+(§3.4) so no consumer repeats the bit test. The distinct protection
+names of the captured regions the section's mapped range falls in are
+carried as **context only** — never an observation. `PAGE_EXECUTE_WRITECOPY`
+is ordinary loader context for an executable image section; a consumer
+must not substring-match `WRITE` against these names. The section's
+capture state (§8.6's `CaptureState`) is carried the same way.
+
+An interval is taken over `VirtualSize`, the mapped extent (§8.5). A
+section whose `VirtualSize` is zero contains no address and overlaps
+nothing.
+
+#### 8.8.5 Per-descriptor observations
+
+For each of the sixteen directory descriptors, in index order:
+
+| Field | Meaning |
+|---|---|
+| `directory_image_bound` | `conflict` when `[value, value + size)` is not inside `[0, SizeOfImage)`; `unavailable` for a `declared_absent`, presence-unknown, or `partial` descriptor |
+| `containing_section_index` | the decoded section whose mapped interval holds `value`, or `null` |
+| `capture_state` | how much of `[actual_base + value, + size)` the dump wrote, or `null` |
+
+Index 4 (Security) is the exception §2.5 fixes: its `value` is a file
+offset, not an RVA. `directory_image_bound` for index 4 is `unavailable`
+with the file-offset reason, its `containing_section_index` is `null`,
+and it carries no capture claim — the certificate bytes are not part of
+the image mapping.
+
+#### 8.8.6 Entry-point memory context
+
+Alongside §8.5's `entry_point_in_section`, the layer carries the entry
+point resolved into the process: `actual_base + AddressOfEntryPoint`
+checked for 64-bit overflow (§2.6), the decoded section that holds the
+entry RVA, the entry page's capture state, and the MemoryInfo region's
+state, type, and protection. These are **context for §8.5**, not a second
+verdict. An entry point in a nonstandard-named section, and an unusual
+section name, are weak context here — never a `conflict` on their own.
+
+A zero `AddressOfEntryPoint` is "no entry point" (§8.5), abundant among
+resource-only DLLs and `.mui` modules. The RVA is carried as `0`, but the
+VA and every memory-context field are `null`: resolving `actual_base + 0`
+would present the image's header page as where execution begins.
+
+#### 8.8.7 Identity comparisons
+
+Three comparisons, each present in every result even when it can only be
+`unavailable` — represented, never omitted:
+
+| Observation | Compares | Notes |
+|---|---|---|
+| `identity_time_date_stamp` | COFF `TimeDateStamp`, `MODULE.TimeDateStamp` | `unavailable` with no ModuleList record |
+| `identity_check_sum` | optional header `CheckSum`, `MODULE.CheckSum` | a zero header `CheckSum` is "not checksummed" and is not compared |
+| `identity_machine` | COFF `Machine` — no second attributable source | always `unavailable` |
+
+`identity_machine` has no second source by construction. The dump's
+SystemInfo processor architecture is not one: a WOW64 process runs a
+32-bit `I386` image while SystemInfo reports the 64-bit host, so that
+comparison would `conflict` on every WOW64 process. With no attributable
+second source the observation is `unavailable`.
+
+#### 8.8.8 Source attribution
+
+Every observation names the evidence that **actually decided it**, not
+every stream it might have consulted. An observation resolved on a
+short-circuit names only the operand that settled it: a zero
+`relocation_delta` names the two bases, not the stripped bit or the
+BASERELOC descriptor; a zero `AddressOfEntryPoint` names the field, not
+the section table; a `null` `SizeOfImage` names the optional header, not
+the region and segment tables it never reached. An observation that
+resolves an RVA against `actual_base` — the size extent, the per-section
+overflow check — names that base's own provenance (`source_kind`, §2.1)
+alongside the header component, so a consumer can tell a PEB base from a
+module-list base from a scanned candidate.
 
 ---
 
