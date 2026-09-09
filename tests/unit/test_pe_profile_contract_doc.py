@@ -3459,6 +3459,111 @@ def test_a_short_capture_is_never_a_size_conflict(doc):
         "The mapped extent is fully captured and `SizeOfImage` exceeds it"]
 
 
+# ── §8.8: the correlation layer is additive and matches the module ─────
+
+
+def _correlation_section(doc: str) -> str:
+    return _section(doc, "### 8.8 The main-image correlation layer",
+                    "## §9 Projection rules")
+
+
+def test_the_correlation_layer_is_additive_not_a_redefinition(doc):
+    section = _flat(_correlation_section(doc))
+    assert "additive, not a redefinition" in section
+    assert "evaluated by §8.3's three-valued rule" in section
+    assert "scores nothing and emits no Finding" in section
+    # §1.2's first rule: a missing source is a gap, never a conflict.
+    assert "never a PE defect and never a `conflict`" in section
+
+
+def test_correlation_coverage_is_not_a_status(doc):
+    section = _flat(_section(doc, "#### 8.8.2 Correlation coverage",
+                             "#### 8.8.3 Size cross-checks"))
+    assert "not** a coverage status" in section
+    assert "not** a `PROCESS_MAIN_IMAGE_*` limitation" in section
+    assert "changes no exit code and no legacy" in section
+
+
+def test_the_new_observation_names_match_the_shipped_module():
+    from dumpex.core.pe_correlation import OBSERVATION_NAMES
+
+    frozen_five = {"base_vs_preferred", "relocation_expected", "machine_vs_format",
+                   "entry_point_in_section", "size_vs_image_extent"}
+    doc = _DOC_PATH.read_text(encoding="utf-8")
+    section = _correlation_section(doc)
+    named = set(re.findall(r"`([a-z_]+)`", section)) & set(OBSERVATION_NAMES)
+
+    # Every §8.8 observation the module can produce is named in §8.8.
+    assert set(OBSERVATION_NAMES) - frozen_five <= named
+    # And §8.8 names no observation the module does not implement.
+    assert named <= set(OBSERVATION_NAMES)
+
+
+def test_the_size_cross_checks_name_both_new_observations(doc):
+    section = _section(doc, "#### 8.8.3 Size cross-checks",
+                       "#### 8.8.4 Per-section observations")
+    names = {row[0] for row in _rows(section)}
+    assert names == {"`size_vs_modulelist`", "`size_vs_section_extent`"}
+    flat = _flat(section)
+    assert "rounded up to `SectionAlignment`" in flat
+    assert "larger** than the section extent is legal padding" in flat
+
+
+def test_the_per_section_table_lists_its_three_observations(doc):
+    section = _section(doc, "#### 8.8.4 Per-section observations",
+                       "#### 8.8.5 Per-descriptor observations")
+    names = {row[0] for row in _rows(section)}
+    assert names == {"`section_range_overflow`", "`section_image_bound`",
+                     "`section_overlap`"}
+    flat = _flat(section)
+    assert "PAGE_EXECUTE_WRITECOPY" in flat
+    assert "must not substring-match `WRITE`" in flat
+    # An overlap conflict keeps its counterpart so a consumer need not
+    # recompute the relationship.
+    assert "names the lowest-index section it overlaps" in flat
+    assert "exact intersecting RVA range" in flat
+
+
+def test_a_lossy_table_withholds_per_address_context(doc):
+    section = _flat(_section(doc, "#### 8.8.1 Evidence inputs",
+                             "#### 8.8.2 Correlation coverage"))
+    assert "covering the address in question" in section
+    assert "is withheld (empty or `null`)" in section
+    assert 'separates "lossy" from "absent"' in section
+
+
+def test_a_zero_entry_point_carries_no_va_or_memory_context(doc):
+    section = _flat(_section(doc, "#### 8.8.6 Entry-point memory context",
+                             "#### 8.8.7 Identity comparisons"))
+    assert "zero `AddressOfEntryPoint` is \"no entry point\"" in section
+    assert "VA and every memory-context field are `null`" in section
+
+
+def test_the_security_directory_exception_is_restated_for_the_layer(doc):
+    section = _flat(_section(doc, "#### 8.8.5 Per-descriptor observations",
+                             "#### 8.8.6 Entry-point memory context"))
+    assert "Index 4 (Security)" in section
+    assert "file offset, not an RVA" in section
+    assert "no capture claim" in section
+
+
+def test_identity_machine_is_unavailable_for_the_wow64_reason(doc):
+    section = _flat(_section(doc, "#### 8.8.7 Identity comparisons",
+                             "#### 8.8.8 Source attribution"))
+    assert "WOW64 process runs a 32-bit `I386` image" in section
+    assert "would `conflict` on every WOW64 process" in section
+    assert 'zero header `CheckSum` is "not checksummed" and is not compared' in section
+
+
+def test_source_attribution_names_only_the_deciding_evidence(doc):
+    section = _flat(_section(doc, "#### 8.8.8 Source attribution",
+                             "## §9 Projection rules"))
+    assert "actually decided it" in section
+    assert "zero `relocation_delta` names the two bases" in section
+    assert "zero `AddressOfEntryPoint` names the field, not the section table" in section
+    assert "names that base's own provenance (`source_kind`, §2.1)" in section
+
+
 # ── §11.1: the "available now" list is the shipped parser's own result ──
 
 _BACKTICKED_RE = re.compile(r"`([a-z0-9_]+)`")
