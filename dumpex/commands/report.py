@@ -7,7 +7,7 @@ from typing import NamedTuple
 from minidump.minidumpfile import MinidumpFile
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
 from dumpex.core.memory import (get_modules, get_memory_regions,
-    get_thread_infos, addr_to_module, va_to_file_offset, prot_str,
+    get_thread_infos, get_thread_contexts, addr_to_module, va_to_file_offset, prot_str,
     read_region, parse_hex_or_int, INDICATOR_DIMS, MAX_REGION_READ,
     _get_region_at, _extract_strings_from_data,
     _hexdump_context, _search_string_in_memory, StringSearchStats, verdict_for,
@@ -29,10 +29,13 @@ from dumpex.output.coverage import (
 from dumpex.output.command_result import CommandResult
 from dumpex.commands.extract import build_extract_artifact
 from dumpex.commands.report_enrichment import (
-    CONSOLE_CORRELATED_HANDLES, CONSOLE_HANDLE_TYPE_ROWS, CONSOLE_NEIGHBOR_REGIONS,
-    CONSOLE_STRING_CONTEXT, collect_allocation_neighborhood, collect_exception_context,
-    collect_handle_correlation, collect_process_enrichment, collect_string_context,
-    HandleSegmentIndex, MAX_REPORT_CARDS, MAX_REPORT_SCAN_BYTES, RegionEvidence,
+    CONSOLE_BRANCH_TARGETS, CONSOLE_CORRELATED_HANDLES, CONSOLE_HANDLE_TYPE_ROWS,
+    CONSOLE_IAT_ROWS, CONSOLE_INSTRUCTION_ROWS, CONSOLE_NEIGHBOR_REGIONS,
+    CONSOLE_PE_CONFLICTS, CONSOLE_STRING_CONTEXT, collect_allocation_neighborhood,
+    collect_anchor_pe_context, collect_exception_context, collect_handle_correlation,
+    collect_instruction_context, collect_iat_correlation, collect_pe_context,
+    collect_process_enrichment, collect_string_context, HandleSegmentIndex,
+    MAX_REPORT_CARDS, MAX_REPORT_SCAN_BYTES, PeProfileCache, RegionEvidence,
 )
 from dumpex.output.records import (
     ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL,
@@ -180,7 +183,8 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
                           modules: list, regions: list, infos: list, tid_map: dict,
                           modules_available: bool, string_hit_tuple=None,
                           handle_records=(), handle_summary=None, query=None,
-                          region_evidence=None, handle_index=None, resolved_region=None):
+                          region_evidence=None, handle_index=None, resolved_region=None,
+                          pe_cache=None):
     """Sections 1-4 + verdict + optional extract from today's single-shot
     cmd_report, unchanged in logic (including the exact MECE
     reconciliation rule for tid_unbacked_detail) -- just building a
@@ -454,6 +458,85 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         ioc_offsets=(scan.ioc_offsets if region is not None else frozenset()),
         query=query, string_hit=string_hit_dict)
 
+    # ── Card enrichment: PE, instruction, and IAT correlation ─────────
+    anchor_pe_context = instruction_context = iat_correlation = None
+    if pe_cache is not None:
+        anchor_pe_context = collect_anchor_pe_context(
+            pe_cache, anchor_address=target_addr, region_evidence=region_evidence)
+
+        # Approved anchor sources for the instruction window, highest
+        # priority first, each admitted only when it is correlated with
+        # THIS card: a faulting RIP only when its exception relates to the
+        # anchor thread or the anchor region (never the dump's own
+        # process-wide crash record), the live thread RIP and the thread
+        # StartAddress only for the card's anchor thread, then the card's
+        # own anchor. When the card carries an explicit user-supplied
+        # address, that anchor is what the analyst pointed at and leads --
+        # only a correlated fault outranks it.
+        thread_ip = thread_ip_reg = wow64_hint = None
+        if tid_int is not None:
+            for ctx in get_thread_contexts(mf):
+                if ctx.get("ThreadId") == tid_int:
+                    thread_ip = ctx.get("ip")
+                    thread_ip_reg = ctx.get("ip_reg")
+                    wow64_hint = ctx.get("is_wow64")
+                    break
+        exception_rip = None
+        if exception_context is not None and exception_context.entries:
+            first = exception_context.entries[0]
+            if (first.exception_address is not None
+                    and first.selection_reason in ("anchor_thread", "anchor_region")):
+                exception_rip = int(first.exception_address, 16)
+        _order = (("exception_rip", exception_rip), ("card_anchor", target_addr),
+                  ("thread_rip", thread_ip), ("thread_start_address", tid_start_addr)) \
+            if addr_was_independent else \
+            (("exception_rip", exception_rip), ("thread_rip", thread_ip),
+             ("thread_start_address", tid_start_addr), ("card_anchor", target_addr))
+        candidates = [(name, addr) for name, addr in _order
+                      if isinstance(addr, int) and addr > 0]
+
+        # The instruction window, its architecture, its IAT-directory
+        # range, and the IAT it is correlated against all belong to the
+        # module that owns the CHOSEN anchor address -- not necessarily
+        # the module the card's own anchor is in.
+        instruction_slot_vas = ()
+        instruction_module = instruction_module_base = None
+        if candidates and target_addr is not None:
+            _name, instruction_anchor = candidates[0]
+            instruction_module = addr_to_module(instruction_anchor, modules)
+            instruction_module_base = getattr(instruction_module, "baseaddress", None)
+            if not isinstance(instruction_module_base, int):
+                instruction_module, instruction_module_base = None, None
+            instruction_iat = (pe_cache.iat_at_base(instruction_module_base)
+                               if instruction_module_base is not None else None)
+            instruction_context, instruction_slot_vas = collect_instruction_context(
+                pe_cache, mf=mf, anchor_candidates=candidates,
+                region_evidence=region_evidence, iat_raw=instruction_iat,
+                instruction_module_base=instruction_module_base,
+                instruction_module_profile=(
+                    pe_cache.profile_at_base(instruction_module_base)
+                    if instruction_module_base is not None else None),
+                thread_ip_reg=thread_ip_reg, wow64_hint=wow64_hint)
+
+        # IAT correlation is about the same module the window is in when
+        # there is one, so an instruction-correlated slot is never checked
+        # against a different image's table; otherwise it falls back to
+        # the card anchor's own module to still surface unusual thunks.
+        iat_module = instruction_module
+        iat_module_base = instruction_module_base
+        if iat_module_base is None and target_addr is not None:
+            iat_module = addr_to_module(target_addr, modules)
+            candidate_base = getattr(iat_module, "baseaddress", None)
+            iat_module_base = candidate_base if isinstance(candidate_base, int) else None
+            if iat_module_base is None:
+                iat_module = None
+        if iat_module_base is not None:
+            iat_correlation = collect_iat_correlation(
+                pe_cache, anchor_module=iat_module, anchor_module_base=iat_module_base,
+                iat_raw=pe_cache.iat_at_base(iat_module_base),
+                region_evidence=region_evidence,
+                instruction_slot_vas=instruction_slot_vas)
+
     record = TriageCardRecord(
         anchor_tid=tid_int,
         anchor_address=hex_address(target_addr) if target_addr is not None else None,
@@ -467,7 +550,9 @@ def _collect_triage_card(mf, *, tid=None, addr=None, anchor_source: str, min_len
         extract_read_truncated=extract_read_truncated,
         exception_context=exception_context,
         allocation_neighborhood=allocation_neighborhood,
-        handle_correlation=handle_correlation, string_context=string_context)
+        handle_correlation=handle_correlation, string_context=string_context,
+        anchor_pe_context=anchor_pe_context, instruction_context=instruction_context,
+        iat_correlation=iat_correlation)
 
     sources = {
         "thread_info": observe_source("thread_info", present=bool(mf.thread_info), items=infos),
@@ -615,6 +700,10 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
     handle_summary = process_enrichment.handles
     region_evidence = RegionEvidence.from_dump(mf)
     handle_index = HandleSegmentIndex.from_records(handle_records)
+    # The main-image PE profile, its correlation, and each anchor module's
+    # parsed IAT are collected once here and reused by every card.
+    pe_cache = PeProfileCache.from_dump(mf, process_enrichment.image_base_address)
+    pe_context = collect_pe_context(pe_cache)
 
     modules_available = bool(mf.modules)
     modules = get_modules(mf)
@@ -650,7 +739,8 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                          "clamped_regions": search_stats.clamped,
                          "cards_skipped_for_budget": 0, "hits_skipped_for_budget": 0,
                          "hits_sharing_a_region": 0,
-                         "process_enrichment": process_enrichment.to_dict()},
+                         "process_enrichment": process_enrichment.to_dict(),
+                         "pe_context": pe_context.to_dict()},
                 diagnostics=diagnostics)
 
         # The search reports a hit against the region it read. Everything
@@ -713,6 +803,7 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
             "hits_skipped_for_budget": 0,
             "hits_sharing_a_region": 0,
             "process_enrichment": process_enrichment.to_dict(),
+            "pe_context": pe_context.to_dict(),
         }
 
         if not hit_groups:
@@ -762,7 +853,7 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                 string_hit_tuple=(off, enc), handle_records=handle_records,
                 handle_summary=handle_summary, query=report_string,
                 region_evidence=region_evidence, handle_index=handle_index,
-                resolved_region=final)
+                resolved_region=final, pe_cache=pe_cache)
             records.append(record)
             coverages.append(coverage)
             diagnostics.extend(card_diagnostics)
@@ -811,7 +902,7 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         modules=modules, regions=regions, infos=infos, tid_map=tid_map,
         modules_available=modules_available, handle_records=handle_records,
         handle_summary=handle_summary, region_evidence=region_evidence,
-        handle_index=handle_index)
+        handle_index=handle_index, pe_cache=pe_cache)
 
     mode_parts = []
     if tid_int is not None:
@@ -827,6 +918,7 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
         "hits_skipped_for_budget": 0,
         "hits_sharing_a_region": 0,
         "process_enrichment": process_enrichment.to_dict(),
+        "pe_context": pe_context.to_dict(),
     }
     return CommandResult(kind="report", records=[record],
                           coverage=_combine_with_aggregate([coverage], [record], _NO_SEARCH_STATS),
@@ -1008,6 +1100,12 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
         _render_handle_correlation(card.handle_correlation, verbose)
     if card.string_context is not None:
         _render_string_context(card.string_context, verbose)
+    if card.anchor_pe_context is not None:
+        _render_anchor_pe_context(card.anchor_pe_context, verbose)
+    if card.instruction_context is not None:
+        _render_instruction_context(card.instruction_context, verbose)
+    if card.iat_correlation is not None:
+        _render_iat_correlation(card.iat_correlation, verbose)
 
     # ── Verdict (MECE) ────────────────────────────────────────────────
     print(BOLD("[ VERDICT ]"))
@@ -1452,6 +1550,164 @@ def _render_string_context(context, verbose: bool = False) -> None:
     print()
 
 
+def _render_pe_context(pe_context: dict, verbose: bool = False) -> None:
+    print()
+    print(BOLD("[ PE ] MAIN IMAGE PE CONTEXT"))
+    print("─" * 50)
+    section = pe_context["section"]
+    if section["status"] == ENRICHMENT_MISSING:
+        print(DIM("  [·] The main image PE header was not read."))
+        _print_section_state(section, verbose=verbose)
+        print()
+        return
+    base = pe_context["image_base"]
+    if base:
+        print(f"  {'Image base':<20} 0x{int(base, 16):016x}")
+    machine = pe_context["machine_name"] or (
+        hex(pe_context["machine"]) if pe_context["machine"] is not None else None)
+    if machine:
+        print(f"  {'Machine':<20} {console_safe(str(machine))}")
+    if verbose:
+        preferred = pe_context["preferred_image_base"]
+        if preferred:
+            print(f"  {'Preferred base':<20} 0x{int(preferred, 16):016x}")
+        if pe_context["time_date_stamp"] is not None:
+            print(f"  {'TimeDateStamp':<20} 0x{pe_context['time_date_stamp']:08x}")
+        if pe_context["size_of_image"] is not None:
+            print(f"  {'SizeOfImage':<20} 0x{pe_context['size_of_image']:x}")
+        entry_va = pe_context["entry_point_va"]
+        if entry_va:
+            print(f"  {'Entry point':<20} 0x{int(entry_va, 16):016x}")
+    match = pe_context["module_match"]
+    if match is not None and (verbose or match != _MODULE_MATCH_RESOLVED):
+        print(f"  {'Module list match':<20} {_module_match_text(match)}")
+    print(f"  {'Correlation':<20} "
+          + DIM(f"{pe_context['consistent_count']} consistent  "
+                f"{pe_context['conflict_count']} conflict  "
+                f"{pe_context['unavailable_count']} unavailable"))
+    conflicts = pe_context["observations"]
+    if conflicts:
+        print("  " + BOLD("Structural conflicts (captured facts disagree)"))
+        shown = conflicts if verbose else conflicts[:CONSOLE_PE_CONFLICTS]
+        for observation in shown:
+            print("    " + YELLOW("[!] " + console_safe(observation["name"]) + " — "
+                                  + console_safe(observation["reason"])))
+        _print_console_omission(len(shown), len(conflicts), indent="    ")
+    print(DIM("  A structural conflict is a lead for review, not a maliciousness finding."))
+    _print_section_state(section, verbose=verbose)
+    print()
+
+
+def _render_anchor_pe_context(context, verbose: bool = False) -> None:
+    print(BOLD("[ 9 ] ANCHOR IN THE PE IMAGE"))
+    print("─" * 50)
+    section = context.section.to_dict()
+    if section["status"] == ENRICHMENT_MISSING:
+        print(DIM("  [·] No module or region places this anchor."))
+        _print_section_state(section, verbose=verbose)
+        print()
+        return
+    owner = console_safe(context.module_owner) if context.module_owner else "(no module)"
+    cut = _cap_mark(("module owner", context.module_owner_truncated),
+                    ("section name", context.section_name_truncated))
+    location = context.classification
+    if context.section_name:
+        location += f" in {console_safe(context.section_name)}"
+    print(f"  {'Placement':<18} {location}{cut}")
+    print(f"  {'Owning module':<18} {owner}   {DIM(context.registration)}")
+    if context.module_rva is not None:
+        print(f"  {'Module RVA':<18} 0x{context.module_rva:x}")
+    if context.live_protection or context.declared_executable is not None:
+        declared = "".join(letter for letter, flag in (
+            ("R", context.declared_readable), ("W", context.declared_writable),
+            ("X", context.declared_executable)) if flag) or "?"
+        live = context.live_protection or "?"
+        match = context.protection_matches_declared
+        note = ("" if match is None
+                else DIM("  (matches declared)") if match
+                else YELLOW("  [!] live protection differs from the declared section bits"))
+        print(f"  {'Protection':<18} declared {declared}   live {live}{note}")
+    print(DIM("  A protection mismatch is a lead for review, not a verdict."))
+    _print_section_state(section, verbose=verbose)
+    print()
+
+
+def _render_instruction_context(context, verbose: bool = False) -> None:
+    print(BOLD("[ 10 ] INSTRUCTION CONTEXT"))
+    print("─" * 50)
+    section = context.section.to_dict()
+    if context.anchor_address:
+        print(DIM(f"  Window at 0x{int(context.anchor_address, 16):016x} "
+                  f"({context.anchor_source}, {context.architecture or '?'}); "
+                  f"{context.bytes_read} byte(s) read; decoder: {context.decoder_state}"))
+    if not context.instructions:
+        if section["status"] == ENRICHMENT_MISSING:
+            print(DIM("  [·] No bytes were captured at this anchor."))
+        else:
+            print(DIM("  [·] No instruction was decoded."))
+    else:
+        shown = (list(context.instructions) if verbose
+                 else context.instructions[:CONSOLE_INSTRUCTION_ROWS])
+        for insn in shown:
+            marker = RED("►") if insn.is_anchor else " "
+            mark = DIM(" [truncated]") if insn.text_truncated else ""
+            print(f"  {marker} 0x{int(insn.address, 16):016x}  "
+                  f"{console_safe(insn.text)}{mark}")
+        _print_console_omission(len(shown), len(context.instructions))
+    if context.branch_targets:
+        print("  " + BOLD("Branch targets"))
+        shown = (list(context.branch_targets) if verbose
+                 else context.branch_targets[:CONSOLE_BRANCH_TARGETS])
+        for target in shown:
+            owner = console_safe(target.module_owner) if target.module_owner else "?"
+            dest = target.resolved_target_address or target.target_address
+            dest_text = f"0x{int(dest, 16):016x}" if dest else "(unresolved)"
+            symbol = (f"  {console_safe(target.iat_symbol)}"
+                      if target.iat_symbol else "")
+            kind = target.kind + ("?" if target.iat_classification_uncertain else "")
+            print(f"    {DIM(kind):<20} {dest_text}  {owner}{symbol}")
+        _print_console_omission(len(shown), len(context.branch_targets), indent="    ")
+    print(DIM("  Instruction context names no function, argument, or call stack."))
+    _print_section_state(section, verbose=verbose)
+    print()
+
+
+def _render_iat_correlation(correlation, verbose: bool = False) -> None:
+    print(BOLD("[ 11 ] IAT CORRELATION"))
+    print("─" * 50)
+    section = correlation.section.to_dict()
+    owner = (console_safe(correlation.module_owner) if correlation.module_owner
+             else "(module unknown)")
+    if section["status"] == ENRICHMENT_MISSING:
+        print(DIM(f"  [·] {owner}: its import table could not be read."))
+        _print_section_state(section, verbose=verbose)
+        print()
+        return
+    counts = []
+    if correlation.dll_count is not None:
+        counts.append(f"{correlation.dll_count} DLL(s)")
+    if correlation.entry_count is not None:
+        counts.append(f"{correlation.entry_count} import(s)")
+    print(f"  {owner}   " + DIM(", ".join(counts) if counts else "no import summary"))
+    if not correlation.entries:
+        print(DIM("  [·] No import slot is instruction-correlated or unusual."))
+    else:
+        shown = (list(correlation.entries) if verbose
+                 else correlation.entries[:CONSOLE_IAT_ROWS])
+        for entry in shown:
+            name = console_safe(entry.symbol or entry.dll or "(unnamed)")
+            target = entry.resolved_target_va
+            target_text = f"→ 0x{int(target, 16):016x}" if target else ""
+            owner_text = (console_safe(entry.target_module_owner)
+                          if entry.target_module_owner else entry.target_registration or "?")
+            print(f"  ► {name}  {DIM(entry.selection_reason)}")
+            print(f"      {target_text}  {owner_text}")
+        _print_console_omission(len(shown), len(correlation.entries))
+    print(DIM("  An unusual thunk target is an investigation lead, not a verdict."))
+    _print_section_state(section, verbose=verbose)
+    print()
+
+
 def _render_verdict_text(verdict: str, score: int) -> str:
     """`score` (len(card.findings)) reproduces today's `_verdict(dims)`
     text exactly -- `verdict` alone only carries the four-tier
@@ -1493,6 +1749,8 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     # times and invite an analyst to read it as card-specific.
     if summary.get("process_enrichment") is not None:
         _render_process_enrichment(summary["process_enrichment"], verbose)
+    if summary.get("pe_context") is not None:
+        _render_pe_context(summary["pe_context"], verbose)
 
     if summary["mode"] == "string":
         print(f"\n{BOLD('Searching memory for:')} {CYAN(repr(summary['query_string']))}")

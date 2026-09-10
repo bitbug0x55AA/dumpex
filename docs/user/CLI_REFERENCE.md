@@ -349,12 +349,18 @@ anchor with thread, region, module backing, protection, strings, PE/header
 context, verdict dimensions, and coverage. A string not found during an
 incomplete scan is not a clean result.
 
-Each run also prints bounded context around its anchors. One process block
-covers the whole invocation: process identity and session, an allowlisted slice
-of the environment block, a per-type handle census, and whether the dump's
-TokenStream can contribute anything. Each card then adds its own exception
-context, allocation neighborhood, correlated handles, and anchor-aware string
-context.
+Each run also prints bounded context around its anchors. Two process-wide blocks
+cover the whole invocation: process identity and session (identity, an
+allowlisted slice of the environment block, a per-type handle census, and
+whether the dump's TokenStream can contribute anything), and the main image's PE
+identity and structural-consistency summary. Each card then adds its own
+exception context, allocation neighborhood, correlated handles, anchor-aware
+string context, where the anchor sits in its owning PE image, a bounded
+instruction window at the anchor, and the anchor module's correlated IAT slots.
+
+The instruction window needs the optional `capstone` dependency
+(`pip install "dumpex[disasm]"`). Without it that one section reports an explicit
+unavailable state; nothing else changes.
 
 A `--report-string` run builds at most 32 cards and reads at most 256 MB of
 content across them; any actionable hit left untriaged is counted in the output

@@ -420,3 +420,139 @@ def test_string_context_rejects_impossible_read_and_entry_relationships():
             replace(adjacent, address=query.address, offset=query.offset),
             query_text=None,
         )
+
+
+# ── PE, instruction, and IAT correlation records ─────────────────────
+
+from dumpex.output.records import (  # noqa: E402
+    ReportAnchorPeContext, ReportBranchTarget, ReportDecodedInstruction,
+    ReportIatCorrelatedEntry, ReportIatCorrelation, ReportInstructionContext,
+    ReportPeContext, ReportPeObservation,
+)
+
+
+def test_pe_observation_rejects_an_unknown_state():
+    with pytest.raises(ValueError, match="state must be one of"):
+        ReportPeObservation(name="machine_vs_format", state="suspicious", reason="x")
+    with pytest.raises(ValueError, match="JSON scalar"):
+        ReportPeObservation(name="x", state="conflict", reason="y", operands={"k": object()})
+
+
+def _pe_context(*observations, status=ENRICHMENT_COMPLETE, conflict_count=None):
+    conflict_count = len(observations) if conflict_count is None else conflict_count
+    return ReportPeContext(
+        section=EnrichmentSection(name="pe_context", scope="process", status=status,
+                                  total=conflict_count, included=len(observations), cap=16,
+                                  truncated=len(observations) < conflict_count),
+        image_base="0x0000000140000000", preferred_image_base=None, machine=0x8664,
+        machine_name="AMD64", time_date_stamp=1, size_of_image=0x4000,
+        entry_point_rva=0x1000, entry_point_va="0x0000000140001000", section_count=2,
+        pe32_plus=True, module_match="resolved", consistent_count=5,
+        conflict_count=conflict_count, unavailable_count=1, observations=observations)
+
+
+def test_pe_context_total_must_be_the_conflict_count():
+    conflict = ReportPeObservation(name="size_vs_modulelist", state="conflict", reason="r")
+    good = _pe_context(conflict)
+    with pytest.raises(ValueError, match="must be the conflict_count"):
+        replace(good, conflict_count=3)
+    with pytest.raises(ValueError, match="only the retained conflict observations"):
+        _pe_context(ReportPeObservation(name="x", state="consistent", reason="r"))
+
+
+def _anchor_pe(**overrides):
+    kwargs = dict(
+        section=EnrichmentSection(name="anchor_pe_context", scope="card",
+                                  status=ENRICHMENT_COMPLETE, total=1, included=1, cap=1,
+                                  truncated=False),
+        anchor_address="0x0000000140001000", classification="code",
+        registration="registered")
+    kwargs.update(overrides)
+    return ReportAnchorPeContext(**kwargs)
+
+
+def test_anchor_pe_context_rejects_an_unknown_classification():
+    with pytest.raises(ValueError, match="classification must be one of"):
+        _anchor_pe(classification="somewhere")
+    with pytest.raises(ValueError, match="module_owner_truncated requires"):
+        _anchor_pe(module_owner_truncated=True)
+
+
+def _instruction(**overrides):
+    kwargs = dict(address="0x0000000140001000", size=6, text="call qword ptr [rip + 0xffa]",
+                  text_truncated=False, is_call=True, is_jump=False, is_return=False,
+                  is_anchor=True, branch_kind="indirect_slot")
+    kwargs.update(overrides)
+    return ReportDecodedInstruction(**kwargs)
+
+
+def _instruction_context(*, instructions=(), targets=(), targets_total=None,
+                         status=ENRICHMENT_COMPLETE):
+    targets_total = len(targets) if targets_total is None else targets_total
+    total = len(instructions) if status != "partial" else None
+    return ReportInstructionContext(
+        section=EnrichmentSection(name="instruction_context", scope="card", status=status,
+                                  total=total, included=len(instructions), cap=48,
+                                  truncated=False),
+        anchor_source="card_anchor", anchor_address="0x0000000140001000",
+        architecture="x64", decoder_state="decoded", window_base="0x0000000140001000",
+        bytes_read=7, branch_targets_total=targets_total,
+        branch_targets_truncated=len(targets) < targets_total,
+        instructions=instructions, branch_targets=targets)
+
+
+def test_instruction_context_rejects_an_unknown_decoder_state():
+    with pytest.raises(ValueError, match="decoder_state must be one of"):
+        ReportInstructionContext(
+            section=EnrichmentSection(name="instruction_context", scope="card",
+                                      status=ENRICHMENT_MISSING, total=None, included=0,
+                                      cap=48, truncated=False),
+            anchor_source=None, anchor_address=None, architecture=None,
+            decoder_state="broken", window_base=None, bytes_read=0)
+
+
+def test_instruction_context_branch_target_must_reference_a_decoded_instruction():
+    stray = ReportBranchTarget(instruction_address="0x00000000dead0000", kind="direct",
+                               target_address="0x0000000140003000")
+    with pytest.raises(ValueError, match="must reference a decoded instruction"):
+        _instruction_context(instructions=(_instruction(),), targets=(stray,))
+
+
+def test_branch_target_indirect_register_carries_no_address():
+    with pytest.raises(ValueError, match="resolves no address"):
+        ReportBranchTarget(instruction_address="0x0000000140001000",
+                           kind="indirect_register", target_address="0x0000000140002000")
+    with pytest.raises(ValueError, match="IAT-slot cross-link"):
+        ReportBranchTarget(instruction_address="0x0000000140001000", kind="direct",
+                           target_address="0x0000000140002000", iat_symbol="Foo")
+
+
+def test_branch_target_iat_uncertainty_is_only_for_indirect_memory():
+    with pytest.raises(ValueError, match="only to an 'indirect_memory' target"):
+        ReportBranchTarget(instruction_address="0x0000000140001000", kind="iat_slot",
+                           target_address="0x0000000140002000",
+                           iat_classification_uncertain=True)
+
+
+def _iat_entry(**overrides):
+    kwargs = dict(import_by="name", selection_reason="instruction_correlated",
+                  symbol="GetProcAddress", iat_slot_va="0x0000000140002000")
+    kwargs.update(overrides)
+    return ReportIatCorrelatedEntry(**kwargs)
+
+
+def test_iat_correlation_deduplicates_by_slot():
+    section = EnrichmentSection(name="iat_correlation", scope="card",
+                                status=ENRICHMENT_COMPLETE, total=2, included=2, cap=16,
+                                truncated=False)
+    with pytest.raises(ValueError, match="deduplicated by IAT slot"):
+        ReportIatCorrelation(section=section, module_owner="app.exe",
+                             module_owner_truncated=False,
+                             module_base="0x0000000140000000", dll_count=1, entry_count=1,
+                             import_directory_present=True, iat_directory_present=True,
+                             entries=(_iat_entry(), _iat_entry()))
+
+
+def test_iat_entry_also_selected_for_must_be_distinct_reasons():
+    with pytest.raises(ValueError, match="distinct additional"):
+        _iat_entry(also_selected_for=("instruction_correlated",))

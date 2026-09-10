@@ -100,9 +100,10 @@ def _run(monkeypatch, tmp_path, argv_extra, *, modules=None, threads=None, regio
 # Matching on block text instead would re-break the moment an enrichment
 # line began with a character the matcher used as a boundary.
 _ENRICHMENT_RENDERERS = (
-    "_render_process_enrichment", "_render_exception_context",
+    "_render_process_enrichment", "_render_pe_context", "_render_exception_context",
     "_render_allocation_neighborhood", "_render_handle_correlation",
-    "_render_string_context",
+    "_render_string_context", "_render_anchor_pe_context",
+    "_render_instruction_context", "_render_iat_correlation",
 )
 
 

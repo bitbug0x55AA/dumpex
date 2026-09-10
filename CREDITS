@@ -107,3 +107,28 @@ Nature of use
   The hash constants 0x4EC20EEC (LoadLibraryA) and 0x7CB89778
   (GetProcAddress) are derived from the ReflectiveDLLInjection
   implementation.
+
+
+Capstone Engine
+---------------
+
+Description
+  Multi-architecture disassembly framework; the x86/x64 decoder behind
+  --report instruction context.
+
+Author
+  Nguyen Anh Quynh and the Capstone contributors
+
+Source
+  https://github.com/capstone-engine/capstone
+
+License
+  BSD 3-Clause. The complete notice is reproduced in THIRD_PARTY_NOTICES.
+
+Used in
+  dumpex/core/disasm.py (optional `disasm` extra)
+
+Nature of use
+  Runtime dependency only. dumpex imports the published `capstone` package to
+  decode a bounded instruction window; no Capstone source is copied into
+  dumpex.

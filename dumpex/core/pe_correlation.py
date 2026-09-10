@@ -65,6 +65,7 @@ __all__ = [
     "CorrelationCoverage",
     "MainImageCorrelation",
     "correlate_main_image",
+    "section_interval",
     "OBSERVATION_NAMES",
     "MAX_DISTINCT_PROTECTIONS",
 ]
@@ -624,14 +625,20 @@ def _observe_machine_vs_format(profile: PeImageProfile) -> Observation:
                 sources=sources, **operands)
 
 
-def _section_interval(section) -> "tuple[int, int] | None":
-    """A decoded section's mapped RVA interval ``[VirtualAddress,
-    VirtualAddress + VirtualSize)``, or ``None`` when ``VirtualSize`` is
-    zero -- a section with no mapped extent contains no address and
-    overlaps nothing."""
+def section_interval(section) -> "tuple[int, int] | None":
+    """A decoded :class:`~dumpex.core.pe_profile.SectionDescriptor`'s
+    mapped RVA interval ``[VirtualAddress, VirtualAddress + VirtualSize)``,
+    or ``None`` when ``VirtualSize`` is zero -- a section with no mapped
+    extent contains no address and overlaps nothing."""
     if section.virtual_size <= 0:
         return None
     return section.virtual_address, section.virtual_address + section.virtual_size
+
+
+# In-module callers use the private spelling; `section_interval` is the
+# public name an out-of-module consumer resolving an address into a
+# section imports.
+_section_interval = section_interval
 
 
 def _observe_entry_point_in_section(profile: PeImageProfile,
