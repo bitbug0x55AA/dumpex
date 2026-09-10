@@ -26,11 +26,18 @@ dependencies = [
 full = [
     "yara-python",
 ]
+# Isolated behind dumpex/core/disasm.py: --report instruction context
+# decodes an x86/x64 window when this is installed and reports an explicit
+# unavailable state when it is not.
+disasm = [
+    "capstone>=5.0,<6",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "jsonschema>=4.0",
     "packaging>=24.0",
+    "capstone>=5.0,<6",
 ]
 
 [project.scripts]

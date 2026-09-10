@@ -7,6 +7,27 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.8.0 — 2026-09-10
+
+### Added
+
+- `--report` now correlates each triage card's anchor with the PE image that
+  owns it: a process-wide main-image identity and structural-consistency
+  summary, the anchor's placement (headers, code, data, import/IAT, relocation,
+  or private memory) with the section's declared versus live protection, a
+  bounded x86/x64 instruction window at the anchor with direct and proven
+  indirect branch targets resolved to module/section/region, and the anchor
+  module's import table reduced to the slots a nearby branch targets or whose
+  live thunk target is unusual. Every section states unavailable, incomplete,
+  completed-empty, or truncated evidence and changes no report finding, verdict,
+  or exit code.
+- The instruction window uses an optional `capstone` dependency, installed with
+  `pip install dumpex[disasm]`. Without it the instruction section reports an
+  explicit unavailable state rather than being omitted.
+- Published output schema v2.18 for the new report correlation fields. See
+  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the structured
+  compatibility details.
+
 ## 3.7.1 — 2026-09-08
 
 ### Changed

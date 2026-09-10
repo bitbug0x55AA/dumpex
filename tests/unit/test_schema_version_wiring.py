@@ -509,3 +509,52 @@ def test_a_targeted_hunter_branch_pins_selected_to_the_same_analyzer():
     `scan_scope.hunter` to `selected` is what closes the identity chain."""
     for hunter, then in _targeted_hunter_branches(_load(CURRENT_SCHEMA)).items():
         assert then["properties"]["summary"]["properties"]["selected"]["const"] == hunter
+
+
+# ── v2.18's PE, instruction, and IAT correlation ────────────────────────
+
+def test_v2_18s_row_names_the_new_projections():
+    row = _version_summary_row("2.18")
+    for token in ("pe_context", "anchor_pe_context", "instruction_context",
+                  "iat_correlation"):
+        assert token in row
+
+
+def test_v2_18s_row_names_the_decoder_states_and_the_optional_dependency():
+    row = _version_summary_row("2.18")
+    for state in ("decoded", "not_run", "unavailable", "unsupported_arch",
+                  "decode_error"):
+        assert state in row
+    assert "dumpex[disasm]" in row
+
+
+def test_v2_18s_row_states_that_no_verdict_moves():
+    row = _version_summary_row("2.18")
+    assert "coverage.status" in row and "exit code" in row
+
+
+def test_the_schema_defines_the_new_card_projections_required_and_nullable():
+    card = _load(CURRENT_SCHEMA)["$defs"]["triageCardRecord"]
+    for projection in ("anchor_pe_context", "instruction_context", "iat_correlation"):
+        assert projection in card["required"]
+        assert {"type": "null"} in card["properties"][projection]["anyOf"]
+    summary = _load(CURRENT_SCHEMA)["$defs"]["reportSummary"]
+    assert "pe_context" in summary["required"]
+    assert {"type": "null"} in summary["properties"]["pe_context"]["anyOf"]
+
+
+def test_the_schema_defines_the_instruction_decoder_states():
+    schema = _load(CURRENT_SCHEMA)
+    assert schema["$defs"]["reportInstructionContext"]["properties"]["decoder_state"]["enum"] == [
+        "decoded", "not_run", "unavailable", "unsupported_arch", "arch_undetermined",
+        "decode_error", "undecoded_tail"]
+    assert schema["$defs"]["reportBranchTarget"]["properties"]["kind"]["enum"] == [
+        "direct", "iat_slot", "indirect_memory", "indirect_register"]
+
+
+def test_enrichment_stays_absent_from_the_triage_cards_judgment_fields_in_v2_18():
+    card = _load(CURRENT_SCHEMA)["$defs"]["triageCardRecord"]
+    assert card["properties"]["findings"]["items"]["enum"] == [
+        "unbacked_thread", "rwx_private", "injected_pe", "ioc_strings"]
+    assert card["properties"]["verdict"]["enum"] == [
+        "CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_MALICIOUS"]

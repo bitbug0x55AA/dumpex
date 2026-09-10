@@ -465,25 +465,27 @@ hits_private + hits_image                                     == total_hits
 card_count + hits_sharing_a_region + hits_skipped_for_budget  == hits_private
 ```
 
-### Report enrichment (v2.17)
+### Report enrichment (v2.17, extended in v2.18)
 
 A report also carries bounded context around its anchors, so an analyst can
 tell who produced the evidence, what execution state referenced it, and which
 nearby or correlated objects deserve follow-up without leaving the report.
 
-`result.summary.process_enrichment` is **one object per invocation**, shared by
-every card in the run:
+`result.summary` carries **two objects per invocation**, each shared by every
+card in the run:
 
 | Field | Content |
 |---|---|
-| `pid`, `process_name`, `process_path`, `path_source`, `command_line`, `process_start_utc`, `image_base_address`, `module_match_state` | Process identity, from the same canonical boundary `--process` uses |
-| `environment` | The allowlisted session slice of the environment block |
-| `handles` | `total_handles` plus a bounded per-type census |
-| `token` | Whether the dump's TokenStream can contribute anything |
+| `process_enrichment.pid`, `process_name`, `process_path`, `path_source`, `command_line`, `process_start_utc`, `image_base_address`, `module_match_state` | Process identity, from the same canonical boundary `--process` uses |
+| `process_enrichment.environment` | The allowlisted session slice of the environment block |
+| `process_enrichment.handles` | `total_handles` plus a bounded per-type census |
+| `process_enrichment.token` | Whether the dump's TokenStream can contribute anything |
+| `pe_context` (v2.18) | The main image's identity and the structural-consistency correlation summary |
 
-Every `triageCardRecord` carries four **card-scoped** projections about that one
+Every `triageCardRecord` carries **card-scoped** projections about that one
 anchor: `exception_context`, `allocation_neighborhood`, `handle_correlation`,
-and `string_context`.
+`string_context`, and, from v2.18, `anchor_pe_context`, `instruction_context`,
+and `iat_correlation`.
 
 #### Every section states what it evaluated
 
@@ -541,11 +543,11 @@ represents no way to tell a breakpoint a debugger injected from a fault the
 process took. An exception is execution state, never in itself a maliciousness
 observation.
 
-Registers (RIP/EIP, RSP/ESP) and a comparison between the ExceptionStream's own
-thread context and the ordinary thread context are **not** in this contract.
-Reading them means parsing the raw `CONTEXT` blob the stream's
-`ThreadContext` descriptor points at, which no shipped collector exposes; the
-report will not add a parser of its own for it.
+A general register dump (RSP/ESP and the full set) and a field-by-field
+comparison between the ExceptionStream's own thread context and the ordinary
+thread context are **not** in this contract. The one exception-stream register
+the report does read is the faulting instruction pointer, and only as one of the
+anchor sources for the `instruction_context` window below.
 
 `allocation_neighborhood` names the anchor's own region, the rest of its
 allocation, and the nearest regions **outside** that allocation on each side,
@@ -635,6 +637,94 @@ anything at the anchor.
 `stream_present: true` with `parser_state: "unparsed"` means it captured token
 evidence dumpex has no parser for. Those are different problems with different
 answers, so they never collapse into one silence.
+
+#### PE, instruction, and IAT correlation (v2.18)
+
+`result.summary.pe_context` is one process-wide object per invocation. It
+consumes the canonical in-memory PE profile and its process-memory correlation
+directly — the report adds no PE parser of its own — and publishes the main
+image's identity (`machine`, `time_date_stamp`, `size_of_image`,
+`preferred_image_base`, `image_base`, `entry_point_va`, `section_count`) plus
+the correlation layer's `consistent_count` / `conflict_count` /
+`unavailable_count` tally. `observations` carries the retained `conflict`
+observations, each with its `name`, `reason`, `sources`, and `operands`. A
+structural conflict is a disagreement between two captured facts (a base that
+does not match a stripped image's declared base, a section that escapes
+`SizeOfImage`); it is an investigation lead, never a finding or a verdict input.
+`module_match` says whether the image base is registered in the captured module
+list.
+
+`anchor_pe_context` places the card's anchor against the PE image that owns it.
+`classification` is `headers`, `code`, `data`, `import_iat`, `relocation`,
+`unmapped`, or `outside_image` inside the owning module; `module` when the
+module's profile was not available to place it finer; and `private` or
+`unresolved` when no module owns it. `declared_readable` / `declared_writable` /
+`declared_executable` are the containing section's own characteristic bits, and
+`protection_matches_declared` compares them with `live_protection`, the region's
+actual protection. A mismatch is an observation an analyst follows up, not a
+verdict.
+
+`instruction_context` reads a bounded byte window at one approved anchor
+address and decodes it through an optional isolated disassembler. `anchor_source`
+names which anchor was used, chosen in this priority and only when it is
+correlated with this card: an exception RIP (only when its record relates to the
+anchor thread or region — never the dump's own process-wide crash record), a
+live thread RIP from the anchor thread's captured `CONTEXT`, that thread's
+StartAddress, then the card's own anchor. `architecture` is the instruction set
+of the module that owns that anchor, from its COFF `Machine` (`I386` → x86,
+`AMD64` → x64; a concrete non-x86 machine, ARM64 included, is
+`unsupported_arch`). When that module has no `Machine` — an anchor in unbacked
+private memory, or a short header read — a WOW64 thread context, then the
+**main image** `Machine` (checked before the dump SystemInfo, which reports the
+*host*: a WOW64 process on an x64 host has an `I386` main image), then the
+anchor thread's context flavour (`RIP`/`EIP`), then the SystemInfo are used;
+only if none of those settles it is the state `arch_undetermined`. `decoder_state` is `decoded`, `not_run` (no
+bytes were captured at the anchor), `unavailable` (the `capstone` dependency is
+not installed — `pip install dumpex[disasm]`), `unsupported_arch`,
+`arch_undetermined`, `decode_error` (an invalid opcode a full instruction's
+worth of bytes from the failure point still cannot decode), or `undecoded_tail`
+(the capture ends before that many lookahead bytes are available and a short
+trailing run did not decode — the limitation states the "invalid opcode or
+cut-short instruction" ambiguity); every value but `decoded` makes the section
+`partial`, as does a window the byte cap or the end of the capture cut short, or
+a non-decoded window — its `total` is then null. A legitimate instruction the
+byte cap cut stays `decoded`.
+`instructions` is the decoded window,
+with `is_anchor` marking the instruction the anchor address falls in.
+`branch_targets` resolves each call/jump: a `direct` branch to its fixed
+destination, an `iat_slot` (the module's IAT names or bounds the slot) or
+`indirect_memory` (otherwise — confirmed outside the IAT only when the section's
+limitations do not report the IAT bounds as unreadable) branch through a fixed
+memory slot to both the slot and the pointer currently in it, and an
+`indirect_register` branch to nothing — the destination is run-time state.
+Resolved targets carry `module_owner`, `section_name`, `region_type`, and
+`registration`. Nothing here names a function boundary, a call argument, or a
+stack.
+
+`iat_correlation` reuses the canonical in-memory IAT parser over the module that
+owns the instruction window's anchor — the same image the window is in, so an
+`instruction_correlated` slot is never checked against a different module's
+table — falling back to the card anchor's own module when there is no window.
+`module_owner`, `dll_count`, and `entry_count` summarise it; `entries` retains
+only the slots a `branch_target` in `instruction_context` points at
+(`instruction_correlated`) or whose live thunk target is unusual
+(`slot_out_of_bounds`, `target_unregistered`, `target_private_executable`). Each
+entry carries the imported `dll` / `symbol` / `ordinal`, the `iat_slot_va`, the
+`resolved_target_va` currently in it, and where that target lands. An anchor in
+no module leaves this `null`; a module whose header or import table could not be
+read leaves it `missing`; a module whose import-directory array was unreadable
+reports `import_directory_present: null` and `partial`; a module that positively
+declares no import directory is `complete` with no missed-slot limitation. A
+population gap in the walk (a failed descriptor/thunk read, an unterminated or
+cyclic table, a walk cap) reports a null `total`, and so does an unreadable
+data-directory array (the IAT directory bounds are then unknown); an unread
+import symbol name makes the section `partial` with its own note but leaves the
+count exact. When `total` is null a known-eligible set larger than the retention
+cap still sets `truncated`. A module that imports
+nothing, or nothing unusual, leaves it `complete` with an empty `entries` list.
+
+The main-image PE profile, its correlation, and each distinct module's parsed
+IAT are built once per invocation and reused by every card.
 
 #### Enrichment is context, not judgment
 

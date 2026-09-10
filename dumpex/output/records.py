@@ -1929,6 +1929,663 @@ class ReportStringContext:
         }
 
 
+# ── Report enrichment: PE, instruction, and IAT correlation ────────────
+# Phase 2 of the report enrichment contract. One process-wide
+# ReportPeContext for the invocation (the main image's identity and the
+# correlation layer's conflicts), plus per-card anchor-PE, instruction,
+# and IAT projections. Everything here is captured evidence and
+# navigation context: none of it reaches findings, verdict, coverage
+# status, or the exit code, and every section carries its own
+# missing/partial/complete state like the Phase 1 sections above.
+
+PE_OBSERVATION_STATES = ("consistent", "conflict", "unavailable")
+
+
+@dataclass(frozen=True)
+class ReportPeObservation:
+    """One :class:`dumpex.core.pe_correlation.Observation` reduced to a
+    wire record.
+
+    ``name`` is one of the correlation layer's frozen observation names,
+    ``state`` its three-valued result, ``reason`` the dumpex-authored
+    token behind it. ``sources`` names the evidence actually evaluated and
+    ``operands`` the exact scalar values compared. A ``conflict`` here is a
+    disagreement between two captured facts, never a maliciousness
+    finding."""
+    name:     str
+    state:    str
+    reason:   str
+    sources:  tuple = ()
+    operands: dict = field(default_factory=dict)
+
+    def __post_init__(self):
+        _require_bounded_text(self.name, "ReportPeObservation.name", ENRICHMENT_TEXT_CAP)
+        if self.state not in PE_OBSERVATION_STATES:
+            raise ValueError(
+                f"ReportPeObservation.state must be one of {PE_OBSERVATION_STATES}, "
+                f"got {self.state!r}")
+        _require_bounded_text(self.reason, "ReportPeObservation.reason", ENRICHMENT_TEXT_CAP)
+        object.__setattr__(self, "sources", tuple(self.sources))
+        if any(not isinstance(s, str) or not s for s in self.sources):
+            raise ValueError("ReportPeObservation.sources must be non-empty strings")
+        if not isinstance(self.operands, dict):
+            raise TypeError("ReportPeObservation.operands must be a dict")
+        for key, value in self.operands.items():
+            if not isinstance(key, str):
+                raise ValueError("ReportPeObservation.operands keys must be str")
+            if not isinstance(value, (str, int, float, bool, type(None))):
+                raise ValueError(
+                    f"ReportPeObservation.operands[{key!r}] must be a JSON scalar, "
+                    f"got {value!r}")
+        object.__setattr__(self, "operands", dict(self.operands))
+
+    def to_dict(self) -> dict:
+        return {"name": self.name, "state": self.state, "reason": self.reason,
+                "sources": list(self.sources), "operands": dict(self.operands)}
+
+
+# Shares the process-identity snapshot's own vocabulary for one concept:
+# `resolved` -- the image base is inside a captured module.
+PE_MODULE_MATCH_STATES = _MODULE_CONTEXTS
+
+
+@dataclass(frozen=True)
+class ReportPeContext:
+    """The one process-wide PE projection of a `--report` run: the main
+    image's identity, and the correlation layer's tally and conflicts.
+
+    The identity fields are the canonical
+    :class:`dumpex.core.pe_profile.PeImageProfile`'s own decoded values.
+    ``consistent_count`` / ``conflict_count`` / ``unavailable_count`` tally
+    every observation the correlation produced; ``observations`` carries
+    only the retained conflicts, so ``section.total`` is the conflict
+    count and ``section.included`` is how many survived the cap."""
+    section:              EnrichmentSection
+    image_base:           "str | None"
+    preferred_image_base: "str | None"
+    machine:              "int | None"
+    machine_name:         "str | None"
+    time_date_stamp:      "int | None"
+    size_of_image:        "int | None"
+    entry_point_rva:      "int | None"
+    entry_point_va:       "str | None"
+    section_count:        "int | None"
+    pe32_plus:            "bool | None"
+    module_match:         "str | None"
+    consistent_count:     int
+    conflict_count:       int
+    unavailable_count:    int
+    observations:         tuple = ()
+
+    def __post_init__(self):
+        _require_enrichment_section(self.section, "ReportPeContext.section",
+                                    scope=ENRICHMENT_SCOPE_PROCESS, name="pe_context")
+        _require_optional_hex_address(self.image_base, "ReportPeContext.image_base")
+        _require_optional_hex_address(self.preferred_image_base,
+                                     "ReportPeContext.preferred_image_base")
+        _require_optional_diff_int(self.machine, "ReportPeContext.machine")
+        _require_optional_diff_str(self.machine_name, "ReportPeContext.machine_name")
+        _require_optional_bounded_text(self.machine_name, "ReportPeContext.machine_name")
+        _require_optional_diff_int(self.time_date_stamp, "ReportPeContext.time_date_stamp")
+        _require_optional_nonneg_int(self.size_of_image, "ReportPeContext.size_of_image")
+        _require_optional_nonneg_int(self.entry_point_rva, "ReportPeContext.entry_point_rva")
+        _require_optional_hex_address(self.entry_point_va, "ReportPeContext.entry_point_va")
+        _require_optional_nonneg_int(self.section_count, "ReportPeContext.section_count")
+        if self.pe32_plus is not None:
+            _require_bool(self.pe32_plus, "ReportPeContext.pe32_plus")
+        if self.module_match is not None and self.module_match not in PE_MODULE_MATCH_STATES:
+            raise ValueError(
+                f"ReportPeContext.module_match must be None or one of "
+                f"{PE_MODULE_MATCH_STATES}, got {self.module_match!r}")
+        for field_name in ("consistent_count", "conflict_count", "unavailable_count"):
+            _require_nonneg_int(getattr(self, field_name), f"ReportPeContext.{field_name}")
+        object.__setattr__(self, "observations", tuple(self.observations))
+        if any(not isinstance(o, ReportPeObservation) for o in self.observations):
+            raise TypeError("ReportPeContext.observations must be ReportPeObservation instances")
+        if len(self.observations) != self.section.included:
+            raise ValueError("ReportPeContext.observations length must equal section.included")
+        if any(o.state != "conflict" for o in self.observations):
+            raise ValueError(
+                "ReportPeContext.observations carries only the retained conflict observations")
+        if self.section.total is not None and self.section.total != self.conflict_count:
+            raise ValueError(
+                "ReportPeContext.section.total must be the conflict_count -- the eligible "
+                "population this section retains from")
+
+    def to_dict(self) -> dict:
+        return {
+            "section":              self.section.to_dict(),
+            "image_base":           self.image_base,
+            "preferred_image_base": self.preferred_image_base,
+            "machine":              self.machine,
+            "machine_name":         self.machine_name,
+            "time_date_stamp":      self.time_date_stamp,
+            "size_of_image":        self.size_of_image,
+            "entry_point_rva":      self.entry_point_rva,
+            "entry_point_va":       self.entry_point_va,
+            "section_count":        self.section_count,
+            "pe32_plus":            self.pe32_plus,
+            "module_match":         self.module_match,
+            "consistent_count":     self.consistent_count,
+            "conflict_count":       self.conflict_count,
+            "unavailable_count":    self.unavailable_count,
+            "observations":         [o.to_dict() for o in self.observations],
+        }
+
+
+ANCHOR_PE_CLASSIFICATIONS = (
+    "headers",        # the anchor RVA is inside SizeOfHeaders
+    "code",           # inside an executable section
+    "data",           # inside a non-executable section
+    "import_iat",     # inside the IMPORT or IAT data directory's range
+    "relocation",     # inside the BASERELOC data directory's range
+    "unmapped",       # inside the image bound but no section covers the RVA
+    "outside_image",  # the anchor is registered to a module but past SizeOfImage
+    "module",         # inside a loaded module whose PE profile was not available to place it
+    "private",        # the anchor is in a committed region owned by no module
+    "unresolved",     # no module and no region place the anchor
+)
+
+ANCHOR_PE_REGISTRATIONS = ("registered", "unregistered", "unavailable")
+
+
+@dataclass(frozen=True)
+class ReportAnchorPeContext:
+    """This card's anchor placed against the PE image that owns it.
+
+    ``classification`` says what kind of image location the anchor is --
+    headers, code, data, import/IAT, relocation, unmapped, or, when no
+    module owns it, private or unresolved. ``protection_matches_declared``
+    compares the section's own R/W/X bits with the live region protection;
+    a mismatch is an observation an analyst follows up, never a verdict."""
+    section:                     EnrichmentSection
+    anchor_address:              str
+    classification:              str
+    registration:                str
+    module_owner:                "str | None" = None
+    module_owner_truncated:      bool = False
+    module_base:                 "str | None" = None
+    module_rva:                  "int | None" = None
+    section_index:               "int | None" = None
+    section_name:                "str | None" = None
+    section_name_truncated:      bool = False
+    declared_readable:           "bool | None" = None
+    declared_writable:           "bool | None" = None
+    declared_executable:         "bool | None" = None
+    live_protection:             "str | None" = None
+    protection_matches_declared: "bool | None" = None
+    region_base:                 "str | None" = None
+    region_type:                 "str | None" = None
+
+    def __post_init__(self):
+        _require_enrichment_section(self.section, "ReportAnchorPeContext.section",
+                                    scope=ENRICHMENT_SCOPE_CARD, name="anchor_pe_context")
+        _require_hex_address(self.anchor_address, "ReportAnchorPeContext.anchor_address")
+        if self.classification not in ANCHOR_PE_CLASSIFICATIONS:
+            raise ValueError(
+                f"ReportAnchorPeContext.classification must be one of "
+                f"{ANCHOR_PE_CLASSIFICATIONS}, got {self.classification!r}")
+        if self.registration not in ANCHOR_PE_REGISTRATIONS:
+            raise ValueError(
+                f"ReportAnchorPeContext.registration must be one of "
+                f"{ANCHOR_PE_REGISTRATIONS}, got {self.registration!r}")
+        _require_optional_diff_str(self.module_owner, "ReportAnchorPeContext.module_owner")
+        _require_optional_bounded_text(self.module_owner, "ReportAnchorPeContext.module_owner")
+        _require_bool(self.module_owner_truncated,
+                      "ReportAnchorPeContext.module_owner_truncated")
+        if self.module_owner_truncated and self.module_owner is None:
+            raise ValueError(
+                "ReportAnchorPeContext.module_owner_truncated requires a module_owner")
+        _require_optional_hex_address(self.module_base, "ReportAnchorPeContext.module_base")
+        _require_optional_nonneg_int(self.module_rva, "ReportAnchorPeContext.module_rva")
+        _require_optional_nonneg_int(self.section_index, "ReportAnchorPeContext.section_index")
+        _require_optional_diff_str(self.section_name, "ReportAnchorPeContext.section_name")
+        _require_optional_bounded_text(self.section_name, "ReportAnchorPeContext.section_name")
+        _require_bool(self.section_name_truncated,
+                      "ReportAnchorPeContext.section_name_truncated")
+        if self.section_name_truncated and self.section_name is None:
+            raise ValueError(
+                "ReportAnchorPeContext.section_name_truncated requires a section_name")
+        for field_name in ("declared_readable", "declared_writable", "declared_executable",
+                           "protection_matches_declared"):
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_bool(value, f"ReportAnchorPeContext.{field_name}")
+        _require_optional_diff_str(self.live_protection, "ReportAnchorPeContext.live_protection")
+        _require_optional_diff_str(self.region_type, "ReportAnchorPeContext.region_type")
+        _require_optional_hex_address(self.region_base, "ReportAnchorPeContext.region_base")
+
+    def to_dict(self) -> dict:
+        return {
+            "section":                     self.section.to_dict(),
+            "anchor_address":              self.anchor_address,
+            "classification":              self.classification,
+            "registration":                self.registration,
+            "module_owner":                self.module_owner,
+            "module_owner_truncated":      self.module_owner_truncated,
+            "module_base":                 self.module_base,
+            "module_rva":                  self.module_rva,
+            "section_index":               self.section_index,
+            "section_name":                self.section_name,
+            "section_name_truncated":      self.section_name_truncated,
+            "declared_readable":           self.declared_readable,
+            "declared_writable":           self.declared_writable,
+            "declared_executable":         self.declared_executable,
+            "live_protection":             self.live_protection,
+            "protection_matches_declared": self.protection_matches_declared,
+            "region_base":                 self.region_base,
+            "region_type":                 self.region_type,
+        }
+
+
+INSTRUCTION_ANCHOR_SOURCES = (
+    "exception_rip",         # a faulting instruction pointer from the ExceptionStream
+    "thread_rip",            # the anchor thread's live RIP/EIP from its CONTEXT
+    "thread_start_address",  # the anchor thread's StartAddress
+    "card_anchor",           # the card's own resolved anchor address
+)
+
+INSTRUCTION_DECODER_STATES = (
+    "decoded",              # the window decoded to its end or a cap
+    "not_run",              # no bytes were captured at the anchor, so no decode was attempted
+    "unavailable",          # no disassembler backend is installed
+    "unsupported_arch",     # a determined machine the decoder does not handle (e.g. ARM64)
+    "arch_undetermined",    # no signal fixed the instruction-set architecture
+    "decode_error",         # the decoder stopped at an invalid opcode mid-stream
+    "undecoded_tail",       # a short trailing run did not decode: an invalid opcode or an
+                            # instruction the capture cut short, indistinguishable here
+)
+
+INSTRUCTION_BRANCH_KINDS = ("direct", "indirect_slot", "indirect_register", "none")
+
+BRANCH_TARGET_KINDS = (
+    "direct",             # a direct call/jump to a fixed address
+    "iat_slot",           # an indirect call/jump through a slot the module's IAT names
+    "indirect_memory",    # an indirect call/jump through a fixed memory slot not identified
+                          # as an IAT slot -- confirmed outside the IAT only when the
+                          # section's limitations do not say the IAT bounds were unreadable
+    "indirect_register",  # an indirect call/jump through a register -- target is run-time state
+)
+
+
+@dataclass(frozen=True)
+class ReportDecodedInstruction:
+    """One decoded instruction of this card's bounded window."""
+    address:        str
+    size:           int
+    text:           str
+    text_truncated: bool
+    is_call:        bool
+    is_jump:        bool
+    is_return:      bool
+    is_anchor:      bool
+    branch_kind:    str
+
+    def __post_init__(self):
+        _require_hex_address(self.address, "ReportDecodedInstruction.address")
+        _require_nonneg_int(self.size, "ReportDecodedInstruction.size")
+        _require_bounded_text(self.text, "ReportDecodedInstruction.text", ENRICHMENT_TEXT_CAP)
+        for field_name in ("text_truncated", "is_call", "is_jump", "is_return", "is_anchor"):
+            _require_bool(getattr(self, field_name),
+                          f"ReportDecodedInstruction.{field_name}")
+        if self.branch_kind not in INSTRUCTION_BRANCH_KINDS:
+            raise ValueError(
+                f"ReportDecodedInstruction.branch_kind must be one of "
+                f"{INSTRUCTION_BRANCH_KINDS}, got {self.branch_kind!r}")
+
+    def to_dict(self) -> dict:
+        return {
+            "address":        self.address,
+            "size":           self.size,
+            "text":           self.text,
+            "text_truncated": self.text_truncated,
+            "is_call":        self.is_call,
+            "is_jump":        self.is_jump,
+            "is_return":      self.is_return,
+            "is_anchor":      self.is_anchor,
+            "branch_kind":    self.branch_kind,
+        }
+
+
+@dataclass(frozen=True)
+class ReportBranchTarget:
+    """One resolved branch target from this card's instruction window.
+
+    ``target_address`` is the direct destination for a ``direct`` target
+    and the IAT slot address for an ``iat_slot`` target;
+    ``resolved_target_address`` is the pointer read from that slot. The
+    module / section / region fields describe wherever the destination
+    lands. An ``indirect_register`` target carries only its instruction
+    address -- the destination is run-time state and is not reported.
+
+    ``iat_classification_uncertain`` is set only on an ``indirect_memory``
+    target the run could not confirm is outside the IAT (the owning
+    module's IAT directory bounds were unreadable and no import table
+    parsed); the same fact is in the section's limitations."""
+    instruction_address:     str
+    kind:                    str
+    target_address:          "str | None" = None
+    resolved_target_address: "str | None" = None
+    module_owner:            "str | None" = None
+    module_owner_truncated:  bool = False
+    section_name:            "str | None" = None
+    section_name_truncated:  bool = False
+    region_type:             "str | None" = None
+    registration:            "str | None" = None
+    iat_symbol:              "str | None" = None
+    iat_symbol_truncated:    bool = False
+    iat_classification_uncertain: bool = False
+
+    def __post_init__(self):
+        _require_hex_address(self.instruction_address,
+                             "ReportBranchTarget.instruction_address")
+        if self.kind not in BRANCH_TARGET_KINDS:
+            raise ValueError(
+                f"ReportBranchTarget.kind must be one of {BRANCH_TARGET_KINDS}, "
+                f"got {self.kind!r}")
+        _require_optional_hex_address(self.target_address, "ReportBranchTarget.target_address")
+        _require_optional_hex_address(self.resolved_target_address,
+                                     "ReportBranchTarget.resolved_target_address")
+        for name in ("module_owner", "section_name", "iat_symbol"):
+            _require_optional_diff_str(getattr(self, name), f"ReportBranchTarget.{name}")
+            _require_optional_bounded_text(getattr(self, name), f"ReportBranchTarget.{name}")
+        for value_field, flag_field in (("module_owner", "module_owner_truncated"),
+                                        ("section_name", "section_name_truncated"),
+                                        ("iat_symbol", "iat_symbol_truncated")):
+            _require_bool(getattr(self, flag_field), f"ReportBranchTarget.{flag_field}")
+            if getattr(self, flag_field) and getattr(self, value_field) is None:
+                raise ValueError(
+                    f"ReportBranchTarget.{flag_field} requires a {value_field}")
+        _require_optional_diff_str(self.region_type, "ReportBranchTarget.region_type")
+        if self.registration is not None and self.registration not in ANCHOR_PE_REGISTRATIONS:
+            raise ValueError(
+                f"ReportBranchTarget.registration must be None or one of "
+                f"{ANCHOR_PE_REGISTRATIONS}, got {self.registration!r}")
+        if self.kind == "indirect_register" and (self.target_address is not None
+                                                 or self.resolved_target_address is not None):
+            raise ValueError(
+                "ReportBranchTarget(kind='indirect_register') resolves no address -- the "
+                "target is run-time state")
+        if self.resolved_target_address is not None and self.kind == "direct":
+            raise ValueError(
+                "ReportBranchTarget.resolved_target_address is a memory-slot dereference, "
+                "which a direct branch does not have")
+        if self.iat_symbol is not None and self.kind != "iat_slot":
+            raise ValueError("ReportBranchTarget.iat_symbol is an IAT-slot cross-link")
+        _require_bool(self.iat_classification_uncertain,
+                      "ReportBranchTarget.iat_classification_uncertain")
+        if self.iat_classification_uncertain and self.kind != "indirect_memory":
+            raise ValueError(
+                "ReportBranchTarget.iat_classification_uncertain applies only to an "
+                "'indirect_memory' target")
+
+    def to_dict(self) -> dict:
+        return {
+            "instruction_address":     self.instruction_address,
+            "kind":                    self.kind,
+            "target_address":          self.target_address,
+            "resolved_target_address": self.resolved_target_address,
+            "module_owner":            self.module_owner,
+            "module_owner_truncated":  self.module_owner_truncated,
+            "section_name":            self.section_name,
+            "section_name_truncated":  self.section_name_truncated,
+            "region_type":             self.region_type,
+            "registration":            self.registration,
+            "iat_symbol":              self.iat_symbol,
+            "iat_symbol_truncated":    self.iat_symbol_truncated,
+            "iat_classification_uncertain": self.iat_classification_uncertain,
+        }
+
+
+@dataclass(frozen=True)
+class ReportInstructionContext:
+    """This card's bounded instruction window and its resolved branch
+    targets.
+
+    ``anchor_source`` names which approved anchor the window was read at
+    -- an exception RIP, a live thread RIP, a thread StartAddress, or the
+    card's own anchor -- in that priority. ``decoder_state`` is one of
+    :data:`INSTRUCTION_DECODER_STATES`; every value but ``decoded`` makes
+    the section `partial`, never a claim about the code. Nothing here
+    names a function, an argument, or a call stack."""
+    section:                   EnrichmentSection
+    anchor_source:             "str | None"
+    anchor_address:            "str | None"
+    architecture:              "str | None"
+    decoder_state:             str
+    window_base:               "str | None"
+    bytes_read:                int
+    branch_targets_total:      int = 0
+    branch_targets_truncated:  bool = False
+    instructions:              tuple = ()
+    branch_targets:            tuple = ()
+
+    def __post_init__(self):
+        _require_enrichment_section(self.section, "ReportInstructionContext.section",
+                                    scope=ENRICHMENT_SCOPE_CARD, name="instruction_context")
+        if self.anchor_source is not None and self.anchor_source not in INSTRUCTION_ANCHOR_SOURCES:
+            raise ValueError(
+                f"ReportInstructionContext.anchor_source must be None or one of "
+                f"{INSTRUCTION_ANCHOR_SOURCES}, got {self.anchor_source!r}")
+        _require_optional_hex_address(self.anchor_address,
+                                     "ReportInstructionContext.anchor_address")
+        if self.architecture is not None and self.architecture not in ("x86", "x64"):
+            raise ValueError(
+                "ReportInstructionContext.architecture must be None, 'x86', or 'x64', "
+                f"got {self.architecture!r}")
+        if self.decoder_state not in INSTRUCTION_DECODER_STATES:
+            raise ValueError(
+                f"ReportInstructionContext.decoder_state must be one of "
+                f"{INSTRUCTION_DECODER_STATES}, got {self.decoder_state!r}")
+        _require_optional_hex_address(self.window_base,
+                                     "ReportInstructionContext.window_base")
+        _require_nonneg_int(self.bytes_read, "ReportInstructionContext.bytes_read")
+        _require_nonneg_int(self.branch_targets_total,
+                            "ReportInstructionContext.branch_targets_total")
+        _require_bool(self.branch_targets_truncated,
+                      "ReportInstructionContext.branch_targets_truncated")
+        object.__setattr__(self, "instructions", tuple(self.instructions))
+        object.__setattr__(self, "branch_targets", tuple(self.branch_targets))
+        if any(not isinstance(i, ReportDecodedInstruction) for i in self.instructions):
+            raise TypeError(
+                "ReportInstructionContext.instructions must be ReportDecodedInstruction instances")
+        if any(not isinstance(t, ReportBranchTarget) for t in self.branch_targets):
+            raise TypeError(
+                "ReportInstructionContext.branch_targets must be ReportBranchTarget instances")
+        if len(self.instructions) != self.section.included:
+            raise ValueError(
+                "ReportInstructionContext.instructions length must equal section.included")
+        if len(self.branch_targets) > self.branch_targets_total:
+            raise ValueError(
+                "ReportInstructionContext.branch_targets_total must count every eligible "
+                "target, including those the cap dropped")
+        if self.branch_targets_truncated != (len(self.branch_targets) < self.branch_targets_total):
+            raise ValueError(
+                "ReportInstructionContext.branch_targets_truncated must equal "
+                "included < total for the branch-target sub-collection")
+        instruction_addresses = {i.address for i in self.instructions}
+        for target in self.branch_targets:
+            if self.instructions and target.instruction_address not in instruction_addresses:
+                raise ValueError(
+                    "ReportInstructionContext.branch_targets must reference a decoded "
+                    "instruction in this window")
+
+    def to_dict(self) -> dict:
+        return {
+            "section":                  self.section.to_dict(),
+            "anchor_source":            self.anchor_source,
+            "anchor_address":           self.anchor_address,
+            "architecture":             self.architecture,
+            "decoder_state":            self.decoder_state,
+            "window_base":              self.window_base,
+            "bytes_read":               self.bytes_read,
+            "branch_targets_total":     self.branch_targets_total,
+            "branch_targets_truncated": self.branch_targets_truncated,
+            "instructions":             [i.to_dict() for i in self.instructions],
+            "branch_targets":           [t.to_dict() for t in self.branch_targets],
+        }
+
+
+IAT_IMPORT_BY = ("name", "ordinal", "unavailable")
+
+IAT_ENTRY_SELECTION_REASONS = (
+    "instruction_correlated",     # a branch in this card's instruction window targets the slot
+    "target_unregistered",        # the live thunk target is in no registered module
+    "target_private_executable",  # the live thunk target is in private executable memory
+    "slot_out_of_bounds",         # the slot is outside the declared IAT directory range
+)
+
+
+@dataclass(frozen=True)
+class ReportIatCorrelatedEntry:
+    """One IAT slot retained for this card: instruction-correlated, or
+    with a live thunk target unusual enough to be an investigation lead.
+
+    ``iat_slot_va`` is the slot's own address; ``resolved_target_va`` is
+    the pointer currently in it. The ``target_*`` fields describe wherever
+    that pointer lands. A private, unregistered, or redirected target is a
+    lead, never a verdict dimension."""
+    import_by:                     str
+    selection_reason:              str
+    dll:                           "str | None" = None
+    dll_truncated:                 bool = False
+    symbol:                        "str | None" = None
+    symbol_truncated:              bool = False
+    ordinal:                       "int | None" = None
+    iat_slot_va:                   "str | None" = None
+    resolved_target_va:            "str | None" = None
+    target_module_owner:           "str | None" = None
+    target_module_owner_truncated: bool = False
+    target_section_name:           "str | None" = None
+    target_section_name_truncated: bool = False
+    target_region_type:            "str | None" = None
+    target_registration:           "str | None" = None
+    also_selected_for:             tuple = ()
+
+    def __post_init__(self):
+        if self.import_by not in IAT_IMPORT_BY:
+            raise ValueError(
+                f"ReportIatCorrelatedEntry.import_by must be one of {IAT_IMPORT_BY}, "
+                f"got {self.import_by!r}")
+        if self.selection_reason not in IAT_ENTRY_SELECTION_REASONS:
+            raise ValueError(
+                f"ReportIatCorrelatedEntry.selection_reason must be one of "
+                f"{IAT_ENTRY_SELECTION_REASONS}, got {self.selection_reason!r}")
+        for name in ("dll", "symbol", "target_module_owner", "target_section_name"):
+            _require_optional_diff_str(getattr(self, name),
+                                       f"ReportIatCorrelatedEntry.{name}")
+            _require_optional_bounded_text(getattr(self, name),
+                                           f"ReportIatCorrelatedEntry.{name}")
+        for value_field, flag_field in (
+                ("dll", "dll_truncated"), ("symbol", "symbol_truncated"),
+                ("target_module_owner", "target_module_owner_truncated"),
+                ("target_section_name", "target_section_name_truncated")):
+            _require_bool(getattr(self, flag_field),
+                          f"ReportIatCorrelatedEntry.{flag_field}")
+            if getattr(self, flag_field) and getattr(self, value_field) is None:
+                raise ValueError(
+                    f"ReportIatCorrelatedEntry.{flag_field} requires a {value_field}")
+        _require_optional_nonneg_int(self.ordinal, "ReportIatCorrelatedEntry.ordinal")
+        _require_optional_hex_address(self.iat_slot_va,
+                                     "ReportIatCorrelatedEntry.iat_slot_va")
+        _require_optional_hex_address(self.resolved_target_va,
+                                     "ReportIatCorrelatedEntry.resolved_target_va")
+        _require_optional_diff_str(self.target_region_type,
+                                   "ReportIatCorrelatedEntry.target_region_type")
+        if (self.target_registration is not None
+                and self.target_registration not in ANCHOR_PE_REGISTRATIONS):
+            raise ValueError(
+                f"ReportIatCorrelatedEntry.target_registration must be None or one of "
+                f"{ANCHOR_PE_REGISTRATIONS}, got {self.target_registration!r}")
+        object.__setattr__(self, "also_selected_for", tuple(self.also_selected_for))
+        for reason in self.also_selected_for:
+            if reason not in IAT_ENTRY_SELECTION_REASONS or reason == self.selection_reason:
+                raise ValueError(
+                    "ReportIatCorrelatedEntry.also_selected_for must be distinct additional "
+                    f"reasons from {IAT_ENTRY_SELECTION_REASONS}")
+
+    def to_dict(self) -> dict:
+        return {
+            "import_by":                     self.import_by,
+            "selection_reason":              self.selection_reason,
+            "dll":                           self.dll,
+            "dll_truncated":                 self.dll_truncated,
+            "symbol":                        self.symbol,
+            "symbol_truncated":              self.symbol_truncated,
+            "ordinal":                       self.ordinal,
+            "iat_slot_va":                   self.iat_slot_va,
+            "resolved_target_va":            self.resolved_target_va,
+            "target_module_owner":           self.target_module_owner,
+            "target_module_owner_truncated": self.target_module_owner_truncated,
+            "target_section_name":           self.target_section_name,
+            "target_section_name_truncated": self.target_section_name_truncated,
+            "target_region_type":            self.target_region_type,
+            "target_registration":           self.target_registration,
+            "also_selected_for":             list(self.also_selected_for),
+        }
+
+
+@dataclass(frozen=True)
+class ReportIatCorrelation:
+    """This card's bounded view of the anchor module's import address
+    table.
+
+    ``module_owner`` is the module the anchor resolved to -- the one whose
+    IAT this projects. ``dll_count`` / ``entry_count`` summarise what the
+    canonical IAT parser found; ``entries`` carries only the retained
+    unusual or instruction-correlated slots. An anchor in no module, or a
+    module with no import directory, leaves this `missing`."""
+    section:                  EnrichmentSection
+    module_owner:             "str | None"
+    module_owner_truncated:   bool
+    module_base:              "str | None"
+    dll_count:                "int | None"
+    entry_count:              "int | None"
+    import_directory_present: "bool | None"
+    iat_directory_present:    "bool | None"
+    entries:                  tuple = ()
+
+    def __post_init__(self):
+        _require_enrichment_section(self.section, "ReportIatCorrelation.section",
+                                    scope=ENRICHMENT_SCOPE_CARD, name="iat_correlation")
+        _require_optional_diff_str(self.module_owner, "ReportIatCorrelation.module_owner")
+        _require_optional_bounded_text(self.module_owner, "ReportIatCorrelation.module_owner")
+        _require_bool(self.module_owner_truncated,
+                      "ReportIatCorrelation.module_owner_truncated")
+        if self.module_owner_truncated and self.module_owner is None:
+            raise ValueError(
+                "ReportIatCorrelation.module_owner_truncated requires a module_owner")
+        _require_optional_hex_address(self.module_base, "ReportIatCorrelation.module_base")
+        _require_optional_nonneg_int(self.dll_count, "ReportIatCorrelation.dll_count")
+        _require_optional_nonneg_int(self.entry_count, "ReportIatCorrelation.entry_count")
+        for field_name in ("import_directory_present", "iat_directory_present"):
+            value = getattr(self, field_name)
+            if value is not None:
+                _require_bool(value, f"ReportIatCorrelation.{field_name}")
+        object.__setattr__(self, "entries", tuple(self.entries))
+        if any(not isinstance(e, ReportIatCorrelatedEntry) for e in self.entries):
+            raise TypeError(
+                "ReportIatCorrelation.entries must be ReportIatCorrelatedEntry instances")
+        if len(self.entries) != self.section.included:
+            raise ValueError("ReportIatCorrelation.entries length must equal section.included")
+        slots = [e.iat_slot_va for e in self.entries if e.iat_slot_va is not None]
+        if len(set(slots)) != len(slots):
+            raise ValueError("ReportIatCorrelation.entries must be deduplicated by IAT slot")
+
+    def to_dict(self) -> dict:
+        return {
+            "section":                  self.section.to_dict(),
+            "module_owner":             self.module_owner,
+            "module_owner_truncated":   self.module_owner_truncated,
+            "module_base":              self.module_base,
+            "dll_count":                self.dll_count,
+            "entry_count":              self.entry_count,
+            "import_directory_present": self.import_directory_present,
+            "iat_directory_present":    self.iat_directory_present,
+            "entries":                  [e.to_dict() for e in self.entries],
+        }
+
+
 @dataclass
 class TriageCardRecord:
     """One triage card -- see this section's own header comment for why
@@ -2027,6 +2684,9 @@ class TriageCardRecord:
     allocation_neighborhood:  "ReportAllocationNeighborhood | None" = None
     handle_correlation:       "ReportHandleCorrelation | None" = None
     string_context:           "ReportStringContext | None" = None
+    anchor_pe_context:        "ReportAnchorPeContext | None" = None
+    instruction_context:      "ReportInstructionContext | None" = None
+    iat_correlation:          "ReportIatCorrelation | None" = None
 
     def __post_init__(self):
         if self.anchor_tid is not None:
@@ -2134,11 +2794,24 @@ class TriageCardRecord:
         for field_name, cls in (("exception_context", ReportExceptionContext),
                                 ("allocation_neighborhood", ReportAllocationNeighborhood),
                                 ("handle_correlation", ReportHandleCorrelation),
-                                ("string_context", ReportStringContext)):
+                                ("string_context", ReportStringContext),
+                                ("anchor_pe_context", ReportAnchorPeContext),
+                                ("instruction_context", ReportInstructionContext),
+                                ("iat_correlation", ReportIatCorrelation)):
             value = getattr(self, field_name)
             if value is not None and not isinstance(value, cls):
                 raise TypeError(
                     f"TriageCardRecord.{field_name} must be None or a {cls.__name__}")
+        if (self.anchor_pe_context is not None
+                and self.anchor_pe_context.anchor_address != self.anchor_address):
+            raise ValueError(
+                "TriageCardRecord.anchor_pe_context.anchor_address must be this card's own "
+                "anchor_address")
+        if (self.instruction_context is not None
+                and self.instruction_context.anchor_address is not None
+                and self.anchor_address is None):
+            raise ValueError(
+                "TriageCardRecord.instruction_context resolves an anchor the card does not have")
         if self.string_context is not None and self.anchor_address is None:
             raise ValueError(
                 "TriageCardRecord.string_context requires a resolved anchor_address -- string "
@@ -2177,6 +2850,12 @@ class TriageCardRecord:
                                         if self.handle_correlation else None),
             "string_context":          (self.string_context.to_dict()
                                         if self.string_context else None),
+            "anchor_pe_context":       (self.anchor_pe_context.to_dict()
+                                        if self.anchor_pe_context else None),
+            "instruction_context":     (self.instruction_context.to_dict()
+                                        if self.instruction_context else None),
+            "iat_correlation":         (self.iat_correlation.to_dict()
+                                        if self.iat_correlation else None),
         }
 
 

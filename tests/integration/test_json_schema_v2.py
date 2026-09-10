@@ -2509,7 +2509,8 @@ def _minimal_valid_report_summary():
             "truncated_regions": 0, "clamped_regions": 0,
             "cards_skipped_for_budget": 0, "hits_skipped_for_budget": 0,
             "hits_sharing_a_region": 0,
-            "process_enrichment": _minimal_valid_process_enrichment()}
+            "process_enrichment": _minimal_valid_process_enrichment(),
+            "pe_context": None}
 
 
 def _minimal_valid_triage_card_record():
@@ -2534,6 +2535,9 @@ def _minimal_valid_triage_card_record():
                 "handle_correlation", "card", status="missing", total=None, cap=8),
             "entries": []},
         "string_context": None,
+        "anchor_pe_context": None,
+        "instruction_context": None,
+        "iat_correlation": None,
     }
 
 
@@ -2832,6 +2836,7 @@ def test_report_summary_string_mode_with_all_fields_set_passes(validator):
         "hits_skipped_for_budget": 0,
         "hits_sharing_a_region": 0,
         "process_enrichment": _minimal_valid_process_enrichment(),
+        "pe_context": None,
     }
     doc["result"]["data"]["records"] = [{
         **_minimal_valid_triage_card_record(),
@@ -3047,3 +3052,107 @@ def test_triage_card_ioc_string_non_network_with_context_hex_is_rejected(validat
         "is_network_pattern": False, "context_hex": "deadbeef",
         "context_base_address": "0x0000000000000f80", "context_hit_offset": 4}]
     assert not validator.is_valid(doc)
+
+
+# ── v2.18: PE, instruction, and IAT correlation ─────────────────────────
+
+@pytest.fixture(scope="module")
+def pe_context_schema(schema):
+    return _fragment_validator(schema, "reportPeContext")
+
+
+@pytest.fixture(scope="module")
+def instruction_context_schema(schema):
+    return _fragment_validator(schema, "reportInstructionContext")
+
+
+@pytest.fixture(scope="module")
+def iat_correlation_schema(schema):
+    return _fragment_validator(schema, "reportIatCorrelation")
+
+
+def _pe_section(name, *, status="complete", total=0, included=0, cap=16):
+    return {"name": name, "scope": "process" if name == "pe_context" else "card",
+            "status": status, "total": total, "included": included, "cap": cap,
+            "truncated": included < (total or 0), "provenance": [], "limitations": []}
+
+
+def test_pe_context_fragment_valid_with_a_conflict_passes(pe_context_schema):
+    doc = {
+        "section": _pe_section("pe_context", total=1, included=1),
+        "image_base": "0x0000000140000000", "preferred_image_base": None,
+        "machine": 0x8664, "machine_name": "AMD64", "time_date_stamp": 1,
+        "size_of_image": 0x4000, "entry_point_rva": 0x1000,
+        "entry_point_va": "0x0000000140001000", "section_count": 2, "pe32_plus": True,
+        "module_match": "resolved", "consistent_count": 5, "conflict_count": 1,
+        "unavailable_count": 2,
+        "observations": [{"name": "size_vs_modulelist", "state": "conflict",
+                          "reason": "size_contradicts_modulelist",
+                          "sources": ["profile.optional_header", "module_list"],
+                          "operands": {"size_of_image": 16384, "modulelist_size": 20480}}]}
+    assert list(pe_context_schema.iter_errors(doc)) == []
+
+
+def test_pe_context_fragment_rejects_an_unknown_observation_state(pe_context_schema):
+    doc = {
+        "section": _pe_section("pe_context", total=0, included=0),
+        "image_base": None, "preferred_image_base": None, "machine": None,
+        "machine_name": None, "time_date_stamp": None, "size_of_image": None,
+        "entry_point_rva": None, "entry_point_va": None, "section_count": None,
+        "pe32_plus": None, "module_match": None, "consistent_count": 0,
+        "conflict_count": 0, "unavailable_count": 0,
+        "observations": [{"name": "x", "state": "suspicious", "reason": "y",
+                          "sources": [], "operands": {}}]}
+    assert not pe_context_schema.is_valid(doc)
+
+
+def test_instruction_context_fragment_valid_iat_call_passes(instruction_context_schema):
+    doc = {
+        "section": _pe_section("instruction_context", total=1, included=1, cap=48),
+        "anchor_source": "card_anchor", "anchor_address": "0x0000000140001000",
+        "architecture": "x64", "decoder_state": "decoded",
+        "window_base": "0x0000000140001000", "bytes_read": 7,
+        "branch_targets_total": 1, "branch_targets_truncated": False,
+        "instructions": [{"address": "0x0000000140001000", "size": 6,
+                          "text": "call qword ptr [rip + 0xffa]", "text_truncated": False,
+                          "is_call": True, "is_jump": False, "is_return": False,
+                          "is_anchor": True, "branch_kind": "indirect_slot"}],
+        "branch_targets": [{"instruction_address": "0x0000000140001000", "kind": "iat_slot",
+                            "target_address": "0x0000000140002000",
+                            "resolved_target_address": "0x0000000141001000",
+                            "module_owner": "kernel32.dll", "module_owner_truncated": False,
+                            "section_name": None, "section_name_truncated": False,
+                            "region_type": "MEM_IMAGE", "registration": "registered",
+                            "iat_symbol": "GetProcAddress", "iat_symbol_truncated": False,
+                            "iat_classification_uncertain": False}]}
+    assert list(instruction_context_schema.iter_errors(doc)) == []
+
+
+def test_instruction_context_fragment_rejects_an_unknown_decoder_state(
+        instruction_context_schema):
+    doc = {
+        "section": _pe_section("instruction_context", status="missing", total=None,
+                               cap=48),
+        "anchor_source": None, "anchor_address": None, "architecture": None,
+        "decoder_state": "melted", "window_base": None, "bytes_read": 0,
+        "branch_targets_total": 0, "branch_targets_truncated": False,
+        "instructions": [], "branch_targets": []}
+    assert not instruction_context_schema.is_valid(doc)
+
+
+def test_iat_correlation_fragment_valid_entry_passes(iat_correlation_schema):
+    doc = {
+        "section": _pe_section("iat_correlation", total=1, included=1),
+        "module_owner": "app.exe", "module_owner_truncated": False,
+        "module_base": "0x0000000140000000", "dll_count": 1, "entry_count": 1,
+        "import_directory_present": True, "iat_directory_present": True,
+        "entries": [{"import_by": "name", "selection_reason": "instruction_correlated",
+                     "dll": "K32.dll", "dll_truncated": False, "symbol": "GetProcAddress",
+                     "symbol_truncated": False, "ordinal": None,
+                     "iat_slot_va": "0x0000000140002000",
+                     "resolved_target_va": "0x0000000141001000",
+                     "target_module_owner": "kernel32.dll",
+                     "target_module_owner_truncated": False, "target_section_name": None,
+                     "target_section_name_truncated": False, "target_region_type": "MEM_IMAGE",
+                     "target_registration": "registered", "also_selected_for": []}]}
+    assert list(iat_correlation_schema.iter_errors(doc)) == []
