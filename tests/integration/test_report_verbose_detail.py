@@ -109,7 +109,7 @@ def _build_mf(tmp_path, *, handles=None, regions=None, exception=None,
 
 def _populated(tmp_path, *, handle_names=None):
     """One card whose four card-scoped sections all retain more rows than
-    the default console shows, and none of which reaches its cap."""
+    the default shows, and none of which reaches its cap."""
     names = PIPE_NAMES if handle_names is None else handle_names
     descriptors = [{"handle": 0x40 + i, "type_name": f"File{i:02d}", "object_name": obj}
                    for i, obj in enumerate(names)]
@@ -201,22 +201,35 @@ def _strings_in(value) -> list:
     return []
 
 
+_HEADER_RULE = re.compile(r"\n([─=]{50})\n")
+
+
 def _enrichment_region(console_text: str) -> str:
-    """Everything the enrichment projection prints, from the process block
-    down to the verdict -- the part of the console whose content this
-    change decides."""
-    start = console_text.index("[ P ] PROCESS CONTEXT")
-    return console_text[start:console_text.index("[ VERDICT ]", start)]
+    """Everything the report prints for its one anchor, from the current
+    assessment down to (but not including) the extract result -- the part
+    of the console whose content this change decides. The extract result
+    is excluded because an unredacted artifact path legitimately contains
+    the directory this function is used to check for."""
+    start = console_text.index("ASSESSMENT")
+    end = console_text.find("Region extracted", start)
+    return console_text[start:end] if end != -1 else console_text[start:]
 
 
 def _section(console_text: str, header: str) -> str:
-    """One enrichment block, from its header to the next one. A retained
-    string is printed by section 4 as well, so a claim about section 8's
-    preview has to be made against section 8's own text."""
+    """One named block, from its header to the next one. Every header --
+    section or group -- is immediately followed by its own full-width
+    rule line ('─' * 50 for a section, '═' * 50 for a group), so the next
+    one is the next line immediately preceding such a rule. A retained
+    string is printed by the STRINGS IN REGION section as well, so a
+    claim about the string-context section's own preview has to be made
+    against that section's own text."""
     start = console_text.index(header)
-    rest = console_text[start + len(header):]
-    end = rest.find("\n[ ")
-    return rest if end == -1 else rest[:end]
+    body_start = _HEADER_RULE.search(console_text, start).end()
+    next_rule = _HEADER_RULE.search(console_text, body_start)
+    if next_rule is None:
+        return console_text[body_start:]
+    next_header_start = console_text.rfind("\n", body_start, next_rule.start()) + 1
+    return console_text[body_start:next_header_start]
 
 
 def _canonical(doc: dict) -> dict:
@@ -297,8 +310,8 @@ def test_verbose_expands_the_console_in_every_report_mode(
     verbose = results["verbose"][2]
 
     assert len(verbose.splitlines()) > len(normal.splitlines())
-    assert "console shows" in normal
-    assert "console shows" not in verbose
+    assert "this section shows" in normal
+    assert "this section shows" not in verbose
 
 
 # ── what each level shows ───────────────────────────────────────────────
@@ -311,6 +324,14 @@ def test_verbose_prints_every_retained_row_of_all_four_sections(
     verbose = results["verbose"][2]
     card = results["verbose"][1]["result"]["data"]["records"][0]
     handles = results["verbose"][1]["result"]["summary"]["process_enrichment"]["handles"]
+    # Every string in this fixture is either the one IOC hit (the beacon
+    # URL) or a notable string (the pipe names, the two ordinary ones) --
+    # all of them are also selected into string_context by anchor
+    # proximity, so a retained string carrying both roles is the norm
+    # here, not the exception. STRING CONTEXT presents each as a
+    # cross-reference rather than a second copy of its text.
+    dedup_identities = {(s["address"], s["encoding"]) for s in card["ioc_strings"]}
+    dedup_identities |= {(s["address"], s["encoding"]) for s in card["notable_strings"]}
 
     for row in handles["by_type"]:
         assert f"{row['type_name']}={row['count']}" in verbose
@@ -319,20 +340,33 @@ def test_verbose_prints_every_retained_row_of_all_four_sections(
     for entry in card["handle_correlation"]["entries"]:
         assert entry["object_name"] in verbose
     for entry in card["string_context"]["entries"]:
+        # Still present in the full verbose output either way: an
+        # overlapping entry's text was already printed as IOC evidence.
         assert entry["text"] in verbose
 
     # ... and the default shows a strict prefix of each of them.
-    neighborhood = _section(normal, "[ 6 ] ALLOCATION NEIGHBORHOOD")
-    correlated = _section(normal, "[ 7 ] CORRELATED HANDLES")
-    strings = _section(normal, "[ 8 ] STRING CONTEXT AROUND THE ANCHOR")
+    neighborhood = _section(normal, "ALLOCATION NEIGHBORHOOD")
+    correlated = _section(normal, "CORRELATED HANDLES")
+    strings = _section(normal, "STRING CONTEXT AROUND THE ANCHOR")
     assert sum(f"0x{int(e['base_address'], 16):016x}" in neighborhood
                for e in card["allocation_neighborhood"]["entries"]) == (
         CONSOLE_NEIGHBOR_REGIONS)
     assert sum(e["object_name"] in correlated
                for e in card["handle_correlation"]["entries"]) == (
         CONSOLE_CORRELATED_HANDLES)
-    assert sum(e["text"] in strings for e in card["string_context"]["entries"]) == (
-        CONSOLE_STRING_CONTEXT)
+    shown_context = card["string_context"]["entries"][:CONSOLE_STRING_CONTEXT]
+    hidden_context = card["string_context"]["entries"][CONSOLE_STRING_CONTEXT:]
+    overlapping_shown = [e for e in shown_context
+                         if (e["address"], e["encoding"]) in dedup_identities]
+    non_overlapping_shown = [e for e in shown_context
+                             if (e["address"], e["encoding"]) not in dedup_identities]
+    assert overlapping_shown, "fixture no longer exercises the dedup-overlap case"
+    assert all(e["text"] in strings for e in non_overlapping_shown)
+    assert all(e["text"] not in strings for e in overlapping_shown)
+    # Beyond the cap, an entry is not rendered at all -- neither its text
+    # nor a cross-reference stands in for it.
+    assert all(e["text"] not in strings for e in hidden_context)
+    assert "also retained as evidence under" in strings
 
 
 def test_the_default_discloses_each_omission_and_verbose_removes_it(
@@ -345,13 +379,13 @@ def test_the_default_discloses_each_omission_and_verbose_removes_it(
     normal = results["normal"][2]
     verbose = results["verbose"][2]
 
-    assert f"console shows {CONSOLE_HANDLE_TYPE_ROWS} of" in normal
-    assert f"console shows {CONSOLE_NEIGHBOR_REGIONS} of" in normal
-    assert f"console shows {CONSOLE_CORRELATED_HANDLES} of" in normal
-    assert f"console shows {CONSOLE_STRING_CONTEXT} of" in normal
+    assert f"this section shows {CONSOLE_HANDLE_TYPE_ROWS} of" in normal
+    assert f"this section shows {CONSOLE_NEIGHBOR_REGIONS} of" in normal
+    assert f"this section shows {CONSOLE_CORRELATED_HANDLES} of" in normal
+    assert f"this section shows {CONSOLE_STRING_CONTEXT} of" in normal
     assert "use --verbose for all of them" in normal
     assert "--json carries the same retained set" in normal
-    assert "console shows" not in verbose
+    assert "this section shows" not in verbose
     assert "use --verbose" not in verbose
 
 
@@ -438,7 +472,7 @@ def test_a_partial_read_is_reported_at_both_levels(monkeypatch, tmp_path, capsys
 
 def test_hostile_dump_text_is_escaped_at_both_levels(monkeypatch, tmp_path, capsys):
     """A handle object name is attacker-influenced text and reaches the
-    console escaped however much of it the console shows."""
+    console escaped however much of it this section shows."""
     hostile = ["\\Device\\Named\x1b[31mPipe\\evil-{}".format(i)
                for i in range(CORRELATED_HANDLES)]
     text = b"\x00".join(n.encode() for n in hostile) + b"\x00"
@@ -575,8 +609,8 @@ def test_the_txt_tee_mirrors_the_selected_level_without_ansi(
 
     for text in written.values():
         assert _ANSI.search(text) is None
-    assert "console shows" in written["normal"]
-    assert "console shows" not in written["verbose"]
+    assert "this section shows" in written["normal"]
+    assert "this section shows" not in written["verbose"]
     assert "scope: card   evidence:" in written["verbose"]
     assert "scope: card   evidence:" not in written["normal"]
 
@@ -608,7 +642,7 @@ def test_the_session_block_names_its_variables_and_verbose_adds_the_values(
     assert "--json carries the same retained set" in normal
     # A name outside the allowlist is not retained at all, so no level
     # can show it.
-    assert "PATH" not in normal.split("[ 2 ]")[0]
+    assert "PATH" not in normal
 
 
 # ── values that reached the retained-text cap ───────────────────────────
@@ -657,7 +691,7 @@ def _census_mf(tmp_path, names):
 
 
 def _census_line(console_text: str) -> str:
-    for line in _section(console_text, "[ P ] PROCESS CONTEXT").splitlines():
+    for line in _section(console_text, "PROCESS CONTEXT").splitlines():
         if line.strip().startswith("By type"):
             return line
     raise AssertionError("the process block printed no census line")
@@ -777,7 +811,7 @@ def test_a_resolved_module_match_is_verbose_only(monkeypatch, tmp_path, capsys):
     assert results["verbose"][1]["result"]["summary"]["process_enrichment"][
         "module_match_state"] == "resolved"
     assert "Module match" not in results["normal"][2]
-    assert "resolved" in _section(results["verbose"][2], "[ P ] PROCESS CONTEXT")
+    assert "resolved" in _section(results["verbose"][2], "PROCESS CONTEXT")
 
 
 def test_an_unregistered_module_match_is_stated_at_both_levels(
@@ -825,7 +859,7 @@ def test_the_packaged_cli_answers_to_report_verbose(tmp_path):
     for label, completed in runs.items():
         assert completed.returncode == EXIT_NOT_EVALUATED, (
             f"{label}: {completed.stdout[-800:]}{completed.stderr[-800:]}")
-        assert "[ P ] PROCESS CONTEXT" in completed.stdout
+        assert "PROCESS CONTEXT" in completed.stdout
 
     assert "scope: process   evidence:" in runs["verbose"].stdout
     assert "built from: " in runs["verbose"].stdout

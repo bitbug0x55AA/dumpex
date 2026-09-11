@@ -2,7 +2,10 @@
 
 Status: **implemented** in dumpex 3.8.0 and schema v2.18. Phase 1 (process,
 exception, allocation-neighbourhood, handle, string context) landed in 3.7.0 /
-v2.17; Phase 2 (PE, instruction, and IAT correlation) in 3.8.0 / v2.18.
+v2.17; Phase 2 (PE, instruction, and IAT correlation) in 3.8.0 / v2.18. The
+3.8.1 hotfix changed console/`--txt` document hierarchy, presentation caps,
+and string-identity deduplication; it changed no wire field, schema, finding,
+verdict, or coverage semantic.
 
 This document records the current implementation contract behind `--report`
 enrichment. User-visible behavior and wire fields are documented in
@@ -56,6 +59,35 @@ coverage, execution status, diagnostics, artifacts, and exit code. `--txt`
 uses the requested console detail level; JSON always carries the complete
 retained record set.
 
+### Document hierarchy
+
+The report banner (title and file identity) is the first substantive block of
+every invocation, tid/addr or string mode alike, printed exactly once
+regardless of how many cards the run produces. It is followed, per anchor, by:
+
+1. **Assessment** — the current verdict, its findings, and a concise next step
+   looked up from those findings and `coverage.status` alone; it names no new
+   risk category and adds no fact this run did not already collect.
+2. **Coverage summary** — `coverage.status` and its reasons, printed even when
+   the run is complete, so an analyst never has to infer completeness from a
+   block's absence. For `--report-string`, this prints before either the
+   zero-hit or the all-hits-in-known-modules early return, so neither path can
+   hide a partial or not-evaluated scan behind "not found".
+3. **Anchor context** — thread analysis, memory region, other threads in the
+   region, and the anchor's PE placement.
+4. **Key evidence** — the region's strings and IOC matches, then
+   anchor-proximity string context.
+5. **Correlation** — exception, instruction, IAT, and handle correlation.
+6. **Additional context** — this card's allocation neighborhood, then (once
+   per invocation, not once per card) process identity and the main-image PE
+   header.
+7. **Limitations and provenance** — verbose only; see below.
+
+Section headers are plain names, never numbers: a conditional section this run
+did not populate leaves no numbering gap to reason about.
+
+### Default output
+
 Default output remains self-contained while limiting routine detail. It keeps
 the anchor, region, thread, string and IOC evidence, findings, verdict,
 coverage, diagnostics, every incomplete enrichment state, and every identity
@@ -63,18 +95,54 @@ conflict. Process, session, handle-census, and token details are summarized;
 populated collections use bounded previews, and a complete section with no
 eligible entries does not repeat an empty counts row.
 
-Verbose output expands every retained handle-type census row,
-allocation-neighborhood entry, correlated handle, and nearby-string entry. It
-also shows each section's scope, evidence state, counts, cap, provenance, and
-each entry's selection reason. A renderer must not re-run collection or infer
-new evidence at either level.
+The console preview of retained IOC matches and of retained notable strings is
+each capped independently (`CONSOLE_IOC_STRINGS` / `CONSOLE_NOTABLE_STRINGS` in
+`dumpex.commands.report`). Selecting the IOC preview prioritizes
+network-pattern hits — the only class carrying its own byte context — ahead of
+other matches, so a routine match at a low offset cannot crowd a C2 indicator
+at a higher offset out of the default view; a network-pattern hit the
+preview still could not fit states so explicitly; a hit's overlapping
+±128-byte context windows are coalesced into one combined byte range instead
+of repeating shared bytes once per hit, whether one hit or several.
 
-Two omission notices have distinct meanings:
+### Verbose output
+
+Verbose output expands every retained handle-type census row,
+allocation-neighborhood entry, correlated handle, IOC match, notable string,
+and nearby-string entry, plus each entry's selection reason. A renderer must
+not re-run collection or infer new evidence at either level.
+
+Each section's scope, evidence state, counts, cap, and provenance no longer
+print inline after that section: the full envelope appears once per anchor, in
+a trailing **Limitations and provenance** table, verbose only. Each section's
+own short reminder — evidence state, retained count, truncation, and
+limitations — still prints inline at both detail levels; an incomplete
+evidence state is never deferred to that trailing table.
+
+### Deduplicated string identity
+
+A retained string selected both as an IOC match (or notable string) in
+STRINGS IN REGION and as anchor-proximity context is one presentation
+identity. Its full text prints once — in STRINGS IN REGION, wherever that
+section's own cap allows it — and STRING CONTEXT prints only its placement and
+a short cross-reference in place of a second copy. The cross-reference is
+built against exactly what STRINGS IN REGION renders at the current level,
+never the wider retained set: a match STRINGS IN REGION's own cap left out of
+its preview is, from STRING CONTEXT's perspective, still new, and prints there
+in full under STRING CONTEXT's own separate cap — a cross-reference must never
+point at a section that does not actually show the string.
+
+### Omission notices
+
+Three omission notices have distinct meanings:
 
 - A console preview omits retained rows. The notice says they remain available
   from `--verbose` and JSON.
 - A retention cap drops eligible rows before projection. The notice says the
   rows are absent from every console level and JSON.
+- A retained string's full text is published under a different section at
+  this same detail level. The cross-reference names that section rather than
+  repeating the text.
 
 Where the console renders a dump-derived value that reached its retained-text
 cap, it must expose the truncation beside that value. Ordinary fields use a
@@ -291,6 +359,10 @@ The focused collector and projection tests live in
 `tests/unit/test_report_pe_enrichment.py` (Phase 2), and
 `tests/integration/test_report_enrichment_output.py`; console detail-level
 projection is covered by `tests/integration/test_report_verbose_detail.py`.
+The document hierarchy, presentation caps, and string-identity deduplication
+introduced in 3.8.1 are covered by `tests/integration/test_report_hierarchy.py`;
+the exact byte-for-byte hierarchy of the banner, assessment, and anchor-context
+blocks is frozen in `tests/integration/test_report_compat_freeze.py`.
 The isolated disassembler seam and the VA-resolution join have their own tests
 in `tests/unit/test_disasm.py` and `tests/unit/test_va_location.py`.
 Schema compatibility is covered by `tests/integration/test_json_schema_v2.py`

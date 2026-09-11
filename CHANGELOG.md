@@ -7,6 +7,37 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.8.1 — 2026-09-11
+
+### Changed
+
+- `--report` console/`--txt` output is now analyst-first: the report title is
+  the first line printed, followed immediately by the current assessment, its
+  findings, a concise next step, and a coverage summary. Anchor context, key
+  evidence, correlation, and process/PE background follow, in that order.
+  Section headers are plain names rather than numbers, so a conditional
+  section that this run did not populate never leaves a numbering gap.
+- Default detail now also caps the console preview of retained IOC matches (5,
+  prioritizing network-pattern hits) and notable strings (5), each with an
+  omission notice; `--verbose` still expands to the complete retained set.
+  Overlapping ±128-byte network-hit windows are coalesced into one combined
+  byte range instead of repeating shared bytes once per hit.
+- A retained string selected as both an IOC match (or notable string) and
+  anchor-proximity context now prints its full text once and a short
+  cross-reference in place of the second copy, only when that first copy is
+  actually rendered at the current detail level.
+- Each section's scope, cap, and provenance -- previously repeated inline
+  after every verbose section -- now appear once, in a trailing LIMITATIONS
+  AND PROVENANCE table. Each section's own evidence state, retained count,
+  truncation, and limitations remain inline at both detail levels.
+
+### Fixed
+
+- `--report-string` no longer prints process-wide and main-image PE context
+  before the report's own title, and no longer hides a partial or
+  not-evaluated coverage state behind an early "not found" or
+  "all hits are in known system modules" return.
+
 ## 3.8.0 — 2026-09-10
 
 ### Added

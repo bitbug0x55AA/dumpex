@@ -10,7 +10,7 @@ from dumpex.core.memory import (get_modules, get_memory_regions,
     get_thread_infos, get_thread_contexts, addr_to_module, va_to_file_offset, prot_str,
     read_region, parse_hex_or_int, INDICATOR_DIMS, MAX_REGION_READ,
     _get_region_at, _extract_strings_from_data,
-    _hexdump_context, _search_string_in_memory, StringSearchStats, verdict_for,
+    _search_string_in_memory, StringSearchStats, verdict_for,
     VERDICT_CLEAN, VERDICT_SUSPICIOUS, VERDICT_LIKELY_MALICIOUS)
 from dumpex.rules_pkg.loader import get_rules
 from dumpex.core.pe_utils import _duration_100ns_to_str
@@ -24,7 +24,7 @@ from dumpex.output.records import (
 from dumpex.output.coverage import (
     LimitationCode, build_coverage_report, combine_coverage_reports,
     SourceRequirement, SourceObservation, SourceState, CoverageLimitation, observe_source,
-    EXECUTION_COMPLETED, EXECUTION_PARTIAL,
+    EXECUTION_COMPLETED, EXECUTION_PARTIAL, CoverageStatus,
 )
 from dumpex.output.command_result import CommandResult
 from dumpex.commands.extract import build_extract_artifact
@@ -41,12 +41,12 @@ from dumpex.output.records import (
     ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL,
 )
 
-# _get_region_at, _extract_strings_from_data, _hexdump_context,
-# _search_string_in_memory, and verdict_for all come from the core.memory
-# import above. They used to be duplicated here (a leftover that shadowed
-# the imports -- meaning fixes made to the shared core.memory versions,
-# like _search_string_in_memory's MAX_REGION_READ cap, silently never
-# applied to --report-string). Do not redefine them locally again.
+# _get_region_at, _extract_strings_from_data, _search_string_in_memory,
+# and verdict_for all come from the core.memory import above. They used to
+# be duplicated here (a leftover that shadowed the imports -- meaning
+# fixes made to the shared core.memory versions, like
+# _search_string_in_memory's MAX_REGION_READ cap, silently never applied
+# to --report-string). Do not redefine them locally again.
 
 IOC_PATTERNS = re.compile(
     r'https?://|cmd\.exe|powershell|CreateRemoteThread'
@@ -61,6 +61,19 @@ NET_PATTERNS = re.compile(
     r'|:\d{2,5}$',
     re.IGNORECASE
 )
+
+# The normal-detail preview of card.ioc_strings/card.notable_strings -- a
+# console-only cap, not a retention one: --json always carries every IOC
+# match and every notable string _scan_content_range found, and --verbose
+# expands the console to all of them too. Kept small and separate from
+# MAX_REPORT_SCAN_BYTES/MAX_REGION_READ (which bound what is READ, not
+# what is printed).
+CONSOLE_IOC_STRINGS = 5
+CONSOLE_NOTABLE_STRINGS = 5
+
+# The retention cap _scan_content_range applies to notable strings (not a
+# console-preview cap -- see CONSOLE_NOTABLE_STRINGS above for that).
+MAX_NOTABLE_STRINGS = 20
 
 
 def _module_context_for(mod, modules_available: bool) -> str:
@@ -125,7 +138,7 @@ def _scan_content_range(mf, *, base_address: int, requested_size: int, min_len: 
                 if IOC_PATTERNS.search(s)]
     net_offs = {off for off, enc, s in ioc_hits if NET_PATTERNS.search(s)}
     notable  = [(off, enc, s) for off, enc, s in strings
-                if not IOC_PATTERNS.search(s) and len(s) > 20][:20]
+                if not IOC_PATTERNS.search(s) and len(s) > 20][:MAX_NOTABLE_STRINGS]
 
     ioc_strings = []
     for off, enc, s in ioc_hits:
@@ -927,11 +940,26 @@ def collect_report(mf, report_tid: "str | None" = None, report_addr: "str | None
                           artifacts=([artifact] if artifact is not None else []))
 
 
-def _print_card_banner(mf, card, query_tid, query_addr) -> None:
+def _print_report_banner(mf) -> None:
+    """The report's own title and file identity -- the first substantive
+    block of EVERY invocation, tid/addr or string mode alike, printed
+    exactly once regardless of how many cards the run produces.
+    `mf.filename` is the analyst-supplied dump path, but the FILE ITSELF
+    can come from an untrusted source with an attacker-chosen name --
+    console_safe() keeps a crafted name from forging additional report
+    lines (a newline, an ANSI escape, a bidi override) the same way every
+    other dump-derived value in this renderer already is."""
     print(f"\n{BOLD('══════════════════════════════════════════')}")
     print(f"{BOLD('  dumpex TRIAGE REPORT')}")
     print(f"{BOLD('══════════════════════════════════════════')}")
-    print(f"  File : {os.path.basename(mf.filename)}")
+    print(f"  File : {console_safe(os.path.basename(mf.filename))}")
+
+
+def _print_anchor_line(card, query_tid, query_addr) -> None:
+    """This one card's own TID/Addr line -- the part of the old combined
+    banner that is genuinely per-card, printed under the report banner
+    for tid/addr mode's single card and under each "Triaging hit i/N"
+    separator for string mode's several."""
     if card.anchor_tid is not None and query_tid is not None:
         print(f"  TID  : {query_tid}")
     if card.anchor_source == TRIAGE_ANCHOR_ADDRESS and query_addr is not None:
@@ -949,10 +977,212 @@ def _backed_by_text(module_context: str, backing_module: "str | None") -> str:
     return YELLOW("module classification unavailable")
 
 
-def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
+def _render_group_header(name: str) -> None:
+    """A hierarchy-level heading, one step above the named sections it
+    contains. Its own '=' rule is visually distinct from a section's own
+    '─' rule, so a reader can tell "a new group started" from "a new
+    section within this group started" without counting anything."""
+    print()
+    print(BOLD(name))
+    print("=" * 50)
+
+
+_NEXT_STEP_BY_FINDING = {
+    "rwx_private":     "correlate this region against its instruction and IAT context, and "
+                       "consider extracting it for offline analysis",
+    "injected_pe":     "cross-check the anchor's PE placement and IAT correlation against the "
+                       "module it does not match",
+    "ioc_strings":     "review the adjacent byte context and any network correlation for "
+                       "these matches before treating them as confirmed",
+    "unbacked_thread": "correlate this thread's start address against loaded modules and "
+                       "recent allocations",
+}
+# card.findings is always drawn from INDICATOR_DIMS's own keys (see
+# _verdict_for's MECE `dims`), so a next step must exist for every one of
+# them -- an unmapped key here would otherwise print a findings list with
+# a silently empty Next: block underneath it.
+assert set(_NEXT_STEP_BY_FINDING) == set(INDICATOR_DIMS), (
+    "_NEXT_STEP_BY_FINDING must name a next step for every INDICATOR_DIMS key")
+
+
+def _render_assessment(card, coverage) -> None:
+    """The current verdict, its supporting findings, and a concise next
+    step, rendered together so the caller can print them immediately
+    after the report banner -- before any anchor, evidence, or
+    correlation detail. Verdict calculation itself is untouched: this
+    only prints `card.verdict`/`card.findings`/`card.finding_details`,
+    already computed by MECE evaluation at collect time. The next step is
+    a deterministic lookup keyed on those same findings plus
+    `coverage.status` -- never a new risk category synthesized from
+    routine enrichment facts, and never information this run did not
+    already collect."""
+    print(BOLD("ASSESSMENT"))
+    print("─" * 50)
+    print(f"  {_render_verdict_text(card.verdict, len(card.findings))}\n")
+    if card.findings:
+        for key in card.findings:
+            label = INDICATOR_DIMS.get(key, key)
+            print(f"  {BOLD('►')} {YELLOW(label)}")
+            print(f"    {DIM(card.finding_details[key])}")
+        print()
+    print(f"  {BOLD('Next:')}")
+    if card.findings:
+        for key in card.findings:
+            advice = _NEXT_STEP_BY_FINDING.get(
+                key, "review this finding's own detail above before drawing a conclusion")
+            print(f"    {DIM('- ' + INDICATOR_DIMS.get(key, key) + ': ' + advice)}")
+    elif coverage.status == CoverageStatus.COMPLETE:
+        clean_text = ("no anomalies were found within this rule set's current coverage; "
+                     "if the originating alert independently indicates compromise, "
+                     "re-verify against raw telemetry outside this dump")
+        print(f"    {DIM(clean_text)}")
+    else:
+        nothing_eligible_text = ("this card's own evidence found nothing eligible -- see "
+                                 "the coverage summary below for what this run could not "
+                                 "evaluate")
+        print(f"    {DIM(nothing_eligible_text)}")
+    print()
+
+
+def _coverage_status_text(status) -> str:
+    """One coverage status as a colored console phrase. The color helper
+    is applied here, at render time, rather than pre-baked into a lookup
+    table at import time -- `colors.USE_COLOR`/`colors._c()` are read at
+    call time (see their own docstrings), and a table built once at
+    import would freeze whatever that value was then."""
+    if status == CoverageStatus.COMPLETE:
+        return GREEN("COMPLETE")
+    if status == CoverageStatus.PARTIAL:
+        return YELLOW("PARTIAL")
+    if status == CoverageStatus.NOT_EVALUATED:
+        return YELLOW("NOT EVALUATED")
+    return console_safe(str(status))
+
+
+def _render_coverage_summary(coverage) -> None:
+    """Whole-run coverage, stated once near the top of the report rather
+    than only implied by the per-section evidence-state lines each
+    enrichment block already prints -- always, including when it is
+    complete: an analyst reading this block must never have to guess
+    whether "nothing here" means complete coverage or a hidden gap.
+    Detailed caps, selection reasons, and provenance stay in each
+    section's own state line further down; this is the short summary
+    that never omits an incomplete state.
+
+    The incomplete-coverage caveat below is printed here, once for the
+    whole run, rather than repeated inside each card's own ASSESSMENT --
+    it is a fact about this run's coverage, not about any one card's own
+    findings, and a multi-card `--report-string` run would otherwise
+    repeat the identical sentence once per card."""
+    print(BOLD("COVERAGE SUMMARY"))
+    print("─" * 50)
+    print(f"  Status: {_coverage_status_text(coverage.status)}")
+    if coverage.reasons:
+        for reason in coverage.reasons:
+            print(YELLOW(f"  [~] {reason}"))
+    else:
+        print(DIM("  No known collection limitations."))
+    if coverage.status != CoverageStatus.COMPLETE:
+        caveat_text = ("treat every finding below as based on what this run could "
+                       "evaluate, and consider a more complete capture or a targeted "
+                       "re-run over the missing coverage before ruling anything in or out")
+        print(YELLOW(f"  [~] {caveat_text}"))
+    print()
+
+
+def _select_shown_iocs(ioc_strings, cap: int) -> list:
+    """The normal-detail preview of `ioc_strings`: a positional slice
+    over scan (address) order would let several routine matches at low
+    offsets crowd out a network-pattern hit -- the highest-value evidence
+    class this section carries, and the only one with its own byte
+    context -- sitting at a higher offset. Network-pattern hits are
+    prioritized into the preview first, then the rest, up to `cap`; the
+    chosen subset is restored to scan order afterward so the printed VAs
+    still read low-to-high."""
+    if len(ioc_strings) <= cap:
+        return list(ioc_strings)
+    indexed = list(enumerate(ioc_strings))
+    prioritized = sorted(indexed, key=lambda pair: (not pair[1].is_network_pattern, pair[0]))
+    chosen = sorted(prioritized[:cap], key=lambda pair: pair[0])
+    return [s for _i, s in chosen]
+
+
+def _coalesce_network_contexts(ioc_strings) -> list:
+    """Partition the network-pattern IOC strings into groups whose
+    retained ±128-byte `context_hex` windows overlap, so the renderer can
+    print each overlapping byte range once instead of once per hit.
+    Consumes only what `_collect_triage_card` already retained on each
+    `ReportIocString` -- no dump read happens here. Returns a list of
+    groups, each a list of `(window_start, window_end, ReportIocString)`
+    sorted by window start; a hit with no overlapping neighbor is its own
+    group of one."""
+    spans = []
+    for s in ioc_strings:
+        if not s.is_network_pattern or s.context_hex is None:
+            continue
+        start = int(s.context_base_address, 16)
+        end = start + len(s.context_hex) // 2
+        spans.append((start, end, s))
+    if not spans:
+        return []
+    spans.sort(key=lambda t: t[0])
+
+    groups = [[spans[0]]]
+    group_end = spans[0][1]
+    for span in spans[1:]:
+        if span[0] <= group_end:
+            groups[-1].append(span)
+            group_end = max(group_end, span[1])
+        else:
+            groups.append([span])
+            group_end = span[1]
+    return groups
+
+
+def _hexdump_context_multi(data: bytes, hit_offsets: frozenset, base_address: int) -> str:
+    """Same row layout as `_hexdump_context`, but highlighting every row
+    that contains one of several hit offsets rather than exactly one --
+    the coalesced counterpart for a combined multi-hit byte range."""
+    lines = []
+    for i in range(0, len(data), 16):
+        row     = data[i:i + 16]
+        addr    = base_address + i
+        hex_col = " ".join(f"{b:02x}" for b in row).ljust(48)
+        asc_col = "".join(chr(b) if 32 <= b < 127 else "." for b in row)
+        if any(i <= off < i + 16 for off in hit_offsets):
+            lines.append(f"    {YELLOW(f'0x{addr:016x}')}  {YELLOW(hex_col)}  {YELLOW(asc_col)}")
+        else:
+            lines.append(f"    {DIM(f'0x{addr:016x}')}  {hex_col}  {DIM(asc_col)}")
+    return "\n".join(lines)
+
+
+def _render_grouped_hex_context(group: list) -> None:
+    """The one combined hexdump for a group `_coalesce_network_contexts`
+    produced: every contributing hit's own address is named above it and
+    marked within it, and the byte range it covers -- the union of the
+    group's own retained windows, never wider -- prints exactly once."""
+    start = min(s0 for s0, _e0, _s in group)
+    end   = max(e0 for _s0, e0, _s in group)
+    buf = bytearray(end - start)
+    for s0, _e0, s in group:
+        buf[s0 - start:s0 - start + len(s.context_hex) // 2] = bytes.fromhex(s.context_hex)
+    hit_offsets = frozenset(int(s.address, 16) - start for _s0, _e0, s in group)
+    if len(group) == 1:
+        print(YELLOW("    ↳ Network pattern — ±128 byte context:"))
+    else:
+        addrs = ", ".join(f"0x{int(s.address, 16):016x}" for _s0, _e0, s in group)
+        print(YELLOW(f"    ↳ Network pattern — combined byte context for "
+                     f"{len(group)} overlapping hit(s) at {addrs}:"))
+    print(_hexdump_context_multi(bytes(buf), hit_offsets, start))
+    print()
+
+
+def _render_card(mf, card, min_len: int, verbose: bool = False,
+                 collector: "list | None" = None) -> None:
+    _render_group_header("ANCHOR CONTEXT")
     # ── 1. Thread analysis ────────────────────────────────────────────
     if card.anchor_tid is not None:
-        print(BOLD("[ 1 ] THREAD ANALYSIS"))
+        print(BOLD("THREAD ANALYSIS"))
         print("─" * 50)
         if card.thread is None:
             print(RED(f"  [!] TID 0x{card.anchor_tid:x} not found in dump."))
@@ -976,7 +1206,7 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
 
     # ── 2. Memory region ──────────────────────────────────────────────
     if card.anchor_address is not None:
-        print(BOLD("[ 2 ] MEMORY REGION AT TARGET ADDRESS"))
+        print(BOLD("MEMORY REGION AT TARGET ADDRESS"))
         print("─" * 50)
         target_addr = int(card.anchor_address, 16)
         if card.region is None:
@@ -1027,7 +1257,7 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
 
     # ── 3. Other threads in same region ──────────────────────────────
     if card.region is not None and card.other_threads_in_region:
-        print(BOLD("[ 3 ] THREADS EXECUTING IN THIS REGION"))
+        print(BOLD("THREADS EXECUTING IN THIS REGION"))
         print("─" * 50)
         for t in card.other_threads_in_region:
             sa2 = int(t.start_address, 16)
@@ -1036,9 +1266,37 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
             print(f"  TID=0x{t.tid:<8x}  StartAddr=0x{sa2:x}  {backed}{tag}")
         print()
 
+    if card.anchor_pe_context is not None:
+        _render_anchor_pe_context(card.anchor_pe_context, verbose, collector=collector)
+
     # ── 4. Strings + context-aware IOC display ────────────────────────
+    # string_context is only ever collected from this same region's own
+    # scan (see collect_string_context's own anchor_address/string_scan
+    # requirements), so it is never populated while card.region is None.
+    #
+    # `dedup_sources` maps (address, encoding) -> full text for exactly
+    # the IOC matches and notable strings THIS render actually prints in
+    # full below (`shown_iocs`/`shown_notable` -- the normal-detail cap
+    # already applied to each). A cross-reference is only ever correct
+    # when it points at text genuinely on screen elsewhere: keying this
+    # off the wider retained set instead would let STRING CONTEXT's own
+    # independent distance-based ranking pick an IOC or notable string
+    # THIS section's own cap cut, mark it a duplicate, and print neither
+    # its text nor a reference to anywhere it actually appears -- an
+    # entry retained and selected here, shown nowhere at this detail
+    # level. A known identity that is not in the shown set below is, from
+    # this section's perspective, still new: its full text prints here,
+    # under STRING CONTEXT's own separate cap and its own honest
+    # "this section shows N of M" disclosure.
+    shown_iocs = (list(card.ioc_strings) if verbose
+                 else _select_shown_iocs(card.ioc_strings, CONSOLE_IOC_STRINGS))
+    shown_notable = (list(card.notable_strings) if verbose
+                     else card.notable_strings[:CONSOLE_NOTABLE_STRINGS])
+    dedup_sources = {(s.address, s.encoding): s.text for s in shown_iocs}
+    dedup_sources.update({(s.address, s.encoding): s.text for s in shown_notable})
     if card.region is not None:
-        print(BOLD("[ 4 ] STRINGS IN REGION"))
+        _render_group_header("KEY EVIDENCE")
+        print(BOLD("STRINGS IN REGION"))
         print("─" * 50)
         if card.string_scan is not None:
             ss = card.string_scan
@@ -1054,7 +1312,20 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
             if card.ioc_strings:
                 print(f"  {RED(f'[!] {len(card.ioc_strings)} IOC match(es):')}")
                 base = int(card.region.base_address, 16)
-                for s in card.ioc_strings:
+                # Overlapping ±128-byte network-hit windows are grouped once,
+                # up front (over only the shown subset, so a hidden hit's
+                # own window never pulls a shown one into a combined dump
+                # that names an address printed nowhere above it), so a hit
+                # belonging to a group of more than one renders its combined
+                # hexdump only the first time that group is reached below --
+                # never once per hit.
+                groups = _coalesce_network_contexts(shown_iocs)
+                group_of = {}
+                for group in groups:
+                    for _s0, _e0, s in group:
+                        group_of[id(s)] = group
+                rendered_groups = set()
+                for s in shown_iocs:
                     abs_addr = int(s.address, 16)
                     fo_abs = None if card.region.file_offset is None else card.region.file_offset + s.offset
                     fo_abs_str = f"0x{fo_abs:x}" if fo_abs is not None else "(not captured)"
@@ -1063,20 +1334,29 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
                     print(RED(f"      VA  = region base 0x{base:016x}  +  offset 0x{s.offset:x}  =  "
                               f"0x{abs_addr:016x}"))
                     print(RED(f"      DMP = file offset {fo_abs_str}"))
-                    if s.is_network_pattern and s.context_hex is not None:
-                        print(YELLOW("    ↳ Network pattern — ±128 byte context:"))
-                        context_bytes = bytes.fromhex(s.context_hex)
-                        print(_hexdump_context(context_bytes, s.context_hit_offset,
-                                                int(s.context_base_address, 16),
-                                                before=len(context_bytes), after=len(context_bytes)))
-                        print()
+                    group = group_of.get(id(s))
+                    if group is not None:
+                        group_key = id(group)
+                        if group_key not in rendered_groups:
+                            rendered_groups.add(group_key)
+                            _render_grouped_hex_context(group)
+                        elif len(group) > 1:
+                            print(DIM("    ↳ part of the combined byte context above"))
+                _print_console_omission(len(shown_iocs), len(card.ioc_strings))
+                dropped_network = (sum(1 for s in card.ioc_strings if s.is_network_pattern)
+                                  - sum(1 for s in shown_iocs if s.is_network_pattern))
+                if dropped_network:
+                    entries = "entry" if dropped_network == 1 else "entries"
+                    print(YELLOW(f"  [~] {dropped_network} retained network-pattern {entries} "
+                                 f"with byte context {'is' if dropped_network == 1 else 'are'} "
+                                 f"not shown at this level — use --verbose"))
             else:
                 print(f"  {DIM('[·] No IOC patterns matched.')}")
 
             if card.notable_strings:
-                print(f"\n  {BOLD('Other notable strings (len > 20, top 20):')}")
+                print(f"\n  {BOLD('Other notable strings (len > 20):')}")
                 base = int(card.region.base_address, 16)
-                for s in card.notable_strings:
+                for s in shown_notable:
                     abs_addr = int(s.address, 16)
                     off = abs_addr - base
                     fo_abs = None if card.region.file_offset is None else card.region.file_offset + off
@@ -1084,6 +1364,7 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
                     enc_col = f"[{s.encoding}]"
                     print(f"    {CYAN(enc_col):<14} {console_safe(s.text)}")
                     print(DIM(f"      VA  = 0x{base:016x} + 0x{off:x} = 0x{abs_addr:016x}  DMP = {fo_abs_str}"))
+                _print_console_omission(len(shown_notable), len(card.notable_strings))
 
             print(DIM(f"\n  Total: {ss['total']} strings  "
                       f"(ASCII: {ss['ascii_count']}  UTF-16LE: {ss['utf16_count']})"))
@@ -1091,31 +1372,22 @@ def _render_card(mf, card, min_len: int, verbose: bool = False) -> None:
             print(RED(f"  [!] Could not read region: {card.string_scan_error}"))
         print()
 
-    # ── 5-8. Card enrichment ──────────────────────────────────────────
-    if card.exception_context is not None:
-        _render_exception_context(card.exception_context, verbose)
-    if card.allocation_neighborhood is not None:
-        _render_allocation_neighborhood(card.allocation_neighborhood, verbose)
-    if card.handle_correlation is not None:
-        _render_handle_correlation(card.handle_correlation, verbose)
     if card.string_context is not None:
-        _render_string_context(card.string_context, verbose)
-    if card.anchor_pe_context is not None:
-        _render_anchor_pe_context(card.anchor_pe_context, verbose)
-    if card.instruction_context is not None:
-        _render_instruction_context(card.instruction_context, verbose)
-    if card.iat_correlation is not None:
-        _render_iat_correlation(card.iat_correlation, verbose)
+        _render_string_context(card.string_context, verbose, dedup_sources=dedup_sources,
+                               collector=collector)
 
-    # ── Verdict (MECE) ────────────────────────────────────────────────
-    print(BOLD("[ VERDICT ]"))
-    print("─" * 50)
-    print(f"  {_render_verdict_text(card.verdict, len(card.findings))}\n")
-    if card.findings:
-        for key in card.findings:
-            label = INDICATOR_DIMS.get(key, key)
-            print(f"  {BOLD('►')} {YELLOW(label)}")
-            print(f"    {DIM(card.finding_details[key])}")
+    # ── Correlation ────────────────────────────────────────────────────
+    if (card.exception_context is not None or card.instruction_context is not None
+            or card.iat_correlation is not None or card.handle_correlation is not None):
+        _render_group_header("CORRELATION")
+    if card.exception_context is not None:
+        _render_exception_context(card.exception_context, verbose, collector=collector)
+    if card.instruction_context is not None:
+        _render_instruction_context(card.instruction_context, verbose, collector=collector)
+    if card.iat_correlation is not None:
+        _render_iat_correlation(card.iat_correlation, verbose, collector=collector)
+    if card.handle_correlation is not None:
+        _render_handle_correlation(card.handle_correlation, verbose, collector=collector)
 
 
 # ── Enrichment console projection ─────────────────────────────────────
@@ -1163,33 +1435,30 @@ def _module_match_text(state: str) -> str:
     return console_safe(state)
 
 
-def _print_section_state(section: dict, *, indent: str = "  ", verbose: bool = False) -> None:
-    """The state line every enrichment block closes with, plus each
-    limitation the section recorded.
+def _print_section_state(section: dict, *, indent: str = "  ", label: "str | None" = None,
+                          collector: "list | None" = None) -> None:
+    """The short local reminder every enrichment block closes with: which
+    evidence state this is, how much it kept, and every truncation or
+    limitation -- printed here, at both detail levels, because an
+    incomplete evidence state is never a detail an analyst can be made to
+    go find elsewhere. A completed evaluation that found nothing eligible
+    states nothing at all: the block's own sentence above it is already
+    the completed-negative result, and a `kept: 0 of 0` line under it only
+    repeats that.
 
-    Verbose states the full envelope: scope, evidence state, counts, cap,
-    and the streams the section was built from. The default states only
-    what an analyst has to act on -- which evidence state this is, and how
-    much it kept -- because scope and cap are properties of the section's
-    own definition, not of this dump. A completed evaluation that found
-    nothing eligible states nothing at all: the block's own sentence above
-    it is already the completed-negative result, and a `kept: 0 of 0` line
-    under it only repeats that. Truncation and limitations print at both
-    levels: an incomplete evidence state is never a detail."""
+    The full envelope -- scope, cap, and the streams this section was
+    built from -- is verbose-only detail with no bearing on whether
+    evidence is missing, so it is never printed inline: when `collector`
+    and `label` are both given, this section is appended there instead,
+    for one LIMITATIONS AND PROVENANCE table at the end of the report
+    rather than the same fields repeated after every section."""
     state = _ENRICHMENT_STATE_TEXT[section["status"]]
     counts = str(section["included"])
     if section["total"] is not None:
         counts = f"{section['included']} of {section['total']}"
-    cap = section["cap"] if section["cap"] is not None else "none"
     routine_negative = (section["status"] == ENRICHMENT_COMPLETE
                         and section["included"] == 0 and not section["truncated"])
-    if verbose:
-        print(indent + DIM(f"scope: {section['scope']}   evidence: {state}   "
-                           f"kept: {counts}   cap: {cap}"))
-        if section["provenance"]:
-            print(indent + DIM("built from: "
-                               + ", ".join(console_safe(p) for p in section["provenance"])))
-    elif section["status"] == ENRICHMENT_MISSING:
+    if section["status"] == ENRICHMENT_MISSING:
         print(indent + DIM(f"evidence: {state}"))
     elif not routine_negative:
         print(indent + DIM(f"evidence: {state}   kept: {counts}"))
@@ -1197,6 +1466,44 @@ def _print_section_state(section: dict, *, indent: str = "  ", verbose: bool = F
         print(indent + YELLOW(_truncation_text(section)))
     for limitation in section["limitations"]:
         print(indent + YELLOW("[~] " + console_safe(limitation)))
+    if collector is not None and label is not None:
+        collector.append((label, section))
+
+
+def _prefix_provenance(provenance: list, start: int, prefix: str) -> None:
+    """Prefix every (label, section) pair `_print_section_state` appended
+    to `provenance` from index `start` onward -- used to disambiguate a
+    shared, whole-run provenance table's rows by the specific card (region)
+    they came from once more than one card contributes to it."""
+    for idx in range(start, len(provenance)):
+        label, section = provenance[idx]
+        provenance[idx] = (prefix + label, section)
+
+
+def _render_limitations_and_provenance(entries: list, verbose: bool) -> None:
+    """One place for the full envelope every rendered section already
+    carries on its own EnrichmentSection -- scope, evidence state,
+    counts, cap, and provenance -- instead of repeating those same four
+    fields after each section individually. Verbose only: the short
+    reminder `_print_section_state` prints inline (evidence state,
+    truncation, limitations) is the whole story at normal detail, and
+    this table would just restate it with no new fact attached."""
+    if not verbose or not entries:
+        return
+    _render_group_header("LIMITATIONS AND PROVENANCE")
+    for label, section in entries:
+        state = _ENRICHMENT_STATE_TEXT[section["status"]]
+        counts = str(section["included"])
+        if section["total"] is not None:
+            counts = f"{section['included']} of {section['total']}"
+        cap = section["cap"] if section["cap"] is not None else "none"
+        scope = section["scope"]
+        print(f"  {BOLD(label)}")
+        print("    " + DIM(f"scope: {scope}   evidence: {state}   kept: {counts}   cap: {cap}"))
+        if section["provenance"]:
+            print("    " + DIM("built from: "
+                               + ", ".join(console_safe(p) for p in section["provenance"])))
+        print()
 
 
 def _truncation_text(section: dict) -> str:
@@ -1238,20 +1545,26 @@ def _cap_mark(*fields) -> str:
 
 def _print_console_omission(shown: int, kept: int, indent: str = "  ") -> None:
     """A console preview shorter than the retained set. Every omitted row
-    is still retained, so both --verbose and --json can produce it."""
+    is still retained, so both --verbose and --json can produce it. Scoped
+    to "this section" rather than "the console": a string the STRINGS IN
+    REGION preview cuts can still print in full elsewhere, in STRING
+    CONTEXT's own separate preview under its own separate cap -- "the
+    console shows N of M" would describe the whole report's total visible
+    evidence, which this count is not."""
     if kept > shown:
-        print(indent + DIM(f"[·] console shows {shown} of {kept} retained entries "
+        print(indent + DIM(f"[·] this section shows {shown} of {kept} retained entries "
                            f"— use --verbose for all of them; --json carries the same "
                            f"retained set"))
 
 
-def _render_process_enrichment(enrichment: dict, verbose: bool = False) -> None:
+def _render_process_enrichment(enrichment: dict, verbose: bool = False,
+                               collector: "list | None" = None) -> None:
     # This block owns its own leading blank line, so suppressing the whole
     # function leaves the surrounding output exactly as it would be
     # without any enrichment at all -- which is what the compatibility
     # freeze suite relies on to compare the frozen surface.
     print()
-    print(BOLD("[ P ] PROCESS CONTEXT"))
+    print(BOLD("PROCESS CONTEXT"))
     print("─" * 50)
     section = enrichment["section"]
     if section["status"] == ENRICHMENT_MISSING:
@@ -1300,7 +1613,7 @@ def _render_process_enrichment(enrichment: dict, verbose: bool = False) -> None:
         hidden = enrichment["identity_conflicts_total"] - len(conflicts)
         if hidden > 0:
             print(DIM(f"    [·] {hidden} further conflict(s) are reported by --process"))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="Process identity", collector=collector)
     print()
 
     environment = enrichment["environment"]
@@ -1327,7 +1640,8 @@ def _render_process_enrichment(enrichment: dict, verbose: bool = False) -> None:
         print(DIM("    [·] Environment block not read — see the note below."))
     else:
         print(DIM("    [·] No allowlisted variable was captured in this block."))
-    _print_section_state(environment["section"], indent="    ", verbose=verbose)
+    _print_section_state(environment["section"], indent="    ", label="Session environment",
+                         collector=collector)
     print()
 
     handles = enrichment["handles"]
@@ -1361,7 +1675,8 @@ def _render_process_enrichment(enrichment: dict, verbose: bool = False) -> None:
             print(YELLOW(f"    [~] {hidden_capped} retained type name(s) not shown here "
                          f"also reached the retained-text cap"))
         _print_console_omission(len(shown), len(rows), indent="    ")
-    _print_section_state(handles["section"], indent="    ", verbose=verbose)
+    _print_section_state(handles["section"], indent="    ", label="Process handles",
+                         collector=collector)
     print()
 
     token = enrichment["token"]
@@ -1400,8 +1715,9 @@ def _address_context_text(context) -> str:
     return "  ".join(parts)
 
 
-def _render_exception_context(context, verbose: bool = False) -> None:
-    print(BOLD("[ 5 ] EXCEPTION CONTEXT"))
+def _render_exception_context(context, verbose: bool = False,
+                              collector: "list | None" = None) -> None:
+    print(BOLD("EXCEPTION CONTEXT"))
     print("─" * 50)
     section = context.section.to_dict()
     if not context.entries:
@@ -1433,12 +1749,13 @@ def _render_exception_context(context, verbose: bool = False) -> None:
             more = " …" if entry.parameters_truncated else ""
             print("      " + DIM("Information: " + ", ".join(entry.parameters) + more))
     print(DIM("  Exception state is execution evidence, not a maliciousness finding."))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="Exception context", collector=collector)
     print()
 
 
-def _render_allocation_neighborhood(neighborhood, verbose: bool = False) -> None:
-    print(BOLD("[ 6 ] ALLOCATION NEIGHBORHOOD"))
+def _render_allocation_neighborhood(neighborhood, verbose: bool = False,
+                                    collector: "list | None" = None) -> None:
+    print(BOLD("ALLOCATION NEIGHBORHOOD"))
     print("─" * 50)
     section = neighborhood.section.to_dict()
     if not neighborhood.entries:
@@ -1470,7 +1787,7 @@ def _render_allocation_neighborhood(neighborhood, verbose: bool = False) -> None
                       + _cap_mark(("module owner", entry.module_owner_truncated)))
         _print_console_omission(len(shown), len(neighborhood.entries))
         print(DIM("  Adjacency is memory layout, not a relationship to the anchor."))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="Allocation neighborhood", collector=collector)
     print()
 
 
@@ -1478,8 +1795,9 @@ def _hex_or_none(value) -> "str | None":
     return None if value is None else f"0x{value:x}"
 
 
-def _render_handle_correlation(correlation, verbose: bool = False) -> None:
-    print(BOLD("[ 7 ] CORRELATED HANDLES"))
+def _render_handle_correlation(correlation, verbose: bool = False,
+                               collector: "list | None" = None) -> None:
+    print(BOLD("CORRELATED HANDLES"))
     print("─" * 50)
     section = correlation.section.to_dict()
     if not correlation.entries:
@@ -1512,12 +1830,37 @@ def _render_handle_correlation(correlation, verbose: bool = False) -> None:
         _print_console_omission(len(shown), len(correlation.entries))
         print(DIM("  A shared name is two captures of the same text, not proof of use."))
     print(DIM("  Full inventory: --handles"))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="Correlated handles", collector=collector)
     print()
 
 
-def _render_string_context(context, verbose: bool = False) -> None:
-    print(BOLD("[ 8 ] STRING CONTEXT AROUND THE ANCHOR"))
+def _render_string_context(context, verbose: bool = False, dedup_sources: dict = None,
+                           collector: "list | None" = None) -> None:
+    """`dedup_sources` maps (address, encoding) -> full text for exactly
+    the IOC matches and notable strings STRINGS IN REGION actually prints
+    in full THIS render (its own normal-detail cap already applied, not
+    the wider retained set) -- a cross-reference is only ever printed
+    when it points at text genuinely on screen elsewhere in this same
+    card. A string chosen for both that inventory and anchor-proximity
+    context is one presentation identity with two roles: its full text
+    prints once, there; here it prints only its placement and a
+    cross-reference back to it, never the text again. An identity STRINGS
+    IN REGION's own cap left out of ITS preview is not in `dedup_sources`
+    either, so it is never falsely cross-referenced to a section that
+    does not actually show it -- it prints here instead, in full, under
+    this section's own separate cap.
+
+    The (address, encoding) pair is unique within one card's single
+    content scan (no two strings the extraction pass produces start at
+    the same offset with the same encoding), but this entry's own `text`
+    may be a truncated prefix of that source string's full text -- so a
+    match still confirms the FULL text agrees (exactly, or as a prefix
+    when truncated) before treating the two as the same string. A pair
+    that resolves to a source with different text is not deduplicated:
+    identity is address+encoding+text together, never address+encoding
+    alone."""
+    dedup_sources = dedup_sources or {}
+    print(BOLD("STRING CONTEXT AROUND THE ANCHOR"))
     print("─" * 50)
     section = context.section.to_dict()
     # The read line prints at both detail levels: `bytes_read` short of
@@ -1543,21 +1886,29 @@ def _render_string_context(context, verbose: bool = False) -> None:
             reason = (entry.selection_reason + " ") if verbose else ""
             print(f"    {encoding:<14} 0x{int(entry.address, 16):016x}  "
                   f"{DIM(reason + distance)}")
-            print(f"      {console_safe(entry.text)}{mark}")
+            source_text = dedup_sources.get((entry.address, entry.encoding))
+            is_duplicate = source_text is not None and (
+                source_text == entry.text
+                or (entry.text_truncated and source_text.startswith(entry.text)))
+            if is_duplicate:
+                print(f"      {DIM('↳ also retained as evidence under STRINGS IN REGION')}")
+            else:
+                print(f"      {console_safe(entry.text)}{mark}")
         _print_console_omission(len(shown), len(context.entries))
     print(DIM("  Proximity is layout: an adjacent string is not a reference to the anchor."))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="String context", collector=collector)
     print()
 
 
-def _render_pe_context(pe_context: dict, verbose: bool = False) -> None:
+def _render_pe_context(pe_context: dict, verbose: bool = False,
+                       collector: "list | None" = None) -> None:
     print()
-    print(BOLD("[ PE ] MAIN IMAGE PE CONTEXT"))
+    print(BOLD("MAIN IMAGE PE CONTEXT"))
     print("─" * 50)
     section = pe_context["section"]
     if section["status"] == ENRICHMENT_MISSING:
         print(DIM("  [·] The main image PE header was not read."))
-        _print_section_state(section, verbose=verbose)
+        _print_section_state(section, label="Main image PE context", collector=collector)
         print()
         return
     base = pe_context["image_base"]
@@ -1594,17 +1945,18 @@ def _render_pe_context(pe_context: dict, verbose: bool = False) -> None:
                                   + console_safe(observation["reason"])))
         _print_console_omission(len(shown), len(conflicts), indent="    ")
     print(DIM("  A structural conflict is a lead for review, not a maliciousness finding."))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="Main image PE context", collector=collector)
     print()
 
 
-def _render_anchor_pe_context(context, verbose: bool = False) -> None:
-    print(BOLD("[ 9 ] ANCHOR IN THE PE IMAGE"))
+def _render_anchor_pe_context(context, verbose: bool = False,
+                              collector: "list | None" = None) -> None:
+    print(BOLD("ANCHOR IN THE PE IMAGE"))
     print("─" * 50)
     section = context.section.to_dict()
     if section["status"] == ENRICHMENT_MISSING:
         print(DIM("  [·] No module or region places this anchor."))
-        _print_section_state(section, verbose=verbose)
+        _print_section_state(section, label="Anchor PE placement", collector=collector)
         print()
         return
     owner = console_safe(context.module_owner) if context.module_owner else "(no module)"
@@ -1628,12 +1980,13 @@ def _render_anchor_pe_context(context, verbose: bool = False) -> None:
                 else YELLOW("  [!] live protection differs from the declared section bits"))
         print(f"  {'Protection':<18} declared {declared}   live {live}{note}")
     print(DIM("  A protection mismatch is a lead for review, not a verdict."))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="Anchor PE placement", collector=collector)
     print()
 
 
-def _render_instruction_context(context, verbose: bool = False) -> None:
-    print(BOLD("[ 10 ] INSTRUCTION CONTEXT"))
+def _render_instruction_context(context, verbose: bool = False,
+                                collector: "list | None" = None) -> None:
+    print(BOLD("INSTRUCTION CONTEXT"))
     print("─" * 50)
     section = context.section.to_dict()
     if context.anchor_address:
@@ -1668,19 +2021,20 @@ def _render_instruction_context(context, verbose: bool = False) -> None:
             print(f"    {DIM(kind):<20} {dest_text}  {owner}{symbol}")
         _print_console_omission(len(shown), len(context.branch_targets), indent="    ")
     print(DIM("  Instruction context names no function, argument, or call stack."))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="Instruction context", collector=collector)
     print()
 
 
-def _render_iat_correlation(correlation, verbose: bool = False) -> None:
-    print(BOLD("[ 11 ] IAT CORRELATION"))
+def _render_iat_correlation(correlation, verbose: bool = False,
+                            collector: "list | None" = None) -> None:
+    print(BOLD("IAT CORRELATION"))
     print("─" * 50)
     section = correlation.section.to_dict()
     owner = (console_safe(correlation.module_owner) if correlation.module_owner
              else "(module unknown)")
     if section["status"] == ENRICHMENT_MISSING:
         print(DIM(f"  [·] {owner}: its import table could not be read."))
-        _print_section_state(section, verbose=verbose)
+        _print_section_state(section, label="IAT correlation", collector=collector)
         print()
         return
     counts = []
@@ -1704,7 +2058,7 @@ def _render_iat_correlation(correlation, verbose: bool = False) -> None:
             print(f"      {target_text}  {owner_text}")
         _print_console_omission(len(shown), len(correlation.entries))
     print(DIM("  An unusual thunk target is an investigation lead, not a verdict."))
-    _print_section_state(section, verbose=verbose)
+    _print_section_state(section, label="IAT correlation", collector=collector)
     print()
 
 
@@ -1723,11 +2077,33 @@ def _render_verdict_text(verdict: str, score: int) -> str:
     return RED(f"HIGH CONFIDENCE MALICIOUS — {score} independent indicators")
 
 
+def _render_additional_context(*, allocation_neighborhood=None, process_enrichment=None,
+                               pe_context=None, verbose: bool = False,
+                               collector: "list | None" = None) -> None:
+    """Lower-priority background, one group header for whatever subset of
+    it applies here: a card's own allocation neighborhood, and/or the
+    whole-run process identity and main-image PE header. The two
+    whole-run facts have no single anchor and print once per invocation
+    (see collect_report's own note on why they are collected once), never
+    before the report banner -- an analyst reads the current assessment
+    and this card's own evidence before this background, not after it."""
+    if allocation_neighborhood is None and process_enrichment is None and pe_context is None:
+        return
+    _render_group_header("ADDITIONAL CONTEXT")
+    if allocation_neighborhood is not None:
+        _render_allocation_neighborhood(allocation_neighborhood, verbose, collector=collector)
+    if process_enrichment is not None:
+        _render_process_enrichment(process_enrichment, verbose, collector=collector)
+    if pe_context is not None:
+        _render_pe_context(pe_context, verbose, collector=collector)
+
+
 def render_report_console(records, coverage, diagnostics, artifacts, summary, mf,
                           min_len: int, verbose: bool = False) -> None:
-    """Reproduces today's exact, pre-migration console text -- see
-    dumpex.commands.report's own git history / the Phase E plan's capture
-    script for the byte-for-byte ground truth this was built against.
+    """Analyst-first console projection: the report banner is the first
+    substantive block, the current assessment and a coverage summary
+    follow it immediately, and every other block -- anchor context, key
+    evidence, correlation, and whole-run background -- comes after that.
     Takes `mf` (unlike every other render_*_console in this package) only
     to read `mf.filename` for the per-card banner's "File : ..." line --
     no coverage/business-logic decision here depends on the dump itself,
@@ -1739,22 +2115,17 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     `verbose` is presentation only: it selects how much of the already
     collected `records`/`summary` the enrichment blocks project, and
     changes no finding, verdict, coverage, diagnostic, artifact, or exit
-    code. Sections 1-4 and the verdict block render identically at both
-    levels."""
-    for reason in coverage.reasons:
-        print(YELLOW(f"  [~] {reason}"))
-
-    # One process-wide block per invocation, before any card: its scope is
-    # the whole dump, so repeating it per card would publish one fact N
-    # times and invite an analyst to read it as card-specific.
-    if summary.get("process_enrichment") is not None:
-        _render_process_enrichment(summary["process_enrichment"], verbose)
-    if summary.get("pe_context") is not None:
-        _render_pe_context(summary["pe_context"], verbose)
-
+    code. The assessment and anchor-context blocks render identically at
+    both levels."""
     if summary["mode"] == "string":
+        _print_report_banner(mf)
         print(f"\n{BOLD('Searching memory for:')} {CYAN(repr(summary['query_string']))}")
         print("─" * 55)
+        # Printed before either early return below: a scan that found
+        # nothing, or found hits only in already-expected MEM_IMAGE
+        # modules, can still be a partial or not-evaluated scan, and that
+        # must never be hidden behind "not found".
+        _render_coverage_summary(coverage)
         if summary["card_count"] == 0 and summary["total_hits"] == 0:
             print(RED(f"  [!] String not found in the memory regions that could be scanned."))
             print(DIM("      Try --strings with a broader address range to verify."))
@@ -1797,24 +2168,71 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
                       f"established relationship to any specific string hit region — "
                       f"it is not carried into the per-region triage below.\n"))
 
+        # One shared provenance list and one deferred additional-context
+        # pass for the WHOLE run, never one per card: LIMITATIONS AND
+        # PROVENANCE and (for allocation neighborhoods) ADDITIONAL CONTEXT
+        # are otherwise N separate trailing tables for an N-hit run, the
+        # same "several transcripts appended together" shape this hotfix
+        # exists to remove. A multi-hit run's entries are prefixed with
+        # their own region so the shared table still says which hit each
+        # row belongs to.
+        shared_provenance = []
+        allocation_entries = []   # [(card, allocation_neighborhood)]
         for i, card in enumerate(records, 1):
             if len(records) > 1:
                 print(BOLD(f"{'═'*55}"))
                 print(BOLD(f"  Triaging hit {i}/{len(records)} — region 0x{int(card.region.base_address, 16):x}"))
                 print(BOLD(f"{'═'*55}"))
-            _print_card_banner(mf, card, None, None)
-            _render_card(mf, card, min_len, verbose)
+            _print_anchor_line(card, None, None)
+            _render_assessment(card, coverage)
+            provenance_start = len(shared_provenance)
+            _render_card(mf, card, min_len, verbose, collector=shared_provenance)
+            if len(records) > 1:
+                _prefix_provenance(shared_provenance, provenance_start,
+                                   f"region 0x{int(card.region.base_address, 16):x} — ")
+            if card.allocation_neighborhood is not None:
+                allocation_entries.append((card, card.allocation_neighborhood))
             _print_extract_result(records, artifacts, card)
             print()   # unconditional trailing blank line -- matches today's
                        # cmd_report, which ends every single-shot invocation
                        # (each recursive sub-call, pre-flatten) with a bare
                        # print() after the extract block, extract or not
+        # Whole-run background, printed once regardless of card count: each
+        # card's own allocation neighborhood, then process identity and the
+        # main-image PE header (see collect_report's own note on why those
+        # last two are collected once per invocation, never once per card).
+        process_enrichment = summary.get("process_enrichment")
+        pe_context = summary.get("pe_context")
+        if allocation_entries or process_enrichment is not None or pe_context is not None:
+            _render_group_header("ADDITIONAL CONTEXT")
+            for card, neighborhood in allocation_entries:
+                region_start = len(shared_provenance)
+                if len(allocation_entries) > 1:
+                    print(BOLD(f"Region 0x{int(card.region.base_address, 16):x}"))
+                _render_allocation_neighborhood(neighborhood, verbose, collector=shared_provenance)
+                if len(allocation_entries) > 1:
+                    _prefix_provenance(shared_provenance, region_start,
+                                       f"region 0x{int(card.region.base_address, 16):x} — ")
+            if process_enrichment is not None:
+                _render_process_enrichment(process_enrichment, verbose, collector=shared_provenance)
+            if pe_context is not None:
+                _render_pe_context(pe_context, verbose, collector=shared_provenance)
+        _render_limitations_and_provenance(shared_provenance, verbose)
         return
 
     # tid/addr mode -- exactly one card
     card = records[0]
-    _print_card_banner(mf, card, summary["query_tid"], summary["query_addr"])
-    _render_card(mf, card, min_len, verbose)
+    _print_report_banner(mf)
+    _print_anchor_line(card, summary["query_tid"], summary["query_addr"])
+    _render_assessment(card, coverage)
+    _render_coverage_summary(coverage)
+    provenance = []
+    _render_card(mf, card, min_len, verbose, collector=provenance)
+    _render_additional_context(
+        allocation_neighborhood=card.allocation_neighborhood,
+        process_enrichment=summary.get("process_enrichment"),
+        pe_context=summary.get("pe_context"), verbose=verbose, collector=provenance)
+    _render_limitations_and_provenance(provenance, verbose)
     _print_extract_result(records, artifacts, card)
     print()
 

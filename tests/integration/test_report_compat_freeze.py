@@ -6,10 +6,11 @@ runs the real `cli.main()` end to end against a FakeMF and asserts exit
 code, the full console text, and the JSON document's kind/coverage/record
 shape -- same discipline as test_extract_strings_compat_freeze.py.
 
-Expected console text was captured by actually running the ORIGINAL
-(pre-migration) `cmd_report` via a scratchpad script (see the Phase E
-plan's own capture-script discipline note) before report.py was
-flattened, not hand-guessed.
+Expected console text was captured by actually running `cmd_report`, not
+hand-guessed. `test_tid_not_found` and `test_addr_not_found` pin the exact
+byte-for-byte hierarchy the report banner, ASSESSMENT block, and
+ANCHOR CONTEXT group render in; every other scenario here asserts
+substrings of sections 1-4 and the banner rather than the full body.
 
 Every scenario here supplies modules=[]/threads=[]/regions=[...] (all
 three admin sources genuinely present, even if empty), so
@@ -132,13 +133,27 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
         "══════════════════════════════════════════\n"
         "  File : test.dmp\n"
         "  TID  : 5\n"
-        "\n[ 1 ] THREAD ANALYSIS\n"
+        "\nASSESSMENT\n"
+        "──────────────────────────────────────────────────\n"
+        "  CLEAN — no suspicious indicators found\n\n"
+        "  Next:\n"
+        "    no anomalies were found within this rule set's current coverage; if the "
+        "originating alert independently indicates compromise, re-verify against raw "
+        "telemetry outside this dump\n\n"
+        "COVERAGE SUMMARY\n"
+        "──────────────────────────────────────────────────\n"
+        "  Status: COMPLETE\n"
+        "  No known collection limitations.\n\n"
+        "\nANCHOR CONTEXT\n"
+        "==================================================\n"
+        "THREAD ANALYSIS\n"
         "──────────────────────────────────────────────────\n"
         "  [!] TID 0x5 not found in dump.\n"
-        "      Thread may have exited before dump was taken.\n"
-        "\n[ VERDICT ]\n"
-        "──────────────────────────────────────────────────\n"
-        "  CLEAN — no suspicious indicators found\n\n\n"
+        "      Thread may have exited before dump was taken.\n\n"
+        "\nCORRELATION\n"
+        "==================================================\n"
+        "\nADDITIONAL CONTEXT\n"
+        "==================================================\n\n"
     )
     assert exit_code == 0
     assert doc["meta"]["schema_version"] == SCHEMA_VERSION
@@ -164,13 +179,27 @@ def test_addr_not_found(monkeypatch, tmp_path, capsys):
         "══════════════════════════════════════════\n"
         "  File : test.dmp\n"
         "  Addr : 0x9999000\n"
-        "\n[ 2 ] MEMORY REGION AT TARGET ADDRESS\n"
+        "\nASSESSMENT\n"
+        "──────────────────────────────────────────────────\n"
+        "  CLEAN — no suspicious indicators found\n\n"
+        "  Next:\n"
+        "    no anomalies were found within this rule set's current coverage; if the "
+        "originating alert independently indicates compromise, re-verify against raw "
+        "telemetry outside this dump\n\n"
+        "COVERAGE SUMMARY\n"
+        "──────────────────────────────────────────────────\n"
+        "  Status: COMPLETE\n"
+        "  No known collection limitations.\n\n"
+        "\nANCHOR CONTEXT\n"
+        "==================================================\n"
+        "MEMORY REGION AT TARGET ADDRESS\n"
         "──────────────────────────────────────────────────\n"
         "  [!] No committed region found at 0x9999000\n"
-        "      Address may not be in a page captured by this dump.\n"
-        "\n[ VERDICT ]\n"
-        "──────────────────────────────────────────────────\n"
-        "  CLEAN — no suspicious indicators found\n\n\n"
+        "      Address may not be in a page captured by this dump.\n\n"
+        "\nCORRELATION\n"
+        "==================================================\n"
+        "\nADDITIONAL CONTEXT\n"
+        "==================================================\n\n"
     )
     assert exit_code == 0
     assert doc["result"]["coverage"]["status"] == "complete"
@@ -277,7 +306,7 @@ def test_section3_sharing_threads_and_network_pattern_hexdump(monkeypatch, tmp_p
         regions=[Region(0x4000, 0x4000, 0x1000, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")],
         read_map={0x4000: ioc_data})
     body = _split_console_body(capsys.readouterr().out)
-    assert "[ 3 ] THREADS EXECUTING IN THIS REGION" in body
+    assert "THREADS EXECUTING IN THIS REGION" in body
     assert "TID=0x6" in body
     assert "← report TID" in body
     assert "Network pattern" in body

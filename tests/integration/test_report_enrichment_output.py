@@ -132,9 +132,9 @@ def test_every_enrichment_block_is_printed_for_an_address_card(monkeypatch, tmp_
     _run(monkeypatch, tmp_path, mf, dump_path, ["--report-addr", hex(REGION_BASE)])
     out = capsys.readouterr().out
 
-    for header in ("[ P ] PROCESS CONTEXT", "[ 5 ] EXCEPTION CONTEXT",
-                   "[ 6 ] ALLOCATION NEIGHBORHOOD", "[ 7 ] CORRELATED HANDLES",
-                   "[ 8 ] STRING CONTEXT AROUND THE ANCHOR"):
+    for header in ("PROCESS CONTEXT", "EXCEPTION CONTEXT",
+                   "ALLOCATION NEIGHBORHOOD", "CORRELATED HANDLES",
+                   "STRING CONTEXT AROUND THE ANCHOR"):
         assert header in out
 
 
@@ -160,8 +160,8 @@ def test_the_process_block_is_printed_once_for_a_multi_card_string_run(
          read_map={REGION_BASE: REGION_BYTES, 0x2000: REGION_BYTES})
     out = capsys.readouterr().out
 
-    assert out.count("[ P ] PROCESS CONTEXT") == 1
-    assert out.count("[ 5 ] EXCEPTION CONTEXT") == 2
+    assert out.count("PROCESS CONTEXT") == 1
+    assert out.count("EXCEPTION CONTEXT") == 2
 
 
 def test_a_missing_section_says_so_rather_than_printing_nothing(monkeypatch, tmp_path, capsys):
@@ -196,7 +196,7 @@ def test_the_console_says_when_it_shows_less_than_was_retained(monkeypatch, tmp_
          read_map={REGION_BASE: data})
     out = capsys.readouterr().out
 
-    assert f"console shows {CONSOLE_STRING_CONTEXT} of" in out
+    assert f"this section shows {CONSOLE_STRING_CONTEXT} of" in out
     assert "use --verbose for all of them" in out
     assert "--json carries the same retained set" in out
 
@@ -211,7 +211,7 @@ def test_console_omission_and_data_truncation_are_worded_differently(
     _run(monkeypatch, tmp_path, mf, dump_path, ["--report-addr", hex(REGION_BASE)])
     out = capsys.readouterr().out
 
-    assert "console shows" in out
+    assert "this section shows" in out
     assert f"retained set cut at the cap of {MAX_CORRELATED_HANDLES}" in out
     # A cap drops eligible records before anything is retained, so no
     # detail level and no document can produce them.
