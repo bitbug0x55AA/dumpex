@@ -7,7 +7,8 @@ packaged resources (rules.yaml, the YARA rule files, the JSON output
 schema) are readable via importlib.resources, its MPL-2.0 metadata and
 license/notice files are present, the rules loader picks up the packaged
 rules.yaml rather than silently falling back to the built-in emergency
-defaults, and the CLI entry point runs.
+defaults, the CLI entry point runs, and the instruction decoder that came
+with the base dependencies actually decodes.
 
 Deliberately NOT a pytest test: it must run standalone, with no pytest
 and no dependency on this repository's source tree, from a fresh venv
@@ -60,54 +61,58 @@ def validate_current_schema_is_listed(current_schema: str) -> None:
               "never actually be smoke-tested")
 
 
-def validate_optional_decoder() -> None:
-    """The installed package must be import-safe and honest about the
-    optional instruction decoder, whichever way this install went.
+def validate_declared_decoder() -> None:
+    """The installed distribution must declare the instruction decoder as
+    a base requirement and must actually decode with it.
 
-    A wheel/sdist install carries no decoder, so the disassembler seam has
-    to import and answer `unavailable` rather than raise, and the build
-    self-check has to fail with the one remedy a Python install can act
-    on. An install that does have the decoder must actually decode. Both
-    are real contracts, so neither outcome is a skip.
+    Instruction context is a built-in `--report` capability, so a wheel or
+    sdist installed with no extras carries `capstone` like any other
+    dependency. This asserts all three links of that chain: the metadata
+    names the requirement unconditionally, the production
+    `decode_window()` seam decodes the synthetic pair on both supported
+    architectures, and the shipped `--self-check` exits 0. An absent
+    backend is a failure here, never a skip.
     """
-    from dumpex.core.disasm import (
-        DisasmAvailability, DisasmBackendStatus, backend_status, decode_window,
-    )
+    import importlib.metadata
+
+    from dumpex.core.disasm import DisasmBackendStatus, backend_status, decode_window
+
+    requirements = importlib.metadata.distribution("dumpex").requires or ()
+    # An extra's requirement carries an `extra == "..."` marker; a base
+    # requirement carries no marker at all. Reading the marker, not the
+    # name, is what separates "installed with the wheel" from "installed
+    # because this environment happened to ask for an extra".
+    unconditional = [line for line in requirements if ";" not in line]
+    if not any(line.lower().startswith("capstone") for line in unconditional):
+        _fail(f"the installed distribution does not require capstone unconditionally: "
+              f"a default install would ship without a decoder (base requirements: "
+              f"{unconditional})")
 
     backend = backend_status()
+    if backend.status is not DisasmBackendStatus.AVAILABLE:
+        _fail(f"a default install's decoder backend is {backend.status.value} "
+              f"({backend.exception_type}: {backend.reason}) -- instruction context is "
+              f"a built-in capability, not an optional one")
+
     # nop; ret -- the same synthetic pair dumpex.core.selfcheck decodes.
-    decoded = decode_window(code=b"\x90\xc3", base_va=0x140001000, architecture="x64")
+    for architecture, base_va in (("x86", 0x00401000), ("x64", 0x140001000)):
+        decoded = decode_window(code=b"\x90\xc3", base_va=base_va,
+                                architecture=architecture)
+        mnemonics = tuple(insn.mnemonic for insn in decoded.instructions)
+        if mnemonics != ("nop", "ret"):
+            _fail(f"the installed decoder returned {mnemonics!r} for 90 c3 on "
+                  f"{architecture}, not ('nop', 'ret')")
 
     check = subprocess.run([sys.executable, "-m", "dumpex", "--self-check"],
                            capture_output=True, text=True)
     output = check.stdout + check.stderr
     if "Traceback" in output:
         _fail(f"'python -m dumpex --self-check' printed a traceback:\n{output}")
-
-    if backend.status is DisasmBackendStatus.AVAILABLE:
-        mnemonics = tuple(insn.mnemonic for insn in decoded.instructions)
-        if mnemonics != ("nop", "ret"):
-            _fail(f"the installed decoder returned {mnemonics!r} for 90 c3, not "
-                  f"('nop', 'ret')")
-        if check.returncode != 0:
-            _fail(f"'python -m dumpex --self-check' exited {check.returncode} with a "
-                  f"loaded decoder:\n{output}")
-        print(f"optional decoder installed and decoding: capstone {backend.version}")
-        return
-
-    if decoded.availability is not DisasmAvailability.UNAVAILABLE:
-        _fail(f"no decoder backend loaded ({backend.status.value}) but decode_window() "
-              f"reported {decoded.availability.value}")
-    if decoded.instructions:
-        _fail("decode_window() returned instructions with no decoder backend loaded")
-    if check.returncode == 0:
-        _fail(f"'python -m dumpex --self-check' exited 0 with no decoder backend:\n"
-              f"{output}")
-    if backend.status is DisasmBackendStatus.MODULE_ABSENT:
-        if "pip install dumpex[disasm]" not in output:
-            _fail(f"a base install's self-check does not name the optional extra:\n"
-                  f"{output}")
-    print(f"optional decoder absent and reported accurately: {backend.status.value}")
+    if check.returncode != 0:
+        _fail(f"'python -m dumpex --self-check' exited {check.returncode} on a default "
+              f"install:\n{output}")
+    print(f"decoder installed with the base dependencies and decoding: "
+          f"capstone {backend.version}")
 
 
 def main() -> None:
@@ -219,7 +224,7 @@ def main() -> None:
         _fail(f"'python -m dumpex --help' exited {result.returncode}\n"
               f"stdout: {result.stdout}\nstderr: {result.stderr}")
 
-    validate_optional_decoder()
+    validate_declared_decoder()
 
     print("OK: package smoke test passed")
 

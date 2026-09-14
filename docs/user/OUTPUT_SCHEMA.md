@@ -665,7 +665,8 @@ actual protection. A mismatch is an observation an analyst follows up, not a
 verdict.
 
 `instruction_context` reads a bounded byte window at one approved anchor
-address and decodes it through an optional isolated disassembler. `anchor_source`
+address and decodes it through the isolated disassembler seam every supported
+installation carries. `anchor_source`
 names which anchor was used, chosen in this priority and only when it is
 correlated with this card: an exception RIP (only when its record relates to the
 anchor thread or region — never the dump's own process-wide crash record), a
@@ -680,9 +681,11 @@ private memory, or a short header read — a WOW64 thread context, then the
 anchor thread's context flavour (`RIP`/`EIP`), then the SystemInfo are used;
 only if none of those settles it is the state `arch_undetermined`. `decoder_state` is `decoded`, `not_run` (no
 bytes were captured at the anchor), `unavailable` (no decoder answered: the
-`capstone` dependency is absent, or it is installed and its native library did
-not load — the section limitation says which, and a packaged executable is
-never told to run `pip install`), `unsupported_arch`,
+`capstone` dependency — a base requirement of every supported installation — is
+missing, or it is present and its native library did not load. Either way the
+installation or build is broken rather than merely unconfigured; the section
+limitation says which, and a packaged executable is never told to run
+`pip install`), `unsupported_arch`,
 `arch_undetermined`, `decode_error` (an invalid opcode a full instruction's
 worth of bytes from the failure point still cannot decode), or `undecoded_tail`
 (the capture ends before that many lookahead bytes are available and a short

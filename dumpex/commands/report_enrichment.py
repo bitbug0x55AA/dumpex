@@ -1720,10 +1720,12 @@ def _decoder_unavailable_limitation(backend) -> str:
     this process was packaged and for why the backend was unusable.
 
     A packaged executable ships its own decoder, so a decoder missing
-    there is a defect in that build and no `pip` command can reach it;
-    only a Python installation is pointed at the optional extra. A
-    backend that is installed and failed to load names the raising
-    exception's type and nothing else -- no path, no traceback."""
+    there is a defect in that build and no `pip` command can reach it. A
+    Python installation declares the decoder as a base dependency, so an
+    absent one is an incomplete installation rather than a feature left
+    unrequested. A backend that is present and failed to load names the
+    raising exception's type and nothing else -- no path, no
+    traceback."""
     status = getattr(backend, "status", None)
     load_failed = status is DisasmBackendStatus.LOAD_FAILURE
     raised = getattr(backend, "exception_type", None) if load_failed else None
@@ -1738,8 +1740,8 @@ def _decoder_unavailable_limitation(backend) -> str:
     if load_failed:
         return (f"the installed disassembler did not load{named}: the instruction window "
                 f"was not decoded")
-    return ("no disassembler is installed (pip install dumpex[disasm]): the instruction "
-            "window was not decoded")
+    return ("the disassembler dumpex depends on is missing: this installation is "
+            "incomplete and the instruction window was not decoded")
 
 
 def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidates,

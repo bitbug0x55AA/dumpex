@@ -1,6 +1,10 @@
-"""The decoder backend seam: telling an absent optional dependency apart
-from one that is installed and will not load, and keeping the reason for
-either bounded and safe to print."""
+"""The decoder backend seam: telling an absent dependency apart from one
+that is present and will not load, and keeping the reason for either
+bounded and safe to print.
+
+The absent states below are simulated. capstone is a base dependency, so
+a real installation reaches
+:func:`test_a_loaded_backend_is_named_on_every_decode_result`."""
 import builtins
 import sys
 
@@ -56,7 +60,7 @@ def test_an_unloadable_native_library_is_a_load_failure(monkeypatch):
 
 
 def test_a_missing_dependency_of_capstone_is_a_load_failure(monkeypatch):
-    # capstone is installed; something it imports is not. The optional
+    # capstone is installed; something it imports is not. The declared
     # dependency is present, so this is a broken backend, not an absent one.
     _raising_import(monkeypatch, ModuleNotFoundError("No module named 'ctypes'",
                                                      name="ctypes"))
@@ -137,8 +141,9 @@ def test_a_backend_reason_is_cut_to_its_cap(monkeypatch):
 
 def test_a_loaded_backend_carries_no_failure_reason():
     backend = backend_status()
-    if not backend.available:
-        pytest.skip("capstone not installed")
+    assert backend.available, (
+        "capstone is a base dependency of dumpex: an environment that can "
+        "import dumpex must be able to decode")
     assert backend.exception_type is None
     assert backend.reason is None
     assert backend.version
@@ -164,8 +169,9 @@ def test_decode_window_reports_an_absent_module_as_absent(monkeypatch):
 
 
 def test_a_loaded_backend_is_named_on_every_decode_result():
-    if not disasm_available():
-        pytest.skip("capstone not installed")
+    assert disasm_available(), (
+        "capstone is a base dependency of dumpex: an environment that can "
+        "import dumpex must be able to decode")
     result = decode_window(code=_NOP_RET, base_va=BASE, architecture="x64")
     assert result.backend.status is DisasmBackendStatus.AVAILABLE
 

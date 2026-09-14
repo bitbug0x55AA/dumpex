@@ -375,14 +375,21 @@ exception context, allocation neighborhood, correlated handles, anchor-aware
 string context, where the anchor sits in its owning PE image, a bounded
 instruction window at the anchor, and the anchor module's correlated IAT slots.
 
-The instruction window needs a `capstone` decoder. The Python distribution
-keeps it optional (`pip install "dumpex[disasm]"`); the official Windows
-executable bundles it, so `dumpex.exe` decodes with no Python or pip step at
-all. Without a decoder that one section reports an explicit unavailable state
-and says whether the dependency is absent or installed and unloadable; nothing
-else changes. A packaged executable that cannot decode is a defect in that
-build, and it says so rather than suggesting a `pip install` it could not
-act on.
+The instruction window needs a `capstone` decoder, and every supported
+installation of dumpex comes with one: `capstone` is a base dependency of the
+Python distribution, so a plain `pip install dumpex` — or an install straight
+from a Git ref — is ready to decode, and the official Windows executable
+bundles the package and its native library, so `dumpex.exe` decodes with no
+Python or pip step at all. There is no extra to discover; `dumpex[disasm]`
+remains accepted as an alias of the plain install and adds nothing.
+
+A decoder that does not answer therefore reports a broken installation, not a
+feature left unrequested. That one section reports an explicit unavailable
+state and says whether the dependency is missing or present and unloadable;
+nothing else changes. A packaged executable that cannot decode is a defect in
+that build, and it says so rather than suggesting a `pip install` it could not
+act on. `dumpex --self-check` decodes fixed synthetic bytes through the same
+seam and exits 0 or 1, so an installation can be verified on its own.
 
 A `--report-string` run builds at most 32 cards and reads at most 256 MB of
 content across them; any actionable hit left untriaged is counted in the output

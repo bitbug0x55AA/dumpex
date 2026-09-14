@@ -1,22 +1,23 @@
 """The isolated disassembler seam.
 
-`capstone` is an optional dependency of the Python distribution
-(`pip install dumpex[disasm]`) and an unconditional part of the official
-Windows executable. This module is the only place it is imported, and
-every entry point works whether or not it is there: with no decoder, a
-decode request returns a result whose `availability` is `"unavailable"`
-and whose instruction tuple is empty, never an exception and never a
-partial guess.
+`capstone` is a base dependency of dumpex and an unconditional part of
+the official Windows executable, so a successful installation of either
+kind arrives with a decoder. This module is the only place it is
+imported, and every entry point still works when the backend does not
+answer: a decode request then returns a result whose `availability` is
+`"unavailable"` and whose instruction tuple is empty, never an exception
+and never a partial guess. That state describes a damaged installation
+or a development tree, never the expected shape of a supported install.
 
 A decoder that does not answer has two distinct causes and this module
-keeps them apart. `module_absent` is the optional dependency not being
-installed. `load_failure` is the backend being importable by name and
-still unusable -- capstone resolves its native library through
+keeps them apart. `module_absent` is the declared dependency not being
+present at all. `load_failure` is the backend being importable by name
+and still unusable -- capstone resolves its native library through
 `ctypes.CDLL()` at import time, so a missing, misplaced, or incompatible
 `capstone.dll` raises `ImportError`/`OSError`, not `ModuleNotFoundError`.
-Only the first is something `pip` can fix, and only a Python install can
-act on that advice at all. Every failure reason is carried as bounded,
-path-redacted, printable-ASCII text; a traceback never reaches a caller.
+The two have different remedies, and a packaged executable can act on
+neither. Every failure reason is carried as bounded, path-redacted,
+printable-ASCII text; a traceback never reaches a caller.
 
 What this module decodes is a bounded byte window at a known virtual
 address. It resolves the mechanically determinable branch operand of each
@@ -88,11 +89,12 @@ class DisasmAvailability(str, Enum):
 class DisasmBackendStatus(str, Enum):
     """Why the decoder backend is or is not usable.
 
-    ``MODULE_ABSENT`` -- the optional `capstone` dependency is not
-    installed. ``LOAD_FAILURE`` -- it is installed and did not load: its
+    ``MODULE_ABSENT`` -- the declared `capstone` dependency is not
+    present. ``LOAD_FAILURE`` -- it is present and did not load: its
     native library is missing, misplaced, or incompatible, or its own
-    import raised. The two are never merged, because only the first is
-    an absent dependency and only the first has a `pip` remedy.
+    import raised. The two are never merged: the first is an incomplete
+    installation, the second an installed backend that does not work,
+    and each is repaired differently.
     """
     AVAILABLE = "available"
     MODULE_ABSENT = "module_absent"
@@ -315,12 +317,12 @@ def _load_backend() -> "tuple[object | None, DisasmBackend]":
     Performed on every call so a test can remove the module from
     ``sys.modules`` and see the unavailable path. Never raises: every
     failure becomes a :class:`DisasmBackend` whose status says whether
-    the optional dependency is absent or present and unusable."""
+    the declared dependency is absent or present and unusable."""
     try:
         import capstone
     except ModuleNotFoundError as exc:
-        # The optional dependency is absent only when ``capstone`` itself
-        # is exactly the name that could not be found. A missing
+        # The dependency is absent only when ``capstone`` itself is
+        # exactly the name that could not be found. A missing
         # ``capstone.x86`` -- a damaged install, or a submodule packaging
         # left behind -- means the distribution IS there and is
         # incomplete, and so does a missing module capstone imports. An

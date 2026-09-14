@@ -876,13 +876,17 @@ def _limitation(context) -> str:
     return limitation
 
 
-def test_a_python_install_without_the_extra_is_pointed_at_pip(monkeypatch):
+def test_a_python_install_without_the_decoder_is_told_it_is_incomplete(monkeypatch):
+    # The decoder is a base dependency, so a Python install that lacks it
+    # is broken rather than merely missing an unrequested feature.
     monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
     monkeypatch.setitem(sys.modules, "capstone", None)
     mf = _pe_mf()
     context, _slots = _instruction(_cache(mf), mf, [("card_anchor", PE_ENTRY_VA)])
+    limitation = _limitation(context)
     assert context.decoder_state == "unavailable"
-    assert "pip install dumpex[disasm]" in _limitation(context)
+    assert "this installation is incomplete" in limitation
+    assert "dumpex[disasm]" not in limitation
 
 
 def test_a_frozen_runtime_is_never_told_to_pip_install(monkeypatch):
@@ -913,7 +917,7 @@ def test_an_installed_backend_that_did_not_load_is_not_called_uninstalled(monkey
     mf = _pe_mf()
     context, _slots = _instruction(_cache(mf), mf, [("card_anchor", PE_ENTRY_VA)])
     limitation = _limitation(context)
-    assert "pip install dumpex[disasm]" not in limitation
+    assert "this installation is incomplete" not in limitation
     assert "did not load (ImportError)" in limitation
 
 
@@ -940,7 +944,7 @@ def test_every_decoder_limitation_stays_within_the_enrichment_text_cap(monkeypat
 
 
 def test_an_unclassified_backend_keeps_the_absent_dependency_wording(monkeypatch):
-    # A decode result from before the backend was recorded carries None;
-    # the safe reading is the absent optional dependency.
+    # A decode result that carries no backend record names no exception
+    # type; the safe reading is the dependency being absent.
     monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
-    assert "pip install dumpex[disasm]" in _decoder_unavailable_limitation(None)
+    assert "this installation is incomplete" in _decoder_unavailable_limitation(None)

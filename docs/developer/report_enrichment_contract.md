@@ -483,13 +483,15 @@ mismatch are investigation leads: none of them touches `findings`,
 `finding_details`, `verdict`, `coverage.status`, or the exit code.
 
 The disassembler is the `capstone` dependency, imported only inside
-`dumpex.core.disasm`. It is optional for the Python distribution
-(`dumpex[disasm]`) and unconditional in the official Windows executable. With
-no decoder the instruction section reports `decoder_state: unavailable` and an
-empty instruction list.
+`dumpex.core.disasm`. It is a base requirement of the Python distribution and
+unconditional in the official Windows executable, so every supported
+installation can decode; the `disasm` extra survives only as an empty alias for
+older installation instructions. With no decoder the instruction section
+reports `decoder_state: unavailable` and an empty instruction list, and that
+state describes a damaged installation or a development tree.
 
 `unavailable` covers two causes and the section limitation keeps them apart.
-`module_absent` is the optional dependency not being installed. `load_failure`
+`module_absent` is the declared dependency not being present. `load_failure`
 is a backend that imports by name and still does not work -- capstone resolves
 its native library through `ctypes.CDLL()` during its own import, so a missing
 or incompatible `capstone.dll` raises `ImportError`/`OSError`, never

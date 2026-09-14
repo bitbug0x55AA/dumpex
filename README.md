@@ -59,7 +59,8 @@ python -m pip install -e .
 ```
 
 The base install can already read the packaged `rules.yaml` TTP defaults
-(`pyyaml` is a required dependency, not optional). Install YARA support for
+(`pyyaml` is a required dependency, not optional) and decode `--report`
+instruction windows (`capstone` likewise). Install YARA support for
 the complete hunt set:
 
 ```bash

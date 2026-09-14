@@ -1,10 +1,11 @@
 """The build's own capability check.
 
-A Python installation can add the instruction decoder with an extra at
-any time. A packaged executable cannot: the decoder it was built with is
-the decoder its users get, so a build that lost the `capstone` package,
-its package data, or its native library ships a headline `--report`
-capability that nobody who has the executable can repair.
+The instruction decoder is part of every supported dumpex installation:
+`capstone` is a base dependency of the Python distribution and the
+official Windows executable bundles the package together with its native
+library. A build or an install that lost it ships a headline `--report`
+capability its users cannot exercise, and the holder of a packaged
+executable cannot repair one at all.
 
 This module decodes fixed synthetic bytes -- `90 c3`, x86 `nop` followed
 by `ret` -- through :func:`dumpex.core.disasm.decode_window`, the same
@@ -132,15 +133,17 @@ def _unavailable_guidance(backend) -> str:
     chosen by how this process was packaged.
 
     A packaged executable ships its own decoder, so a backend missing
-    there is a defect in that build and `pip` cannot repair it. Only a
-    Python installation is told to install the optional extra, and only
-    when the dependency is genuinely absent rather than present and
-    unloadable."""
+    there is a defect in that build and no `pip` command reaches it. A
+    Python installation declares the decoder as a base dependency, so an
+    absent one is an incomplete installation to repair rather than an
+    extra to discover; a present one that will not load is a broken
+    backend and is named as such."""
     if is_frozen():
         return ("this executable's bundled decoder is missing or unloadable: "
                 "the build is incomplete and must not be published")
     if backend.status is DisasmBackendStatus.MODULE_ABSENT:
-        return "install the optional decoder with: pip install dumpex[disasm]"
+        return ("the decoder dumpex depends on is missing: this installation is "
+                "incomplete -- pip install --force-reinstall dumpex")
     return ("the installed decoder did not load: reinstall capstone for this "
             "interpreter and platform")
 

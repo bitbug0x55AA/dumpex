@@ -62,11 +62,33 @@ jobs:
           Write-Host "Version check passed: $expected"
 
       - name: Install dependencies
-        # `disasm` is named explicitly: the official Windows executable
-        # bundles the instruction decoder unconditionally, so the release
-        # environment declares that capability itself rather than
-        # inheriting capstone from whatever `dev` happens to list.
-        run: python -m pip install "pyinstaller==6.21.0" -e ".[full,disasm,dev]"
+        # The instruction decoder arrives with the base dependencies:
+        # capstone is declared in pyproject.toml's project.dependencies,
+        # not in an extra, so no release environment can lose it by way of
+        # an extras cleanup and the executable is built against the same
+        # backend a normal installation gets.
+        run: python -m pip install "pyinstaller==6.21.0" -e ".[full,dev]"
+
+      - name: Verify the decoder arrived with the base dependencies
+        # Read the installed distribution's own metadata: capstone must be
+        # an unconditional requirement, not one carried by `full` or
+        # `dev`. A release built in an environment where an extra supplied
+        # the decoder would pass every later gate while the wheel a user
+        # installs shipped without one. The self-check then proves this
+        # interpreter really decodes, independently of the executable.
+        shell: pwsh
+        run: |
+          $script = "import importlib.metadata as m; from packaging.requirements import Requirement; " +
+                    "rs = m.distribution('dumpex').requires or (); " +
+                    "print(' '.join(Requirement(r).name for r in rs if Requirement(r).marker is None))"
+          $baseRequirements = (python -c $script) -split ' '
+          if ($baseRequirements -notcontains 'capstone') {
+            throw "dumpex's base requirements do not name capstone ($baseRequirements): the decoder would reach users only through an extra"
+          }
+          python -m dumpex --self-check
+          if ($LASTEXITCODE -ne 0) {
+            throw "the release environment's own Python installation cannot decode"
+          }
 
       - name: Verify resolved package version
         shell: pwsh
@@ -94,7 +116,9 @@ jobs:
         # ctypes.CDLL(), so the modules, the package data, and
         # capstone/lib/capstone.dll must all travel together; a hidden
         # import alone would leave an executable that imports the binding
-        # and then raises ImportError on the missing library.
+        # and then raises ImportError on the missing library. PyInstaller
+        # follows imports, and dumpex.core.disasm imports capstone inside
+        # a function, so the collection is named here explicitly.
         run: pyinstaller --onefile dumpex.py --name dumpex --collect-data dumpex.rules_pkg --collect-all capstone --python-option "X utf8"
 
       - name: Verify bundled package resources

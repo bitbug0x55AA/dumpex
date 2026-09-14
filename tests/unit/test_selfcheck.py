@@ -6,8 +6,6 @@ import io
 import sys
 from pathlib import Path
 
-import pytest
-
 from dumpex.core import runtime
 from dumpex.core.disasm import (
     DisasmAvailability, DisasmBackendStatus, disasm_available,
@@ -18,9 +16,6 @@ from dumpex.core.selfcheck import (
 )
 
 _REPO_ROOT = Path(__file__).parents[2]
-
-needs_capstone = pytest.mark.skipif(not disasm_available(),
-                                    reason="capstone not installed")
 
 
 def _load_script(name):
@@ -57,7 +52,14 @@ def _unloadable_capstone(monkeypatch, exc=None):
 
 # ── a build that can decode ───────────────────────────────────────────
 
-@needs_capstone
+def test_this_environment_has_the_decoder_it_declares():
+    # The decode checks below run unconditionally because capstone is a
+    # base dependency. This one names that premise, so an environment
+    # without a backend fails here rather than producing a wall of
+    # unrelated failures.
+    assert disasm_available()
+
+
 def test_the_synthetic_bytes_decode_on_every_supported_architecture():
     result = run_disasm_self_check()
     assert result.ok
@@ -65,7 +67,6 @@ def test_the_synthetic_bytes_decode_on_every_supported_architecture():
     assert any("x64: 90 c3 -> nop, ret" in line for line in result.lines)
 
 
-@needs_capstone
 def test_a_usable_decoder_exits_zero():
     code, output = _render()
     assert code == 0
@@ -77,7 +78,6 @@ def test_the_checked_bytes_are_a_nop_and_a_ret():
     assert SELF_CHECK_EXPECTED_MNEMONICS == ("nop", "ret")
 
 
-@needs_capstone
 def test_the_release_gate_looks_for_lines_the_self_check_prints():
     # The frozen smoke matches the executable's output verbatim; drift
     # between the two would leave the release gate asserting nothing.
@@ -97,11 +97,15 @@ def test_an_absent_decoder_fails_the_check(monkeypatch):
     assert f"backend: {DisasmBackendStatus.MODULE_ABSENT.value}" in output
 
 
-def test_a_python_install_missing_the_extra_is_told_how_to_install_it(monkeypatch):
+def test_a_python_install_without_the_decoder_is_told_it_is_incomplete(monkeypatch):
+    # The decoder is a base dependency, so its absence is a broken
+    # installation to repair, not an extra the user has yet to request.
     monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
     _absent_capstone(monkeypatch)
     _, output = _render()
-    assert "pip install dumpex[disasm]" in output
+    assert "this installation is incomplete" in output
+    assert "pip install --force-reinstall dumpex" in output
+    assert "dumpex[disasm]" not in output
 
 
 def test_an_unloadable_decoder_fails_the_check(monkeypatch):
@@ -114,11 +118,12 @@ def test_an_unloadable_decoder_fails_the_check(monkeypatch):
 
 
 def test_an_unloadable_decoder_is_not_blamed_on_a_missing_install(monkeypatch):
-    # A backend that is installed and will not load has no pip remedy.
+    # A backend that is present and will not load is repaired by fixing
+    # that backend, not by reinstalling dumpex.
     monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
     _unloadable_capstone(monkeypatch)
     _, output = _render()
-    assert "pip install dumpex[disasm]" not in output
+    assert "this installation is incomplete" not in output
     assert "reinstall capstone" in output
 
 
@@ -186,7 +191,6 @@ def _decoding(monkeypatch, **fields):
                         lambda **kwargs: DecodeResult(**defaults))
 
 
-@needs_capstone
 def test_a_backend_that_stops_answering_mid_check_fails(monkeypatch):
     _decoding(monkeypatch, availability=DisasmAvailability.UNAVAILABLE)
     code, output = _render()
@@ -194,7 +198,6 @@ def test_a_backend_that_stops_answering_mid_check_fails(monkeypatch):
     assert "no decoder answered" in output
 
 
-@needs_capstone
 def test_an_architecture_the_build_cannot_decode_fails(monkeypatch):
     _decoding(monkeypatch, arch_supported=False)
     code, output = _render()
@@ -202,7 +205,6 @@ def test_an_architecture_the_build_cannot_decode_fails(monkeypatch):
     assert "does not decode this architecture" in output
 
 
-@needs_capstone
 def test_a_decode_that_did_not_finish_fails(monkeypatch):
     _decoding(monkeypatch, stopped_reason="decode_error")
     code, output = _render()
@@ -210,7 +212,6 @@ def test_a_decode_that_did_not_finish_fails(monkeypatch):
     assert "decoding stopped at decode_error" in output
 
 
-@needs_capstone
 def test_the_wrong_instructions_fail_even_when_decoding_succeeded(monkeypatch):
     from dumpex.core.disasm import BranchKind, DecodedInsn
 
@@ -223,7 +224,6 @@ def test_the_wrong_instructions_fail_even_when_decoding_succeeded(monkeypatch):
     assert "decoded to int3, expected nop, ret" in output
 
 
-@needs_capstone
 def test_a_decode_that_produced_nothing_says_so(monkeypatch):
     _decoding(monkeypatch, instructions=())
     code, output = _render()

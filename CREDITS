@@ -126,9 +126,9 @@ License
   BSD 3-Clause. The complete notice is reproduced in THIRD_PARTY_NOTICES.
 
 Used in
-  dumpex/core/disasm.py. Optional for the Python distribution, via the
-  `disasm` extra; bundled unconditionally in the official Windows executable,
-  including its native library.
+  dumpex/core/disasm.py. A base requirement of the Python distribution;
+  bundled unconditionally in the official Windows executable, including its
+  native library.
 
 Nature of use
   Runtime dependency only. dumpex imports the published `capstone` package to

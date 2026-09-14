@@ -98,11 +98,12 @@ Capstone Engine
 ---------------
 
 The `capstone` dependency provides the x86/x64 decoder behind `--report`
-instruction context. It is optional for the Python distribution, where it is
-installed via the `disasm` extra. The official dumpex Windows executable
-incorporates Capstone unconditionally -- the Capstone Python package and its
-native library are part of every such build -- and that executable therefore
-redistributes Capstone in binary form under the following BSD 3-Clause notice:
+instruction context. It is a base requirement of the Python distribution, so
+every wheel, sdist, and source installation resolves it. The official dumpex
+Windows executable incorporates Capstone unconditionally -- the Capstone
+Python package and its native library are part of every such build -- and that
+executable therefore redistributes Capstone in binary form under the following
+BSD 3-Clause notice:
 
 Copyright (c) 2013, COSEINC. All rights reserved.
 

@@ -1,8 +1,10 @@
 """The isolated disassembler seam: bounded decoding, branch-operand
-resolution, and the graceful state when capstone is not installed."""
-import sys
+resolution, and the graceful state when the backend does not answer.
 
-import pytest
+capstone is a base dependency, so these decodes run unconditionally. A
+skip would turn the one environment this suite must reject -- a dumpex
+that cannot decode -- into a silent pass."""
+import sys
 
 from dumpex.core import disasm
 from dumpex.core.disasm import (
@@ -10,8 +12,11 @@ from dumpex.core.disasm import (
     disasm_available,
 )
 
-pytestmark = pytest.mark.skipif(not disasm_available(),
-                                reason="capstone not installed")
+
+def test_the_declared_decoder_answers_in_this_environment():
+    assert disasm_available(), (
+        "capstone is a base dependency of dumpex: an environment that can "
+        "import dumpex must be able to decode")
 
 # x64 machine code fragments, each assembled by hand at a known base.
 BASE = 0x140001000

@@ -44,6 +44,15 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   into one line naming the regions it covers, instead of repeating the
   identical sentence once per hit; a gap only one card carries keeps its own
   region prefix.
+- The instruction decoder is now a base dependency. `pip install dumpex`, an
+  install from a Git ref, and the official Windows executable all arrive able
+  to decode `--report` instruction windows, resolve branch targets, and
+  correlate the IAT; no extra has to be discovered or requested. The `disasm`
+  extra remains accepted so existing instructions keep working, but it is now
+  empty and installs nothing beyond the plain package. A decoder that is
+  missing or will not load is reported as a broken installation or build
+  rather than as an optional feature awaiting installation, and `--report`,
+  `--self-check`, and the documentation say so consistently.
 
 ### Added
 
@@ -68,7 +77,7 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   Capstone's license with the code it now ships.
 - A decoder that is installed but will not load is no longer reported as one
   that is not installed. `--report` instruction context distinguishes an
-  absent optional dependency from a native library that failed to load, names
+  absent dependency from a native library that failed to load, names
   the raising exception's type, and keeps the reason bounded and free of
   filesystem paths. A packaged executable is told its decoder is a
   distribution defect rather than being advised to run `pip install`, which it
