@@ -264,6 +264,11 @@ jobs:
           coverage report --include="dumpex/commands/handles.py" --fail-under=90
           coverage report --include="dumpex/ui/access_rights.py" --fail-under=95
           coverage report --include="dumpex/commands/profile.py"  --fail-under=90
+          # The decoder seam and the release self-check gate the Windows
+          # executable's advertised Report capability.
+          coverage report --include="dumpex/core/disasm.py"    --fail-under=90
+          coverage report --include="dumpex/core/selfcheck.py" --fail-under=95
+          coverage report --include="dumpex/core/runtime.py"   --fail-under=95
 
   minidump-version-range:
     # Verify every listed minidump version installs and supports the

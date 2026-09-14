@@ -62,7 +62,11 @@ jobs:
           Write-Host "Version check passed: $expected"
 
       - name: Install dependencies
-        run: python -m pip install "pyinstaller==6.21.0" -e ".[full,dev]"
+        # `disasm` is named explicitly: the official Windows executable
+        # bundles the instruction decoder unconditionally, so the release
+        # environment declares that capability itself rather than
+        # inheriting capstone from whatever `dev` happens to list.
+        run: python -m pip install "pyinstaller==6.21.0" -e ".[full,disasm,dev]"
 
       - name: Verify resolved package version
         shell: pwsh
@@ -84,7 +88,14 @@ jobs:
         # canonical dumpex/rules_pkg/data layout via importlib.resources.
         # The CLI deliberately uses Unicode evidence/output labels, so force
         # UTF-8 mode for redirected/non-console Windows executions as well.
-        run: pyinstaller --onefile dumpex.py --name dumpex --collect-data dumpex.rules_pkg --python-option "X utf8"
+        #
+        # capstone is collected whole. Its Python package resolves the
+        # native backend package-relative and loads it through
+        # ctypes.CDLL(), so the modules, the package data, and
+        # capstone/lib/capstone.dll must all travel together; a hidden
+        # import alone would leave an executable that imports the binding
+        # and then raises ImportError on the missing library.
+        run: pyinstaller --onefile dumpex.py --name dumpex --collect-data dumpex.rules_pkg --collect-all capstone --python-option "X utf8"
 
       - name: Verify bundled package resources
         shell: pwsh
@@ -103,7 +114,24 @@ jobs:
               throw "PyInstaller artifact is missing package resource: $resource"
             }
           }
+          # The decoder's native backend. Its presence in the archive is
+          # necessary, not sufficient -- the self-check step below is what
+          # proves it loads and decodes.
+          if (-not $archive.Contains('capstone.dll')) {
+            throw "PyInstaller artifact is missing the Capstone native library (capstone.dll)"
+          }
           & .\dist\dumpex.exe --help
+
+      - name: Verify the built executable decodes instructions
+        # Execute the real artifact and require the production
+        # decode_window() path to answer. A missing or unloadable
+        # capstone.dll fails the release here, before any archive exists.
+        shell: pwsh
+        run: |
+          python scripts/frozen_disasm_smoke.py dist/dumpex.exe
+          if ($LASTEXITCODE -ne 0) {
+            throw "dist/dumpex.exe failed the decoder self-check"
+          }
 
       - name: Stage the output-contract schemas as release assets
         # Ship dumpex.schemas.CURRENT_SCHEMA and every supported frozen schema
@@ -215,6 +243,22 @@ jobs:
           # Validate the copies extracted from the final ZIP.
           foreach ($schema in $bundledSchemas) {
             python -c "import json; json.load(open(r'$(Join-Path $extractDir $schema)', encoding='utf-8'))"
+          }
+
+          # The dependency notices must reach the bundle, Capstone's
+          # included: the executable carries its code unconditionally.
+          $licenseDir = Join-Path $extractDir 'third-party-licenses'
+          $capstoneNotices = Get-ChildItem -Path $licenseDir -Recurse -Filter '*capstone*'
+          if (-not $capstoneNotices) {
+            throw "Release bundle carries Capstone code but no Capstone license file"
+          }
+
+          # The executable users actually receive, run from the extracted
+          # copy: staging or archiving must not be able to drop a file the
+          # decoder needs without failing the release.
+          python scripts/frozen_disasm_smoke.py (Join-Path $extractDir 'dumpex.exe')
+          if ($LASTEXITCODE -ne 0) {
+            throw "The executable extracted from $zipPath failed the decoder self-check"
           }
 
           Write-Host "Bundle contents verified: $($required -join ', '), $($bundledSchemas -join ', ')"

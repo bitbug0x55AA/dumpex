@@ -253,6 +253,23 @@ captured memory and produces a card for each actionable private-memory hit.
 `--output` extracts each card's surrounding captured region, disambiguating
 filenames when string mode produces several cards.
 
+## Build diagnostics
+
+| Option | Description |
+|---|---|
+| `--self-check` | Verify this build's instruction decoder and exit |
+
+`--self-check` takes no dump file and no command. It decodes fixed synthetic
+bytes -- `90 c3`, `nop` then `ret` -- through the same decoder `--report`
+instruction context uses, for both x86 and x64, and exits 0 when the decoder is
+usable or 1 when it is missing or will not load. A failure names the raising
+exception and a bounded reason, never a traceback or a filesystem path.
+
+Use it to confirm an executable you downloaded is complete. The release
+workflow runs the same check against the built executable and against the copy
+extracted from the published ZIP, so a build whose decoder did not survive
+packaging never reaches a release.
+
 ## Output and case metadata
 
 | Option | Description |
@@ -358,9 +375,14 @@ exception context, allocation neighborhood, correlated handles, anchor-aware
 string context, where the anchor sits in its owning PE image, a bounded
 instruction window at the anchor, and the anchor module's correlated IAT slots.
 
-The instruction window needs the optional `capstone` dependency
-(`pip install "dumpex[disasm]"`). Without it that one section reports an explicit
-unavailable state; nothing else changes.
+The instruction window needs a `capstone` decoder. The Python distribution
+keeps it optional (`pip install "dumpex[disasm]"`); the official Windows
+executable bundles it, so `dumpex.exe` decodes with no Python or pip step at
+all. Without a decoder that one section reports an explicit unavailable state
+and says whether the dependency is absent or installed and unloadable; nothing
+else changes. A packaged executable that cannot decode is a defect in that
+build, and it says so rather than suggesting a `pip install` it could not
+act on.
 
 A `--report-string` run builds at most 32 cards and reads at most 256 MB of
 content across them; any actionable hit left untriaged is counted in the output

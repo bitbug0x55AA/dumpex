@@ -679,8 +679,10 @@ private memory, or a short header read — a WOW64 thread context, then the
 *host*: a WOW64 process on an x64 host has an `I386` main image), then the
 anchor thread's context flavour (`RIP`/`EIP`), then the SystemInfo are used;
 only if none of those settles it is the state `arch_undetermined`. `decoder_state` is `decoded`, `not_run` (no
-bytes were captured at the anchor), `unavailable` (the `capstone` dependency is
-not installed — `pip install dumpex[disasm]`), `unsupported_arch`,
+bytes were captured at the anchor), `unavailable` (no decoder answered: the
+`capstone` dependency is absent, or it is installed and its native library did
+not load — the section limitation says which, and a packaged executable is
+never told to run `pip install`), `unsupported_arch`,
 `arch_undetermined`, `decode_error` (an invalid opcode a full instruction's
 worth of bytes from the failure point still cannot decode), or `undecoded_tail`
 (the capture ends before that many lookahead bytes are available and a short

@@ -1,10 +1,22 @@
 """The isolated disassembler seam.
 
-`capstone` is an optional dependency (`pip install dumpex[disasm]`). This
-module is the only place it is imported, and every entry point works
-whether or not it is installed: with no decoder, a decode request returns
-a result whose `availability` is `"unavailable"` and whose instruction
-tuple is empty, never an exception and never a partial guess.
+`capstone` is an optional dependency of the Python distribution
+(`pip install dumpex[disasm]`) and an unconditional part of the official
+Windows executable. This module is the only place it is imported, and
+every entry point works whether or not it is there: with no decoder, a
+decode request returns a result whose `availability` is `"unavailable"`
+and whose instruction tuple is empty, never an exception and never a
+partial guess.
+
+A decoder that does not answer has two distinct causes and this module
+keeps them apart. `module_absent` is the optional dependency not being
+installed. `load_failure` is the backend being importable by name and
+still unusable -- capstone resolves its native library through
+`ctypes.CDLL()` at import time, so a missing, misplaced, or incompatible
+`capstone.dll` raises `ImportError`/`OSError`, not `ModuleNotFoundError`.
+Only the first is something `pip` can fix, and only a Python install can
+act on that advice at all. Every failure reason is carried as bounded,
+path-redacted, printable-ASCII text; a traceback never reaches a caller.
 
 What this module decodes is a bounded byte window at a known virtual
 address. It resolves the mechanically determinable branch operand of each
@@ -14,11 +26,14 @@ absolute memory operand -- and nothing else. An indirect branch through a
 register, function boundaries, call arguments, and stack state are not
 mechanically determinable from a byte window and are never reported.
 """
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 
 __all__ = [
     "DisasmAvailability",
+    "DisasmBackendStatus",
+    "DisasmBackend",
     "BranchKind",
     "DecodedInsn",
     "DecodeResult",
@@ -28,6 +43,8 @@ __all__ = [
     "MAX_INSTRUCTION_LENGTH",
     "MAX_MNEMONIC_CHARS",
     "MAX_OPERANDS_CHARS",
+    "MAX_BACKEND_REASON_CHARS",
+    "backend_status",
     "disasm_available",
     "decode_window",
 ]
@@ -51,6 +68,11 @@ MAX_INSTRUCTION_LENGTH = 15
 MAX_MNEMONIC_CHARS = 32
 MAX_OPERANDS_CHARS = 160
 
+# A backend failure reason comes from a third-party exception, so it is
+# bounded the same way dump-derived text is: one line, this many
+# characters, and no room for a message that fills a log.
+MAX_BACKEND_REASON_CHARS = 120
+
 #: The architecture tokens this module decodes. Anything else leaves a
 #: decode result `arch_supported` False with an empty instruction tuple --
 #: an explicit unsupported state, never a wrong-width decode.
@@ -61,6 +83,44 @@ class DisasmAvailability(str, Enum):
     """Whether a decoder backend is installed."""
     AVAILABLE = "available"
     UNAVAILABLE = "unavailable"
+
+
+class DisasmBackendStatus(str, Enum):
+    """Why the decoder backend is or is not usable.
+
+    ``MODULE_ABSENT`` -- the optional `capstone` dependency is not
+    installed. ``LOAD_FAILURE`` -- it is installed and did not load: its
+    native library is missing, misplaced, or incompatible, or its own
+    import raised. The two are never merged, because only the first is
+    an absent dependency and only the first has a `pip` remedy.
+    """
+    AVAILABLE = "available"
+    MODULE_ABSENT = "module_absent"
+    LOAD_FAILURE = "load_failure"
+
+
+@dataclass(frozen=True)
+class DisasmBackend:
+    """One attempt to load the decoder backend.
+
+    ``version`` is the loaded binding's own version string, read from the
+    module that answered rather than from installed metadata, so it
+    describes the code that is actually running. ``exception_type`` is
+    the raising class's bare name and ``reason`` its message reduced by
+    :func:`_sanitize_reason` to one bounded, path-free, printable-ASCII
+    line; both are None when the backend loaded, and neither ever carries
+    a traceback.
+    """
+    status: DisasmBackendStatus
+    version: "str | None" = None
+    exception_type: "str | None" = None
+    reason: "str | None" = None
+    reason_truncated: bool = False
+
+    @property
+    def available(self) -> bool:
+        """The backend loaded and can decode."""
+        return self.status is DisasmBackendStatus.AVAILABLE
 
 
 class BranchKind(str, Enum):
@@ -143,6 +203,10 @@ class DecodeResult:
     remain to tell an invalid opcode from a cut-short instruction), or
     ``decode_error`` (an invalid opcode with room for a whole instruction
     after it). The instructions before any stop are sound.
+
+    ``backend`` is the :class:`DisasmBackend` this decode ran against. It
+    says why an ``unavailable`` result is unavailable; a caller phrasing
+    guidance reads it rather than assuming an absent dependency.
     """
     availability: DisasmAvailability
     arch_supported: bool
@@ -152,6 +216,7 @@ class DecodeResult:
     bytes_decoded: int
     stopped_reason: str
     instructions: tuple = field(default_factory=tuple)
+    backend: "DisasmBackend | None" = None
 
     @property
     def decoded_ok(self) -> bool:
@@ -180,20 +245,108 @@ def _bounded(text: str, cap: int) -> "tuple[str, bool]":
     return text, False
 
 
-def _import_capstone():
-    """The one import of ``capstone`` in dumpex. Returns the module or
-    ``None``; performed on every call so a test can remove it from
-    ``sys.modules`` and see the unavailable path."""
+# A filesystem path in an exception message names the machine it came
+# from, so it is removed rather than escaped. An unquoted path has no
+# reliable end -- a profile directory named after a person, and the
+# standard program directory, both carry a space inside a directory
+# name, and no rule tells that space apart from the one before the next
+# word of prose. A path opener therefore redacts everything from itself
+# to the next quote or the end of the message: a quoted path gives its
+# own terminator back, and an unquoted one gives up the rest of the line
+# rather than a surname.
+#
+# An opener is a drive letter, a UNC prefix, or a complete POSIX
+# `/segment/`. Requiring that whole segment keeps ordinary prose such as
+# "and/or" prose.
+_PATH_RE = re.compile(
+    r"""(?:[A-Za-z]:[\\/]"""                # a drive-letter path
+    r"""|\\\\"""                            # a UNC share path
+    r"""|/(?:[^\s'"/]+/)+)"""               # a POSIX path
+    r"""[^'"]*""")
+_NON_PRINTABLE_RE = re.compile(r"[^\x20-\x7e]")
+
+
+def _sanitize_reason(text) -> "tuple[str, bool]":
+    """``(reason, truncated)`` for one exception message: a single line of
+    printable ASCII, with filesystem paths replaced by ``<path>`` and the
+    whole cut to :data:`MAX_BACKEND_REASON_CHARS`.
+
+    The text is third-party and may be hostile, so it is treated like
+    dump-derived text. Line breaks are folded first, so no reason can
+    forge a second line of a release log or a console report; anything
+    outside printable ASCII becomes ``.``, so no escape sequence survives
+    to act on a terminal. A drive-letter, UNC, or POSIX path takes the
+    rest of the message with it (see :data:`_PATH_RE`), so a user name or
+    an install directory cannot reach a log through a path whose spaces
+    hid its end."""
+    if not isinstance(text, str):
+        text = str(text)
+    one_line = " ".join(text.split())
+    redacted = _PATH_RE.sub("<path>", one_line)
+    printable = _NON_PRINTABLE_RE.sub(".", redacted)
+    return _bounded(printable, MAX_BACKEND_REASON_CHARS)
+
+
+def _failed_backend(status: DisasmBackendStatus, exc: BaseException) -> DisasmBackend:
+    """A :class:`DisasmBackend` recording ``exc`` as the reason ``status``
+    was reached."""
+    reason, cut = _sanitize_reason(str(exc))
+    return DisasmBackend(status=status, exception_type=type(exc).__name__,
+                         reason=reason, reason_truncated=cut)
+
+
+def _backend_version(capstone) -> "str | None":
+    """The loaded backend's version, or ``None`` when it cannot be read.
+    ``cs_version()`` is answered by the native library, so a version read
+    from it is also evidence that the library responded."""
+    version = getattr(capstone, "__version__", None)
+    if isinstance(version, str) and version:
+        return _sanitize_reason(version)[0]
     try:
-        import capstone
+        major, minor, extra = capstone.cs_version()
     except Exception:
         return None
-    return capstone
+    return f"{major}.{minor}.{extra}"
+
+
+def _load_backend() -> "tuple[object | None, DisasmBackend]":
+    """``(module, backend)`` for the one import of ``capstone`` in dumpex.
+
+    Performed on every call so a test can remove the module from
+    ``sys.modules`` and see the unavailable path. Never raises: every
+    failure becomes a :class:`DisasmBackend` whose status says whether
+    the optional dependency is absent or present and unusable."""
+    try:
+        import capstone
+    except ModuleNotFoundError as exc:
+        # The optional dependency is absent only when ``capstone`` itself
+        # is exactly the name that could not be found. A missing
+        # ``capstone.x86`` -- a damaged install, or a submodule packaging
+        # left behind -- means the distribution IS there and is
+        # incomplete, and so does a missing module capstone imports. An
+        # error that names nothing is read the same way: an installed
+        # backend that failed, never advice to install what is present.
+        if exc.name == "capstone":
+            return None, _failed_backend(DisasmBackendStatus.MODULE_ABSENT, exc)
+        return None, _failed_backend(DisasmBackendStatus.LOAD_FAILURE, exc)
+    except Exception as exc:
+        # capstone's own ``ctypes.CDLL()`` search raising ``ImportError``,
+        # an ``OSError`` from an unreadable or incompatible native
+        # library, and anything else its import raises all land here.
+        return None, _failed_backend(DisasmBackendStatus.LOAD_FAILURE, exc)
+    return capstone, DisasmBackend(status=DisasmBackendStatus.AVAILABLE,
+                                   version=_backend_version(capstone))
+
+
+def backend_status() -> DisasmBackend:
+    """The decoder backend's state right now, with a bounded sanitized
+    reason when it is not usable. Import-safe and never raises."""
+    return _load_backend()[1]
 
 
 def disasm_available() -> bool:
-    """Whether a decoder backend is installed right now."""
-    return _import_capstone() is not None
+    """Whether a decoder backend is installed and loaded right now."""
+    return backend_status().available
 
 
 def _mode_for(capstone, architecture: str):
@@ -293,19 +446,21 @@ def decode_window(*, code: bytes, base_va: int, architecture: str,
     """
     window = bytes(code[:max_bytes]) if code else b""
     lookahead = bytes(code[:max_bytes + _MAX_X86_INSN_LEN]) if code else b""
-    capstone = _import_capstone()
+    capstone, backend = _load_backend()
     if capstone is None:
         return DecodeResult(
             availability=DisasmAvailability.UNAVAILABLE, arch_supported=False,
             architecture=architecture, base_va=base_va, window_bytes=len(window),
-            bytes_decoded=0, stopped_reason=_StopReason.END_OF_INPUT.value)
+            bytes_decoded=0, stopped_reason=_StopReason.END_OF_INPUT.value,
+            backend=backend)
 
     mode = _mode_for(capstone, architecture)
     if mode is None:
         return DecodeResult(
             availability=DisasmAvailability.AVAILABLE, arch_supported=False,
             architecture=architecture, base_va=base_va, window_bytes=len(window),
-            bytes_decoded=0, stopped_reason=_StopReason.END_OF_INPUT.value)
+            bytes_decoded=0, stopped_reason=_StopReason.END_OF_INPUT.value,
+            backend=backend)
 
     address_mask = 0xFFFFFFFF if architecture == "x86" else 0xFFFFFFFFFFFFFFFF
     truncated_input = input_truncated or (bool(code) and len(code) > len(window))
@@ -365,4 +520,4 @@ def decode_window(*, code: bytes, base_va: int, architecture: str,
         availability=DisasmAvailability.AVAILABLE, arch_supported=True,
         architecture=architecture, base_va=base_va, window_bytes=len(window),
         bytes_decoded=bytes_decoded, stopped_reason=stopped.value,
-        instructions=tuple(instructions))
+        instructions=tuple(instructions), backend=backend)

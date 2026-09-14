@@ -21,7 +21,11 @@ from packaging.utils import canonicalize_name
 
 
 _PROJECT = "dumpex"
-_ENABLED_EXTRAS = ("", "full")
+# The extras whose distributions ship inside the frozen executable, and
+# whose notices the release bundle must therefore carry. `disasm` is here
+# because the Windows executable bundles Capstone and its native library
+# unconditionally, even though the Python distribution keeps it optional.
+_ENABLED_EXTRAS = ("", "full", "disasm")
 _NOTICE_PREFIXES = ("license", "copying", "notice")
 
 

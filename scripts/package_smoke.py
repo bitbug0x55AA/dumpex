@@ -60,6 +60,56 @@ def validate_current_schema_is_listed(current_schema: str) -> None:
               "never actually be smoke-tested")
 
 
+def validate_optional_decoder() -> None:
+    """The installed package must be import-safe and honest about the
+    optional instruction decoder, whichever way this install went.
+
+    A wheel/sdist install carries no decoder, so the disassembler seam has
+    to import and answer `unavailable` rather than raise, and the build
+    self-check has to fail with the one remedy a Python install can act
+    on. An install that does have the decoder must actually decode. Both
+    are real contracts, so neither outcome is a skip.
+    """
+    from dumpex.core.disasm import (
+        DisasmAvailability, DisasmBackendStatus, backend_status, decode_window,
+    )
+
+    backend = backend_status()
+    # nop; ret -- the same synthetic pair dumpex.core.selfcheck decodes.
+    decoded = decode_window(code=b"\x90\xc3", base_va=0x140001000, architecture="x64")
+
+    check = subprocess.run([sys.executable, "-m", "dumpex", "--self-check"],
+                           capture_output=True, text=True)
+    output = check.stdout + check.stderr
+    if "Traceback" in output:
+        _fail(f"'python -m dumpex --self-check' printed a traceback:\n{output}")
+
+    if backend.status is DisasmBackendStatus.AVAILABLE:
+        mnemonics = tuple(insn.mnemonic for insn in decoded.instructions)
+        if mnemonics != ("nop", "ret"):
+            _fail(f"the installed decoder returned {mnemonics!r} for 90 c3, not "
+                  f"('nop', 'ret')")
+        if check.returncode != 0:
+            _fail(f"'python -m dumpex --self-check' exited {check.returncode} with a "
+                  f"loaded decoder:\n{output}")
+        print(f"optional decoder installed and decoding: capstone {backend.version}")
+        return
+
+    if decoded.availability is not DisasmAvailability.UNAVAILABLE:
+        _fail(f"no decoder backend loaded ({backend.status.value}) but decode_window() "
+              f"reported {decoded.availability.value}")
+    if decoded.instructions:
+        _fail("decode_window() returned instructions with no decoder backend loaded")
+    if check.returncode == 0:
+        _fail(f"'python -m dumpex --self-check' exited 0 with no decoder backend:\n"
+              f"{output}")
+    if backend.status is DisasmBackendStatus.MODULE_ABSENT:
+        if "pip install dumpex[disasm]" not in output:
+            _fail(f"a base install's self-check does not name the optional extra:\n"
+                  f"{output}")
+    print(f"optional decoder absent and reported accurately: {backend.status.value}")
+
+
 def main() -> None:
     repo_root = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else None
 
@@ -168,6 +218,8 @@ def main() -> None:
     if result.returncode != 0:
         _fail(f"'python -m dumpex --help' exited {result.returncode}\n"
               f"stdout: {result.stdout}\nstderr: {result.stderr}")
+
+    validate_optional_decoder()
 
     print("OK: package smoke test passed")
 

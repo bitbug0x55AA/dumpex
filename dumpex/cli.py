@@ -7,6 +7,7 @@ from minidump.minidumpfile import MinidumpFile
 
 from dumpex.ui.colors import RED, DIM, BOLD
 from dumpex.core.memory import open_dump, parse_hex_or_int, _resolve_size
+from dumpex.core.selfcheck import cmd_self_check
 from dumpex.rules_pkg.loader import get_rules, configure_rules_source
 from dumpex.ui.structured import _ANSI_RE
 from dumpex.output import V2Output
@@ -81,6 +82,26 @@ _V2_STRUCTURED_MODES = frozenset({"list", "modules", "threads", "process", "sysi
 # itself (exit_code_for) live in dumpex.output.coverage, not here --
 # that's the single place a coverage status becomes a process exit code,
 # used by _apply_command_result() below for all twelve of these commands.
+
+
+# --self-check asks what this build can do, not what a dump contains, so
+# it is the one invocation that names neither a dump file nor a command.
+# It is recognized before the parser enforces either, the way argparse
+# itself would recognize it: the flag, or any abbreviation long enough to
+# be unambiguous among dumpex's options, up to a bare "--".
+_SELF_CHECK_FLAG = "--self-check"
+_SELF_CHECK_MIN_ABBREVIATION = len("--self")
+
+
+def _self_check_requested(argv) -> bool:
+    """Whether this invocation asks for the build self-check."""
+    for token in argv:
+        if token == "--":
+            return False
+        if (len(token) >= _SELF_CHECK_MIN_ABBREVIATION
+                and _SELF_CHECK_FLAG.startswith(token)):
+            return True
+    return False
 
 
 def _selected_run_mode(args) -> str:
@@ -230,6 +251,19 @@ def main():
                               help='Analyst name recorded in structured output')
     output_group.add_argument('--redact-paths', action='store_true',
                               help='Reduce filesystem paths to basenames in structured output and in rendered rescan commands')
+
+    diagnostics_group = parser.add_argument_group(
+        "build diagnostics", "Check what this build itself can do. Takes no dump file.")
+    diagnostics_group.add_argument('--self-check', action='store_true',
+                                   help='Decode fixed synthetic bytes through this build\'s '
+                                        'instruction decoder and exit 0 (usable) or 1 '
+                                        '(missing or unloadable)')
+
+    # Settled before parse_args(), so the required dumpfile and command
+    # group never reject an invocation that deliberately names neither.
+    if _self_check_requested(sys.argv[1:]):
+        sys.exit(cmd_self_check())
+
     args = parser.parse_args()
 
     run_mode = _selected_run_mode(args)

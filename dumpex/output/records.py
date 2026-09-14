@@ -2188,7 +2188,8 @@ INSTRUCTION_ANCHOR_SOURCES = (
 INSTRUCTION_DECODER_STATES = (
     "decoded",              # the window decoded to its end or a cap
     "not_run",              # no bytes were captured at the anchor, so no decode was attempted
-    "unavailable",          # no disassembler backend is installed
+    "unavailable",          # no decoder backend answered: absent, or installed
+                            # and unloadable -- the section limitation says which
     "unsupported_arch",     # a determined machine the decoder does not handle (e.g. ARM64)
     "arch_undetermined",    # no signal fixed the instruction-set architecture
     "decode_error",         # the decoder stopped at an invalid opcode mid-stream

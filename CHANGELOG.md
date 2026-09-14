@@ -45,8 +45,35 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   identical sentence once per hit; a gap only one card carries keeps its own
   region prefix.
 
+### Added
+
+- `dumpex --self-check` verifies this build's instruction decoder and exits 0
+  (usable) or 1 (missing or unloadable). It takes no dump file and no command:
+  it decodes fixed synthetic bytes -- `90 c3`, `nop` then `ret` -- for x86 and
+  x64 through the same decoder `--report` instruction context uses. A failure
+  names the raising exception and a bounded reason, never a traceback or a
+  filesystem path.
+
 ### Fixed
 
+- The official Windows executable now bundles the Capstone decoder and its
+  native library, so `dumpex.exe --report` decodes instruction windows,
+  resolves branch targets, and correlates the IAT with no Python or `pip`
+  step. Previously that headline capability could report "no disassembler is
+  installed" in an executable whose users had no way to install one. The
+  release workflow declares the decoder dependency explicitly, checks the
+  packaged native library, and runs the decode self-check against both the
+  built executable and the copy extracted from the published ZIP, so a build
+  that lost the decoder fails before publication. The bundle carries
+  Capstone's license with the code it now ships.
+- A decoder that is installed but will not load is no longer reported as one
+  that is not installed. `--report` instruction context distinguishes an
+  absent optional dependency from a native library that failed to load, names
+  the raising exception's type, and keeps the reason bounded and free of
+  filesystem paths. A packaged executable is told its decoder is a
+  distribution defect rather than being advised to run `pip install`, which it
+  cannot act on. `decoder_state`, the JSON schema, findings, verdict,
+  coverage, and exit codes are unchanged.
 - `--report-string` no longer prints process-wide and main-image PE context
   before the report's own title, and no longer hides a partial or
   not-evaluated coverage state behind an early "not found" or

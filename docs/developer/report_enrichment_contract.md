@@ -482,10 +482,28 @@ redirected or private thunk target, and a declared-versus-live protection
 mismatch are investigation leads: none of them touches `findings`,
 `finding_details`, `verdict`, `coverage.status`, or the exit code.
 
-The disassembler is the optional `capstone` dependency (`dumpex[disasm]`),
-imported only inside `dumpex.core.disasm`. With no decoder installed the
-instruction section reports `decoder_state: unavailable` and an empty
-instruction list.
+The disassembler is the `capstone` dependency, imported only inside
+`dumpex.core.disasm`. It is optional for the Python distribution
+(`dumpex[disasm]`) and unconditional in the official Windows executable. With
+no decoder the instruction section reports `decoder_state: unavailable` and an
+empty instruction list.
+
+`unavailable` covers two causes and the section limitation keeps them apart.
+`module_absent` is the optional dependency not being installed. `load_failure`
+is a backend that imports by name and still does not work -- capstone resolves
+its native library through `ctypes.CDLL()` during its own import, so a missing
+or incompatible `capstone.dll` raises `ImportError`/`OSError`, never
+`ModuleNotFoundError`. The limitation names the raising exception's type and
+nothing more: the bounded, path-redacted reason stays in
+`DecodeResult.backend` for build and release diagnostics. A packaged executable
+is never told to run `pip install`; its missing decoder is reported as a
+distribution defect. `decoder_state` itself, the schema, findings, verdict,
+coverage, and exit codes are unchanged by any of this.
+
+`dumpex --self-check` (`dumpex.core.selfcheck`) decodes fixed synthetic bytes
+through `decode_window()` and exits non-zero when this build cannot decode. It
+is the release gate the Windows workflow runs against the built executable and
+against the copy extracted from the published ZIP.
 
 ## Safety and compatibility invariants
 
@@ -508,6 +526,10 @@ introduced in 3.8.1 are covered by `tests/integration/test_report_hierarchy.py`;
 the exact byte-for-byte hierarchy of the banner, assessment, and anchor-context
 blocks is frozen in `tests/integration/test_report_compat_freeze.py`.
 The isolated disassembler seam and the VA-resolution join have their own tests
-in `tests/unit/test_disasm.py` and `tests/unit/test_va_location.py`.
+in `tests/unit/test_disasm.py` and `tests/unit/test_va_location.py`; backend
+classification and reason sanitization are covered by
+`tests/unit/test_disasm_backend.py`, the build self-check by
+`tests/unit/test_selfcheck.py`, and the Windows bundling contract by
+`tests/unit/test_release_packaging_gates.py`.
 Schema compatibility is covered by `tests/integration/test_json_schema_v2.py`
 and `tests/integration/test_report_compat_freeze.py`.

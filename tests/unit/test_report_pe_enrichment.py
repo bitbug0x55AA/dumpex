@@ -842,3 +842,105 @@ def test_iat_correlation_unknown_directory_bounds_make_the_total_undeterminable(
     assert correlation.iat_directory_present is None
     assert any("IAT directory bounds are undetermined" in note
                for note in correlation.section.limitations)
+
+
+# ── decoder guidance: accurate for how this process was packaged ──────
+
+import builtins  # noqa: E402
+
+from dumpex.core import runtime  # noqa: E402
+from dumpex.core.disasm import DisasmBackend, DisasmBackendStatus  # noqa: E402
+from dumpex.commands.report_enrichment import (  # noqa: E402
+    _decoder_unavailable_limitation,
+)
+from dumpex.output.records import ENRICHMENT_TEXT_CAP  # noqa: E402
+
+
+def _unloadable_capstone(monkeypatch, exc=None):
+    """Make ``import capstone`` fail the way a packaged build with a
+    missing or incompatible native library fails."""
+    exc = exc or ImportError("ERROR: fail to load the dynamic library.")
+    real_import = builtins.__import__
+
+    def fake_import(name, *args, **kwargs):
+        if name == "capstone" or name.startswith("capstone."):
+            raise exc
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+
+def _limitation(context) -> str:
+    (limitation,) = [text for text in context.section.limitations
+                     if "disassembler" in text]
+    return limitation
+
+
+def test_a_python_install_without_the_extra_is_pointed_at_pip(monkeypatch):
+    monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
+    monkeypatch.setitem(sys.modules, "capstone", None)
+    mf = _pe_mf()
+    context, _slots = _instruction(_cache(mf), mf, [("card_anchor", PE_ENTRY_VA)])
+    assert context.decoder_state == "unavailable"
+    assert "pip install dumpex[disasm]" in _limitation(context)
+
+
+def test_a_frozen_runtime_is_never_told_to_pip_install(monkeypatch):
+    monkeypatch.setattr(runtime.sys, "frozen", True, raising=False)
+    monkeypatch.setitem(sys.modules, "capstone", None)
+    mf = _pe_mf()
+    context, _slots = _instruction(_cache(mf), mf, [("card_anchor", PE_ENTRY_VA)])
+    limitation = _limitation(context)
+    assert context.decoder_state == "unavailable"
+    assert "pip" not in limitation
+    assert "distribution defect" in limitation
+
+
+def test_a_packaged_backend_that_did_not_load_is_a_distribution_defect(monkeypatch):
+    monkeypatch.setattr(runtime.sys, "frozen", True, raising=False)
+    _unloadable_capstone(monkeypatch)
+    mf = _pe_mf()
+    context, _slots = _instruction(_cache(mf), mf, [("card_anchor", PE_ENTRY_VA)])
+    limitation = _limitation(context)
+    assert context.decoder_state == "unavailable"
+    assert "did not load (ImportError)" in limitation
+    assert "pip" not in limitation
+
+
+def test_an_installed_backend_that_did_not_load_is_not_called_uninstalled(monkeypatch):
+    monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
+    _unloadable_capstone(monkeypatch)
+    mf = _pe_mf()
+    context, _slots = _instruction(_cache(mf), mf, [("card_anchor", PE_ENTRY_VA)])
+    limitation = _limitation(context)
+    assert "pip install dumpex[disasm]" not in limitation
+    assert "did not load (ImportError)" in limitation
+
+
+def test_the_limitation_carries_no_path_and_no_traceback(monkeypatch):
+    _unloadable_capstone(monkeypatch, OSError(
+        r"cannot load D:\build-agent\lib\capstone.dll"))
+    mf = _pe_mf()
+    context, _slots = _instruction(_cache(mf), mf, [("card_anchor", PE_ENTRY_VA)])
+    limitation = _limitation(context)
+    assert "D:\\" not in limitation
+    assert "Traceback" not in limitation
+    assert len(limitation) <= ENRICHMENT_TEXT_CAP
+
+
+def test_every_decoder_limitation_stays_within_the_enrichment_text_cap(monkeypatch):
+    for frozen in (False, True):
+        monkeypatch.setattr(runtime.sys, "frozen", frozen, raising=False)
+        for backend in (
+                DisasmBackend(status=DisasmBackendStatus.MODULE_ABSENT),
+                DisasmBackend(status=DisasmBackendStatus.LOAD_FAILURE,
+                              exception_type="ImportError"),
+                None):
+            assert len(_decoder_unavailable_limitation(backend)) <= ENRICHMENT_TEXT_CAP
+
+
+def test_an_unclassified_backend_keeps_the_absent_dependency_wording(monkeypatch):
+    # A decode result from before the backend was recorded carries None;
+    # the safe reading is the absent optional dependency.
+    monkeypatch.setattr(runtime.sys, "frozen", False, raising=False)
+    assert "pip install dumpex[disasm]" in _decoder_unavailable_limitation(None)

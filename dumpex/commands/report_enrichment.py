@@ -28,8 +28,9 @@ from minidump.constants import MINIDUMP_STREAM_TYPE
 from dumpex.commands.handles import collect_handles, summarize_handles_by_type
 from dumpex.core.disasm import (
     MAX_DECODE_BYTES, MAX_DECODE_INSNS, MAX_INSTRUCTION_LENGTH, BranchKind,
-    DisasmAvailability, decode_window,
+    DisasmAvailability, DisasmBackendStatus, decode_window,
 )
+from dumpex.core.runtime import is_frozen
 from dumpex.core.memory import (
     addr_to_module, clamped_reader, get_modules, get_thread_contexts,
     handle_stream_evidence, has_stream_directory, read_region_spanning, stream_failure,
@@ -1714,6 +1715,33 @@ def _branch_target_record(insn_address: int, kind: str, target: "int | None",
         iat_classification_uncertain=bool(iat_uncertain and kind == "indirect_memory"))
 
 
+def _decoder_unavailable_limitation(backend) -> str:
+    """The limitation recorded when no decoder answered, phrased for how
+    this process was packaged and for why the backend was unusable.
+
+    A packaged executable ships its own decoder, so a decoder missing
+    there is a defect in that build and no `pip` command can reach it;
+    only a Python installation is pointed at the optional extra. A
+    backend that is installed and failed to load names the raising
+    exception's type and nothing else -- no path, no traceback."""
+    status = getattr(backend, "status", None)
+    load_failed = status is DisasmBackendStatus.LOAD_FAILURE
+    raised = getattr(backend, "exception_type", None) if load_failed else None
+    named = f" ({raised})" if raised else ""
+    if is_frozen():
+        if load_failed:
+            return (f"this executable's bundled disassembler did not load{named}: the "
+                    f"instruction window was not decoded. Report it as a distribution "
+                    f"defect")
+        return ("this executable ships no disassembler: the instruction window was not "
+                "decoded. Report it as a distribution defect")
+    if load_failed:
+        return (f"the installed disassembler did not load{named}: the instruction window "
+                f"was not decoded")
+    return ("no disassembler is installed (pip install dumpex[disasm]): the instruction "
+            "window was not decoded")
+
+
 def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidates,
                                 region_evidence, iat_raw, instruction_module_base,
                                 instruction_module_profile, thread_ip_reg, wow64_hint
@@ -1738,7 +1766,9 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
     instruction-correlated slot the public `branch_targets` list dropped.
 
     `decoder_state` is `decoded`, `not_run` (no captured bytes),
-    `unavailable` (no decoder installed), `unsupported_arch` (a determined
+    `unavailable` (no decoder answered -- absent, or installed and
+    unloadable, which the limitation text distinguishes),
+    `unsupported_arch` (a determined
     non-x86 machine), `arch_undetermined` (no signal fixed the
     architecture), or `decode_error` (an invalid opcode mid-stream); every
     value but `decoded` makes the section `partial`. A window the byte cap
@@ -1863,9 +1893,8 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
             "the owning module's IAT directory bounds and import table could not be "
             "read: an indirect memory branch here is not confirmed to be outside the IAT")
     if decoder_state == "unavailable":
-        limitations.append(
-            "no disassembler is installed (pip install dumpex[disasm]): the instruction "
-            "window was not decoded")
+        limitations.append(_bounded_text(
+            _decoder_unavailable_limitation(result.backend))[0])
     elif decoder_state == "unsupported_arch":
         machine = getattr(instruction_module_profile, "machine", None)
         machine_name = getattr(instruction_module_profile, "machine_name", None)
