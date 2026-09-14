@@ -15,11 +15,27 @@ substrings of sections 1-4 and the banner rather than the full body.
 Every scenario here supplies modules=[]/threads=[]/regions=[...] (all
 three admin sources genuinely present, even if empty), so
 result.coverage.status stays "complete" and no coverage.reasons lines
-print -- keeping the console-body assertion exactly byte-identical to the
-captured ground truth. The NEW coverage-visibility behavior (printing
-coverage.reasons when a source genuinely IS absent, the same convention
-already established for --extract/--strings) is covered separately in
-tests/unit/test_report_cmd.py, not duplicated here.
+print -- keeping the frozen sections 1-4/banner/verdict surface
+byte-identical to the captured ground truth. The NEW coverage-visibility
+behavior (printing coverage.reasons when a source genuinely IS absent,
+the same convention already established for --extract/--strings) is
+covered separately in tests/unit/test_report_cmd.py, not duplicated
+here.
+
+test_tid_not_found and test_addr_not_found pin the banner/ASSESSMENT
+prefix and the ANCHOR CONTEXT/CORRELATION/ADDITIONAL CONTEXT suffix
+byte-for-byte, with the COVERAGE SUMMARY block between the two asserted
+as an invariant instead (its status line, and a couple of representative
+gap reasons, plus the absence of "No known collection limitations.").
+That block is not part of the frozen surface above: a FakeMF this
+minimal has no ExceptionStream, HandleDataStream, TokenStream,
+MiscInfoStream, or PEB, so the optional enrichment this run did collect
+is genuinely incomplete, and the summary says so -- see _all_gap_reasons
+in dumpex/commands/report.py. Pinning that gap list byte-for-byte would
+make this frozen-surface suite churn on every new enrichment limitation
+this bare fixture happens to trigger, for a fact neither test exists to
+freeze; test_coverage_summary_never_hides_a_real_enrichment_gap in
+test_report_hierarchy.py owns that behavior's own dedicated coverage.
 """
 import datetime
 import json
@@ -105,6 +121,7 @@ _ENRICHMENT_RENDERERS = (
     "_render_allocation_neighborhood", "_render_handle_correlation",
     "_render_string_context", "_render_anchor_pe_context",
     "_render_instruction_context", "_render_iat_correlation",
+    "_render_additional_retained_strings",
 )
 
 
@@ -125,7 +142,15 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
         monkeypatch, tmp_path, ["--report-tid", "5"],
         threads=[ThreadInfo(1, 0x1000)])
     body = _split_console_body(capsys.readouterr().out)
-    assert body == (
+
+    # The frozen surface -- banner, ASSESSMENT, and the ANCHOR CONTEXT /
+    # CORRELATION / ADDITIONAL CONTEXT group hierarchy -- stays pinned
+    # byte-for-byte. COVERAGE SUMMARY sits between the two and is asserted
+    # as an invariant instead (below): pinning its exact gap list here
+    # would make this frozen-surface test churn on every new enrichment
+    # limitation this bare fixture happens to trigger, for a fact this
+    # test does not exist to freeze -- see this module's own docstring.
+    frozen_prefix = (
         "  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  "
         "(sha256_prefix=b1e78e29b51cf439…)\n"
         "\n══════════════════════════════════════════\n"
@@ -140,10 +165,8 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
         "    no anomalies were found within this rule set's current coverage; if the "
         "originating alert independently indicates compromise, re-verify against raw "
         "telemetry outside this dump\n\n"
-        "COVERAGE SUMMARY\n"
-        "──────────────────────────────────────────────────\n"
-        "  Status: COMPLETE\n"
-        "  No known collection limitations.\n\n"
+    )
+    frozen_suffix = (
         "\nANCHOR CONTEXT\n"
         "==================================================\n"
         "THREAD ANALYSIS\n"
@@ -155,6 +178,22 @@ def test_tid_not_found(monkeypatch, tmp_path, capsys):
         "\nADDITIONAL CONTEXT\n"
         "==================================================\n\n"
     )
+    assert body.startswith(frozen_prefix), body
+    assert body.endswith(frozen_suffix), body
+    coverage_block = body[len(frozen_prefix):-len(frozen_suffix)]
+
+    assert coverage_block.startswith(
+        "COVERAGE SUMMARY\n"
+        "──────────────────────────────────────────────────\n"
+        "  Status: COMPLETE  (core report coverage — see below for "
+        "optional-enrichment gaps)\n")
+    # This bare FakeMF carries no ExceptionStream, HandleDataStream,
+    # TokenStream, MiscInfoStream, or PEB -- a genuine, honest gap, never
+    # "No known collection limitations."
+    assert "No known collection limitations." not in coverage_block
+    assert "Exception context: the dump carries no ExceptionStream" in coverage_block
+    assert "Token: the dump declares no TokenStream" in coverage_block
+
     assert exit_code == 0
     assert doc["meta"]["schema_version"] == SCHEMA_VERSION
     assert doc["result"]["kind"] == "report"
@@ -171,7 +210,12 @@ def test_addr_not_found(monkeypatch, tmp_path, capsys):
     exit_code, doc = _run(
         monkeypatch, tmp_path, ["--report-addr", "0x9999000"])
     body = _split_console_body(capsys.readouterr().out)
-    assert body == (
+
+    # See test_tid_not_found's own note: the frozen surface is the banner,
+    # ASSESSMENT, and the ANCHOR CONTEXT/CORRELATION/ADDITIONAL CONTEXT
+    # group hierarchy; COVERAGE SUMMARY's gap list is asserted as an
+    # invariant below rather than pinned.
+    frozen_prefix = (
         "  [·] Rules loaded from <dumpex.rules_pkg>/data/rules.yaml  "
         "(sha256_prefix=b1e78e29b51cf439…)\n"
         "\n══════════════════════════════════════════\n"
@@ -186,10 +230,8 @@ def test_addr_not_found(monkeypatch, tmp_path, capsys):
         "    no anomalies were found within this rule set's current coverage; if the "
         "originating alert independently indicates compromise, re-verify against raw "
         "telemetry outside this dump\n\n"
-        "COVERAGE SUMMARY\n"
-        "──────────────────────────────────────────────────\n"
-        "  Status: COMPLETE\n"
-        "  No known collection limitations.\n\n"
+    )
+    frozen_suffix = (
         "\nANCHOR CONTEXT\n"
         "==================================================\n"
         "MEMORY REGION AT TARGET ADDRESS\n"
@@ -201,6 +243,21 @@ def test_addr_not_found(monkeypatch, tmp_path, capsys):
         "\nADDITIONAL CONTEXT\n"
         "==================================================\n\n"
     )
+    assert body.startswith(frozen_prefix), body
+    assert body.endswith(frozen_suffix), body
+    coverage_block = body[len(frozen_prefix):-len(frozen_suffix)]
+
+    assert coverage_block.startswith(
+        "COVERAGE SUMMARY\n"
+        "──────────────────────────────────────────────────\n"
+        "  Status: COMPLETE  (core report coverage — see below for "
+        "optional-enrichment gaps)\n")
+    assert "No known collection limitations." not in coverage_block
+    assert "Anchor PE placement: no loaded module and no captured region" in coverage_block
+    assert "Instruction context: no bytes were captured at the card_anchor anchor " \
+           "0x9999000" in coverage_block
+    assert "Token: the dump declares no TokenStream" in coverage_block
+
     assert exit_code == 0
     assert doc["result"]["coverage"]["status"] == "complete"
 

@@ -330,8 +330,6 @@ def test_verbose_prints_every_retained_row_of_all_four_sections(
     # proximity, so a retained string carrying both roles is the norm
     # here, not the exception. STRING CONTEXT presents each as a
     # cross-reference rather than a second copy of its text.
-    dedup_identities = {(s["address"], s["encoding"]) for s in card["ioc_strings"]}
-    dedup_identities |= {(s["address"], s["encoding"]) for s in card["notable_strings"]}
 
     for row in handles["by_type"]:
         assert f"{row['type_name']}={row['count']}" in verbose
@@ -354,19 +352,49 @@ def test_verbose_prints_every_retained_row_of_all_four_sections(
     assert sum(e["object_name"] in correlated
                for e in card["handle_correlation"]["entries"]) == (
         CONSOLE_CORRELATED_HANDLES)
-    shown_context = card["string_context"]["entries"][:CONSOLE_STRING_CONTEXT]
-    hidden_context = card["string_context"]["entries"][CONSOLE_STRING_CONTEXT:]
-    overlapping_shown = [e for e in shown_context
-                         if (e["address"], e["encoding"]) in dedup_identities]
-    non_overlapping_shown = [e for e in shown_context
-                             if (e["address"], e["encoding"]) not in dedup_identities]
-    assert overlapping_shown, "fixture no longer exercises the dedup-overlap case"
-    assert all(e["text"] in strings for e in non_overlapping_shown)
-    assert all(e["text"] not in strings for e in overlapping_shown)
-    # Beyond the cap, an entry is not rendered at all -- neither its text
-    # nor a cross-reference stands in for it.
-    assert all(e["text"] not in strings for e in hidden_context)
-    assert "also retained as evidence under" in strings
+    # The console cap bounds how many UNIQUE entries this preview renders,
+    # not how many retained entries it considers -- a duplicate never
+    # occupies a slot a genuinely unique entry could have used (see
+    # _render_string_context's own note). Partition by dedup identity
+    # first, then cap the unique remainder, mirroring the renderer.
+    #
+    # At normal detail, `dedup_sources` is built from STRINGS IN REGION's
+    # own CAPPED IOC preview only -- an IOC match beyond THAT cap is
+    # genuinely new from STRING CONTEXT's perspective and renders here in
+    # full (see test_normal_detail_caps_the_ioc_preview_and_discloses_the_
+    # omission in test_report_hierarchy.py). Notable strings never render
+    # inline at normal detail at all (see ADDITIONAL RETAINED STRINGS), so
+    # none of them are in `dedup_sources` at this level either.
+    #
+    # An entry selected by proximity alone is routine background held for
+    # --verbose (see test_routine_proximity_entries_are_held_for_verbose
+    # in test_report_hierarchy.py), so it is out of the preview before the
+    # cap applies -- the cap bounds the entries that could still render.
+    normal_dedup_identities = {(s["address"], s["encoding"])
+                               for s in card["ioc_strings"][:report_mod.CONSOLE_IOC_STRINGS]}
+    all_context = card["string_context"]["entries"]
+    duplicate_entries = [e for e in all_context
+                         if (e["address"], e["encoding"]) in normal_dedup_identities]
+    unique_entries = [e for e in all_context
+                      if (e["address"], e["encoding"]) not in normal_dedup_identities]
+    routine_entries = [e for e in unique_entries
+                       if e["selection_reason"] == "adjacent_to_anchor"]
+    eligible = [e for e in unique_entries
+                if e["selection_reason"] != "adjacent_to_anchor"]
+    shown_unique = eligible[:CONSOLE_STRING_CONTEXT]
+    hidden_unique = eligible[CONSOLE_STRING_CONTEXT:]
+    assert duplicate_entries, "fixture no longer exercises the dedup-overlap case"
+    assert all(e["text"] in strings for e in shown_unique)
+    # A duplicate never renders its own text, regardless of position --
+    # and neither does a unique entry the cap left out, nor a routine
+    # proximity-only one this level holds back.
+    assert all(e["text"] not in strings for e in duplicate_entries)
+    assert all(e["text"] not in strings for e in hidden_unique)
+    assert all(e["text"] not in strings for e in routine_entries)
+    assert "already shown in full under STRINGS IN REGION" in strings
+    # Verbose is still the complete retained set, routine entries included.
+    for entry in all_context:
+        assert entry["text"] in verbose
 
 
 def test_the_default_discloses_each_omission_and_verbose_removes_it(

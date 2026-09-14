@@ -68,20 +68,81 @@ regardless of how many cards the run produces. It is followed, per anchor, by:
 1. **Assessment** — the current verdict, its findings, and a concise next step
    looked up from those findings and `coverage.status` alone; it names no new
    risk category and adds no fact this run did not already collect.
-2. **Coverage summary** — `coverage.status` and its reasons, printed even when
-   the run is complete, so an analyst never has to infer completeness from a
-   block's absence. For `--report-string`, this prints before either the
-   zero-hit or the all-hits-in-known-modules early return, so neither path can
-   hide a partial or not-evaluated scan behind "not found".
+2. **Coverage summary** — `coverage.status`, its reasons, and every already-
+   collected enrichment section's own gap, printed even when the run is
+   complete, so an analyst never has to infer completeness from a block's
+   absence and never reads "No known collection limitations" while a later
+   section still discloses one. `coverage.status`/`coverage.reasons` are the
+   compatibility-frozen reducer's own verdict and are unread by this
+   addition; the status line carries a short qualifier ("core report
+   coverage — see below for optional-enrichment gaps") whenever this run's
+   own sections add anything beneath it, so `COMPLETE` is never read as
+   covering more than that narrower contract.
+
+   Each enrichment section's own gap (see `_all_gap_reasons` in
+   `dumpex.commands.report`) is one of two kinds, kept apart because they
+   call for different follow-up: **availability** (an incomplete status, or
+   a limitation sentence `_split_limitations` classifies as a gap — evidence
+   not evaluated at all) prints under the main `[~]` list alongside
+   `coverage.reasons`; **retention** (a retained-set cut — evidence
+   evaluated but not all of it kept) prints under its own "Retention
+   limits:" lead-in. A completed evaluation's settled negative is neither,
+   and appears in no gap list (see **Settled negatives** below). A card's own
+   gap that is already the identical fact as a `coverage.reasons` entry (a
+   target-region read coming up short is both the reducer's own aggregate
+   reason and String context's own limitation) is stated once, via the
+   reducer's reason; the affected section still reports its own distinct
+   status without repeating byte counts the reducer's sentence does not
+   carry. The incomplete-coverage caveat that can follow both lists carries
+   its own `[·]` marker, distinguishing advice about reading the summary
+   from one more gap in it.
+
+   One cause is one line, however many sections observed it. A single
+   missing stream leaves every projection that consumed it with the
+   identical reason — a dump with no `HandleDataStream` leaves both the
+   process-wide handle census and each card's handle correlation unable to
+   evaluate — and `_merge_shared_causes` states it once, naming every
+   affected section, each keeping its own region annotation. Merging is
+   keyed on the reason's own detail, so only genuinely identical causes
+   merge; a reason already scoped to one specific region is left alone
+   rather than widened into a whole-run line.
+
+   For `--report-string`, this prints before either the zero-hit or the
+   all-hits-in-known-modules early return, so neither path can hide a
+   partial or not-evaluated scan behind "not found"; a reason every triaged
+   card shares collapses to one line naming every region it covers, printed
+   before any reason narrower than that, rather than once per hit or
+   interleaved with per-region reasons. A label whose own per-region detail
+   differs too much to merge that way (Instruction context's own limitation
+   names each region's own anchor address, for one) still collapses once
+   there are more than `_MAX_PER_LABEL_VARIANTS_SHOWN` such variants, into
+   one line naming how many distinct detail lines it replaced -- a count of
+   lines, not of affected regions, since a line already covering more than
+   one region (see the previous paragraph) is not re-expanded to count
+   each of those regions separately. An actionable hit region this run's
+   own card/read budget left completely untriaged is named here too — the
+   widest scope gap such a run can carry — and here only, carrying its own
+   next step (`--report-addr` against a specific region) rather than being
+   restated in full beside the hit list further down.
 3. **Anchor context** — thread analysis, memory region, other threads in the
-   region, and the anchor's PE placement.
+   region, and the anchor's PE placement (rendered as `ANCHOR PLACEMENT`; a
+   declared-versus-live protection comparison prints only when the anchor is
+   actually inside an owning PE section -- private or otherwise unmapped
+   memory has a live protection but no declared bits to compare it against,
+   and prints a bare `Live protection` line instead).
 4. **Key evidence** — the region's strings and IOC matches, then
    anchor-proximity string context.
-5. **Correlation** — exception, instruction, IAT, and handle correlation.
-6. **Additional context** — this card's allocation neighborhood, then (once
+5. **Additional retained strings** — verbose only: routine (non-IOC) notable
+   strings, kept out of Key evidence as its own sibling group (not a section
+   nested under it) so a page of low-priority strings never crowds the
+   evidence an analyst reads first. Default detail names only how many this
+   card retained; there is no narrower default-detail preview of the
+   strings themselves to cap.
+6. **Correlation** — exception, instruction, IAT, and handle correlation.
+7. **Additional context** — this card's allocation neighborhood, then (once
    per invocation, not once per card) process identity and the main-image PE
    header.
-7. **Limitations and provenance** — verbose only; see below.
+8. **Limitations and provenance** — verbose only; see below.
 
 Section headers are plain names, never numbers: a conditional section this run
 did not populate leaves no numbering gap to reason about.
@@ -93,17 +154,31 @@ the anchor, region, thread, string and IOC evidence, findings, verdict,
 coverage, diagnostics, every incomplete enrichment state, and every identity
 conflict. Process, session, handle-census, and token details are summarized;
 populated collections use bounded previews, and a complete section with no
-eligible entries does not repeat an empty counts row.
+eligible entries does not repeat an empty counts row. Notable (non-IOC)
+strings are the exception: default detail previews none of them at all (not
+even a capped preview) and names only their retained count, since the
+strings themselves are Additional retained strings' own verbose-only content.
 
-The console preview of retained IOC matches and of retained notable strings is
-each capped independently (`CONSOLE_IOC_STRINGS` / `CONSOLE_NOTABLE_STRINGS` in
-`dumpex.commands.report`). Selecting the IOC preview prioritizes
-network-pattern hits — the only class carrying its own byte context — ahead of
-other matches, so a routine match at a low offset cannot crowd a C2 indicator
-at a higher offset out of the default view; a network-pattern hit the
-preview still could not fit states so explicitly; a hit's overlapping
-±128-byte context windows are coalesced into one combined byte range instead
-of repeating shared bytes once per hit, whether one hit or several.
+Routine text reaches the console by two routes, and default detail holds both.
+The second is String context's own proximity selection: an entry whose
+`selection_reason` is `adjacent_to_anchor` was kept only because it sits near
+the anchor — proximity is layout, not a finding — so it is the same class of
+low-priority background, and String context renders inside Key evidence. Held
+there too, default detail names how many were held and where to get them; a
+`query_match` or `ioc_pattern` entry carries its own analytic claim and always
+keeps its place. Without this, moving the notable-string inventory out of Key
+evidence would close only one of the two routes and the same strings would
+reach that block through the other.
+
+The console preview of retained IOC matches is capped independently
+(`CONSOLE_IOC_STRINGS` in `dumpex.commands.report`). Selecting the IOC
+preview prioritizes network-pattern hits — the only class carrying its own
+byte context — ahead of other matches, so a routine match at a low offset
+cannot crowd a C2 indicator at a higher offset out of the default view; a
+network-pattern hit the preview still could not fit states so explicitly; a
+hit's overlapping ±128-byte context windows are coalesced into one combined
+byte range instead of repeating shared bytes once per hit, whether one hit
+or several.
 
 ### Verbose output
 
@@ -112,25 +187,65 @@ allocation-neighborhood entry, correlated handle, IOC match, notable string,
 and nearby-string entry, plus each entry's selection reason. A renderer must
 not re-run collection or infer new evidence at either level.
 
-Each section's scope, evidence state, counts, cap, and provenance no longer
-print inline after that section: the full envelope appears once per anchor, in
-a trailing **Limitations and provenance** table, verbose only. Each section's
-own short reminder — evidence state, retained count, truncation, and
-limitations — still prints inline at both detail levels; an incomplete
-evidence state is never deferred to that trailing table.
+Each section's scope, evidence state, counts, and cap no longer print inline
+after that section: that envelope appears once per anchor, in a trailing
+**Limitations and provenance** table, verbose only — and only for a section
+that actually has a gap (`_has_reportable_limitation` in
+`dumpex.commands.report`: an incomplete status, a retained-set cut, or a
+limitation sentence). A section with none of those contributes no envelope
+fact the table does not already imply by leaving it out.
+
+Provenance is a different fact from that envelope, and is not gated on having
+a gap: every section this run collected still gets its own entry in the
+trailer naming the streams it was built from, whether or not anything about
+it went wrong — with a `built from:` line and no envelope line above it when
+the section is clean. A section with neither a gap nor any provenance to name
+is the only case left out of the table entirely.
+
+Each section's own short reminder — evidence state, retained count,
+truncation, and limitations — prints inline at both detail levels, but only
+when that same `_has_reportable_limitation` test is true: a routine complete
+result (an incomplete evidence state is never routine) states nothing beyond
+the block's own sentence above it, whether that sentence reports rows or
+reports nothing eligible, so an `evidence: complete   kept: N of N` line under
+it is never printed. Neither surface prints `kept:`/`cap:` when a section's own
+`included`/`total` are both zero (`_has_meaningful_counts`): `0 of 0` names no
+retention cap this run ever approached, and would duplicate whatever a more
+specific count in the section's own body already means (main-image PE
+context's own "N consistent, 0 conflict, N unavailable" line, for one).
 
 ### Deduplicated string identity
 
-A retained string selected both as an IOC match (or notable string) in
-STRINGS IN REGION and as anchor-proximity context is one presentation
-identity. Its full text prints once — in STRINGS IN REGION, wherever that
-section's own cap allows it — and STRING CONTEXT prints only its placement and
-a short cross-reference in place of a second copy. The cross-reference is
-built against exactly what STRINGS IN REGION renders at the current level,
-never the wider retained set: a match STRINGS IN REGION's own cap left out of
-its preview is, from STRING CONTEXT's perspective, still new, and prints there
-in full under STRING CONTEXT's own separate cap — a cross-reference must never
-point at a section that does not actually show the string.
+A retained string can be selected into any two of three projections: STRINGS
+IN REGION's own IOC-match inventory, Additional retained strings' notable-
+string inventory (verbose only), and STRING CONTEXT's own anchor-proximity
+selection. A string chosen for one of the first two AND for proximity context
+is one presentation identity; its full text prints once, in whichever of the
+two source sections actually shows it at the current level, and STRING
+CONTEXT drops the row entirely rather than printing a per-row cross-reference
+in its place. Every dropped row is named once, together, as a single trailing
+count that also names which section(s) it was already shown under ("N
+further retained entries are already shown in full under STRINGS IN REGION",
+or "... under STRINGS IN REGION and ADDITIONAL RETAINED STRINGS" when a
+verbose run's duplicates come from both), or, when every entry STRING
+CONTEXT's own console cap would otherwise show is a duplicate, one summary
+sentence replaces the row list outright, naming the same section(s).
+
+The identity check is built against exactly what each source section renders
+at the current level, never its wider retained set: a match that section's own
+cap left out of its preview is, from STRING CONTEXT's perspective, still new,
+and prints there in full under STRING CONTEXT's own separate cap — a
+duplicate is only ever counted when it points at text genuinely on screen
+elsewhere. Notable strings render at verbose only, so at normal detail none
+of them are in STRING CONTEXT's dedup source at all; a notable string close
+enough to the anchor to be selected as proximity context is proximity-only by
+that route as well, and default detail holds it rather than printing it (see
+**Default output**). STRING CONTEXT's own console cap is applied AFTER this
+dedup partition and after that hold, over the remainder only: a duplicate or a
+routine entry at the front of the retained order can never push a genuinely
+unique one further back out of the preview, and can never make the
+all-duplicate summary sentence print while entries this level has not yet
+considered still exist beyond it.
 
 ### Omission notices
 
@@ -141,8 +256,9 @@ Three omission notices have distinct meanings:
 - A retention cap drops eligible rows before projection. The notice says the
   rows are absent from every console level and JSON.
 - A retained string's full text is published under a different section at
-  this same detail level. The cross-reference names that section rather than
-  repeating the text.
+  this same detail level. The row is dropped rather than repeated, and every
+  dropped row in one section is named once, together, in a single trailing
+  count naming the other section — never one stub row per duplicate.
 
 Where the console renders a dump-derived value that reached its retained-text
 cap, it must expose the truncation beside that value. Ordinary fields use a
@@ -172,6 +288,34 @@ When the eligible population is known, `truncated` is exactly
 fabricated count. A section limitation describes missing evidence or incomplete
 work; a captured disagreement is an observation and belongs in its typed
 conflict record instead.
+
+### Settled negatives
+
+A few `complete` sections carry a limitation sentence that is not a gap but the
+answer: the collector read what it needed and the thing it was looking for is
+positively absent. `iat_correlation` is the published case — a module that
+declares no import directory is `complete` with "the module declares no import
+directory", exactly so a consumer does not read it as an unanswered question
+(see `OUTPUT_SCHEMA.md`).
+
+`_split_limitations` in `dumpex.commands.report` is the presentation-side
+classifier, and it changes no record: `limitations` stays exactly what the
+collector published. A settled negative
+- appears in no coverage-summary gap list, since naming it one would send an
+  analyst looking for evidence this run has already established is not there;
+- leaves its section out of the inline `evidence: …` envelope line and out of
+  the LIMITATIONS AND PROVENANCE trailer's envelope, the same as any other
+  routine complete result (`_has_reportable_limitation`);
+- still prints, under the neutral `[·]` marker rather than the caveat `[~]` —
+  it is that section's result, and suppressing it would lose the answer.
+
+Only a section that is `complete`, untruncated, and found nothing eligible can
+carry one at all, and only for the exact sentences the classifier lists: a
+`partial` or truncated section did not finish the evaluation that would have
+settled anything, and any other sentence — including a genuine gap riding in
+the same section's own `limitations`, such as an unread data-directory array —
+stays a gap. Classification is per sentence, not per section, and an unlisted
+sentence over-reports rather than being silently reclassified.
 
 ## Bounded selection
 

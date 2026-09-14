@@ -62,18 +62,26 @@ NET_PATTERNS = re.compile(
     re.IGNORECASE
 )
 
-# The normal-detail preview of card.ioc_strings/card.notable_strings -- a
-# console-only cap, not a retention one: --json always carries every IOC
-# match and every notable string _scan_content_range found, and --verbose
-# expands the console to all of them too. Kept small and separate from
-# MAX_REPORT_SCAN_BYTES/MAX_REGION_READ (which bound what is READ, not
-# what is printed).
+# The normal-detail preview of card.ioc_strings -- a console-only cap, not
+# a retention one: --json always carries every IOC match
+# _scan_content_range found, and --verbose expands the console to all of
+# them. Kept small and separate from MAX_REPORT_SCAN_BYTES/MAX_REGION_READ
+# (which bound what is READ, not what is printed). Notable strings carry no
+# console cap of their own: they are verbose-only supplementary evidence
+# (see _render_additional_retained_strings) -- normal detail shows none of
+# them inline, so there is no narrower preview of that section to cap.
 CONSOLE_IOC_STRINGS = 5
-CONSOLE_NOTABLE_STRINGS = 5
 
-# The retention cap _scan_content_range applies to notable strings (not a
-# console-preview cap -- see CONSOLE_NOTABLE_STRINGS above for that).
+# The retention cap _scan_content_range applies to notable strings.
 MAX_NOTABLE_STRINGS = 20
+
+# collect_string_context's own selection reason for a string kept only
+# because it lies near the anchor -- no query match, no IOC pattern. The
+# one reason that carries no analytic claim of its own: proximity is
+# layout, so these are routine background rather than key evidence, and
+# STRING CONTEXT holds them for --verbose the same way the notable-string
+# inventory does.
+_REASON_ADJACENT_TO_ANCHOR = "adjacent_to_anchor"
 
 
 def _module_context_for(mod, modules_available: bool) -> str:
@@ -1059,7 +1067,354 @@ def _coverage_status_text(status) -> str:
     return console_safe(str(status))
 
 
-def _render_coverage_summary(coverage) -> None:
+# A limitation sentence that states a DETERMINED NEGATIVE rather than a
+# gap: the collector read what it needed, and the thing it was looking
+# for is positively absent. "The module declares no import directory" is
+# the settled answer to "does this module import anything" -- OUTPUT_SCHEMA
+# publishes it as `complete` precisely so a consumer does not read it as
+# an unanswered question -- where "the import directory array was not
+# readable" is the same section's genuinely unanswered one.
+#
+# Only consulted for a section that is complete, untruncated, and found
+# nothing eligible (see `_split_limitations`), and only for the exact
+# sentences listed here: anything else a section carries stays a gap, so
+# a collector that grows a new limitation over-reports rather than
+# silently reclassifying a real gap as a settled answer.
+_COMPLETED_NEGATIVE_LIMITATIONS = frozenset((
+    "the module declares no import directory",
+))
+
+
+def _split_limitations(section: dict) -> "tuple[tuple, tuple]":
+    """This section's own limitation sentences as `(gaps, negatives)`.
+
+    A `negative` is a completed evaluation's settled answer (see
+    `_COMPLETED_NEGATIVE_LIMITATIONS`); a `gap` is everything else --
+    something this run could not evaluate, or could not finish. The two
+    are not interchangeable to an analyst: a gap is a reason to look
+    further with a differently bounded run, and a negative is a reason to
+    stop looking. Only a section that completed, kept everything it
+    found, and found nothing eligible can carry a negative at all; a
+    partial or truncated section's sentences are all gaps, whatever they
+    say, because that section did not finish the evaluation that would
+    have settled them."""
+    limitations = tuple(section["limitations"])
+    if (section["status"] != ENRICHMENT_COMPLETE or section["truncated"]
+            or section["total"] != 0 or section["included"] != 0):
+        return limitations, ()
+    gaps = tuple(text for text in limitations
+                 if text not in _COMPLETED_NEGATIVE_LIMITATIONS)
+    negatives = tuple(text for text in limitations
+                      if text in _COMPLETED_NEGATIVE_LIMITATIONS)
+    return gaps, negatives
+
+
+def _enrichment_gap_reasons(sections: list) -> "tuple[list, list]":
+    """`(availability_reasons, retention_reasons)` for these already-
+    collected `(label, EnrichmentSection dict)` pairs -- the same
+    limitation sentences and retained-set cuts each section's own inline
+    evidence-state line states further down, read here rather than
+    rendered so a coverage summary that prints before any of those lines
+    can still state the same facts honestly.
+
+    The two lists answer different analyst questions and are kept apart
+    rather than interleaved under one marker: availability names what
+    this run could not evaluate at all (an incomplete status, or a
+    limitation sentence `_split_limitations` classifies as a gap);
+    retention names what this run DID evaluate but could not keep all of
+    (a retained-set cut). A section can contribute to both. A completed
+    evaluation's settled negative is neither, and appears in no gap list:
+    naming it one would send an analyst looking for evidence this run has
+    already established is not there. `coverage.status`/`coverage.reasons`
+    are a separate, compatibility-frozen judgment about what this run
+    could collect at all; neither list here ever merges into that
+    status."""
+    availability = []
+    retention = []
+    for label, section in sections:
+        gaps, _negatives = _split_limitations(section)
+        if gaps:
+            for limitation in gaps:
+                availability.append(f"{label}: {console_safe(limitation)}")
+        elif section["status"] != ENRICHMENT_COMPLETE:
+            availability.append(f"{label}: {_ENRICHMENT_STATE_TEXT[section['status']]}")
+        if section["truncated"]:
+            retention.append(f"{label}: {_truncation_detail(section)}")
+    return availability, retention
+
+
+def _card_gap_reasons(card) -> "tuple[list, list]":
+    """Coverage-summary `(availability, retention)` reasons for one
+    card's own already-collected context -- the same sections
+    `_render_card` walks to print each block's own evidence-state line,
+    read here (not rendered) so those facts are available before
+    `_render_card` itself runs."""
+    sections = []
+    if card.anchor_pe_context is not None:
+        sections.append(("Anchor PE placement", card.anchor_pe_context.section.to_dict()))
+    if card.string_context is not None:
+        section = card.string_context.section.to_dict()
+        if card.string_scan is not None and card.string_scan.get("truncated"):
+            # This card's own target-region read coming up short is
+            # already the whole-run "Requested memory region was only
+            # partially read" coverage.reasons fact (see
+            # _build_aggregate_coverage_report) -- string_context's own
+            # limitation names the identical string_scan read, not a
+            # second gap, so it is dropped here rather than restated.
+            # The section keeps its own PARTIAL status (still a real,
+            # distinct fact -- this section specifically was affected)
+            # and its full byte counts still print inline, further down.
+            section = dict(section, limitations=tuple(
+                text for text in section["limitations"]
+                if not text.startswith("the region read came up short:")))
+        sections.append(("String context", section))
+    if card.exception_context is not None:
+        sections.append(("Exception context", card.exception_context.section.to_dict()))
+    if card.instruction_context is not None:
+        sections.append(("Instruction context", card.instruction_context.section.to_dict()))
+    if card.iat_correlation is not None:
+        sections.append(("IAT correlation", card.iat_correlation.section.to_dict()))
+    if card.handle_correlation is not None:
+        sections.append(("Correlated handles", card.handle_correlation.section.to_dict()))
+    if card.allocation_neighborhood is not None:
+        sections.append(("Allocation neighborhood",
+                         card.allocation_neighborhood.section.to_dict()))
+    return _enrichment_gap_reasons(sections)
+
+
+def _run_gap_reasons(process_enrichment, pe_context) -> "tuple[list, list]":
+    """Coverage-summary `(availability, retention)` reasons for the
+    whole-run background blocks -- process identity, session environment,
+    process handles, token capability, and the main image PE header --
+    gathered the same way as `_card_gap_reasons` and for the same reason.
+    Token capability is not an `EnrichmentSection` (see
+    `ReportTokenCapability`), so it is folded into `availability`
+    separately rather than forced into that shape."""
+    sections = []
+    if process_enrichment is not None:
+        sections.append(("Process identity", process_enrichment["section"]))
+        sections.append(("Session environment", process_enrichment["environment"]["section"]))
+        sections.append(("Process handles", process_enrichment["handles"]["section"]))
+    if pe_context is not None:
+        sections.append(("Main image PE context", pe_context["section"]))
+    availability, retention = _enrichment_gap_reasons(sections)
+    if process_enrichment is not None:
+        token = process_enrichment["token"]
+        if token["status"] != "available":
+            availability.append(f"Token: {console_safe(token['detail'])}")
+    return availability, retention
+
+
+def _aggregate_by_region(per_card: list, num_cards: int, multi: bool) -> list:
+    """Collapse a reason every triaged card shares into one line naming
+    every region it covers, instead of repeating the identical sentence
+    once per hit; a reason shared by only some cards keeps a
+    region-scoped line, still printed once rather than once per card
+    that carries it. `per_card` is `[(region_label_or_None, [reason,
+    ...]), ...]`, one entry per card, in triage order; a body's region
+    membership is a SET built from that card's own DISTINCT reasons (not
+    a per-occurrence tally), so a card that happened to carry one body
+    twice cannot inflate its own single region into two.
+
+    Shared-by-every-card reasons print first, in the order they were
+    first seen, then narrower reasons follow, also in first-seen order --
+    grouping this way keeps a whole-dump fact from interleaving with a
+    handful of per-region facts in between it and its own duplicates
+    from other cards. The narrower reasons are then passed through
+    `_collapse_by_label`, so a label whose own per-region detail differs
+    too much to have merged above (see that function) does not still
+    print one line per region."""
+    if not multi:
+        return [reason for _region, reasons in per_card for reason in reasons]
+    body_regions = {}
+    for region_label, reasons in per_card:
+        if region_label is None:
+            continue
+        for body in set(reasons):
+            body_regions.setdefault(body, set()).add(region_label)
+    shared = {body for body, regions in body_regions.items() if len(regions) == num_cards}
+    out = []
+    emitted = set()
+    for _region_label, reasons in per_card:
+        for body in reasons:
+            if body in shared and body not in emitted:
+                out.append(f"{body} (same in all {num_cards} triaged regions)")
+                emitted.add(body)
+    narrower = []
+    for region_label, reasons in per_card:
+        for body in reasons:
+            if body in emitted:
+                continue
+            regions = body_regions.get(body)
+            if not regions or region_label is None:
+                narrower.append(body)
+            elif len(regions) == 1:
+                narrower.append(f"region {region_label} — {body}")
+            else:
+                ordered = sorted(regions, key=lambda r: int(r, 16))
+                narrower.append(f"{body} (regions: {', '.join(ordered)})")
+            emitted.add(body)
+    out.extend(_collapse_by_label(narrower, num_cards))
+    return out
+
+
+# A label whose per-region detail differs enough to have avoided the
+# shared-reason merge above -- e.g. Instruction context's own limitation,
+# which names each region's own anchor address -- still scales with the
+# hit count one line at a time otherwise. Below this many per-region
+# variants for the same label, the detail is still worth reading
+# individually (see test_string_mode_coverage_summary_prefixes_each_card_
+# own_gaps_by_region's own two-region case); at or beyond it, N
+# nearly-identical lines that differ only in an embedded address teach an
+# analyst nothing N-of-them-worth reading did not already teach at 1.
+_MAX_PER_LABEL_VARIANTS_SHOWN = 4
+
+
+def _reason_label(line: str) -> str:
+    """The section label a coverage-summary reason line names, stripping
+    any `region 0x... — ` prefix `_aggregate_by_region` may have added --
+    the label is always the text before the reason's own first `:`, since
+    every reason is built as `f"{label}: {detail}"` even when `detail`
+    itself goes on to carry further colons of its own (see, for example,
+    "Exception context: the dump carries no ExceptionStream: no exception
+    was evaluated")."""
+    label = line.split(":", 1)[0]
+    return label.split(" — ", 1)[-1]
+
+
+def _collapse_by_label(lines: list, num_cards: int) -> list:
+    """Collapse a label's own per-region reason lines into one summary
+    line once there are more of them than `_MAX_PER_LABEL_VARIANTS_SHOWN`
+    -- see that constant's own note on why. Below the threshold, `lines`
+    passes through unchanged, in the order given.
+
+    The collapsed line counts DISTINCT DETAIL LINES, not affected
+    regions: a line already covering more than one region (the
+    `(regions: 0x…, 0x…)` form `_aggregate_by_region` produces for a body
+    two or more cards share) would otherwise be undercounted if this
+    claimed a region tally instead -- `len(group)` is exactly what this
+    function actually knows without re-deriving that per-line region
+    count."""
+    by_label = {}
+    order = []
+    for line in lines:
+        label = _reason_label(line)
+        if label not in by_label:
+            order.append(label)
+        by_label.setdefault(label, []).append(line)
+    out = []
+    for label in order:
+        group = by_label[label]
+        if len(group) > _MAX_PER_LABEL_VARIANTS_SHOWN:
+            out.append(f"{label}: {len(group)} distinct per-region detail(s) among this "
+                      f"run's {num_cards} triaged regions -- see each region's own report, "
+                      f"further down, for its specific detail")
+        else:
+            out.extend(group)
+    return out
+
+
+# The region annotation `_aggregate_by_region` may append to a reason.
+# Stripped before two reasons are compared for a shared cause, and
+# re-attached to the label it belongs to, so a card-scoped reason and a
+# whole-run one that name the same missing source still merge without
+# either inheriting the other's scope.
+_REGION_ANNOTATION = re.compile(
+    r" \((?:same in all \d+ triaged regions|regions: [^)]*)\)$")
+
+
+def _merge_shared_causes(lines: list) -> list:
+    """Collapse reasons that differ only in which section observed them.
+
+    A single missing stream is one capture gap, not one per projection
+    that consumed it: a dump with no HandleDataStream leaves both the
+    process-wide handle census and each card's handle correlation with
+    the identical reason, and listing both makes one gap read as two
+    independent problems in a summary whose whole job is to say, once,
+    what this run could not evaluate. The merged line names the cause
+    once and every section it affects, each keeping its own region
+    annotation, so nothing about scope is lost or borrowed.
+
+    Merging is keyed on the reason's own detail -- the text after the
+    `f"{label}: "` every reason is built with -- so only genuinely
+    identical causes merge; two sections that could not evaluate for
+    different reasons stay separate lines. A reason already scoped to one
+    specific region (`region 0x... — `) is left alone: it is a fact about
+    that region rather than about the run, and folding it into a
+    whole-run line would widen it.
+
+    A cause only one section reports is passed through exactly as it came
+    in. Only a merged line rewrites its own shape, moving each region
+    annotation next to the label it qualifies, because a single trailing
+    annotation after several labels would read as covering all of
+    them."""
+    order = []
+    groups = {}
+    for line in lines:
+        label, sep, detail = line.partition(": ")
+        if not sep or " — " in label:
+            order.append(line)
+            groups.setdefault(line, None)
+            continue
+        annotation = _REGION_ANNOTATION.search(detail)
+        key = detail[:annotation.start()] if annotation else detail
+        if key not in groups:
+            order.append(key)
+            groups[key] = []
+        groups[key].append((label, annotation.group(0) if annotation else "", line))
+    out = []
+    for key in order:
+        group = groups.get(key)
+        if group is None:
+            out.append(key)
+            continue
+        if len(group) == 1:
+            out.append(group[0][2])
+            continue
+        names = [label + annotation for label, annotation, _line in group]
+        out.append(f"{', '.join(names[:-1])} and {names[-1]}: {key}")
+    return out
+
+
+def _all_gap_reasons(records, process_enrichment, pe_context, summary) -> "tuple[list, list]":
+    """Coverage-summary `(availability, retention)` reasons drawn from
+    every card this run already collected plus the whole-run background
+    blocks, gathered before any of them render -- see
+    `_card_gap_reasons`/`_run_gap_reasons` for what each list means, and
+    `_aggregate_by_region` for how a multi-card `--report-string` run
+    avoids repeating a whole-dump fact once per hit region.
+
+    A region this run's own card/read budget left untriaged is the
+    widest scope gap a `--report-string` run can carry -- wider than any
+    single card's own enrichment gap, since none of that card's own
+    evidence was ever examined at all -- so it belongs in `availability`
+    even though `summary["cards_skipped_for_budget"]` has no
+    `EnrichmentSection` of its own to read it from."""
+    multi = len(records) > 1
+    availability_per_card = []
+    retention_per_card = []
+    for card in records:
+        region_label = (f"0x{int(card.region.base_address, 16):x}"
+                        if card.region is not None else None)
+        availability, retention = _card_gap_reasons(card)
+        availability_per_card.append((region_label, availability))
+        retention_per_card.append((region_label, retention))
+    availability_reasons = _aggregate_by_region(availability_per_card, len(records), multi)
+    retention_reasons = _aggregate_by_region(retention_per_card, len(records), multi)
+    run_availability, run_retention = _run_gap_reasons(process_enrichment, pe_context)
+    availability_reasons = _merge_shared_causes(availability_reasons + run_availability)
+    retention_reasons = _merge_shared_causes(retention_reasons + run_retention)
+    skipped = summary.get("cards_skipped_for_budget")
+    if skipped:
+        hits = summary.get("hits_skipped_for_budget", 0)
+        availability_reasons.append(
+            f"{skipped} actionable hit region(s) covering {hits} hit(s) were not "
+            f"triaged at all -- this run reached its own card/read budget. Use "
+            f"--report-addr on a specific region to triage one of them")
+    return availability_reasons, retention_reasons
+
+
+def _render_coverage_summary(coverage, extra_reasons: "tuple[list, list]" = ((), ())) -> None:
     """Whole-run coverage, stated once near the top of the report rather
     than only implied by the per-section evidence-state lines each
     enrichment block already prints -- always, including when it is
@@ -1069,24 +1424,51 @@ def _render_coverage_summary(coverage) -> None:
     section's own state line further down; this is the short summary
     that never omits an incomplete state.
 
-    The incomplete-coverage caveat below is printed here, once for the
-    whole run, rather than repeated inside each card's own ASSESSMENT --
-    it is a fact about this run's coverage, not about any one card's own
-    findings, and a multi-card `--report-string` run would otherwise
-    repeat the identical sentence once per card."""
+    `coverage.reasons` is the compatibility-frozen reducer's own verdict
+    about what this run could collect at all -- unread and unchanged
+    here. `extra_reasons` is `(availability, retention)` from
+    `_all_gap_reasons`: presentation-level facts this run's own
+    enrichment sections already carry beneath this summary. This block
+    never claims "No known collection limitations" while any of the
+    three is non-empty, even when `coverage.status` itself is COMPLETE
+    under the existing reducer's narrower contract -- the status line
+    itself gains a short qualifier whenever that narrower contract is
+    not the whole story, so COMPLETE is never read as "nothing to
+    report" while a gap still follows it. Retention reasons print under
+    their own short lead-in, separate from availability, because a
+    retained-set cut (evaluated, but not all of it kept) and an
+    unavailable evidence source (not evaluated at all) call for
+    different follow-up and must not be read as the same kind of gap.
+
+    The incomplete-coverage caveat below stays tied to `coverage.status`
+    alone, never to `extra_reasons` -- it is a statement about this run's
+    own compatibility-frozen coverage, not about optional enrichment
+    depth, and changing what triggers it would change the reducer's own
+    exit-code-facing contract. It carries its own `[·]` marker rather
+    than `[~]`: it is advice about how to read what is already listed
+    above it, not one more gap in that list."""
+    availability_reasons, retention_reasons = extra_reasons
     print(BOLD("COVERAGE SUMMARY"))
     print("─" * 50)
-    print(f"  Status: {_coverage_status_text(coverage.status)}")
-    if coverage.reasons:
-        for reason in coverage.reasons:
-            print(YELLOW(f"  [~] {reason}"))
-    else:
+    scope_note = (DIM("  (core report coverage — see below for optional-enrichment gaps)")
+                 if availability_reasons or retention_reasons else "")
+    print(f"  Status: {_coverage_status_text(coverage.status)}{scope_note}")
+    reasons = list(coverage.reasons) + list(availability_reasons)
+    if reasons:
+        print(DIM("  Known evidence gaps:"))
+        for reason in reasons:
+            print(YELLOW(f"    [~] {reason}"))
+    elif not retention_reasons:
         print(DIM("  No known collection limitations."))
+    if retention_reasons:
+        print(DIM("  Retention limits:"))
+        for reason in retention_reasons:
+            print(YELLOW(f"    [~] {reason}"))
     if coverage.status != CoverageStatus.COMPLETE:
         caveat_text = ("treat every finding below as based on what this run could "
                        "evaluate, and consider a more complete capture or a targeted "
                        "re-run over the missing coverage before ruling anything in or out")
-        print(YELLOW(f"  [~] {caveat_text}"))
+        print(DIM(f"  [·] {caveat_text}"))
     print()
 
 
@@ -1290,10 +1672,15 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
     # "this section shows N of M" disclosure.
     shown_iocs = (list(card.ioc_strings) if verbose
                  else _select_shown_iocs(card.ioc_strings, CONSOLE_IOC_STRINGS))
-    shown_notable = (list(card.notable_strings) if verbose
-                     else card.notable_strings[:CONSOLE_NOTABLE_STRINGS])
-    dedup_sources = {(s.address, s.encoding): s.text for s in shown_iocs}
-    dedup_sources.update({(s.address, s.encoding): s.text for s in shown_notable})
+    # Notable strings render in full only at verbose, in their own
+    # ADDITIONAL RETAINED STRINGS section below -- normal detail shows
+    # none of them, so none of them count as "shown" for STRING CONTEXT's
+    # own dedup at that level either.
+    shown_notable = list(card.notable_strings) if verbose else []
+    dedup_sources = {(s.address, s.encoding): (s.text, "STRINGS IN REGION")
+                     for s in shown_iocs}
+    dedup_sources.update({(s.address, s.encoding): (s.text, "ADDITIONAL RETAINED STRINGS")
+                          for s in shown_notable})
     if card.region is not None:
         _render_group_header("KEY EVIDENCE")
         print(BOLD("STRINGS IN REGION"))
@@ -1353,18 +1740,16 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
             else:
                 print(f"  {DIM('[·] No IOC patterns matched.')}")
 
-            if card.notable_strings:
-                print(f"\n  {BOLD('Other notable strings (len > 20):')}")
-                base = int(card.region.base_address, 16)
-                for s in shown_notable:
-                    abs_addr = int(s.address, 16)
-                    off = abs_addr - base
-                    fo_abs = None if card.region.file_offset is None else card.region.file_offset + off
-                    fo_abs_str = f"0x{fo_abs:x}" if fo_abs is not None else "?"
-                    enc_col = f"[{s.encoding}]"
-                    print(f"    {CYAN(enc_col):<14} {console_safe(s.text)}")
-                    print(DIM(f"      VA  = 0x{base:016x} + 0x{off:x} = 0x{abs_addr:016x}  DMP = {fo_abs_str}"))
-                _print_console_omission(len(shown_notable), len(card.notable_strings))
+            if card.notable_strings and not verbose:
+                # The strings themselves are low-priority, routine (non-IOC)
+                # evidence -- see _render_additional_retained_strings for
+                # why they render outside KEY EVIDENCE, at verbose only. A
+                # bare count still says they exist, so normal detail never
+                # hides that this card retained any.
+                noun = "string" if len(card.notable_strings) == 1 else "strings"
+                print(DIM(f"\n  [·] {len(card.notable_strings)} notable {noun} "
+                          f"(len > 20) retained -- use --verbose for the ADDITIONAL "
+                          f"RETAINED STRINGS section"))
 
             print(DIM(f"\n  Total: {ss['total']} strings  "
                       f"(ASCII: {ss['ascii_count']}  UTF-16LE: {ss['utf16_count']})"))
@@ -1375,6 +1760,9 @@ def _render_card(mf, card, min_len: int, verbose: bool = False,
     if card.string_context is not None:
         _render_string_context(card.string_context, verbose, dedup_sources=dedup_sources,
                                collector=collector)
+
+    if verbose and card.notable_strings and card.region is not None:
+        _render_additional_retained_strings(card)
 
     # ── Correlation ────────────────────────────────────────────────────
     if (card.exception_context is not None or card.instruction_context is not None
@@ -1435,16 +1823,55 @@ def _module_match_text(state: str) -> str:
     return console_safe(state)
 
 
+def _has_reportable_limitation(section: dict) -> bool:
+    """Whether this section's own EnrichmentSection has anything to say
+    beyond a routine complete evaluation -- an incomplete status, a
+    retained-set cut, or a limitation sentence `_split_limitations`
+    classifies as a gap. A section with none of those contributes no fact
+    an analyst does not already have from that block's own sentence above
+    it, whether that sentence reports rows or reports nothing eligible.
+
+    A completed evaluation's settled negative is not a limitation for
+    this purpose: it is that section's answer, not a shortfall in it, so
+    a section carrying only negatives is routine here and stays out of
+    both the inline envelope line and the LIMITATIONS AND PROVENANCE
+    trailer -- the negative itself still prints, under its own neutral
+    marker (see `_print_section_state`). `_print_section_state` calls
+    this directly to decide its own inline `evidence: ... kept: ...`
+    line, and `_render_limitations_and_provenance` calls it to decide
+    whether a section belongs in the trailer at all -- one predicate, so
+    the two surfaces can never disagree about which sections are
+    routine."""
+    return (section["status"] != ENRICHMENT_COMPLETE
+            or section["truncated"]
+            or bool(_split_limitations(section)[0]))
+
+
+def _has_meaningful_counts(section: dict) -> bool:
+    """Whether `included`/`total` name an actual retained collection worth
+    printing as `kept: N of M`. A section whose own collector found zero
+    eligible items out of zero possible ones (e.g. a PE correlation with
+    no conflicts to report) is not a retention story -- `0 of 0` names no
+    cap this run ever approached, and duplicates whatever count the
+    section's own body already gives a more specific meaning (PE context's
+    own "N consistent, 0 conflict, N unavailable" line, for one)."""
+    return not (section["total"] == 0 and section["included"] == 0)
+
+
 def _print_section_state(section: dict, *, indent: str = "  ", label: "str | None" = None,
                           collector: "list | None" = None) -> None:
     """The short local reminder every enrichment block closes with: which
     evidence state this is, how much it kept, and every truncation or
     limitation -- printed here, at both detail levels, because an
     incomplete evidence state is never a detail an analyst can be made to
-    go find elsewhere. A completed evaluation that found nothing eligible
-    states nothing at all: the block's own sentence above it is already
-    the completed-negative result, and a `kept: 0 of 0` line under it only
-    repeats that.
+    go find elsewhere. A routine complete result states nothing at all:
+    the block's own sentence above it already IS the completed result,
+    whether that result is empty or a full list of rows, and an
+    `evidence: complete   kept: N of N` line under it would only repeat
+    what printing (or not printing) that sentence already said --
+    `_has_reportable_limitation` is the exact test for "routine," shared
+    with the LIMITATIONS AND PROVENANCE trailer below so the two
+    surfaces apply one policy rather than two.
 
     The full envelope -- scope, cap, and the streams this section was
     built from -- is verbose-only detail with no bearing on whether
@@ -1456,16 +1883,24 @@ def _print_section_state(section: dict, *, indent: str = "  ", label: "str | Non
     counts = str(section["included"])
     if section["total"] is not None:
         counts = f"{section['included']} of {section['total']}"
-    routine_negative = (section["status"] == ENRICHMENT_COMPLETE
-                        and section["included"] == 0 and not section["truncated"])
     if section["status"] == ENRICHMENT_MISSING:
         print(indent + DIM(f"evidence: {state}"))
-    elif not routine_negative:
-        print(indent + DIM(f"evidence: {state}   kept: {counts}"))
+    elif _has_reportable_limitation(section):
+        if _has_meaningful_counts(section):
+            print(indent + DIM(f"evidence: {state}   kept: {counts}"))
+        else:
+            print(indent + DIM(f"evidence: {state}"))
     if section["truncated"]:
         print(indent + YELLOW(_truncation_text(section)))
-    for limitation in section["limitations"]:
+    gaps, negatives = _split_limitations(section)
+    for limitation in gaps:
         print(indent + YELLOW("[~] " + console_safe(limitation)))
+    # A settled negative prints too -- it is evidence, and suppressing it
+    # would lose the answer -- but under the neutral marker, never the
+    # caveat one: "the module declares no import directory" is this
+    # section's result, not a shortfall an analyst should act on.
+    for negative in negatives:
+        print(indent + DIM("[·] " + console_safe(negative)))
     if collector is not None and label is not None:
         collector.append((label, section))
 
@@ -1481,46 +1916,69 @@ def _prefix_provenance(provenance: list, start: int, prefix: str) -> None:
 
 
 def _render_limitations_and_provenance(entries: list, verbose: bool) -> None:
-    """One place for the full envelope every rendered section already
-    carries on its own EnrichmentSection -- scope, evidence state,
-    counts, cap, and provenance -- instead of repeating those same four
-    fields after each section individually. Verbose only: the short
-    reminder `_print_section_state` prints inline (evidence state,
-    truncation, limitations) is the whole story at normal detail, and
-    this table would just restate it with no new fact attached."""
+    """One place for the full envelope a section with an actual gap
+    already carries on its own EnrichmentSection -- scope, evidence
+    state, counts, and cap -- instead of repeating those same fields
+    after each section individually. Verbose only: the short reminder
+    `_print_section_state` prints inline (evidence state, truncation,
+    limitations) is the whole story at normal detail, and that envelope
+    line would just restate it with no new fact attached.
+
+    Provenance is a different fact from that envelope, and is not gated
+    on having a gap: every section this run collected names the streams
+    it was built from, whether or not it found anything wrong, so a
+    section with `_has_reportable_limitation` false still gets its own
+    entry here -- with a `built from:` line and no envelope line above
+    it -- rather than losing that provenance because it happened to be
+    clean. A section with neither a gap nor any provenance to name
+    contributes nothing this table can say about it and is left out
+    entirely."""
+    entries = [(label, section) for label, section in entries
+               if _has_reportable_limitation(section) or section["provenance"]]
     if not verbose or not entries:
         return
     _render_group_header("LIMITATIONS AND PROVENANCE")
     for label, section in entries:
-        state = _ENRICHMENT_STATE_TEXT[section["status"]]
-        counts = str(section["included"])
-        if section["total"] is not None:
-            counts = f"{section['included']} of {section['total']}"
-        cap = section["cap"] if section["cap"] is not None else "none"
-        scope = section["scope"]
         print(f"  {BOLD(label)}")
-        print("    " + DIM(f"scope: {scope}   evidence: {state}   kept: {counts}   cap: {cap}"))
+        if _has_reportable_limitation(section):
+            state = _ENRICHMENT_STATE_TEXT[section["status"]]
+            counts = str(section["included"])
+            if section["total"] is not None:
+                counts = f"{section['included']} of {section['total']}"
+            scope = section["scope"]
+            if _has_meaningful_counts(section):
+                cap = section["cap"] if section["cap"] is not None else "none"
+                print("    " + DIM(f"scope: {scope}   evidence: {state}   kept: {counts}   "
+                                   f"cap: {cap}"))
+            else:
+                print("    " + DIM(f"scope: {scope}   evidence: {state}"))
         if section["provenance"]:
             print("    " + DIM("built from: "
                                + ", ".join(console_safe(p) for p in section["provenance"])))
         print()
 
 
-def _truncation_text(section: dict) -> str:
+def _truncation_detail(section: dict) -> str:
     """A collection cut, worded so it can never be read as a console
     preview. What the cap dropped was never retained: no detail level and
     no structured document can produce it, and only a differently bounded
-    run could."""
+    run could. Carries no leading marker of its own, so both the inline
+    per-section reminder and the top-of-report coverage summary can each
+    apply their own."""
     cap = section["cap"] if section["cap"] is not None else "none"
     total = section["total"]
     if total is None:
-        return (f"[~] retained set cut at the cap of {cap} — the eligible entries beyond "
+        return (f"retained set cut at the cap of {cap} — the eligible entries beyond "
                 f"it were not retained and are in neither the console nor --json")
     dropped = total - section["included"]
     entries = "entry" if dropped == 1 else "entries"
-    return (f"[~] retained set cut at the cap of {cap}: kept {section['included']} of "
+    return (f"retained set cut at the cap of {cap}: kept {section['included']} of "
             f"{total} eligible — {dropped} eligible {entries} were not retained and are "
             f"in neither the console nor --json")
+
+
+def _truncation_text(section: dict) -> str:
+    return "[~] " + _truncation_detail(section)
 
 
 # The cut point a capped value carries when it sits in a packed line with
@@ -1836,19 +2294,24 @@ def _render_handle_correlation(correlation, verbose: bool = False,
 
 def _render_string_context(context, verbose: bool = False, dedup_sources: dict = None,
                            collector: "list | None" = None) -> None:
-    """`dedup_sources` maps (address, encoding) -> full text for exactly
-    the IOC matches and notable strings STRINGS IN REGION actually prints
-    in full THIS render (its own normal-detail cap already applied, not
-    the wider retained set) -- a cross-reference is only ever printed
+    """`dedup_sources` maps (address, encoding) -> (full text, section
+    name) for exactly the IOC matches (STRINGS IN REGION) and notable
+    strings (ADDITIONAL RETAINED STRINGS, verbose only) THIS render
+    actually prints in full -- a cross-reference is only ever printed
     when it points at text genuinely on screen elsewhere in this same
-    card. A string chosen for both that inventory and anchor-proximity
-    context is one presentation identity with two roles: its full text
-    prints once, there; here it prints only its placement and a
-    cross-reference back to it, never the text again. An identity STRINGS
-    IN REGION's own cap left out of ITS preview is not in `dedup_sources`
-    either, so it is never falsely cross-referenced to a section that
-    does not actually show it -- it prints here instead, in full, under
-    this section's own separate cap.
+    card, and names the section it actually appears in rather than
+    assuming it is always STRINGS IN REGION now that the two source
+    inventories render in two different sections. A string chosen for
+    both an inventory and anchor-proximity context is one presentation
+    identity with two roles: its full text prints once, there; a row
+    here that would only repeat it is dropped rather than printed as its
+    own cross-reference line, and the dropped rows are named once,
+    together, in a single trailing count -- an analyst-proximity list of
+    a dozen rows that each say "see above" is still a duplicated
+    inventory, one row at a time. An identity a source section's own cap
+    left out of ITS preview is not in `dedup_sources` either, so it is
+    never falsely counted as shown elsewhere -- it prints here instead,
+    in full, under this section's own separate cap.
 
     The (address, encoding) pair is unique within one card's single
     content scan (no two strings the extraction pass produces start at
@@ -1877,26 +2340,116 @@ def _render_string_context(context, verbose: bool = False, dedup_sources: dict =
     if not context.entries:
         print(DIM("  [·] No string was retained from the examined range."))
     else:
-        shown = (list(context.entries) if verbose
-                 else context.entries[:CONSOLE_STRING_CONTEXT])
-        for entry in shown:
-            distance = "anchor" if entry.distance is None else f"distance {entry.distance:#x}"
-            mark = DIM(" [truncated]") if entry.text_truncated else ""
-            encoding = CYAN("[" + entry.encoding + "]")
-            reason = (entry.selection_reason + " ") if verbose else ""
-            print(f"    {encoding:<14} 0x{int(entry.address, 16):016x}  "
-                  f"{DIM(reason + distance)}")
-            source_text = dedup_sources.get((entry.address, entry.encoding))
-            is_duplicate = source_text is not None and (
-                source_text == entry.text
-                or (entry.text_truncated and source_text.startswith(entry.text)))
+        # The dedup partition runs over EVERY retained entry, never a
+        # console-capped slice of it: a duplicate at the front of the
+        # retained order must never push a genuinely unique entry further
+        # back out of a normal-detail preview computed BEFORE dedup --
+        # that would both drop evidence this section is the only one
+        # left to show and, when the whole capped slice happened to be
+        # duplicates, wrongly claim no unique entries exist at all. The
+        # console cap therefore bounds how many UNIQUE entries this
+        # preview renders, not how many retained entries it considers.
+        already_shown = 0
+        duplicate_sections = set()
+        unique_all = []
+        for entry in context.entries:
+            source = dedup_sources.get((entry.address, entry.encoding))
+            is_duplicate = source is not None and (
+                source[0] == entry.text
+                or (entry.text_truncated and source[0].startswith(entry.text)))
             if is_duplicate:
-                print(f"      {DIM('↳ also retained as evidence under STRINGS IN REGION')}")
+                already_shown += 1
+                duplicate_sections.add(source[1])
             else:
+                unique_all.append(entry)
+        # An entry selected purely because it sits near the anchor is the
+        # same class of routine, non-IOC text ADDITIONAL RETAINED STRINGS
+        # holds -- proximity alone is layout, not a finding (see this
+        # section's own closing sentence). It is verbose-only for the same
+        # reason: reached through this projection instead of the notable
+        # inventory, it would otherwise walk straight back into KEY
+        # EVIDENCE at the level that is supposed to carry only what an
+        # analyst acts on first. A query match or an IOC-pattern match is
+        # not routine and always keeps its place here.
+        if verbose:
+            eligible, routine_held = unique_all, 0
+        else:
+            eligible = [e for e in unique_all
+                        if e.selection_reason != _REASON_ADJACENT_TO_ANCHOR]
+            routine_held = len(unique_all) - len(eligible)
+        shown_unique = eligible if verbose else eligible[:CONSOLE_STRING_CONTEXT]
+        shown_where = " and ".join(sorted(duplicate_sections))
+        if not shown_unique and already_shown and not routine_held:
+            plural = "y is" if already_shown == 1 else "ies are"
+            print(DIM(f"  [·] All {already_shown} retained anchor-context entr{plural} "
+                      f"already shown in full under {shown_where}; no additional "
+                      f"unique entries."))
+        else:
+            for entry in shown_unique:
+                distance = ("anchor" if entry.distance is None
+                           else f"distance {entry.distance:#x}")
+                mark = DIM(" [truncated]") if entry.text_truncated else ""
+                encoding = CYAN("[" + entry.encoding + "]")
+                reason = (entry.selection_reason + " ") if verbose else ""
+                print(f"    {encoding:<14} 0x{int(entry.address, 16):016x}  "
+                      f"{DIM(reason + distance)}")
                 print(f"      {console_safe(entry.text)}{mark}")
-        _print_console_omission(len(shown), len(context.entries))
+            if already_shown:
+                plural = "y is" if already_shown == 1 else "ies are"
+                print(DIM(f"  [·] {already_shown} further retained entr{plural} already "
+                          f"shown in full under {shown_where} (not repeated here)."))
+        if routine_held:
+            plural = "y" if routine_held == 1 else "ies"
+            print(DIM(f"  [·] {routine_held} retained entr{plural} selected by proximity "
+                      f"alone (no IOC or query match) -- routine background, held for "
+                      f"--verbose"))
+        # Not `_print_console_omission`: that helper's "--json carries the
+        # same retained set" is true of `context.entries` as a whole (JSON
+        # keeps every entry, duplicates included -- deduplication is a
+        # console/TXT projection rule, not a retained-set one), but this
+        # preview's own cap counts only the UNIQUE remainder. Naming that
+        # smaller number as "the retained set" would contradict this
+        # section's own read line above, which already states the true
+        # count (`context.total_strings`); naming the true count here
+        # instead would wrongly imply --verbose prints that many more full
+        # texts, when the duplicates among them never print their text at
+        # any level.
+        if len(shown_unique) < len(eligible):
+            print(DIM(f"  [·] this section shows {len(shown_unique)} of {len(eligible)} "
+                      f"unique retained entries — use --verbose for the rest; --json "
+                      f"carries the full retained set of {len(context.entries)}, "
+                      f"duplicates included"))
     print(DIM("  Proximity is layout: an adjacent string is not a reference to the anchor."))
     _print_section_state(section, label="String context", collector=collector)
+    print()
+
+
+def _render_additional_retained_strings(card) -> None:
+    """Routine (non-IOC) strings long enough to be notable but not
+    otherwise actionable -- kept out of KEY EVIDENCE so a page of
+    low-priority strings never crowds the evidence an analyst reads
+    first, and verbose-only: there is no narrower normal-detail
+    projection of this section, since none of these strings print inline
+    at that level (STRINGS IN REGION states only their count there --
+    see the caller). "Kept out of KEY EVIDENCE" is a hierarchy claim, not
+    just a naming one: this uses `_render_group_header`, the same
+    top-level '=' rule ANCHOR CONTEXT/KEY EVIDENCE/CORRELATION/ADDITIONAL
+    CONTEXT each open with, so it is a sibling group rather than a
+    section still nested under KEY EVIDENCE's own banner. Always the
+    complete retained set: `card.notable_strings` is already
+    `_scan_content_range`'s own bounded retention, not a console-only
+    preview this function caps further."""
+    _render_group_header("ADDITIONAL RETAINED STRINGS")
+    base = int(card.region.base_address, 16)
+    for s in card.notable_strings:
+        abs_addr = int(s.address, 16)
+        off = abs_addr - base
+        fo_abs = None if card.region.file_offset is None else card.region.file_offset + off
+        fo_abs_str = f"0x{fo_abs:x}" if fo_abs is not None else "?"
+        enc_col = f"[{s.encoding}]"
+        print(f"    {CYAN(enc_col):<14} {console_safe(s.text)}")
+        print(DIM(f"      VA  = 0x{base:016x} + 0x{off:x} = 0x{abs_addr:016x}  DMP = {fo_abs_str}"))
+    print(DIM("  Routine, non-IOC strings -- verbose-only background, not key evidence."))
     print()
 
 
@@ -1951,7 +2504,7 @@ def _render_pe_context(pe_context: dict, verbose: bool = False,
 
 def _render_anchor_pe_context(context, verbose: bool = False,
                               collector: "list | None" = None) -> None:
-    print(BOLD("ANCHOR IN THE PE IMAGE"))
+    print(BOLD("ANCHOR PLACEMENT"))
     print("─" * 50)
     section = context.section.to_dict()
     if section["status"] == ENRICHMENT_MISSING:
@@ -1969,17 +2522,25 @@ def _render_anchor_pe_context(context, verbose: bool = False,
     print(f"  {'Owning module':<18} {owner}   {DIM(context.registration)}")
     if context.module_rva is not None:
         print(f"  {'Module RVA':<18} 0x{context.module_rva:x}")
-    if context.live_protection or context.declared_executable is not None:
+    # A declared/live comparison implies a PE section whose header states
+    # what its permissions ought to be -- print it only when this anchor
+    # is actually inside one. Private or otherwise unmapped memory has a
+    # live protection but no declared bits to compare it against; showing
+    # "declared ?" there would read as a PE section with unknown
+    # permissions rather than as no PE section at all.
+    if context.declared_executable is not None:
         declared = "".join(letter for letter, flag in (
             ("R", context.declared_readable), ("W", context.declared_writable),
-            ("X", context.declared_executable)) if flag) or "?"
+            ("X", context.declared_executable)) if flag) or "-"
         live = context.live_protection or "?"
         match = context.protection_matches_declared
         note = ("" if match is None
                 else DIM("  (matches declared)") if match
                 else YELLOW("  [!] live protection differs from the declared section bits"))
         print(f"  {'Protection':<18} declared {declared}   live {live}{note}")
-    print(DIM("  A protection mismatch is a lead for review, not a verdict."))
+        print(DIM("  A protection mismatch is a lead for review, not a verdict."))
+    elif context.live_protection:
+        print(f"  {'Live protection':<18} {context.live_protection}")
     _print_section_state(section, label="Anchor PE placement", collector=collector)
     print()
 
@@ -2124,8 +2685,12 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
         # Printed before either early return below: a scan that found
         # nothing, or found hits only in already-expected MEM_IMAGE
         # modules, can still be a partial or not-evaluated scan, and that
-        # must never be hidden behind "not found".
-        _render_coverage_summary(coverage)
+        # must never be hidden behind "not found". `records` is already
+        # this run's complete, already-collected card list at this point
+        # (collection happens in collect_report, entirely before this
+        # function runs), so every card's own gaps are known here too.
+        _render_coverage_summary(coverage, _all_gap_reasons(
+            records, summary.get("process_enrichment"), summary.get("pe_context"), summary))
         if summary["card_count"] == 0 and summary["total_hits"] == 0:
             print(RED(f"  [!] String not found in the memory regions that could be scanned."))
             print(DIM("      Try --strings with a broader address range to verify."))
@@ -2156,13 +2721,11 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
             print(DIM("  [·] All hits are in known system modules — no actionable regions to triage."))
             return
 
-        if summary.get("cards_skipped_for_budget"):
-            print(YELLOW(
-                f"  [~] {summary['cards_skipped_for_budget']} actionable hit region(s) "
-                f"covering {summary['hits_skipped_for_budget']} hit(s) were not triaged — "
-                f"this run reached its own card/read budget. Use --report-addr on a specific "
-                f"region to triage one of them.\n"))
-
+        # The untriaged-region fact belongs to COVERAGE SUMMARY above,
+        # which already carries it with its own counts and its own next
+        # step (see _all_gap_reasons). Restating it here in full would
+        # give one gap two complete presentation records in one document
+        # -- the same duplication this projection exists to remove.
         if summary["query_tid"]:
             print(DIM(f"  [·] --report-tid 0x{summary['query_tid']} was also given, but a TID has no "
                       f"established relationship to any specific string hit region — "
@@ -2225,7 +2788,8 @@ def render_report_console(records, coverage, diagnostics, artifacts, summary, mf
     _print_report_banner(mf)
     _print_anchor_line(card, summary["query_tid"], summary["query_addr"])
     _render_assessment(card, coverage)
-    _render_coverage_summary(coverage)
+    _render_coverage_summary(coverage, _all_gap_reasons(
+        records, summary.get("process_enrichment"), summary.get("pe_context"), summary))
     provenance = []
     _render_card(mf, card, min_len, verbose, collector=provenance)
     _render_additional_context(
