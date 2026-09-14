@@ -397,7 +397,7 @@ def test_report_console_renders_the_new_sections(monkeypatch, capsys, verbose):
         result.summary, mf, min_len=6, verbose=verbose)
     out = capsys.readouterr().out
     assert "MAIN IMAGE PE CONTEXT" in out
-    assert "ANCHOR IN THE PE IMAGE" in out
+    assert "ANCHOR PLACEMENT" in out
     assert "INSTRUCTION CONTEXT" in out
     assert "IAT CORRELATION" in out
     if disasm_available():

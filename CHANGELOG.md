@@ -7,6 +7,147 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.8.1 — 2026-09-11
+
+### Changed
+
+- `--report` console/`--txt` output is now analyst-first: the report title is
+  the first line printed, followed immediately by the current assessment, its
+  findings, a concise next step, and a coverage summary. Anchor context, key
+  evidence, correlation, and process/PE background follow, in that order.
+  Section headers are plain names rather than numbers, so a conditional
+  section that this run did not populate never leaves a numbering gap.
+- Default detail now also caps the console preview of retained IOC matches (5,
+  prioritizing network-pattern hits) and notable strings (5), each with an
+  omission notice; `--verbose` still expands to the complete retained set.
+  Overlapping ±128-byte network-hit windows are coalesced into one combined
+  byte range instead of repeating shared bytes once per hit.
+- A retained string selected as both an IOC match (or notable string) and
+  anchor-proximity context now prints its full text once, only when that
+  first copy is actually rendered at the current detail level; STRING
+  CONTEXT AROUND THE ANCHOR no longer repeats one cross-reference line per
+  such string, naming them instead as a single trailing count (or, when
+  every anchor-context entry is already shown elsewhere, one summary
+  sentence in place of the row list).
+- Each section's scope, cap, and provenance -- previously repeated inline
+  after every verbose section -- now appear once, in a trailing LIMITATIONS
+  AND PROVENANCE table, and only for a section that actually has an
+  incomplete status, a retained-set cut, or a limitation to report. Each
+  section's own evidence state and retained count now print inline only
+  under that same condition -- a routine complete section (however many rows
+  it retained) no longer prints an `evidence: complete   kept: N of N` line
+  at either detail level, and neither surface prints `kept:`/`cap:` when a
+  section's own retained count is meaninglessly `0 of 0`. Truncation and
+  limitation lines remain inline at both detail levels whenever they apply.
+- A multi-hit `--report-string` run's COVERAGE SUMMARY collapses a gap
+  every triaged card shares (a whole-dump fact, such as no ExceptionStream)
+  into one line naming the regions it covers, instead of repeating the
+  identical sentence once per hit; a gap only one card carries keeps its own
+  region prefix.
+
+### Fixed
+
+- `--report-string` no longer prints process-wide and main-image PE context
+  before the report's own title, and no longer hides a partial or
+  not-evaluated coverage state behind an early "not found" or
+  "all hits are in known system modules" return.
+- COVERAGE SUMMARY no longer prints "No known collection limitations" while
+  this run's own already-collected enrichment sections (exception,
+  instruction, and string context; PE and anchor-PE placement; process
+  identity, session, handles, and token capability) are themselves partial,
+  not evaluated, unavailable, or cut at a retention cap. The compatibility-
+  frozen `coverage.status`/`coverage.reasons` reducer is unread and
+  unchanged; the summary now also states the presentation-level gaps each
+  of those sections already discloses further down, so `Status: COMPLETE`
+  never reads as "nothing to report" when a later section says otherwise.
+  The incomplete-coverage caveat sentence now carries its own neutral
+  marker, distinct from an actual gap reason.
+- STRING CONTEXT AROUND THE ANCHOR's console cap now bounds how many
+  UNIQUE entries the preview renders, applied after -- not before -- the
+  dedup partition against STRINGS IN REGION. Previously the cap sliced the
+  raw retained order first, so a duplicate ranked ahead of a genuinely
+  unique entry could push that entry out of the preview entirely and, when
+  the whole capped slice happened to be duplicates, made the section falsely
+  claim no unique entries existed at all.
+- COVERAGE SUMMARY's `Status:` line now carries a short qualifier ("core
+  report coverage — see below for optional-enrichment gaps") whenever this
+  run's own enrichment sections add anything beneath it, so `COMPLETE` is
+  never read as covering more than the compatibility-frozen reducer's own
+  narrower contract. A retained-set cut (evaluated, but not all of it kept)
+  now prints under its own "Retention limits:" lead-in, separate from an
+  unavailable evidence source (not evaluated at all) -- the two call for
+  different follow-up and no longer share one undifferentiated list.
+- A card's own target-region read coming up short no longer states the same
+  fact twice in COVERAGE SUMMARY: the reducer's own aggregate "Requested
+  memory region was only partially read" and String context's own "the
+  region read came up short: N of M..." limitation both derived from the
+  identical read. String context's own distinct PARTIAL status still names
+  that the section was affected; the specific byte counts remain available
+  in that section's own inline reminder, further down.
+- LIMITATIONS AND PROVENANCE no longer drops a section's `built from:`
+  provenance just because the section itself was clean: every section this
+  run collected still gets its own entry naming the streams it was built
+  from, with no `scope:`/`evidence:` envelope line above it when there is
+  nothing to report -- restoring a fact the previous 3.8.1 revision had
+  dropped along with the routine envelope line.
+- A `--report-string` run's COVERAGE SUMMARY now also names any actionable
+  hit region this run's own card/read budget left completely untriaged --
+  the widest scope gap such a run can carry, previously visible only as a
+  YELLOW line printed after the coverage summary and the per-hit region
+  list, easy to miss relative to the triaged cards' own minor gaps listed
+  above it.
+- KEY EVIDENCE no longer includes routine (non-IOC) notable strings: they
+  render in their own verbose-only ADDITIONAL RETAINED STRINGS section
+  instead, so the section an analyst reads first stays IOC matches and
+  proximity context. Default detail now only names how many notable
+  strings this card retained, with no console-only cap of its own to
+  disclose.
+- ANCHOR IN THE PE IMAGE is renamed ANCHOR PLACEMENT, and no longer prints
+  a `declared ?  live X` comparison for private or otherwise unmapped
+  memory: that memory has a live protection but no owning PE section to
+  compare it against, and the comparison implied one existed with merely
+  unknown bits. A bare `Live protection` line prints instead; the
+  declared/live comparison (and its own mismatch caveat) now appears only
+  when an owning PE section genuinely has declared bits to compare against.
+- A `--report-string` run's COVERAGE SUMMARY no longer prints one line per
+  triaged region for a section whose own per-region detail differs across
+  more than a few regions (Instruction context's own limitation names each
+  region's own anchor address, for one): beyond four such variants for one
+  label, they collapse into a single line naming the count, so the summary
+  no longer scales with the hit count for that case.
+- A completed evaluation's settled negative is no longer reported as an
+  evidence gap. A module that positively declares no import directory is a
+  `complete` IAT section carrying "the module declares no import directory"
+  -- the answer, not an unanswered question -- and it was being listed under
+  the coverage summary's known evidence gaps and pulling its own section
+  into the LIMITATIONS AND PROVENANCE envelope, blurring `complete`,
+  `partial`, and positively-absent back together and sending an analyst
+  looking for an import table this run had already established does not
+  exist. It now prints under the neutral marker, in its own section only.
+  Classification is per limitation sentence, so a genuine gap riding in the
+  same section (an unread data-directory array) is unaffected, and only a
+  complete, untruncated, nothing-eligible section can carry a settled
+  negative at all. No collected record changes.
+- Default detail no longer expands routine strings inside KEY EVIDENCE
+  through STRING CONTEXT AROUND THE ANCHOR. An entry selected purely
+  because it lies near the anchor is the same low-priority background that
+  moved to ADDITIONAL RETAINED STRINGS, and reached KEY EVIDENCE anyway by
+  that second route; default detail now names how many were held and where
+  to get them. A query match or an IOC-pattern match carries its own
+  analytic claim and still prints, and `--verbose` still renders every
+  retained entry.
+- One missing stream is now one gap in COVERAGE SUMMARY, however many
+  sections observed it: a dump with no HandleDataStream left both the
+  process-wide handle census and each card's handle correlation reporting
+  the identical reason, so one capture gap read as two independent
+  problems. The merged line names the cause once and every section it
+  affects, each keeping its own region annotation; only genuinely identical
+  causes merge.
+- The card/read budget's untriaged-region fact is now stated once. It was
+  printed in full both in COVERAGE SUMMARY and again beside the hit list,
+  giving one gap two complete presentation records in one document. It now
+  appears only in the summary, carrying its own `--report-addr` next step.
+
 ## 3.8.0 — 2026-09-10
 
 ### Added
