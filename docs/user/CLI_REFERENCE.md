@@ -391,6 +391,27 @@ that build, and it says so rather than suggesting a `pip install` it could not
 act on. `dumpex --self-check` decodes fixed synthetic bytes through the same
 seam and exits 0 or 1, so an installation can be verified on its own.
 
+The window is a linear decode in byte order from the anchor, not an executed
+path: bytes after a branch may be data the code reads. The console prints where
+decoding ended and how far it reached; why it ended there is a separate line,
+because an undecodable byte mid-window, an incomplete instruction at the end of
+the capture, and the 512-byte analysis cap are three different reasons. Bytes
+past an undecodable one were never offered to the decoder and are reported as
+unevaluated, not as invalid instructions.
+
+When the decoded shapes support one, the assessment additionally prints a
+qualified static-analysis lead with its own next step. An in-place write the
+loop can actually reach — not merely one whose address falls inside the
+branch's span — is a *possible in-place memory transform loop* and no more; an
+ordinary buffer decode is that shape. It is only called a *possible position-independent
+self-decoding stub* when the address being written derives from a register a
+`call`/`pop` pair in the same window left the code's own address in, and no
+return or unconditional branch separates the two. A lead is a shape the bytes
+contain, never evidence that the shape ran, and it is not a finding: the
+verdict, the indicator count, the coverage status, and the exit code are
+unchanged by it. None of this appears in `--json`, whose contract is
+unchanged.
+
 A `--report-string` run builds at most 32 cards and reads at most 256 MB of
 content across them; any actionable hit left untriaged is counted in the output
 and in a warning, and `--report-addr` triages a specific region on its own.

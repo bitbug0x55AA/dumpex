@@ -9,7 +9,7 @@ import sys
 from dumpex.core import disasm
 from dumpex.core.disasm import (
     BranchKind, DisasmAvailability, MAX_DECODE_INSNS, decode_window,
-    disasm_available,
+    disasm_available, is_full_width_register, register_family,
 )
 
 
@@ -68,6 +68,172 @@ def test_ret_is_not_a_branch():
     result = decode_window(code=_RET, base_va=BASE, architecture="x64")
     (insn,) = result.instructions
     assert insn.is_return and insn.branch_kind is BranchKind.NONE
+
+
+def test_a_store_into_an_explicit_memory_operand_is_reported():
+    # xor byte ptr [rax], 0x41
+    result = decode_window(code=b"\x80\x30\x41", base_va=BASE, architecture="x64")
+    (insn,) = result.instructions
+    assert insn.writes_memory
+
+
+def test_a_read_only_memory_operand_is_not_a_write():
+    # cmp byte ptr [rax], 0x41 -- the same operand shape, read only
+    result = decode_window(code=b"\x80\x38\x41", base_va=BASE, architecture="x64")
+    (insn,) = result.instructions
+    assert not insn.writes_memory
+
+
+def test_a_register_only_instruction_is_not_a_memory_write():
+    # xor eax, eax names no memory operand at all
+    result = decode_window(code=b"\x31\xc0", base_va=BASE, architecture="x64")
+    (insn,) = result.instructions
+    assert not insn.writes_memory
+
+
+def test_an_implicit_stack_write_is_not_an_explicit_memory_operand():
+    # push rax stores to the stack, but the instruction names no memory
+    # operand, so nothing mechanically determinable is reported.
+    result = decode_window(code=b"\x50", base_va=BASE, architecture="x64")
+    (insn,) = result.instructions
+    assert not insn.writes_memory
+
+
+def test_register_names_resolve_to_the_register_they_share():
+    """One register has up to five names. A consumer tracking a value
+    between instructions has to see them as one thing."""
+    for name in ("rax", "eax", "ax", "al", "ah", "RAX"):
+        assert register_family(name) == "rax"
+    for name in ("r8", "r8d", "r8w", "r8b"):
+        assert register_family(name) == "r8"
+    assert register_family("sil") == "rsi"
+    # A name with no family is its own, so it is never merged with another.
+    assert register_family("xmm0") == "xmm0"
+    assert register_family(None) is None
+
+
+def test_full_width_is_read_against_the_architecture():
+    """`eax` is the whole register in 32-bit code and half of one in
+    64-bit code, so the question cannot be answered by the name alone."""
+    assert is_full_width_register("rax", "x64")
+    assert not is_full_width_register("eax", "x64")
+    assert is_full_width_register("eax", "x86")
+    assert not is_full_width_register("rax", "x86")
+    for narrow in ("ax", "al", "ah", "r8b"):
+        assert not is_full_width_register(narrow, "x64")
+    # An architecture this module does not decode answers False rather
+    # than letting a caller conclude a value survived.
+    assert not is_full_width_register("rax", "arm64")
+    assert not is_full_width_register("rax", None)
+
+
+def test_falls_through_is_decided_by_instruction_id_not_mnemonic():
+    """`jmp` and `ljmp` are one control-flow fact under two spellings and
+    two capstone ids, and `retf`/`iret` are returns that do not spell
+    themselves `ret`. A consumer comparing mnemonic text would find only
+    some of them."""
+    def only(hexs, architecture="x86"):
+        (insn,) = decode_window(code=bytes.fromhex(hexs), base_va=BASE,
+                                architecture=architecture).instructions
+        return insn
+
+    for hexs, mnemonic in (("ea785634120800", "ljmp"),   # far jump
+                           ("ebfe", "jmp"),              # near relative jump
+                           ("ffe0", "jmp"),              # register-indirect jump
+                           ("c3", "ret"),
+                           ("cb", "retf"),
+                           ("cf", "iretd")):
+        insn = only(hexs)
+        assert insn.mnemonic == mnemonic
+        assert not insn.falls_through, mnemonic
+
+    # A conditional branch, a call, and an ordinary instruction all
+    # continue at the next instruction.
+    for hexs in ("75f3", "e8fbffffff", "803041", "90"):
+        assert only(hexs).falls_through
+
+
+def test_an_instruction_that_never_reaches_its_successor_does_not_fall_through():
+    """An undefined opcode raises #UD every time it runs. Reading the
+    bytes below it as the continuation would assume a handler exists and
+    resumes there, which no byte window shows. The same goes for the
+    other instructions that do not return to their successor."""
+    def only(hexs):
+        (insn,) = decode_window(code=bytes.fromhex(hexs), base_va=BASE,
+                                architecture="x86").instructions
+        return insn
+
+    for hexs, mnemonic in (("0f0b", "ud2"),
+                           ("0fff", "ud0"),
+                           ("0fb9c0", "ud1"),
+                           ("f4", "hlt"),
+                           ("0f07", "sysret"),
+                           ("0f35", "sysexit"),
+                           ("0f34", "sysenter"),
+                           ("0faa", "rsm"),
+                           ("c6f800", "xabort")):
+        insn = only(hexs)
+        assert insn.mnemonic == mnemonic
+        assert not insn.falls_through, mnemonic
+
+    # `syscall` is the contrast: it records the address to come back to,
+    # so its successor IS a continuation the architecture supports.
+    (syscall,) = decode_window(code=bytes.fromhex("0f05"), base_va=BASE,
+                               architecture="x64").instructions
+    assert syscall.mnemonic == "syscall"
+    assert syscall.falls_through
+
+
+def test_implicit_register_writes_are_reported_as_clobbers():
+    """`mul` overwrites rax and rdx without naming either as an operand.
+    A consumer asking whether a register still holds what it held has to
+    be told about those, so they are separate from the operand writes."""
+    (mul_insn,) = decode_window(code=bytes.fromhex("48f7e3"), base_va=BASE,
+                                architecture="x64").instructions
+    assert mul_insn.register_writes == ()
+    assert set(mul_insn.clobbered_registers) >= {"rax", "rdx"}
+    # An operand write is a clobber too -- the two never disagree about a
+    # register the instruction spells out.
+    (add_insn,) = decode_window(code=bytes.fromhex("4883c010"), base_va=BASE,
+                                architecture="x64").instructions
+    assert add_insn.register_writes == ("rax",)
+    assert "rax" in add_insn.clobbered_registers
+
+
+def test_a_written_memory_operand_reports_its_base_register():
+    # xor byte ptr [rax], 0x41 -- rax is read to compute the address and
+    # is not itself written.
+    result = decode_window(code=b"\x80\x30\x41", base_va=BASE, architecture="x64")
+    (insn,) = result.instructions
+    assert insn.write_base_register == "rax"
+    assert insn.register_reads == ("rax",)
+    assert insn.register_writes == ()
+
+
+def test_register_reads_and_writes_follow_capstone_access():
+    # add rax, 0x10 reads and writes rax; mov rbx, qword ptr [rax] writes
+    # rbx and reads rax for the address only.
+    (add,) = decode_window(code=b"\x48\x83\xc0\x10", base_va=BASE,
+                           architecture="x64").instructions
+    assert add.register_reads == ("rax",) and add.register_writes == ("rax",)
+    (mov,) = decode_window(code=b"\x48\x8b\x18", base_va=BASE,
+                           architecture="x64").instructions
+    assert mov.register_writes == ("rbx",) and mov.register_reads == ("rax",)
+    assert not mov.writes_memory
+
+
+def test_ordered_register_operands_separate_the_zero_idiom_from_an_immediate():
+    """`xor eax, eax` names one register twice and `sub rcx, 1` names one
+    once. The deduplicated read/write tuples cannot tell them apart, so
+    the ordered operand list is what a consumer checks."""
+    (zeroed,) = decode_window(code=b"\x31\xc0", base_va=BASE,
+                              architecture="x64").instructions
+    (subtracted,) = decode_window(code=b"\x48\x83\xe9\x01", base_va=BASE,
+                                  architecture="x64").instructions
+    assert zeroed.register_operands == ("eax", "eax")
+    assert subtracted.register_operands == ("rcx",)
+    assert zeroed.register_reads == zeroed.register_writes == ("eax",)
+    assert subtracted.register_reads == subtracted.register_writes == ("rcx",)
 
 
 def test_instruction_cap_stops_the_window():

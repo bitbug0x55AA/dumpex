@@ -56,6 +56,29 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 ### Added
 
+- The `--report` console and `--txt` assessment now prints a qualified
+  static-analysis lead read from the card's decoded instruction window, under
+  its own heading beside the findings and with its own entry in `Next:`. An
+  in-place memory write that a loop can actually reach -- the branch target
+  must be a decoded instruction, and no return or unconditional branch may end
+  the run before the write or before the branch that closes the loop -- is
+  reported as a possible in-place memory transform loop and no more; an
+  ordinary buffer decode is that shape. It is called a possible position-independent
+  self-decoding stub only when the written address derives from a register a
+  `call`/`pop` pair in the same window left the code's own address in -- tracked
+  per register family, so a write to any width of that register (`xor eax, eax`
+  over a `pop rax`) ends the derivation, and carried onward only by the copy,
+  address-computation and self-arithmetic forms whose data flow is modelled, so
+  a reduction to a constant (`and rax, 0`), an exchange, an implicit clobber
+  (`mul`) or a load does not pass it on -- and no return or unconditional
+  branch separates the two. The next step names the
+  correlated thread when the card has one and says what to establish when it
+  does not, and in both cases points at extracting the region for offline
+  analysis. A lead is a shape the bytes contain, never evidence that the shape
+  ran, and it is not a finding: the verdict, the indicator count, `findings`,
+  the coverage status, and the exit code are unchanged by it. `--json` is
+  unchanged -- the lead is console output, not a contract field.
+
 - `dumpex --self-check` verifies this build's instruction decoder and exits 0
   (usable) or 1 (missing or unloadable). It takes no dump file and no command:
   it decodes fixed synthetic bytes -- `90 c3`, `nop` then `ret` -- for x86 and
@@ -64,6 +87,22 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   filesystem path.
 
 ### Fixed
+
+- A `--report` instruction window that stops decoding well inside the window no
+  longer explains itself with the 512-byte analysis cap. The console prints
+  where linear decoding ended and how far it reached (`70/512 byte(s)
+  decoded`), and why it ended there is a separate line: an undecodable byte
+  mid-window now names its address, states that it is not the cap, and says the
+  remaining bytes were not decoded rather than implying they are invalid
+  instructions. A stop at the cap is worded distinctly, and no longer both
+  claims the trailing bytes were "not evaluated" and identifies them as an
+  instruction crossing the boundary.
+
+- The instruction listing now says it is a linear decode in byte order rather
+  than an executed path, and that bytes after a branch may be data. A branch
+  target no module owns is labelled with the captured region that does place it
+  (`MEM_PRIVATE (unregistered)`) instead of `?`, and a register-indirect branch
+  says its destination is run-time state.
 
 - The official Windows executable now bundles the Capstone decoder and its
   native library, so `dumpex.exe --report` decodes instruction windows,

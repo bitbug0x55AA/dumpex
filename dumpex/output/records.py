@@ -2199,6 +2199,42 @@ INSTRUCTION_DECODER_STATES = (
 
 INSTRUCTION_BRANCH_KINDS = ("direct", "indirect_slot", "indirect_register", "none")
 
+# One instruction shape a decoded window mechanically contains, weakest
+# first. A lead is evidence to look at, never a claim that the shape ran:
+# a linear decode shows byte order, and only a debugger or a trace shows
+# a path.
+#
+# The two names are a deliberate ladder. `memory_transform_loop` is what
+# an in-place write inside a loop supports on its own, and an ordinary
+# buffer transform is exactly that shape -- the name says no more.
+# `self_decoding_stub` additionally requires the address written to be
+# derived from the code's own address, so the write lands in the code
+# region rather than in some buffer; only that one is described as
+# position-independent, and only one of the two is ever emitted.
+INSTRUCTION_LEAD_NAMES = (
+    "memory_transform_loop",
+    "self_decoding_stub",
+)
+
+# The supporting shapes a lead names. Each is a mechanically determinable
+# property of the decoded window, so a reader can re-check every one of
+# them against the instruction rows the same record carries.
+INSTRUCTION_LEAD_SIGNALS = (
+    "memory_write_back",            # an arithmetic/logic instruction stores into an explicit
+                                    # memory operand
+    "backward_branch_loop",         # a direct branch whose target is at or before its own
+                                    # address, with the write inside the span it closes
+    "get_pc_register_flows_to_write",  # the register a call/pop pair left the code's own
+                                    # address in reaches the written operand's base register
+    "linear_fall_through_from_get_pc",  # no return and no unconditional branch separates
+                                    # that pop from the loop, so one linear path covers both
+    "register_transfer_after_loop",  # a call/jmp through a register follows the loop with no
+                                    # return in between -- destination is run-time state
+)
+
+# Instruction addresses one lead carries as evidence.
+MAX_INSTRUCTION_LEAD_EVIDENCE = 8
+
 BRANCH_TARGET_KINDS = (
     "direct",             # a direct call/jump to a fixed address
     "iat_slot",           # an indirect call/jump through a slot the module's IAT names
@@ -2207,6 +2243,59 @@ BRANCH_TARGET_KINDS = (
                           # section's limitations do not say the IAT bounds were unreadable
     "indirect_register",  # an indirect call/jump through a register -- target is run-time state
 )
+
+
+@dataclass(frozen=True)
+class ReportInstructionLead:
+    """One qualified static-analysis lead read from a card's decoded
+    instruction window.
+
+    ``name`` is one of :data:`INSTRUCTION_LEAD_NAMES` and ``signals``
+    every supporting shape from :data:`INSTRUCTION_LEAD_SIGNALS` the
+    window carries, each anchored by an address in
+    ``evidence_addresses`` so an analyst re-reads the same rows rather
+    than taking the name on trust.
+
+    A lead is console and text-report presentation only. It is NOT part
+    of the JSON contract: no ``to_dict`` of any record carries it, so a
+    consumer pinned to the published schema sees exactly what it saw
+    before. It also never enters ``findings``, ``finding_details``,
+    ``verdict``, the indicator count, ``coverage.status``, or the exit
+    code, and it asserts nothing about execution."""
+    name:               str
+    signals:            tuple = ()
+    evidence_addresses: tuple = ()
+    detail:             "str | None" = None
+
+    def __post_init__(self):
+        if self.name not in INSTRUCTION_LEAD_NAMES:
+            raise ValueError(
+                f"ReportInstructionLead.name must be one of {INSTRUCTION_LEAD_NAMES}, "
+                f"got {self.name!r}")
+        object.__setattr__(self, "signals", tuple(self.signals))
+        object.__setattr__(self, "evidence_addresses", tuple(self.evidence_addresses))
+        for signal in self.signals:
+            if signal not in INSTRUCTION_LEAD_SIGNALS:
+                raise ValueError(
+                    f"ReportInstructionLead.signals must name only "
+                    f"{INSTRUCTION_LEAD_SIGNALS}, got {signal!r}")
+        if len(set(self.signals)) != len(self.signals):
+            raise ValueError("ReportInstructionLead.signals must not repeat a signal")
+        if not self.signals:
+            raise ValueError(
+                "ReportInstructionLead.signals must name the shapes the lead was read "
+                "from: a lead with no supporting signal is an unsupported claim")
+        for address in self.evidence_addresses:
+            _require_hex_address(address, "ReportInstructionLead.evidence_addresses")
+        if len(self.evidence_addresses) > MAX_INSTRUCTION_LEAD_EVIDENCE:
+            raise ValueError(
+                f"ReportInstructionLead.evidence_addresses must hold at most "
+                f"{MAX_INSTRUCTION_LEAD_EVIDENCE} addresses")
+        if not self.evidence_addresses:
+            raise ValueError(
+                "ReportInstructionLead.evidence_addresses must name at least one "
+                "instruction the lead was read from")
+        _require_optional_bounded_text(self.detail, "ReportInstructionLead.detail")
 
 
 @dataclass(frozen=True)
@@ -2348,7 +2437,27 @@ class ReportInstructionContext:
     card's own anchor -- in that priority. ``decoder_state`` is one of
     :data:`INSTRUCTION_DECODER_STATES`; every value but ``decoded`` makes
     the section `partial`, never a claim about the code. Nothing here
-    names a function, an argument, or a call stack."""
+    names a function, an argument, or a call stack.
+
+    ``bytes_decoded``, ``decode_stop_address``, and ``leads`` are
+    presentation state for the console and text report and are NOT part
+    of the JSON contract: ``to_dict`` below omits all three, so the
+    published schema and every consumer pinned to it are untouched by
+    them.
+
+    ``bytes_read`` is the window this decode was offered and
+    ``bytes_decoded`` how far into it linear decoding reached;
+    ``decode_stop_address`` is the virtual address it stopped at, present
+    whenever a decode actually ran. Together they locate where decoding
+    ended; WHY it ended there is the section's own limitation sentences,
+    which distinguish an undecodable byte mid-window, an incomplete
+    instruction at the end of the capture, and the byte cap. The location
+    alone asserts none of the three.
+
+    ``leads`` carries the qualified static-analysis leads
+    (:class:`ReportInstructionLead`) this window's own instruction shapes
+    support. Like every other enrichment fact they reach no finding,
+    verdict, indicator count, or exit code."""
     section:                   EnrichmentSection
     anchor_source:             "str | None"
     anchor_address:            "str | None"
@@ -2356,10 +2465,13 @@ class ReportInstructionContext:
     decoder_state:             str
     window_base:               "str | None"
     bytes_read:                int
+    bytes_decoded:             int = 0
+    decode_stop_address:       "str | None" = None
     branch_targets_total:      int = 0
     branch_targets_truncated:  bool = False
     instructions:              tuple = ()
     branch_targets:            tuple = ()
+    leads:                     tuple = ()
 
     def __post_init__(self):
         _require_enrichment_section(self.section, "ReportInstructionContext.section",
@@ -2381,12 +2493,34 @@ class ReportInstructionContext:
         _require_optional_hex_address(self.window_base,
                                      "ReportInstructionContext.window_base")
         _require_nonneg_int(self.bytes_read, "ReportInstructionContext.bytes_read")
+        _require_nonneg_int(self.bytes_decoded, "ReportInstructionContext.bytes_decoded")
+        if self.bytes_decoded > self.bytes_read:
+            raise ValueError(
+                "ReportInstructionContext.bytes_decoded cannot exceed the window that "
+                "was read")
+        _require_optional_hex_address(self.decode_stop_address,
+                                      "ReportInstructionContext.decode_stop_address")
+        if self.decode_stop_address is not None:
+            if self.window_base is None:
+                raise ValueError(
+                    "ReportInstructionContext.decode_stop_address is an offset into the "
+                    "window, so the window base must be known")
+            if int(self.decode_stop_address, 16) != int(self.window_base, 16) + self.bytes_decoded:
+                raise ValueError(
+                    "ReportInstructionContext.decode_stop_address must be window_base + "
+                    "bytes_decoded")
         _require_nonneg_int(self.branch_targets_total,
                             "ReportInstructionContext.branch_targets_total")
         _require_bool(self.branch_targets_truncated,
                       "ReportInstructionContext.branch_targets_truncated")
         object.__setattr__(self, "instructions", tuple(self.instructions))
         object.__setattr__(self, "branch_targets", tuple(self.branch_targets))
+        object.__setattr__(self, "leads", tuple(self.leads))
+        if any(not isinstance(lead, ReportInstructionLead) for lead in self.leads):
+            raise TypeError(
+                "ReportInstructionContext.leads must be ReportInstructionLead instances")
+        if len({lead.name for lead in self.leads}) != len(self.leads):
+            raise ValueError("ReportInstructionContext.leads must not repeat a lead name")
         if any(not isinstance(i, ReportDecodedInstruction) for i in self.instructions):
             raise TypeError(
                 "ReportInstructionContext.instructions must be ReportDecodedInstruction instances")
@@ -2410,8 +2544,18 @@ class ReportInstructionContext:
                 raise ValueError(
                     "ReportInstructionContext.branch_targets must reference a decoded "
                     "instruction in this window")
+        for lead in self.leads:
+            for address in lead.evidence_addresses:
+                if address not in instruction_addresses:
+                    raise ValueError(
+                        "ReportInstructionLead.evidence_addresses must name decoded "
+                        "instructions of this window")
 
     def to_dict(self) -> dict:
+        """The published projection. `bytes_decoded`, `decode_stop_address`
+        and `leads` are console presentation state and are deliberately
+        absent: the JSON contract is closed, and a field added here would
+        be rejected by every consumer validating against it."""
         return {
             "section":                  self.section.to_dict(),
             "anchor_source":            self.anchor_source,

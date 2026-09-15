@@ -19,7 +19,7 @@ from dumpex.commands.report_enrichment import (
     PeProfileCache, RegionEvidence, collect_anchor_pe_context,
     collect_iat_correlation, collect_instruction_context, collect_pe_context,
 )
-from dumpex.core.disasm import disasm_available
+from dumpex.core.disasm import MAX_DECODE_BYTES, disasm_available
 from dumpex.output.records import (
     ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL,
 )
@@ -297,7 +297,8 @@ def test_instruction_context_partial_when_the_region_exceeds_the_byte_window(mon
     assert record.decoder_state == "decoded"
     assert record.section.status == ENRICHMENT_PARTIAL
     assert record.section.total is None
-    assert any("more than the" in note for note in record.section.limitations)
+    assert any("instructions past the cap were not evaluated" in note
+               for note in record.section.limitations)
 
 
 @_needs_capstone
@@ -594,6 +595,485 @@ def test_instruction_context_partial_on_a_mid_stream_invalid_opcode():
     assert record.decoder_state == "decode_error"
     assert record.section.status == ENRICHMENT_PARTIAL
     assert any("invalid opcode" in note for note in record.section.limitations)
+
+
+@_needs_capstone
+def test_a_stop_far_from_the_byte_cap_locates_itself_and_never_claims_the_cap():
+    """A stop inside the window is a property of the bytes at that
+    address. It names the address and how far decoding reached, it does
+    not borrow the byte cap's explanation, and it makes no claim about
+    the bytes after it -- they were never offered to the decoder."""
+    # Seven multi-byte NOPs fill 70 bytes, then 0x06 (invalid in 64-bit
+    # mode) runs well past the window: the stop is 442 bytes short of the
+    # cap, and both caps are far from reached.
+    nop11 = b"\x66\x66\x66\x0f\x1f\x84\x00\x00\x00\x00\x00"
+    mf = _private_code_mf(nop11 * 6 + b"\x0f\x1f\x40\x00" + b"\x06" * 600)
+    record, _slots = _instruction(
+        PeProfileCache.from_dump(mf, hex(PE_IMAGE_BASE)), mf,
+        [("thread_rip", _PRIVATE_CODE_VA)], base=None, thread_ip_reg="RIP")
+
+    assert record.decoder_state == "decode_error"
+    assert record.bytes_read == MAX_DECODE_BYTES
+    assert record.bytes_decoded == 70
+    assert record.decode_stop_address == f"0x{_PRIVATE_CODE_VA + 70:016x}"
+
+    (stop_note,) = [note for note in record.section.limitations
+                    if "linear decoding stopped" in note]
+    assert f"0x{_PRIVATE_CODE_VA + 70:x}" in stop_note
+    assert f"70 of {MAX_DECODE_BYTES} byte(s) in" in stop_note
+    assert f"not the {MAX_DECODE_BYTES}-byte cap" in stop_note
+    assert "cut short" not in stop_note
+    # The cap is a real, separate limit on this window and keeps its own
+    # sentence; it is never the reason decoding stopped where it did.
+    assert any("the region holds more than the" in note
+               for note in record.section.limitations)
+
+
+@_needs_capstone
+def test_a_stop_at_the_byte_cap_is_labelled_as_the_boundary_it_is():
+    """The opposite case: decoding ran the whole window and the region
+    continues. That is the cap, and it says so without borrowing the
+    invalid-opcode wording."""
+    nop11 = b"\x66\x66\x66\x0f\x1f\x84\x00\x00\x00\x00\x00"
+    # 46 eleven-byte NOPs reach offset 506; a seven-byte call then crosses
+    # the 512-byte cap and the lookahead completes it.
+    code = nop11 * 46 + b"\xff\x14\x25\x11\x22\x33\x44" + b"\x90" * 10
+    mf = _private_code_mf(code)
+    record, _slots = _instruction(
+        PeProfileCache.from_dump(mf, hex(PE_IMAGE_BASE)), mf,
+        [("thread_rip", _PRIVATE_CODE_VA)], base=None, thread_ip_reg="RIP")
+
+    assert record.decoder_state == "decoded"
+    assert record.bytes_decoded == 506
+    (cap_note,) = [note for note in record.section.limitations
+                   if "linear decoding ran the whole" in note]
+    assert f"{MAX_DECODE_BYTES}-byte window" in cap_note
+    assert "beginning an instruction that crosses it" in cap_note
+    assert all("invalid opcode" not in note for note in record.section.limitations)
+
+
+# Each fixture is a complete x64 byte sequence in unbacked private code.
+# They differ only in the one relationship the lead ladder tests for, so
+# a demotion in any of them is attributable to that difference alone.
+#
+#   call +0 / pop rax          -- leaves this code's own address in rax
+#   add rax, 0x10
+#   xor byte ptr [rax], 0x41   -- transforms bytes at that address
+#   inc rax / sub rcx, 1
+#   jne back to the xor        -- closes the loop around the write
+#   call rax                   -- leaves through a register
+_SELF_DECODING_STUB = bytes.fromhex(
+    "e800000000" "58" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "ffd0" "c3")
+_STUB_CALL_OFFSET = 0x00
+_STUB_POP_OFFSET = 0x05
+_STUB_XOR_OFFSET = 0x0a
+_STUB_JNE_OFFSET = 0x14
+_STUB_CALL_RAX_OFFSET = 0x16
+
+# The same loop over a register that no call/pop ever wrote: an ordinary
+# in-place buffer transform, which is what most of these loops are.
+_PLAIN_TRANSFORM_LOOP = bytes.fromhex("803341" "48ffc3" "48ffc9" "75f5" "c3")
+
+# The stub's shape, but the loop writes through rbx while the call/pop
+# filled rax: the get-PC value reaches nothing the write addresses.
+_STUB_WRITING_AN_UNRELATED_REGISTER = bytes.fromhex(
+    "e800000000" "58" "4883c010" "803341" "48ffc3" "4883e901" "75f4" "ffd0" "c3")
+
+# The stub's shape with a `ret` between the pop and the loop: no single
+# linear run covers both, so the two are not shown to belong together.
+_STUB_WITH_A_RETURN_BEFORE_THE_LOOP = bytes.fromhex(
+    "e800000000" "58" "4883c010" "c3" "803041" "48ffc0" "4883e901" "75f4" "c3")
+
+# The stub's shape with `xor rax, rax` after the pop: the register the
+# write addresses no longer carries the code's own address.
+_STUB_WITH_THE_POPPED_REGISTER_ZEROED = bytes.fromhex(
+    "e800000000" "58" "4831c0" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "c3")
+
+# The backward branch lands on a `ret`, so the loop leaves immediately and
+# the write below it is bytes in the branch's address span that no run of
+# this loop reaches.
+_LOOP_BRANCHING_TO_A_RETURN = bytes.fromhex(
+    "e800000000" "58" "4883c010" "c3" "803041" "48ffc9" "75f7" "c3")
+
+# A `ret` between the write and the branch that would close the loop: the
+# run ends before the loop is ever closed.
+_WRITE_CUT_OFF_FROM_ITS_CLOSING_BRANCH = bytes.fromhex(
+    "803041" "c3" "48ffc9" "75f7" "c3")
+
+# The backward branch targets an address one byte into the `xor`, which
+# is not an instruction boundary this decode produced.
+_LOOP_BRANCHING_INTO_THE_MIDDLE_OF_AN_INSTRUCTION = bytes.fromhex(
+    "803041" "c3" "48ffc9" "75f8" "c3")
+
+# An unconditional backward `jmp` closes the loop, so nothing follows it
+# on any run -- the `call rax` after it is not "after the loop".
+_LOOP_CLOSED_BY_AN_UNCONDITIONAL_JUMP = bytes.fromhex("803041" "ebfb" "ffd0" "c3")
+
+
+def _lead_for(code, *, ip_reg="RIP"):
+    """The instruction record for `code` in unbacked private memory.
+    `ip_reg` fixes the decode width: RIP is x64, EIP is x86."""
+    mf = _private_code_mf(code)
+    record, _slots = _instruction(
+        PeProfileCache.from_dump(mf, hex(PE_IMAGE_BASE)), mf,
+        [("thread_rip", _PRIVATE_CODE_VA)], base=None, thread_ip_reg=ip_reg)
+    return record
+
+
+@_needs_capstone
+def test_a_write_loop_alone_supports_only_the_transform_loop_name():
+    """An in-place write inside a loop is all an ordinary buffer decode
+    looks like too, so that is the whole claim: the name says nothing
+    about the bytes being written."""
+    record = _lead_for(_PLAIN_TRANSFORM_LOOP)
+    (lead,) = record.leads
+    assert lead.name == "memory_transform_loop"
+    assert set(lead.signals) == {"memory_write_back", "backward_branch_loop"}
+    assert "not shown to be code" in lead.detail
+
+
+@_needs_capstone
+def test_a_get_pc_value_reaching_the_write_upgrades_to_a_self_decoding_stub():
+    """The written operand's base register carries what the call/pop read
+    as this code's own address, and one uninterrupted linear run covers
+    the pop and the loop. Only then is the stronger name used."""
+    record = _lead_for(_SELF_DECODING_STUB)
+    (lead,) = record.leads
+    assert lead.name == "self_decoding_stub"
+    assert set(lead.signals) == {
+        "memory_write_back", "backward_branch_loop", "get_pc_register_flows_to_write",
+        "linear_fall_through_from_get_pc", "register_transfer_after_loop"}
+    assert lead.evidence_addresses == tuple(
+        f"0x{_PRIVATE_CODE_VA + offset:016x}" for offset in
+        (_STUB_CALL_OFFSET, _STUB_POP_OFFSET, _STUB_XOR_OFFSET, _STUB_JNE_OFFSET,
+         _STUB_CALL_RAX_OFFSET))
+    assert set(lead.evidence_addresses) <= {insn.address for insn in record.instructions}
+    assert "this code's own address" in lead.detail
+
+
+@_needs_capstone
+def test_a_write_through_a_register_the_get_pc_never_filled_is_not_a_stub():
+    """A call/pop elsewhere in the same 512-byte window is not evidence
+    about this loop: the write addresses a register the get-PC value
+    never reached."""
+    (lead,) = _lead_for(_STUB_WRITING_AN_UNRELATED_REGISTER).leads
+    assert lead.name == "memory_transform_loop"
+    assert "get_pc_register_flows_to_write" not in lead.signals
+    # The register-indirect transfer after the loop still holds, and on
+    # its own it still does not upgrade the name.
+    assert "register_transfer_after_loop" in lead.signals
+
+
+@_needs_capstone
+def test_a_return_between_the_get_pc_and_the_loop_is_not_a_stub():
+    """No single linear run covers the pop and the loop, so the two
+    fragments are not shown to belong to each other -- exactly what the
+    listing's own "not an executed path" caveat means."""
+    (lead,) = _lead_for(_STUB_WITH_A_RETURN_BEFORE_THE_LOOP).leads
+    assert lead.name == "memory_transform_loop"
+    assert "linear_fall_through_from_get_pc" not in lead.signals
+
+
+@_needs_capstone
+def test_a_popped_register_zeroed_before_the_write_is_not_a_stub():
+    """`xor rax, rax` discards the code's own address; a later
+    `add rax, 0x10` rebuilds an address from nothing the get-PC left."""
+    (lead,) = _lead_for(_STUB_WITH_THE_POPPED_REGISTER_ZEROED).leads
+    assert lead.name == "memory_transform_loop"
+    assert "get_pc_register_flows_to_write" not in lead.signals
+
+
+# `rax`, `eax`, `ax`, `al` and `ah` are one register. Each of these is
+# the stub, with one narrowing write inserted between the pop and the
+# address arithmetic: the code's own address does not survive it, so the
+# write's address no longer derives from the call/pop.
+_STUB_WITH_EAX_ZEROED = bytes.fromhex(
+    "e800000000" "58" "31c0" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "c3")
+_STUB_WITH_EAX_MOVED_ZERO = bytes.fromhex(
+    "e800000000" "58" "b800000000" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "c3")
+_STUB_WITH_AL_MOVED_ZERO = bytes.fromhex(
+    "e800000000" "58" "b000" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "c3")
+# The same, in the r8/r8d/r8w/r8b family rather than the legacy one.
+_R8_STUB_WITH_R8D_ZEROED = bytes.fromhex(
+    "e800000000" "4158" "4531c0" "4983c010" "41803041" "49ffc0" "4883e901" "75f3" "c3")
+_R8_STUB = bytes.fromhex(
+    "e800000000" "4158" "4983c010" "41803041" "49ffc0" "4883e901" "75f3" "c3")
+# 32-bit code, where `eax` IS the full width and a write to it preserves
+# the address the call/pop produced.
+_X86_STUB = bytes.fromhex("e800000000" "58" "83c010" "803041" "40" "49" "75f9" "c3")
+
+
+@_needs_capstone
+@pytest.mark.parametrize("code, inserted", [
+    (_STUB_WITH_EAX_ZEROED, "xor eax, eax"),
+    (_STUB_WITH_EAX_MOVED_ZERO, "mov eax, 0"),
+    (_STUB_WITH_AL_MOVED_ZERO, "mov al, 0"),
+    (_R8_STUB_WITH_R8D_ZEROED, "xor r8d, r8d"),
+])
+def test_a_narrowing_write_ends_the_get_pc_value_it_overwrites(code, inserted):
+    """A write to any name of a register is a write to that register. In
+    64-bit mode a 32-bit write zeroes the upper half outright, and an
+    8-bit one leaves the rest stale; in neither case is the address the
+    call/pop produced still there to be written through."""
+    (lead,) = _lead_for(code).leads
+    assert lead.name == "memory_transform_loop", inserted
+    assert "get_pc_register_flows_to_write" not in lead.signals
+
+
+# Reading a carrying register does not make the result derive from it.
+# Each of these reads the register the call/pop filled and leaves
+# something that no longer depends on the code's own address.
+_STUB_WITH_RAX_ANDED_TO_ZERO = bytes.fromhex(
+    "e800000000" "58" "4883e000" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "c3")
+_STUB_WITH_RAX_ORED_TO_ONES = bytes.fromhex(
+    "e800000000" "58" "4883c8ff" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "c3")
+# `xchg` writes two destinations that are not interchangeable: the code
+# address ends up in rbx, and rax -- which the loop writes through --
+# takes the zero that was in rbx.
+_STUB_WITH_THE_ADDRESS_EXCHANGED_AWAY = bytes.fromhex(
+    "e800000000" "58" "48c7c300000000" "4887d8" "4883c010" "803041" "48ffc0"
+    "4883e901" "75f4" "c3")
+# `mul` overwrites rax without naming it as an operand at all.
+_STUB_WITH_RAX_CLOBBERED_IMPLICITLY = bytes.fromhex(
+    "e800000000" "58" "48f7e3" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "c3")
+# A load brings back what the memory held, not the address used to reach
+# it, so rbx is not the code's own address.
+_STUB_LOADING_THROUGH_THE_ADDRESS = bytes.fromhex(
+    "e800000000" "58" "488b18" "803341" "48ffc3" "4883e901" "75f4" "c3")
+
+# The two copy forms that DO carry the address onward, so the demotions
+# above are attributable to their own instruction and not to blanket
+# suppression.
+_STUB_COPIED_THROUGH_MOV = bytes.fromhex(
+    "e800000000" "58" "4889c3" "4883c310" "803341" "48ffc3" "4883e901" "75f4" "c3")
+_STUB_COMPUTED_THROUGH_LEA = bytes.fromhex(
+    "e800000000" "58" "488d5808" "803341" "48ffc3" "4883e901" "75f4" "c3")
+
+
+@_needs_capstone
+@pytest.mark.parametrize("code, inserted", [
+    (_STUB_WITH_RAX_ANDED_TO_ZERO, "and rax, 0"),
+    (_STUB_WITH_RAX_ORED_TO_ONES, "or rax, -1"),
+    (_STUB_WITH_THE_ADDRESS_EXCHANGED_AWAY, "xchg rax, rbx"),
+    (_STUB_WITH_RAX_CLOBBERED_IMPLICITLY, "mul rbx"),
+    (_STUB_LOADING_THROUGH_THE_ADDRESS, "mov rbx, qword ptr [rax]"),
+])
+def test_reading_a_carrying_register_is_not_deriving_from_it(code, inserted):
+    """Only the forms whose data flow this module models carry a value
+    onward. A reduction to a constant, an exchange that writes two
+    destinations, an implicit clobber, and a load all read the register
+    the call/pop filled and leave something else behind."""
+    (lead,) = _lead_for(code).leads
+    assert lead.name == "memory_transform_loop", inserted
+    assert "get_pc_register_flows_to_write" not in lead.signals
+
+
+@_needs_capstone
+@pytest.mark.parametrize("code, form", [
+    (_STUB_COPIED_THROUGH_MOV, "mov rbx, rax"),
+    (_STUB_COMPUTED_THROUGH_LEA, "lea rbx, [rax + 8]"),
+])
+def test_a_modelled_copy_carries_the_address_to_another_register(code, form):
+    """The control for the demotions above: a register-to-register copy
+    and an address computation do carry the value, so the loop writing
+    through the destination is still the stronger lead."""
+    (lead,) = _lead_for(code).leads
+    assert lead.name == "self_decoding_stub", form
+    assert "get_pc_register_flows_to_write" in lead.signals
+
+
+@_needs_capstone
+def test_the_extended_register_family_still_carries_a_full_width_value():
+    """The control for the r8 case above: with no narrowing write, the
+    same family carries the address to the write as the legacy registers
+    do."""
+    (lead,) = _lead_for(_R8_STUB).leads
+    assert lead.name == "self_decoding_stub"
+    assert "get_pc_register_flows_to_write" in lead.signals
+
+
+@_needs_capstone
+def test_full_width_is_the_architecture_s_own_width():
+    """`eax` is a narrowing write on x64 and the whole register on x86.
+    The same shape decoded 32-bit therefore does carry its value."""
+    record = _lead_for(_X86_STUB, ip_reg="EIP")
+    assert record.architecture == "x86"
+    (lead,) = record.leads
+    assert lead.name == "self_decoding_stub"
+
+
+# 32-bit code whose backward branch lands on a far `ljmp`: every run of
+# the loop leaves through it, so the write below is never reached. The
+# far jump is a different capstone instruction id from the near one, and
+# its mnemonic is not "jmp".
+_X86_LOOP_BRANCHING_TO_A_FAR_JUMP = bytes.fromhex(
+    "ea785634120800" "803041" "49" "75f3")
+# The same loop with the far jump replaced by seven one-byte NOPs, so
+# only that instruction differs.
+_X86_LOOP_WITH_A_REACHABLE_WRITE = bytes.fromhex("90" * 7 + "803041" "49" "75f3")
+# `retf` inside the loop body: a return this module must recognise
+# whatever its width.
+_LOOP_WITH_A_FAR_RETURN_IN_THE_BODY = bytes.fromhex("803041" "cb" "48ffc9" "75f7" "c3")
+
+
+# 32-bit code whose backward branch lands on an instruction that never
+# reaches its successor: `ud2` faults on every pass, and `rsm` either
+# resumes the context System Management Mode interrupted or faults. In
+# both the write below is unreachable.
+_X86_LOOP_BRANCHING_TO_AN_UNDEFINED_OPCODE = bytes.fromhex(
+    "0f0b" "803041" "49" "75f8")
+_X86_LOOP_BRANCHING_TO_A_MODE_RESUME = bytes.fromhex(
+    "0faa" "803041" "49" "75f8")
+# `sysenter` records no return address, and is not one half of a pair
+# with `sysexit`: where control resumes is an OS convention, not
+# something these bytes state.
+_X86_LOOP_BRANCHING_TO_A_FAST_SYSTEM_CALL = bytes.fromhex(
+    "0f34" "803041" "49" "75f8")
+# The same loop with those two bytes replaced by two one-byte NOPs, so
+# only that instruction differs.
+_X86_LOOP_WITH_THE_UNDEFINED_OPCODE_REPLACED = bytes.fromhex(
+    "9090" "803041" "49" "75f8")
+
+
+@_needs_capstone
+def test_an_undefined_opcode_at_the_loop_entry_makes_the_write_unreachable():
+    """`ud2` raises #UD on every pass. There is no path from the loop
+    entry to the write, so no lead -- a handler that resumed below it is
+    not something this window shows."""
+    record = _lead_for(_X86_LOOP_BRANCHING_TO_AN_UNDEFINED_OPCODE, ip_reg="EIP")
+    assert any(insn.text.startswith("ud2") for insn in record.instructions)
+    assert any(insn.text.startswith("xor") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_a_mode_resume_at_the_loop_entry_makes_the_write_unreachable():
+    """`rsm` returns to the state SMM interrupted, and raises #UD
+    anywhere else. Neither outcome continues at the instruction below
+    it, so the loop reaches no write."""
+    record = _lead_for(_X86_LOOP_BRANCHING_TO_A_MODE_RESUME, ip_reg="EIP")
+    assert any(insn.text.startswith("rsm") for insn in record.instructions)
+    assert any(insn.text.startswith("xor") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_a_fast_system_call_entry_at_the_loop_entry_makes_the_write_unreachable():
+    """`sysenter` saves no user instruction pointer, so nothing in these
+    bytes says control comes back below it. The loop reaches no write."""
+    record = _lead_for(_X86_LOOP_BRANCHING_TO_A_FAST_SYSTEM_CALL, ip_reg="EIP")
+    assert any(insn.text.startswith("sysenter") for insn in record.instructions)
+    assert any(insn.text.startswith("xor") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_the_same_loop_without_the_undefined_opcode_still_reports_its_write():
+    """The control for the three cases above: with those two bytes
+    replaced by NOPs and nothing else changed, the loop reaches its
+    write."""
+    (lead,) = _lead_for(_X86_LOOP_WITH_THE_UNDEFINED_OPCODE_REPLACED,
+                        ip_reg="EIP").leads
+    assert lead.name == "memory_transform_loop"
+
+
+@_needs_capstone
+def test_a_far_jump_ends_the_run_exactly_as_a_near_one_does():
+    """`ljmp` is unconditional. Every run of this loop leaves through it
+    before reaching the write, so the write is not something the loop
+    transforms -- and the decode layer decides that from the instruction
+    id, not from the mnemonic text."""
+    record = _lead_for(_X86_LOOP_BRANCHING_TO_A_FAR_JUMP, ip_reg="EIP")
+    assert record.architecture == "x86"
+    assert any(insn.text.startswith("ljmp") for insn in record.instructions)
+    assert any(insn.text.startswith("xor") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_the_same_loop_without_the_far_jump_still_reports_its_write():
+    """The control for the case above: with the far jump replaced by
+    NOPs and nothing else changed, the loop reaches its write."""
+    record = _lead_for(_X86_LOOP_WITH_A_REACHABLE_WRITE, ip_reg="EIP")
+    (lead,) = record.leads
+    assert lead.name == "memory_transform_loop"
+
+
+@_needs_capstone
+def test_a_far_return_ends_the_run_like_a_near_one():
+    record = _lead_for(_LOOP_WITH_A_FAR_RETURN_IN_THE_BODY)
+    assert any(insn.text.startswith("retf") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_a_loop_that_branches_to_a_return_runs_no_write():
+    """The write lies between the branch target and the branch, and no
+    run of the loop reaches it: the target is a `ret`. An address inside
+    the span is not reachability, so there is no lead at all -- not even
+    the base one."""
+    record = _lead_for(_LOOP_BRANCHING_TO_A_RETURN)
+    assert any(insn.text.startswith("xor") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_a_write_cut_off_from_its_closing_branch_runs_no_loop():
+    """The other end of the same rule: a `ret` after the write ends the
+    run before the branch that would close the loop is reached."""
+    record = _lead_for(_WRITE_CUT_OFF_FROM_ITS_CLOSING_BRANCH)
+    assert any(insn.text.startswith("xor") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_a_branch_into_the_middle_of_an_instruction_is_not_a_loop_entry():
+    """The branch target has to be an instruction boundary this decode
+    produced. An address inside a decoded instruction is not a loop entry
+    this run can reason about."""
+    record = _lead_for(_LOOP_BRANCHING_INTO_THE_MIDDLE_OF_AN_INSTRUCTION)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_nothing_follows_an_unconditional_backward_jump():
+    """A conditional branch falls through to what comes after the loop; an
+    unconditional one never does. The register-indirect `call` sitting
+    after it is not reachable from the loop, so the signal is absent --
+    the loop itself is still reported."""
+    (lead,) = _lead_for(_LOOP_CLOSED_BY_AN_UNCONDITIONAL_JUMP).leads
+    assert lead.name == "memory_transform_loop"
+    assert "register_transfer_after_loop" not in lead.signals
+
+
+@_needs_capstone
+def test_a_window_with_no_write_loop_reports_no_lead():
+    record = _lead_for(b"\x48\x83\xc0\x10\x48\xff\xc0\xc3")   # add, inc, ret
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_a_memory_write_outside_the_loop_span_reports_no_lead():
+    """The write has to be inside the span the backward branch closes. A
+    loop and a store that merely share a window are not a loop that runs
+    the store."""
+    #   sub rcx, 1 / jne back to itself / xor byte ptr [rax], 0x41 / ret
+    record = _lead_for(bytes.fromhex("4883e901" "75fa" "803041" "c3"))
+    assert any(insn.text.startswith("xor") for insn in record.instructions)
+    assert record.leads == ()
+
+
+@_needs_capstone
+def test_a_branch_into_unbacked_private_memory_still_resolves_its_region():
+    """A direct target no module owns is still placed by the captured
+    region table, which is what the console labels it with -- no extra
+    field on the published record is needed to say so."""
+    record = _lead_for(_SELF_DECODING_STUB)
+    direct = [t for t in record.branch_targets if t.kind == "direct"]
+    assert direct
+    assert all(t.module_owner is None for t in direct)
+    assert all(t.region_type == "MEM_PRIVATE" for t in direct)
+    assert all(t.registration == "unregistered" for t in direct)
 
 
 def test_va_location_resolution_is_memoised_across_calls(monkeypatch):
