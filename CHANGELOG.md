@@ -7,242 +7,73 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
-## 3.8.1 — 2026-09-11
+## 3.8.0 — 2026-09-10
 
 ### Changed
 
-- `--report` console/`--txt` output is now analyst-first: the report title is
-  the first line printed, followed immediately by the current assessment, its
-  findings, a concise next step, and a coverage summary. Anchor context, key
-  evidence, correlation, and process/PE background follow, in that order.
-  Section headers are plain names rather than numbers, so a conditional
-  section that this run did not populate never leaves a numbering gap.
-- Default detail now also caps the console preview of retained IOC matches (5,
-  prioritizing network-pattern hits) and notable strings (5), each with an
-  omission notice; `--verbose` still expands to the complete retained set.
-  Overlapping ±128-byte network-hit windows are coalesced into one combined
-  byte range instead of repeating shared bytes once per hit.
-- A retained string selected as both an IOC match (or notable string) and
-  anchor-proximity context now prints its full text once, only when that
-  first copy is actually rendered at the current detail level; STRING
-  CONTEXT AROUND THE ANCHOR no longer repeats one cross-reference line per
-  such string, naming them instead as a single trailing count (or, when
-  every anchor-context entry is already shown elsewhere, one summary
-  sentence in place of the row list).
-- Each section's scope, cap, and provenance -- previously repeated inline
-  after every verbose section -- now appear once, in a trailing LIMITATIONS
-  AND PROVENANCE table, and only for a section that actually has an
-  incomplete status, a retained-set cut, or a limitation to report. Each
-  section's own evidence state and retained count now print inline only
-  under that same condition -- a routine complete section (however many rows
-  it retained) no longer prints an `evidence: complete   kept: N of N` line
-  at either detail level, and neither surface prints `kept:`/`cap:` when a
-  section's own retained count is meaninglessly `0 of 0`. Truncation and
-  limitation lines remain inline at both detail levels whenever they apply.
-- A multi-hit `--report-string` run's COVERAGE SUMMARY collapses a gap
-  every triaged card shares (a whole-dump fact, such as no ExceptionStream)
-  into one line naming the regions it covers, instead of repeating the
-  identical sentence once per hit; a gap only one card carries keeps its own
-  region prefix.
-- The instruction decoder is now a base dependency. `pip install dumpex`, an
-  install from a Git ref, and the official Windows executable all arrive able
-  to decode `--report` instruction windows, resolve branch targets, and
-  correlate the IAT; no extra has to be discovered or requested. The `disasm`
-  extra remains accepted so existing instructions keep working, but it is now
-  empty and installs nothing beyond the plain package. A decoder that is
-  missing or will not load is reported as a broken installation or build
-  rather than as an optional feature awaiting installation, and `--report`,
-  `--self-check`, and the documentation say so consistently.
+- Console and `--txt` reports now put the title, assessment, next step, and
+  coverage summary first, followed by anchor context, key evidence,
+  correlation, and background. Section names are no longer numbered.
+- Default detail keeps high-priority evidence concise: it previews up to five
+  IOC matches with network-pattern hits first, keeps routine notable and
+  proximity-only strings for `--verbose`, coalesces overlapping network-hit
+  byte windows, and avoids printing the same retained string in more than one
+  section. Omission notices point to `--verbose` and JSON where applicable.
+- Evidence gaps, retention limits, and provenance are presented consistently:
+  routine complete counts are suppressed, detailed scope/provenance moves to a
+  trailing verbose table, and multi-card reports merge genuinely identical
+  causes while preserving region-specific gaps. Every collected section still
+  names its evidence sources.
+- Capstone is now a base dependency and is bundled with the official Windows
+  executable, so every supported installation can decode report instruction
+  windows. The empty `disasm` extra remains as a compatibility alias for older
+  installation commands; a missing or unloadable decoder is reported as a
+  broken installation or build.
 
 ### Added
 
-- The `--report` console and `--txt` assessment now prints a qualified
-  static-analysis lead read from the card's decoded instruction window, under
-  its own heading beside the findings and with its own entry in `Next:`. An
-  in-place memory write that a loop can actually reach -- the branch target
-  must be a decoded instruction, and no return or unconditional branch may end
-  the run before the write or before the branch that closes the loop -- is
-  reported as a possible in-place memory transform loop and no more; an
-  ordinary buffer decode is that shape. It is called a possible position-independent
-  self-decoding stub only when the written address derives from a register a
-  `call`/`pop` pair in the same window left the code's own address in -- tracked
-  per register family, so a write to any width of that register (`xor eax, eax`
-  over a `pop rax`) ends the derivation, and carried onward only by the copy,
-  address-computation and self-arithmetic forms whose data flow is modelled, so
-  a reduction to a constant (`and rax, 0`), an exchange, an implicit clobber
-  (`mul`) or a load does not pass it on -- and no return or unconditional
-  branch separates the two. The next step names the
-  correlated thread when the card has one and says what to establish when it
-  does not, and in both cases points at extracting the region for offline
-  analysis. A lead is a shape the bytes contain, never evidence that the shape
-  ran, and it is not a finding: the verdict, the indicator count, `findings`,
-  the coverage status, and the exit code are unchanged by it. `--json` is
-  unchanged -- the lead is console output, not a contract field.
-
-- `dumpex --self-check` verifies this build's instruction decoder and exits 0
-  (usable) or 1 (missing or unloadable). It takes no dump file and no command:
-  it decodes fixed synthetic bytes -- `90 c3`, `nop` then `ret` -- for x86 and
-  x64 through the same decoder `--report` instruction context uses. A failure
-  names the raising exception and a bounded reason, never a traceback or a
-  filesystem path.
+- `--report` now correlates each triage-card anchor with its owning PE image,
+  including main-image identity and structural consistency, anchor placement
+  and memory protection, a bounded x86/x64 instruction window with resolved
+  branch targets, and relevant IAT slots. Every section distinguishes missing,
+  incomplete, completed-empty, and truncated evidence without changing report
+  findings, verdicts, or exit status.
+- The console and `--txt` assessment adds qualified static-analysis leads for
+  possible in-place memory-transform loops and position-independent
+  self-decoding stubs found in the decoded instruction window. Leads are
+  investigative context only: they do not change JSON, findings, verdict,
+  coverage, or exit status.
+- `dumpex --self-check` verifies that the installed instruction decoder works
+  for both x86 and x64 and returns a failing exit status with a safe diagnostic
+  when the decoder is missing or cannot load.
+- Published output schema v2.18 for the new report correlation fields. See
+  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the structured
+  compatibility details.
 
 ### Fixed
 
-- A `--report` instruction window that stops decoding well inside the window no
-  longer explains itself with the 512-byte analysis cap. The console prints
-  where linear decoding ended and how far it reached (`70/512 byte(s)
-  decoded`), and why it ended there is a separate line: an undecodable byte
-  mid-window now names its address, states that it is not the cap, and says the
-  remaining bytes were not decoded rather than implying they are invalid
-  instructions. A stop at the cap is worded distinctly, and no longer both
-  claims the trailing bytes were "not evaluated" and identifies them as an
-  instruction crossing the boundary.
-
-- The instruction listing now says it is a linear decode in byte order rather
-  than an executed path, and that bytes after a branch may be data. A branch
-  target no module owns is labelled with the captured region that does place it
-  (`MEM_PRIVATE (unregistered)`) instead of `?`, and a register-indirect branch
-  says its destination is run-time state.
-
-- The official Windows executable now bundles the Capstone decoder and its
-  native library, so `dumpex.exe --report` decodes instruction windows,
-  resolves branch targets, and correlates the IAT with no Python or `pip`
-  step. Previously that headline capability could report "no disassembler is
-  installed" in an executable whose users had no way to install one. The
-  release workflow declares the decoder dependency explicitly, checks the
-  packaged native library, and runs the decode self-check against both the
-  built executable and the copy extracted from the published ZIP, so a build
-  that lost the decoder fails before publication. The bundle carries
-  Capstone's license with the code it now ships.
-- A decoder that is installed but will not load is no longer reported as one
-  that is not installed. `--report` instruction context distinguishes an
-  absent dependency from a native library that failed to load, names
-  the raising exception's type, and keeps the reason bounded and free of
-  filesystem paths. A packaged executable is told its decoder is a
-  distribution defect rather than being advised to run `pip install`, which it
-  cannot act on. `decoder_state`, the JSON schema, findings, verdict,
-  coverage, and exit codes are unchanged.
+- Instruction output now distinguishes a byte-cap stop from an undecodable or
+  cut-short tail, reports where linear decoding ended, labels captured
+  unregistered branch targets and register-indirect destinations accurately,
+  and makes clear that the listing is byte-order analysis rather than an
+  executed path.
 - `--report-string` no longer prints process-wide and main-image PE context
   before the report's own title, and no longer hides a partial or
   not-evaluated coverage state behind an early "not found" or
   "all hits are in known system modules" return.
-- COVERAGE SUMMARY no longer prints "No known collection limitations" while
-  this run's own already-collected enrichment sections (exception,
-  instruction, and string context; PE and anchor-PE placement; process
-  identity, session, handles, and token capability) are themselves partial,
-  not evaluated, unavailable, or cut at a retention cap. The compatibility-
-  frozen `coverage.status`/`coverage.reasons` reducer is unread and
-  unchanged; the summary now also states the presentation-level gaps each
-  of those sections already discloses further down, so `Status: COMPLETE`
-  never reads as "nothing to report" when a later section says otherwise.
-  The incomplete-coverage caveat sentence now carries its own neutral
-  marker, distinct from an actual gap reason.
-- STRING CONTEXT AROUND THE ANCHOR's console cap now bounds how many
-  UNIQUE entries the preview renders, applied after -- not before -- the
-  dedup partition against STRINGS IN REGION. Previously the cap sliced the
-  raw retained order first, so a duplicate ranked ahead of a genuinely
-  unique entry could push that entry out of the preview entirely and, when
-  the whole capped slice happened to be duplicates, made the section falsely
-  claim no unique entries existed at all.
-- COVERAGE SUMMARY's `Status:` line now carries a short qualifier ("core
-  report coverage — see below for optional-enrichment gaps") whenever this
-  run's own enrichment sections add anything beneath it, so `COMPLETE` is
-  never read as covering more than the compatibility-frozen reducer's own
-  narrower contract. A retained-set cut (evaluated, but not all of it kept)
-  now prints under its own "Retention limits:" lead-in, separate from an
-  unavailable evidence source (not evaluated at all) -- the two call for
-  different follow-up and no longer share one undifferentiated list.
-- A card's own target-region read coming up short no longer states the same
-  fact twice in COVERAGE SUMMARY: the reducer's own aggregate "Requested
-  memory region was only partially read" and String context's own "the
-  region read came up short: N of M..." limitation both derived from the
-  identical read. String context's own distinct PARTIAL status still names
-  that the section was affected; the specific byte counts remain available
-  in that section's own inline reminder, further down.
-- LIMITATIONS AND PROVENANCE no longer drops a section's `built from:`
-  provenance just because the section itself was clean: every section this
-  run collected still gets its own entry naming the streams it was built
-  from, with no `scope:`/`evidence:` envelope line above it when there is
-  nothing to report -- restoring a fact the previous 3.8.1 revision had
-  dropped along with the routine envelope line.
-- A `--report-string` run's COVERAGE SUMMARY now also names any actionable
-  hit region this run's own card/read budget left completely untriaged --
-  the widest scope gap such a run can carry, previously visible only as a
-  YELLOW line printed after the coverage summary and the per-hit region
-  list, easy to miss relative to the triaged cards' own minor gaps listed
-  above it.
-- KEY EVIDENCE no longer includes routine (non-IOC) notable strings: they
-  render in their own verbose-only ADDITIONAL RETAINED STRINGS section
-  instead, so the section an analyst reads first stays IOC matches and
-  proximity context. Default detail now only names how many notable
-  strings this card retained, with no console-only cap of its own to
-  disclose.
-- ANCHOR IN THE PE IMAGE is renamed ANCHOR PLACEMENT, and no longer prints
-  a `declared ?  live X` comparison for private or otherwise unmapped
-  memory: that memory has a live protection but no owning PE section to
-  compare it against, and the comparison implied one existed with merely
-  unknown bits. A bare `Live protection` line prints instead; the
-  declared/live comparison (and its own mismatch caveat) now appears only
-  when an owning PE section genuinely has declared bits to compare against.
-- A `--report-string` run's COVERAGE SUMMARY no longer prints one line per
-  triaged region for a section whose own per-region detail differs across
-  more than a few regions (Instruction context's own limitation names each
-  region's own anchor address, for one): beyond four such variants for one
-  label, they collapse into a single line naming the count, so the summary
-  no longer scales with the hit count for that case.
-- A completed evaluation's settled negative is no longer reported as an
-  evidence gap. A module that positively declares no import directory is a
-  `complete` IAT section carrying "the module declares no import directory"
-  -- the answer, not an unanswered question -- and it was being listed under
-  the coverage summary's known evidence gaps and pulling its own section
-  into the LIMITATIONS AND PROVENANCE envelope, blurring `complete`,
-  `partial`, and positively-absent back together and sending an analyst
-  looking for an import table this run had already established does not
-  exist. It now prints under the neutral marker, in its own section only.
-  Classification is per limitation sentence, so a genuine gap riding in the
-  same section (an unread data-directory array) is unaffected, and only a
-  complete, untruncated, nothing-eligible section can carry a settled
-  negative at all. No collected record changes.
-- Default detail no longer expands routine strings inside KEY EVIDENCE
-  through STRING CONTEXT AROUND THE ANCHOR. An entry selected purely
-  because it lies near the anchor is the same low-priority background that
-  moved to ADDITIONAL RETAINED STRINGS, and reached KEY EVIDENCE anyway by
-  that second route; default detail now names how many were held and where
-  to get them. A query match or an IOC-pattern match carries its own
-  analytic claim and still prints, and `--verbose` still renders every
-  retained entry.
-- One missing stream is now one gap in COVERAGE SUMMARY, however many
-  sections observed it: a dump with no HandleDataStream left both the
-  process-wide handle census and each card's handle correlation reporting
-  the identical reason, so one capture gap read as two independent
-  problems. The merged line names the cause once and every section it
-  affects, each keeping its own region annotation; only genuinely identical
-  causes merge.
-- The card/read budget's untriaged-region fact is now stated once. It was
-  printed in full both in COVERAGE SUMMARY and again beside the hit list,
-  giving one gap two complete presentation records in one document. It now
-  appears only in the summary, carrying its own `--report-addr` next step.
-
-## 3.8.0 — 2026-09-10
-
-### Added
-
-- `--report` now correlates each triage card's anchor with the PE image that
-  owns it: a process-wide main-image identity and structural-consistency
-  summary, the anchor's placement (headers, code, data, import/IAT, relocation,
-  or private memory) with the section's declared versus live protection, a
-  bounded x86/x64 instruction window at the anchor with direct and proven
-  indirect branch targets resolved to module/section/region, and the anchor
-  module's import table reduced to the slots a nearby branch targets or whose
-  live thunk target is unusual. Every section states unavailable, incomplete,
-  completed-empty, or truncated evidence and changes no report finding, verdict,
-  or exit code.
-- The instruction window uses an optional `capstone` dependency, installed with
-  `pip install dumpex[disasm]`. Without it the instruction section reports an
-  explicit unavailable state rather than being omitted.
-- Published output schema v2.18 for the new report correlation fields. See
-  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the structured
-  compatibility details.
+- Coverage summaries now include optional-enrichment gaps and completely
+  untriaged hit regions, distinguish unavailable evidence from retention cuts,
+  merge duplicate causes and shared multi-region gaps, bound repeated
+  per-region variants, and state each untriaged-region or short-read fact only
+  once. A completed negative such as a module declaring no import directory is
+  no longer presented as an evidence gap.
+- String-context preview limits are applied after deduplication, preventing a
+  duplicate from hiding a unique retained entry. Routine notable strings and
+  proximity-only background no longer crowd analyst-significant evidence at
+  default detail; query and IOC matches remain visible.
+- Anchor placement now shows declared-versus-live protection only when an
+  owning PE section provides declared permissions; private and otherwise
+  unmapped memory shows only its live protection.
 
 ## 3.7.1 — 2026-09-08
 

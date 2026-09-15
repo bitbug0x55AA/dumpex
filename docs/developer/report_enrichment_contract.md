@@ -2,10 +2,10 @@
 
 Status: **implemented** in dumpex 3.8.0 and schema v2.18. Phase 1 (process,
 exception, allocation-neighbourhood, handle, string context) landed in 3.7.0 /
-v2.17; Phase 2 (PE, instruction, and IAT correlation) in 3.8.0 / v2.18. The
-3.8.1 hotfix changed console/`--txt` document hierarchy, presentation caps,
-and string-identity deduplication; it changed no wire field, schema, finding,
-verdict, or coverage semantic.
+v2.17; Phase 2 (PE, instruction, and IAT correlation), together with the final
+console/`--txt` document hierarchy, presentation caps, and string-identity
+deduplication, landed in 3.8.0 / v2.18. The presentation changes added no wire
+field, schema, finding, verdict, or coverage semantic.
 
 This document records the current implementation contract behind `--report`
 enrichment. User-visible behavior and wire fields are documented in
@@ -623,7 +623,7 @@ The focused collector and projection tests live in
 `tests/integration/test_report_enrichment_output.py`; console detail-level
 projection is covered by `tests/integration/test_report_verbose_detail.py`.
 The document hierarchy, presentation caps, and string-identity deduplication
-introduced in 3.8.1 are covered by `tests/integration/test_report_hierarchy.py`;
+introduced in 3.8.0 are covered by `tests/integration/test_report_hierarchy.py`;
 the exact byte-for-byte hierarchy of the banner, assessment, and anchor-context
 blocks is frozen in `tests/integration/test_report_compat_freeze.py`.
 The isolated disassembler seam and the VA-resolution join have their own tests
