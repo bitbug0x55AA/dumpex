@@ -520,12 +520,16 @@ def test_v2_18s_row_names_the_new_projections():
         assert token in row
 
 
-def test_v2_18s_row_names_the_decoder_states_and_the_optional_dependency():
+def test_v2_18s_row_names_the_decoder_states_and_why_one_is_unavailable():
     row = _version_summary_row("2.18")
     for state in ("decoded", "not_run", "unavailable", "unsupported_arch",
                   "decode_error"):
         assert state in row
-    assert "dumpex[disasm]" in row
+    # The decoder ships with every supported installation, so the row
+    # explains `unavailable` as a broken install rather than telling a
+    # consumer to install an extra.
+    assert "capstone" in row
+    assert "dumpex[disasm]" not in row
 
 
 def test_v2_18s_row_states_that_no_verdict_moves():

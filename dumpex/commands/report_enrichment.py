@@ -28,8 +28,10 @@ from minidump.constants import MINIDUMP_STREAM_TYPE
 from dumpex.commands.handles import collect_handles, summarize_handles_by_type
 from dumpex.core.disasm import (
     MAX_DECODE_BYTES, MAX_DECODE_INSNS, MAX_INSTRUCTION_LENGTH, BranchKind,
-    DisasmAvailability, decode_window,
+    DisasmAvailability, DisasmBackendStatus, decode_window, is_full_width_register,
+    register_family,
 )
+from dumpex.core.runtime import is_frozen
 from dumpex.core.memory import (
     addr_to_module, clamped_reader, get_modules, get_thread_contexts,
     handle_stream_evidence, has_stream_directory, read_region_spanning, stream_failure,
@@ -51,13 +53,15 @@ from dumpex.output.coverage import COVERAGE_COMPLETE
 from dumpex.output.records import (
     ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL,
     ENRICHMENT_SCOPE_CARD, ENRICHMENT_SCOPE_PROCESS, ENRICHMENT_TEXT_CAP,
-    MODULE_CONTEXT_UNAVAILABLE, EnrichmentSection, ReportAddressContext,
+    MAX_INSTRUCTION_LEAD_EVIDENCE, MODULE_CONTEXT_UNAVAILABLE, EnrichmentSection,
+    ReportAddressContext,
     ReportAnchorPeContext, ReportBranchTarget, ReportDecodedInstruction,
     ReportIdentityConflict, ReportAllocationNeighborhood, ReportCorrelatedHandle,
     ReportEnvironmentSummary, ReportEnvironmentValue, ReportExceptionContext,
     ReportExceptionEntry, ReportHandleCorrelation, ReportHandleSummary,
     ReportHandleTypeCount, ReportIatCorrelatedEntry, ReportIatCorrelation,
-    ReportInstructionContext, ReportNeighborRegion, ReportPeContext, ReportPeObservation,
+    ReportInstructionContext, ReportInstructionLead, ReportNeighborRegion,
+    ReportPeContext, ReportPeObservation,
     ReportProcessEnrichment, ReportStringContext, ReportStringContextEntry,
     ReportTokenCapability, StreamParserState, hex_address,
 )
@@ -1714,6 +1718,366 @@ def _branch_target_record(insn_address: int, kind: str, target: "int | None",
         iat_classification_uncertain=bool(iat_uncertain and kind == "indirect_memory"))
 
 
+# ── instruction leads ──────────────────────────────────────────────────
+# The arithmetic and logic mnemonics a write-back signal reads. An
+# instruction qualifies only when it is one of these AND capstone reports
+# a write to an explicit memory operand, so a plain `mov` store, an
+# implicit stack write, and a read-only test never carry the signal. The
+# set is written out here rather than derived from an instruction group,
+# so the rule a lead is emitted under is readable in one place.
+_WRITE_BACK_MNEMONICS = frozenset((
+    "xor", "add", "sub", "adc", "sbb", "and", "or", "not", "neg",
+    "inc", "dec", "rol", "ror", "shl", "shr", "sal", "sar", "rcl", "rcr",
+))
+
+
+def _linear_run_is_uninterrupted(instructions, start_va: int, end_va: int) -> bool:
+    """Whether every instruction in the half-open range ``[start_va,
+    end_va)`` leaves the linear path intact -- no return and no
+    unconditional branch.
+
+    The range is half-open so a caller can state exactly which endpoints
+    it means: an instruction AT ``start_va`` is examined, one at
+    ``end_va`` is not. A caller that means "after this instruction"
+    passes ``insn.address + insn.size`` rather than ``insn.address``,
+    because the instruction sitting on an endpoint is often the very one
+    that ends the run.
+
+    Whether an instruction ends the run is `DecodedInsn.falls_through`,
+    decided at the decode layer from capstone's instruction id -- so a
+    far `ljmp` ends it exactly as a near `jmp` does, which comparing
+    mnemonic text would miss.
+
+    This is the weakest honest statement that one linear run can cover
+    the range; it proves no run was taken."""
+    return all(insn.falls_through for insn in instructions
+               if start_va <= insn.address < end_va)
+
+
+def _loop_body_holds_write(instructions, by_address, write, branch) -> bool:
+    """Whether the loop ``branch`` closes actually runs ``write``.
+
+    An address between the branch's target and the branch itself is not
+    enough: a `ret` or an unconditional branch inside that span ends the
+    run before the write is reached, or before the closing branch is,
+    and the write is then simply bytes that happen to lie in the
+    interval. Three things are required, and each is an endpoint the
+    range arithmetic has to include on purpose:
+
+    * the branch target is an instruction boundary THIS decode produced,
+      so the loop entry is a real instruction and not the middle of one;
+    * nothing from the loop entry up to the write ends the run -- the
+      instruction AT the target is part of that check, and a `ret`
+      sitting exactly there is the case this exists to reject;
+    * nothing after the write ends the run before the closing branch.
+
+    It says the loop can run the write, never that it did."""
+    target = branch.direct_target_va
+    if target not in by_address:
+        return False
+    if not target <= write.address <= branch.address:
+        return False
+    return (_linear_run_is_uninterrupted(instructions, target, write.address)
+            and _linear_run_is_uninterrupted(
+                instructions, write.address + write.size, branch.address))
+
+
+def _get_pc_pairs(instructions, by_address, base_va: int, window_end: int) -> list:
+    """``[(call, pop)]`` for each direct `call` in this window whose
+    target is a `pop` in the same window -- the position-independent way
+    code leaves its own address in a register."""
+    pairs = []
+    for insn in instructions:
+        if not (insn.is_call and insn.branch_kind is BranchKind.DIRECT):
+            continue
+        target = insn.direct_target_va
+        if target is None or not base_va <= target < window_end:
+            continue
+        popped = by_address.get(target)
+        if popped is not None and popped.mnemonic == "pop" and popped.register_writes:
+            pairs.append((insn, popped))
+    return pairs
+
+
+def _is_zero_idiom(insn) -> bool:
+    """Whether ``insn`` is the `xor reg, reg` / `sub reg, reg` zeroing
+    idiom. It is recognised by the instruction naming one register twice,
+    so `sub rcx, 1` -- which reads and writes rcx just as `sub rcx, rcx`
+    does -- is not mistaken for it."""
+    return (insn.mnemonic in ("xor", "sub") and len(insn.register_operands) == 2
+            and insn.register_operands[0] == insn.register_operands[1])
+
+
+# The only instruction forms whose data flow this module follows. Each
+# names exactly one register destination and has a stated relationship
+# between that destination and its inputs:
+#
+#   mov dst, src      the destination becomes the source, register to
+#                     register only -- a load names a memory operand,
+#                     and what it brings back is whatever that memory
+#                     held, not the address used to reach it;
+#   lea dst, [...]    the destination becomes an address computed from
+#                     the memory operand's own registers;
+#   add/sub/inc/dec   the destination is also an input, so the result
+#                     still derives from what it held.
+#
+# Everything else only ever KILLS what its destinations held. That
+# includes reductions whose result no longer depends on the input
+# (`and reg, 0`, `or reg, -1`), instructions that permute several
+# destinations at once (`xchg`), and every mnemonic not named here.
+#
+# This is a whitelist on purpose. A blacklist of value-destroying forms
+# would have to be complete to be safe, and x86 has too many ways to
+# reduce a register to a constant for that to be a claim worth making.
+# A form this does not know under-reports: the lead falls back to the
+# name the loop alone supports.
+_COPY_MNEMONIC = "mov"
+_ADDRESS_MNEMONIC = "lea"
+_SELF_ARITHMETIC_MNEMONICS = frozenset(("add", "sub", "inc", "dec"))
+
+
+def _carrying_destination(insn, *, architecture: "str | None", carrying: set
+                          ) -> "str | None":
+    """The one register family ``insn`` leaves a carried value in, or None.
+
+    None is the answer for every instruction this module does not model,
+    and the caller kills the instruction's destinations either way -- so
+    an unrecognised form loses the value rather than passing it on."""
+    writes = insn.register_writes
+    if len(writes) != 1 or not is_full_width_register(writes[0], architecture):
+        return None
+    if not any(register_family(name) in carrying for name in insn.register_reads):
+        return None
+    destination = register_family(writes[0])
+    if insn.mnemonic == _COPY_MNEMONIC:
+        # Two register operands and exactly one register read: a register
+        # source. A load reads a memory operand's base instead, which
+        # leaves only one register operand and is rejected here.
+        if len(insn.register_operands) == 2 and len(insn.register_reads) == 1:
+            return destination
+        return None
+    if insn.mnemonic == _ADDRESS_MNEMONIC:
+        # `lea`'s only register operand is its destination; everything it
+        # reads is the address arithmetic.
+        if len(insn.register_operands) == 1:
+            return destination
+        return None
+    if insn.mnemonic in _SELF_ARITHMETIC_MNEMONICS:
+        if _is_zero_idiom(insn):
+            return None
+        reads = {register_family(name) for name in insn.register_reads}
+        return destination if destination in reads else None
+    return None
+
+
+def _registers_holding(instructions, *, seed: str, architecture: "str | None",
+                       from_va: int, to_va: int) -> set:
+    """The register families still carrying the value ``seed`` held at
+    ``from_va``, walked forward over the instructions in ``[from_va,
+    to_va)``.
+
+    Tracking is per register FAMILY, not per name: `rax`, `eax`, `ax`,
+    `al` and `ah` are one register, and writing any of them ends what it
+    held. The kill covers every register capstone says an instruction
+    writes, the implicit ones included, so a `mul` that overwrites `rax`
+    without naming it does not leave a stale value behind. It is
+    unconditional and it comes first -- in 64-bit mode `xor eax, eax`
+    zeroes the whole of `rax`, and an 8- or 16-bit write leaves the rest
+    stale, so in neither case does the address someone was following
+    survive.
+
+    Only then, and only for the forms :func:`_carrying_destination`
+    models, does one destination take the value on. Reading a carrying
+    register is not enough by itself: `and rax, 0` reads `rax` and leaves
+    a constant, and `xchg rbx, rax` reads one carrying register and
+    writes two destinations that are not interchangeable.
+
+    Everything this cannot model under-reports, which is the direction to
+    err in: a flow it cannot follow yields no claim that the flow
+    exists."""
+    carrying = {register_family(seed)}
+    for insn in instructions:
+        if not from_va <= insn.address < to_va or not insn.clobbered_registers:
+            continue
+        destination = _carrying_destination(
+            insn, architecture=architecture, carrying=carrying)
+        carrying -= {register_family(name) for name in insn.clobbered_registers}
+        if destination is not None:
+            carrying.add(destination)
+    return carrying
+
+
+def _instruction_leads(instructions, *, base_va: int, window_len: int,
+                       architecture: "str | None") -> tuple:
+    """The static-analysis lead this decoded window supports, as a
+    one-element :class:`ReportInstructionLead` tuple, or empty.
+
+    The rule is a two-step ladder, fixed here rather than scored, and
+    each step names only what it has actually shown.
+
+    ``memory_transform_loop`` is the base: an arithmetic or logic store
+    into an explicit memory operand whose address lies inside the span of
+    a backward direct branch -- a write a loop in the same window runs
+    more than once. That is all an in-place transform proves, and an
+    ordinary buffer decode loop is exactly this shape, so the name claims
+    nothing about what the written bytes are.
+
+    ``self_decoding_stub`` requires, in addition, that the written
+    operand's base register carry a value a `call`/`pop` pair in this
+    same window left the code's own address in -- followed per register
+    family, so a write at any width to any name of that register ends the
+    carry -- and that no return and no unconditional branch separate that
+    `pop` from the loop. Together
+    those say the loop writes at an address derived from where this code
+    itself sits, on one linear run -- the difference between transforming
+    a buffer and rewriting one's own bytes. Without both, the base name
+    stands: a `call`/`pop` elsewhere in the 512-byte window is not
+    evidence about this loop.
+
+    ``register_transfer_after_loop`` is a supporting signal and never a
+    gate: a register-indirect `call`/`jmp` that the loop can fall through
+    to. Only a conditional closing branch falls through at all -- nothing
+    follows an unconditional backward `jmp` on any run -- and nothing
+    between the two may end the run.
+
+    Every one of these relationships requires the write to be somewhere
+    the loop can actually reach: an address inside the branch's span is
+    not enough, because a `ret` or an unconditional branch in that span
+    ends the run first. :func:`_loop_body_holds_write` is the gate.
+
+    Everything here is a shape the bytes contain. Linear order is not an
+    executed path -- these relationships are the weakest ones that still
+    connect the instructions to each other, and none of them asserts that
+    any of it ran. No lead moves a finding, verdict, indicator count,
+    coverage status, or exit code."""
+    window_end = base_va + window_len
+    by_address = {insn.address: insn for insn in instructions}
+
+    write_backs = [insn for insn in instructions
+                   if insn.writes_memory and insn.mnemonic in _WRITE_BACK_MNEMONICS]
+    backward_branches = [
+        insn for insn in instructions
+        if (insn.is_jump and insn.branch_kind is BranchKind.DIRECT
+            and insn.direct_target_va is not None
+            and base_va <= insn.direct_target_va <= insn.address)]
+    looping_writes = [
+        (write, branch) for branch in backward_branches for write in write_backs
+        if _loop_body_holds_write(instructions, by_address, write, branch)]
+    if not looping_writes:
+        return ()
+
+    get_pc_pairs = _get_pc_pairs(instructions, by_address, base_va, window_end)
+
+    def _get_pc_reaching(write, branch):
+        """The ``(call, pop)`` pair whose value reaches the address
+        register of ``write`` on a linear run that also covers the loop,
+        or None."""
+        if write.write_base_register is None:
+            return None
+        for call, popped in get_pc_pairs:
+            if popped.address >= write.address:
+                continue
+            # The walk starts AFTER the pop: the pop is what seeded the
+            # register, and a walk that included it would read its own
+            # write as a kill.
+            carrying = _registers_holding(
+                instructions, seed=popped.register_writes[0],
+                architecture=architecture,
+                from_va=popped.address + popped.size, to_va=write.address)
+            if register_family(write.write_base_register) not in carrying:
+                continue
+            if not _linear_run_is_uninterrupted(
+                    instructions, popped.address + popped.size,
+                    branch.direct_target_va):
+                continue
+            return call, popped
+        return None
+
+    # The first pair that supports the stronger name leads; otherwise the
+    # first looping write carries the base name.
+    write, branch = looping_writes[0]
+    get_pc = None
+    for candidate_write, candidate_branch in looping_writes:
+        reaching = _get_pc_reaching(candidate_write, candidate_branch)
+        if reaching is not None:
+            write, branch, get_pc = candidate_write, candidate_branch, reaching
+            break
+
+    signals = ["memory_write_back", "backward_branch_loop"]
+    evidence = [write.address, branch.address]
+    # One address in the prose -- the write the lead is named for. Every
+    # other instruction the lead rests on is in `evidence_addresses`, so
+    # the sentence stays the same length whatever the addresses are and
+    # never has to be cut mid-word to fit the text cap.
+    detail = (f"{write.mnemonic} stores into memory at 0x{write.address:x} inside a loop "
+              f"closed by a backward branch")
+    if get_pc is None:
+        name = "memory_transform_loop"
+        detail += "; what it writes over is not shown to be code"
+    else:
+        name = "self_decoding_stub"
+        call, popped = get_pc
+        signals += ["get_pc_register_flows_to_write", "linear_fall_through_from_get_pc"]
+        evidence += [call.address, popped.address]
+        detail += (f"; its address register carries what the call/pop at "
+                   f"0x{popped.address:x} read as this code's own address")
+
+    # Only a CONDITIONAL closing branch falls through to what follows the
+    # loop. An unconditional backward `jmp` never reaches the next
+    # instruction at all, so nothing after it is "after the loop".
+    transfer = None
+    if branch.falls_through:
+        transfer = next((insn for insn in instructions
+                         if insn.branch_kind is BranchKind.INDIRECT_REGISTER
+                         and (insn.is_call or insn.is_jump)
+                         and insn.address > branch.address
+                         and _linear_run_is_uninterrupted(
+                             instructions, branch.address + branch.size,
+                             insn.address)), None)
+    if transfer is not None:
+        signals.append("register_transfer_after_loop")
+        evidence.append(transfer.address)
+
+    # Leads are bounded by the closed INSTRUCTION_LEAD_NAMES vocabulary,
+    # not by a retention cap: there is no dump-derived population here to
+    # select from. The evidence addresses within one lead are capped.
+    lead = ReportInstructionLead(
+        name=name, signals=tuple(signals),
+        evidence_addresses=tuple(hex_address(address) for address in
+                                 sorted(set(evidence))[:MAX_INSTRUCTION_LEAD_EVIDENCE]),
+        detail=_bounded_text(detail)[0])
+    return (lead,)
+
+
+def _decoder_unavailable_limitation(backend) -> str:
+    """The limitation recorded when no decoder answered, phrased for how
+    this process was packaged and for why the backend was unusable.
+
+    A packaged executable ships its own decoder, so a decoder missing
+    there is a defect in that build and no `pip` command can reach it. A
+    Python installation declares the decoder as a base dependency, so an
+    absent one is an incomplete installation rather than a feature left
+    unrequested. A backend that is present and failed to load names the
+    raising exception's type and nothing else -- no path, no
+    traceback."""
+    status = getattr(backend, "status", None)
+    load_failed = status is DisasmBackendStatus.LOAD_FAILURE
+    raised = getattr(backend, "exception_type", None) if load_failed else None
+    named = f" ({raised})" if raised else ""
+    if is_frozen():
+        if load_failed:
+            return (f"this executable's bundled disassembler did not load{named}: the "
+                    f"instruction window was not decoded. Report it as a distribution "
+                    f"defect")
+        return ("this executable ships no disassembler: the instruction window was not "
+                "decoded. Report it as a distribution defect")
+    if load_failed:
+        return (f"the installed disassembler did not load{named}: the instruction window "
+                f"was not decoded")
+    return ("the disassembler dumpex depends on is missing: this installation is "
+            "incomplete and the instruction window was not decoded")
+
+
 def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidates,
                                 region_evidence, iat_raw, instruction_module_base,
                                 instruction_module_profile, thread_ip_reg, wow64_hint
@@ -1738,7 +2102,9 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
     instruction-correlated slot the public `branch_targets` list dropped.
 
     `decoder_state` is `decoded`, `not_run` (no captured bytes),
-    `unavailable` (no decoder installed), `unsupported_arch` (a determined
+    `unavailable` (no decoder answered -- absent, or installed and
+    unloadable, which the limitation text distinguishes),
+    `unsupported_arch` (a determined
     non-x86 machine), `arch_undetermined` (no signal fixed the
     architecture), or `decode_error` (an invalid opcode mid-stream); every
     value but `decoded` makes the section `partial`. A window the byte cap
@@ -1746,7 +2112,17 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
     null. A direct branch resolves to its destination; an indirect branch
     through a fixed memory slot resolves the slot and the pointer in it;
     an indirect branch through a register is reported unresolved. Nothing
-    here names a function, an argument, or a call stack."""
+    here names a function, an argument, or a call stack.
+
+    `bytes_decoded`, `decode_stop_address` and `leads` are console and
+    text-report presentation state, deliberately absent from the record's
+    `to_dict`: the published JSON contract is closed and none of them
+    changes it. The first two say how far linear decoding reached and
+    where it ended; WHY it ended there is the section's own limitation
+    sentences, which keep an undecodable byte mid-window, an incomplete
+    instruction at the end of the capture, and the byte cap apart.
+    `leads` carries what `_instruction_leads` reads from the decoded
+    shapes -- evidence to follow, never a finding or a verdict input."""
     if not anchor_candidates:
         return None, ()
     section_kwargs = dict(name="instruction_context", scope=ENRICHMENT_SCOPE_CARD,
@@ -1777,7 +2153,7 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
         return record, ()
 
     result = decode_window(code=raw, base_va=anchor, architecture=arch,
-                           input_truncated=region_has_more)
+                           max_bytes=MAX_DECODE_BYTES, input_truncated=region_has_more)
     if result.availability is DisasmAvailability.UNAVAILABLE:
         decoder_state = "unavailable"
     elif arch is None:
@@ -1788,6 +2164,13 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
         decoder_state = "undecoded_tail"
     else:
         decoder_state = "decoded"
+
+    # Where linear decoding ended. A state that never ran a decode has no
+    # stop address at all rather than one equal to the anchor, which
+    # would read as a decode that stopped immediately.
+    decode_ran = decoder_state in ("decoded", "decode_error", "undecoded_tail")
+    bytes_decoded = result.bytes_decoded if decode_ran else 0
+    decode_stop_va = anchor + bytes_decoded
 
     instructions = []
     anchor_marked = False
@@ -1863,9 +2246,8 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
             "the owning module's IAT directory bounds and import table could not be "
             "read: an indirect memory branch here is not confirmed to be outside the IAT")
     if decoder_state == "unavailable":
-        limitations.append(
-            "no disassembler is installed (pip install dumpex[disasm]): the instruction "
-            "window was not decoded")
+        limitations.append(_bounded_text(
+            _decoder_unavailable_limitation(result.backend))[0])
     elif decoder_state == "unsupported_arch":
         machine = getattr(instruction_module_profile, "machine", None)
         machine_name = getattr(instruction_module_profile, "machine_name", None)
@@ -1883,15 +2265,17 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
             "the instruction-set architecture could not be determined: the anchor is in "
             "no PE image and the dump carries no usable thread context or SystemInfo")
     elif decoder_state == "decode_error":
-        tail = result.window_bytes - result.bytes_decoded
-        if region_has_more and 0 < tail < MAX_DECODE_BYTES:
-            limitations.append(_bounded_text(
-                f"the last {tail} byte(s) before the {MAX_DECODE_BYTES}-byte cap did not "
-                f"decode: an invalid opcode, or an instruction the cap cut short")[0])
-        else:
-            limitations.append(_bounded_text(
-                f"the decoder stopped at an invalid opcode {result.bytes_decoded} byte(s) "
-                f"into the window")[0])
+        # An invalid opcode is where linear decoding could not continue,
+        # and that is all it is: the bytes after it were never offered to
+        # the decoder, so they are unevaluated rather than invalid. The
+        # byte cap is a separate limit and gets its own sentence below --
+        # a stop anywhere inside the window is a property of the bytes
+        # there, whether or not the window is also capped.
+        limitations.append(_bounded_text(
+            f"linear decoding stopped at 0x{decode_stop_va:x}, {result.bytes_decoded} of "
+            f"{result.window_bytes} byte(s) in: an invalid opcode there, not the "
+            f"{MAX_DECODE_BYTES}-byte cap. The remaining "
+            f"{result.window_bytes - result.bytes_decoded} byte(s) were not decoded")[0])
 
     # The window did not cover every available byte: the byte cap, or a
     # final instruction the window cut short. The count of instructions
@@ -1903,6 +2287,15 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
             f"the last {result.window_bytes - result.bytes_decoded} byte(s) of the "
             f"captured run did not decode: an invalid opcode, or an instruction the "
             f"capture cut short")[0])
+    elif result.stopped_reason == "byte_cap":
+        # A stop AT the boundary, told apart from a stop inside the
+        # window: decoding ran the whole window and the region continues.
+        cut = result.window_bytes - result.bytes_decoded
+        crossing = (f", the last {cut} of them beginning an instruction that crosses it"
+                    if cut > 0 else "")
+        limitations.append(_bounded_text(
+            f"linear decoding ran the whole {MAX_DECODE_BYTES}-byte window{crossing}: "
+            f"instructions past the cap were not evaluated")[0])
     elif region_has_more:
         limitations.append(
             f"the region holds more than the {MAX_DECODE_BYTES}-byte decode window: "
@@ -1928,6 +2321,9 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
                   if (not target_section_capped and not iat_classification_uncertain)
                   else ENRICHMENT_PARTIAL)
 
+    leads = _instruction_leads(result.instructions, base_va=anchor,
+                               window_len=result.window_bytes, architecture=arch)
+
     record = ReportInstructionContext(
         section=EnrichmentSection(
             status=status, total=total, included=len(instructions),
@@ -1935,9 +2331,11 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
         anchor_source=source_name, anchor_address=hex_address(anchor),
         architecture=arch, decoder_state=decoder_state,
         window_base=hex_address(anchor), bytes_read=window_len,
+        bytes_decoded=bytes_decoded,
+        decode_stop_address=hex_address(decode_stop_va) if decode_ran else None,
         branch_targets_total=len(all_targets),
         branch_targets_truncated=len(kept_targets) < len(all_targets),
-        instructions=tuple(instructions), branch_targets=kept_targets)
+        instructions=tuple(instructions), branch_targets=kept_targets, leads=leads)
     return record, tuple(dict.fromkeys(all_iat_slot_vas))
 
 

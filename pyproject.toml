@@ -20,24 +20,29 @@ dependencies = [
     "minidump>=0.0.24,<0.0.25",
     "colorama>=0.4.6",
     "pyyaml",
+    # The x86/x64 decoder behind `--report` instruction context, isolated
+    # behind dumpex/core/disasm.py. Instruction context is a built-in
+    # Report capability, so every supported installation carries the
+    # backend: a wheel, an sdist, a `pip install` from a Git ref, and the
+    # official Windows executable alike. This is the only place the
+    # version is constrained.
+    "capstone>=5.0,<6",
 ]
 
 [project.optional-dependencies]
 full = [
     "yara-python",
 ]
-# Isolated behind dumpex/core/disasm.py: --report instruction context
-# decodes an x86/x64 window when this is installed and reports an explicit
-# unavailable state when it is not.
-disasm = [
-    "capstone>=5.0,<6",
-]
+# A compatibility alias for installation instructions that still request
+# the decoder by name. It is deliberately empty: capstone is a base
+# dependency, so `dumpex` and `dumpex[disasm]` install exactly the same
+# decoder and nothing here may restate its version constraint.
+disasm = []
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
     "jsonschema>=4.0",
     "packaging>=24.0",
-    "capstone>=5.0,<6",
 ]
 
 [project.scripts]

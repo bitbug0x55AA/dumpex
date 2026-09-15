@@ -7,7 +7,8 @@ packaged resources (rules.yaml, the YARA rule files, the JSON output
 schema) are readable via importlib.resources, its MPL-2.0 metadata and
 license/notice files are present, the rules loader picks up the packaged
 rules.yaml rather than silently falling back to the built-in emergency
-defaults, and the CLI entry point runs.
+defaults, the CLI entry point runs, and the instruction decoder that came
+with the base dependencies actually decodes.
 
 Deliberately NOT a pytest test: it must run standalone, with no pytest
 and no dependency on this repository's source tree, from a fresh venv
@@ -58,6 +59,60 @@ def validate_current_schema_is_listed(current_schema: str) -> None:
         _fail(f"dumpex.schemas.CURRENT_SCHEMA ({current_schema!r}) is not in this script's "
               "SCHEMA_FILENAMES list -- the installed package's current contract would "
               "never actually be smoke-tested")
+
+
+def validate_declared_decoder() -> None:
+    """The installed distribution must declare the instruction decoder as
+    a base requirement and must actually decode with it.
+
+    Instruction context is a built-in `--report` capability, so a wheel or
+    sdist installed with no extras carries `capstone` like any other
+    dependency. This asserts all three links of that chain: the metadata
+    names the requirement unconditionally, the production
+    `decode_window()` seam decodes the synthetic pair on both supported
+    architectures, and the shipped `--self-check` exits 0. An absent
+    backend is a failure here, never a skip.
+    """
+    import importlib.metadata
+
+    from dumpex.core.disasm import DisasmBackendStatus, backend_status, decode_window
+
+    requirements = importlib.metadata.distribution("dumpex").requires or ()
+    # An extra's requirement carries an `extra == "..."` marker; a base
+    # requirement carries no marker at all. Reading the marker, not the
+    # name, is what separates "installed with the wheel" from "installed
+    # because this environment happened to ask for an extra".
+    unconditional = [line for line in requirements if ";" not in line]
+    if not any(line.lower().startswith("capstone") for line in unconditional):
+        _fail(f"the installed distribution does not require capstone unconditionally: "
+              f"a default install would ship without a decoder (base requirements: "
+              f"{unconditional})")
+
+    backend = backend_status()
+    if backend.status is not DisasmBackendStatus.AVAILABLE:
+        _fail(f"a default install's decoder backend is {backend.status.value} "
+              f"({backend.exception_type}: {backend.reason}) -- instruction context is "
+              f"a built-in capability, not an optional one")
+
+    # nop; ret -- the same synthetic pair dumpex.core.selfcheck decodes.
+    for architecture, base_va in (("x86", 0x00401000), ("x64", 0x140001000)):
+        decoded = decode_window(code=b"\x90\xc3", base_va=base_va,
+                                architecture=architecture)
+        mnemonics = tuple(insn.mnemonic for insn in decoded.instructions)
+        if mnemonics != ("nop", "ret"):
+            _fail(f"the installed decoder returned {mnemonics!r} for 90 c3 on "
+                  f"{architecture}, not ('nop', 'ret')")
+
+    check = subprocess.run([sys.executable, "-m", "dumpex", "--self-check"],
+                           capture_output=True, text=True)
+    output = check.stdout + check.stderr
+    if "Traceback" in output:
+        _fail(f"'python -m dumpex --self-check' printed a traceback:\n{output}")
+    if check.returncode != 0:
+        _fail(f"'python -m dumpex --self-check' exited {check.returncode} on a default "
+              f"install:\n{output}")
+    print(f"decoder installed with the base dependencies and decoding: "
+          f"capstone {backend.version}")
 
 
 def main() -> None:
@@ -168,6 +223,8 @@ def main() -> None:
     if result.returncode != 0:
         _fail(f"'python -m dumpex --help' exited {result.returncode}\n"
               f"stdout: {result.stdout}\nstderr: {result.stderr}")
+
+    validate_declared_decoder()
 
     print("OK: package smoke test passed")
 

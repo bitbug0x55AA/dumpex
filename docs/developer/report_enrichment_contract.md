@@ -437,8 +437,21 @@ consumes a canonical collector and adds no report-only PE or IAT parser:
   decode (or one with a whole instruction's room inside the window). When
   the capture ends before that many lookahead bytes are available and the
   tail does not decode, the state stays `undecoded_tail`, whose limitation
-  states the invalid-opcode / cut-instruction ambiguity. A direct branch
-  resolves to its destination. An indirect branch through a `[rip+disp]` or
+  states the invalid-opcode / cut-instruction ambiguity.
+
+  Three different reasons end a decode short of the window, and each
+  states itself in its own limitation sentence: an undecodable byte
+  mid-window (which also says it is NOT the byte cap, and that the bytes
+  after it were never offered to the decoder and so are unevaluated
+  rather than invalid), an incomplete instruction at the end of the
+  capture, and the byte cap cutting a real instruction. WHERE decoding
+  ended is separate from all three and is carried as `bytes_decoded` and
+  `decode_stop_address` (`window_base` + `bytes_decoded`, None when no
+  decode ran) -- console and text-report presentation state, absent from
+  the record's `to_dict` and from the published schema. The console
+  summary prints the location alone; naming one of the three reasons
+  there would contradict the other two. A direct branch resolves to its
+  destination. An indirect branch through a `[rip+disp]` or
   absolute `[disp]` memory operand resolves the slot and the pointer currently
   in it -- the only mechanically provable indirect form; a sign-extended
   displacement is brought back into the unsigned address space by the operand
@@ -446,8 +459,94 @@ consumes a canonical collector and adds no report-only PE or IAT parser:
   slot or the module's IAT directory bounds are known and contain it; it is
   `indirect_memory` otherwise, carrying `iat_classification_uncertain: true`
   when the IAT bounds were unreadable and no import table parsed. An indirect
-  branch through a register is reported unresolved. Nothing here names a
+  branch through a register is reported unresolved. A target no module
+  owns is still placed by the captured region table through the existing
+  `region_type` / `registration` pair, which is what the console labels
+  it with -- there is no separate same-region field. Nothing here names a
   function boundary, a call argument, or a stack.
+
+  `leads` is what `_instruction_leads` reads from the decoded shapes. It
+  is console and text-report presentation state like the decode-stop
+  location: no `to_dict` carries it, and the published JSON contract is
+  unchanged by it.
+
+  The rule is a two-step ladder, and each step names only what it has
+  shown. `memory_transform_loop` is the base: an arithmetic or logic
+  store into an explicit memory operand (capstone's own write access on a
+  memory operand, surfaced as `DecodedInsn.writes_memory`) that a
+  backward direct branch closes a loop around. An ordinary buffer decode
+  loop is exactly that shape, so the name claims nothing about the bytes
+  being written.
+
+  Lying between the branch target and the branch is NOT enough, and
+  `_loop_body_holds_write` is the gate: the target must be an instruction
+  boundary this decode produced, nothing from the target up to the write
+  may end the run (the instruction AT the target included -- a `ret`
+  sitting exactly there is the case this rejects), and nothing after the
+  write may end it before the closing branch. What ends a run is
+  `DecodedInsn.falls_through`, decided at the decode layer from
+  capstone's instruction id and groups rather than from mnemonic text.
+  `dumpex.core.disasm._NON_FALLTHROUGH_INSN_NAMES` is the whole list and
+  says why each entry is on it: a far `ljmp` ends a run exactly as a
+  near `jmp` does, `retf`/`iret` exactly as `ret` does, and an
+  instruction that never reaches its successor at all -- an undefined
+  opcode, `hlt`, a return to another context (`sysret`/`sysexit`/`rsm`),
+  `sysenter` (which records no return address, so where control resumes
+  is an OS convention rather than a fact about these bytes), a
+  transactional abort -- ends it too, because assuming a handler resumes
+  below it is not something a byte window shows. The list also records
+  what was considered and left off, each for its own reason: `syscall`
+  DOES record the address to come back to, `int`/`int3` return to their
+  successor, and a VM entry falls through precisely when it fails. Otherwise the write is
+  bytes that happen to fall in an address range, not something the loop
+  runs. `self_decoding_stub` additionally requires the written
+  operand's base register (`DecodedInsn.write_base_register`) to carry a
+  value a `call`/`pop` pair in the same window left the code's own
+  address in -- followed through `DecodedInsn.register_reads` /
+  `register_writes` -- AND no return and no unconditional branch between
+  that `pop` and the loop.
+
+  That value is followed per register FAMILY, not per name:
+  `dumpex.core.disasm.register_family` maps `rax`, `eax`, `ax`, `al` and
+  `ah` to one register. Writing any of them ends what it held, and the
+  kill covers `DecodedInsn.clobbered_registers` -- every register
+  capstone says the instruction writes, the implicit ones included, so a
+  `mul` that overwrites `rax` without naming it leaves nothing stale
+  behind. The kill is unconditional and comes first, because a 32-bit
+  write in 64-bit mode zeroes the upper half outright and an 8- or
+  16-bit write leaves the rest stale; in neither case does a 64-bit
+  address survive.
+
+  Only then does one destination take the value on, and only for the
+  instruction forms `_carrying_destination` models: a register-to-register
+  `mov`, an `lea` address computation, and `add`/`sub`/`inc`/`dec` whose
+  destination is also an input. Each needs exactly one written register,
+  at this architecture's full width (`is_full_width_register`: `rax` on
+  x64, `eax` on x86). Reading a carrying register is NOT sufficient --
+  `and reg, 0` and `or reg, -1` read one and leave a constant, `xchg`
+  writes two destinations that are not interchangeable, and a load
+  (`mov dst, [src]`) brings back what the memory held rather than the
+  address used to reach it. This is a whitelist on purpose: a blacklist
+  of value-destroying forms would have to be complete to be safe, and
+  x86 has too many ways to reduce a register to a constant for that to
+  be a claim worth making. Everything unmodelled -- including a value
+  that moves through a narrower register and back -- under-reports, and
+  under-reporting is the direction this errs in. Without both, the base name stands: a
+  `call`/`pop` elsewhere in the 512-byte window is not evidence about
+  this loop. `register_transfer_after_loop` is a supporting signal and
+  never a gate, and applies only to a CONDITIONAL closing branch:
+  nothing follows an unconditional backward `jmp` on any run, so a
+  register-indirect branch after one is not "after the loop".
+
+  Linear order is not an executed path, and these relationships are the
+  weakest ones that still connect the instructions to each other; none
+  asserts that any of it ran. The console prints a lead in the ASSESSMENT
+  block beside the findings, under its own heading and its own next step,
+  and the verdict line and indicator count are still computed from
+  `card.findings` alone. The next step is chosen by whether the card
+  carries a correlated thread: a card anchored by an explicit address or
+  a string hit has none, and is told to establish which thread or control
+  flow reaches the region instead.
 - `collect_iat_correlation` reuses `dumpex.core.pe_utils.parse_iat` over the
   module that owns the instruction window's anchor -- the same image the window
   is in, so an instruction-correlated slot is never checked against a different
@@ -482,10 +581,30 @@ redirected or private thunk target, and a declared-versus-live protection
 mismatch are investigation leads: none of them touches `findings`,
 `finding_details`, `verdict`, `coverage.status`, or the exit code.
 
-The disassembler is the optional `capstone` dependency (`dumpex[disasm]`),
-imported only inside `dumpex.core.disasm`. With no decoder installed the
-instruction section reports `decoder_state: unavailable` and an empty
-instruction list.
+The disassembler is the `capstone` dependency, imported only inside
+`dumpex.core.disasm`. It is a base requirement of the Python distribution and
+unconditional in the official Windows executable, so every supported
+installation can decode; the `disasm` extra survives only as an empty alias for
+older installation instructions. With no decoder the instruction section
+reports `decoder_state: unavailable` and an empty instruction list, and that
+state describes a damaged installation or a development tree.
+
+`unavailable` covers two causes and the section limitation keeps them apart.
+`module_absent` is the declared dependency not being present. `load_failure`
+is a backend that imports by name and still does not work -- capstone resolves
+its native library through `ctypes.CDLL()` during its own import, so a missing
+or incompatible `capstone.dll` raises `ImportError`/`OSError`, never
+`ModuleNotFoundError`. The limitation names the raising exception's type and
+nothing more: the bounded, path-redacted reason stays in
+`DecodeResult.backend` for build and release diagnostics. A packaged executable
+is never told to run `pip install`; its missing decoder is reported as a
+distribution defect. `decoder_state` itself, the schema, findings, verdict,
+coverage, and exit codes are unchanged by any of this.
+
+`dumpex --self-check` (`dumpex.core.selfcheck`) decodes fixed synthetic bytes
+through `decode_window()` and exits non-zero when this build cannot decode. It
+is the release gate the Windows workflow runs against the built executable and
+against the copy extracted from the published ZIP.
 
 ## Safety and compatibility invariants
 
@@ -508,6 +627,10 @@ introduced in 3.8.1 are covered by `tests/integration/test_report_hierarchy.py`;
 the exact byte-for-byte hierarchy of the banner, assessment, and anchor-context
 blocks is frozen in `tests/integration/test_report_compat_freeze.py`.
 The isolated disassembler seam and the VA-resolution join have their own tests
-in `tests/unit/test_disasm.py` and `tests/unit/test_va_location.py`.
+in `tests/unit/test_disasm.py` and `tests/unit/test_va_location.py`; backend
+classification and reason sanitization are covered by
+`tests/unit/test_disasm_backend.py`, the build self-check by
+`tests/unit/test_selfcheck.py`, and the Windows bundling contract by
+`tests/unit/test_release_packaging_gates.py`.
 Schema compatibility is covered by `tests/integration/test_json_schema_v2.py`
 and `tests/integration/test_report_compat_freeze.py`.

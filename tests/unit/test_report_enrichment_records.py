@@ -427,7 +427,7 @@ def test_string_context_rejects_impossible_read_and_entry_relationships():
 from dumpex.output.records import (  # noqa: E402
     ReportAnchorPeContext, ReportBranchTarget, ReportDecodedInstruction,
     ReportIatCorrelatedEntry, ReportIatCorrelation, ReportInstructionContext,
-    ReportPeContext, ReportPeObservation,
+    ReportInstructionLead, ReportPeContext, ReportPeObservation,
 )
 
 
@@ -487,10 +487,10 @@ def _instruction(**overrides):
 
 
 def _instruction_context(*, instructions=(), targets=(), targets_total=None,
-                         status=ENRICHMENT_COMPLETE):
+                         status=ENRICHMENT_COMPLETE, leads=(), **overrides):
     targets_total = len(targets) if targets_total is None else targets_total
     total = len(instructions) if status != "partial" else None
-    return ReportInstructionContext(
+    kwargs = dict(
         section=EnrichmentSection(name="instruction_context", scope="card", status=status,
                                   total=total, included=len(instructions), cap=48,
                                   truncated=False),
@@ -498,7 +498,62 @@ def _instruction_context(*, instructions=(), targets=(), targets_total=None,
         architecture="x64", decoder_state="decoded", window_base="0x0000000140001000",
         bytes_read=7, branch_targets_total=targets_total,
         branch_targets_truncated=len(targets) < targets_total,
-        instructions=instructions, branch_targets=targets)
+        instructions=instructions, branch_targets=targets, leads=leads)
+    kwargs.update(overrides)
+    return ReportInstructionContext(**kwargs)
+
+
+def _lead(**overrides):
+    kwargs = dict(name="memory_transform_loop",
+                  signals=("memory_write_back", "backward_branch_loop"),
+                  evidence_addresses=("0x0000000140001000",), detail="a write in a loop")
+    kwargs.update(overrides)
+    return ReportInstructionLead(**kwargs)
+
+
+def test_instruction_lead_rejects_an_unsupported_claim():
+    with pytest.raises(ValueError, match="name must be one of"):
+        _lead(name="definitely_malware")
+    with pytest.raises(ValueError, match="must name only"):
+        _lead(signals=("looks_bad",))
+    with pytest.raises(ValueError, match="unsupported claim"):
+        _lead(signals=())
+    with pytest.raises(ValueError, match="at least one"):
+        _lead(evidence_addresses=())
+
+
+def test_instruction_lead_evidence_names_instructions_of_this_window():
+    with pytest.raises(ValueError, match="must name decoded instructions"):
+        _instruction_context(instructions=(_instruction(),),
+                             leads=(_lead(evidence_addresses=("0x00000000dead0000",)),))
+
+
+def test_decode_stop_address_is_the_window_base_plus_bytes_decoded():
+    good = _instruction_context(instructions=(_instruction(),), bytes_decoded=6,
+                                decode_stop_address="0x0000000140001006")
+    assert good.decode_stop_address == "0x0000000140001006"
+    with pytest.raises(ValueError, match="window_base . bytes_decoded"):
+        _instruction_context(instructions=(_instruction(),), bytes_decoded=6,
+                             decode_stop_address="0x0000000140001111")
+    with pytest.raises(ValueError, match="cannot exceed the window"):
+        _instruction_context(instructions=(_instruction(),), bytes_decoded=99)
+
+
+def test_presentation_state_never_reaches_the_published_projection():
+    """`bytes_decoded`, `decode_stop_address` and `leads` are console
+    state. The JSON contract is closed, so a consumer validating against
+    the published schema must see exactly the keys it saw before them."""
+    context = _instruction_context(
+        instructions=(_instruction(),), bytes_decoded=6,
+        decode_stop_address="0x0000000140001006", leads=(_lead(),))
+    assert context.leads and context.decode_stop_address       # carried in memory
+    published = context.to_dict()
+    for absent in ("bytes_decoded", "decode_stop_address", "leads"):
+        assert absent not in published
+    target = ReportBranchTarget(instruction_address="0x0000000140001000", kind="direct",
+                                target_address="0x0000000140002000",
+                                region_type="MEM_PRIVATE", registration="unregistered")
+    assert "in_window_region" not in target.to_dict()
 
 
 def test_instruction_context_rejects_an_unknown_decoder_state():

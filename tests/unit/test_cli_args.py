@@ -237,3 +237,44 @@ def test_mode_flags_selected_run_mode_values_and_v2_structured_modes_all_agree()
     possible_returns = {cli._selected_run_mode(_namespace_selecting(flag)) for flag in _MODE_FLAGS}
     assert possible_returns == set(_MODE_FLAGS)
     assert cli._V2_STRUCTURED_MODES == set(_MODE_FLAGS)
+
+
+# ── --self-check: a question about the build, not about a dump ────────
+
+def test_self_check_needs_neither_a_dumpfile_nor_a_command(monkeypatch, capsys):
+    code = _run(monkeypatch, ["--self-check"])
+    captured = capsys.readouterr()
+    assert code in (0, 1)
+    assert "dumpex self-check: instruction decoder" in captured.out
+    assert "required: dumpfile" not in captured.err
+
+
+def test_self_check_is_recognized_by_an_unambiguous_abbreviation(monkeypatch, capsys):
+    code = _run(monkeypatch, ["--self-chec"])
+    assert code in (0, 1)
+    assert "dumpex self-check: instruction decoder" in capsys.readouterr().out
+
+
+def test_self_check_wins_over_an_invocation_that_also_names_a_dump(monkeypatch, capsys):
+    code = _run(monkeypatch, ["/nonexistent.dmp", "--modules", "--self-check"])
+    assert code in (0, 1)
+    assert "dumpex self-check: instruction decoder" in capsys.readouterr().out
+
+
+def test_a_bare_double_dash_ends_option_parsing_before_self_check(monkeypatch, capsys):
+    # After "--" the token is a positional dump path, not the flag.
+    code = _run(monkeypatch, ["--", "--self-check"])
+    assert code == 2
+    assert "dumpex self-check" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("argv", [[], ["/nonexistent.dmp"], ["--sysinfo"], ["--strings"]])
+def test_ordinary_invocations_do_not_trip_the_self_check(argv):
+    assert not cli._self_check_requested(argv)
+
+
+def test_self_check_is_documented_in_help(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["dumpex", "--help"])
+    with pytest.raises(SystemExit):
+        cli.main()
+    assert "--self-check" in capsys.readouterr().out

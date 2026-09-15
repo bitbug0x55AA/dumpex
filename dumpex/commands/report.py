@@ -38,7 +38,7 @@ from dumpex.commands.report_enrichment import (
     MAX_REPORT_CARDS, MAX_REPORT_SCAN_BYTES, PeProfileCache, RegionEvidence,
 )
 from dumpex.output.records import (
-    ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL,
+    ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL, INSTRUCTION_LEAD_NAMES,
 )
 
 # _get_region_at, _extract_strings_from_data, _search_string_in_memory,
@@ -1013,6 +1013,71 @@ assert set(_NEXT_STEP_BY_FINDING) == set(INDICATOR_DIMS), (
     "_NEXT_STEP_BY_FINDING must name a next step for every INDICATOR_DIMS key")
 
 
+# A static-analysis lead read from a card's decoded instruction window.
+# It is rendered beside the findings and is not one: a lead has no
+# indicator dimension, adds nothing to the indicator count, and moves no
+# verdict, score, coverage status, or exit code.
+#
+# Each label stays "possible" and says exactly what its own rule
+# established, never that the shape ran. The base name describes an
+# in-place transform loop and nothing more -- an ordinary buffer decode
+# is that shape. Only `self_decoding_stub`, whose rule requires the
+# written address to derive from the code's own address, is described as
+# position-independent or as touching code.
+_INSTRUCTION_LEAD_LABEL = {
+    "memory_transform_loop": "possible in-place memory transform loop",
+    "self_decoding_stub": "possible position-independent self-decoding stub",
+}
+
+assert set(INSTRUCTION_LEAD_NAMES) == set(_INSTRUCTION_LEAD_LABEL), (
+    "every INSTRUCTION_LEAD_NAMES entry needs a console label")
+
+
+def _instruction_lead_label(lead) -> str:
+    return _INSTRUCTION_LEAD_LABEL.get(lead.name, lead.name)
+
+
+# What to do with a lead, split by whether this card actually has a
+# thread correlated with it. A card anchored by an explicit --report-addr
+# or by a string hit may have none, and telling an analyst to read "the
+# anchor thread's" start address is then an instruction they cannot
+# follow. Both halves end in the same region-level step, which needs no
+# thread at all.
+_LEAD_STEP_WITH_THREAD = (
+    "check TID {tid}'s start address and current instruction pointer and where they "
+    "enter this region, then extract the region and analyse it offline")
+_LEAD_STEP_WITHOUT_THREAD = (
+    "no thread is correlated with this card -- establish which thread or control flow "
+    "reaches this region, then extract the region and analyse it offline")
+_LEAD_STEP_TAIL_BY_NAME = {
+    "memory_transform_loop":
+        ", including whatever the loop writes over; static disassembly shows the "
+        "shape, not that it ran",
+    "self_decoding_stub":
+        ", including whatever the loop would decode; static disassembly shows the "
+        "shape, not that it ran",
+}
+
+assert set(INSTRUCTION_LEAD_NAMES) == set(_LEAD_STEP_TAIL_BY_NAME), (
+    "every INSTRUCTION_LEAD_NAMES entry needs a next step")
+
+
+def _instruction_lead_next_step(lead, card) -> str:
+    """This card's own next step for one lead: thread-level guidance only
+    when the card actually carries a thread, region-level guidance
+    always."""
+    if card.anchor_tid is not None:
+        head = _LEAD_STEP_WITH_THREAD.format(tid=f"0x{card.anchor_tid:x}")
+    else:
+        head = _LEAD_STEP_WITHOUT_THREAD
+    return head + _LEAD_STEP_TAIL_BY_NAME.get(lead.name, "")
+
+
+def _card_instruction_leads(card) -> tuple:
+    context = getattr(card, "instruction_context", None)
+    return tuple(getattr(context, "leads", ()) or ())
+
+
 def _render_assessment(card, coverage) -> None:
     """The current verdict, its supporting findings, and a concise next
     step, rendered together so the caller can print them immediately
@@ -1023,7 +1088,15 @@ def _render_assessment(card, coverage) -> None:
     a deterministic lookup keyed on those same findings plus
     `coverage.status` -- never a new risk category synthesized from
     routine enrichment facts, and never information this run did not
-    already collect."""
+    already collect.
+
+    A static-analysis lead from the card's decoded instruction window is
+    printed here too, under its own heading and its own next step. It is
+    kept visibly apart from the findings: the verdict line and the
+    indicator count are computed from `card.findings` alone, so a lead
+    changes neither, and its wording stays qualified -- the window shows
+    an instruction shape, never that the shape executed."""
+    leads = _card_instruction_leads(card)
     print(BOLD("ASSESSMENT"))
     print("─" * 50)
     print(f"  {_render_verdict_text(card.verdict, len(card.findings))}\n")
@@ -1033,12 +1106,26 @@ def _render_assessment(card, coverage) -> None:
             print(f"  {BOLD('►')} {YELLOW(label)}")
             print(f"    {DIM(card.finding_details[key])}")
         print()
+    if leads:
+        print(f"  {BOLD('Static-analysis leads')}")
+        print("  " + DIM("from the decoded instruction window; not findings -- the "
+                         "verdict and indicator count above are unchanged"))
+        for lead in leads:
+            print(f"  {BOLD('►')} {YELLOW(_instruction_lead_label(lead))}")
+            if lead.detail:
+                print(f"    {DIM(console_safe(lead.detail))}")
+            print(f"    {DIM('evidence: ' + ', '.join(lead.evidence_addresses))}")
+        print()
     print(f"  {BOLD('Next:')}")
-    if card.findings:
+    if card.findings or leads:
         for key in card.findings:
             advice = _NEXT_STEP_BY_FINDING.get(
                 key, "review this finding's own detail above before drawing a conclusion")
             print(f"    {DIM('- ' + INDICATOR_DIMS.get(key, key) + ': ' + advice)}")
+        for lead in leads:
+            step = (f"- {_instruction_lead_label(lead)}: "
+                    f"{_instruction_lead_next_step(lead, card)}")
+            print(f"    {DIM(step)}")
     elif coverage.status == CoverageStatus.COMPLETE:
         clean_text = ("no anomalies were found within this rule set's current coverage; "
                      "if the originating alert independently indicates compromise, "
@@ -2545,6 +2632,25 @@ def _render_anchor_pe_context(context, verbose: bool = False,
     print()
 
 
+def _branch_target_owner_text(target) -> str:
+    """One branch target's destination owner, from what this run already
+    resolved for it.
+
+    A module name when one owns the address; otherwise the captured
+    region the address lands in and its registration, which is a real
+    placement (`MEM_PRIVATE (unregistered)`) rather than an unknown
+    destination. A register-indirect branch has no static destination at
+    all and says so. Only an address no module and no captured region
+    places is left unresolved."""
+    if target.kind == "indirect_register":
+        return "destination is run-time state"
+    if target.module_owner:
+        return console_safe(target.module_owner)
+    if target.region_type:
+        return f"{console_safe(target.region_type)} ({target.registration or 'unplaced'})"
+    return target.registration or "?"
+
+
 def _render_instruction_context(context, verbose: bool = False,
                                 collector: "list | None" = None) -> None:
     print(BOLD("INSTRUCTION CONTEXT"))
@@ -2554,6 +2660,15 @@ def _render_instruction_context(context, verbose: bool = False,
         print(DIM(f"  Window at 0x{int(context.anchor_address, 16):016x} "
                   f"({context.anchor_source}, {context.architecture or '?'}); "
                   f"{context.bytes_read} byte(s) read; decoder: {context.decoder_state}"))
+    # Where linear decoding ended, and nothing about why. Three different
+    # reasons end a decode short of the window -- an undecodable byte
+    # mid-window, an incomplete instruction at the end of the capture,
+    # and the byte cap cutting a real instruction -- and each states
+    # itself in its own limitation line below. A summary that named one
+    # of them would contradict the other two.
+    if context.decode_stop_address and context.bytes_decoded < context.bytes_read:
+        print(DIM(f"  {'Decode ended at':<18} 0x{int(context.decode_stop_address, 16):016x}   "
+                  f"{context.bytes_decoded}/{context.bytes_read} byte(s) decoded"))
     if not context.instructions:
         if section["status"] == ENRICHMENT_MISSING:
             print(DIM("  [·] No bytes were captured at this anchor."))
@@ -2573,7 +2688,7 @@ def _render_instruction_context(context, verbose: bool = False,
         shown = (list(context.branch_targets) if verbose
                  else context.branch_targets[:CONSOLE_BRANCH_TARGETS])
         for target in shown:
-            owner = console_safe(target.module_owner) if target.module_owner else "?"
+            owner = _branch_target_owner_text(target)
             dest = target.resolved_target_address or target.target_address
             dest_text = f"0x{int(dest, 16):016x}" if dest else "(unresolved)"
             symbol = (f"  {console_safe(target.iat_symbol)}"
@@ -2581,6 +2696,18 @@ def _render_instruction_context(context, verbose: bool = False,
             kind = target.kind + ("?" if target.iat_classification_uncertain else "")
             print(f"    {DIM(kind):<20} {dest_text}  {owner}{symbol}")
         _print_console_omission(len(shown), len(context.branch_targets), indent="    ")
+    if context.leads:
+        print("  " + BOLD("Static-analysis leads"))
+        for lead in context.leads:
+            print(f"    {YELLOW(_instruction_lead_label(lead))}")
+            if lead.detail:
+                print(f"      {DIM(console_safe(lead.detail))}")
+            print(f"      {DIM('signals: ' + ', '.join(lead.signals))}")
+    if context.instructions:
+        print(DIM("  Rows are a linear decode from the anchor in byte order, not an "
+                  "executed path;"))
+        print(DIM("  bytes after a branch may be data the code reads rather than "
+                  "instructions."))
     print(DIM("  Instruction context names no function, argument, or call stack."))
     _print_section_state(section, label="Instruction context", collector=collector)
     print()

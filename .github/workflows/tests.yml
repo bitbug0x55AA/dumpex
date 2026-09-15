@@ -264,6 +264,11 @@ jobs:
           coverage report --include="dumpex/commands/handles.py" --fail-under=90
           coverage report --include="dumpex/ui/access_rights.py" --fail-under=95
           coverage report --include="dumpex/commands/profile.py"  --fail-under=90
+          # The decoder seam and the release self-check gate the Windows
+          # executable's advertised Report capability.
+          coverage report --include="dumpex/core/disasm.py"    --fail-under=90
+          coverage report --include="dumpex/core/selfcheck.py" --fail-under=95
+          coverage report --include="dumpex/core/runtime.py"   --fail-under=95
 
   minidump-version-range:
     # Verify every listed minidump version installs and supports the
@@ -335,6 +340,14 @@ jobs:
   package-smoke:
     # Editable installs do not prove package-data inclusion. Build and install
     # the real wheel/sdist, then load rules and schemas via importlib.resources.
+    #
+    # This is also the only job that proves the BASE distribution carries the
+    # instruction decoder: it installs with no extras at all, so a decoder
+    # that reached a development environment through `dev` cannot stand in for
+    # one a user gets. The matrix spans the declared requires-python range --
+    # its floor, a mid version, and the newest supported interpreter -- because
+    # a dependency that cannot resolve on a claimed-supported Python would
+    # otherwise ship as a silently decoder-less install.
     needs: plan
     # Auxiliary gates run only in the full tier.
     if: needs.plan.outputs.mode == 'full'
@@ -342,7 +355,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12"]
+        python-version: ["3.10", "3.12", "3.14"]
 
     steps:
       - uses: actions/checkout@v4
@@ -380,3 +393,24 @@ jobs:
           python -m venv "$RUNNER_TEMP/venv-sdist"
           "$RUNNER_TEMP/venv-sdist/bin/pip" install --quiet "$GITHUB_WORKSPACE"/dist/*.tar.gz
           "$RUNNER_TEMP/venv-sdist/bin/python" "$RUNNER_TEMP/package_smoke.py" "$GITHUB_WORKSPACE"
+
+      - name: Git ref — install into a fresh venv and run the smoke test
+        # `pip install git+<url>` is how users install an unreleased branch,
+        # and it resolves dependencies from the metadata pip builds out of
+        # the clone rather than from a published artifact. A wheel and an
+        # sdist passing is not proof this path does: it is its own gate on
+        # the decoder reaching a default install.
+        #
+        # The clone source is this checkout over file://, so the commit
+        # under test is what gets installed -- a remote URL would install
+        # the default branch and prove nothing about a pull request. pip
+        # clones the named ref, and actions/checkout leaves HEAD detached,
+        # so give the commit a real branch name to clone.
+        working-directory: ${{ runner.temp }}
+        run: |
+          git -C "$GITHUB_WORKSPACE" branch --force package-smoke-ref "$GITHUB_SHA"
+          python -m venv "$RUNNER_TEMP/venv-gitref"
+          "$RUNNER_TEMP/venv-gitref/bin/pip" install --quiet \
+            "git+file://$GITHUB_WORKSPACE@package-smoke-ref"
+          "$RUNNER_TEMP/venv-gitref/bin/python" -m dumpex --self-check
+          "$RUNNER_TEMP/venv-gitref/bin/python" "$RUNNER_TEMP/package_smoke.py" "$GITHUB_WORKSPACE"
