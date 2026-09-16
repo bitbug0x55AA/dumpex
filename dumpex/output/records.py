@@ -2220,20 +2220,34 @@ INSTRUCTION_LEAD_NAMES = (
 # property of the decoded window, so a reader can re-check every one of
 # them against the instruction rows the same record carries.
 INSTRUCTION_LEAD_SIGNALS = (
-    "memory_write_back",            # an arithmetic/logic instruction stores into an explicit
-                                    # memory operand
+    "memory_write_back",            # an arithmetic/logic instruction both reads and writes one
+                                    # explicit memory operand, leaving a non-identity result
+    "register_mediated_write_back",  # a load, a non-identity transform of the loaded value in
+                                    # a register, and a store of that surviving value back to
+                                    # the same proven effective address
     "backward_branch_loop",         # a direct branch whose target is at or before its own
-                                    # address, with the write inside the span it closes
+                                    # address, with the transform inside the span it closes
     "get_pc_register_flows_to_write",  # the register a call/pop pair left the code's own
-                                    # address in reaches the written operand's base register
+                                    # address in reaches the transformed address's base
+                                    # register
     "linear_fall_through_from_get_pc",  # no return and no unconditional branch separates
                                     # that pop from the loop, so one linear path covers both
-    "register_transfer_after_loop",  # a call/jmp through a register follows the loop with no
-                                    # return in between -- destination is run-time state
+    "register_transfer_after_loop",  # a call/jmp through a register is reachable over the
+                                    # decoded graph from the edge that leaves the loop. That
+                                    # edge always belongs to a CONDITIONAL branch -- the
+                                    # closing branch's own fall-through, or a conditional
+                                    # branch before it; an unconditional backward jmp has no
+                                    # fall-through, so nothing is "after" one. The transfer's
+                                    # destination is run-time state and is never reported
 )
 
 # Instruction addresses one lead carries as evidence.
 MAX_INSTRUCTION_LEAD_EVIDENCE = 8
+
+# Sentences one window carries about what its lead analysis could not
+# establish. There is one such reason today; the cap bounds the field
+# rather than the reason.
+MAX_INSTRUCTION_LEAD_LIMITATIONS = 4
 
 BRANCH_TARGET_KINDS = (
     "direct",             # a direct call/jump to a fixed address
@@ -2256,6 +2270,14 @@ class ReportInstructionLead:
     ``evidence_addresses`` so an analyst re-reads the same rows rather
     than taking the name on trust.
 
+    ``evidence_addresses`` is capped at
+    :data:`MAX_INSTRUCTION_LEAD_EVIDENCE`, and a proof can rest on more
+    instructions than that -- the copies that carried a value, the
+    address arithmetic between a `pop` and the access, the control-flow
+    path to a transfer. ``evidence_truncated`` says the list is a cut of
+    what the proof named, so a reader never takes a bounded list for a
+    complete one.
+
     A lead is console and text-report presentation only. It is NOT part
     of the JSON contract: no ``to_dict`` of any record carries it, so a
     consumer pinned to the published schema sees exactly what it saw
@@ -2266,6 +2288,7 @@ class ReportInstructionLead:
     signals:            tuple = ()
     evidence_addresses: tuple = ()
     detail:             "str | None" = None
+    evidence_truncated: bool = False
 
     def __post_init__(self):
         if self.name not in INSTRUCTION_LEAD_NAMES:
@@ -2295,6 +2318,8 @@ class ReportInstructionLead:
             raise ValueError(
                 "ReportInstructionLead.evidence_addresses must name at least one "
                 "instruction the lead was read from")
+        _require_bool(self.evidence_truncated,
+                      "ReportInstructionLead.evidence_truncated")
         _require_optional_bounded_text(self.detail, "ReportInstructionLead.detail")
 
 
@@ -2439,11 +2464,14 @@ class ReportInstructionContext:
     the section `partial`, never a claim about the code. Nothing here
     names a function, an argument, or a call stack.
 
-    ``bytes_decoded``, ``decode_stop_address``, and ``leads`` are
-    presentation state for the console and text report and are NOT part
-    of the JSON contract: ``to_dict`` below omits all three, so the
-    published schema and every consumer pinned to it are untouched by
-    them.
+    ``bytes_decoded``, ``decode_stop_address``, ``leads`` and
+    ``lead_limitations`` are presentation state for the console and text
+    report and are NOT part of the JSON contract: ``to_dict`` below omits
+    all four, so the published schema and every consumer pinned to it are
+    untouched by them. ``lead_limitations`` is deliberately NOT folded
+    into ``section.limitations``: that tuple IS published, and a sentence
+    about what the lead analysis could not establish is lead analysis --
+    it belongs with ``leads``, on the same side of the contract.
 
     ``bytes_read`` is the window this decode was offered and
     ``bytes_decoded`` how far into it linear decoding reached;
@@ -2457,7 +2485,14 @@ class ReportInstructionContext:
     ``leads`` carries the qualified static-analysis leads
     (:class:`ReportInstructionLead`) this window's own instruction shapes
     support. Like every other enrichment fact they reach no finding,
-    verdict, indicator count, or exit code."""
+    verdict, indicator count, or exit code.
+
+    ``lead_limitations`` carries what that analysis could not establish
+    for a reason an analyst cannot read off the instruction rows -- a
+    shape withheld because no decoded branch reaches it from this anchor.
+    Each is one bounded sentence naming no address: a withheld proof is
+    not a lead, and pointing at the bytes that nearly carried one would
+    assert what the analysis declined to assert."""
     section:                   EnrichmentSection
     anchor_source:             "str | None"
     anchor_address:            "str | None"
@@ -2472,6 +2507,7 @@ class ReportInstructionContext:
     instructions:              tuple = ()
     branch_targets:            tuple = ()
     leads:                     tuple = ()
+    lead_limitations:          tuple = ()
 
     def __post_init__(self):
         _require_enrichment_section(self.section, "ReportInstructionContext.section",
@@ -2550,12 +2586,23 @@ class ReportInstructionContext:
                     raise ValueError(
                         "ReportInstructionLead.evidence_addresses must name decoded "
                         "instructions of this window")
+        object.__setattr__(self, "lead_limitations", tuple(self.lead_limitations))
+        for note in self.lead_limitations:
+            _require_bounded_text(note, "ReportInstructionContext.lead_limitations",
+                                  ENRICHMENT_TEXT_CAP)
+        if len(self.lead_limitations) > MAX_INSTRUCTION_LEAD_LIMITATIONS:
+            raise ValueError(
+                f"ReportInstructionContext.lead_limitations must hold at most "
+                f"{MAX_INSTRUCTION_LEAD_LIMITATIONS} notes")
 
     def to_dict(self) -> dict:
-        """The published projection. `bytes_decoded`, `decode_stop_address`
-        and `leads` are console presentation state and are deliberately
-        absent: the JSON contract is closed, and a field added here would
-        be rejected by every consumer validating against it."""
+        """The published projection. `bytes_decoded`, `decode_stop_address`,
+        `leads` and `lead_limitations` are console presentation state and
+        are deliberately absent: the JSON contract is closed, and a field
+        added here would be rejected by every consumer validating against
+        it. `lead_limitations` is a separate tuple rather than an entry in
+        `section.limitations` for exactly that reason -- the section's own
+        limitations ARE published, and lead analysis is not."""
         return {
             "section":                  self.section.to_dict(),
             "anchor_source":            self.anchor_source,

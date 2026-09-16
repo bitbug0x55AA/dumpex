@@ -400,17 +400,44 @@ past an undecodable one were never offered to the decoder and are reported as
 unevaluated, not as invalid instructions.
 
 When the decoded shapes support one, the assessment additionally prints a
-qualified static-analysis lead with its own next step. An in-place write the
-loop can actually reach — not merely one whose address falls inside the
-branch's span — is a *possible in-place memory transform loop* and no more; an
-ordinary buffer decode is that shape. It is only called a *possible position-independent
-self-decoding stub* when the address being written derives from a register a
-`call`/`pop` pair in the same window left the code's own address in, and no
-return or unconditional branch separates the two. A lead is a shape the bytes
-contain, never evidence that the shape ran, and it is not a finding: the
-verdict, the indicator count, the coverage status, and the exit code are
-unchanged by it. None of this appears in `--json`, whose contract is
-unchanged.
+single qualified static-analysis lead — the strongest the window supports —
+with its own next step. An in-place transform the loop can actually reach —
+not merely one whose address falls inside the branch's span — is a *possible
+in-place memory transform loop* and no more; an ordinary buffer decode is that
+shape. The transform counts whether one arithmetic instruction performs it on
+memory directly or a load, a transform of the loaded value in a register, and a
+store back to the same address perform it between them; a loop that writes back
+exactly what it read transforms nothing and is not one. It is only called a
+*possible position-independent self-decoding stub* when the address being
+transformed derives from a register a `call`/`pop` pair in the same window left
+the code's own address in, and no return or unconditional branch separates the
+two. That address has to arrive unscaled: arithmetic that doubles it or
+subtracts it from itself leaves a multiple or a displacement, which is a number
+computed from where the code sits rather than a place in it, and such a loop
+keeps the weaker name. A `call`/`jmp` through a register that the edge leaving the loop can reach
+is noted as supporting context — that edge is always a conditional branch's,
+often one inside the loop, since nothing follows an unconditional backward jump
+— and never promotes the lead on its own; a transfer a path reaches only by
+going back round the loop is inside the loop, not after it. `--verbose` adds
+the instruction addresses the lead was read from, beside the instruction rows
+themselves — every step of the proof, including the instructions that carried a
+value or an address from one register to another, and marked `(+more)` when
+there are more of them than the line holds. A
+lead is a shape the bytes contain, never evidence that the shape ran, that a
+payload was decoded, that an indirect call was reached, or that the region
+belongs to any malware family; and it is not a finding: the verdict, the
+indicator count, the coverage status, and the exit code are unchanged by it.
+None of this appears in `--json`, whose contract is unchanged.
+
+A lead is read only from instructions some branch in the same window reaches,
+so bytes that merely decode like a loop — padding, a data table — are not one.
+That reachability is measured from the anchor the window starts at, and an
+anchor that reaches nothing (a thread start that is a jump thunk, a
+`--report-addr` landing on a `ret` or inside an instruction) leaves everything
+below it unreachable. Where that suppresses a shape which would otherwise have
+been named, INSTRUCTION CONTEXT says so rather than presenting the window as one
+that had nothing in it. That note, like the lead itself, is console and `--txt`
+only and does not appear in `--json`.
 
 A `--report-string` run builds at most 32 cards and reads at most 256 MB of
 content across them; any actionable hit left untriaged is counted in the output

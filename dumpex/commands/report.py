@@ -1095,7 +1095,12 @@ def _render_assessment(card, coverage) -> None:
     kept visibly apart from the findings: the verdict line and the
     indicator count are computed from `card.findings` alone, so a lead
     changes neither, and its wording stays qualified -- the window shows
-    an instruction shape, never that the shape executed."""
+    an instruction shape, never that the shape executed.
+
+    What the lead contributes here is its sentence. The instruction
+    addresses it was read from belong beside the instruction rows
+    themselves and are printed there, at verbose, so the same bounded
+    list never appears in two blocks of one report."""
     leads = _card_instruction_leads(card)
     print(BOLD("ASSESSMENT"))
     print("─" * 50)
@@ -1114,7 +1119,6 @@ def _render_assessment(card, coverage) -> None:
             print(f"  {BOLD('►')} {YELLOW(_instruction_lead_label(lead))}")
             if lead.detail:
                 print(f"    {DIM(console_safe(lead.detail))}")
-            print(f"    {DIM('evidence: ' + ', '.join(lead.evidence_addresses))}")
         print()
     print(f"  {BOLD('Next:')}")
     if card.findings or leads:
@@ -2697,12 +2701,28 @@ def _render_instruction_context(context, verbose: bool = False,
             print(f"    {DIM(kind):<20} {dest_text}  {owner}{symbol}")
         _print_console_omission(len(shown), len(context.branch_targets), indent="    ")
     if context.leads:
+        # The lead's sentence is printed once, in ASSESSMENT. What it is
+        # worth repeating here is the mechanical half: which shapes the
+        # name was read from, and -- at verbose -- the instruction
+        # addresses to re-check them against, which are the rows
+        # immediately above.
         print("  " + BOLD("Static-analysis leads"))
         for lead in context.leads:
             print(f"    {YELLOW(_instruction_lead_label(lead))}")
-            if lead.detail:
-                print(f"      {DIM(console_safe(lead.detail))}")
             print(f"      {DIM('signals: ' + ', '.join(lead.signals))}")
+            if verbose:
+                # A cut list is labelled as one: the proof rests on more
+                # instructions than are printed, and an unlabelled list
+                # would read as the whole of what it was read from.
+                more = (" (+more)" if getattr(lead, "evidence_truncated", False)
+                        else "")
+                shown = ", ".join(lead.evidence_addresses) + more
+                print(f"      {DIM('evidence: ' + shown)}")
+    for note in getattr(context, "lead_limitations", ()) or ():
+        # What the lead analysis could not establish for a reason the
+        # instruction rows do not show. It prints beside them, and like
+        # the leads themselves it stays out of the published document.
+        print(f"  {DIM('[~] ' + console_safe(note))}")
     if context.instructions:
         print(DIM("  Rows are a linear decode from the anchor in byte order, not an "
                   "executed path;"))

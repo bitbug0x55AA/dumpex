@@ -63,6 +63,23 @@ STOPS_AT_70_BYTES = _NOP11 * 6 + b"\x0f\x1f\x40\x00" + b"\x06" * (REGION_SIZE - 
 STOPS_AT_THE_BYTE_CAP = (_NOP11 * 46 + b"\xff\x14\x25\x11\x22\x33\x44"
                          + b"\x90" * (REGION_SIZE - 513))
 
+# The register-mediated shape, in which no instruction both reads and
+# writes memory. A call/pop leaves this code's own address in rbp; a
+# loop loads from it, transforms the loaded value in a register and
+# stores it back to the same address; an unconditional backward `jmp`
+# closes the loop with a `je` before it providing the exit; the exit path
+# reaches a `call` through a register.
+#
+#   0x05 jmp 0x3a / 0x07 pop rbp / 0x18 push rbp
+#   0x19 mov edx, dword ptr [rbp] / 0x1c xor edx, eax
+#   0x1e mov dword ptr [rbp], edx
+#   0x2e je 0x32 / 0x30 jmp 0x19 / 0x32 pop rax
+#   0x38 call rax / 0x3a call 0x07
+REGISTER_MEDIATED_STUB = bytes.fromhex(
+    "0f1f400090" "eb33" "5d" "0f1f40000f1f40000f1f40000f1f4000"
+    "55" "8b5500" "31c2" "895500" "90" "0f1f40000f1f40000f1f4000"
+    "7402" "ebe7" "58" "90" "0f1f4000" "ffd0" "e8c8ffffff" "c3")
+
 # A window with no write loop at all: the control case for every lead
 # assertion below.
 PLAIN_CODE = b"\x48\x83\xc0\x10\x48\xff\xc0\xc3" + b"\x90" * (REGION_SIZE - 8)
@@ -264,6 +281,151 @@ def test_the_stub_lead_is_surfaced_in_the_assessment_and_next_steps(
     next_block = assessment[assessment.index("Next:"):]
     assert "extract the region and analyse it offline" in next_block
     assert "not that it ran" in next_block
+
+
+@_needs_capstone
+def test_the_register_mediated_shape_reaches_the_analyst_as_one_lead(
+        monkeypatch, tmp_path, capsys):
+    """The shape this recognizer exists for. It reaches the ASSESSMENT
+    block under the stronger name, phrased as a static observation, and
+    it is one lead: the window's strongest, not a list of every shape in
+    it."""
+    _run(monkeypatch, tmp_path, REGISTER_MEDIATED_STUB)
+    out = capsys.readouterr().out
+    assessment = _assessment(out)
+
+    assert "possible position-independent self-decoding stub" in assessment
+    assert "store back to the same address" in assessment
+    # One lead, not a list of every shape in the window: the weaker name
+    # this same loop would also satisfy is not printed beside it.
+    assert "possible in-place memory transform loop" not in assessment
+    assert assessment.count("Static-analysis leads") == 1
+    # The wording stays a hypothesis about shape: no decoded payload, no
+    # executed path, no family name.
+    for overclaim in ("decoded payload", "decrypts", "was executed", "malware family"):
+        assert overclaim not in assessment
+
+    block = _instruction_block(out)
+    assert "register_mediated_write_back" in block
+    assert "register_transfer_after_loop" in block
+
+
+@_needs_capstone
+def test_the_evidence_list_is_verbose_detail_and_lives_in_one_block(
+        monkeypatch, tmp_path, capsys):
+    """The lead's sentence belongs with the assessment and its
+    instruction addresses belong with the instruction rows. Neither block
+    repeats the other's half, and the address list is verbose-only."""
+    _run(monkeypatch, tmp_path, REGISTER_MEDIATED_STUB)
+    normal = capsys.readouterr().out
+    assert "evidence: 0x" not in _instruction_block(normal)
+    assert "evidence: 0x" not in _assessment(normal)
+
+    _run(monkeypatch, tmp_path, REGISTER_MEDIATED_STUB,
+         argv_extra=["--report-addr", hex(REGION_BASE), "--verbose"])
+    verbose = capsys.readouterr().out
+    block = _instruction_block(verbose)
+    assert "evidence: 0x" in block
+    # Every address it names is an instruction the same block listed.
+    listed = {line.split()[-1] for line in block.splitlines()
+              if line.strip().startswith(("0x", "► 0x"))}
+    evidence = [line for line in block.splitlines() if "evidence: 0x" in line][0]
+    assert all(f"0x{int(address, 16):016x}" in block
+               for address in evidence.split("evidence:")[1].split(", "))
+    assert "evidence: 0x" not in _assessment(verbose)
+    assert listed
+
+
+# The same stub with the transformed value copied into `esi` before the
+# store. The copy is a step the proof rests on, so the lead names nine
+# instructions where the printed list holds eight. Two padding NOPs pay
+# for the copy's two bytes, so every later offset is where it was.
+#
+#   0x19 mov edx, dword ptr [rbp] / 0x1c xor edx, eax
+#   0x1e mov esi, edx / 0x20 mov dword ptr [rbp], esi
+REGISTER_MEDIATED_STUB_WITH_A_CARRIER = bytes.fromhex(
+    "0f1f400090" "eb33" "5d" "0f1f40000f1f40000f1f40000f1f4000"
+    "55" "8b5500" "31c2" "89d6" "897500" "0f1f40000f1f4000909090"
+    "7402" "ebe7" "58" "90" "0f1f4000" "ffd0" "e8c8ffffff" "c3")
+
+
+@_needs_capstone
+def test_an_evidence_list_the_cap_cut_says_so(monkeypatch, tmp_path, capsys):
+    """A proof can rest on more instructions than the printed list holds.
+    The list is marked as a cut one rather than left to read as the whole
+    of what the lead was read from."""
+    _run(monkeypatch, tmp_path, REGISTER_MEDIATED_STUB_WITH_A_CARRIER,
+         argv_extra=["--report-addr", hex(REGION_BASE), "--verbose"])
+    block = _instruction_block(capsys.readouterr().out)
+    evidence = [line for line in block.splitlines() if "evidence: 0x" in line][0]
+    assert evidence.rstrip().endswith("(+more)")
+    named = evidence.split("evidence:")[1].replace("(+more)", "").split(", ")
+    assert all(f"0x{int(address, 16):016x}" in block
+               for address in named if address.strip())
+
+
+@_needs_capstone
+def test_a_register_mediated_copy_loop_reaches_the_analyst_as_no_lead(
+        monkeypatch, tmp_path, capsys):
+    """The control: the same window with the `xor` replaced by a NOP and
+    every later offset where it was. A loop that writes back exactly what
+    it read transforms nothing, and nothing is claimed about it."""
+    copy_loop = bytes.fromhex(
+        "0f1f400090" "eb33" "5d" "0f1f40000f1f40000f1f40000f1f4000"
+        "55" "8b5500" "9090" "895500" "90" "0f1f40000f1f40000f1f4000"
+        "7402" "ebe7" "58" "90" "0f1f4000" "ffd0" "e8c8ffffff" "c3")
+    _run(monkeypatch, tmp_path, copy_loop,
+         argv_extra=["--report-addr", hex(REGION_BASE), "--verbose"])
+    out = capsys.readouterr().out
+    assert "mov dword ptr [rbp], edx" in _instruction_block(out)
+    assert "Static-analysis leads" not in _assessment(out)
+    assert "Static-analysis leads" not in _instruction_block(out)
+
+
+@_needs_capstone
+def test_a_shape_withheld_for_unreachability_reaches_the_console_as_a_gap(
+        monkeypatch, tmp_path, capsys):
+    """An anchor that reaches nothing -- here a `ret` sitting at the
+    decode start -- leaves an otherwise whole transform loop unreachable.
+    No lead is printed, and the analyst is told a shape was withheld
+    rather than being shown a window that looks like a clean negative."""
+    unreachable = bytes.fromhex(
+        "c3" "8b5500" "31c2" "895500" "4883e901" "75f2" "c3")
+    _exit_code, doc = _run(monkeypatch, tmp_path, unreachable)
+    out = capsys.readouterr().out
+
+    assert "Static-analysis leads" not in _assessment(out)
+    assert "no decoded branch reaches from this anchor" in _instruction_block(out)
+    # It is lead analysis, so it reaches the console and stops there --
+    # not the section limitations, which the published document carries.
+    context = doc["result"]["data"]["records"][0]["instruction_context"]
+    for absent in ("leads", "lead_limitations"):
+        assert absent not in context
+    assert all("no decoded branch reaches" not in note
+               for note in _limitations(doc))
+    assert "transform loop" not in json.dumps(doc)
+
+
+@_needs_capstone
+def test_a_shape_the_evidence_cannot_prove_also_reaches_the_console(
+        monkeypatch, tmp_path, capsys):
+    """The second withheld reason, end to end. A composite transform --
+    `xor edx, eax` then `rol edx, 3`, the standard multi-round decoder
+    shape -- leaves a load, a transform and a same-address store in the
+    rows with no lead beside them, and the rows do not show an analyst
+    which step was declined. Like the lead itself, the note is console
+    and `--txt` only."""
+    composite = bytes.fromhex(
+        "90" "8b5500" "31c2" "c1c203" "895500" "4883e901" "75ef" "c3")
+    _exit_code, doc = _run(monkeypatch, tmp_path, composite)
+    out = capsys.readouterr().out
+
+    assert "Static-analysis leads" not in _assessment(out)
+    assert "does not prove it" in _instruction_block(out)
+    context = doc["result"]["data"]["records"][0]["instruction_context"]
+    for absent in ("leads", "lead_limitations"):
+        assert absent not in context
+    assert "transform loop" not in json.dumps(doc)
 
 
 @_needs_capstone
