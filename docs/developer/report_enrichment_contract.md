@@ -659,14 +659,17 @@ consumes a canonical collector and adds no report-only PE or IAT parser:
     `stmxcsr` and `cmpxchg16b` as read-only, and every one of those
     writes. It is True for a `call` and for an interrupt, whose pushes
     name no operand. And it is True for
-    `disasm._IMPLICIT_MEMORY_WRITE_MNEMONICS`, which carries the
+    `disasm._IMPLICIT_MEMORY_WRITE_INSN_NAMES`, which carries the
     instructions that write memory while naming no memory operand at all
     -- a stack push, the `maskmov*` masked stores through `[rdi]`, and
     `clzero`, for which capstone reports no operand, no access and no
     register clobber, leaving the mnemonic as the only statement. That
     list is the enforcement point for its class and has to stay complete
     to stay safe; keeping it to the no-operand cases is what keeps it
-    short.
+    short. It is keyed on capstone instruction identities rather than
+    rendered mnemonics. In particular, the all-register pushes are exposed
+    as `pushaw`/`pushal` rather than the version-dependent `pusha`/`pushad`
+    spellings, so a text-keyed rule could silently omit all eight writes.
 
     Under all of it sits `DecodedInsn.effects_unknown`, which is true two
     ways, because reporting SOMETHING is not the same as reporting
@@ -686,8 +689,11 @@ consumes a canonical collector and adds no report-only PE or IAT parser:
     exists for depends on.
 
     Or capstone reported no operand, no register write, no clobber and no
-    group at all, and the mnemonic is not one of the three in
-    `disasm._NO_EFFECT_MNEMONICS` that genuinely do nothing. Reporting
+    group at all, and the mnemonic is not in
+    `disasm._NO_EFFECT_MNEMONICS`, the allowlist of instructions that
+    genuinely have no memory, general-register, or control-flow effect for
+    this analysis: `nop`, `emms`/`femms`, `pause`, and
+    `lfence`/`mfence`/`sfence`. Reporting
     nothing is not the same as doing nothing, and the encoding spaces the
     system instructions live in are full of the difference -- `aaa` and
     `das` change AL, `xlatb` reads through `[rbx + al]` and writes AL,
