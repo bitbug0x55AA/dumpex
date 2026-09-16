@@ -522,6 +522,16 @@ def test_instruction_lead_rejects_an_unsupported_claim():
         _lead(evidence_addresses=())
 
 
+def test_instruction_lead_says_whether_its_evidence_list_is_a_cut_one():
+    """A proof can name more instructions than the cap holds, so the flag
+    is part of the record: a bounded list with nothing said about it
+    would read as the whole of what the lead was read from."""
+    assert not _lead().evidence_truncated
+    assert _lead(evidence_truncated=True).evidence_truncated
+    with pytest.raises(ValueError, match="evidence_truncated must be a bool"):
+        _lead(evidence_truncated="yes")
+
+
 def test_instruction_lead_evidence_names_instructions_of_this_window():
     with pytest.raises(ValueError, match="must name decoded instructions"):
         _instruction_context(instructions=(_instruction(),),

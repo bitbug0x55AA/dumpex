@@ -22,6 +22,7 @@ from dumpex.commands.report_enrichment import (
 from dumpex.core.disasm import MAX_DECODE_BYTES, disasm_available
 from dumpex.output.records import (
     ENRICHMENT_COMPLETE, ENRICHMENT_MISSING, ENRICHMENT_PARTIAL,
+    MAX_INSTRUCTION_LEAD_EVIDENCE,
 )
 from tests.fixtures.fakes import (
     Ctx, EnvBufferedReader, EnvReader, FakeMF, FakeStream, Module, Peb, Region,
@@ -666,6 +667,7 @@ _SELF_DECODING_STUB = bytes.fromhex(
     "e800000000" "58" "4883c010" "803041" "48ffc0" "4883e901" "75f4" "ffd0" "c3")
 _STUB_CALL_OFFSET = 0x00
 _STUB_POP_OFFSET = 0x05
+_STUB_ADD_OFFSET = 0x06
 _STUB_XOR_OFFSET = 0x0a
 _STUB_JNE_OFFSET = 0x14
 _STUB_CALL_RAX_OFFSET = 0x16
@@ -679,10 +681,18 @@ _PLAIN_TRANSFORM_LOOP = bytes.fromhex("803341" "48ffc3" "48ffc9" "75f5" "c3")
 _STUB_WRITING_AN_UNRELATED_REGISTER = bytes.fromhex(
     "e800000000" "58" "4883c010" "803341" "48ffc3" "4883e901" "75f4" "ffd0" "c3")
 
-# The stub's shape with a `ret` between the pop and the loop: no single
-# linear run covers both, so the two are not shown to belong together.
-_STUB_WITH_A_RETURN_BEFORE_THE_LOOP = bytes.fromhex(
+# The stub's shape with a `ret` between the pop and the loop. The `ret`
+# reaches no successor, and nothing else in the window targets the loop,
+# so no edge in the decoded graph arrives at it at all.
+_STUB_WHOSE_LOOP_NOTHING_REACHES = bytes.fromhex(
     "e800000000" "58" "4883c010" "c3" "803041" "48ffc0" "4883e901" "75f4" "c3")
+
+# The stub's shape with an unconditional `jmp` to the next instruction
+# between the pop and the loop. The jump DOES reach the loop, so the loop
+# is a loop; what it breaks is the single linear run that would carry the
+# popped value from the pop to the loop's own address.
+_STUB_WITH_A_JUMP_BEFORE_THE_LOOP = bytes.fromhex(
+    "e800000000" "58" "4883c010" "eb00" "803041" "48ffc0" "4883e901" "75f4" "c3")
 
 # The stub's shape with `xor rax, rax` after the pop: the register the
 # write addresses no longer carries the code's own address.
@@ -743,10 +753,14 @@ def test_a_get_pc_value_reaching_the_write_upgrades_to_a_self_decoding_stub():
     assert set(lead.signals) == {
         "memory_write_back", "backward_branch_loop", "get_pc_register_flows_to_write",
         "linear_fall_through_from_get_pc", "register_transfer_after_loop"}
+    # `add rax, 0x10` is the instruction that carried the popped address
+    # to the register the write addresses, so the claim rests on it as
+    # much as on the `pop` and the `xor` either side of it.
     assert lead.evidence_addresses == tuple(
         f"0x{_PRIVATE_CODE_VA + offset:016x}" for offset in
-        (_STUB_CALL_OFFSET, _STUB_POP_OFFSET, _STUB_XOR_OFFSET, _STUB_JNE_OFFSET,
-         _STUB_CALL_RAX_OFFSET))
+        (_STUB_CALL_OFFSET, _STUB_POP_OFFSET, _STUB_ADD_OFFSET, _STUB_XOR_OFFSET,
+         _STUB_JNE_OFFSET, _STUB_CALL_RAX_OFFSET))
+    assert not lead.evidence_truncated
     assert set(lead.evidence_addresses) <= {insn.address for insn in record.instructions}
     assert "this code's own address" in lead.detail
 
@@ -765,13 +779,26 @@ def test_a_write_through_a_register_the_get_pc_never_filled_is_not_a_stub():
 
 
 @_needs_capstone
-def test_a_return_between_the_get_pc_and_the_loop_is_not_a_stub():
+def test_a_branch_between_the_get_pc_and_the_loop_is_not_a_stub():
     """No single linear run covers the pop and the loop, so the two
     fragments are not shown to belong to each other -- exactly what the
-    listing's own "not an executed path" caveat means."""
-    (lead,) = _lead_for(_STUB_WITH_A_RETURN_BEFORE_THE_LOOP).leads
+    listing's own "not an executed path" caveat means. The loop itself is
+    reached by the jump and is still reported."""
+    (lead,) = _lead_for(_STUB_WITH_A_JUMP_BEFORE_THE_LOOP).leads
     assert lead.name == "memory_transform_loop"
     assert "linear_fall_through_from_get_pc" not in lead.signals
+
+
+@_needs_capstone
+def test_a_loop_no_edge_in_the_window_arrives_at_is_not_a_loop():
+    """The control for the case above, differing in one instruction: a
+    `ret` where the jump was. Nothing in the decoded graph reaches the
+    instructions below it, so they are bytes that decode like a loop
+    rather than a loop -- and no lead is read from them at all."""
+    record = _lead_for(_STUB_WHOSE_LOOP_NOTHING_REACHES)
+    assert any(insn.text.startswith("xor byte ptr [rax]")
+               for insn in record.instructions)
+    assert record.leads == ()
 
 
 @_needs_capstone
@@ -1044,6 +1071,216 @@ def test_nothing_follows_an_unconditional_backward_jump():
     (lead,) = _lead_for(_LOOP_CLOSED_BY_AN_UNCONDITIONAL_JUMP).leads
     assert lead.name == "memory_transform_loop"
     assert "register_transfer_after_loop" not in lead.signals
+
+
+# The register-mediated shape: a call/pop leaves this code's own address
+# in rbp, a loop loads from it, transforms the loaded value in a
+# register, and stores it back to the same address, an unconditional
+# backward `jmp` closes the loop with a `je` before it providing the
+# exit, and the exit path reaches a `call` through a register. No single
+# instruction here both reads and writes memory.
+#
+#   0x05 jmp 0x3a / 0x07 pop rbp / 0x18 push rbp
+#   0x19 mov edx, dword ptr [rbp] / 0x1c xor edx, eax
+#   0x1e mov dword ptr [rbp], edx
+#   0x2e je 0x32 / 0x30 jmp 0x19 / 0x32 pop rax
+#   0x38 call rax / 0x3a call 0x07
+_REGISTER_MEDIATED_STUB = bytes.fromhex(
+    "0f1f400090" "eb33" "5d" "0f1f40000f1f40000f1f40000f1f4000"
+    "55" "8b5500" "31c2" "895500" "90" "0f1f40000f1f40000f1f4000"
+    "7402" "ebe7" "58" "90" "0f1f4000" "ffd0" "e8c8ffffff" "c3")
+_REGISTER_MEDIATED_EVIDENCE = (0x07, 0x19, 0x1c, 0x1e, 0x2e, 0x30, 0x38, 0x3a)
+
+# The same window with the `xor` replaced by a one-byte NOP and a filler
+# NOP keeping every later offset where it was: a load and a store of the
+# same bytes to the same address, which changes nothing.
+_REGISTER_MEDIATED_COPY = bytes.fromhex(
+    "0f1f400090" "eb33" "5d" "0f1f40000f1f40000f1f40000f1f4000"
+    "55" "8b5500" "9090" "895500" "90" "0f1f40000f1f40000f1f4000"
+    "7402" "ebe7" "58" "90" "0f1f4000" "ffd0" "e8c8ffffff" "c3")
+
+
+@_needs_capstone
+def test_the_register_mediated_sample_reaches_the_analyst_as_a_stub_lead():
+    """The shape this recognizer exists for. The store is a `mov`, so the
+    direct write-back test sees nothing; the three instructions together
+    are what proves the in-place transform, and the call/pop address flow
+    is what makes it the stronger name."""
+    record = _lead_for(_REGISTER_MEDIATED_STUB)
+    (lead,) = record.leads
+    assert lead.name == "self_decoding_stub"
+    assert set(lead.signals) == {
+        "register_mediated_write_back", "backward_branch_loop",
+        "get_pc_register_flows_to_write", "linear_fall_through_from_get_pc",
+        "register_transfer_after_loop"}
+    assert lead.evidence_addresses == tuple(
+        f"0x{_PRIVATE_CODE_VA + offset:016x}"
+        for offset in _REGISTER_MEDIATED_EVIDENCE)
+    assert set(lead.evidence_addresses) <= {insn.address for insn in record.instructions}
+    assert "store back to the same address" in lead.detail
+    assert "this code's own address" in lead.detail
+
+
+# The same window with the transformed value copied into `esi` before
+# the store, which the proof rests on and which takes the instruction
+# count past the evidence cap. Every later offset is where it was: two
+# padding NOPs pay for the copy's two bytes.
+#
+#   0x19  mov  edx, dword ptr [rbp]
+#   0x1c  xor  edx, eax
+#   0x1e  mov  esi, edx
+#   0x20  mov  dword ptr [rbp], esi
+_REGISTER_MEDIATED_STUB_WITH_A_CARRIER = bytes.fromhex(
+    "0f1f400090" "eb33" "5d" "0f1f40000f1f40000f1f40000f1f4000"
+    "55" "8b5500" "31c2" "89d6" "897500" "0f1f40000f1f4000909090"
+    "7402" "ebe7" "58" "90" "0f1f4000" "ffd0" "e8c8ffffff" "c3")
+
+
+@_needs_capstone
+def test_a_proof_naming_more_instructions_than_the_cap_says_the_list_is_cut():
+    """The copy into `esi` is a step the claim depends on, so the proof
+    names nine instructions where the cap holds eight. The lead keeps the
+    first eight and says the list is a cut of them -- an unlabelled
+    bounded list would read as the whole of what the lead was read
+    from."""
+    record = _lead_for(_REGISTER_MEDIATED_STUB_WITH_A_CARRIER)
+    (lead,) = record.leads
+    assert lead.name == "self_decoding_stub"
+    assert len(lead.evidence_addresses) == MAX_INSTRUCTION_LEAD_EVIDENCE
+    assert lead.evidence_truncated
+    assert set(lead.evidence_addresses) <= {insn.address for insn in record.instructions}
+
+
+@_needs_capstone
+def test_the_same_sample_without_a_transform_is_a_copy_and_no_lead():
+    """The control for the case above: with the `xor` replaced by a NOP
+    and nothing else moved, the loop reads bytes and writes the same
+    bytes back. Nothing is transformed, so there is no lead at all --
+    not a weaker one."""
+    record = _lead_for(_REGISTER_MEDIATED_COPY)
+    assert any(insn.text.startswith("mov dword ptr [rbp], edx")
+               for insn in record.instructions)
+    assert record.leads == ()
+
+
+@pytest.mark.parametrize("form", ["direct_write_back", "load_transform_store"])
+@pytest.mark.parametrize("with_get_pc", [False, True])
+def test_a_lead_sentence_fits_its_cap_at_the_widest_address(form, with_get_pc):
+    """The sentence carries an address and a mnemonic, and both are as
+    wide as a decode can make them here: a 64-bit address at every digit
+    and a mnemonic at the decoder's own character cap. It has to fit
+    whole, because a sentence cut to the cap is cut mid-word."""
+    from dumpex.commands.report_enrichment import _lead_detail
+    from dumpex.core.disasm import (
+        BranchKind, DecodedInsn, MAX_MNEMONIC_CHARS, MemoryOperand,
+    )
+    from dumpex.core.insn_flow import GetPcPair, TransformLoop
+    from dumpex.output.records import ENRICHMENT_TEXT_CAP
+
+    def insn(mnemonic):
+        return DecodedInsn(
+            address=0xFFFFFFFFFFFFFFFF, size=1, mnemonic=mnemonic,
+            mnemonic_truncated=False, operands="", operands_truncated=False,
+            is_call=False, is_jump=False, is_return=False,
+            branch_kind=BranchKind.NONE)
+
+    widest = insn("m" * MAX_MNEMONIC_CHARS)
+    loop = TransformLoop(
+        form=form, branch=widest, entry_va=0, store=widest,
+        address=MemoryOperand(base="rbp", width=4),
+        access_va=0xFFFFFFFFFFFFFFFF,
+        load=widest, transform=widest,
+        get_pc=(GetPcPair(call=widest, pop=widest, register="rbp")
+                if with_get_pc else None))
+    assert len(_lead_detail(loop)) <= ENRICHMENT_TEXT_CAP
+
+
+# The register-mediated loop behind an anchor that reaches nothing: a
+# `ret` sits at the decode start, so no edge in the window arrives at the
+# loop below it. This is what a thread whose start address is a jump
+# thunk, or a `--report-addr` one instruction early, looks like.
+_UNREACHABLE_FROM_THE_ANCHOR = bytes.fromhex(
+    "c3" "8b5500" "31c2" "895500" "4883e901" "75f2" "c3")
+_REACHABLE_FROM_THE_ANCHOR = bytes.fromhex(
+    "90" "8b5500" "31c2" "895500" "4883e901" "75f2" "c3")
+
+_WITHHELD_NOTE = "no decoded branch reaches from this anchor"
+
+
+@_needs_capstone
+def test_a_shape_withheld_for_unreachability_is_reported_as_a_coverage_gap():
+    """The reachability gate is the one rejection that says something
+    about where the decode BEGAN rather than about the instructions, so
+    it is the one an analyst cannot infer from the rows in front of them.
+    No lead is emitted, and the section says a shape was withheld rather
+    than leaving the window looking like a clean negative."""
+    record = _lead_for(_UNREACHABLE_FROM_THE_ANCHOR)
+    assert record.leads == ()
+    (note,) = [n for n in record.lead_limitations if _WITHHELD_NOTE in n]
+    assert "possible in-place transform loop" in note
+    # A withheld proof is not a lead: the note names no instruction.
+    assert "0x" not in note
+    # And it is lead analysis, so it stays on the same side of the JSON
+    # contract as `leads` -- out of the published section limitations,
+    # which ARE serialized.
+    assert not [n for n in record.section.limitations if _WITHHELD_NOTE in n]
+    assert "lead_limitations" not in record.to_dict()
+    assert all(_WITHHELD_NOTE not in n
+               for n in record.to_dict()["section"]["limitations"])
+
+
+# The same loop with a composite transform -- `xor edx, eax` then
+# `rol edx, 3`, the standard multi-round decoder shape. The load, a
+# transform and a same-address store are all there; what this module
+# will not do is compose two transforms and still claim the result is
+# non-identity.
+_SHAPE_THE_EVIDENCE_CANNOT_PROVE = bytes.fromhex(
+    "90" "8b5500" "31c2" "c1c203" "895500" "4883e901" "75ef" "c3")
+
+
+@_needs_capstone
+def test_a_shape_the_evidence_cannot_prove_is_reported_as_a_gap():
+    """The second reason a shape is withheld, and the reason it needs
+    saying: the instruction rows show a load, a transform and a store
+    over one address, and nothing in them shows an analyst which step
+    this module declined to prove."""
+    record = _lead_for(_SHAPE_THE_EVIDENCE_CANNOT_PROVE)
+    assert record.leads == ()
+    (note,) = [n for n in record.lead_limitations
+               if "does not prove it" in n]
+    assert "possible in-place transform loop" in note
+    assert "0x" not in note
+    assert not [n for n in record.section.limitations if "transform loop" in n]
+
+
+@_needs_capstone
+def test_a_reachable_shape_reports_no_such_gap():
+    """The control, differing in one byte: a `nop` where the `ret` was.
+    The lead is read, and nothing is withheld to report."""
+    record = _lead_for(_REACHABLE_FROM_THE_ANCHOR)
+    (lead,) = record.leads
+    assert lead.name == "memory_transform_loop"
+    assert record.lead_limitations == ()
+
+
+@_needs_capstone
+def test_a_window_with_no_shape_reports_no_gap_either():
+    """A window that simply has no transform loop in it has nothing
+    withheld. The note is about a proof that exists and was declined, not
+    about every negative."""
+    record = _lead_for(b"\x48\x83\xc0\x10\x48\xff\xc0\xc3")
+    assert record.leads == ()
+    assert not [n for n in record.section.limitations if _WITHHELD_NOTE in n]
+
+
+@_needs_capstone
+def test_the_withheld_gap_changes_no_status_or_finding():
+    """A limitation is a coverage note. It moves neither the section's
+    own evidence state nor anything the card is scored on."""
+    withheld = _lead_for(_UNREACHABLE_FROM_THE_ANCHOR)
+    reachable = _lead_for(_REACHABLE_FROM_THE_ANCHOR)
+    assert withheld.section.status == reachable.section.status
+    assert withheld.decoder_state == reachable.decoder_state == "decoded"
 
 
 @_needs_capstone

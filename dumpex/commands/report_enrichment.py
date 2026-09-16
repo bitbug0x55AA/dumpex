@@ -28,8 +28,11 @@ from minidump.constants import MINIDUMP_STREAM_TYPE
 from dumpex.commands.handles import collect_handles, summarize_handles_by_type
 from dumpex.core.disasm import (
     MAX_DECODE_BYTES, MAX_DECODE_INSNS, MAX_INSTRUCTION_LENGTH, BranchKind,
-    DisasmAvailability, DisasmBackendStatus, decode_window, is_full_width_register,
-    register_family,
+    DisasmAvailability, DisasmBackendStatus, decode_window,
+)
+from dumpex.core.insn_flow import (
+    LOAD_TRANSFORM_STORE, WITHHELD_UNREACHABLE, find_transform_loop,
+    transform_loop_withheld,
 )
 from dumpex.core.runtime import is_frozen
 from dumpex.core.memory import (
@@ -1719,192 +1722,33 @@ def _branch_target_record(insn_address: int, kind: str, target: "int | None",
 
 
 # ── instruction leads ──────────────────────────────────────────────────
-# The arithmetic and logic mnemonics a write-back signal reads. An
-# instruction qualifies only when it is one of these AND capstone reports
-# a write to an explicit memory operand, so a plain `mov` store, an
-# implicit stack write, and a read-only test never carry the signal. The
-# set is written out here rather than derived from an instruction group,
-# so the rule a lead is emitted under is readable in one place.
-_WRITE_BACK_MNEMONICS = frozenset((
-    "xor", "add", "sub", "adc", "sbb", "and", "or", "not", "neg",
-    "inc", "dec", "rol", "ror", "shl", "shr", "sal", "sar", "rcl", "rcr",
-))
+# The analysis itself is `dumpex.core.insn_flow`: a bounded local
+# control-flow graph over the decoded boundaries, a proof that a loop
+# transforms memory in place, and the correlation of a call/pop address
+# acquisition with the address that transform uses. What is left here is
+# naming -- turning one proof into the one qualified lead an analyst
+# reads -- so every renderer consumes the same accepted semantics rather
+# than re-deriving them.
 
 
-def _linear_run_is_uninterrupted(instructions, start_va: int, end_va: int) -> bool:
-    """Whether every instruction in the half-open range ``[start_va,
-    end_va)`` leaves the linear path intact -- no return and no
-    unconditional branch.
+def _lead_detail(loop) -> str:
+    """One sentence for the proof ``loop``, naming a single address --
+    the store the lead is named for.
 
-    The range is half-open so a caller can state exactly which endpoints
-    it means: an instruction AT ``start_va`` is examined, one at
-    ``end_va`` is not. A caller that means "after this instruction"
-    passes ``insn.address + insn.size`` rather than ``insn.address``,
-    because the instruction sitting on an endpoint is often the very one
-    that ends the run.
-
-    Whether an instruction ends the run is `DecodedInsn.falls_through`,
-    decided at the decode layer from capstone's instruction id -- so a
-    far `ljmp` ends it exactly as a near `jmp` does, which comparing
-    mnemonic text would miss.
-
-    This is the weakest honest statement that one linear run can cover
-    the range; it proves no run was taken."""
-    return all(insn.falls_through for insn in instructions
-               if start_va <= insn.address < end_va)
-
-
-def _loop_body_holds_write(instructions, by_address, write, branch) -> bool:
-    """Whether the loop ``branch`` closes actually runs ``write``.
-
-    An address between the branch's target and the branch itself is not
-    enough: a `ret` or an unconditional branch inside that span ends the
-    run before the write is reached, or before the closing branch is,
-    and the write is then simply bytes that happen to lie in the
-    interval. Three things are required, and each is an endpoint the
-    range arithmetic has to include on purpose:
-
-    * the branch target is an instruction boundary THIS decode produced,
-      so the loop entry is a real instruction and not the middle of one;
-    * nothing from the loop entry up to the write ends the run -- the
-      instruction AT the target is part of that check, and a `ret`
-      sitting exactly there is the case this exists to reject;
-    * nothing after the write ends the run before the closing branch.
-
-    It says the loop can run the write, never that it did."""
-    target = branch.direct_target_va
-    if target not in by_address:
-        return False
-    if not target <= write.address <= branch.address:
-        return False
-    return (_linear_run_is_uninterrupted(instructions, target, write.address)
-            and _linear_run_is_uninterrupted(
-                instructions, write.address + write.size, branch.address))
-
-
-def _get_pc_pairs(instructions, by_address, base_va: int, window_end: int) -> list:
-    """``[(call, pop)]`` for each direct `call` in this window whose
-    target is a `pop` in the same window -- the position-independent way
-    code leaves its own address in a register."""
-    pairs = []
-    for insn in instructions:
-        if not (insn.is_call and insn.branch_kind is BranchKind.DIRECT):
-            continue
-        target = insn.direct_target_va
-        if target is None or not base_va <= target < window_end:
-            continue
-        popped = by_address.get(target)
-        if popped is not None and popped.mnemonic == "pop" and popped.register_writes:
-            pairs.append((insn, popped))
-    return pairs
-
-
-def _is_zero_idiom(insn) -> bool:
-    """Whether ``insn`` is the `xor reg, reg` / `sub reg, reg` zeroing
-    idiom. It is recognised by the instruction naming one register twice,
-    so `sub rcx, 1` -- which reads and writes rcx just as `sub rcx, rcx`
-    does -- is not mistaken for it."""
-    return (insn.mnemonic in ("xor", "sub") and len(insn.register_operands) == 2
-            and insn.register_operands[0] == insn.register_operands[1])
-
-
-# The only instruction forms whose data flow this module follows. Each
-# names exactly one register destination and has a stated relationship
-# between that destination and its inputs:
-#
-#   mov dst, src      the destination becomes the source, register to
-#                     register only -- a load names a memory operand,
-#                     and what it brings back is whatever that memory
-#                     held, not the address used to reach it;
-#   lea dst, [...]    the destination becomes an address computed from
-#                     the memory operand's own registers;
-#   add/sub/inc/dec   the destination is also an input, so the result
-#                     still derives from what it held.
-#
-# Everything else only ever KILLS what its destinations held. That
-# includes reductions whose result no longer depends on the input
-# (`and reg, 0`, `or reg, -1`), instructions that permute several
-# destinations at once (`xchg`), and every mnemonic not named here.
-#
-# This is a whitelist on purpose. A blacklist of value-destroying forms
-# would have to be complete to be safe, and x86 has too many ways to
-# reduce a register to a constant for that to be a claim worth making.
-# A form this does not know under-reports: the lead falls back to the
-# name the loop alone supports.
-_COPY_MNEMONIC = "mov"
-_ADDRESS_MNEMONIC = "lea"
-_SELF_ARITHMETIC_MNEMONICS = frozenset(("add", "sub", "inc", "dec"))
-
-
-def _carrying_destination(insn, *, architecture: "str | None", carrying: set
-                          ) -> "str | None":
-    """The one register family ``insn`` leaves a carried value in, or None.
-
-    None is the answer for every instruction this module does not model,
-    and the caller kills the instruction's destinations either way -- so
-    an unrecognised form loses the value rather than passing it on."""
-    writes = insn.register_writes
-    if len(writes) != 1 or not is_full_width_register(writes[0], architecture):
-        return None
-    if not any(register_family(name) in carrying for name in insn.register_reads):
-        return None
-    destination = register_family(writes[0])
-    if insn.mnemonic == _COPY_MNEMONIC:
-        # Two register operands and exactly one register read: a register
-        # source. A load reads a memory operand's base instead, which
-        # leaves only one register operand and is rejected here.
-        if len(insn.register_operands) == 2 and len(insn.register_reads) == 1:
-            return destination
-        return None
-    if insn.mnemonic == _ADDRESS_MNEMONIC:
-        # `lea`'s only register operand is its destination; everything it
-        # reads is the address arithmetic.
-        if len(insn.register_operands) == 1:
-            return destination
-        return None
-    if insn.mnemonic in _SELF_ARITHMETIC_MNEMONICS:
-        if _is_zero_idiom(insn):
-            return None
-        reads = {register_family(name) for name in insn.register_reads}
-        return destination if destination in reads else None
-    return None
-
-
-def _registers_holding(instructions, *, seed: str, architecture: "str | None",
-                       from_va: int, to_va: int) -> set:
-    """The register families still carrying the value ``seed`` held at
-    ``from_va``, walked forward over the instructions in ``[from_va,
-    to_va)``.
-
-    Tracking is per register FAMILY, not per name: `rax`, `eax`, `ax`,
-    `al` and `ah` are one register, and writing any of them ends what it
-    held. The kill covers every register capstone says an instruction
-    writes, the implicit ones included, so a `mul` that overwrites `rax`
-    without naming it does not leave a stale value behind. It is
-    unconditional and it comes first -- in 64-bit mode `xor eax, eax`
-    zeroes the whole of `rax`, and an 8- or 16-bit write leaves the rest
-    stale, so in neither case does the address someone was following
-    survive.
-
-    Only then, and only for the forms :func:`_carrying_destination`
-    models, does one destination take the value on. Reading a carrying
-    register is not enough by itself: `and rax, 0` reads `rax` and leaves
-    a constant, and `xchg rbx, rax` reads one carrying register and
-    writes two destinations that are not interchangeable.
-
-    Everything this cannot model under-reports, which is the direction to
-    err in: a flow it cannot follow yields no claim that the flow
-    exists."""
-    carrying = {register_family(seed)}
-    for insn in instructions:
-        if not from_va <= insn.address < to_va or not insn.clobbered_registers:
-            continue
-        destination = _carrying_destination(
-            insn, architecture=architecture, carrying=carrying)
-        carrying -= {register_family(name) for name in insn.clobbered_registers}
-        if destination is not None:
-            carrying.add(destination)
-    return carrying
+    Every other instruction the lead rests on is in
+    ``evidence_addresses``, so the sentence stays within the text cap at
+    the widest address and the longest mnemonic a decode can produce, and
+    never has to be cut mid-word to fit."""
+    if loop.form == LOAD_TRANSFORM_STORE:
+        detail = (f"a load, a register transform, and a store back to the same address "
+                  f"at 0x{loop.store.address:x}, inside a backward-branch loop")
+    else:
+        detail = (f"{loop.store.mnemonic} stores into memory at 0x{loop.store.address:x}, "
+                  f"inside a backward-branch loop")
+    if loop.get_pc is None:
+        return detail + "; what it writes over is not shown to be code"
+    return detail + ("; that address derives from a call/pop reading "
+                     "this code's own address")
 
 
 def _instruction_leads(instructions, *, base_va: int, window_len: int,
@@ -1913,139 +1757,75 @@ def _instruction_leads(instructions, *, base_va: int, window_len: int,
     one-element :class:`ReportInstructionLead` tuple, or empty.
 
     The rule is a two-step ladder, fixed here rather than scored, and
-    each step names only what it has actually shown.
+    each step names only what `dumpex.core.insn_flow` has actually
+    proven.
 
-    ``memory_transform_loop`` is the base: an arithmetic or logic store
-    into an explicit memory operand whose address lies inside the span of
-    a backward direct branch -- a write a loop in the same window runs
-    more than once. That is all an in-place transform proves, and an
-    ordinary buffer decode loop is exactly this shape, so the name claims
+    ``memory_transform_loop`` is the base: a loop that transforms memory
+    in place, in either of the two forms that prove it. One arithmetic or
+    logic instruction whose explicit memory operand is both its input and
+    its output is the direct form. A load, a non-identity transform of
+    the loaded value in a register, and a store of that surviving value
+    back to the same proven effective address is the register-mediated
+    one -- the same transform written across three instructions, and the
+    shape a real sample is far more likely to be in. Either way an
+    ordinary buffer decode loop is exactly this, so the name claims
     nothing about what the written bytes are.
 
-    ``self_decoding_stub`` requires, in addition, that the written
-    operand's base register carry a value a `call`/`pop` pair in this
+    ``self_decoding_stub`` requires, in addition, that the transformed
+    address's base register carry a value a `call`/`pop` pair in this
     same window left the code's own address in -- followed per register
     family, so a write at any width to any name of that register ends the
     carry -- and that no return and no unconditional branch separate that
-    `pop` from the loop. Together
-    those say the loop writes at an address derived from where this code
-    itself sits, on one linear run -- the difference between transforming
-    a buffer and rewriting one's own bytes. Without both, the base name
-    stands: a `call`/`pop` elsewhere in the 512-byte window is not
-    evidence about this loop.
+    `pop` from the loop. Together those say the loop writes at an address
+    derived from where this code itself sits, on one linear run -- the
+    difference between transforming a buffer and rewriting one's own
+    bytes. Without both, the base name stands: a `call`/`pop` elsewhere
+    in the 512-byte window is not evidence about this loop.
 
     ``register_transfer_after_loop`` is a supporting signal and never a
-    gate: a register-indirect `call`/`jmp` that the loop can fall through
-    to. Only a conditional closing branch falls through at all -- nothing
-    follows an unconditional backward `jmp` on any run -- and nothing
-    between the two may end the run.
-
-    Every one of these relationships requires the write to be somewhere
-    the loop can actually reach: an address inside the branch's span is
-    not enough, because a `ret` or an unconditional branch in that span
-    ends the run first. :func:`_loop_body_holds_write` is the gate.
+    gate: a register-indirect `call`/`jmp` that the edge leaving the loop
+    reaches over the decoded graph. That edge always belongs to a
+    conditional branch -- often one inside the loop body rather than the
+    closing branch's own fall-through, and never an unconditional
+    backward `jmp`'s, because nothing follows one of those on any run.
 
     Everything here is a shape the bytes contain. Linear order is not an
     executed path -- these relationships are the weakest ones that still
     connect the instructions to each other, and none of them asserts that
     any of it ran. No lead moves a finding, verdict, indicator count,
     coverage status, or exit code."""
-    window_end = base_va + window_len
-    by_address = {insn.address: insn for insn in instructions}
-
-    write_backs = [insn for insn in instructions
-                   if insn.writes_memory and insn.mnemonic in _WRITE_BACK_MNEMONICS]
-    backward_branches = [
-        insn for insn in instructions
-        if (insn.is_jump and insn.branch_kind is BranchKind.DIRECT
-            and insn.direct_target_va is not None
-            and base_va <= insn.direct_target_va <= insn.address)]
-    looping_writes = [
-        (write, branch) for branch in backward_branches for write in write_backs
-        if _loop_body_holds_write(instructions, by_address, write, branch)]
-    if not looping_writes:
+    loop = find_transform_loop(instructions, base_va=base_va,
+                               window_len=window_len, architecture=architecture)
+    if loop is None:
         return ()
 
-    get_pc_pairs = _get_pc_pairs(instructions, by_address, base_va, window_end)
-
-    def _get_pc_reaching(write, branch):
-        """The ``(call, pop)`` pair whose value reaches the address
-        register of ``write`` on a linear run that also covers the loop,
-        or None."""
-        if write.write_base_register is None:
-            return None
-        for call, popped in get_pc_pairs:
-            if popped.address >= write.address:
-                continue
-            # The walk starts AFTER the pop: the pop is what seeded the
-            # register, and a walk that included it would read its own
-            # write as a kill.
-            carrying = _registers_holding(
-                instructions, seed=popped.register_writes[0],
-                architecture=architecture,
-                from_va=popped.address + popped.size, to_va=write.address)
-            if register_family(write.write_base_register) not in carrying:
-                continue
-            if not _linear_run_is_uninterrupted(
-                    instructions, popped.address + popped.size,
-                    branch.direct_target_va):
-                continue
-            return call, popped
-        return None
-
-    # The first pair that supports the stronger name leads; otherwise the
-    # first looping write carries the base name.
-    write, branch = looping_writes[0]
-    get_pc = None
-    for candidate_write, candidate_branch in looping_writes:
-        reaching = _get_pc_reaching(candidate_write, candidate_branch)
-        if reaching is not None:
-            write, branch, get_pc = candidate_write, candidate_branch, reaching
-            break
-
-    signals = ["memory_write_back", "backward_branch_loop"]
-    evidence = [write.address, branch.address]
-    # One address in the prose -- the write the lead is named for. Every
-    # other instruction the lead rests on is in `evidence_addresses`, so
-    # the sentence stays the same length whatever the addresses are and
-    # never has to be cut mid-word to fit the text cap.
-    detail = (f"{write.mnemonic} stores into memory at 0x{write.address:x} inside a loop "
-              f"closed by a backward branch")
-    if get_pc is None:
+    if loop.form == LOAD_TRANSFORM_STORE:
+        signals = ["register_mediated_write_back", "backward_branch_loop"]
+    else:
+        signals = ["memory_write_back", "backward_branch_loop"]
+    if loop.get_pc is None:
         name = "memory_transform_loop"
-        detail += "; what it writes over is not shown to be code"
     else:
         name = "self_decoding_stub"
-        call, popped = get_pc
         signals += ["get_pc_register_flows_to_write", "linear_fall_through_from_get_pc"]
-        evidence += [call.address, popped.address]
-        detail += (f"; its address register carries what the call/pop at "
-                   f"0x{popped.address:x} read as this code's own address")
-
-    # Only a CONDITIONAL closing branch falls through to what follows the
-    # loop. An unconditional backward `jmp` never reaches the next
-    # instruction at all, so nothing after it is "after the loop".
-    transfer = None
-    if branch.falls_through:
-        transfer = next((insn for insn in instructions
-                         if insn.branch_kind is BranchKind.INDIRECT_REGISTER
-                         and (insn.is_call or insn.is_jump)
-                         and insn.address > branch.address
-                         and _linear_run_is_uninterrupted(
-                             instructions, branch.address + branch.size,
-                             insn.address)), None)
-    if transfer is not None:
+    if loop.exit is not None:
         signals.append("register_transfer_after_loop")
-        evidence.append(transfer.address)
 
     # Leads are bounded by the closed INSTRUCTION_LEAD_NAMES vocabulary,
     # not by a retention cap: there is no dump-derived population here to
-    # select from. The evidence addresses within one lead are capped.
+    # select from. The evidence addresses within one lead are capped, and
+    # a proof that names more instructions than the cap holds -- the
+    # copies that carried a value, the arithmetic between a `pop` and the
+    # access, the path to a transfer -- carries `evidence_truncated` so
+    # the shorter list is never read as the whole of it.
+    evidence = loop.instruction_addresses
     lead = ReportInstructionLead(
         name=name, signals=tuple(signals),
-        evidence_addresses=tuple(hex_address(address) for address in
-                                 sorted(set(evidence))[:MAX_INSTRUCTION_LEAD_EVIDENCE]),
-        detail=_bounded_text(detail)[0])
+        evidence_addresses=tuple(
+            hex_address(address)
+            for address in evidence[:MAX_INSTRUCTION_LEAD_EVIDENCE]),
+        evidence_truncated=len(evidence) > MAX_INSTRUCTION_LEAD_EVIDENCE,
+        detail=_bounded_text(_lead_detail(loop))[0])
     return (lead,)
 
 
@@ -2323,6 +2103,29 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
 
     leads = _instruction_leads(result.instructions, base_va=anchor,
                                window_len=result.window_bytes, architecture=arch)
+    # A shape the lead rules found and declined to name. Both reasons
+    # exist because an analyst reading the instruction rows cannot see
+    # either of them; every other rejection is visible in the rows
+    # themselves -- a copy loop writes back what it read, a store lands
+    # at a different address -- and needs no note.
+    #
+    # These go in `lead_limitations`, NOT in the section's own
+    # `limitations`: that tuple is published, and a sentence about what
+    # the lead analysis could not establish is lead analysis. It belongs
+    # on the same side of the JSON contract as `leads`. Neither names an
+    # address and neither is a lead.
+    lead_limitations = []
+    withheld = (transform_loop_withheld(
+        result.instructions, base_va=anchor, window_len=result.window_bytes,
+        architecture=arch) if not leads else None)
+    if withheld == WITHHELD_UNREACHABLE:
+        lead_limitations.append(
+            "a possible in-place transform loop lies in bytes no decoded branch "
+            "reaches from this anchor: no lead was read from it")
+    elif withheld is not None:
+        lead_limitations.append(
+            "a possible in-place transform loop is present and this window's "
+            "evidence does not prove it: no lead was read from it")
 
     record = ReportInstructionContext(
         section=EnrichmentSection(
@@ -2335,7 +2138,8 @@ def collect_instruction_context(pe_cache: PeProfileCache, *, mf, anchor_candidat
         decode_stop_address=hex_address(decode_stop_va) if decode_ran else None,
         branch_targets_total=len(all_targets),
         branch_targets_truncated=len(kept_targets) < len(all_targets),
-        instructions=tuple(instructions), branch_targets=kept_targets, leads=leads)
+        instructions=tuple(instructions), branch_targets=kept_targets, leads=leads,
+        lead_limitations=tuple(lead_limitations))
     return record, tuple(dict.fromkeys(all_iat_slot_vas))
 
 

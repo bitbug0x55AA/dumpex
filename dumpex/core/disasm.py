@@ -24,9 +24,9 @@ address. It resolves the mechanically determinable operands of each
 instruction -- the absolute target of a direct `call`/`jmp`, the slot
 address of an indirect `call`/`jmp` through a RIP-relative or absolute
 memory operand, which explicit register operands are read and written,
-the base register of an explicit memory operand that is written, and
-whether execution continues at the instruction after this one -- and
-nothing else. An indirect branch through a register, function
+each explicit memory operand's whole effective-address expression and
+access width, and whether execution continues at the instruction after
+this one -- and nothing else. An indirect branch through a register, function
 boundaries, call arguments, and stack state are not mechanically
 determinable from a byte window and are never reported.
 
@@ -48,6 +48,7 @@ __all__ = [
     "DisasmBackendStatus",
     "DisasmBackend",
     "BranchKind",
+    "MemoryOperand",
     "DecodedInsn",
     "DecodeResult",
     "SUPPORTED_ARCHITECTURES",
@@ -57,7 +58,10 @@ __all__ = [
     "MAX_MNEMONIC_CHARS",
     "MAX_OPERANDS_CHARS",
     "MAX_REGISTER_OPERANDS",
+    "MAX_MEMORY_OPERANDS",
+    "MAX_IMMEDIATES",
     "register_family",
+    "register_width",
     "is_full_width_register",
     "MAX_BACKEND_REASON_CHARS",
     "backend_status",
@@ -89,6 +93,15 @@ MAX_OPERANDS_CHARS = 160
 # against a binding that reports more than it should.
 MAX_REGISTER_OPERANDS = 8
 
+# Explicit memory operands kept per instruction. An x86 instruction names
+# at most two (a string operation's source and destination), so this is
+# slack over the architecture rather than a cut through it.
+MAX_MEMORY_OPERANDS = 4
+
+# Immediate values kept per instruction. One is the normal case; the
+# cap bounds a binding that reports more.
+MAX_IMMEDIATES = 4
+
 # A backend failure reason comes from a third-party exception, so it is
 # bounded the same way dump-derived text is: one line, this many
 # characters, and no room for a message that fills a log.
@@ -98,6 +111,87 @@ MAX_BACKEND_REASON_CHARS = 120
 #: decode result `arch_supported` False with an empty instruction tuple --
 #: an explicit unsupported state, never a wrong-width decode.
 SUPPORTED_ARCHITECTURES = ("x86", "x64")
+
+
+# Instructions that hand control to code outside this window without
+# capstone placing them in a group that says so. `getsec` enters an
+# authenticated code module and capstone reports no group for it at all;
+# every other form this module knows of is carried by a group below, so
+# this list stays as short as the binding allows.
+_CONTEXT_LEAVING_MNEMONICS = frozenset((
+    # Enters an authenticated code module.
+    "getsec",
+    # `enclu` dispatches on EAX, and three of its leaves -- EENTER,
+    # ERESUME and EEXIT -- transfer into or out of an SGX enclave. This
+    # module does not track EAX, so it cannot tell those leaves from the
+    # ones that stay put, and treats every `enclu` as the transfer.
+    "enclu",
+))
+
+# The few instructions that report nothing because they genuinely DO
+# nothing this analysis has to account for -- no memory, no general
+# register, no transfer. Everything else that reports nothing is covered
+# by :attr:`DecodedInsn.effects_unknown`, so this list is an ALLOWLIST:
+# forgetting an entry costs a proof, where forgetting an entry on a list
+# of dangerous instructions would cost the truth of one.
+_NO_EFFECT_MNEMONICS = frozenset((
+    "nop",                          # including the multi-byte forms
+    "emms", "femms",                # clear the MMX/x87 tag word only
+    "pause",                        # architecturally `rep nop`
+    "lfence", "mfence", "sfence",   # order accesses; perform none
+))
+
+# The one instruction whose memory operand is not an access. `lea`
+# computes an effective address and is architecturally guaranteed never
+# to dereference it, so its operand says nothing about memory being
+# touched. This is not a decision to trust capstone's reported access --
+# capstone reports `lea` exactly as it reports `movnti`, read-only -- it
+# is a fact about what the instruction does.
+_ADDRESS_ONLY_MNEMONICS = frozenset(("lea",))
+
+# Instruction ids whose execution MUST change the stack pointer, and the
+# one pair that must change the accumulator. They are the basis of a
+# self-consistency check rather than a list of dangerous instructions:
+# capstone models most of these fully -- `push rbp` reports `rsp`, `leave`
+# reports `rbp` and `rsp` -- and under-reports a few. `push fs`, `pop fs`
+# and `enter` name no stack pointer at all, and `aam`/`aad` name no
+# accumulator, so for those the report is demonstrably short of what the
+# architecture requires, and nothing else it says can be relied on
+# either.
+#
+# Keyed on capstone's instruction ids, not its mnemonics: one id covers
+# `push rbp` and `push fs` together, and a spelling that moves between
+# binding versions (`pusha` became `pushal`) cannot silently empty the
+# set.
+_STACK_POINTER_INSN_NAMES = (
+    "X86_INS_PUSH", "X86_INS_POP",
+    "X86_INS_PUSHAW", "X86_INS_PUSHAL", "X86_INS_POPAW", "X86_INS_POPAL",
+    "X86_INS_PUSHF", "X86_INS_PUSHFD", "X86_INS_PUSHFQ",
+    "X86_INS_POPF", "X86_INS_POPFD", "X86_INS_POPFQ",
+    "X86_INS_ENTER", "X86_INS_LEAVE",
+)
+_ACCUMULATOR_INSN_NAMES = ("X86_INS_AAM", "X86_INS_AAD")
+
+# Instruction ids that write memory while naming no memory operand,
+# replacing what was a list of mnemonics -- capstone spells the
+# all-register push `pushal` and `pushaw`, not `pusha`/`pushad`, and a
+# set keyed on the spelling silently matched neither.
+_IMPLICIT_MEMORY_WRITE_INSN_NAMES = (
+    # A stack frame pushed below the stack pointer.
+    "X86_INS_PUSH", "X86_INS_PUSHAW", "X86_INS_PUSHAL",
+    "X86_INS_PUSHF", "X86_INS_PUSHFD", "X86_INS_PUSHFQ", "X86_INS_ENTER",
+    # A masked store through `[rdi]`/`[edi]`, named by no operand.
+    "X86_INS_MASKMOVQ", "X86_INS_MASKMOVDQU", "X86_INS_VMASKMOVDQU",
+    # A cache line zeroed at the address in `rax`, named by no operand.
+    "X86_INS_CLZERO",
+    # SGX and MKTME leaf dispatchers. Each selects its function from EAX,
+    # which this module does not track, and several of those functions
+    # write memory through a register: `encls[EDBGWR]` writes RBX's data
+    # to the EPC page at RCX, `enclv[ESETCONTEXT]` writes EPC, and
+    # `pconfig` programs a key table. None of it reaches an operand.
+    "X86_INS_ENCLS", "X86_INS_ENCLV", "X86_INS_PCONFIG",
+)
+
 
 
 # ── Register families ──────────────────────────────────────────────────
@@ -122,12 +216,19 @@ _REGISTER_WIDTH_ROWS = (
     ("rip", "eip", "ip", None, None),
 ) + tuple((f"r{n}", f"r{n}d", f"r{n}w", f"r{n}b", None) for n in range(8, 16))
 
+# The width in bytes of each column of ``_REGISTER_WIDTH_ROWS``. The two
+# 8-bit columns are the low and high halves of one 16-bit register, so
+# they share a width and are still distinct names.
+_REGISTER_WIDTH_BYTES = (8, 4, 2, 1, 1)
+
 _REGISTER_FAMILY = {}
+_REGISTER_WIDTH = {}
 _FULL_WIDTH_BY_ARCH = {"x64": set(), "x86": set()}
 for _row in _REGISTER_WIDTH_ROWS:
-    for _name in _row:
+    for _column, _name in enumerate(_row):
         if _name:
             _REGISTER_FAMILY[_name] = _row[0]
+            _REGISTER_WIDTH[_name] = _REGISTER_WIDTH_BYTES[_column]
     _FULL_WIDTH_BY_ARCH["x64"].add(_row[0])
     if _row[1]:
         _FULL_WIDTH_BY_ARCH["x86"].add(_row[1])
@@ -144,6 +245,19 @@ def register_family(name) -> "str | None":
         return None
     lowered = name.lower()
     return _REGISTER_FAMILY.get(lowered, lowered)
+
+
+def register_width(name) -> "int | None":
+    """How many bytes of its register ``name`` names -- 8 for ``rax``, 4
+    for ``eax``, 2 for ``ax``, 1 for ``al`` and ``ah``.
+
+    A name this module has no width for -- a vector or segment register,
+    or anything a future binding invents -- answers None, so a consumer
+    comparing the width of a value against the width of a memory slot is
+    told it cannot, rather than being given a wrong number."""
+    if not isinstance(name, str) or not name:
+        return None
+    return _REGISTER_WIDTH.get(name.lower())
 
 
 def is_full_width_register(name, architecture) -> bool:
@@ -247,14 +361,102 @@ _MAX_X86_INSN_LEN = MAX_INSTRUCTION_LENGTH
 
 
 @dataclass(frozen=True)
+class MemoryOperand:
+    """One explicit memory operand of one instruction, normalized.
+
+    The address is the x86 effective-address expression the instruction
+    itself spells out: ``segment:[base + index*scale + displacement]``.
+    ``base`` and ``index`` are register names at the width the
+    instruction names them (an address-size override makes ``ebp`` and
+    ``rbp`` different address expressions, and they stay different names
+    here), ``scale`` is 1 when there is no index, and ``displacement`` is
+    capstone's own signed value. ``segment`` is the segment register the
+    instruction names, or None for the default -- two operands under
+    different segments are different addresses however alike the rest
+    reads.
+
+    ``width`` is the access width in bytes, so a 4-byte load and a 1-byte
+    store through one address are not confused for each other; it is 0
+    when the binding does not report a size. ``reads`` and ``writes`` are
+    capstone's own access bits for this operand: a read-modify-write
+    operand has both.
+
+    ``components_unknown`` says the binding named a component this record
+    could not represent -- a register id it would not name, a
+    displacement that is not an integer, a scale that is not a positive
+    one. The field is then holding its own default rather than the
+    operand's value, so the normalized expression is a shape and not this
+    address; an operand carrying the flag is equivalent to no other
+    operand, itself included.
+
+    Two operands are the same effective address only when every one of
+    these matches AND nothing wrote the base or index register in
+    between; equality of this record alone says the expressions agree,
+    not that they evaluate alike. :func:`rip_relative` marks the one
+    expression that cannot agree across two addresses even when it does:
+    ``[rip + disp]`` resolves against the *next* instruction's address,
+    so the same text at two instructions is two addresses."""
+    base: "str | None" = None
+    index: "str | None" = None
+    scale: int = 1
+    displacement: int = 0
+    width: int = 0
+    segment: "str | None" = None
+    reads: bool = False
+    writes: bool = False
+    components_unknown: bool = False
+
+    @property
+    def address_registers(self) -> tuple:
+        """The registers this address expression reads, base then index,
+        each once and only when it has one."""
+        names = []
+        for name in (self.base, self.index):
+            if name and name not in names:
+                names.append(name)
+        return tuple(names)
+
+    @property
+    def rip_relative(self) -> bool:
+        """The address is computed from the instruction pointer."""
+        return register_family(self.base) == "rip"
+
+    @property
+    def access_unknown(self) -> bool:
+        """The binding named this memory operand and reported neither a
+        read nor a write on it.
+
+        An operand that reports no access is not an operand that is left
+        alone: a string instruction's implied destination is the common
+        case -- `insb` names `[rdi]` and capstone reports no access bit
+        for it -- and the instruction writes there every time it runs.
+        The honest reading is "this instruction touches memory here and
+        the direction is not stated", so a consumer that must rule out a
+        write cannot rule this one out."""
+        return not self.reads and not self.writes
+
+
+@dataclass(frozen=True)
 class DecodedInsn:
     """One decoded instruction and its resolved branch operand.
 
     ``address`` is the instruction's own virtual address, ``size`` its
     length in bytes. ``mnemonic`` and ``operands`` are capstone's text,
     each cut to this module's cap with a ``*_truncated`` flag. ``is_call``
-    / ``is_jump`` / ``is_return`` are read from capstone's instruction
-    groups so no consumer repeats the opcode test.
+    / ``is_jump`` / ``is_return`` / ``is_interrupt`` are read from
+    capstone's instruction groups so no consumer repeats the opcode test.
+    ``is_interrupt`` covers `int3`, `int n`, `int1` and `into` as one
+    group rather than as four spellings: each pushes a stack frame it
+    names no operand for, so a consumer tracking memory has to see them,
+    and a list of names would have to stay complete to stay safe.
+
+    ``is_call`` and ``is_jump`` are not exclusive. A relative `call` is
+    in capstone's relative-branch group as well as its call group, so
+    both are True for one: ``is_jump`` answers "this instruction branches
+    to a relative or computed destination", not "this instruction is a
+    `jmp`". A consumer that means the second -- anything deciding whether
+    a backward branch closes a loop, where a backward `call` is recursion
+    instead -- reads ``is_call`` as well.
 
     ``falls_through`` is whether execution continues at the instruction
     after this one: False for a return of any width, for `iret`, for an
@@ -273,13 +475,74 @@ class DecodedInsn:
     register, or None when it has none (an absolute or RIP-relative
     address) or nothing is written.
 
+    ``memory_operands`` is every explicit memory operand as a normalized
+    :class:`MemoryOperand` -- the whole effective-address expression and
+    the access width, which is what proving two accesses reach the same
+    address needs. ``writes_memory`` and ``write_base_register`` are the
+    summary of the same facts and stay for callers that need no more.
+
     ``register_reads`` and ``register_writes`` name the explicit register
     operands this instruction reads and writes, capstone's own access
     bits again, plus the base and index registers of every memory operand
     in ``register_reads`` -- computing an address reads those registers.
-    Each name appears once. ``register_operands`` is the same register
-    operands in the order the instruction names them, repeats kept, so
-    `xor eax, eax` is distinguishable from `xor eax, 1`.
+    Each name appears once. ``data_register_reads`` is the same read set
+    with the address registers left out: the registers whose CONTENTS
+    this instruction consumes, as opposed to the ones it consumes only to
+    reach a memory slot. `mov edx, dword ptr [rbp]` reads `rbp` to form
+    an address and reads no register's contents at all, so its
+    ``data_register_reads`` is empty while its ``register_reads`` names
+    `rbp`. ``register_operands`` is the register operands in the order
+    the instruction names them, repeats kept, so `xor eax, eax` is
+    distinguishable from `xor eax, 1`.
+
+    ``immediates`` is every immediate operand's signed value, in operand
+    order. It is what tells an identity from a transform: `xor edx, 0`
+    and `and edx, 0` have the same shape as `xor edx, 0x41` and leave the
+    register unchanged and constant respectively.
+
+    ``leaves_analysis_context`` is whether control may continue in code
+    this window does not contain before reaching the next instruction: a
+    `call`, an interrupt or `syscall`, a VM entry or exit (`vmcall`,
+    `vmmcall`, `vmlaunch`, `vmresume`, `vmfunc`, `vmrun`, and the rest of
+    capstone's ``vm`` group), and `getsec`.
+    Most of those fall through to their successor and clobber no register
+    capstone reports, so nothing else about them says that a hypervisor,
+    a kernel or an authenticated code module ran in between. A consumer
+    following a value across one of these is following it across code it
+    never saw, which is why this is one fact rather than a test each
+    consumer repeats.
+
+    ``effects_unknown`` is the backstop under all of this: capstone
+    reports no operand, no register write, no clobber and no group for
+    this instruction, and it is not one of the few in
+    :data:`_NO_EFFECT_MNEMONICS` that genuinely do nothing. Reporting
+    nothing is not the same as doing nothing, and the encoding spaces
+    these live in are full of the difference -- `aaa` and `das` change
+    AL, `xlatb` reads memory through `[rbx + al]` and writes AL,
+    `rdpkru` writes EAX and EDX, and every SGX and virtualisation leaf
+    dispatcher selects its behaviour from a register. A consumer that
+    treated "nothing reported" as "nothing happened" would be trusting
+    the decoder's silence, which is what this flag exists to stop.
+
+    ``may_write_memory`` is the conservative answer to "could this
+    instruction have written memory". It is True for ANY explicit memory
+    operand, whatever access capstone claims for it, because that claim
+    is not reliable enough to prove a pure read: capstone reports the
+    memory operands of `movnti`, `cmpxchg16b` and `stmxcsr` as read-only,
+    and every one of those writes. It is also True for a `call`, an
+    interrupt, and the instructions in
+    ``writes_memory_implicitly`` instructions -- those writing memory
+    they name no operand for. A consumer that must rule out a write reads this;
+    one that wants the narrower "capstone reports an explicit written
+    operand" reads ``writes_memory``.
+
+    ``return_address_width`` is how many bytes of return address a `call`
+    pushes, and 0 for everything else. It is the instruction's own
+    operand size, so a `callw` in 32-bit code answers 2 where a plain
+    `call` answers 4 -- the difference between a `pop` that recovers the
+    whole of what was pushed and one that recovers part of it, which is
+    the difference between having the code's own address and having some
+    of its bits.
 
     ``clobbered_registers`` is every register capstone says the
     instruction writes, the ones it names and the ones it does not: the
@@ -299,16 +562,75 @@ class DecodedInsn:
     is_jump: bool
     is_return: bool
     branch_kind: BranchKind
+    is_interrupt: bool = False
     falls_through: bool = True
     direct_target_va: "int | None" = None
     slot_target_va: "int | None" = None
     slot_is_rip_relative: bool = False
     writes_memory: bool = False
     write_base_register: "str | None" = None
+    memory_operands: tuple = ()
     register_reads: tuple = ()
+    data_register_reads: tuple = ()
     register_writes: tuple = ()
     register_operands: tuple = ()
     clobbered_registers: tuple = ()
+    immediates: tuple = ()
+    return_address_width: int = 0
+    leaves_analysis_context: bool = False
+    implicit_clobbers_known: bool = True
+    writes_memory_implicitly: bool = False
+
+    @property
+    def effects_unknown(self) -> bool:
+        """Whether the decoder reported nothing about this instruction
+        and it is not known to be inert.
+
+        Two ways to be unknown, and both are here because reporting
+        something is not the same as reporting everything.
+        ``implicit_clobbers_known`` False is a report that contradicts
+        the architecture -- a `push` that names no stack pointer, an
+        `aam` that names no accumulator -- and a report short in one
+        place is not trustworthy in another. Otherwise it is a report
+        with nothing in it at all, from an instruction not known to be
+        inert.
+
+        The allowlist is deliberately tiny and the rule deliberately
+        wide: an instruction this answers True for ends any analysis that
+        was following state through it, which costs a proof, while the
+        opposite mistake costs the truth of one."""
+        if not self.implicit_clobbers_known:
+            return True
+        if (self.memory_operands or self.register_operands
+                or self.clobbered_registers or self.immediates):
+            return False
+        if (self.is_call or self.is_jump or self.is_return
+                or self.is_interrupt or self.leaves_analysis_context
+                or not self.falls_through):
+            return False
+        return self.mnemonic.lower() not in _NO_EFFECT_MNEMONICS
+
+    @property
+    def may_write_memory(self) -> bool:
+        """Whether this instruction could have written memory.
+
+        Deliberately wider than :attr:`writes_memory`: an operand's
+        claimed access does not prove a pure read, so any memory operand
+        counts. `lea` is the one exception, and not because its report is
+        believed -- capstone describes its operand exactly as it
+        describes `movnti`'s, read-only -- but because the instruction is
+        architecturally guaranteed never to dereference the address it
+        computes. Anything that leaves for code this window does not show
+        counts too -- what a callee, a kernel or a hypervisor wrote is
+        not visible here. The cost is that an unambiguous load answers
+        True as well, which under-reports for a caller ruling writes out
+        -- the direction to be wrong in here."""
+        if self.mnemonic.lower() in _ADDRESS_ONLY_MNEMONICS:
+            return False
+        return bool(self.memory_operands
+                    or self.leaves_analysis_context
+                    or self.effects_unknown
+                    or self.writes_memory_implicitly)
 
 
 @dataclass(frozen=True)
@@ -587,6 +909,74 @@ def _control_flow_stops(capstone) -> "tuple[frozenset, frozenset]":
     return frozenset(ids), frozenset(groups)
 
 
+def _effect_tables(capstone) -> tuple:
+    """``(stack_ids, accumulator_ids, implicit_write_ids)`` resolved once
+    against the loaded binding, so an id it does not define is simply
+    absent rather than an AttributeError."""
+    x86 = capstone.x86
+    tables = []
+    for names in (_STACK_POINTER_INSN_NAMES, _ACCUMULATOR_INSN_NAMES,
+                  _IMPLICIT_MEMORY_WRITE_INSN_NAMES):
+        ids = {getattr(x86, name, None) for name in names}
+        ids.discard(None)
+        tables.append(frozenset(ids))
+    return tuple(tables)
+
+
+def _implicit_clobbers_known(insn, clobbered: tuple, tables: tuple) -> bool:
+    """Whether capstone's register-write report for ``insn`` accounts for
+    the effect its instruction class requires.
+
+    A self-consistency check, not a list of instructions to distrust.
+    Executing a `push` MUST change the stack pointer and an `aam` MUST
+    change the accumulator; when the report names neither, it is short of
+    what the architecture requires and nothing else in it can be relied
+    on either. capstone models most of these fully -- `push rbp` names
+    `rsp`, `leave` names `rbp` and `rsp` -- so the check costs nothing
+    there, and it is exactly the segment-register `push`/`pop`, `enter`
+    and `aam`/`aad` forms that it catches."""
+    stack_ids, accumulator_ids, _writes = tables
+    insn_id = getattr(insn, "id", None)
+    if insn_id is None:
+        return True
+    families = {register_family(name) for name in clobbered}
+    if insn_id in stack_ids and "rsp" not in families:
+        return False
+    if insn_id in accumulator_ids and "rax" not in families:
+        return False
+    return True
+
+
+def _leaves_analysis_context(capstone, mnemonic: str, groups: set) -> bool:
+    """Whether control may continue in code outside this window before
+    reaching the instruction after ``insn``.
+
+    Read from capstone's own groups wherever one names the class
+    precisely: ``call``, ``int`` (which carries `syscall` too), and ``vm``
+    for every VM entry and exit. A group is preferred over a name for the
+    reason every list of names is a liability, and
+    :data:`_CONTEXT_LEAVING_MNEMONICS` carries only what no group names --
+    `getsec`, which enters an authenticated code module, and `enclu`,
+    whose EENTER, ERESUME and EEXIT leaves transfer into and out of an
+    SGX enclave (EAX selects which, and this module does not track EAX,
+    so every `enclu` is read as the transfer).
+
+    capstone's ``privilege`` group is deliberately NOT read here. It is
+    broader than this claim -- `mov es, ecx` is in it, and loading a
+    segment register does not hand control to anyone -- and a group whose
+    membership exceeds the fact being stated is not a mechanical basis
+    for stating it. What a privileged instruction can still do to an
+    address is handled where it belongs: a segment selector through the
+    address-version set, and a segment base through
+    `insn_flow._SEGMENT_BASE_WRITES`."""
+    x86 = capstone.x86
+    for name in ("X86_GRP_CALL", "X86_GRP_INT", "X86_GRP_VM"):
+        group = getattr(x86, name, None)
+        if group is not None and group in groups:
+            return True
+    return mnemonic.lower() in _CONTEXT_LEAVING_MNEMONICS
+
+
 def _falls_through(insn, groups, stops) -> bool:
     """Whether execution continues at the instruction after ``insn``,
     against the ``stops`` :func:`_control_flow_stops` resolved."""
@@ -608,22 +998,90 @@ def _register_name(insn, reg) -> "str | None":
     return name.lower() if isinstance(name, str) and name else None
 
 
-def _operand_facts(capstone, insn) -> "tuple[bool, str | None, tuple, tuple, tuple]":
-    """``(writes_memory, write_base_register, register_reads,
-    register_writes, register_operands)`` for one instruction, from
-    capstone's own per-operand access bits.
+@dataclass(frozen=True)
+class _OperandFacts:
+    """What one instruction's explicit operands say, before the record is
+    built. A container rather than a tuple because there are now more of
+    these than a positional result can be read at a glance."""
+    writes_memory: bool = False
+    write_base_register: "str | None" = None
+    memory_operands: tuple = ()
+    register_reads: tuple = ()
+    data_register_reads: tuple = ()
+    register_writes: tuple = ()
+    register_operands: tuple = ()
+    immediates: tuple = ()
+    immediate_width: int = 0
+
+
+def _memory_operand(capstone, insn, op) -> MemoryOperand:
+    """One capstone memory operand as a :class:`MemoryOperand`.
+
+    A scale the binding reports as 0 -- which an operand with no index
+    does -- is normalized to 1, so the expression reads as the identity
+    it is rather than as a multiplication by nothing, and an operand that
+    names no base or index register carries None for it. Those are the
+    absences the expression itself states.
+
+    Everything else is a component the binding named and this record
+    cannot represent: a register id it would not name, a displacement
+    that is not an integer, a scale on a real index that is not a
+    positive one. The field then falls back to its default and
+    ``components_unknown`` is set, because a default is indistinguishable
+    from a real `[base + 0]` and an unknown component must never be read
+    as agreement with one."""
+    read_bit = getattr(capstone, "CS_AC_READ", 0)
+    write_bit = getattr(capstone, "CS_AC_WRITE", 0)
+    access = getattr(op, "access", 0)
+    mem = op.mem
+    base_id = getattr(mem, "base", 0)
+    index_id = getattr(mem, "index", 0)
+    segment_id = getattr(mem, "segment", 0)
+    base = _register_name(insn, base_id)
+    index = _register_name(insn, index_id)
+    segment = _register_name(insn, segment_id)
+    scale = getattr(mem, "scale", 1)
+    disp = getattr(mem, "disp", 0)
+    size = getattr(op, "size", 0)
+    unknown = ((bool(base_id) and base is None)
+               or (bool(index_id) and index is None)
+               or (bool(segment_id) and segment is None)
+               or not isinstance(disp, int)
+               or (index is not None
+                   and not (isinstance(scale, int) and scale > 0)))
+    return MemoryOperand(
+        base=base, index=index,
+        scale=(scale if isinstance(scale, int) and scale > 0 and index else 1),
+        displacement=(disp if isinstance(disp, int) else 0),
+        width=(size if isinstance(size, int) and size > 0 else 0),
+        segment=segment,
+        reads=bool(read_bit and (access & read_bit)),
+        writes=bool(write_bit and (access & write_bit)),
+        components_unknown=unknown)
+
+
+def _operand_facts(capstone, insn) -> _OperandFacts:
+    """One instruction's explicit operands, from capstone's own
+    per-operand access bits.
 
     An operand that reports no access contributes nothing, so an unknown
     is never an assertion that a store or a register write happened. A
     memory operand's base and index are register READS whatever the
     operand's own access is: computing the address reads them, and
-    writing through `[rax]` does not write `rax`."""
+    writing through `[rax]` does not write `rax`. Those same registers
+    are kept OUT of ``data_register_reads``, which names only the
+    registers whose contents the instruction consumes -- the distinction
+    between a register that reaches a value and a register that is one.
+    A register that is both, as in `add rax, qword ptr [rax]`, is in
+    both."""
     x86 = capstone.x86
     read_bit = getattr(capstone, "CS_AC_READ", 0)
     write_bit = getattr(capstone, "CS_AC_WRITE", 0)
     writes_memory = False
     write_base = None
-    reads, writes, named = [], [], []
+    immediate_width = 0
+    reads, data_reads, writes, named = [], [], [], []
+    memory, immediates = [], []
     for op in (getattr(insn, "operands", ()) or ()):
         access = getattr(op, "access", 0)
         if op.type == x86.X86_OP_REG:
@@ -631,23 +1089,38 @@ def _operand_facts(capstone, insn) -> "tuple[bool, str | None, tuple, tuple, tup
             if name is None:
                 continue
             named.append(name)
-            if read_bit and (access & read_bit) and name not in reads:
-                reads.append(name)
+            if read_bit and (access & read_bit):
+                if name not in reads:
+                    reads.append(name)
+                if name not in data_reads:
+                    data_reads.append(name)
             if write_bit and (access & write_bit) and name not in writes:
                 writes.append(name)
+        elif op.type == x86.X86_OP_IMM:
+            value = getattr(op, "imm", None)
+            immediates.append(value if isinstance(value, int) else 0)
+            size = getattr(op, "size", 0)
+            if immediate_width == 0 and isinstance(size, int) and size > 0:
+                immediate_width = size
         elif op.type == x86.X86_OP_MEM:
-            base = _register_name(insn, op.mem.base)
-            index = _register_name(insn, op.mem.index)
-            for name in (base, index):
-                if name is not None and name not in reads:
+            operand = _memory_operand(capstone, insn, op)
+            memory.append(operand)
+            for name in operand.address_registers:
+                if name not in reads:
                     reads.append(name)
-            if write_bit and (access & write_bit):
+            if operand.writes:
                 writes_memory = True
                 if write_base is None:
-                    write_base = base
-    return (writes_memory, write_base,
-            tuple(reads[:MAX_REGISTER_OPERANDS]), tuple(writes[:MAX_REGISTER_OPERANDS]),
-            tuple(named[:MAX_REGISTER_OPERANDS]))
+                    write_base = operand.base
+    return _OperandFacts(
+        writes_memory=writes_memory, write_base_register=write_base,
+        memory_operands=tuple(memory[:MAX_MEMORY_OPERANDS]),
+        register_reads=tuple(reads[:MAX_REGISTER_OPERANDS]),
+        data_register_reads=tuple(data_reads[:MAX_REGISTER_OPERANDS]),
+        register_writes=tuple(writes[:MAX_REGISTER_OPERANDS]),
+        register_operands=tuple(named[:MAX_REGISTER_OPERANDS]),
+        immediates=tuple(immediates[:MAX_IMMEDIATES]),
+        immediate_width=immediate_width)
 
 
 def _clobbered_registers(insn, explicit_writes: tuple) -> tuple:
@@ -739,13 +1212,13 @@ def decode_window(*, code: bytes, base_va: int, architecture: str,
         md = capstone.Cs(*mode)
         md.detail = True
         stops = _control_flow_stops(capstone)
+        effects = _effect_tables(capstone)
         for insn in md.disasm(window, base_va):
             if len(instructions) >= max_insns:
                 stopped = _StopReason.INSN_CAP
                 break
             kind, direct, slot, rip_rel = _classify_branch(capstone, insn, address_mask)
-            (writes_memory, write_base, reg_reads, reg_writes,
-             reg_operands) = _operand_facts(capstone, insn)
+            facts = _operand_facts(capstone, insn)
             groups = set(getattr(insn, "groups", ()) or ())
             mnemonic, mn_cut = _bounded(insn.mnemonic or "", MAX_MNEMONIC_CHARS)
             operands, op_cut = _bounded(insn.op_str or "", MAX_OPERANDS_CHARS)
@@ -757,13 +1230,30 @@ def decode_window(*, code: bytes, base_va: int, architecture: str,
                 is_jump=(capstone.x86.X86_GRP_JUMP in groups
                          or capstone.x86.X86_GRP_BRANCH_RELATIVE in groups),
                 is_return=capstone.x86.X86_GRP_RET in groups,
+                is_interrupt=getattr(capstone.x86, "X86_GRP_INT", None) in groups,
                 falls_through=_falls_through(insn, groups, stops),
                 branch_kind=kind, direct_target_va=direct,
                 slot_target_va=slot, slot_is_rip_relative=rip_rel,
-                writes_memory=writes_memory, write_base_register=write_base,
-                register_reads=reg_reads, register_writes=reg_writes,
-                register_operands=reg_operands,
-                clobbered_registers=_clobbered_registers(insn, reg_writes)))
+                writes_memory=facts.writes_memory,
+                write_base_register=facts.write_base_register,
+                memory_operands=facts.memory_operands,
+                register_reads=facts.register_reads,
+                data_register_reads=facts.data_register_reads,
+                register_writes=facts.register_writes,
+                register_operands=facts.register_operands,
+                clobbered_registers=_clobbered_registers(
+                    insn, facts.register_writes),
+                immediates=facts.immediates,
+                return_address_width=(
+                    facts.immediate_width
+                    if capstone.x86.X86_GRP_CALL in groups else 0),
+                leaves_analysis_context=_leaves_analysis_context(
+                    capstone, insn.mnemonic or "", groups),
+                implicit_clobbers_known=_implicit_clobbers_known(
+                    insn, _clobbered_registers(insn, facts.register_writes),
+                    effects),
+                writes_memory_implicitly=(
+                    getattr(insn, "id", None) in effects[2])))
             bytes_decoded = (insn.address - base_va) + insn.size
         else:
             remaining = len(window) - bytes_decoded
