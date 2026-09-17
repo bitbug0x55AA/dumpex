@@ -39,7 +39,7 @@ from dumpex.core.memory import (
     addr_to_module, clamped_reader, get_modules, get_thread_contexts,
     handle_stream_evidence, has_stream_directory, read_region_spanning, stream_failure,
 )
-from dumpex.core.pe_correlation import ModuleListImage, ObservationState, correlate_main_image
+from dumpex.core.pe_correlation import ModuleListImage, correlate_main_image
 from dumpex.core.pe_profile import (
     PE_HEADER_READ_MAX, ComponentState, PeStage, SourceKind, collect_pe_image_profile,
 )
@@ -64,7 +64,7 @@ from dumpex.output.records import (
     ReportExceptionEntry, ReportHandleCorrelation, ReportHandleSummary,
     ReportHandleTypeCount, ReportIatCorrelatedEntry, ReportIatCorrelation,
     ReportInstructionContext, ReportInstructionLead, ReportNeighborRegion,
-    ReportPeContext, ReportPeObservation,
+    ReportPeContext, PeObservationRecord,
     ReportProcessEnrichment, ReportStringContext, ReportStringContextEntry,
     ReportTokenCapability, StreamParserState, hex_address,
 )
@@ -1182,12 +1182,6 @@ _IMPORT_DIRECTORY_INDEX = 1
 _IAT_DIRECTORY_INDEX = 12
 _BASERELOC_DIRECTORY_INDEX = 5
 
-_PE_OBS_STATE_WIRE = {
-    ObservationState.CONSISTENT: "consistent",
-    ObservationState.CONFLICT:   "conflict",
-    ObservationState.UNAVAILABLE: "unavailable",
-}
-
 
 class PeProfileCache:
     """The PE evidence a `--report` invocation reads once and shares.
@@ -1412,7 +1406,8 @@ def collect_pe_context(pe_cache: PeProfileCache) -> ReportPeContext:
             machine=None, machine_name=None, time_date_stamp=None, size_of_image=None,
             entry_point_rva=None, entry_point_va=None, section_count=None,
             pe32_plus=None, module_match=None,
-            consistent_count=0, conflict_count=0, unavailable_count=0)
+            consistent_count=0, conflict_count=0, unavailable_count=0,
+            not_applicable_count=0)
 
     correlation = pe_cache.main_correlation()
     limitations = []
@@ -1428,7 +1423,7 @@ def collect_pe_context(pe_cache: PeProfileCache) -> ReportPeContext:
     conflicts = correlation.conflicts() if correlation is not None else ()
     kept = conflicts[:MAX_PE_CONFLICTS]
     observations = tuple(
-        ReportPeObservation(
+        PeObservationRecord(
             name=observation.name, state="conflict", reason=observation.reason,
             sources=tuple(observation.sources),
             operands={key: value for key, value in observation.operands.items()})
@@ -1437,6 +1432,7 @@ def collect_pe_context(pe_cache: PeProfileCache) -> ReportPeContext:
     consistent_count = coverage.consistent if coverage is not None else 0
     conflict_count = coverage.conflict if coverage is not None else 0
     unavailable_count = coverage.unavailable if coverage is not None else 0
+    not_applicable_count = coverage.not_applicable if coverage is not None else 0
 
     if correlation is None:
         limitations.append(
@@ -1470,6 +1466,7 @@ def collect_pe_context(pe_cache: PeProfileCache) -> ReportPeContext:
         section_count=profile.number_of_sections, pe32_plus=profile.is_pe32_plus,
         module_match=module_match, consistent_count=consistent_count,
         conflict_count=conflict_count, unavailable_count=unavailable_count,
+        not_applicable_count=not_applicable_count,
         observations=observations)
 
 

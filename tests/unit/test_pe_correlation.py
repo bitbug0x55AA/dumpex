@@ -21,8 +21,8 @@ from dumpex.core.va_range import (
     CapturedEnumeration, CapturedRegion, CapturedSegment, VirtualRange,
 )
 from dumpex.core.pe_correlation import (
-    MAX_DISTINCT_PROTECTIONS, ModuleListImage, ObservationState,
-    correlate_main_image,
+    MAX_DISTINCT_PROTECTIONS, NOT_APPLICABLE_REASONS, ModuleListImage, Observation,
+    ObservationState, correlate_main_image,
 )
 
 PREFERRED = 0x140000000
@@ -247,7 +247,7 @@ def test_a_zero_delta_is_consistent_on_the_delta_alone():
     (0x014c, MAGIC_PE32, ObservationState.CONSISTENT),
     (0x014c, MAGIC_PE32_PLUS, ObservationState.CONFLICT),
     (0x0ebc, MAGIC_PE32, ObservationState.CONSISTENT),      # unconstrained, width known
-    (0x5045, MAGIC_PE32_PLUS, ObservationState.UNAVAILABLE),  # a value with no name
+    (0x5045, MAGIC_PE32_PLUS, ObservationState.NOT_APPLICABLE),  # a value with no name
 ])
 def test_machine_vs_format(machine, magic, expected):
     kwargs = dict(machine=machine, magic=magic)
@@ -258,10 +258,14 @@ def test_machine_vs_format(machine, magic, expected):
     assert observation.state is expected
 
 
-def test_an_unnamed_machine_is_unavailable_not_a_conflict():
+def test_an_unnamed_machine_is_not_applicable_not_a_conflict():
+    """Both operands are established and §8.4 fixes no width for this
+    ``Machine``: there is no expectation to compare the format against,
+    which is a comparison with no subject rather than a gap in the
+    dump."""
     observation = correlate_main_image(
         profile_at(BASE, machine=0x5045)).machine_vs_format
-    assert observation.state is ObservationState.UNAVAILABLE
+    assert observation.state is ObservationState.NOT_APPLICABLE
     assert observation.reason == "machine_has_no_width"
 
 
@@ -563,15 +567,18 @@ def test_the_security_directory_gets_no_memory_bounds_or_capture_claim():
     profile = profile_at(BASE, directories=((0, 0),) * 4 + ((0x99999, 0x200),))
     security = correlate_main_image(profile, **whole_image_evidence(BASE)).directories[4]
     assert security.value_kind == "file_offset"
-    assert security.image_bound.state is ObservationState.UNAVAILABLE
+    assert security.image_bound.state is ObservationState.NOT_APPLICABLE
     assert security.image_bound.reason == "file_offset_semantics"
     assert security.containing_section_index is None
     assert security.capture_state is None
 
 
 def test_a_declared_absent_directory_makes_no_bounds_claim():
+    """The image's own declaration settles that there is nothing at this
+    index to bound, so the check does not apply. It is not evidence the
+    dump failed to carry."""
     observation = correlate_main_image(profile_at(BASE)).directories[7].image_bound
-    assert observation.state is ObservationState.UNAVAILABLE
+    assert observation.state is ObservationState.NOT_APPLICABLE
     assert observation.reason == "directory_declared_absent"
 
 
@@ -600,7 +607,7 @@ def test_a_zero_header_checksum_is_not_compared():
     module = ModuleListImage(base_address=base, check_sum=0x1234)
     observation = correlate_main_image(profile_at(base, checksum=0),
                                        module_list_image=module).identity[1]
-    assert observation.state is ObservationState.UNAVAILABLE
+    assert observation.state is ObservationState.NOT_APPLICABLE
     assert observation.reason == "header_checksum_absent"
 
 
@@ -626,9 +633,40 @@ def test_a_wow64_image_correlates_without_a_machine_conflict():
 def test_coverage_is_a_plain_tally_not_a_status():
     result = correlate_main_image(profile_at(BASE), **whole_image_evidence(BASE))
     coverage = result.coverage
-    assert coverage.total == coverage.consistent + coverage.conflict + coverage.unavailable
+    assert coverage.total == (coverage.consistent + coverage.conflict
+                              + coverage.unavailable + coverage.not_applicable)
     assert coverage.evaluated == coverage.consistent + coverage.conflict
     assert not hasattr(coverage, "status")
+
+
+def test_the_two_withheld_answers_are_counted_apart():
+    """A whole image declares most of its sixteen directories absent and
+    carries no second source for its architecture. Only the second is a
+    gap in the evidence, and the tally says so rather than reporting an
+    ordinary PE layout as fourteen unexamined checks."""
+    result = correlate_main_image(profile_at(BASE), **whole_image_evidence(BASE))
+    coverage = result.coverage
+
+    assert coverage.not_applicable > coverage.unavailable
+    unavailable = [o for o in result.all_observations()
+                   if o.state is ObservationState.UNAVAILABLE]
+    assert {o.reason for o in unavailable} == {"machine_no_independent_source"}
+    not_applicable = [o for o in result.all_observations()
+                      if o.state is ObservationState.NOT_APPLICABLE]
+    assert {o.reason for o in not_applicable} <= NOT_APPLICABLE_REASONS
+    assert len(unavailable) == coverage.unavailable
+    assert len(not_applicable) == coverage.not_applicable
+
+
+def test_a_reason_and_its_kind_of_no_answer_cannot_be_swapped():
+    """The reason token is what says which of the two withheld answers an
+    observation carries, so the pair is fixed rather than set twice."""
+    with pytest.raises(ValueError, match="not_applicable"):
+        Observation(name="identity_check_sum", state=ObservationState.UNAVAILABLE,
+                    reason="header_checksum_absent")
+    with pytest.raises(ValueError, match="not_applicable"):
+        Observation(name="identity_time_date_stamp",
+                    state=ObservationState.NOT_APPLICABLE, reason="no_second_source")
 
 
 def test_a_disk_reference_profile_cannot_be_correlated():

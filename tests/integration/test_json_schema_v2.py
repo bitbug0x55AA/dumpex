@@ -518,6 +518,50 @@ def test_process_empty_dump_still_returns_one_all_null_record_and_validates(vali
     assert "peb_extended" not in record
 
 
+def test_process_pe_image_with_a_whole_profile_validates(validator):
+    # v2.19's pe_image against a real collect_process() run over a whole
+    # synthetic image: the decoded section table, all sixteen descriptors,
+    # the acquisition provenance, and every observation in all three
+    # states -- the complete record, not a hand-shaped stand-in.
+    from tests.unit.test_process_pe_image import DATA, _dump, _image
+    from tests.unit.test_pe_profile import TEXT
+
+    result = collect_process(_dump(image=_image(sections=(TEXT, DATA))))
+    doc = _validate(validator, result)
+    pe_image = doc["result"]["data"]["records"][0]["pe_image"]
+    assert pe_image["collected"] is True
+    assert pe_image["unavailable_reason"] is None
+    assert len(pe_image["directories"]) == 16
+    assert [s["name"] for s in pe_image["sections"]] == [".text", ".data"]
+    assert pe_image["acquisition"]["requested_stage"] == "sections"
+    assert len(pe_image["observations"]) == pe_image["observation_coverage"]["total"]
+    states = {o["state"] for o in pe_image["observations"]}
+    assert states <= {"consistent", "conflict", "unavailable", "not_applicable"}
+    # A real run carries both kinds of withheld answer, so this document
+    # validates the new state end to end rather than only permitting it:
+    # the image declares most of its directories absent, and the dump
+    # carries no second source for its architecture.
+    assert {"unavailable", "not_applicable"} <= states
+    tally = pe_image["observation_coverage"]
+    for state in ("consistent", "conflict", "unavailable", "not_applicable"):
+        assert tally[state] == sum(
+            1 for o in pe_image["observations"] if o["state"] == state)
+    assert tally["not_applicable"] > 0
+
+
+def test_process_pe_image_uncollected_profile_validates(validator):
+    # The other half of the same required object: a run with no image base
+    # emits it with every fact null and every array empty, so a consumer
+    # can tell "no profile" from "older producer".
+    result = collect_process(FakeMF())
+    doc = _validate(validator, result)
+    pe_image = doc["result"]["data"]["records"][0]["pe_image"]
+    assert pe_image["collected"] is False
+    assert pe_image["unavailable_reason"] == "no_image_base"
+    assert pe_image["directories"] == [] and pe_image["observations"] == []
+    assert pe_image["acquisition"] is None
+
+
 def test_process_peb_module_base_conflict_diagnostic_validates(validator):
     # Exercises identity_evidence.diagnostics[] (processDiagnosticRecord)
     # with a real PROCESS_MODULE_BASE_CONFLICT entry -- the PEB and module
@@ -700,7 +744,35 @@ def _minimal_process_record():
                                   "name": None, "path": None, "name_matched_candidate": None,
                                   "name_matched_candidate_ambiguous": False},
                 "main_image_pe": {"checked": False, "valid": None, "reason": None},
-                "selected_path_source": None, "diagnostics": []}}
+                "selected_path_source": None, "diagnostics": []},
+            "pe_image": _uncollected_pe_image()}
+
+
+def _uncollected_pe_image():
+    """v2.19's `pe_image` for a run that profiled nothing: the object is
+    always there, and the absence is stated once in `unavailable_reason`."""
+    return {"collected": False, "correlated": False, "unavailable_reason": "no_image_base",
+            "source_kind": None,
+            "module_identity": {"value": None, "form": None, "truncated": False},
+            "actual_base": None, "preferred_image_base": None, "format": None,
+            "machine": None, "machine_name": None, "time_date_stamp": None, "checksum": None,
+            "subsystem": None, "dll_characteristics": None, "coff_characteristics": None,
+            "size_of_image": None, "size_of_headers": None, "section_alignment": None,
+            "file_alignment": None, "declared_section_count": None,
+            "decoded_section_count": 0, "structural_state": None,
+            "relocation": {"delta": None, "relocs_stripped": None, "dynamic_base": None,
+                            "basereloc_present": None, "basereloc_descriptor_state": None},
+            "entry_point": {"rva": None, "va": None, "va_overflow": False,
+                             "section_index": None, "section_name": None,
+                             "capture_state": None, "region_state": None,
+                             "region_type": None, "region_protection": None},
+            "acquisition": None,
+            "directory_summary": {"declared_count": None, "declared_count_raw": None,
+                                   "readable_count": None, "unprojected_count": None},
+            "module_match": None,
+            "observation_coverage": {"total": 0, "consistent": 0, "conflict": 0,
+                                      "unavailable": 0, "not_applicable": 0},
+            "sections": [], "directories": [], "observations": []}
 
 
 def _minimal_handle_record():
@@ -3085,7 +3157,7 @@ def test_pe_context_fragment_valid_with_a_conflict_passes(pe_context_schema):
         "size_of_image": 0x4000, "entry_point_rva": 0x1000,
         "entry_point_va": "0x0000000140001000", "section_count": 2, "pe32_plus": True,
         "module_match": "resolved", "consistent_count": 5, "conflict_count": 1,
-        "unavailable_count": 2,
+        "unavailable_count": 2, "not_applicable_count": 3,
         "observations": [{"name": "size_vs_modulelist", "state": "conflict",
                           "reason": "size_contradicts_modulelist",
                           "sources": ["profile.optional_header", "module_list"],
@@ -3100,7 +3172,7 @@ def test_pe_context_fragment_rejects_an_unknown_observation_state(pe_context_sch
         "machine_name": None, "time_date_stamp": None, "size_of_image": None,
         "entry_point_rva": None, "entry_point_va": None, "section_count": None,
         "pe32_plus": None, "module_match": None, "consistent_count": 0,
-        "conflict_count": 0, "unavailable_count": 0,
+        "conflict_count": 0, "unavailable_count": 0, "not_applicable_count": 0,
         "observations": [{"name": "x", "state": "suspicious", "reason": "y",
                           "sources": [], "operands": {}}]}
     assert not pe_context_schema.is_valid(doc)

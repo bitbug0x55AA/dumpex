@@ -506,13 +506,25 @@ def build_pe_header(sections, machine=0x8664, timestamp=0x12345678,
     accept it. `sections` is a list of dicts:
       {"name": bytes, "vaddr": int, "vsize": int, "rawptr": int,
        "rawsize": int, "chars": int}
+
+    The bytes this returns are an input to several golden fixtures,
+    including tests/fixtures/hunt_cli_golden/. Any change to the header
+    layout below moves those goldens — a decoded size, a sha256, an
+    entropy figure — without any analyzer having changed behaviour.
+    Regenerate them with scripts/update_hunt_cli_goldens.py and say so in
+    the commit message, so the diff is not read as detection drift.
     """
     e_lfanew = 0x80
     dos = bytearray(e_lfanew)
     dos[0:2] = b'MZ'
     struct.pack_into('<I', dos, 0x3C, e_lfanew)
     buf = bytearray(dos) + b'PE\x00\x00'
-    opt_hdr_size = 224
+    # A PE32+ optional header is its 112-byte fixed portion plus the
+    # sixteen 8-byte data-directory descriptors. Declaring a shorter one
+    # would put the section table on top of the directory array, so a
+    # caller patching directories in place would be overwriting the
+    # sections this builder just wrote.
+    opt_hdr_size = 112 + 16 * 8
     buf += struct.pack('<HHIIIHH', machine, len(sections), timestamp, 0, 0, opt_hdr_size, 0x0102)
     opt = bytearray(opt_hdr_size)
     struct.pack_into('<H', opt, 0, 0x20b)              # PE32+ magic

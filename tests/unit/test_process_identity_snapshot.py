@@ -793,7 +793,8 @@ def test_main_image_pe_claim_is_hashable():
     # dataclasses only" boundary and remains hashable.
     facts = MainImagePeFacts(data_directories=((0, 0),), declared_directory_count=1,
                               is_pe32_plus=True, insufficient_data=False)
-    hash(MainImagePeClaim(checked=True, valid=True, reason=None, captured_bytes=928, pe_facts=facts))
+    hash(MainImagePeClaim(checked=True, valid=True, reason=None, captured_bytes=4,
+                          pe_facts=facts, header_bytes=b"MZ" + bytes(2)))
     hash(MainImagePeClaim(checked=False, valid=None, reason=None))
 
 

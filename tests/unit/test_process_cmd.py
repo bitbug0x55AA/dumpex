@@ -1464,7 +1464,8 @@ def _identity_evidence(*, peb_path=r"C:\Samples\malware.exe", peb_name="malware.
 
 
 def _process_record(*, entries=(), identity_evidence=None, peb_extended=None,
-                    process_path=r"C:\Samples\malware.exe", process_name="malware.exe"):
+                    process_path=r"C:\Samples\malware.exe", process_name="malware.exe",
+                    pe_image=None):
     iat = records_module.IatRecord(
         table_present=bool(entries),
         table_va="0x00007ff600021000" if entries else None,
@@ -1480,6 +1481,7 @@ def _process_record(*, entries=(), identity_evidence=None, peb_extended=None,
         process_start_utc="2026-08-14 01:15:05 UTC",
         image_base_address="0x00007ff600010000", iat=iat,
         identity_evidence=identity_evidence or _identity_evidence(),
+        pe_image=pe_image or records_module.ProcessPeRecord.uncollected("no_image_base"),
         peb_extended=peb_extended)
 
 
@@ -1796,8 +1798,8 @@ def test_identity_block_reports_unavailable_checks_as_unavailable():
     result = collect_process(mf, verbose=True)
     out = _rendered(result, verbose=True)
 
-    assert "[--] PEB image base could not be compared with ModuleList" in out
-    assert "[--] PEB and ModuleList process names could not be compared" in out
+    assert "[??] PEB image base could not be compared with ModuleList" in out
+    assert "[??] PEB and ModuleList process names could not be compared" in out
     assert "PEB and ModuleList process names agree" not in out
 
 
@@ -1840,7 +1842,7 @@ def test_identity_block_reports_an_unchecked_pe_header_as_unavailable():
                               match_state="resolved",
                               main_image_pe={"checked": False, "valid": None, "reason": None})
     out = _rendered_record(record, verbose=True)
-    assert "[--] the PEB image base was not checked for a PE header" in out
+    assert "[??] the PEB image base was not checked for a PE header" in out
 
 
 # ── #98: every dump-derived verbose string is console-escaped ───────────

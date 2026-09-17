@@ -406,6 +406,30 @@ def test_report_console_renders_the_new_sections(monkeypatch, capsys, verbose):
         assert "GetProcAddress" in out
 
 
+def test_the_correlation_line_reproduces_every_count_the_record_carries(monkeypatch, capsys):
+    """`--process` and `--report` publish the same PE meanings, so a
+    count that reaches one record and not the other surface is a drift
+    between them -- including the two withheld answers, which are
+    separate facts and must not be summed into one number here either."""
+    mf = _pe_mf()
+    monkeypatch.setattr(
+        report_mod, "read_region",
+        mem_reader({PE_ENTRY_VA: b"\xff\x15\xfa\x0f\x00\x00\xc3"}))
+    result = collect_report(mf, report_addr=hex(PE_ENTRY_VA))
+    report_mod.render_report_console(
+        result.records, result.coverage, result.diagnostics, result.artifacts,
+        result.summary, mf, min_len=6, verbose=True)
+
+    pe_context = result.summary["pe_context"]
+    assert pe_context["not_applicable_count"] > 0, "the fixture exercises no such check"
+    line = next(l for l in capsys.readouterr().out.splitlines() if "Correlation" in l)
+    for count, label in ((pe_context["consistent_count"], "consistent"),
+                         (pe_context["conflict_count"], "conflict"),
+                         (pe_context["unavailable_count"], "unavailable"),
+                         (pe_context["not_applicable_count"], "not applicable")):
+        assert f"{count} {label}" in line
+
+
 # ── review follow-ups ────────────────────────────────────────────────
 
 import types  # noqa: E402

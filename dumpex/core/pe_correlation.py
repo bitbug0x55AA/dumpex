@@ -6,13 +6,14 @@ What this module is
 -------------------
 It is the **derived observation** tier of
 ``docs/developer/pe_image_profile_contract.md`` §1.1: it compares two
-already-established facts and reports ``consistent``, ``conflict``, or
-``unavailable`` over them, and nothing else. It never scores, never
-assigns a confidence, never emits a hunter :class:`Finding`, and never
-re-reads a byte of PE or memory -- every value it uses is one the profile
-already decoded or one the caller already reduced from ``mf``.
+already-established facts and reports ``consistent``, ``conflict``,
+``unavailable``, or ``not_applicable`` over them, and nothing else. It
+never scores, never assigns a confidence, never emits a hunter
+:class:`Finding`, and never re-reads a byte of PE or memory -- every value
+it uses is one the profile already decoded or one the caller already
+reduced from ``mf``.
 
-Two rules from the contract bind every observation here:
+Three rules from the contract bind every observation here:
 
 - §8.3's three-valued rule. When the established facts determine an
   observation's predicate the result is ``conflict`` (true) or
@@ -22,6 +23,10 @@ Two rules from the contract bind every observation here:
   gap, never a ``conflict``. A missing ModuleList entry, a missing
   MemoryInfo region, and an unwritten page each yield ``unavailable``,
   never a PE defect.
+- §8.1's separation of the two no-answers. A comparison an established
+  fact leaves no subject for -- a directory the header declares absent,
+  the Security directory's file offset -- is ``not_applicable``, never
+  ``unavailable``: the dump is not missing anything there.
 
 The frozen five and the correlation layer
 -----------------------------------------
@@ -64,6 +69,7 @@ __all__ = [
     "EntryPointContext",
     "CorrelationCoverage",
     "MainImageCorrelation",
+    "NOT_APPLICABLE_REASONS",
     "correlate_main_image",
     "section_interval",
     "OBSERVATION_NAMES",
@@ -75,9 +81,9 @@ _ADDRESS_SPACE = 1 << 64
 # COFF ``Machine`` to the optional-header format it fixes (§8.4). ``EBC``
 # (``0x0ebc``) is deliberately absent: EFI Byte Code images ship in both
 # widths, so a width guess here would manufacture a conflict for a
-# legitimate image. A value absent from the table -- ``EBC`` or a
-# ``Machine`` the profile has no name for -- leaves the observation
-# ``unavailable``, never ``conflict``.
+# legitimate image. A ``Machine`` this table names no width for fixes no
+# expectation to compare against, so the observation is
+# ``not_applicable``, never ``conflict``.
 _MACHINE_FORMAT = MappingProxyType({
     0x014c: False,   # I386   -> PE32
     0x01c0: False,   # ARM    -> PE32
@@ -198,13 +204,33 @@ _REASONS = frozenset({
 })
 
 
+#: The reasons that say the comparison does not apply to this image
+#: (§8.1). Each one is an **established** fact of the image or of this
+#: contract -- a directory the header declares absent, the Security
+#: directory's file-offset semantics (§2.5), a zero ``CheckSum``, a
+#: ``Machine`` §8.4 fixes no width for. None of them is a gap in the
+#: dump, so none of them may be counted as one.
+NOT_APPLICABLE_REASONS = frozenset({
+    "machine_has_no_width",
+    "header_checksum_absent",
+    "directory_declared_absent",
+    "file_offset_semantics",
+})
+
+
 class ObservationState(str, Enum):
-    """The three values every observation carries (§8.1). Never
+    """The four values every observation carries (§8.1). Never
     ``trusted``, ``clean``, ``malicious``, ``suspicious``, a score, or a
-    confidence (§8.2): structural agreement is not integrity."""
+    confidence (§8.2): structural agreement is not integrity.
+
+    ``UNAVAILABLE`` and ``NOT_APPLICABLE`` are both "no answer", and they
+    are never merged: the first is evidence the dump does not carry, the
+    second is a comparison this image gives no subject. Counting the
+    second as the first overstates the gap in the evidence."""
     CONSISTENT = "consistent"
     CONFLICT = "conflict"
     UNAVAILABLE = "unavailable"
+    NOT_APPLICABLE = "not_applicable"
 
 
 @dataclass(frozen=True)
@@ -233,6 +259,17 @@ class Observation:
                 f"Observation.state must be an ObservationState, got {self.state!r}")
         if self.reason not in _REASONS:
             raise ValueError(f"unknown observation reason: {self.reason!r}")
+        # One reason, one kind of no-answer. A reason from
+        # NOT_APPLICABLE_REASONS states that the comparison has no
+        # subject, and a reason outside it never does, so the two can
+        # neither be swapped nor be reported under one count.
+        in_set = self.reason in NOT_APPLICABLE_REASONS
+        if in_set != (self.state is ObservationState.NOT_APPLICABLE):
+            raise ValueError(
+                f"observation reason {self.reason!r} is "
+                f"{'' if in_set else 'not '}a not-applicable reason and must "
+                f"{'' if in_set else 'not '}carry state 'not_applicable', "
+                f"got {self.state.value!r}")
         object.__setattr__(self, "sources", tuple(self.sources))
         for token in self.sources:
             if not isinstance(token, str) or not token:
@@ -411,10 +448,12 @@ class DirectoryCorrelation:
 
     ``image_bound`` asks whether ``[value, value + size)`` stays inside
     ``[0, SizeOfImage)``. Index 4 (Security) is a file offset, not an RVA
-    (§2.5): its ``image_bound`` is ``unavailable`` with reason
+    (§2.5): its ``image_bound`` is ``not_applicable`` with reason
     ``file_offset_semantics``, its ``containing_section_index`` is
     ``None``, and it carries no capture claim -- the certificate bytes are
-    not part of the image mapping.
+    not part of the image mapping. A directory the header declares absent
+    is ``not_applicable`` for the same reason: the image states there is
+    nothing at that index to bound.
     """
     index: int
     name: str
@@ -458,22 +497,27 @@ class EntryPointContext:
 
 @dataclass(frozen=True)
 class CorrelationCoverage:
-    """A plain tally of the observations this correlation produced.
+    """A plain tally of the observations this correlation produced, one
+    count per :class:`ObservationState`.
 
     It is **not** a coverage status and it is **not** a
     ``PROCESS_MAIN_IMAGE_*`` limitation. It changes no exit code and no
     legacy ``--process`` field coverage. Until a public cutover contract
     adopts it, it is a diagnostic count and nothing more.
+
+    ``unavailable`` is the size of the evidence gap and ``not_applicable``
+    is not part of it: folding the second into the first would report an
+    ordinary PE layout as unexamined evidence.
     """
     total: int
     consistent: int
     conflict: int
     unavailable: int
+    not_applicable: int
 
     @property
     def evaluated(self) -> int:
-        """Observations the established facts actually decided -- the
-        complement of ``unavailable``."""
+        """Observations the established facts actually decided."""
         return self.consistent + self.conflict
 
 
@@ -486,7 +530,7 @@ class MainImageCorrelation:
     correlation layer. ``sections`` follows the profile's own decoded
     section order; ``directories`` is all sixteen indices in order;
     ``identity`` is the fixed triple of source-attributed comparisons,
-    each present even when it can only be ``unavailable`` -- represented,
+    each present even when it can only withhold an answer -- represented,
     never omitted.
     """
     profile_actual_base: int
@@ -598,9 +642,9 @@ def _observe_relocation_expected(profile: PeImageProfile) -> Observation:
 
 def _observe_machine_vs_format(profile: PeImageProfile) -> Observation:
     """§8.4: each named ``Machine`` fixes one width, except ``EBC`` which
-    accepts either. An unnamed value, or either operand ``null``, is
-    ``unavailable`` -- never a conflict with an expectation that does not
-    exist."""
+    accepts either. Either operand ``null`` is ``unavailable``; a
+    ``Machine`` §8.4 names no width for is ``not_applicable`` -- never a
+    conflict with an expectation that does not exist."""
     machine = profile.machine
     is_plus = profile.is_pe32_plus
     operands = dict(machine=machine, machine_name=profile.machine_name, is_pe32_plus=is_plus)
@@ -616,7 +660,7 @@ def _observe_machine_vs_format(profile: PeImageProfile) -> Observation:
                     sources=sources, **operands)
     expected_plus = _MACHINE_FORMAT.get(machine)
     if expected_plus is None:
-        return _obs("machine_vs_format", ObservationState.UNAVAILABLE, "machine_has_no_width",
+        return _obs("machine_vs_format", ObservationState.NOT_APPLICABLE, "machine_has_no_width",
                     sources=sources, **operands)
     if bool(is_plus) == expected_plus:
         return _obs("machine_vs_format", ObservationState.CONSISTENT, "format_matches_machine",
@@ -873,7 +917,7 @@ def _identity_observations(profile: PeImageProfile,
         # common case for a linked image. Comparing it to the loader's
         # real checksum would manufacture a conflict from a field the
         # image never populated.
-        cs = _obs("identity_check_sum", ObservationState.UNAVAILABLE, "header_checksum_absent",
+        cs = _obs("identity_check_sum", ObservationState.NOT_APPLICABLE, "header_checksum_absent",
                   sources=("profile.optional_header", "module_list"),
                   header_value=0, module_list_value=loader_cs)
     else:
@@ -884,9 +928,10 @@ def _identity_observations(profile: PeImageProfile,
     # The dump's SystemInfo processor architecture is not an independent
     # source for the main image's ``Machine``: a WOW64 process runs a
     # 32-bit ``I386`` image while SystemInfo reports the 64-bit host, so
-    # that comparison would conflict on every WOW64 process. With no
-    # second attributable source the observation is represented and
-    # ``unavailable``.
+    # that comparison would conflict on every WOW64 process. The second
+    # source a dump could carry is one this dump does not, so the
+    # observation is represented and ``unavailable`` -- a real gap in the
+    # evidence, not a comparison that does not apply.
     machine = _obs("identity_machine", ObservationState.UNAVAILABLE,
                    "machine_no_independent_source", sources=("profile.coff_header",),
                    machine=profile.machine, machine_name=profile.machine_name)
@@ -1019,7 +1064,7 @@ def _correlate_directory(descriptor, profile: PeImageProfile,
     base = profile.actual_base
 
     if index == _SECURITY_DIRECTORY_INDEX:
-        image_bound = _obs("directory_image_bound", ObservationState.UNAVAILABLE,
+        image_bound = _obs("directory_image_bound", ObservationState.NOT_APPLICABLE,
                            "file_offset_semantics", sources=("profile.directory_descriptors",),
                            index=index, value=value, size=dvalue_size, value_kind="file_offset")
         return DirectoryCorrelation(
@@ -1031,7 +1076,7 @@ def _correlate_directory(descriptor, profile: PeImageProfile,
     with_size = ("profile.optional_header", "profile.directory_descriptors")
     operands = dict(index=index, value=value, size=dvalue_size, size_of_image=size)
     if descriptor.present is False:
-        image_bound = _obs("directory_image_bound", ObservationState.UNAVAILABLE,
+        image_bound = _obs("directory_image_bound", ObservationState.NOT_APPLICABLE,
                            "directory_declared_absent", sources=descriptor_only, **operands)
     elif descriptor.present is None:
         image_bound = _obs("directory_image_bound", ObservationState.UNAVAILABLE,
@@ -1137,21 +1182,20 @@ def _containing_section_index(profile: PeImageProfile) -> "int | None":
 # ── the public entry point ───────────────────────────────────────────
 
 
-_EMPTY_COVERAGE = CorrelationCoverage(total=0, consistent=0, conflict=0, unavailable=0)
+_EMPTY_COVERAGE = CorrelationCoverage(
+    total=0, consistent=0, conflict=0, unavailable=0, not_applicable=0)
 
 
 def _coverage(observations) -> CorrelationCoverage:
-    consistent = conflict = unavailable = 0
+    counts = {state: 0 for state in ObservationState}
     for observation in observations:
-        if observation.state is ObservationState.CONSISTENT:
-            consistent += 1
-        elif observation.state is ObservationState.CONFLICT:
-            conflict += 1
-        else:
-            unavailable += 1
+        counts[observation.state] += 1
     return CorrelationCoverage(
-        total=consistent + conflict + unavailable,
-        consistent=consistent, conflict=conflict, unavailable=unavailable)
+        total=sum(counts.values()),
+        consistent=counts[ObservationState.CONSISTENT],
+        conflict=counts[ObservationState.CONFLICT],
+        unavailable=counts[ObservationState.UNAVAILABLE],
+        not_applicable=counts[ObservationState.NOT_APPLICABLE])
 
 
 def correlate_main_image(

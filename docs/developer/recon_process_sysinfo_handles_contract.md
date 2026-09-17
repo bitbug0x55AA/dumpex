@@ -1,6 +1,6 @@
 # Recon `--process`/`--sysinfo`/`--handles` contract
 
-Status: **implemented** in the released CLI and schema v2.13.
+Status: **implemented** in the released CLI. Schema v2.13 for the v2.13 redesign itself; schema v2.19 for §3.10's `pe_image` record.
 
 This document is the current normative contract for the v2.13 Recon redesign. It defines the three commands' record shapes, evidence precedence, bounded parsing, coverage, diagnostics, console behavior, and compatibility boundaries. Tests verify the implementation; the document explains the contract.
 
@@ -11,11 +11,11 @@ This document is the current normative contract for the v2.13 Recon redesign. It
 - §0 Scope and boundaries
 - §1 Shared vocabulary, formatting, and ordering rules
 - §2 Loader contract: `open_dump()` with per-stream isolation
-- §3 `--process`
+- §3 `--process` (§3.10: the canonical main-image PE profile)
 - §4 `--sysinfo`
 - §5 `--handles`
 - §6 Complete code registry (limitations and diagnostics)
-- §7 CSV, compatibility/cutover, and schema v2.13
+- §7 CSV, compatibility/cutover, and schemas v2.13 and v2.19
 
 ---
 
@@ -588,6 +588,7 @@ field is `null`.
     "selected_path_source": "peb",
     "diagnostics": []
   },
+  "pe_image": { "…": "the canonical main-image PE profile, always present, see §3.10" },
   "peb_extended": { "…": "present only with --verbose, see §3.6" }
 }
 ```
@@ -604,6 +605,7 @@ Field summary:
 | `image_base_address` | hex address \| `null` | `peb.image_base_address`, normalized |
 | `iat` | object (never `null`) | §3.5 |
 | `identity_evidence` | object (never `null`) | §3.4 |
+| `pe_image` | object (never `null`) | §3.10 |
 | `peb_extended` | object — key present iff `--verbose` | §3.6 |
 
 ### 3.2 Normalization comes first (coverage is derived from normalized values)
@@ -848,6 +850,12 @@ no normalized image base to check, or the memory at that base was not
 captured. `reason` is `parse_pe_header()`'s own `reason` string, which
 that function already produces from a closed set of structural
 conditions; it is copied verbatim, never composed.
+
+These three fields keep their v2.13 meaning unchanged. They answer "will
+re-reading these bytes help?" over the same header the canonical PE
+profile of §3.10 decodes; that profile's `structural_state` answers the
+different question "is the image defective?", and neither is derived from
+the other.
 
 Every diagnostic, in either array, has exactly this shape:
 
@@ -1446,6 +1454,10 @@ Frozen semantics:
   Start Time (UTC)       2026-08-14 01:15:05 UTC
   Image Base             0x00007ff600010000
 
+  Main Image PE
+    <the concise profile block, then any conflicting observation -- §3.10.10>
+    <section table, descriptors, observations and provenance, --verbose only>
+
   Import Address Table
     <one of the four mutually exclusive branches below, checked in
      order -- the first match wins, and exactly one always matches>
@@ -1454,7 +1466,10 @@ Frozen semantics:
   Identity
     <one line per identity_evidence.diagnostics entry, "[!] " prefix for
      severity=warning, "[i] " for severity=info -- message text only>
-    <nothing at all when diagnostics is empty>
+    <the heading and the block are omitted entirely when diagnostics is
+     empty: a heading over nothing reads as truncated output, or as
+     identity collection that failed without saying so. The identity
+     checks themselves are `--verbose` and carry their own heading>
 ```
 
 The four branches, in evaluation order:
@@ -1606,28 +1621,31 @@ evaluated.
 - The selected **value** and its **source** are separate lines. A source
   name is never printed where a value belongs.
 - Exactly four checks, in this frozen order, each on one line with an
-  explicit state — `[OK]`, `[!!]` (conflict), or `[--]` (could not be
-  evaluated):
+  explicit state — `[OK]`, `[!!]` (conflict), or `[??]` (could not be
+  evaluated). `[??]` is this command's one marker for evidence the dump
+  does not carry, shared with §3.10.10's consistency rows; `[--]` is
+  reserved there for a check that does not apply, which this block has no
+  case of. One marker, one meaning, across the whole `--process` console:
 
   1. **PEB image-base registration in ModuleList**, from
      `module_claim.match_state` (§3.4.3): `resolved` → `[OK]` with the
      base and module name; `unregistered` → `[!!]`, naming
      `name_matched_candidate`'s competing base when there is one;
-     `unavailable` → `[--]`.
+     `unavailable` → `[??]`.
   2. **Process-name agreement** between `peb_claim.name` and
      `module_claim.name`, compared **case-insensitively** (Windows
      module and file names are case-insensitive, so a case difference
      alone is not a conflict worth sending an analyst to chase).
-     Either name `null` → `[--]`, never agreement and never a conflict.
+     Either name `null` → `[??]`, never agreement and never a conflict.
   3. **PE-header validity** at the PEB image base, from `main_image_pe`
-     (§3.4.4). `checked is false` is `[--]` — "the question could not be
+     (§3.4.4). `checked is false` is `[??]` — "the question could not be
      asked" is a different answer from "asked, and the header is not a
      PE", which is `[!!]` plus `parse_pe_header()`'s own `reason`.
   4. **Corroboration / ambiguity**, from
      `name_matched_candidate_ambiguous`: `true` → `[!!]` (only the first
      of several same-named modules is reported, which the reader has to
      know before treating checks 1–2 as decisive); otherwise `[OK]`, or
-     `[--]` when `match_state == "unavailable"` left nothing to
+     `[??]` when `match_state == "unavailable"` left nothing to
      corroborate with.
 
 - The raw per-source claims stay available underneath, bounded to three
@@ -1652,6 +1670,683 @@ evaluated.
 `summary = {"count": 1}`. No other keys. IAT counts live on the record
 (`iat.dll_count`, `iat.entry_count`), not in the summary, so a consumer
 reads them from one place.
+
+### 3.10 `pe_image`: the canonical main-image PE profile
+
+Always present as an object, never `null`, and carried in full whether or
+not `--verbose` was given: verbosity changes what the console prints, not
+what was collected.
+
+`pe_image` is a projection of two already-built values and nothing else —
+the immutable `PeImageProfile` `dumpex.core.pe_profile` collects at the
+PEB-reported image base, and the `MainImageCorrelation`
+`dumpex.core.pe_correlation` derives over it against the dump's module
+list, memory regions, and memory segments. Their meanings are frozen in
+[the canonical PE image profile contract](pe_image_profile_contract.md);
+this section fixes the wire shape they reach `--process` through.
+`--report`'s `summary.pe_context` projects the same two collectors over
+the same read budget, and the facts the two surfaces publish for one dump
+are pinned equal by test rather than left to convention. A later
+PEB-integrity consumer composes with this profile rather than introducing
+a second PE shape.
+
+#### 3.10.1 One read, one profile
+
+The snapshot's own main-image read (§3.4.4) is the only read of these
+bytes the command performs. `MainImagePeClaim.header_bytes` retains that
+run, and the canonical profile is decoded from it, so:
+
+- the dump is touched once at the image base, exactly as before this
+  record existed;
+- `identity_evidence.main_image_pe` and `pe_image` can never disagree
+  about what was there;
+- a base with nothing readable at it yields no profile at all rather than
+  an empty one;
+- both read the same budget. `MAIN_IMAGE_PE_READ_MAX` **is**
+  `dumpex.core.pe_profile.PE_HEADER_READ_MAX`, not a second constant that
+  happens to hold the same number: a profile requesting a different span
+  would report the retained run as a short read of a longer request.
+
+The first invariant has an enforcement point, because a capture slice is
+a ceiling the collector decodes nothing past. §3.10.5's rule is what keeps
+it true: a slice that accounts for fewer bytes than the run already read
+is refused, so no table can clamp the profile below what
+`identity_evidence.main_image_pe` already parsed from the same bytes.
+
+#### 3.10.2 Shape
+
+```json
+"pe_image": {
+  "collected": true,
+  "correlated": true,
+  "unavailable_reason": null,
+  "source_kind": "peb_image_base",
+  "module_identity": { "value": "C:\\Samples\\malware.exe", "form": "path", "truncated": false },
+  "actual_base": "0x00007ff600010000",
+  "preferred_image_base": "0x0000000140000000",
+  "format": "PE32+",
+  "machine": 34404,
+  "machine_name": "AMD64",
+  "time_date_stamp": 305419896,
+  "checksum": 0,
+  "subsystem": 2,
+  "dll_characteristics": 64,
+  "coff_characteristics": 34,
+  "size_of_image": 24576,
+  "size_of_headers": 1024,
+  "section_alignment": 4096,
+  "file_alignment": 512,
+  "declared_section_count": 1,
+  "decoded_section_count": 1,
+  "structural_state": "complete",
+  "relocation": {
+    "delta": 140692215922688,
+    "relocs_stripped": false,
+    "dynamic_base": true,
+    "basereloc_present": false,
+    "basereloc_descriptor_state": "declared_absent"
+  },
+  "entry_point": {
+    "rva": 4096,
+    "va": "0x00007ff600011000",
+    "va_overflow": false,
+    "section_index": 0,
+    "section_name": ".text",
+    "capture_state": "complete",
+    "region_state": "MEM_COMMIT",
+    "region_type": "MEM_IMAGE",
+    "region_protection": "PAGE_EXECUTE_READ"
+  },
+  "acquisition": {
+    "requested_stage": "sections",
+    "highest_completed_stage": "sections",
+    "requested_bytes": 4096,
+    "captured_bytes": 4096,
+    "read_bytes": 432,
+    "read_target_bytes": 432,
+    "target_io_short": false,
+    "bounded_stop": null,
+    "segment_table": "enumerated",
+    "region_table": "enumerated",
+    "capture_overlapping": false,
+    "components": {
+      "dos_header": "complete",
+      "coff_header": "complete",
+      "optional_header": "complete",
+      "directory_array": "complete",
+      "directory_descriptors": "complete",
+      "section_table": "complete"
+    },
+    "unexamined": []
+  },
+  "directory_summary": {
+    "declared_count": 16,
+    "declared_count_raw": 16,
+    "readable_count": 16,
+    "unprojected_count": 0
+  },
+  "module_match": "resolved",
+  "observation_coverage": { "total": 29, "consistent": 11, "conflict": 0, "unavailable": 4, "not_applicable": 14 },
+  "sections": [
+    {
+      "section_index": 0,
+      "name": ".text",
+      "virtual_address": 4096,
+      "virtual_size": 8192,
+      "size_of_raw_data": 8192,
+      "characteristics": 1610612768,
+      "declared_readable": true,
+      "declared_writable": false,
+      "declared_executable": true,
+      "mapped_base_address": "0x00007ff600011000",
+      "mapped_size": 8192,
+      "capture_state": "complete",
+      "live_protections": ["PAGE_EXECUTE_READ"]
+    }
+  ],
+  "directories": [
+    {
+      "index": 1,
+      "name": "IMPORT",
+      "value": 8192,
+      "value_kind": "rva",
+      "size": 40,
+      "bytes_read": 8,
+      "present": true,
+      "descriptor_state": "complete",
+      "containing_section_index": null,
+      "capture_state": "complete"
+    }
+  ],
+  "observations": [
+    {
+      "name": "section_image_bound",
+      "state": "consistent",
+      "reason": "section_within_image_bound",
+      "sources": ["profile.optional_header", "profile.section_table"],
+      "operands": { "section_index": 0, "virtual_address": 4096, "virtual_size": 8192, "size_of_image": 24576 }
+    }
+  ]
+}
+```
+
+| field | type | meaning |
+|---|---|---|
+| `collected` | boolean | a profile was built |
+| `correlated` | boolean | a correlation was produced over it (§3.10.13) |
+| `unavailable_reason` | `"no_image_base" \| "header_unreadable" \| "collection_failed" \| null` | set exactly when `collected` is false (§3.10.3) |
+| `source_kind` | string \| `null` | where the bytes came from; always `"peb_image_base"` for the main image |
+| `module_identity` | object | what the source calls this image: `value`, `form` (`"path"`/`"name"`), and `truncated` |
+| `actual_base` | hex address \| `null` | the address the header was read at — never taken from the header |
+| `preferred_image_base` | hex address \| `null` | the optional header's own `ImageBase` declaration |
+| `format` | `"PE32" \| "PE32+" \| null` | the optional header's own format |
+| `machine` / `machine_name` | integer \| `null`, string \| `null` | the COFF `Machine` and dumpex's name for it |
+| `time_date_stamp` / `checksum` / `subsystem` / `dll_characteristics` / `coff_characteristics` | integer \| `null` | header fields, as declared |
+| `size_of_image` / `size_of_headers` / `section_alignment` / `file_alignment` | integer \| `null` | header fields, as declared |
+| `declared_section_count` | integer \| `null` | the header's own `NumberOfSections` |
+| `decoded_section_count` | integer | how many section headers the table actually yielded |
+| `structural_state` | component state \| `null` | the profile's rollup over the components in scope |
+| `relocation` | object | `delta` (signed), `relocs_stripped`, `dynamic_base`, `basereloc_present`, `basereloc_descriptor_state` |
+| `entry_point` | object (never `null`) | §3.10.4 |
+| `acquisition` | object \| `null` | §3.10.5; `null` only when nothing was collected |
+| `directory_summary` | object | the three directory counts and the unprojected excess |
+| `module_match` | `"resolved" \| "unregistered" \| "unavailable" \| null` | §3.4.3's `module_claim.match_state`, carried verbatim (§3.10.11) |
+| `observation_coverage` | object | `total`, `consistent`, `conflict`, `unavailable`, `not_applicable`; the four states sum to the total |
+| `sections` | array | decoded section headers in table order (§3.10.6) |
+| `directories` | array | all sixteen descriptors in index order, or empty when nothing was collected (§3.10.7) |
+| `observations` | array | every evaluated consistency check (§3.10.8) |
+
+An uncollected profile leaves every field above `null` or empty. It
+changes nothing else about the record: this evidence is optional, and its
+absence can neither erase nor downgrade what MiscInfo, the PEB, and the
+ModuleList independently established.
+
+#### 3.10.3 `structural_state` and the legacy triple
+
+`structural_state` is the profile's own fold over the components the
+requested stage covered, and takes one of the five component states:
+`complete`, `partial`, `unavailable`, `malformed`, `declared_absent`. It
+answers **"is the image defective?"**.
+
+`identity_evidence.main_image_pe`'s `checked`/`valid`/`reason` triple
+(§3.4.4) is unchanged and keeps answering a different question: **"will
+re-reading these bytes help?"**. Neither is derived from the other, and
+they legitimately disagree — an `e_lfanew` past dumpex's own follow
+budget is a deterministic rejection for `valid`, and a bounded stop
+leaving `structural_state` `unavailable` for the profile.
+
+The one mapping between them that does hold, and the only one a consumer
+may rely on:
+
+| `image_base_address` | `main_image_pe.checked` | `pe_image.collected` | `pe_image.unavailable_reason` |
+|---|---|---|---|
+| `null` | `false` | `false` | `"no_image_base"` |
+| set | `false` | `false` | `"header_unreadable"` |
+| set | `true` | `true` | `null` |
+
+`collection_failed` is outside that table on purpose. It is dumpex
+declining to build a profile from bytes it did hold — a defect in dumpex,
+never a fact about the image — and it is a separate token precisely so it
+can never be read as one of the two claims about the dump. The collector
+documents that it never raises for hostile or truncated image bytes, so
+this state is unreachable except through a dumpex bug; publishing it as
+`header_unreadable` would send an analyst to re-collect a dump that is
+fine.
+
+#### 3.10.4 `entry_point`
+
+The entry point resolved into the process, and the memory evidence around
+it. It is context for the `entry_point_in_section` observation, never a
+second verdict.
+
+- `rva` is `null` when the optional header's own `AddressOfEntryPoint`
+  was never decoded — a question with no answer, not an entry point at
+  zero.
+- `rva` `0` is "this image declares no entry point": every other field is
+  then `null`, because resolving `actual_base + 0` would present the
+  header page as where execution begins.
+- `va_overflow` says the addition ran past the end of the 64-bit space;
+  `va` is `null` whenever it is true.
+- `section_index`/`section_name` name the decoded section whose mapped
+  interval holds the entry RVA. `region_state`/`region_type`/
+  `region_protection` are the MemoryInfo facts for the region the entry
+  VA falls in, and are `null` when no region does, the region table was
+  not supplied, or it dropped a descriptor.
+
+#### 3.10.5 `acquisition`
+
+`requested_bytes`, `captured_bytes`, and `read_bytes` are three
+independent facts and are never collapsed into one number:
+`captured < requested` is a collection gap, `read < captured` is a read
+failure over bytes that were present, and the two have different
+remedies. `captured_bytes` is `null` when the dump supplied no segment
+table to resolve the request against — absence of the provenance, not a
+claim that nothing was captured.
+
+A staged acquisition stops as soon as its ladder is satisfied, so
+`read_bytes` is normally far below both on a perfectly healthy image.
+`target_io_short` is the three-valued judgement over `read_target_bytes`
+— `false` when every byte the stages asked for arrived, `true` when the
+read came up short of bytes the dump holds, `null` when the facts in hand
+do not settle it — and is the field to read for "did reading fail?".
+
+`bounded_stop` names which of dumpex's own budgets ended the acquisition,
+its limit, and what was consumed. An unattributed stop is
+indistinguishable from a structural end, so all three are always present
+together or the whole object is `null`.
+
+`segment_table` and `region_table` say what became of each of the dump's
+own tables:
+
+| value | meaning | usable? |
+|---|---|---|
+| `absent` | the dump does not carry this stream at all | no |
+| `failed` | the stream is in the dump and no usable table came back | no |
+| `enumerated` | walked; every descriptor it carries is representable — **including a table that carries none** | yes |
+| `lossy` | walked, but at least one descriptor was not representable | no |
+| `unreadable` | the walk itself raised, so nothing about the table is established | no |
+
+The first three rows are three different statements about evidence and
+none may be reported as another. This matters because an enumeration
+cannot tell them apart on its own: a stream that is not in the dump and a
+stream that parsed and carries no entries both reduce to an empty list,
+and an empty table **answers** a question an absent one cannot. Handing
+the correlation an empty table where there is none turns "there is no
+region table" into "the region table covers nothing", which is
+`base_not_in_region` — a determined negative — where the honest answer is
+`regions_unavailable`. The dump's own directory is what separates them,
+exactly as §2.4 already separates an uncaptured stream from a captured
+one that failed.
+
+What reaches the correlation differs between the unusable states, and
+the difference is what keeps a gap attributable:
+
+- `absent`, `failed` and `unreadable` reach it as `None` — there is no
+  table to hand over, and every check that needed one is `unavailable`.
+- A `lossy` enumeration is handed over intact, **for attribution only**.
+  The correlation needs it to answer `regions_lossy` / `segments_lossy`
+  rather than the flat "no table" reason, so an analyst reading the
+  observation learns that the dump's table dropped a descriptor rather
+  than that it was never there. Its surviving views are not evidence for
+  anything: the correlation withholds them from every address, region and
+  capture judgement, exactly as it does for a table that is not there at
+  all.
+
+Either way no check rests on a partial table, and `captured_bytes` is
+`null` for both (§3.10.5's capture rule below).
+
+`unreadable` is reached only through library-shape drift, which the value
+model deliberately raises on rather than papering over. Where this record
+is the only consumer of the drifted table -- the region table always, and
+a segment descriptor whose virtual extent the address walk can still
+read -- `--process` records the state and continues, because process
+identity comes from four other sources and losing all of them to one
+drifted descriptor would be the larger failure. Drift the address walk
+itself cannot survive still ends the command, in `--process` as anywhere
+else: this state field reports what dumpex declined to represent, and
+never turns a failed walk into a completed one.
+
+A `--report` run over the same dump fails loudly where `--process`
+degrades. That difference is deliberate, documented here, and pinned by
+test, so it stays a decision rather than becoming an accident.
+
+**A table that is not `enumerated` also bounds nothing.** A capture slice is a
+ceiling: the collector decodes nothing past `captured_bytes`. Resolving
+one from a table dumpex could only partly represent would clamp the
+acquisition below the bytes the snapshot already read and parsed — the
+profile would report a truncation dumpex imposed on itself, contradict
+`identity_evidence.main_image_pe` about the same run, and attribute the
+shortfall to the image. So such a table supplies no slice at all,
+`captured_bytes` is `null` (the provenance was not established, which is
+the one thing that is true), and the state field is what attributes the
+gap to the table. The same refusal applies to any slice accounting for
+fewer bytes than the read returned, whatever its own descriptor count
+says.
+
+Both halves of that are enforced, by the record type and by the schema:
+
+- `segment_table` is anything but `enumerated` ⇒ `captured_bytes` and
+  `capture_overlapping` are `null`. A byte count under any other state
+  claims a slice resolved against a table that established nothing.
+- The implication runs **one way only**. An `enumerated` table may still
+  leave `captured_bytes` `null`, because the second refusal above — a
+  slice accounting for fewer bytes than the read returned — has no table
+  state to attribute itself to.
+- `region_table` does not enter it at all. The region table describes the
+  process's mapping, not the dump's bytes, and bounds no read.
+
+`capture_overlapping` is the segment table claiming one address twice
+inside the captured prefix — a contradictory table whose byte provenance
+a consumer must not trust. It is `null` exactly when `captured_bytes` is,
+because it is an answer about a resolved slice.
+
+`components` carries the six components in the PE profile contract's
+frozen order. A component outside the requested stage is `null`: the
+question was never asked, which is not the answer `unavailable`.
+
+`unexamined` is a statement about bytes only — ascending, non-overlapping,
+merged where adjacent. It never says the image is intact there, and never
+that it is damaged there.
+
+#### 3.10.6 `sections`
+
+One entry per decoded section header, in section-table order.
+`virtual_address`/`virtual_size` are the header's own RVA and extent;
+`mapped_base_address`/`mapped_size` are that section resolved against
+`actual_base`, and are `null` together when that arithmetic is not
+representable.
+
+`declared_readable`/`declared_writable`/`declared_executable` are the
+header's own Characteristics bits. `live_protections` is the distinct
+protection names of the captured regions the mapped range falls in,
+ascending — context, never an observation: `PAGE_EXECUTE_WRITECOPY` is
+ordinary loader context for an executable image section, and a consumer
+must not substring-match `WRITE` against these names. `capture_state` is
+how much of the mapped range the dump wrote.
+
+A section's own observations are not nested here. They are in
+`observations`, each carrying this `section_index` in its `operands`, so
+one observation has exactly one home.
+
+#### 3.10.7 `directories`
+
+All sixteen descriptors, in index order, whenever a profile was
+collected; empty when none was. An omitted descriptor would make "not
+captured" indistinguishable from "not declared".
+
+`present` is three-valued presence read from the descriptor's own value,
+and `descriptor_state` describes the eight descriptor bytes — never the
+contents they point at. `value_kind` says how `value` is addressed:
+index 4 (`SECURITY`) is a file offset rather than an image RVA, so it
+carries no `containing_section_index` and no `capture_state`, and its own
+bound observation is `not_applicable` — an image-bound check over a value
+that is not an image address has no subject, and the dump is missing
+nothing there. A directory the header declares absent is
+`not_applicable` for the same reason (PE contract §8.8.5).
+
+#### 3.10.8 `observations`
+
+Every observation the correlation produced, in the correlation layer's
+own deterministic order: the frozen five, the two size cross-checks, the
+identity triple, then each section's three and each descriptor's one. All
+four states are carried — `consistent`, `conflict`, `unavailable`, and
+`not_applicable` — and `observation_coverage` tallies them, one count per
+state.
+
+Each entry carries `name`, `state`, the dumpex-authored `reason` token
+behind that state, the `sources` actually evaluated, and the `operands`
+compared. This is the same wire shape `--report`'s `pe_context` retains
+its conflicts in; that projection keeps only the conflicts, this one
+keeps everything.
+
+An observation is an **observation**. A `conflict` is a disagreement
+between two captured facts and is never a maliciousness claim; an
+`unavailable` is a question the captured evidence does not answer and is
+never a failure; a `not_applicable` is a question this image gives no
+subject and is never a gap in the evidence. A consumer measuring what the
+dump could not support counts `unavailable` alone (PE contract §8.1). No
+`trusted`, `malicious`, `DETECTED`, score, confidence, or ATT&CK field
+exists here or may be added.
+
+#### 3.10.8.1 `correlated`: an empty tally is never a clean image
+
+A correlation that ran always produces observations — the frozen five,
+the two size cross-checks, the identity triple, and one per descriptor at
+least. `total: 0` is therefore exclusively the state of a correlation
+that did **not** run, and `correlated` is what says so. Without it, a
+swallowed failure would publish as `0 consistent, 0 conflicting, 0
+unavailable, 0 not applicable`, which reads exactly like an image with
+nothing to flag.
+
+When `correlated` is `false`, everything the correlation establishes is
+withheld: `observations` is empty, `observation_coverage` is all zeros,
+each section carries no `mapped_base_address`, `capture_state` or
+`live_protections`, each descriptor carries no `containing_section_index`
+or `capture_state`, and `entry_point` carries no VA, section, or memory
+context. A descriptor's own decoded fields stay — `value`, `size`,
+`present` and `descriptor_state` came out of the header, not out of the
+correlation. The profile's own decoded facts are untouched — they came from
+the header, not from the correlation. The console says the correlation
+was not produced instead of printing a tally.
+
+Like `collection_failed`, this state is unreachable except through a
+dumpex defect: the correlation layer documents that it never raises over
+established facts.
+
+#### 3.10.9 Coverage, diagnostics, and exit behavior
+
+This section adds **no** coverage source, **no** `LimitationCode`, and
+**no** diagnostic code. `coverage.status`, `coverage.limitations`, the
+`PROCESS_MAIN_IMAGE_*` codes of §6.1, and the exit code are exactly what
+§3.7 already defines them to be. `observation_coverage` is a tally of
+observations and is not a coverage status: a `conflict` count above zero
+is not a `partial`, and `unavailable` observations are not gaps in field
+coverage.
+
+The tally carries one count per observation state, and the two states
+that withhold an answer are never summed into one. `unavailable` is
+evidence this dump does not carry; `not_applicable` is a comparison an
+established fact leaves no subject for — a directory the image declares
+absent, the Security directory's file offset, a zero `CheckSum`, a
+`Machine` value that fixes no optional-header width (PE contract §8.1).
+Reporting the second as the first would present an ordinary PE layout as
+incomplete analysis, which is exactly the claim §1's evidence semantics
+forbid.
+
+#### 3.10.10 Console
+
+The default console prints one `Main Image PE` block between the scalar
+identity fields and `Import Address Table`:
+
+```
+  Main Image PE
+    Architecture     AMD64 / PE32+
+    Actual Base      0x00007ff600010000
+    Preferred Base   0x0000000140000000
+    Relocation       required -- loaded 0x7ff4c0010000 above the preferred base
+    Image Size       0x6000 (24576 bytes), 1 section(s)
+    Entry Point      RVA 0x1000 -> 0x00007ff600011000 (.text; PAGE_EXECUTE_READ; capture complete)
+    Loader Record    a module is registered at this image base
+    Structure        complete -- every header structure was read in full
+    Consistency      11 consistent, 1 conflicting, 4 unavailable, 14 not applicable
+    Scope            structural main-image checks only; this does not establish
+                     that the process is benign
+    [!!] <one line per conflicting observation>
+    [??] <one line per actionable unavailable check -- both bounded, 8 rows shared>
+    [??] <one line per table that is not `enumerated`, if any>
+    (use --verbose for the section table, the directory descriptors, the relocation evidence, and every consistency check)
+```
+
+Frozen rules:
+
+- an uncollected profile prints one `(unavailable -- …)` line naming
+  which of the two reasons applied, and nothing else;
+- `Actual Base`, `Preferred Base` and `Relocation` are three lines, never
+  one. Where the image is and where it was linked to be are different
+  facts, and whether it was relocated is the conclusion drawn from them —
+  a reader deciding whether relocation applies must not have to subtract
+  two addresses. `Relocation` reads `not required` at a zero delta,
+  `required` with the distance and direction at a non-zero one, and
+  `undetermined` when no delta is established;
+- `Consistency` prints one count per observation state and never one
+  number for both withheld answers (§3.10.9). The console's markers say
+  the same thing: `[??]` is evidence the dump does not carry, `[--]` is a
+  check that does not apply, and a withheld row opens with `unavailable`
+  or `not applicable` so the row states it without a legend;
+- `Scope` is printed on every render of the block, including one where no
+  correlation was produced. Structural agreement between an image's
+  headers, its mapping, its loader record and the captured extent is not
+  evidence that the process is benign, and a block of agreeing checks
+  reads as exactly that to anyone who does not already know what was
+  checked. It is a statement of scope, never a verdict, a confidence, or
+  an investigation policy;
+- conflicts and **actionable unevaluated checks** share one budget of
+  **8** rows, conflicts first. A conflict is the stronger result and can
+  never be displaced out of the budget by an unevaluated check; a run with
+  more rows than fit prints `... and N further conflicting or unanswered
+  check(s) -- see --verbose`, so an image declaring 96 sections cannot
+  flood the default view. "Unanswered" is the word for a row that is
+  `unavailable`: `not_applicable` checks are never eligible for these
+  rows, and "unevaluated" would restore the conflation §3.10.9 forbids;
+- an `unavailable` check is **actionable** when knowing why it could not
+  be answered changes what an analyst does next: a table the dump did not
+  supply, a structure captured only in part, no second source to
+  corroborate against. That set is an allowlist, not a filter. Everything
+  else -- a header field that was never decoded, a comparison no dump can
+  supply a second source for -- is routine, and listing it would bury the
+  rows that matter, so it is counted in `Consistency` and left to
+  `--verbose`. A `not_applicable` check is never eligible for these rows
+  at all: there is nothing for an analyst to act on in a comparison the
+  image itself rules out;
+- one line per table that is not `enumerated` names that table and what
+  became of it, so an unevaluated check has its cause beside it. What is
+  withheld because of that state is stated once, in the verbose
+  provenance block;
+- `--verbose` adds five bounded blocks — the section table, all sixteen
+  descriptors, the relocation evidence, every observation with the
+  evidence it rested on, and the header-acquisition provenance. Their row
+  counts are structural: at most `_MAX_SECTIONS` sections, exactly sixteen
+  descriptors, one observation per frozen check plus three per section and
+  one per descriptor, and a fixed five or six relocation lines;
+- the descriptor table gives each of a descriptor's two declared fields
+  its own column — `Start` and `Size` — and prints the addressing mode
+  before them. They are two distinct fields of the format, and one cell
+  holding both reads as an expression over a single number rather than as
+  a location and a length; a location whose address space the reader has
+  to scan rightwards to learn is not yet an address. `--` is a field the
+  image declares nothing in — an index past the declared count, or the
+  location of a directory the image marks absent — and stands for nothing
+  else: a declared directory's `Size` of zero is a declaration of zero and
+  prints as `0x0`, a size under an absent directory prints as itself, and
+  a declared field the dump does not hold prints `(unread)`. `Descriptor`
+  is how much of the descriptor's own bytes was read and `Content` how
+  much of what they point at, each named for the question it answers;
+
+- the relocation block states what the image declares and how much of it
+  the dump holds — the distance from the preferred base, whether
+  relocations are declared stripped, whether the image opts in to being
+  loaded anywhere, whether a base-relocation directory is declared, how
+  much of that descriptor was read, and how much of the directory's bytes
+  were captured. It makes no capture claim about a directory the image
+  does not declare, and it re-derives nothing: whether the image was
+  relocated is the `Relocation` line above, and whether the declarations
+  agree with it is the `relocation evidence` observation;
+- the header-acquisition block measures the read against **what parsing
+  needed**, not against the window that was requested. A staged
+  acquisition asks for a fraction of its window, so `Requested window`,
+  `Captured in that window` and `Required for parsing` are three separate
+  facts and `Required bytes present` is the judgement over the last two.
+  The capture line is scoped to the window by its own label, because
+  `captured_bytes` cannot exceed what was requested: it never states how
+  much of the *image* the dump holds;
+- when `Required bytes present` is `no`, the line names which of **three**
+  causes applies, because each has a different remedy: one of dumpex's
+  own budgets declined to read further (§6.2), the dump never held the
+  bytes (re-collect the process), or it holds bytes the read did not
+  return. A budget is checked first and answers on its own: a stopped
+  read has always taken every byte it asked for, so `target_io_short` is
+  `false` in every bounded-stop run, and reading that as an answer about
+  the dump would report a limit of this tool as a truncated dump —
+  §6.2's rule inverted;
+- **which** budget fired decides how much the line may then say. A byte
+  budget exonerates the dump outright, and only that one does: the window
+  it asked for arrived whole, and re-reading the header is the remedy. A
+  read-count budget settles nothing of the kind — a header spread across
+  enough captured segments costs one read per segment, so this dump's own
+  layout can reach that limit as readily as a trickling reader can — and
+  an `e_lfanew` stop is a fact about what the image declared. Only the
+  byte budget's sentence denies the dump a part in the shortfall; the
+  others name the budget and claim nothing further, with the `Bounded
+  stop` line below carrying the numbers either way;
+- `Required bytes present: no` implies `Structure` is not `complete`:
+  a structure that did not receive its bytes cannot have been read in
+  full. The converse does not hold — every required byte can arrive and
+  a structure still be `malformed` — so `yes` is not a claim that the
+  image is sound;
+- no dumpex-authored identifier is printed verbatim. That covers an
+  observation's `name`, `reason` and `sources` tokens, an observation
+  `state`, a stage, a component name, a component or descriptor state, a
+  directory addressing mode, and a bounded stop's `scope`. Each is
+  rendered as the words an analyst reads — `declared absent`, `file
+  offset`, `completed through the section table`, `read in full: DOS
+  header, …`, `dumpex's own header byte budget stopped the read`. The
+  tokens stay in `--json`, where a consumer keys on them, and each
+  display table is held equal to the record vocabulary it renders by
+  test, so a value the record permits can never arrive with no words for
+  it. A budget scope the profile contract adds later and this console
+  does not yet name falls back to a sentence that names no token at all,
+  never to the token itself. The one vocabulary carried across as-is is
+  the capture state (`none` / `partial` / `complete`): those are ordinary
+  English words under a `Capture` heading, not identifiers a reader has
+  to translate;
+- every dump-derived string here — section names and the module identity
+  — is escaped for the console, exactly as §3.8 already escapes paths,
+  names, and import symbols. A shortened identity prints its marker
+  **outside** the value, never inside it;
+- `Loader Record` states §3.10.11's distinction in words, so the reason
+  sentences below it never have to: an observation whose reason is
+  `no_modulelist_entry` fires both for a module list that confirms nothing
+  is registered here and for one that could not be compared, and its
+  sentence says the record was *not matched* rather than asserting an
+  absence;
+- no reason sentence claims an absence the correlation did not
+  establish: a table it could not use reads as "no usable memory region
+  table", and a loader record it could not match reads as "not matched",
+  with `Loader Record` and the table lines carrying the distinctions;
+- a correlation that was not produced prints that, never a zero tally;
+- nothing printed here moves `coverage.status`, a limitation, or the exit
+  code.
+
+#### 3.10.11 `module_match` is the identity boundary's own answer
+
+"Is a module registered at this image base" is one question with one
+answer. `module_match` carries §3.4.3's `module_claim.match_state`
+unchanged rather than deriving it a second time, so one record cannot
+state two different conclusions about the same base:
+
+| ModuleListStream | a module at this base | `match_state` and `module_match` |
+|---|---|---|
+| absent, or failed to parse | — | `unavailable` |
+| parsed, zero modules | — | `unregistered` |
+| parsed, modules present | no | `unregistered` |
+| parsed, modules present | yes, at exactly this base | `resolved` |
+
+A stream that parsed and legitimately holds zero modules **confirms** that
+nothing is registered here. That is an `unregistered` an analyst acts on,
+not missing evidence: `unavailable` is reserved for a comparison that
+could not be made at all.
+
+The correlation's own `size_vs_modulelist` and identity observations are a
+separate tier and keep their own `unavailable` semantics — they name
+`module_list` in their `sources` and report what the loader's record did
+or did not carry.
+
+#### 3.10.12 The `collected` state machine, enforced
+
+`collected` is the one discriminator a consumer branches on, so both the
+record type and the schema enforce what each of its states may carry
+rather than leaving the rule in prose.
+
+`collected: false` carries nothing at all: `source_kind`, both bases,
+`format`, every header scalar, `structural_state`, `acquisition` and
+`module_match` are `null`; `decoded_section_count` is `0`;
+`module_identity`, `relocation`, `entry_point` and `directory_summary`
+hold only nulls (with `truncated` and `va_overflow` `false`);
+`observation_coverage` is all zeros; and all three arrays are empty. A
+record reporting no profile while carrying a base, a machine, or a module
+match would describe evidence that came from nowhere.
+
+`collected: true` names what produced it: `source_kind`, `actual_base`,
+`structural_state`, `acquisition` and `module_match` are all set,
+`unavailable_reason` is `null`, and `directories` holds exactly sixteen
+descriptors. A profile with none of those is one that does not exist,
+reported as one that does.
+
+`correlated` is the second discriminator and carries the same treatment:
+`true` requires at least one observation, and `false` empties the
+observations, the tally, every section's resolved range and protections,
+and the entry point's VA and memory context. `correlated: true` with
+`collected: false` is refused outright — there is nothing to correlate.
 
 ---
 
@@ -3477,7 +4172,7 @@ benefit.
 
 ---
 
-## §7 CSV, compatibility, and schema v2.13
+## §7 CSV, compatibility, and schemas v2.13 and v2.19
 
 ### 7.1 CSV: not applicable
 
@@ -3535,5 +4230,32 @@ own schema version.
   `$defs.processDiagnostic` with `severity` constrained to
   `["info", "warning"]` — a schema-level guarantee that no verdict
   vocabulary can appear there.
+
+### 7.4 Schema v2.19 changes (`pe_image`)
+
+`--process` gains §3.10's record in a deliberate new schema file. Nothing
+about v2.13's own shapes moves.
+
+- `SCHEMA_VERSION` becomes `"2.19"`, and `dumpex-output-v2.19.schema.json`
+  is a new file. Every earlier schema stays byte-identical; a document a
+  previous release produced keeps validating against its own version.
+- **Add** `$defs.processPeRecord`, `$defs.processPeSection`,
+  `$defs.processPeDirectory`, `$defs.processPeEntryPoint`, and
+  `$defs.processPeAcquisition`.
+- `$defs.processRecord`: **add** `pe_image`, required and never `null`.
+  `peb_extended` stays the only optional property in the schema.
+- **Rename** v2.18's `$defs.reportPeObservation` to `$defs.peObservation`,
+  now referenced by both `summary.pe_context.observations` and
+  `pe_image.observations`. The observation's own wire shape is unchanged,
+  so every document v2.18 accepted is accepted here: one observation
+  shape, two consumers, identical meanings.
+- `processPeAcquisition` carries `segment_table`, `region_table` and
+  `capture_overlapping` (§3.10.5), so a table that bounds nothing is
+  reportable on the wire rather than only in prose.
+- `processPeRecord.correlated` (§3.10.8.1) and the `collection_failed`
+  reason (§3.10.3) are both discriminators for states that would otherwise
+  publish as a well-formed, apparently-complete record.
+- No `LimitationCode` is added, no coverage source is added, and no
+  `coverage.status` or exit-code rule changes (§3.10.9).
 
 ---

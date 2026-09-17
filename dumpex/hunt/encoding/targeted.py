@@ -87,7 +87,7 @@ from dumpex.hunt.encoding.config import EncodingConfig
 from dumpex.hunt.encoding.models import DecodeResult, LayerResult
 from dumpex.hunt.encoding.sleep_mask import _scan_sleep_mask
 from dumpex.hunt.encoding.entropy import (
-    entropy_region_ineligible_reason, scan_entropy_targeted,
+    entropy_region_ineligible_reason, reported_entropy, scan_entropy_targeted,
 )
 from dumpex.hunt.encoding.decoding import _is_system_dll, scan_decode_layers
 
@@ -526,7 +526,7 @@ def _entropy_measurements(windowed) -> tuple:
 def _measure_entropy(name: str, value: float, *, base_address: int = None,
                      size: int = None) -> TargetedMeasurement:
     return TargetedMeasurement(
-        name=name, value=value, unit="bits_per_byte",
+        name=name, value=reported_entropy(value), unit="bits_per_byte",
         base_address=None if base_address is None else hex_address(base_address),
         size=size)
 

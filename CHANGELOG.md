@@ -7,6 +7,79 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.9.0 — Unreleased
+
+### Added
+
+- `--process` now reports the main image's PE profile. The console gains a
+  `Main Image PE` block with the image's architecture and header format, its
+  load address and the preferred base it was linked for as separate facts
+  alongside whether relocation was required, its declared size and section
+  count, where execution begins, how completely the header was read, and any
+  structural disagreement between two captured facts. A `Scope` line states
+  what the block establishes: structural checks over this one image, which do
+  not establish that the process is benign.
+- `--process --verbose` adds the section table (declared R/W/X, the memory each
+  section is mapped over, and how much of it the dump captured), all sixteen
+  data-directory descriptors, the relocation evidence (the distance from the
+  preferred base, what the header declares, and how much of the
+  base-relocation directory the dump holds), every consistency check with the
+  evidence it rested on — including the ones the captured evidence could not
+  answer — and the header acquisition's own byte provenance, which measures the
+  read against the bytes parsing required rather than against the window that
+  was requested.
+- `--json` carries the complete profile, every section and descriptor, and every
+  consistency observation in the new `pe_image` object on the process record,
+  whether or not `--verbose` was given.
+
+### Changed
+
+- Published output schema v2.19 for the new `--process` PE evidence. See
+  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the field-level
+  summary. Earlier schemas stay frozen, and documents produced by earlier
+  releases keep validating against their own version.
+- `--process` and `--report` now describe the main image through the same
+  canonical PE profile and correlation collectors, under one shared read budget.
+  The facts both surfaces publish for one dump are pinned equal by test rather
+  than by convention. `--report`'s `summary.pe_context` gains the matching
+  `not_applicable_count` beside its existing correlation counts.
+
+The console does not stop at counting what it could not check. Beside any
+conflict, it names the checks whose answer would have changed what an analyst
+does next — a memory table the dump does not carry, a structure captured only
+in part, no second source to corroborate against — and which of the dump's own
+tables is behind them, with routine structural absences left to `--verbose`.
+
+The record states what it could not do rather than implying it did: a memory
+table the dump does not carry is reported as missing evidence rather than as a
+determined negative, and one dumpex cannot walk in full never clamps what the
+PE header decodes; either way the record names that table as the reason its
+byte provenance and dependent checks are withheld. A correlation that could not
+be produced is reported as such rather than as an empty tally of consistency
+checks, and an internal failure to build a profile is named as one rather than
+reported as an unreadable header.
+
+A PE consistency conflict is a disagreement between two captured facts, and a
+check that withholds an answer says which kind it is. A check is `unavailable`
+when the evidence it needed is not in the dump, and `not applicable` when the
+image's own declarations leave the comparison no subject — a data directory the
+header declares absent, the Security directory's file offset, a header with no
+checksum. The two are counted and marked apart on the console and in `--json`,
+so an ordinary PE layout is not reported as unexamined evidence.
+
+None of it is a maliciousness verdict: no finding, score, confidence, verdict,
+coverage status, or exit code changes, existing `--process` fields and IAT
+meanings are unchanged, and an unreadable main image cannot downgrade the
+process identity evidence beside it.
+
+- `--hunt obfuscation` publishes every `entropy` figure to twelve decimal
+  places. One dump now reports one value wherever it is read; at full precision
+  the last bit of the host C library's `log2` reached the document, and two
+  machines could publish different entropies for identical bytes. Only the
+  published figure is pinned: threshold comparisons, window ranking, and the
+  `high_entropy` classification all still read the measurement at full
+  precision, so no finding, score, coverage status, or exit code changes.
+
 ## 3.8.1 — Unreleased
 
 ### Fixed

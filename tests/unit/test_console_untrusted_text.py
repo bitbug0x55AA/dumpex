@@ -228,11 +228,12 @@ def _case_sysinfo():
 # table. process_start_utc/image_base_address are dumpex-formatted.
 # The three top-level ProcessRecord strings hostile_record() can plant
 # directly. The verbose block's own dump-derived strings live inside
-# `iat`/`identity_evidence`/`peb_extended` (a tuple and two dicts, which
-# hostile_record() cannot fill field-by-field), so they are planted by
-# the builders below and checked by the whole-output sweep -- their
-# per-field reachability is asserted in tests/unit/test_process_cmd.py,
-# where the fixture can be the right shape.
+# `iat`/`identity_evidence`/`pe_image`/`peb_extended` (records, a tuple
+# and two dicts, which hostile_record() cannot fill field-by-field), so
+# they are planted by the builders below and checked by the whole-output
+# sweep -- their per-field reachability is asserted in
+# tests/unit/test_process_cmd.py, where the fixture can be the right
+# shape.
 _PROCESS_FIELDS = ("process_name", "process_path", "command_line")
 
 
@@ -276,6 +277,65 @@ def _hostile_identity_evidence() -> dict:
     }
 
 
+def _hostile_pe_image() -> records_module.ProcessPeRecord:
+    """§3.10's canonical PE projection. The section name is eight bytes
+    read out of the image's own section table, and the module identity is
+    the PEB path the profile was collected under; the verbose Main Image
+    PE block prints both. `machine_name`, the component states, and the
+    protection names beside them are dumpex's own vocabulary and are
+    deliberately left alone."""
+    section = records_module.ProcessPeSectionRecord(
+        section_index=0, name=hostile_text_for("pe_section_name"),
+        virtual_address=0x1000, virtual_size=0x2000, size_of_raw_data=0x2000,
+        characteristics=0x60000020, declared_readable=True, declared_writable=False,
+        declared_executable=True, mapped_base_address="0x0000000000401000",
+        mapped_size=0x2000, capture_state="complete",
+        live_protections=("PAGE_EXECUTE_READ",))
+    directories = tuple(
+        records_module.ProcessPeDirectoryRecord(
+            index=index, name=f"DIRECTORY_{index}", value=0, value_kind="rva", size=0,
+            bytes_read=8, present=False, descriptor_state="declared_absent",
+            containing_section_index=None, capture_state=None)
+        for index in range(16))
+    observation = records_module.PeObservationRecord(
+        name="section_image_bound", state="consistent", reason="section_within_image_bound",
+        sources=("profile.optional_header", "profile.section_table"),
+        operands={"section_index": 0})
+    return records_module.ProcessPeRecord(
+        collected=True, correlated=True, unavailable_reason=None, source_kind="peb_image_base",
+        module_identity={"value": hostile_text_for("pe_module_identity"), "form": "path",
+                          "truncated": True},
+        actual_base="0x0000000000400000", preferred_image_base="0x0000000000400000",
+        format="PE32+", machine=0x8664, machine_name="AMD64", time_date_stamp=1,
+        checksum=0, subsystem=2, dll_characteristics=0x40, coff_characteristics=0x22,
+        size_of_image=0x5000, size_of_headers=0x400, section_alignment=0x1000,
+        file_alignment=0x200, declared_section_count=1, decoded_section_count=1,
+        structural_state="complete",
+        relocation={"delta": 0, "relocs_stripped": False, "dynamic_base": True,
+                     "basereloc_present": False,
+                     "basereloc_descriptor_state": "declared_absent"},
+        entry_point=records_module.ProcessPeEntryPointRecord(
+            rva=0x1000, va="0x0000000000401000", va_overflow=False, section_index=0,
+            section_name=hostile_text_for("pe_entry_section_name"), capture_state="complete",
+            region_state="MEM_COMMIT", region_type="MEM_IMAGE",
+            region_protection="PAGE_EXECUTE_READ"),
+        acquisition=records_module.ProcessPeAcquisitionRecord(
+            requested_stage="sections", highest_completed_stage="sections",
+            requested_bytes=0x1000, captured_bytes=0x1000, read_bytes=0x400,
+            read_target_bytes=0x400, target_io_short=False, bounded_stop=None,
+            components={"dos_header": "complete", "coff_header": "complete",
+                         "optional_header": "complete", "directory_array": "complete",
+                         "directory_descriptors": "complete", "section_table": "complete"},
+            segment_table="enumerated", region_table="enumerated", capture_overlapping=False,
+            unexamined=()),
+        directory_summary={"declared_count": 16, "declared_count_raw": 16,
+                            "readable_count": 16, "unprojected_count": 0},
+        module_match="resolved",
+        observation_coverage={"total": 1, "consistent": 1, "conflict": 0, "unavailable": 0,
+                               "not_applicable": 0},
+        sections=(section,), directories=directories, observations=(observation,))
+
+
 def _hostile_peb_extended() -> dict:
     """§3.6's verbose-only block: WindowTitle and DllPath are PEB
     strings."""
@@ -298,6 +358,7 @@ def _case_process():
         command_line="svchost.exe -k netsvcs", process_start_utc="2024-01-01T00:00:00Z",
         image_base_address="0x0000000000400000", iat=_hostile_iat(),
         identity_evidence=_hostile_identity_evidence(),
+        pe_image=_hostile_pe_image(),
         peb_extended=_hostile_peb_extended()), _PROCESS_FIELDS)
     coverage = _coverage("process_identity")
     return (_rendered(render_process_console, record, coverage)
