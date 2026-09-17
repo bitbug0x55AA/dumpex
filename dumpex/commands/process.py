@@ -1425,6 +1425,11 @@ _PE_VALUE_KIND_TEXT = {
     "file_offset": "file offset",
 }
 
+# A declared descriptor field the image puts no number in. It is reserved
+# for exactly that: a dash says the image declares nothing here, while
+# `(unread)` says the dump does not hold what the image declared.
+_PE_NO_DECLARED_FIELD = "--"
+
 
 def _pe_table_losses(acquisition) -> "tuple[str, ...]":
     """The tables that are not `enumerated`, in the fixed order they are
@@ -1782,6 +1787,33 @@ def _render_pe_sections(pe_record) -> None:
           "context.")
 
 
+def _pe_declared_field_text(field: "int | None", descriptor) -> str:
+    """One of a descriptor's two declared fields -- its `Start` or its
+    `Size` -- as the console states it.
+
+    `_PE_NO_DECLARED_FIELD` stands for a field the image declares nothing
+    in, and for nothing else. An index past the declared count has no
+    descriptor to carry a field at all, and a directory the image marks
+    absent declares no location; in neither case is there a number, and a
+    printed `0x0` would read as one. A zero under a DECLARED directory is
+    a declaration of zero and is printed as one, and so is a non-zero size
+    under an absent directory -- both are facts of the image that a dash
+    would hide.
+    """
+    absent = descriptor.present is False
+    if field is None:
+        # Nothing came back for this field. Absent with no descriptor
+        # bytes read at all is an index the array never reaches, so there
+        # was no field to read; every other case is a declared field whose
+        # own bytes the dump does not hold.
+        if absent and descriptor.bytes_read == 0:
+            return _PE_NO_DECLARED_FIELD
+        return "(unread)"
+    if absent and field == 0:
+        return _PE_NO_DECLARED_FIELD
+    return f"0x{field:x}"
+
+
 def _render_pe_directories(pe_record) -> None:
     print(f"\n    {BOLD('Data Directories')}                             [--verbose only]")
     if not pe_record.directories:
@@ -1795,27 +1827,37 @@ def _render_pe_directories(pe_record) -> None:
             presence = "declared"
         else:
             presence = "absent"
-        value = "(unread)" if descriptor.value is None else f"0x{descriptor.value:x}"
-        size = "(unread)" if descriptor.size is None else f"0x{descriptor.size:x}"
+        # Start and Size are two distinct descriptor fields and occupy two
+        # columns: joined into one cell they read as an arithmetic
+        # expression rather than as a location and a length. Addressing
+        # precedes them because it is what Start MEANS -- a number whose
+        # address space the reader must scan rightwards to learn is not
+        # yet an address.
         rows.append((
             str(descriptor.index), descriptor.name, presence,
-            f"{value}+{size}", _PE_VALUE_KIND_TEXT[descriptor.value_kind],
+            _PE_VALUE_KIND_TEXT[descriptor.value_kind],
+            _pe_declared_field_text(descriptor.value, descriptor),
+            _pe_declared_field_text(descriptor.size, descriptor),
             _PE_DESCRIPTOR_STATE_TEXT[descriptor.descriptor_state],
             descriptor.capture_state or "(n/a)"))
     name_w = column_width("Directory", [r[1] for r in rows],
                            minimum=_PE_DIRECTORY_NAME_COLUMN_MIN_WIDTH)
-    value_w = column_width("Value+Size", [r[3] for r in rows], minimum=18)
-    kind_w = column_width("Addressing", [r[4] for r in rows], minimum=11)
-    state_w = column_width("Descriptor", [r[5] for r in rows], minimum=16)
-    print(f"      {'#':<3} {'Directory':<{name_w}}  {'Presence':<14}  {'Value+Size':<{value_w}}  "
-          f"{'Addressing':<{kind_w}}  {'Descriptor':<{state_w}}  Capture")
-    for index, name, presence, value, kind, state, capture in rows:
-        print(f"      {index:<3} {name:<{name_w}}  {presence:<14}  {value:<{value_w}}  "
-              f"{kind:<{kind_w}}  {state:<{state_w}}  {capture}")
-    print("      Value+Size is the descriptor's own declaration; Addressing says whether that "
-          "value is")
-    print("      an image RVA or a file offset. Descriptor is how much of the descriptor itself "
-          "was read.")
+    kind_w = column_width("Addressing", [r[3] for r in rows], minimum=11)
+    start_w = column_width("Start", [r[4] for r in rows], minimum=10)
+    size_w = column_width("Size", [r[5] for r in rows], minimum=10)
+    state_w = column_width("Descriptor", [r[6] for r in rows], minimum=16)
+    print(f"      {'#':<3} {'Directory':<{name_w}}  {'Presence':<14}  "
+          f"{'Addressing':<{kind_w}}  {'Start':<{start_w}}  {'Size':<{size_w}}  "
+          f"{'Descriptor':<{state_w}}  Content")
+    for index, name, presence, kind, start, size, state, content in rows:
+        print(f"      {index:<3} {name:<{name_w}}  {presence:<14}  "
+              f"{kind:<{kind_w}}  {start:<{start_w}}  {size:<{size_w}}  "
+              f"{state:<{state_w}}  {content}")
+    print("      Start and Size are the descriptor's own two declared fields, and Addressing "
+          "says which")
+    print(f"      address space Start is in. {_PE_NO_DECLARED_FIELD} is a field the image "
+          "declares nothing in. Descriptor is how")
+    print("      much of the descriptor was read; Content, how much of what it points at.")
 
 
 def _pe_relocation_distance_text(delta) -> str:

@@ -14,6 +14,7 @@ image.
 import contextlib
 import dataclasses
 import io
+import re
 
 import pytest
 
@@ -1707,6 +1708,109 @@ def test_the_descriptor_table_states_its_columns_in_words():
 
     assert "file offset" in row
     assert "declared absent" in row
+
+
+def _directory_table(output: str) -> "list[str]":
+    """The `Data Directories` block's own lines."""
+    block = output.split("Data Directories", 1)[1].split("Relocation Evidence", 1)[0]
+    return block.splitlines()
+
+
+def _directory_row(output: str, name: str) -> "list[str]":
+    """One descriptor row, split into its columns."""
+    row = next(l for l in _directory_table(output) if f" {name} " in l)
+    return re.split(r"\s{2,}", row.strip())
+
+
+def test_the_descriptor_table_gives_each_declared_field_its_own_column():
+    """A descriptor declares a location and a length, and the two are
+    separate fields: joined into one cell they read as an expression over
+    a single number rather than as two."""
+    output = _console(_dump(image=_image()), verbose=True)
+    header = next(l for l in _directory_table(output) if l.strip().startswith("#"))
+
+    assert re.split(r"\s{2,}", header.strip()) == [
+        "#", "Directory", "Presence", "Addressing", "Start", "Size",
+        "Descriptor", "Content"]
+    assert "Value+Size" not in output
+
+
+def test_a_declared_descriptor_states_its_two_fields_apart():
+    output = _console(_dump(image=_image(directories=[(0, 0), (0x2000, 0x28)])),
+                       verbose=True)
+
+    assert _directory_row(output, "IMPORT") == [
+        "1", "IMPORT", "declared", "image RVA", "0x2000", "0x28", "complete", "none"]
+
+
+def test_the_addressing_mode_precedes_the_number_it_governs():
+    """`Start` is an RVA in one row and a file offset in the next, so the
+    column saying which comes first: a number whose address space the
+    reader has to scan rightwards to learn is not yet an address."""
+    output = _console(_dump(image=_image()), verbose=True)
+    columns = _directory_row(output, "SECURITY")
+
+    assert columns.index("file offset") < columns.index("--")
+
+
+def test_an_absent_directory_declares_no_location_and_shows_no_number():
+    """`0x0` in a location column reads as an address the image declared.
+    An absent directory declared none."""
+    output = _console(_dump(image=_image()), verbose=True)
+
+    assert _directory_row(output, "EXPORT") == [
+        "0", "EXPORT", "absent", "image RVA", "--", "--", "declared absent", "(n/a)"]
+
+
+def test_a_declared_directory_of_zero_length_keeps_its_zero():
+    """The dash is for a field the image declares nothing in. A declared
+    directory's `Size` of zero is a declaration of zero, and printing it
+    as a dash would erase the one fact that distinguishes the two."""
+    output = _console(_dump(image=_image(directories=[(0, 0), (0x2000, 0)])),
+                       verbose=True)
+    columns = _directory_row(output, "IMPORT")
+
+    assert columns[2] == "declared"
+    assert columns[4:6] == ["0x2000", "0x0"]
+
+
+def test_a_size_under_an_absent_directory_stays_visible():
+    """Presence is decided by the location field alone, so an absent
+    directory carrying a length is an image that declared a size for a
+    directory it did not place. That is a fact of the image, not noise
+    the dash may swallow."""
+    output = _console(_dump(image=_image(directories=[(0, 0x10), (0x2000, 0x28)])),
+                       verbose=True)
+    columns = _directory_row(output, "EXPORT")
+
+    assert columns[2] == "absent"
+    assert columns[4:6] == ["--", "0x10"]
+
+
+def test_a_declared_field_the_dump_does_not_hold_is_not_a_dash():
+    """`--` says the image declares nothing here; `(unread)` says the dump
+    does not hold what it declared. A descriptor array the optional header
+    has no room for leaves the image's own declaration intact and the
+    bytes missing, and the two must not collapse into one cell."""
+    pe32_plus_fixed_portion = 112
+    output = _console(_dump(image=_image(
+        size_of_optional_header=pe32_plus_fixed_portion + 2 * 8)), verbose=True)
+    columns = _directory_row(output, "BASERELOC")
+
+    assert columns[2] == "(undetermined)"
+    assert columns[4:6] == ["(unread)", "(unread)"]
+
+
+def test_the_content_column_names_what_it_measures():
+    """Two capture questions sit in one row -- how much of the descriptor
+    was read, and how much of what it points at. Each column is named for
+    the one it answers, so no column is headed with the bare word that
+    fits both."""
+    output = _console(_dump(image=_image()), verbose=True)
+    table = _directory_table(output)
+
+    assert any(l.strip().endswith("Content") for l in table)
+    assert not any("Capture" in l for l in table)
 
 
 def test_every_console_vocabulary_table_is_closed_over_its_own_records():

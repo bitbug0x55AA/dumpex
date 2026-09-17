@@ -2208,6 +2208,20 @@ Frozen rules:
   counts are structural: at most `_MAX_SECTIONS` sections, exactly sixteen
   descriptors, one observation per frozen check plus three per section and
   one per descriptor, and a fixed five or six relocation lines;
+- the descriptor table gives each of a descriptor's two declared fields
+  its own column — `Start` and `Size` — and prints the addressing mode
+  before them. They are two distinct fields of the format, and one cell
+  holding both reads as an expression over a single number rather than as
+  a location and a length; a location whose address space the reader has
+  to scan rightwards to learn is not yet an address. `--` is a field the
+  image declares nothing in — an index past the declared count, or the
+  location of a directory the image marks absent — and stands for nothing
+  else: a declared directory's `Size` of zero is a declaration of zero and
+  prints as `0x0`, a size under an absent directory prints as itself, and
+  a declared field the dump does not hold prints `(unread)`. `Descriptor`
+  is how much of the descriptor's own bytes was read and `Content` how
+  much of what they point at, each named for the question it answers;
+
 - the relocation block states what the image declares and how much of it
   the dump holds — the distance from the preferred base, whether
   relocations are declared stripped, whether the image opts in to being

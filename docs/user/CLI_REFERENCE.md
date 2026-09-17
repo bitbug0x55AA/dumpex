@@ -339,7 +339,9 @@ is benign. `--verbose` adds:
 
 - the section table with each section's declared R/W/X, the memory it is mapped
   over, and how much of it the dump captured;
-- all sixteen data-directory descriptors with their addressing mode and state;
+- all sixteen data-directory descriptors, each with its addressing mode, the
+  start and size it declares, and how much of the descriptor and of what it
+  points at the dump holds;
 - the relocation evidence: the distance from the preferred base, what the header
   declares about relocation, and how much of the base-relocation directory the
   dump holds;
