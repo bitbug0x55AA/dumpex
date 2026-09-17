@@ -7,7 +7,7 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
-## 3.9.0 — Unreleased
+## 3.9.0 — 2026-09-18
 
 ### Added
 
