@@ -117,6 +117,22 @@ authoritative coverage facts, and summary output is produced by the shared
 deterministic reducer. JSON and console code must not maintain parallel copies
 of those decisions.
 
+### Entropy measurement and published precision
+
+Entropy stays at full floating-point precision inside the obfuscation domain.
+Threshold comparisons, window ordering, and `high_entropy` classification all
+use that unrounded measurement. Projectors pass structured numeric entropy
+values through `reported_entropy()` only at the publication boundary, rounding
+them to twelve decimal places.
+
+The boundary is required because the last bits returned by `math.log2` can
+differ between supported interpreter builds and their math libraries for the
+same bytes. Publishing those bits would make otherwise identical structured
+records host-dependent. Rounding must not move into collection or domain
+models: doing so would let serialization precision change a detection or the
+order of two windows. Human-readable console facts retain their own shorter
+display precision and are not the twelve-decimal structured numeric field.
+
 ## Cross-hunter investigation queue ordering
 
 The `--hunt all` investigation queue keeps suspicion priority and evidence

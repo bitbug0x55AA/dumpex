@@ -38,49 +38,19 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
   [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the field-level
   summary. Earlier schemas stay frozen, and documents produced by earlier
   releases keep validating against their own version.
-- `--process` and `--report` now describe the main image through the same
-  canonical PE profile and correlation collectors, under one shared read budget.
-  The facts both surfaces publish for one dump are pinned equal by test rather
-  than by convention. `--report`'s `summary.pe_context` gains the matching
-  `not_applicable_count` beside its existing correlation counts.
+- `--process` and `--report` now publish consistent main-image PE facts.
+  `--report`'s `summary.pe_context` gains a matching `not_applicable_count`
+  beside its existing correlation counts.
+- PE output now distinguishes conflicts, unavailable evidence, and checks that
+  do not apply, and explains why a check could not be completed. These are
+  structural observations rather than maliciousness verdicts: existing
+  findings, scores, confidence, coverage status, and exit codes are unchanged.
+- `--hunt obfuscation` rounds structured numeric `entropy` values to at most
+  twelve decimal places for stable output across supported Python runtimes.
+  Detection thresholds, window ranking, classification, scores, coverage
+  status, and exit codes are unchanged.
 
-The console does not stop at counting what it could not check. Beside any
-conflict, it names the checks whose answer would have changed what an analyst
-does next — a memory table the dump does not carry, a structure captured only
-in part, no second source to corroborate against — and which of the dump's own
-tables is behind them, with routine structural absences left to `--verbose`.
-
-The record states what it could not do rather than implying it did: a memory
-table the dump does not carry is reported as missing evidence rather than as a
-determined negative, and one dumpex cannot walk in full never clamps what the
-PE header decodes; either way the record names that table as the reason its
-byte provenance and dependent checks are withheld. A correlation that could not
-be produced is reported as such rather than as an empty tally of consistency
-checks, and an internal failure to build a profile is named as one rather than
-reported as an unreadable header.
-
-A PE consistency conflict is a disagreement between two captured facts, and a
-check that withholds an answer says which kind it is. A check is `unavailable`
-when the evidence it needed is not in the dump, and `not applicable` when the
-image's own declarations leave the comparison no subject — a data directory the
-header declares absent, the Security directory's file offset, a header with no
-checksum. The two are counted and marked apart on the console and in `--json`,
-so an ordinary PE layout is not reported as unexamined evidence.
-
-None of it is a maliciousness verdict: no finding, score, confidence, verdict,
-coverage status, or exit code changes, existing `--process` fields and IAT
-meanings are unchanged, and an unreadable main image cannot downgrade the
-process identity evidence beside it.
-
-- `--hunt obfuscation` publishes every `entropy` figure to twelve decimal
-  places. One dump now reports one value wherever it is read; at full precision
-  the last bit of the host C library's `log2` reached the document, and two
-  machines could publish different entropies for identical bytes. Only the
-  published figure is pinned: threshold comparisons, window ranking, and the
-  `high_entropy` classification all still read the measurement at full
-  precision, so no finding, score, coverage status, or exit code changes.
-
-## 3.8.1 — Unreleased
+## 3.8.1 — 2026-09-16
 
 ### Fixed
 
