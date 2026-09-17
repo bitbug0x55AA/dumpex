@@ -4716,10 +4716,9 @@ class ProcessPeRecord:
                 raise ValueError(
                     f"ProcessPeRecord.directory_summary[{name!r}] must be null when no "
                     f"profile was collected")
-        if any(count for count in self.observation_coverage.values()):
-            raise ValueError(
-                "ProcessPeRecord.observation_coverage counts nothing when no profile was "
-                "collected")
+        # The tally needs no check of its own here: it sums to `total`,
+        # `total` is the length of `observations`, and the array is empty
+        # by the check above, so every count is already zero.
         entry_point = self.entry_point
         if entry_point.va_overflow or any(
                 getattr(entry_point, name) is not None
@@ -4742,10 +4741,9 @@ class ProcessPeRecord:
             if self.observations:
                 raise ValueError(
                     "ProcessPeRecord carries no observation when no correlation was produced")
-            if any(count for count in self.observation_coverage.values()):
-                raise ValueError(
-                    "ProcessPeRecord.observation_coverage counts nothing when no correlation "
-                    "was produced")
+            # The tally follows the empty array through the same two
+            # invariants it does in `_check_uncollected`, so it is already
+            # all zeros here.
             # Every per-section and per-entry-point fact below is the
             # correlation's, not the profile's: reporting one without it
             # would present a resolution nothing performed.

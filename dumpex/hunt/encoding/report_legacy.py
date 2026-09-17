@@ -1,5 +1,6 @@
 """Project an ``EncodingReport`` into the legacy v1.1 findings shape."""
 from dumpex.hunt.encoding.domain import EncodingReport
+from dumpex.hunt.encoding.entropy import reported_entropy
 from dumpex.hunt.encoding.report_facts import finding_from_check_result, project_coverage_v1
 
 
@@ -46,7 +47,7 @@ def _classification_dict(classification) -> dict:
         "is_shellcode": classification.is_shellcode,
         "ioc_strings": list(classification.ioc_strings),
         "hex_prefix": classification.hex_prefix,
-        "entropy": classification.entropy,
+        "entropy": reported_entropy(classification.entropy),
     }
     if classification.pe_info is not None:
         d["pe_info"] = _pe_info_dict(classification.pe_info)
@@ -73,7 +74,8 @@ def _decoded_hit_dict(h) -> dict:
 
 
 def _entropy_hit_dict(h) -> dict:
-    return {"region": _region_dict(h.region), "entropy": h.entropy, "threshold": h.threshold}
+    return {"region": _region_dict(h.region), "entropy": reported_entropy(h.entropy),
+            "threshold": h.threshold}
 
 
 def _evidence_for(report: EncodingReport, check: str) -> tuple:

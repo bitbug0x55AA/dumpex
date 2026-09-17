@@ -1,4 +1,6 @@
 """Hunter-specific behavior for obfuscation report projectors."""
+import dataclasses
+
 import pytest
 
 from tests.hunt.test_encoding_domain import _cls, _hit, _entropy_hit, _coverage, _check
@@ -7,7 +9,11 @@ from dumpex.hunt._finding import (
     CONFIDENCE_HIGH, CONFIDENCE_LOW, CONFIDENCE_MEDIUM,
     TAG_DETECTION, TAG_LEAD, TAG_OBSERVATION,
 )
+from dumpex.hunt.encoding.config import EncodingConfig
 from dumpex.hunt.encoding.domain import CoverageSnapshot, EncodingEvidence, EncodingReport
+from dumpex.hunt.encoding.entropy import (
+    REPORTED_ENTROPY_PLACES, _shannon_entropy, reported_entropy, scan_entropy_windows,
+)
 from dumpex.hunt.encoding.report_facts import finding_from_check_result
 from dumpex.hunt.encoding.report_legacy import project_legacy_dict
 from dumpex.hunt.encoding.report_record import project_hunter_record
@@ -345,3 +351,84 @@ def test_encoding_report_status_has_no_error_representation():
     known_statuses = {DETECTED, NOT_DETECTED_IN_SCANNED_SCOPE, INCONCLUSIVE, NOT_EVALUATED}
     for report_fn in (_full_report, _clean_report, _inconclusive_report, _not_evaluated_report):
         assert report_fn().status in known_statuses
+
+
+# ── 7. Published precision ──────────────────────────────────────────────────
+# An entropy figure is measured at full precision and published at a fixed
+# one. The split is what keeps the two answers separate: every term of the
+# Shannon sum passes through the platform's `log2`, so the last bits of the
+# measurement belong to the host's C library as much as to the bytes, and a
+# document carrying them would report one dump differently on two machines.
+# Rounding earlier would put that published precision in charge of a
+# threshold comparison instead.
+
+_UNROUNDED = 0.03687450625387198
+
+
+def _unrounded_entropy_report() -> EncodingReport:
+    """One entropy observation whose measurement needs more decimal places
+    than a document publishes."""
+    entropy = _entropy_hit(base=_BASE, entropy=_UNROUNDED, threshold=0.0)
+    return EncodingReport(
+        score=1, coverage=_coverage(), evidence=EncodingEvidence(entropy_hits=(entropy,)),
+        results=(_check(check="obfuscation.entropy_observation", tag=TAG_OBSERVATION,
+                        confidence=CONFIDENCE_LOW, evidence=(entropy,), evidence_limit=15),))
+
+
+def _unrounded_classification_report() -> EncodingReport:
+    """The same, carried on a decoded hit's classification instead."""
+    classification = dataclasses.replace(_cls(kind="plaintext"), entropy=_UNROUNDED)
+    hit = _hit(layer="base64", base=_BASE, classification=classification)
+    return EncodingReport(
+        score=1, coverage=_coverage(), evidence=EncodingEvidence(base64_hits=(hit,)),
+        results=(_check(check="obfuscation.base64_observation", tag=TAG_OBSERVATION,
+                        confidence=CONFIDENCE_LOW, evidence=(hit,), evidence_limit=15),))
+
+
+def test_a_published_entropy_is_pinned_to_a_reproducible_precision():
+    report = _unrounded_entropy_report()
+
+    published = project_hunter_record(report).details.entropy[0]["entropy"]
+    legacy = project_legacy_dict(report)["entropy"][0]["entropy"]
+
+    assert published == legacy == round(_UNROUNDED, REPORTED_ENTROPY_PLACES)
+    assert published != _UNROUNDED
+
+
+def test_a_published_classification_entropy_is_pinned_the_same_way():
+    report = _unrounded_classification_report()
+
+    published = project_legacy_dict(report)["base64"][0]["cls"]["entropy"]
+
+    assert published == round(_UNROUNDED, REPORTED_ENTROPY_PLACES)
+    assert published != _UNROUNDED
+
+
+def test_the_measurement_itself_is_not_rounded():
+    """A threshold comparison, a window ranking, and the `high_entropy`
+    classification all read the measurement, so the value the scan layer
+    produces carries every bit it computed. The bits themselves are not
+    pinned here -- which ones the host produces is exactly what must not
+    reach a document."""
+    data = bytes([0x00]) + bytes([0x01]) * 255
+    measured = _shannon_entropy(data)
+
+    assert measured != reported_entropy(measured)
+    assert reported_entropy(measured) == round(measured, REPORTED_ENTROPY_PLACES)
+
+
+def test_a_threshold_between_the_two_answers_reads_the_measurement():
+    """A threshold placed between the measurement and the figure published
+    for it separates the two: the hit follows the measurement, whichever
+    side of the published figure the host's own value falls on."""
+    data = bytes([0x00]) + bytes([0x01]) * 256
+    measured = _shannon_entropy(data)
+    published = reported_entropy(measured)
+    assert measured != published
+    threshold = (measured + published) / 2
+
+    windowed = scan_entropy_windows(data, 0x400000, threshold, EncodingConfig())
+
+    assert windowed.windows_evaluated == 1
+    assert windowed.whole_range_entropy == measured
+    assert (windowed.windows_above_threshold > 0) == (measured >= threshold)

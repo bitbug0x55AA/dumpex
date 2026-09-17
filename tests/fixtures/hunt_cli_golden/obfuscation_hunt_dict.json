@@ -32,7 +32,7 @@
     "base64": [
       {
         "cls": {
-          "entropy": 0.28539943275448953,
+          "entropy": 0.285399432754,
           "hex_prefix": "4d5a0000000000000000000000000000",
           "ioc_strings": [],
           "is_pe": true,
@@ -90,7 +90,7 @@
     "hidden_pe": [
       {
         "cls": {
-          "entropy": 0.28539943275448953,
+          "entropy": 0.285399432754,
           "hex_prefix": "4d5a0000000000000000000000000000",
           "ioc_strings": [],
           "is_pe": true,

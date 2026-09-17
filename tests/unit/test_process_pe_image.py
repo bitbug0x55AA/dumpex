@@ -494,6 +494,347 @@ def test_a_collected_record_refuses_a_short_descriptor_array():
         dataclasses.replace(collected, directories=collected.directories[:8])
 
 
+# ── Field-level rejections ──────────────────────────────────────────────
+#
+# Every record in the `pe_image` tree validates in `__post_init__`, so a
+# shape the schema would reject cannot be constructed in the first place.
+# Each case below starts from a whole image's own record and makes exactly
+# one field hostile, which is what pins the refusal to that field rather
+# than to the record being malformed in general.
+
+
+def _collected():
+    return _pe(_dump(image=_image()))
+
+
+def _uncorrelated():
+    """A collected profile nothing was correlated over: the header's own
+    facts stand, and every field a correlation would have resolved is
+    null. This is the shape the per-field checks below make hostile."""
+    collected = _collected()
+    return dataclasses.replace(
+        collected,
+        correlated=False,
+        observations=(),
+        observation_coverage={"total": 0, "consistent": 0, "conflict": 0,
+                               "unavailable": 0, "not_applicable": 0},
+        sections=tuple(
+            dataclasses.replace(section, mapped_base_address=None, mapped_size=None,
+                                 capture_state=None, live_protections=())
+            for section in collected.sections),
+        directories=tuple(
+            dataclasses.replace(descriptor, containing_section_index=None, capture_state=None)
+            for descriptor in collected.directories),
+        entry_point=dataclasses.replace(
+            collected.entry_point, va=None, section_index=None, capture_state=None,
+            region_state=None, region_type=None, region_protection=None))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("name", b".text"),
+    ("capture_state", "mostly"),
+    ("mapped_base_address", None),
+    ("mapped_size", None),
+    ("live_protections", ("",)),
+    ("live_protections", (None,)),
+])
+def test_a_section_record_refuses_a_malformed_field(field, value):
+    section = _collected().sections[0]
+    assert section.mapped_base_address is not None and section.mapped_size is not None
+
+    with pytest.raises(ValueError):
+        dataclasses.replace(section, **{field: value})
+
+
+@pytest.mark.parametrize("field,value", [
+    ("name", ""),
+    ("value_kind", "virtual"),
+    ("descriptor_state", "mostly"),
+    ("capture_state", "mostly"),
+])
+def test_a_directory_record_refuses_a_malformed_field(field, value):
+    descriptor = _collected().directories[0]
+
+    with pytest.raises(ValueError):
+        dataclasses.replace(descriptor, **{field: value})
+
+
+@pytest.mark.parametrize("field,value", [
+    ("section_name", 1),
+    ("region_state", 2),
+    ("region_type", 3),
+    ("region_protection", 4),
+    ("capture_state", "mostly"),
+])
+def test_an_entry_point_record_refuses_a_malformed_field(field, value):
+    entry_point = _collected().entry_point
+
+    with pytest.raises(ValueError):
+        dataclasses.replace(entry_point, **{field: value})
+
+
+def test_an_entry_point_that_overflowed_carries_no_address():
+    """`va_overflow` says no address could be formed, so a VA beside it
+    would report the one the addition did not produce."""
+    entry_point = _collected().entry_point
+    assert entry_point.va is not None
+
+    with pytest.raises(ValueError, match="va_overflow"):
+        dataclasses.replace(entry_point, va_overflow=True)
+
+
+@pytest.mark.parametrize("field,value,exc", [
+    ("requested_stage", "everything", ValueError),
+    ("highest_completed_stage", "everything", ValueError),
+    ("bounded_stop", "budget", TypeError),
+    ("bounded_stop", {"scope": "headers"}, ValueError),
+    ("components", ["dos_header"], TypeError),
+    ("components", {"dos_header": "complete"}, ValueError),
+    ("segment_table", "walked", ValueError),
+    ("region_table", "walked", ValueError),
+    ("unexamined", ("0x1000",), ValueError),
+    ("unexamined", ({"base_address": "0x0000000000001000"},), ValueError),
+])
+def test_an_acquisition_record_refuses_a_malformed_field(field, value, exc):
+    acquisition = _collected().acquisition
+
+    with pytest.raises(exc):
+        dataclasses.replace(acquisition, **{field: value})
+
+
+def test_an_acquisition_component_refuses_a_state_outside_the_ladder():
+    acquisition = _collected().acquisition
+    components = dict(acquisition.components)
+    components["dos_header"] = "mostly"
+
+    with pytest.raises(ValueError, match="dos_header"):
+        dataclasses.replace(acquisition, components=components)
+
+
+def test_an_overlap_answer_needs_the_capture_slice_it_is_about():
+    acquisition = _collected().acquisition
+    assert acquisition.captured_bytes is not None
+
+    with pytest.raises(ValueError, match="capture_overlapping"):
+        dataclasses.replace(acquisition, capture_overlapping=None)
+
+
+@pytest.mark.parametrize("field,value,exc", [
+    ("module_identity", ["value"], TypeError),
+    ("module_identity", {"value": None}, ValueError),
+    ("machine_name", 1, ValueError),
+    ("module_match", "sort_of", ValueError),
+    ("entry_point", {"rva": 0}, TypeError),
+    ("acquisition", {"requested_stage": "headers"}, TypeError),
+    ("relocation", ["delta"], TypeError),
+    ("relocation", {"delta": 0}, ValueError),
+    ("directory_summary", ["declared_count"], TypeError),
+    ("directory_summary", {"declared_count": 16}, ValueError),
+    ("observation_coverage", ["total"], TypeError),
+    ("observation_coverage", {"total": 0}, ValueError),
+])
+def test_a_pe_record_refuses_a_malformed_field(field, value, exc):
+    with pytest.raises(exc):
+        dataclasses.replace(_collected(), **{field: value})
+
+
+@pytest.mark.parametrize("value", [True, 0.5, "0"])
+def test_a_relocation_delta_is_an_integer_or_nothing(value):
+    """The delta is signed and counted in bytes: a bool or a float would
+    put a value in the field that no address arithmetic produced."""
+    collected = _collected()
+    relocation = dict(collected.relocation)
+    relocation["delta"] = value
+
+    with pytest.raises(ValueError, match="delta"):
+        dataclasses.replace(collected, relocation=relocation)
+
+
+@pytest.mark.parametrize("value,form,truncated", [
+    (1, "path", False),
+    (None, "path", False),
+    (None, None, True),
+    (r"C:\a.exe", None, False),
+])
+def test_a_module_identity_states_its_value_and_form_together(value, form, truncated):
+    """A name nobody supplied cannot have a form or be a shortened one,
+    and a name that was supplied has to say which form it is."""
+    collected = _collected()
+    identity = {"value": value, "form": form, "truncated": truncated}
+
+    with pytest.raises(ValueError):
+        dataclasses.replace(collected, module_identity=identity)
+
+
+def test_a_correlation_cannot_run_over_a_profile_that_was_never_built():
+    with pytest.raises(ValueError, match="correlated"):
+        dataclasses.replace(_collected(), collected=False, correlated=True,
+                             unavailable_reason="no_image_base")
+
+
+def test_a_collected_profile_carries_no_reason_for_being_absent():
+    with pytest.raises(ValueError, match="unavailable_reason"):
+        dataclasses.replace(_collected(), unavailable_reason="no_image_base")
+
+
+@pytest.mark.parametrize("field,value,exc", [
+    ("sections", ("section",), TypeError),
+    ("directories", ("descriptor",) * 16, TypeError),
+    ("observations", ("observation",), TypeError),
+])
+def test_a_pe_record_refuses_a_foreign_object_in_its_arrays(field, value, exc):
+    with pytest.raises(exc):
+        dataclasses.replace(_collected(), **{field: value})
+
+
+def test_sections_are_carried_in_section_table_order():
+    collected = _pe(_dump(image=_image(sections=(TEXT, DATA))))
+    assert len(collected.sections) > 1
+
+    with pytest.raises(ValueError, match="section-table order"):
+        dataclasses.replace(collected, sections=collected.sections[::-1])
+
+
+def test_the_decoded_section_count_is_the_number_of_sections_carried():
+    collected = _collected()
+
+    with pytest.raises(ValueError, match="decoded_section_count"):
+        dataclasses.replace(collected, decoded_section_count=len(collected.sections) + 1)
+
+
+def test_descriptors_are_carried_in_index_order():
+    collected = _collected()
+
+    with pytest.raises(ValueError, match="index order"):
+        dataclasses.replace(collected, directories=collected.directories[::-1])
+
+
+def test_the_observation_tally_counts_the_observations_carried():
+    collected = _collected()
+
+    with pytest.raises(ValueError, match="observation_coverage"):
+        dataclasses.replace(collected, observations=collected.observations[:-1])
+
+
+def test_the_four_observation_states_sum_to_the_tally_total():
+    collected = _collected()
+    tally = dict(collected.observation_coverage)
+    tally["consistent"] += 1
+
+    with pytest.raises(ValueError, match="sum"):
+        dataclasses.replace(collected, observation_coverage=tally)
+
+
+def test_a_correlation_that_ran_carries_what_it_produced():
+    collected = _collected()
+
+    with pytest.raises(ValueError, match="correlated"):
+        dataclasses.replace(
+            collected, observations=(),
+            observation_coverage={"total": 0, "consistent": 0, "conflict": 0,
+                                   "unavailable": 0, "not_applicable": 0})
+
+
+def test_an_uncorrelated_record_is_a_whole_profile_with_nothing_resolved():
+    """The base the cases below make hostile is itself legitimate: a
+    profile can be collected with no correlation over it."""
+    uncorrelated = _uncorrelated()
+
+    assert uncorrelated.collected and not uncorrelated.correlated
+    assert uncorrelated.size_of_image is not None
+    assert uncorrelated.observations == ()
+
+
+def test_an_uncorrelated_record_carries_no_observation():
+    uncorrelated = _uncorrelated()
+    observation = _collected().observations[0]
+    tally = {"total": 1, "consistent": 1, "conflict": 0, "unavailable": 0, "not_applicable": 0}
+
+    with pytest.raises(ValueError, match="no correlation"):
+        dataclasses.replace(uncorrelated, observations=(observation,),
+                             observation_coverage=tally)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("mapped_base_address", "0x0000000000011000"),
+    ("capture_state", "none"),
+    ("live_protections", ("PAGE_READONLY",)),
+])
+def test_an_uncorrelated_section_resolves_nothing_into_the_process(field, value):
+    uncorrelated = _uncorrelated()
+    replacement = {field: value}
+    if field == "mapped_base_address":
+        replacement["mapped_size"] = 0x1000
+    section = dataclasses.replace(uncorrelated.sections[0], **replacement)
+
+    with pytest.raises(ValueError, match="no correlation"):
+        dataclasses.replace(uncorrelated, sections=(section,) + uncorrelated.sections[1:])
+
+
+@pytest.mark.parametrize("field,value", [
+    ("va", "0x0000000000011000"),
+    ("section_index", 0),
+    ("capture_state", "none"),
+    ("region_state", "MEM_COMMIT"),
+    ("region_type", "MEM_IMAGE"),
+    ("region_protection", "PAGE_EXECUTE_READ"),
+])
+def test_an_uncorrelated_entry_point_resolves_nothing_into_the_process(field, value):
+    uncorrelated = _uncorrelated()
+    entry_point = dataclasses.replace(uncorrelated.entry_point, **{field: value})
+
+    with pytest.raises(ValueError, match="no correlation"):
+        dataclasses.replace(uncorrelated, entry_point=entry_point)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("containing_section_index", 0),
+    ("capture_state", "none"),
+])
+def test_an_uncorrelated_descriptor_resolves_nothing_into_the_process(field, value):
+    uncorrelated = _uncorrelated()
+    descriptor = dataclasses.replace(uncorrelated.directories[0], **{field: value})
+
+    with pytest.raises(ValueError, match="no correlation"):
+        dataclasses.replace(uncorrelated, directories=(descriptor,) + uncorrelated.directories[1:])
+
+
+def test_an_uncollected_record_names_no_module():
+    uncollected = records_module.ProcessPeRecord.uncollected("no_image_base")
+    identity = {"value": r"C:\a.exe", "form": "path", "truncated": False}
+
+    with pytest.raises(ValueError, match="names nothing"):
+        dataclasses.replace(uncollected, module_identity=identity)
+
+
+def test_an_uncollected_record_decoded_no_section():
+    """The count is carried with the sections it counts, so a record that
+    built no profile is refused at the count itself rather than at the
+    mismatch between the two."""
+    uncollected = records_module.ProcessPeRecord.uncollected("no_image_base")
+    section = _collected().sections[0]
+
+    with pytest.raises(ValueError, match="decoded_section_count must be 0"):
+        dataclasses.replace(uncollected, sections=(section,), decoded_section_count=1)
+
+
+def test_an_uncollected_record_carries_no_observation():
+    uncollected = records_module.ProcessPeRecord.uncollected("header_unreadable")
+    observation = _collected().observations[0]
+    tally = {"total": 1, "consistent": 1, "conflict": 0, "unavailable": 0, "not_applicable": 0}
+
+    with pytest.raises(ValueError, match="no profile was collected"):
+        dataclasses.replace(uncollected, observations=(observation,),
+                             observation_coverage=tally)
+
+
+def test_a_process_record_refuses_a_pe_image_of_another_type():
+    record = collect_process(_dump(image=_image())).records[0]
+
+    with pytest.raises(TypeError, match="pe_image"):
+        dataclasses.replace(record, pe_image={"collected": False})
+
+
 # ── Observations ────────────────────────────────────────────────────────
 
 

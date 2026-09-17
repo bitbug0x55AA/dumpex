@@ -4,6 +4,7 @@ Typed evidence is reshaped directly while preserving ``ObfuscationDetails``
 wire semantics.
 """
 from dumpex.hunt.encoding.domain import EncodingReport
+from dumpex.hunt.encoding.entropy import reported_entropy
 from dumpex.hunt.encoding.report_facts import finding_from_check_result, project_coverage_report
 from dumpex.hunt.encoding.report_legacy import _classification_dict
 from dumpex.output.records import HunterRecord, ObfuscationDetails, hex_address
@@ -45,7 +46,7 @@ def _entropy_hit_dict(h) -> dict:
     that sub-range is the thing an investigator extracts. A whole-region value
     -- every full-scope hit -- omits the key entirely rather than emitting a
     window equal to the region."""
-    out = {"region": _region_dict(h.region), "entropy": h.entropy,
+    out = {"region": _region_dict(h.region), "entropy": reported_entropy(h.entropy),
            "threshold": h.threshold}
     if h.size is not None:
         out["window"] = {"base_address": hex_address(h.location.va), "size": h.size}

@@ -72,6 +72,14 @@ coverage status, or exit code changes, existing `--process` fields and IAT
 meanings are unchanged, and an unreadable main image cannot downgrade the
 process identity evidence beside it.
 
+- `--hunt obfuscation` publishes every `entropy` figure to twelve decimal
+  places. One dump now reports one value wherever it is read; at full precision
+  the last bit of the host C library's `log2` reached the document, and two
+  machines could publish different entropies for identical bytes. Only the
+  published figure is pinned: threshold comparisons, window ranking, and the
+  `high_entropy` classification all still read the measurement at full
+  precision, so no finding, score, coverage status, or exit code changes.
+
 ## 3.8.1 — Unreleased
 
 ### Fixed

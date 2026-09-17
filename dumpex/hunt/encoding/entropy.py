@@ -43,6 +43,26 @@ def _shannon_entropy(data: bytes) -> float:
     return -sum(c / n * math.log2(c / n) for c in counts.values()) + 0.0
 
 
+# Decimal places an entropy figure is published with. Every term of the
+# Shannon sum passes through the platform's `log2`, whose last bit is free to
+# differ between C libraries, so the full-precision value is a property of the
+# host as well as of the bytes: two machines can publish different entropies
+# for identical input. Twelve places is orders of magnitude finer than any
+# threshold or rendering in this package and is a figure every platform agrees
+# on.
+REPORTED_ENTROPY_PLACES = 12
+
+
+def reported_entropy(value: float) -> float:
+    """`value` as a document publishes it.
+
+    Measurement, threshold comparison, window ranking, and classification all
+    use the exact figure -- rounding before a comparison would let the
+    published precision decide an outcome. Only what leaves for a record,
+    `--json`, or the console passes through here."""
+    return round(value, REPORTED_ENTROPY_PLACES)
+
+
 def entropy_region_ineligible_reason(region, modules) -> "str | None":
     """Why this layer's descriptor-eligibility gate declines ``region``, or
     ``None`` when it accepts it.
