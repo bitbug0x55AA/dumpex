@@ -518,6 +518,40 @@ def test_process_empty_dump_still_returns_one_all_null_record_and_validates(vali
     assert "peb_extended" not in record
 
 
+def test_process_pe_image_with_a_whole_profile_validates(validator):
+    # v2.19's pe_image against a real collect_process() run over a whole
+    # synthetic image: the decoded section table, all sixteen descriptors,
+    # the acquisition provenance, and every observation in all three
+    # states -- the complete record, not a hand-shaped stand-in.
+    from tests.unit.test_process_pe_image import DATA, _dump, _image
+    from tests.unit.test_pe_profile import TEXT
+
+    result = collect_process(_dump(image=_image(sections=(TEXT, DATA))))
+    doc = _validate(validator, result)
+    pe_image = doc["result"]["data"]["records"][0]["pe_image"]
+    assert pe_image["collected"] is True
+    assert pe_image["unavailable_reason"] is None
+    assert len(pe_image["directories"]) == 16
+    assert [s["name"] for s in pe_image["sections"]] == [".text", ".data"]
+    assert pe_image["acquisition"]["requested_stage"] == "sections"
+    assert len(pe_image["observations"]) == pe_image["observation_coverage"]["total"]
+    assert {o["state"] for o in pe_image["observations"]} <= {
+        "consistent", "conflict", "unavailable"}
+
+
+def test_process_pe_image_uncollected_profile_validates(validator):
+    # The other half of the same required object: a run with no image base
+    # emits it with every fact null and every array empty, so a consumer
+    # can tell "no profile" from "older producer".
+    result = collect_process(FakeMF())
+    doc = _validate(validator, result)
+    pe_image = doc["result"]["data"]["records"][0]["pe_image"]
+    assert pe_image["collected"] is False
+    assert pe_image["unavailable_reason"] == "no_image_base"
+    assert pe_image["directories"] == [] and pe_image["observations"] == []
+    assert pe_image["acquisition"] is None
+
+
 def test_process_peb_module_base_conflict_diagnostic_validates(validator):
     # Exercises identity_evidence.diagnostics[] (processDiagnosticRecord)
     # with a real PROCESS_MODULE_BASE_CONFLICT entry -- the PEB and module
@@ -700,7 +734,35 @@ def _minimal_process_record():
                                   "name": None, "path": None, "name_matched_candidate": None,
                                   "name_matched_candidate_ambiguous": False},
                 "main_image_pe": {"checked": False, "valid": None, "reason": None},
-                "selected_path_source": None, "diagnostics": []}}
+                "selected_path_source": None, "diagnostics": []},
+            "pe_image": _uncollected_pe_image()}
+
+
+def _uncollected_pe_image():
+    """v2.19's `pe_image` for a run that profiled nothing: the object is
+    always there, and the absence is stated once in `unavailable_reason`."""
+    return {"collected": False, "correlated": False, "unavailable_reason": "no_image_base",
+            "source_kind": None,
+            "module_identity": {"value": None, "form": None, "truncated": False},
+            "actual_base": None, "preferred_image_base": None, "format": None,
+            "machine": None, "machine_name": None, "time_date_stamp": None, "checksum": None,
+            "subsystem": None, "dll_characteristics": None, "coff_characteristics": None,
+            "size_of_image": None, "size_of_headers": None, "section_alignment": None,
+            "file_alignment": None, "declared_section_count": None,
+            "decoded_section_count": 0, "structural_state": None,
+            "relocation": {"delta": None, "relocs_stripped": None, "dynamic_base": None,
+                            "basereloc_present": None, "basereloc_descriptor_state": None},
+            "entry_point": {"rva": None, "va": None, "va_overflow": False,
+                             "section_index": None, "section_name": None,
+                             "capture_state": None, "region_state": None,
+                             "region_type": None, "region_protection": None},
+            "acquisition": None,
+            "directory_summary": {"declared_count": None, "declared_count_raw": None,
+                                   "readable_count": None, "unprojected_count": None},
+            "module_match": None,
+            "observation_coverage": {"total": 0, "consistent": 0, "conflict": 0,
+                                      "unavailable": 0},
+            "sections": [], "directories": [], "observations": []}
 
 
 def _minimal_handle_record():

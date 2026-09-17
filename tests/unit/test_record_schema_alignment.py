@@ -37,9 +37,12 @@ from dumpex.output.records import (
     ReportRegionInfo, ReportThreadInfo, StringRecord, SysInfoRecord, ThreadDiffRecord,
     ThreadRecord, hex_address,
     ProcessRecord, IatRecord, ImportEntryRecord, ProcessDiagnosticRecord, HandleRecord,
+    PeObservationRecord, ProcessPeAcquisitionRecord, ProcessPeDirectoryRecord,
+    ProcessPeEntryPointRecord, ProcessPeRecord, ProcessPeSectionRecord,
     ProfileRecord, ProfileMemoryCapture, ProfileStreamEntry, ProfileCapabilityEntry,
     CapabilityLimitation, StreamParserState, CapabilityStatus, CAPABILITY_IDS, CAPABILITY_BY_ID,
 )
+from dumpex.core.pe_profile import DIRECTORY_NAMES
 from dumpex.schemas import CURRENT_SCHEMA, schema_path
 
 _ADDR = hex_address(0x1000)
@@ -53,6 +56,61 @@ _PROCESS_DIAGNOSTIC = ProcessDiagnosticRecord(
     code="PROCESS_MODULE_BASE_CONFLICT", severity="warning",
     message="a module named a.exe is loaded elsewhere", affected_count=1,
     details={"name": "a.exe", "module_base": _ADDR, "peb_base": _ADDR2})
+
+
+_PE_SECTION = ProcessPeSectionRecord(
+    section_index=0, name=".text", virtual_address=0x1000, virtual_size=0x2000,
+    size_of_raw_data=0x2000, characteristics=0x60000020, declared_readable=True,
+    declared_writable=False, declared_executable=True,
+    mapped_base_address=_ADDR, mapped_size=0x2000, capture_state="complete",
+    live_protections=("PAGE_EXECUTE_READ",))
+
+_PE_DIRECTORIES = tuple(
+    ProcessPeDirectoryRecord(
+        index=index, name=name, value=(0x2000 if index == 1 else 0),
+        value_kind=("file_offset" if index == 4 else "rva"),
+        size=(40 if index == 1 else 0), bytes_read=8, present=(index == 1),
+        descriptor_state=("complete" if index == 1 else "declared_absent"),
+        containing_section_index=(0 if index == 1 else None),
+        capture_state=("complete" if index == 1 else None))
+    for index, name in enumerate(DIRECTORY_NAMES))
+
+_PE_OBSERVATION = PeObservationRecord(
+    name="section_image_bound", state="consistent", reason="section_within_image_bound",
+    sources=("profile.optional_header", "profile.section_table"),
+    operands={"section_index": 0, "size_of_image": 0x5000})
+
+_PE_ENTRY_POINT = ProcessPeEntryPointRecord(
+    rva=0x1000, va=_ADDR2, va_overflow=False, section_index=0, section_name=".text",
+    capture_state="complete", region_state="MEM_COMMIT", region_type="MEM_IMAGE",
+    region_protection="PAGE_EXECUTE_READ")
+
+_PE_ACQUISITION = ProcessPeAcquisitionRecord(
+    requested_stage="sections", highest_completed_stage="sections", requested_bytes=0x1000,
+    captured_bytes=0x1000, read_bytes=0x400, read_target_bytes=0x400, target_io_short=False,
+    bounded_stop=None,
+    components={"dos_header": "complete", "coff_header": "complete",
+                 "optional_header": "complete", "directory_array": "complete",
+                 "directory_descriptors": "complete", "section_table": "complete"},
+    segment_table="enumerated", region_table="enumerated", capture_overlapping=False,
+    unexamined=({"base_address": _ADDR2, "size": 0x100},))
+
+_PE_IMAGE = ProcessPeRecord(
+    collected=True, correlated=True, unavailable_reason=None, source_kind="peb_image_base",
+    module_identity={"value": r"C:\a.exe", "form": "path", "truncated": False},
+    actual_base=_ADDR, preferred_image_base=_ADDR, format="PE32+", machine=0x8664,
+    machine_name="AMD64", time_date_stamp=0x12345678, checksum=0, subsystem=2,
+    dll_characteristics=0x40, coff_characteristics=0x22, size_of_image=0x5000,
+    size_of_headers=0x400, section_alignment=0x1000, file_alignment=0x200,
+    declared_section_count=1, decoded_section_count=1, structural_state="complete",
+    relocation={"delta": 0, "relocs_stripped": False, "dynamic_base": True,
+                 "basereloc_present": False, "basereloc_descriptor_state": "declared_absent"},
+    entry_point=_PE_ENTRY_POINT, acquisition=_PE_ACQUISITION,
+    directory_summary={"declared_count": 16, "declared_count_raw": 16, "readable_count": 16,
+                        "unprojected_count": 0},
+    module_match="resolved",
+    observation_coverage={"total": 1, "consistent": 1, "conflict": 0, "unavailable": 0},
+    sections=(_PE_SECTION,), directories=_PE_DIRECTORIES, observations=(_PE_OBSERVATION,))
 
 
 def _capability_entry_for(capability_id: str) -> ProfileCapabilityEntry:
@@ -109,6 +167,12 @@ _RECORDS = {
         environment_variables=[{"name": "PATH", "value": r"C:\windows"}]),
     "importEntryRecord": lambda: _IAT_ENTRY,
     "processDiagnosticRecord": lambda: _PROCESS_DIAGNOSTIC,
+    "peObservation": lambda: _PE_OBSERVATION,
+    "processPeSection": lambda: _PE_SECTION,
+    "processPeDirectory": lambda: _PE_DIRECTORIES[1],
+    "processPeEntryPoint": lambda: _PE_ENTRY_POINT,
+    "processPeAcquisition": lambda: _PE_ACQUISITION,
+    "processPeRecord": lambda: _PE_IMAGE,
     "iatRecord": lambda: IatRecord(
         table_present=True, table_va=_ADDR, table_size=0x100,
         import_directory_present=True, import_directory_va=_ADDR2, import_directory_size=0x28,
@@ -138,6 +202,7 @@ _RECORDS = {
             "selected_path_source": "peb",
             "diagnostics": [_PROCESS_DIAGNOSTIC.to_dict()],
         },
+        pe_image=_PE_IMAGE,
         peb_extended={"peb_address": _ADDR, "being_debugged": False, "window_title": "a",
                       "dll_path": r"C:\windows\system32", "standard_input": _ADDR,
                       "standard_output": _ADDR, "standard_error": _ADDR}),

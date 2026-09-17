@@ -7,6 +7,57 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.9.0 — Unreleased
+
+### Added
+
+- `--process` now reports the main image's PE profile. The console gains a
+  `Main Image PE` block with the image's architecture and header format, its
+  load address against the preferred base it was linked for, its declared size
+  and section count, where execution begins, how completely the header was read,
+  and any structural disagreement between two captured facts.
+- `--process --verbose` adds the section table (declared R/W/X, the memory each
+  section is mapped over, and how much of it the dump captured), all sixteen
+  data-directory descriptors, every consistency check with the evidence it
+  rested on — including the ones the captured evidence could not answer — and
+  the header acquisition's own byte provenance.
+- `--json` carries the complete profile, every section and descriptor, and every
+  consistency observation in the new `pe_image` object on the process record,
+  whether or not `--verbose` was given.
+
+### Changed
+
+- Published output schema v2.19 for the new `--process` PE evidence. See
+  [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the field-level
+  summary. Earlier schemas stay frozen, and documents produced by earlier
+  releases keep validating against their own version.
+- `--process` and `--report` now describe the main image through the same
+  canonical PE profile and correlation collectors, under one shared read budget.
+  The facts both surfaces publish for one dump are pinned equal by test rather
+  than by convention.
+
+The console does not stop at counting what it could not check. Beside any
+conflict, it names the checks whose answer would have changed what an analyst
+does next — a memory table the dump does not carry, a structure captured only
+in part, no second source to corroborate against — and which of the dump's own
+tables is behind them, with routine structural absences left to `--verbose`.
+
+The record states what it could not do rather than implying it did: a memory
+table the dump does not carry is reported as missing evidence rather than as a
+determined negative, and one dumpex cannot walk in full never clamps what the
+PE header decodes; either way the record names that table as the reason its
+byte provenance and dependent checks are withheld. A correlation that could not
+be produced is reported as such rather than as an empty tally of consistency
+checks, and an internal failure to build a profile is named as one rather than
+reported as an unreadable header.
+
+A PE consistency conflict is a disagreement between two captured facts, and an
+unevaluated check is a question the dump does not answer. Neither is a
+maliciousness verdict: no finding, score, confidence, verdict, coverage status,
+or exit code changes, existing `--process` fields and IAT meanings are
+unchanged, and an unreadable main image cannot downgrade the process identity
+evidence beside it.
+
 ## 3.8.1 — Unreleased
 
 ### Fixed

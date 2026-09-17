@@ -25,7 +25,7 @@
                   is the evidence.
     Facts:
       - type=PE encoding=base64 container_VA=0x0000000000300000 module_status=UNREGISTERED
-        decoded_size=1184
+        decoded_size=1200
     Limitations:
       - Structural validation reduces but does not eliminate false positives from
         adversarially-crafted or coincidental byte sequences in high-entropy data.
@@ -38,13 +38,13 @@
                   the obfuscation score by itself; only a decoded PE header or shellcode bootstrap
                   pattern (see obfuscation.structural_payload) does.
     Facts:
-      - VA=0x0000000000300000 File_offset=(not captured) Decoded_type=PE Decoded_size=1184bytes
-        B64_length=1580chars
-        Encoded_preview="TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"[+1516chars
+      - VA=0x0000000000300000 File_offset=(not captured) Decoded_type=PE Decoded_size=1200bytes
+        B64_length=1600chars
+        Encoded_preview="TVoAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"[+1536chars
         omitted]
-        Decoded_hex=4d5a000000000000000000000000000000000000000000000000000000000000[+1152bytes
+        Decoded_hex=4d5a000000000000000000000000000000000000000000000000000000000000[+1168bytes
         omitted] PE_machine=AMD64 PE_sections=1 PE_image_size=0x2000
-        Decoded_sha256=dd7ae74e129c754446a0aa8a5be017fb8c6be91b50382aea7bdaa7d423461ef6
+        Decoded_sha256=389f7df363a2bd66de93644c9ff4cf5f431a1870d4aaa20a253d0193f6281746
     Limitations:
       - IOC-style strings inside decoded content are a lead, not proof — see
         obfuscation.base64_observation facts / stomping-style string caveats.

@@ -13,6 +13,13 @@ _REPO_ROOT = Path(__file__).parents[2]
 _SCHEMA_DIR = _REPO_ROOT / "dumpex" / "schemas"
 _FILENAME_RE = re.compile(r"^dumpex-output-v(\d+)\.(\d+)\.schema\.json$")
 
+# A `vMAJOR.MINOR` written in prose. Compiled once, here, rather than
+# inline at the call site: a pattern spelled with `\b` is one stray
+# non-raw string away from matching two backspace characters instead of
+# two word boundaries, which matches nothing and turns the assertion that
+# uses it into a pass that tests nothing.
+_VERSION_IN_PROSE = re.compile(r"\bv(\d+)\.(\d+)\b")
+
 
 def _packaged_schemas():
     """(major, minor) -> filename for every schema file shipped in the
@@ -562,3 +569,511 @@ def test_enrichment_stays_absent_from_the_triage_cards_judgment_fields_in_v2_18(
         "unbacked_thread", "rwx_private", "injected_pe", "ioc_strings"]
     assert card["properties"]["verdict"]["enum"] == [
         "CLEAN", "SUSPICIOUS", "LIKELY_MALICIOUS", "HIGH_CONFIDENCE_MALICIOUS"]
+
+# ── v2.19's `--process` PE profile ──────────────────────────────────────
+
+
+def _uncollected_pe_image() -> dict:
+    """`pe_image` for a run that built no profile."""
+    return {
+        "collected": False, "correlated": False, "unavailable_reason": "no_image_base",
+        "source_kind": None,
+        "module_identity": {"value": None, "form": None, "truncated": False},
+        "actual_base": None, "preferred_image_base": None, "format": None,
+        "machine": None, "machine_name": None, "time_date_stamp": None, "checksum": None,
+        "subsystem": None, "dll_characteristics": None, "coff_characteristics": None,
+        "size_of_image": None, "size_of_headers": None, "section_alignment": None,
+        "file_alignment": None, "declared_section_count": None,
+        "decoded_section_count": 0, "structural_state": None,
+        "relocation": {"delta": None, "relocs_stripped": None, "dynamic_base": None,
+                        "basereloc_present": None, "basereloc_descriptor_state": None},
+        "entry_point": {"rva": None, "va": None, "va_overflow": False,
+                         "section_index": None, "section_name": None, "capture_state": None,
+                         "region_state": None, "region_type": None,
+                         "region_protection": None},
+        "acquisition": None,
+        "directory_summary": {"declared_count": None, "declared_count_raw": None,
+                               "readable_count": None, "unprojected_count": None},
+        "module_match": None,
+        "observation_coverage": {"total": 0, "consistent": 0, "conflict": 0, "unavailable": 0},
+        "sections": [], "directories": [], "observations": [],
+    }
+
+
+def _collected_pe_image() -> dict:
+    """The same object for a run that built one, in the smallest shape a
+    collected profile can legitimately have: no decoded section, every
+    descriptor present, and -- with `correlated` false -- no observation,
+    no tally, and no resolution the correlation would have performed."""
+    document = _uncollected_pe_image()
+    document.update({
+        "collected": True, "unavailable_reason": None, "source_kind": "peb_image_base",
+        "actual_base": "0x0000000000400000", "structural_state": "partial",
+        "module_match": "unregistered",
+        "acquisition": {
+            "requested_stage": "sections", "highest_completed_stage": "coff",
+            "requested_bytes": 4096, "captured_bytes": 4096, "read_bytes": 64,
+            "read_target_bytes": 64, "target_io_short": False, "bounded_stop": None,
+            "components": {"dos_header": "complete", "coff_header": "complete",
+                            "optional_header": "unavailable",
+                            "directory_array": "unavailable",
+                            "directory_descriptors": "unavailable",
+                            "section_table": "unavailable"},
+            "segment_table": "enumerated", "region_table": "enumerated",
+            "capture_overlapping": False, "unexamined": []},
+        "directories": [
+            {"index": index, "name": "DIRECTORY_%d" % index, "value": None,
+             "value_kind": "rva", "size": None, "bytes_read": 0, "present": None,
+             "descriptor_state": "unavailable", "containing_section_index": None,
+             "capture_state": None}
+            for index in range(16)],
+    })
+    return document
+
+
+def test_v2_19s_row_names_the_new_process_record():
+    row = _version_summary_row("2.19")
+    for token in ("pe_image", "collected", "unavailable_reason", "observations",
+                  "structural_state"):
+        assert token in row
+
+
+def test_v2_19s_row_says_the_evidence_is_optional_and_moves_nothing():
+    """The two things a consumer most needs to know: an unreadable image
+    cannot downgrade the identity facts beside it, and nothing about
+    coverage or exit behavior moved."""
+    row = _version_summary_row("2.19")
+    assert "coverage.status" in row and "exit code" in row
+    assert "verdict" in row and "score" in row
+
+
+def test_v2_19s_row_states_the_mapping_to_the_legacy_triple():
+    """`identity_evidence.main_image_pe` keeps its meaning, so the doc a
+    consumer pins has to say how the two relate rather than leaving them
+    to guess that one replaced the other."""
+    row = _version_summary_row("2.19")
+    assert "identity_evidence.main_image_pe" in row
+    assert "checked" in row
+
+
+def test_the_schema_requires_the_pe_profile_on_every_process_record():
+    """Required and never null: a consumer must be able to tell "this
+    producer collected no profile" from "this key is missing because the
+    producer is older"."""
+    record = _load(CURRENT_SCHEMA)["$defs"]["processRecord"]
+    assert "pe_image" in record["required"]
+    assert record["properties"]["pe_image"] == {"$ref": "#/$defs/processPeRecord"}
+
+
+def test_the_schema_defines_the_pe_profiles_own_vocabularies():
+    schema = _load(CURRENT_SCHEMA)
+    pe_record = schema["$defs"]["processPeRecord"]["properties"]
+    assert pe_record["unavailable_reason"]["enum"] == [
+        "no_image_base", "header_unreadable", "collection_failed", None]
+    assert pe_record["structural_state"]["enum"] == [
+        "complete", "partial", "unavailable", "malformed", "declared_absent", None]
+    assert pe_record["format"]["enum"] == ["PE32", "PE32+", None]
+    acquisition = schema["$defs"]["processPeAcquisition"]["properties"]
+    assert acquisition["requested_stage"]["enum"] == ["dos", "coff", "optional", "sections"]
+    # A table that could not be walked in full is why a byte fact or a
+    # check is missing, so the record has somewhere to say so. There is no
+    # "absent" value: an absent stream enumerates as a table with no
+    # entries, which is a different claim.
+    # Five states, because a table the dump never carried, one it carried
+    # that yielded nothing, and one that parsed and is legitimately empty
+    # are three different claims about evidence.
+    for field_name in ("segment_table", "region_table"):
+        assert acquisition[field_name]["enum"] == [
+            "absent", "failed", "enumerated", "lossy", "unreadable"]
+
+
+def test_the_observation_shape_is_shared_by_both_surfaces():
+    """One observation shape, two consumers: a rename that left `--report`
+    on a second copy would let the two drift."""
+    schema = _load(CURRENT_SCHEMA)
+    assert "peObservation" in schema["$defs"]
+    assert "reportPeObservation" not in schema["$defs"]
+    report = schema["$defs"]["reportPeContext"]["properties"]["observations"]["items"]
+    process = schema["$defs"]["processPeRecord"]["properties"]["observations"]["items"]
+    assert report == process == {"$ref": "#/$defs/peObservation"}
+
+
+def test_the_schema_enforces_what_an_uncollected_profile_may_carry():
+    """`collected` is one fact in several fields: a record claiming no
+    profile while carrying sections, descriptors or observations would
+    describe evidence that came from nowhere."""
+    schema = _load(CURRENT_SCHEMA)
+    validator = _validator_for(schema, "#/$defs/processPeRecord")
+
+    def _doc(**kw):
+        return {**_uncollected_pe_image(), **kw}
+
+    assert validator.is_valid(_doc())
+    # A reason is exactly what "no profile" means; a collected one has none.
+    assert not validator.is_valid(_doc(unavailable_reason=None))
+    assert not validator.is_valid(_doc(collected=True))
+    # Evidence without a profile to have produced it.
+    assert not validator.is_valid(_doc(observations=[
+        {"name": "machine_vs_format", "state": "unavailable", "reason": "machine_null",
+         "sources": [], "operands": {}}]))
+    assert not validator.is_valid(_doc(directories=[{
+        "index": 0, "name": "EXPORT", "value": 0, "value_kind": "rva", "size": 0,
+        "bytes_read": 8, "present": False, "descriptor_state": "declared_absent",
+        "containing_section_index": None, "capture_state": None}]))
+
+
+@pytest.mark.parametrize("field,value", [
+    ("source_kind", "peb_image_base"),
+    ("actual_base", "0x0000000000400000"),
+    ("preferred_image_base", "0x0000000000400000"),
+    ("format", "PE32+"),
+    ("machine", 0x8664),
+    ("machine_name", "AMD64"),
+    ("time_date_stamp", 1),
+    ("size_of_image", 0x5000),
+    ("declared_section_count", 1),
+    ("decoded_section_count", 1),
+    ("structural_state", "complete"),
+    ("module_match", "resolved"),
+])
+def test_an_uncollected_profile_may_not_carry_a_pe_fact(field, value):
+    """`collected` is the discriminator a consumer branches on. A record
+    reporting no profile while carrying a base, a machine, or a module
+    match describes evidence that came from nowhere."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _uncollected_pe_image()
+    document[field] = value
+    assert not validator.is_valid(document)
+
+
+@pytest.mark.parametrize("owner,key,value", [
+    ("module_identity", "value", "C:\\a.exe"),
+    ("module_identity", "truncated", True),
+    ("relocation", "delta", 0),
+    ("relocation", "basereloc_descriptor_state", "complete"),
+    ("entry_point", "rva", 4096),
+    ("entry_point", "va_overflow", True),
+    ("directory_summary", "declared_count", 16),
+    ("observation_coverage", "total", 1),
+    ("observation_coverage", "unavailable", 1),
+])
+def test_an_uncollected_profiles_nested_objects_establish_nothing(owner, key, value):
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _uncollected_pe_image()
+    document[owner][key] = value
+    assert not validator.is_valid(document)
+
+
+@pytest.mark.parametrize("field", [
+    "source_kind", "actual_base", "structural_state", "acquisition", "module_match",
+])
+def test_a_collected_profile_must_name_what_produced_it(field):
+    """The converse: a profile with no source, no base it was read at, no
+    state, no acquisition, or no answer about the loader's own record is a
+    profile that does not exist, reported as one that does."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    assert validator.is_valid(document)
+    document[field] = None
+    assert not validator.is_valid(document)
+
+
+def test_a_collected_profile_carries_every_descriptor():
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document["directories"] = document["directories"][:8]
+    assert not validator.is_valid(document)
+
+
+def test_the_schema_keeps_a_mapped_range_one_fact():
+    """A start with no extent, or an extent with no place, is not a range."""
+    schema = _load(CURRENT_SCHEMA)
+    validator = _validator_for(schema, "#/$defs/processPeSection")
+
+    def _section(**kw):
+        base = {"section_index": 0, "name": ".text", "virtual_address": 4096,
+                 "virtual_size": 8192, "size_of_raw_data": 8192,
+                 "characteristics": 0, "declared_readable": True,
+                 "declared_writable": False, "declared_executable": True,
+                 "mapped_base_address": "0x0000000000401000", "mapped_size": 8192,
+                 "capture_state": "complete", "live_protections": []}
+        base.update(kw)
+        return base
+
+    assert validator.is_valid(_section())
+    assert validator.is_valid(_section(mapped_base_address=None, mapped_size=None))
+    assert not validator.is_valid(_section(mapped_base_address=None))
+    assert not validator.is_valid(_section(mapped_size=None))
+
+
+def test_a_correlation_that_ran_carries_its_observations():
+    """`total: 0` beside `correlated: true` would report a correlation that
+    established nothing -- and read exactly like a clean image."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document["correlated"] = True
+    assert not validator.is_valid(document)
+
+    document["observations"] = [{
+        "name": "machine_vs_format", "state": "unavailable", "reason": "machine_null",
+        "sources": ["profile.coff_header"], "operands": {}}]
+    document["observation_coverage"] = {"total": 1, "consistent": 0, "conflict": 0,
+                                         "unavailable": 1}
+    assert validator.is_valid(document)
+
+
+@pytest.mark.parametrize("owner,key,value", [
+    ("entry_point", "va", "0x0000000000401000"),
+    ("entry_point", "section_index", 0),
+    ("entry_point", "region_protection", "PAGE_EXECUTE_READ"),
+])
+def test_an_uncorrelated_profile_resolves_nothing_into_the_process(owner, key, value):
+    """Everything the correlation resolves -- the entry point's VA, its
+    section, the memory around it -- is withheld when it did not run."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document[owner][key] = value
+    assert not validator.is_valid(document)
+
+
+def test_an_uncorrelated_profiles_sections_carry_no_resolution():
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document["decoded_section_count"] = 1
+    document["sections"] = [{
+        "section_index": 0, "name": ".text", "virtual_address": 0x1000,
+        "virtual_size": 0x2000, "size_of_raw_data": 0x2000, "characteristics": 0,
+        "declared_readable": True, "declared_writable": False, "declared_executable": True,
+        "mapped_base_address": None, "mapped_size": None, "capture_state": None,
+        "live_protections": []}]
+    assert validator.is_valid(document)
+
+    document["sections"][0]["live_protections"] = ["PAGE_EXECUTE_READ"]
+    assert not validator.is_valid(document)
+
+
+def test_every_table_state_is_reportable_on_the_wire():
+    """The fix for a table that bounds nothing has to be expressible
+    without another public bump, so the field exists in this cutover --
+    with the byte provenance each state allows."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeAcquisition")
+    acquisition = _collected_pe_image()["acquisition"]
+    assert acquisition["captured_bytes"] is not None
+
+    # The region table bounds no read, so it constrains nothing here.
+    for state in ("absent", "failed", "enumerated", "lossy", "unreadable"):
+        assert validator.is_valid({**acquisition, "region_table": state})
+    assert not validator.is_valid({**acquisition, "region_table": "missing"})
+    assert not validator.is_valid({**acquisition, "segment_table": "missing"})
+
+
+@pytest.mark.parametrize("state", ["absent", "failed", "lossy", "unreadable"])
+def test_a_segment_table_that_established_nothing_resolved_no_capture(state):
+    """Only a table that enumerated whole can resolve the header's byte
+    provenance. A record reporting a byte count under any other state
+    claims a slice resolved against a table that established nothing."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeAcquisition")
+    acquisition = _collected_pe_image()["acquisition"]
+
+    assert not validator.is_valid({**acquisition, "segment_table": state})
+    assert validator.is_valid({**acquisition, "segment_table": state,
+                                "captured_bytes": None, "capture_overlapping": None})
+
+
+def test_an_enumerated_table_may_still_resolve_no_capture():
+    """The implication runs one way: `_capture_for` also refuses a slice
+    accounting for fewer bytes than the read returned, and that leaves an
+    `enumerated` table with no byte provenance."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeAcquisition")
+    acquisition = _collected_pe_image()["acquisition"]
+
+    assert validator.is_valid({**acquisition, "captured_bytes": None,
+                                "capture_overlapping": None})
+
+
+def test_a_capture_slice_and_its_overlap_answer_are_one_fact():
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeAcquisition")
+    acquisition = _collected_pe_image()["acquisition"]
+
+    assert not validator.is_valid({**acquisition, "captured_bytes": None})
+    assert not validator.is_valid({**acquisition, "capture_overlapping": None})
+
+
+def test_no_schema_files_opening_sentence_names_another_version():
+    """The top-level description is the authoritative prose for a shipped
+    contract, and a new schema is always a copy of the previous one --
+    which is exactly how one comes to open by naming the version it was
+    copied from. Asserted as "names no OTHER version" rather than "starts
+    with its own", because the early v2 files legitimately say "the v2
+    envelope" with no minor at all, and they are frozen."""
+    for (major, minor), filename in _packaged_schemas().items():
+        opening = _load(filename)["description"].split(". ", 1)[0]
+        named = set(re.findall(_VERSION_IN_PROSE, opening))
+        assert named <= {(str(major), str(minor))}, (filename, sorted(named))
+
+
+def test_the_current_schemas_description_opens_with_its_own_version():
+    major, minor = _version_tuple(SCHEMA_VERSION)
+    description = _load(CURRENT_SCHEMA)["description"]
+    assert description.startswith(f"Validates the v{major}.{minor} ")
+
+
+@pytest.mark.parametrize("opening,named", [
+    ("Validates the v2.18 `--json` envelope for --list", {("2", "18")}),
+    ("Validates the v2 envelope written by the six recon commands", set()),
+    ("Validates the v2.19 envelope, superseding v2.18", {("2", "19"), ("2", "18")}),
+])
+def test_the_version_pattern_actually_finds_a_version_in_prose(opening, named):
+    """The check above is only worth its assertion if the pattern matches
+    a real sentence. A pattern that matches nothing makes every document
+    pass, which is indistinguishable from every document being correct --
+    so the pattern is tested against prose that does and does not name a
+    version, rather than only against the shipped files."""
+    assert set(re.findall(_VERSION_IN_PROSE, opening)) == named
+
+
+def test_a_description_naming_another_version_is_caught():
+    """The failure this guards against, evaluated end to end: the same
+    comparison the loop above performs, over a description copied forward
+    without its version being updated."""
+    opening = "Validates the v2.18 `--json` envelope for --list".split(". ", 1)[0]
+    named = set(re.findall(_VERSION_IN_PROSE, opening))
+
+    assert named, "the pattern found no version at all -- the check would be vacuous"
+    assert not named <= {("2", "19")}
+
+# ── the producer contract and the consumer contract admit the same data ─
+# A field the record layer validates with `_require_optional_nonneg_int`
+# and a schema field with no `minimum` are two different contracts: the
+# schema would certify a document no producer can build, which is the one
+# direction a consumer cannot defend against.
+
+_NON_NEGATIVE_RECORD_FIELDS = (
+    "machine", "time_date_stamp", "checksum", "subsystem", "dll_characteristics",
+    "coff_characteristics", "size_of_image", "size_of_headers", "section_alignment",
+    "file_alignment", "declared_section_count",
+)
+
+
+@pytest.mark.parametrize("field", _NON_NEGATIVE_RECORD_FIELDS)
+def test_a_pe_count_may_not_be_negative(field):
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document[field] = -1
+    assert not validator.is_valid(document)
+
+
+@pytest.mark.parametrize("owner,key", [
+    ("directory_summary", "declared_count"),
+    ("directory_summary", "declared_count_raw"),
+    ("directory_summary", "readable_count"),
+    ("directory_summary", "unprojected_count"),
+    ("acquisition", "captured_bytes"),
+])
+def test_a_nested_pe_count_may_not_be_negative(owner, key):
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document[owner][key] = -1
+    assert not validator.is_valid(document)
+
+
+def test_the_relocation_delta_stays_signed():
+    """An image loaded below its preferred base has moved down, and a
+    non-negative bound would forbid saying so."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document["relocation"]["delta"] = -0x10000
+    assert validator.is_valid(document)
+
+
+@pytest.mark.parametrize("field", ["value", "size", "containing_section_index", "bytes_read"])
+def test_a_descriptors_counts_may_not_be_negative(field):
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeDirectory")
+    descriptor = {"index": 0, "name": "EXPORT", "value": 0, "value_kind": "rva", "size": 0,
+                   "bytes_read": 8, "present": False, "descriptor_state": "declared_absent",
+                   "containing_section_index": None, "capture_state": None}
+    assert validator.is_valid(descriptor)
+    assert not validator.is_valid({**descriptor, field: -1})
+
+
+@pytest.mark.parametrize("field", ["mapped_size"])
+def test_a_sections_counts_may_not_be_negative(field):
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeSection")
+    section = {"section_index": 0, "name": ".text", "virtual_address": 0x1000,
+                "virtual_size": 0x2000, "size_of_raw_data": 0x2000, "characteristics": 0,
+                "declared_readable": True, "declared_writable": False,
+                "declared_executable": True, "mapped_base_address": "0x0000000000401000",
+                "mapped_size": 0x2000, "capture_state": "complete", "live_protections": []}
+    assert validator.is_valid(section)
+    assert not validator.is_valid({**section, field: -1})
+
+
+# ── a zero entry point resolves nothing ─────────────────────────────────
+
+def _entry_point(**kw):
+    base = {"rva": 0, "va": None, "va_overflow": False, "section_index": None,
+             "section_name": None, "capture_state": None, "region_state": None,
+             "region_type": None, "region_protection": None}
+    base.update(kw)
+    return base
+
+
+@pytest.mark.parametrize("field,value", [
+    ("va", "0x0000000000401000"),
+    ("section_index", 0),
+    ("section_name", ".text"),
+    ("capture_state", "complete"),
+    ("region_state", "MEM_COMMIT"),
+    ("region_type", "MEM_IMAGE"),
+    ("region_protection", "PAGE_EXECUTE_READ"),
+    ("va_overflow", True),
+])
+def test_a_zero_entry_point_resolves_nothing_into_the_process(field, value):
+    """`rva: 0` is "this image declares no entry point". Resolving
+    `actual_base + 0` would present the header page as where execution
+    begins, so every field that would have said so is null."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeEntryPoint")
+    assert validator.is_valid(_entry_point())
+    assert not validator.is_valid(_entry_point(**{field: value}))
+
+
+def test_a_real_entry_point_still_carries_its_context():
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeEntryPoint")
+    assert validator.is_valid(_entry_point(
+        rva=0x1000, va="0x0000000000401000", section_index=0, section_name=".text",
+        capture_state="complete", region_state="MEM_COMMIT", region_type="MEM_IMAGE",
+        region_protection="PAGE_EXECUTE_READ"))
+
+
+# ── indices, arrays and counts ──────────────────────────────────────────
+
+def test_every_descriptor_sits_at_its_own_index():
+    """Sixteen descriptors that are all index 0 is a table with one
+    descriptor repeated, not the sixteen the record promises."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    assert validator.is_valid(document)
+
+    duplicated = _collected_pe_image()
+    duplicated["directories"][1] = dict(duplicated["directories"][0])
+    assert not validator.is_valid(duplicated)
+
+    reversed_order = _collected_pe_image()
+    reversed_order["directories"].reverse()
+    assert not validator.is_valid(reversed_order)
+
+    seventeen = _collected_pe_image()
+    seventeen["directories"].append(dict(seventeen["directories"][0]))
+    assert not validator.is_valid(seventeen)
+
+
+def test_the_schema_names_the_relationships_it_cannot_express():
+    """`decoded_section_count`, the observation total and the tally's sum
+    are cross-field equalities JSON Schema has no way to state. The record
+    layer enforces all three; the schema says so, so a consumer reads the
+    limit rather than assuming validation covered it."""
+    description = _load(CURRENT_SCHEMA)["$defs"]["processPeRecord"]["description"]
+    assert "NOT expressible in JSON Schema" in description
+    for relationship in ("decoded_section_count", "observation_coverage.total",
+                          "sum to its total"):
+        assert relationship in description

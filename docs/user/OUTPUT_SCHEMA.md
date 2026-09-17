@@ -22,14 +22,14 @@ never replace an input dump.
 
 ## Current contract
 
-All twelve commands emit the same v2.17 envelope. The authoritative schema is
-[`dumpex-output-v2.17.schema.json`](../../dumpex/schemas/dumpex-output-v2.17.schema.json).
+All twelve commands emit the same v2.19 envelope. The authoritative schema is
+[`dumpex-output-v2.19.schema.json`](../../dumpex/schemas/dumpex-output-v2.19.schema.json).
 The schema uses JSON Schema Draft 2020-12 and closes record objects with
 `additionalProperties: false` where their field sets are fixed.
 
 | Commands | Contract | Schema file |
 |---|---|---|
-| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.17 (current) | [`dumpex-output-v2.17.schema.json`](../../dumpex/schemas/dumpex-output-v2.17.schema.json) |
+| `--list`, `--modules`, `--threads`, `--process`, `--sysinfo`, `--handles`, `--profile`, `--diff`, `--extract`, `--strings`, `--report`, `--hunt` | v2.19 (current) | [`dumpex-output-v2.19.schema.json`](../../dumpex/schemas/dumpex-output-v2.19.schema.json) |
 
 Use the document's own `meta.schema_version` to select a validator. Do not
 validate archived output against whichever schema happens to be current today.
@@ -937,6 +937,8 @@ the target did not fail to evaluate it.
 the selected values separate from `identity_evidence`, IAT data, diagnostics,
 and optional verbose `peb_extended` fields.
 
+Every `processRecord` also carries `pe_image` (v2.19) — see below.
+
 `handleRecord` preserves the raw `granted_access` integer and captured
 descriptor facts. Human-readable access-right names are a console projection,
 not a replacement or schema mutation of the mask.
@@ -945,6 +947,77 @@ not a replacement or schema mutation of the mask.
 flags, actual captured-memory facts, and the fixed capability registry. A
 capability status (`available`, `limited`, or `unavailable`) is an evidence
 boundary, never a malicious/clean verdict.
+
+### The main-image PE profile (v2.19)
+
+`processRecord.pe_image` is the canonical PE profile of the process's main
+image, and the consistency observations derived over it. It is always an
+object, never `null`, and it carries the complete collected record whether or
+not `--verbose` was given: verbosity changes what the console prints, not what
+was collected. It is the same profile and the same correlation `--report`'s
+`summary.pe_context` projects, so the two commands cannot disagree about one
+dump.
+
+| field | what it carries |
+|---|---|
+| `collected`, `unavailable_reason` | whether a profile was built, and why not when it was not (`no_image_base`, `header_unreadable`, or `collection_failed` — a dumpex defect, never a fact about the image) |
+| `correlated` | whether a correlation was produced over that profile |
+| `machine`, `machine_name`, `format` | the image's architecture and its 32/64-bit header format |
+| `actual_base`, `preferred_image_base`, `relocation` | where the image is, where it wanted to be, the signed delta between them, and the relocation evidence around it |
+| `size_of_image`, `size_of_headers`, `section_alignment`, `file_alignment` | the extent and layout fields the header declares |
+| `declared_section_count`, `decoded_section_count` | the header's own `NumberOfSections`, and how many section headers were actually decoded |
+| `entry_point` | the entry RVA, the VA it resolves to, the section holding it, and the live region around it |
+| `structural_state` | the acquisition's own rollup: `complete`, `partial`, `unavailable`, `malformed`, or `declared_absent` |
+| `sections` | each decoded section: RVA and extent, mapped address, declared R/W/X, live protections, capture state |
+| `directories` | all sixteen data-directory descriptors: value, addressing mode, size, presence, descriptor state, capture state |
+| `acquisition` | the stage ladder, the requested/captured/read byte counts, any attributed bounded stop, per-component states, the exact unexamined ranges, and how completely each of the dump's own tables could be walked (`segment_table`, `region_table`, `capture_overlapping`) |
+| `observations`, `observation_coverage` | every evaluated consistency check and a tally of the three states |
+
+Three rules a consumer should read before branching on any of it:
+
+- **An observation is an observation.** A `conflict` is a disagreement between
+  two captured facts — a declared image size the loader's own record
+  contradicts, a section reaching past the declared image size — and never a
+  maliciousness claim. An `unavailable` is a question the captured evidence does
+  not answer, and never a failure. There is no score, confidence, verdict, or
+  ATT&CK field here.
+- **This evidence is optional and cannot downgrade anything.** An unreadable
+  header leaves `collected` false and every other process identity field exactly
+  as the PEB, MiscInfo, and ModuleList claims established it. `pe_image` adds no
+  coverage limitation, moves no `coverage.status`, and changes no exit code.
+- **`collected` is a reliable discriminator.** A `false` record carries no fact
+  at all — every scalar null, every nested object all-null, every count zero and
+  every array empty — and a `true` record always names its `source_kind`,
+  `actual_base`, `structural_state`, `acquisition` and `module_match` and carries
+  all sixteen descriptors. The schema enforces both halves, so neither state can
+  arrive half-populated.
+- **`module_match` is the process-identity boundary's own answer**, carried
+  verbatim from `identity_evidence.module_claim.match_state`. `unregistered`
+  includes a ModuleListStream that parsed and holds zero modules: that confirms
+  nothing is registered at this base. `unavailable` means the comparison could
+  not be made at all — the stream was absent or failed.
+- **An empty tally is never a clean image.** A correlation that ran always
+  produces observations, so `observation_coverage.total` of 0 means one did not
+  run — `correlated` says which, and everything the correlation resolves is
+  withheld when it is false.
+- **A gap in the dump's own tables is attributed to those tables.**
+  `acquisition.segment_table` and `region_table` are `absent` (not in the dump),
+  `failed` (in the dump, nothing usable came back), `enumerated`, `lossy` (a
+  descriptor was dropped) or `unreadable` (the walk raised). Anything but
+  `enumerated` means the checks that needed the table report `unavailable` and
+  `captured_bytes` is null — dumpex declining to answer, not a defect in the
+  image — and never clamps what the profile decodes. An `enumerated` table that
+  is legitimately empty is a different claim: it answers as a table that looked
+  and found nothing.
+- **`structural_state` and the legacy triple answer different questions.**
+  `identity_evidence.main_image_pe`'s `checked`/`valid`/`reason` is unchanged and
+  answers "will re-reading these bytes help?"; `structural_state` answers "is the
+  image defective?". Neither is derived from the other. For an image base that
+  normalized, `pe_image.collected` is that triple's `checked`.
+
+`live_protections` is context, not an observation: `PAGE_EXECUTE_WRITECOPY` is
+ordinary loader context for an executable image section, so do not
+substring-match `WRITE` against those names.
 
 ## Coverage limitations and skipped scan targets
 

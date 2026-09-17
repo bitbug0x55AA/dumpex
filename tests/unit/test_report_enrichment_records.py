@@ -427,15 +427,15 @@ def test_string_context_rejects_impossible_read_and_entry_relationships():
 from dumpex.output.records import (  # noqa: E402
     ReportAnchorPeContext, ReportBranchTarget, ReportDecodedInstruction,
     ReportIatCorrelatedEntry, ReportIatCorrelation, ReportInstructionContext,
-    ReportInstructionLead, ReportPeContext, ReportPeObservation,
+    ReportInstructionLead, ReportPeContext, PeObservationRecord,
 )
 
 
 def test_pe_observation_rejects_an_unknown_state():
     with pytest.raises(ValueError, match="state must be one of"):
-        ReportPeObservation(name="machine_vs_format", state="suspicious", reason="x")
+        PeObservationRecord(name="machine_vs_format", state="suspicious", reason="x")
     with pytest.raises(ValueError, match="JSON scalar"):
-        ReportPeObservation(name="x", state="conflict", reason="y", operands={"k": object()})
+        PeObservationRecord(name="x", state="conflict", reason="y", operands={"k": object()})
 
 
 def _pe_context(*observations, status=ENRICHMENT_COMPLETE, conflict_count=None):
@@ -452,12 +452,12 @@ def _pe_context(*observations, status=ENRICHMENT_COMPLETE, conflict_count=None):
 
 
 def test_pe_context_total_must_be_the_conflict_count():
-    conflict = ReportPeObservation(name="size_vs_modulelist", state="conflict", reason="r")
+    conflict = PeObservationRecord(name="size_vs_modulelist", state="conflict", reason="r")
     good = _pe_context(conflict)
     with pytest.raises(ValueError, match="must be the conflict_count"):
         replace(good, conflict_count=3)
     with pytest.raises(ValueError, match="only the retained conflict observations"):
-        _pe_context(ReportPeObservation(name="x", state="consistent", reason="r"))
+        _pe_context(PeObservationRecord(name="x", state="consistent", reason="r"))
 
 
 def _anchor_pe(**overrides):

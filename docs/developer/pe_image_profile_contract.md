@@ -1,12 +1,16 @@
 # Canonical PE image profile and coverage contract
 
-Status: **frozen contract; partially implemented**. The internal
+Status: **frozen contract; partially implemented**. The
 memory-sourced collector implements the raw-profile and staged-acquisition
-subset of this contract (§2–§6), and the internal correlation layer
-implements the derived consistency observations and the correlation
-observations of §8 -- neither is connected to any shipped production
-path. Cache reuse (§7), projections (§9), disk-reference collection
-(§5.1.1), and consumer migrations remain future work. Shipped behavior is
+subset of this contract (§2–§6), and the correlation layer implements the
+derived consistency observations and the correlation observations of §8.
+Both are shipped: `--report`'s `summary.pe_context` retains the main
+image's identity and the correlation's conflicts, and `--process`'s
+`pe_image` record (schema v2.19) carries the complete profile and every
+observation under §9's projection rules. Cache reuse (§7),
+disk-reference collection (§5.1.1), and the remaining consumer migrations
+-- `MainImagePeClaim`, the two Hunt `PeHeaderInfo` projections, and
+`SectionRef` -- are future work, and those consumers' own shapes are
 unchanged.
 
 It is the normative definition that the report PE projection, the

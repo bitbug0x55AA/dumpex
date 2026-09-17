@@ -25,7 +25,7 @@ forms where documented by the option.
 | `--threads` | List threads with captured analysis context |
 | `--extract ADDR` | Extract raw bytes from the region containing `ADDR` |
 | `--strings ADDR` | Extract ASCII/Unicode strings from a captured range |
-| `--process` | Show consolidated process identity, IAT, and verification evidence |
+| `--process` | Show consolidated process identity, the main image's PE profile, IAT, and verification evidence |
 | `--handles` | List captured `HandleDataStream` descriptors |
 | `--profile` | Describe dump streams, capture facts, and analysis capabilities |
 | `--sysinfo` | Show dump identity, OS, host, CPU, and environment evidence |
@@ -315,14 +315,32 @@ handled at the same sensitivity as the dump.
 ### `--process`
 
 Consolidates PID, path/name, command line, start time, image base, source claims,
-IAT entries, and identity diagnostics. `--verbose` adds:
+the main image's PE profile, IAT entries, and identity diagnostics.
 
+The `Main Image PE` block states the image's architecture and header format, its
+load address against the preferred base it was linked for, its declared size and
+section count, where execution begins, whether the loader's own module list
+registers it, how completely the header was read, any structural disagreement
+between two captured facts, and the checks that could not be answered because
+evidence the dump would have had to carry is missing or incomplete. `--verbose` adds:
+
+- the section table with each section's declared R/W/X, the memory it is mapped
+  over, and how much of it the dump captured;
+- all sixteen data-directory descriptors with their addressing mode and state;
+- every consistency check, including the ones the captured evidence could not
+  answer, each with the evidence it rested on;
+- the header acquisition's own byte provenance;
 - `IAT Slot VA -> Resolved Target VA` entries;
 - identity verification states (`[OK]`, `[!!]`, `[--]`);
 - extended PEB fields.
 
-An identity conflict is an observation requiring corroboration, not a command
-failure or maliciousness verdict.
+`--json` carries the complete PE profile, every section and descriptor, and every
+consistency observation whether or not `--verbose` was given: verbosity changes
+console presentation, never what was collected.
+
+An identity conflict, and a PE consistency conflict, are observations requiring
+corroboration — not a command failure and not a maliciousness verdict. Neither
+moves coverage or the exit code.
 
 ### `--handles`
 

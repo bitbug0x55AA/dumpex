@@ -8,10 +8,19 @@ record, coverage, and diagnostics.
 from minidump.constants import MINIDUMP_STREAM_TYPE
 from minidump.minidumpfile import MinidumpFile
 
-from dumpex.core.memory import observe_stream, clamped_reader
+from dumpex.core.memory import (
+    observe_stream, clamped_reader, get_modules, has_stream_directory, stream_failure,
+)
+from dumpex.core.pe_correlation import ModuleListImage, correlate_main_image
+from dumpex.core.pe_profile import (
+    PEB_SOURCE_IDENTITY, ModuleIdentity, PeStage, SourceKind, collect_pe_image_profile,
+)
 from dumpex.core.pe_utils import parse_iat
 from dumpex.core.process_info import (
-    build_process_identity_snapshot, classify_process_create_time,
+    MAIN_IMAGE_PE_READ_MAX, build_process_identity_snapshot, classify_process_create_time,
+)
+from dumpex.core.va_range import (
+    VirtualRange, enumerate_captured_regions, enumerate_captured_segments, slice_captured,
 )
 from dumpex.output.coverage import (
     build_coverage_report, observe_source, EvaluationRequirement, SourceRequirement,
@@ -19,7 +28,9 @@ from dumpex.output.coverage import (
 )
 from dumpex.output.command_result import CommandResult
 from dumpex.output.records import (
-    ProcessRecord, IatRecord, ImportEntryRecord, ProcessDiagnosticRecord, hex_address,
+    ProcessRecord, IatRecord, ImportEntryRecord, ProcessDiagnosticRecord,
+    PeObservationRecord, ProcessPeAcquisitionRecord, ProcessPeDirectoryRecord,
+    ProcessPeEntryPointRecord, ProcessPeRecord, ProcessPeSectionRecord, hex_address,
 )
 from dumpex.ui.colors import BOLD, console_safe
 from dumpex.ui.console_layout import column_width
@@ -132,6 +143,197 @@ def _classify_main_image_state(image_base: "int | None", main_image_pe) -> "str 
     if main_image_pe.pe_facts.insufficient_data:
         return "short_read"
     return "pe_invalid"
+
+
+# ── §3.10 -- the canonical main-image PE profile ────────────────────────
+# One immutable dumpex.core.pe_profile.PeImageProfile at the PEB-reported
+# image base, and one dumpex.core.pe_correlation.MainImageCorrelation over
+# it, built here and consumed once. Nothing downstream re-reads a byte:
+# the projection below and the console take every value from these two
+# objects, so --process, --report, and a later PEB consumer cannot
+# disagree about the same dump.
+#
+# This evidence is optional and self-contained. It adds no coverage
+# source, no limitation code, and no exit-code path: an image whose header
+# is unreadable leaves `pe_image.collected` false and every process
+# identity fact beside it exactly as the MiscInfo/PEB/ModuleList claims
+# established it. The legacy `identity_evidence.main_image_pe`
+# checked/valid/reason triple keeps its own meaning and its own
+# PROCESS_MAIN_IMAGE_* limitations (§3.4.4), which stay the sole authority
+# over coverage and the exit code.
+
+
+def _stream_table_state(mf: MinidumpFile, stream_type, parsed) -> "str | None":
+    """`"absent"` or `"failed"` when the dump supplies no usable table for
+    `stream_type`, `None` when there is one to walk.
+
+    An enumeration cannot answer this on its own: a stream that is not in
+    the dump and a stream that parsed and carries no entries both reduce
+    to an empty list, and an empty table answers a question ("nothing in
+    this table covers that address") that an absent one cannot. The
+    dump's own directory is what tells them apart, exactly as §2.4
+    already separates an uncaptured stream from a captured one that
+    failed."""
+    if stream_failure(mf, stream_type) is not None:
+        return "failed"
+    if parsed is not None:
+        return None
+    # Nothing parsed. The directory says whether there was anything to
+    # parse: a stream the dump never carried is absent, and one it
+    # carried that yielded nothing is a failure whatever the loader
+    # recorded.
+    return "failed" if has_stream_directory(mf, stream_type) else "absent"
+
+
+def _captured_enumeration(mf: MinidumpFile, stream_types, parsed, enumerate_table):
+    """`(enumeration, state)` for one of the dump's own tables, where
+    `state` is one of §3.10.5's five and the enumeration is `None` for
+    every state in which the table establishes nothing.
+
+    `None` is what the correlation layer already means by "not usable
+    evidence": every observation that needed the table is `unavailable`
+    and every per-address context drawn from it is withheld. Handing it an
+    empty table instead would turn "there is no table" into "the table
+    covers nothing", which is a claim the dump never made. `state` is what
+    keeps the cause attributable either way."""
+    states = [state for stream_type, obj in zip(stream_types, parsed)
+              if (state := _stream_table_state(mf, stream_type, obj)) is not None]
+    # A segment table has two candidate streams, and one usable stream is
+    # enough: only a table with no usable stream at all is unusable, and
+    # then a recorded failure outranks a plain absence.
+    if len(states) == len(stream_types):
+        return None, ("failed" if "failed" in states else "absent")
+    try:
+        enumeration = enumerate_table()
+    except Exception:
+        return None, "unreadable"
+    return enumeration, ("lossy" if enumeration.skipped else "enumerated")
+
+
+def _capture_for(image_base: int, segments, segment_table: str, read_bytes: int):
+    """The `CapturedSlice` the profile may resolve its byte facts against,
+    or `None` when no table in hand can bound the run already read.
+
+    A capture slice is a ceiling: the collector decodes nothing past
+    `captured_bytes`. Handing it a slice built from a table dumpex could
+    only partly represent would clamp the acquisition to less than the
+    bytes the snapshot already read and parsed -- the profile would report
+    a truncation dumpex imposed on itself, contradict
+    `identity_evidence.main_image_pe` about the same run, and blame the
+    image for it. So a table that is not whole supplies no slice at all,
+    and `captured_bytes` is `null`: the provenance was not established,
+    which is the one thing that is true.
+
+    The final check is the invariant itself. A slice that accounts for
+    fewer bytes than the read returned describes a different dump from the
+    one the run came out of, whatever its `skipped` count says, so it is
+    refused the same way."""
+    if segments is None or segment_table != "enumerated":
+        return None
+    try:
+        capture = slice_captured(VirtualRange(image_base, MAIN_IMAGE_PE_READ_MAX),
+                                 segments.views)
+    except Exception:
+        return None
+    if capture.captured_bytes < read_bytes:
+        return None
+    return capture
+
+
+def _header_reader(base: int, data: bytes):
+    """A `read(addr, size)` callback over one already-read header run.
+
+    The snapshot's own main-image read is the only read of these bytes
+    this command performs: the canonical profile decodes that same run
+    rather than issuing a second read at the same base, so the two
+    parsers can never disagree about what was there and the dump is
+    touched once. A request past the run returns nothing, exactly as a
+    reader reaching the end of the contiguous captured segments does."""
+    def read(addr, size):
+        offset = addr - base
+        if offset < 0 or size <= 0:
+            return b""
+        return data[offset:offset + size]
+    return read
+
+
+def _collect_main_image_pe(mf: MinidumpFile, image_base: "int | None", main_image_pe,
+                            module_match: str, peb_image_path: "str | None") -> ProcessPeRecord:
+    """Build the main image's profile and correlation once, and project
+    them into §3.10's record.
+
+    `image_base` is the normalized PEB image base -- the only base a main
+    image has (§3.3.4), so no base is no image to profile.
+    `main_image_pe` is the snapshot's already-built
+    dumpex.core.process_info.MainImagePeClaim, whose `header_bytes` are
+    the run this profile is decoded from: `checked is False` is a base
+    with nothing readable at it, which is no profile rather than an empty
+    one.
+
+    `module_match` is §3.4.3's `module_claim.match_state`, passed in
+    rather than re-derived. "Is a module registered at this image base"
+    is one question with one answer, and the identity boundary already
+    answered it against the stream's own availability: a ModuleListStream
+    that parsed and legitimately holds zero modules confirms that nothing
+    is registered there ("unregistered"), which is a finding an analyst
+    acts on -- deriving it a second time from whether the module list is
+    non-empty would report that confirmed absence as "unavailable" and
+    contradict `identity_evidence` inside one record."""
+    if image_base is None:
+        return ProcessPeRecord.uncollected("no_image_base")
+    if not main_image_pe.checked:
+        return ProcessPeRecord.uncollected("header_unreadable")
+
+    segments, segment_table = _captured_enumeration(
+        mf,
+        (MINIDUMP_STREAM_TYPE.Memory64ListStream, MINIDUMP_STREAM_TYPE.MemoryListStream),
+        (mf.memory_segments_64, mf.memory_segments),
+        lambda: enumerate_captured_segments(mf))
+    regions, region_table = _captured_enumeration(
+        mf,
+        (MINIDUMP_STREAM_TYPE.MemoryInfoListStream,),
+        (mf.memory_info,),
+        lambda: enumerate_captured_regions(mf))
+
+    # The profile asks for exactly the span the snapshot's own read asked
+    # for. Requesting a longer one would make the retained run look like a
+    # short read of a longer request, which is a read failure this command
+    # did not have.
+    header_bytes = main_image_pe.header_bytes
+    capture = _capture_for(image_base, segments, segment_table, len(header_bytes))
+    try:
+        profile = collect_pe_image_profile(
+            _header_reader(image_base, header_bytes),
+            image_base,
+            source_kind=SourceKind.PEB_IMAGE_BASE,
+            source_identity=PEB_SOURCE_IDENTITY,
+            module_identity=ModuleIdentity.of(peb_image_path, "path"),
+            requested_bytes=MAIN_IMAGE_PE_READ_MAX,
+            capture=capture,
+            requested_stage=PeStage.SECTIONS)
+    except Exception:
+        # The collector never raises for hostile or truncated image bytes;
+        # only a caller error does. That is a defect in dumpex, and naming
+        # it as one keeps it out of the two tokens that are claims about
+        # the dump.
+        return ProcessPeRecord.uncollected("collection_failed")
+
+    try:
+        # The loader's own record for this image, when one is registered
+        # at exactly this base: the second attributable source the size,
+        # timestamp and checksum observations compare against.
+        module_list_image = ModuleListImage.at_base(get_modules(mf), profile.actual_base)
+        correlation = correlate_main_image(
+            profile, regions=regions, segments=segments,
+            module_list_image=module_list_image)
+    except Exception:
+        # Same boundary, same reading: the correlation layer never raises
+        # over established facts. `correlated` is what says the layer did
+        # not run, so an empty tally can never be read as a clean image.
+        correlation = None
+
+    return _project_main_image_pe(profile, correlation, module_match,
+                                  segment_table=segment_table, region_table=region_table)
 
 
 def collect_process(mf: MinidumpFile, *, verbose: bool = False) -> CommandResult:
@@ -313,7 +515,11 @@ def collect_process(mf: MinidumpFile, *, verbose: bool = False) -> CommandResult
         completeness_checks=completeness_checks,
         retain_completeness_checks_when_not_evaluated=True)
 
-    record = _build_process_record(snapshot, iat_result, mf, verbose)
+    pe_record = _collect_main_image_pe(mf, image_base, main_image_pe,
+                                       snapshot.module_claim.match_state,
+                                       snapshot.peb_claim.image_path)
+
+    record = _build_process_record(snapshot, iat_result, pe_record, mf, verbose)
     return CommandResult(kind="process", records=[record], coverage=coverage, summary={"count": 1})
 
 
@@ -370,6 +576,189 @@ def _build_identity_evidence(snapshot) -> dict:
         "selected_path_source": snapshot.selected_path_source,
         "diagnostics": [d.to_dict() for d in diagnostics],
     }
+
+
+def _state_value(state) -> "str | None":
+    """One ComponentState (or `None`) as its wire token. `None` stays
+    `None`: a component outside the requested stage was never asked
+    about, which is not the same answer as one that came back
+    `unavailable`."""
+    return None if state is None else state.value
+
+
+def _pe_section_records(profile, correlation) -> tuple:
+    """The decoded section table, in section-table order. The header's own
+    fields come from the profile; the mapped range, capture state, and
+    live protections are the correlation's, and stay null when no
+    correlation was produced."""
+    correlated = {c.section_index: c for c in correlation.sections} if correlation else {}
+    records = []
+    for section in profile.sections:
+        link = correlated.get(section.section_index)
+        mapped = link.mapped_range if link is not None else None
+        records.append(ProcessPeSectionRecord(
+            section_index=section.section_index,
+            name=section.name,
+            virtual_address=section.virtual_address,
+            virtual_size=section.virtual_size,
+            size_of_raw_data=section.size_of_raw_data,
+            characteristics=section.characteristics,
+            declared_readable=section.is_readable,
+            declared_writable=section.is_writable,
+            declared_executable=section.is_executable,
+            mapped_base_address=(hex_address(mapped.base_address) if mapped else None),
+            mapped_size=(mapped.size if mapped else None),
+            capture_state=(link.capture_state if link is not None else None),
+            live_protections=(link.live_protections if link is not None else ())))
+    return tuple(records)
+
+
+def _pe_directory_records(profile, correlation) -> tuple:
+    """All sixteen data-directory descriptors, in index order -- the
+    descriptor's own decoded fields and state from the profile, the
+    containing section and capture state from the correlation."""
+    correlated = {c.index: c for c in correlation.directories} if correlation else {}
+    records = []
+    for descriptor in profile.directories:
+        link = correlated.get(descriptor.index)
+        records.append(ProcessPeDirectoryRecord(
+            index=descriptor.index,
+            name=descriptor.name,
+            value=descriptor.value,
+            value_kind=descriptor.value_kind,
+            size=descriptor.size,
+            bytes_read=descriptor.bytes_read,
+            present=descriptor.present,
+            descriptor_state=descriptor.state.value,
+            containing_section_index=(link.containing_section_index
+                                       if link is not None else None),
+            capture_state=(link.capture_state if link is not None else None)))
+    return tuple(records)
+
+
+def _pe_entry_point_record(profile, correlation) -> ProcessPeEntryPointRecord:
+    """The entry point and its memory context. Without a correlation only
+    the header's own RVA is established: the VA, the containing section,
+    and the region facts are all comparisons or resolutions the
+    correlation performs, and none of them is recomputed here."""
+    if correlation is None:
+        return ProcessPeEntryPointRecord(
+            rva=profile.address_of_entry_point, va=None, va_overflow=False,
+            section_index=None, section_name=None, capture_state=None,
+            region_state=None, region_type=None, region_protection=None)
+    entry = correlation.entry_point
+    section_name = None
+    if entry.containing_section_index is not None:
+        section_name = profile.sections[entry.containing_section_index].name
+    return ProcessPeEntryPointRecord(
+        rva=entry.entry_point_rva,
+        va=hex_address(entry.entry_point_va),
+        va_overflow=entry.va_overflow,
+        section_index=entry.containing_section_index,
+        section_name=section_name,
+        capture_state=entry.capture_state,
+        region_state=entry.region_state,
+        region_type=entry.region_type,
+        region_protection=entry.region_protection)
+
+
+def _pe_acquisition_record(profile, *, segment_table: str,
+                            region_table: str) -> ProcessPeAcquisitionRecord:
+    stop = profile.bounded_stop
+    capture = profile.capture
+    return ProcessPeAcquisitionRecord(
+        requested_stage=profile.requested_stage.name.lower(),
+        highest_completed_stage=(profile.highest_completed_stage.name.lower()
+                                  if profile.highest_completed_stage is not None else None),
+        requested_bytes=profile.requested.size,
+        captured_bytes=(capture.captured_bytes if capture is not None else None),
+        read_bytes=profile.read_bytes,
+        read_target_bytes=profile.read_target_bytes,
+        target_io_short=profile.target_io_short,
+        bounded_stop=(None if stop is None else {
+            "scope": stop.scope,
+            "budget_limit": stop.budget_limit,
+            "budget_consumed": stop.budget_consumed}),
+        components={
+            "dos_header": _state_value(profile.components.dos_header),
+            "coff_header": _state_value(profile.components.coff_header),
+            "optional_header": _state_value(profile.components.optional_header),
+            "directory_array": _state_value(profile.components.directory_array),
+            "directory_descriptors": _state_value(profile.components.directory_descriptors),
+            "section_table": _state_value(profile.components.section_table),
+        },
+        segment_table=segment_table,
+        region_table=region_table,
+        capture_overlapping=(capture.overlapping if capture is not None else None),
+        unexamined=tuple({"base_address": hex_address(span.base_address), "size": span.size}
+                          for span in profile.unexamined))
+
+
+def _project_main_image_pe(profile, correlation, module_match: str, *,
+                            segment_table: str, region_table: str) -> ProcessPeRecord:
+    """§3.10's record, built from one already-collected profile and its
+    correlation. Every value is copied or formatted; none is recomputed,
+    and no memory is read here."""
+    observations = tuple(
+        PeObservationRecord(
+            name=observation.name, state=observation.state.value, reason=observation.reason,
+            sources=tuple(observation.sources),
+            operands={key: value for key, value in observation.operands.items()})
+        for observation in (correlation.all_observations() if correlation is not None else ()))
+    tally = correlation.coverage if correlation is not None else None
+    identity = profile.module_identity
+    relocation = profile.relocation
+    return ProcessPeRecord(
+        collected=True,
+        correlated=correlation is not None,
+        unavailable_reason=None,
+        source_kind=profile.source_kind.value,
+        module_identity={"value": identity.value, "form": identity.form,
+                          "truncated": identity.truncated},
+        actual_base=hex_address(profile.actual_base),
+        preferred_image_base=hex_address(profile.preferred_image_base),
+        format=(None if profile.is_pe32_plus is None
+                else ("PE32+" if profile.is_pe32_plus else "PE32")),
+        machine=profile.machine,
+        machine_name=profile.machine_name,
+        time_date_stamp=profile.time_date_stamp,
+        checksum=profile.checksum,
+        subsystem=profile.subsystem,
+        dll_characteristics=profile.dll_characteristics,
+        coff_characteristics=profile.coff_characteristics,
+        size_of_image=profile.size_of_image,
+        size_of_headers=profile.size_of_headers,
+        section_alignment=profile.section_alignment,
+        file_alignment=profile.file_alignment,
+        declared_section_count=profile.number_of_sections,
+        decoded_section_count=len(profile.sections),
+        structural_state=profile.state.value,
+        relocation={
+            "delta": relocation.relocation_delta,
+            "relocs_stripped": relocation.relocs_stripped,
+            "dynamic_base": relocation.dynamic_base,
+            "basereloc_present": relocation.basereloc_present,
+            "basereloc_descriptor_state": relocation.basereloc_descriptor_state.value,
+        },
+        entry_point=_pe_entry_point_record(profile, correlation),
+        acquisition=_pe_acquisition_record(profile, segment_table=segment_table,
+                                            region_table=region_table),
+        directory_summary={
+            "declared_count": profile.declared_directory_count,
+            "declared_count_raw": profile.declared_directory_count_raw,
+            "readable_count": profile.readable_directory_count,
+            "unprojected_count": profile.unprojected_directory_count,
+        },
+        module_match=module_match,
+        observation_coverage={
+            "total": tally.total if tally is not None else 0,
+            "consistent": tally.consistent if tally is not None else 0,
+            "conflict": tally.conflict if tally is not None else 0,
+            "unavailable": tally.unavailable if tally is not None else 0,
+        },
+        sections=_pe_section_records(profile, correlation),
+        directories=_pe_directory_records(profile, correlation),
+        observations=observations)
 
 
 def _build_iat_record(iat_result) -> IatRecord:
@@ -431,7 +820,7 @@ def _build_peb_extended(mf: MinidumpFile) -> dict:
     }
 
 
-def _build_process_record(snapshot, iat_result, mf, verbose: bool) -> ProcessRecord:
+def _build_process_record(snapshot, iat_result, pe_record, mf, verbose: bool) -> ProcessRecord:
     return ProcessRecord(
         process_name=snapshot.selected_process_name,
         pid=snapshot.pid,
@@ -441,6 +830,9 @@ def _build_process_record(snapshot, iat_result, mf, verbose: bool) -> ProcessRec
         image_base_address=hex_address(snapshot.image_base_address),
         iat=_build_iat_record(iat_result),
         identity_evidence=_build_identity_evidence(snapshot),
+        # The complete collected record regardless of `verbose`: verbosity
+        # selects what the console prints, never what was collected.
+        pe_image=pe_record,
         peb_extended=(_build_peb_extended(mf) if verbose else None))
 
 
@@ -475,6 +867,8 @@ def render_process_console(record: ProcessRecord, coverage, *, verbose: bool = F
     print(f"  {'Command Line':<22} {console_safe(record.command_line) or '(unknown)'}")
     print(f"  {'Start Time (UTC)':<22} {record.process_start_utc or '(unknown)'}")
     print(f"  {'Image Base':<22} {record.image_base_address or '(unknown)'}")
+
+    _render_main_image_pe(record.pe_image, verbose=verbose)
 
     print(f"\n  {BOLD('Import Address Table')}")
     partial_iat_limitation = any(lim.code.value.startswith("IAT_") for lim in coverage.limitations)
@@ -736,6 +1130,618 @@ def _render_identity_verification(record: ProcessRecord) -> None:
           f"{console_safe(mod_claim['name']) or '(none)'}")
     print(f"    {'image base':<16} {(peb_claim['image_base_address'] or '(none)'):<32} "
           f"{mod_claim['base_address'] or '(none)'} ({mod_claim['match_state']})")
+
+
+# ── §3.10: the Main Image PE console block ──────────────────────────────
+# The default block is the image an analyst has to know about before
+# reading anything else: what it is, where it is against where it wanted
+# to be, how far it reaches, where execution begins, and every
+# disagreement between two captured facts. The section table, the sixteen
+# descriptors, the complete consistency list, and the byte provenance are
+# density decisions deferred to --verbose -- hidden, never absent, and
+# never abbreviated in `--json`, which carries the whole record either
+# way.
+#
+# Nothing printed here is a verdict. A conflict is a disagreement between
+# two captured facts, an unavailable check is a question the captured
+# evidence does not answer, and neither moves the coverage status, the
+# limitations, or the exit code.
+
+# Every reason token dumpex.core.pe_correlation can attach to an
+# observation, as the sentence an analyst reads instead of the token. The
+# set is closed on that module's side, so a token with no entry here is a
+# missing rendering rather than a new vocabulary.
+_PE_REASON_TEXT = {
+    # shared
+    "size_of_image_null": "the header's SizeOfImage was not decoded, so there is no declared "
+                          "extent to compare",
+    "section_alignment_null": "the header's SectionAlignment was not decoded, so the documented "
+                              "rounding cannot be applied",
+    "profile_field_null": "a header field this comparison needs was not decoded",
+    # base_vs_preferred
+    "delta_recorded": "the load address and the preferred base are both recorded",
+    "preferred_image_base_null": "the header's preferred ImageBase was not decoded",
+    # relocation_expected
+    "zero_delta": "the image is loaded at its preferred base, so no relocation was needed",
+    "relocation_delta_null": "the distance from the preferred base is not established",
+    "relocation_conflict": "the image sits away from its preferred base although it declares "
+                           "relocations stripped, or carries no relocation directory",
+    "relocation_undetermined": "the image sits away from its preferred base and the relocation "
+                               "evidence needed to judge that is not captured",
+    "relocation_consistent": "the image sits away from its preferred base and carries the "
+                             "relocation data that allows it",
+    # machine_vs_format
+    "machine_null": "the header's Machine was not decoded",
+    "format_null": "the optional header's 32/64-bit format was not decoded",
+    "machine_has_no_width": "this Machine value fixes no 32/64-bit format",
+    "unconstrained_machine": "EFI byte code ships in both formats, so either is legitimate",
+    "format_matches_machine": "the header format is the one this architecture fixes",
+    "format_contradicts_machine": "the header format is not the one this architecture fixes",
+    # entry_point_in_section
+    "entry_point_null": "the header's AddressOfEntryPoint was not decoded",
+    "zero_entry_point": "the image declares no entry point",
+    "entry_point_in_decoded_section": "the entry point falls inside a decoded section",
+    "entry_point_outside_every_section": "the entry point falls outside every section the table "
+                                         "declares",
+    "entry_point_table_incomplete": "the section table is incomplete, so where the entry point "
+                                    "falls is undetermined",
+    # size_vs_image_extent
+    "regions_unavailable": "no usable memory region table, so the mapping this image "
+                           "occupies could not be established",
+    "regions_lossy": "the memory region table dropped a descriptor, so the mapping is not usable "
+                     "evidence",
+    "base_not_in_region": "no captured region contains the image base",
+    "base_not_reservation_start": "the image base is not the start of its own memory reservation",
+    "reservation_not_contiguous": "the reservation holding the image is not contiguous",
+    "segments_unavailable": "no usable memory segment table, so how much of the mapping was "
+                            "captured could not be established",
+    "segments_lossy": "the memory segment table dropped a descriptor, so the captured extent is "
+                      "not usable evidence",
+    "segments_overlap_in_extent": "two segments claim the same address inside the mapping, so "
+                                  "the captured extent is contradictory",
+    "short_capture": "the dump captured only part of the mapping, so the declared size cannot be "
+                     "compared against it",
+    "size_within_base_region": "the declared image size fits inside the region holding the image "
+                               "base",
+    "size_within_reservation": "the declared image size fits inside the reservation holding the "
+                               "image",
+    "size_exceeds_reservation": "the declared image size reaches past the memory reserved for "
+                                "the image",
+    # size_vs_modulelist
+    "no_modulelist_entry": "no loader module record was matched at this image base (see the "
+                           "loader record line above for whether one could be)",
+    "modulelist_size_null": "the loader's module record carries no size",
+    "size_matches_modulelist": "the declared image size matches the loader's own record",
+    "size_matches_modulelist_aligned": "the declared image size matches the loader's own record "
+                                       "once section alignment is applied",
+    "size_contradicts_modulelist": "the declared image size differs from the loader's own record",
+    # size_vs_section_extent
+    "no_decoded_sections": "no section was decoded, so the table describes no extent",
+    "section_table_incomplete": "the section table is incomplete, so the extent it describes is "
+                                "a lower bound",
+    "size_covers_section_extent": "every decoded section fits inside the declared image size",
+    "section_extent_exceeds_size": "a decoded section reaches past the declared image size",
+    # identity_*
+    "no_second_source": "no loader module record was matched at this image base to compare "
+                        "against",
+    "operand_null": "one of the two values was not recorded",
+    "identity_matches": "the header value and the loader's own record agree",
+    "identity_contradicts": "the header value and the loader's own record differ",
+    "header_checksum_absent": "the header carries no checksum, which is ordinary for a linked "
+                              "image",
+    "machine_no_independent_source": "the dump carries no second source for this image's "
+                                     "architecture",
+    # section_*
+    "section_range_representable": "the section's address range is representable at this load "
+                                   "address",
+    "section_range_overflows_address_space": "the section's address range runs past the end of "
+                                             "the address space",
+    "section_within_image_bound": "the section fits inside the declared image size",
+    "section_escapes_image_bound": "the section reaches past the declared image size",
+    "section_disjoint_from_others": "the section shares no address with another section",
+    "section_overlaps_another": "the section shares addresses with another section",
+    "section_overlap_undetermined": "the section table is incomplete, so an overlap with an "
+                                    "undecoded section cannot be ruled out",
+    "section_field_null": "a section field this comparison needs was not decoded",
+    # directory_image_bound
+    "directory_declared_absent": "the image declares this directory absent",
+    "directory_presence_unknown": "the descriptor was not read far enough to say whether the "
+                                  "directory is declared",
+    "descriptor_partial": "only part of the descriptor was read",
+    "file_offset_semantics": "this directory is addressed by file offset, not by image RVA, so "
+                             "it is not part of the mapping",
+    "directory_within_image_bound": "the directory fits inside the declared image size",
+    "directory_escapes_image_bound": "the directory reaches past the declared image size",
+}
+
+# What each observation is about, in an analyst's terms. The per-section
+# and per-descriptor families are named from their own operands instead,
+# so a row says which section or which descriptor it is about.
+_PE_OBSERVATION_SUBJECT = {
+    "base_vs_preferred": "load address vs. preferred base",
+    "relocation_expected": "relocation evidence",
+    "machine_vs_format": "architecture vs. header format",
+    "entry_point_in_section": "entry point placement",
+    "size_vs_image_extent": "image size vs. mapped memory",
+    "size_vs_modulelist": "image size vs. loader record",
+    "size_vs_section_extent": "image size vs. section table",
+    "identity_time_date_stamp": "timestamp vs. loader record",
+    "identity_check_sum": "checksum vs. loader record",
+    "identity_machine": "architecture vs. a second source",
+}
+
+# The evidence tokens an observation names, as the stream or structure an
+# analyst would go and look at. A token with no entry prints as itself:
+# an unnamed source is still provenance, and dropping it would hide which
+# evidence a check rested on.
+_PE_SOURCE_TEXT = {
+    "profile.dos_header": "the image's DOS header",
+    "profile.coff_header": "the image's COFF header",
+    "profile.optional_header": "the image's optional header",
+    "profile.directory_array": "the image's data directory array",
+    "profile.directory_descriptors": "the image's data directory descriptors",
+    "profile.section_table": "the image's section table",
+    "profile.source:peb_image_base": "the PEB-reported image base",
+    "profile.source:module_list_entry": "the module list's own base address",
+    "profile.source:memory_candidate": "a scanned memory candidate's base address",
+    "module_list": "the loader's module list",
+    "memory_info": "the dump's memory region table",
+    "memory_segments": "the dump's memory segment table",
+}
+
+_PE_OBSERVATION_MARKER = {
+    "consistent": _CHECK_OK,
+    "conflict": _CHECK_CONFLICT,
+    "unavailable": _CHECK_UNAVAILABLE,
+}
+
+# Why no profile exists, in the analyst's terms. `collection_failed` is
+# dumpex's own defect and says so: the bytes were there, and a token that
+# blamed the image for them would be a false claim about the dump.
+_PE_UNCOLLECTED_TEXT = {
+    "no_image_base": "(unavailable -- no image base to profile; see coverage above)",
+    "header_unreadable": "(unavailable -- the header at the image base could not be read)",
+    "collection_failed": "(unavailable -- dumpex could not build a profile from the captured "
+                         "header; this is a dumpex defect, not a fact about the image)",
+}
+
+# What the loader's own module list says about this image base. The
+# distinction is the record's, not this block's: a module list that parsed
+# and registers nothing here has confirmed an absence, while one that is
+# not there has confirmed nothing.
+_PE_MODULE_MATCH_TEXT = {
+    "resolved": "a module is registered at this image base",
+    "unregistered": "no module is registered at this image base (the loader's list was read)",
+    "unavailable": "the loader's module list could not be compared with this image base",
+    None: "(unknown)",
+}
+
+# What happened to a table, as the sentence that attributes the gap to
+# that table rather than to the image. `enumerated` needs no line:
+# nothing was lost, whatever the table then turned out to contain.
+_PE_TABLE_NAME = {
+    "segment_table": "the dump's memory segment table",
+    "region_table": "the dump's memory region table",
+}
+
+_PE_TABLE_STATE_TEXT = {
+    "absent": "is not in this dump",
+    "failed": "is in this dump and yielded nothing usable",
+    "lossy": "dropped a descriptor",
+    "unreadable": "could not be walked",
+}
+
+_PE_TABLE_CONSEQUENCE = {
+    "segment_table": "the header's byte provenance and any check that needed the table are "
+                     "withheld, not decided",
+    "region_table": "any check or context that needed the table is withheld, not decided",
+}
+
+
+def _pe_table_losses(acquisition) -> "tuple[str, ...]":
+    """The tables that are not `enumerated`, in the fixed order they are
+    declared."""
+    if acquisition is None:
+        return ()
+    return tuple(
+        field_name for field_name in _PE_TABLE_NAME
+        if getattr(acquisition, field_name) != "enumerated")
+
+
+def _pe_table_loss_lines(acquisition) -> "tuple[str, ...]":
+    """One full sentence per table that yielded less than a whole one --
+    what happened to it, and what is withheld because of it."""
+    return tuple(
+        f"{_PE_TABLE_NAME[field_name]} "
+        f"{_PE_TABLE_STATE_TEXT[getattr(acquisition, field_name)]}: "
+        f"{_PE_TABLE_CONSEQUENCE[field_name]}"
+        for field_name in _pe_table_losses(acquisition))
+
+
+def _pe_table_loss_summary(acquisition, *, pointer: bool) -> "tuple[str, ...]":
+    """What happened to each table, without the consequence clause.
+
+    The default block lists the checks that went unanswered directly
+    above this, so repeating what is withheld would say the same thing
+    twice; what this adds is which table, and which of the four things
+    happened to it. `pointer` sends a `--verbose` reader to the block
+    that states it in full rather than printing that sentence twice in
+    one render."""
+    suffix = " -- see Header Acquisition below" if pointer else ""
+    return tuple(
+        f"{_PE_TABLE_NAME[field_name]} "
+        f"{_PE_TABLE_STATE_TEXT[getattr(acquisition, field_name)]}{suffix}"
+        for field_name in _pe_table_losses(acquisition))
+
+
+_PE_STRUCTURAL_STATE_TEXT = {
+    "complete": "every header structure was read in full",
+    "partial": "a header structure was read only in part",
+    "unavailable": "a header structure could not be read at all",
+    "malformed": "a header structure is structurally defective",
+    "declared_absent": "the image positively declares this structure absent",
+}
+
+# How many observation rows the default block prints before folding the
+# rest into a count. A hostile image can declare 96 sections, each
+# carrying three observations of its own, and the default console is a
+# summary.
+_PE_DEFAULT_OBSERVATION_ROWS = 8
+
+# The `unavailable` reasons the default block shows beside the conflicts.
+# An unevaluated check is worth an analyst's attention when knowing WHY
+# it could not be answered changes what they do next -- collect the dump
+# again with the missing stream, look at a truncated structure, find a
+# second source. Every other `unavailable` is routine structure: a
+# directory the image declares absent, a header field that was never
+# decoded (the `Structure` line above already says so), a comparison with
+# no second source that no dump can ever supply. Listing those would bury
+# the ones that matter, so the default block counts them and `--verbose`
+# lists them all.
+#
+# Membership is the question "would an analyst act on this?", not "is it
+# unavailable?" -- which is why this is an allowlist and not a filter.
+_PE_ACTIONABLE_UNAVAILABLE_REASONS = frozenset({
+    # the dump's own tables could not support the check
+    "regions_unavailable",
+    "regions_lossy",
+    "segments_unavailable",
+    "segments_lossy",
+    "segments_overlap_in_extent",
+    "short_capture",
+    # the image is not laid out where the region table says it should be
+    "base_not_in_region",
+    "base_not_reservation_start",
+    "reservation_not_contiguous",
+    # a structure was captured only in part, so a real question went
+    # unanswered rather than being asked and settled
+    "entry_point_table_incomplete",
+    "section_table_incomplete",
+    "section_overlap_undetermined",
+    "descriptor_partial",
+    "relocation_undetermined",
+    # no second source to corroborate against
+    "no_modulelist_entry",
+})
+
+# Section names are eight attacker-controlled bytes and a directory name
+# is dumpex's own, so only the first needs escaping -- both go through
+# console_safe() anyway, for the same reason the IAT table does: one
+# projection for every dump-derived string on this console.
+_PE_SECTION_NAME_COLUMN_MIN_WIDTH = 10
+_PE_SECTION_NAME_COLUMN_MAX_WIDTH = 24
+_PE_PROTECTION_COLUMN_MIN_WIDTH = 22
+_PE_PROTECTION_COLUMN_MAX_WIDTH = 48
+_PE_DIRECTORY_NAME_COLUMN_MIN_WIDTH = 16
+
+
+def _pe_section_label(pe_record, index: "int | None") -> str:
+    """`section N (.text)` for a decoded section, `section N` for an index
+    the decoded table does not reach."""
+    if index is None:
+        return "section"
+    if 0 <= index < len(pe_record.sections):
+        name = console_safe(pe_record.sections[index].name)
+        if name:
+            return f"section {index} ({name})"
+    return f"section {index}"
+
+
+def _pe_observation_subject(pe_record, observation) -> str:
+    if observation.name == "directory_image_bound":
+        index = observation.operands.get("index")
+        if isinstance(index, int) and 0 <= index < len(pe_record.directories):
+            return f"directory {index} ({pe_record.directories[index].name})"
+        return "directory"
+    if "section_index" in observation.operands:
+        return _pe_section_label(pe_record, observation.operands.get("section_index"))
+    return _PE_OBSERVATION_SUBJECT.get(observation.name, observation.name)
+
+
+def _pe_observation_line(pe_record, observation) -> str:
+    """One observation as `[marker] subject: what the evidence says`,
+    unindented -- each caller adds its own. The dumpex-authored reason
+    token never reaches the console: it stays in `--json`, where a
+    consumer keys on it."""
+    marker = _PE_OBSERVATION_MARKER[observation.state]
+    text = _PE_REASON_TEXT.get(observation.reason, observation.reason)
+    return f"{marker} {_pe_observation_subject(pe_record, observation)}: {text}"
+
+
+def _pe_evidence_text(observation) -> str:
+    return ", ".join(_PE_SOURCE_TEXT.get(source, source)
+                      for source in observation.sources) or "(none recorded)"
+
+
+def _pe_base_line(pe_record) -> str:
+    """The actual base, and the preferred base it is measured against.
+    The two are different facts and are never collapsed into one."""
+    actual = pe_record.actual_base or "(unknown)"
+    preferred = pe_record.preferred_image_base
+    delta = pe_record.relocation["delta"]
+    if preferred is None:
+        return f"{actual} (preferred base not decoded)"
+    if delta is None:
+        return f"{actual} (preferred {preferred})"
+    if delta == 0:
+        return f"{actual} (its preferred base)"
+    sign = "+" if delta > 0 else "-"
+    return f"{actual} (preferred {preferred}; relocated {sign}0x{abs(delta):x})"
+
+
+def _pe_architecture_line(pe_record) -> str:
+    machine = pe_record.machine_name or (
+        f"machine 0x{pe_record.machine:x}" if pe_record.machine is not None else "(unknown)")
+    return f"{console_safe(machine)} / {pe_record.format or '(format unknown)'}"
+
+
+def _pe_extent_line(pe_record) -> str:
+    size = pe_record.size_of_image
+    size_text = "(unknown)" if size is None else f"0x{size:x} ({size} bytes)"
+    declared = pe_record.declared_section_count
+    decoded = pe_record.decoded_section_count
+    if declared is None:
+        sections = f"{decoded} section(s) decoded"
+    elif declared == decoded:
+        sections = f"{decoded} section(s)"
+    else:
+        # The header's own count and what the table actually yielded are
+        # different facts; a single number would hide a table that was
+        # cut short.
+        sections = f"{decoded} of {declared} section(s) decoded"
+    return f"{size_text}, {sections}"
+
+
+def _pe_entry_point_line(entry_point) -> str:
+    if entry_point.rva is None:
+        return "(unknown)"
+    if entry_point.rva == 0:
+        return "none declared"
+    text = f"RVA 0x{entry_point.rva:x}"
+    if entry_point.va_overflow:
+        return f"{text} -- past the end of the address space at this load address"
+    if entry_point.va:
+        text += f" -> {entry_point.va}"
+    context = []
+    if entry_point.section_name:
+        context.append(console_safe(entry_point.section_name))
+    elif entry_point.section_index is not None:
+        context.append(f"section {entry_point.section_index}")
+    if entry_point.region_protection:
+        context.append(entry_point.region_protection)
+    if entry_point.capture_state:
+        context.append(f"capture {entry_point.capture_state}")
+    return f"{text} ({'; '.join(context)})" if context else text
+
+
+def _render_main_image_pe(pe_record, *, verbose: bool) -> None:
+    """The default Main Image PE block, and -- under `--verbose` -- the
+    bounded section, descriptor, consistency, and provenance detail."""
+    print(f"\n  {BOLD('Main Image PE')}")
+    if not pe_record.collected:
+        print(f"    {_PE_UNCOLLECTED_TEXT[pe_record.unavailable_reason]}")
+        return
+
+    print(f"    {'Architecture':<16} {_pe_architecture_line(pe_record)}")
+    print(f"    {'Image Base':<16} {_pe_base_line(pe_record)}")
+    print(f"    {'Image Size':<16} {_pe_extent_line(pe_record)}")
+    print(f"    {'Entry Point':<16} {_pe_entry_point_line(pe_record.entry_point)}")
+    print(f"    {'Loader Record':<16} {_PE_MODULE_MATCH_TEXT[pe_record.module_match]}")
+    state = pe_record.structural_state
+    print(f"    {'Structure':<16} {state} -- {_PE_STRUCTURAL_STATE_TEXT.get(state, '')}".rstrip())
+    if not pe_record.correlated:
+        # An empty tally with no cause beside it reads exactly like a
+        # clean image, which is the one thing it must never read as.
+        print(f"    {'Consistency':<16} not produced -- dumpex could not correlate this image "
+              f"with the dump's memory evidence")
+    else:
+        tally = pe_record.observation_coverage
+        print(f"    {'Consistency':<16} {tally['consistent']} consistent, {tally['conflict']} "
+              f"conflicting, {tally['unavailable']} not evaluated")
+
+    # Conflicts first and unconditionally: a disagreement between two
+    # captured facts is the stronger result, and an unevaluated check can
+    # never displace one out of the row budget.
+    rows = [o for o in pe_record.observations if o.state == "conflict"]
+    rows += [o for o in pe_record.observations
+             if o.state == "unavailable"
+             and o.reason in _PE_ACTIONABLE_UNAVAILABLE_REASONS]
+    for observation in rows[:_PE_DEFAULT_OBSERVATION_ROWS]:
+        print(f"    {_pe_observation_line(pe_record, observation)}")
+    omitted = len(rows) - _PE_DEFAULT_OBSERVATION_ROWS
+    if omitted > 0:
+        print(f"    ... and {omitted} further conflicting or unevaluated check(s) "
+              f"-- see --verbose")
+    # Which of the dump's own tables is behind those unanswered checks,
+    # and what happened to it. This keeps the gap attributed to the
+    # table instead of leaving it to read as a property of the image;
+    # what is withheld because of it is stated once, in the verbose
+    # provenance block.
+    for line in _pe_table_loss_summary(pe_record.acquisition, pointer=verbose):
+        print(f"    {_CHECK_UNAVAILABLE} {line}")
+
+    if verbose:
+        _render_pe_sections(pe_record)
+        _render_pe_directories(pe_record)
+        _render_pe_observations(pe_record)
+        _render_pe_provenance(pe_record)
+    else:
+        print("    (use --verbose for the section table, the directory descriptors, and every "
+              "consistency check)")
+
+
+# Row counts here are structural, not arbitrary: a profile carries at
+# most _MAX_SECTIONS sections and exactly sixteen descriptors, and each
+# section contributes three observations and each descriptor one, so
+# every table below is bounded by the image's own declared shape.
+
+def _render_pe_sections(pe_record) -> None:
+    print(f"\n    {BOLD('Sections')}                                     [--verbose only]")
+    if not pe_record.sections:
+        print("      (none decoded)")
+        return
+    rows = []
+    for section in pe_record.sections:
+        declared = "".join((
+            "R" if section.declared_readable else "-",
+            "W" if section.declared_writable else "-",
+            "X" if section.declared_executable else "-"))
+        rows.append((
+            str(section.section_index),
+            console_safe(section.name) or "(unnamed)",
+            f"0x{section.virtual_address:x}+0x{section.virtual_size:x}",
+            section.mapped_base_address or "(unmapped)",
+            declared,
+            ", ".join(section.live_protections) or "(none recorded)",
+            section.capture_state or "(unknown)"))
+    name_w = column_width("Name", [r[1] for r in rows],
+                           minimum=_PE_SECTION_NAME_COLUMN_MIN_WIDTH,
+                           cap=_PE_SECTION_NAME_COLUMN_MAX_WIDTH)
+    rva_w = column_width("RVA+Size", [r[2] for r in rows], minimum=18)
+    base_w = column_width("Mapped At", [r[3] for r in rows], minimum=20)
+    protection_w = column_width("Live Protection", [r[5] for r in rows],
+                                 minimum=_PE_PROTECTION_COLUMN_MIN_WIDTH,
+                                 cap=_PE_PROTECTION_COLUMN_MAX_WIDTH)
+    print(f"      {'#':<3} {'Name':<{name_w}}  {'RVA+Size':<{rva_w}}  {'Mapped At':<{base_w}}  "
+          f"{'R/W/X':<5}  {'Live Protection':<{protection_w}}  Capture")
+    for index, name, rva, base, declared, protection, capture in rows:
+        print(f"      {index:<3} {name:<{name_w}}  {rva:<{rva_w}}  {base:<{base_w}}  "
+              f"{declared:<5}  {protection:<{protection_w}}  {capture}")
+    print("      R/W/X is what the section header declares; Live Protection is what the dump "
+          "recorded")
+    print("      for the memory it is mapped over. PAGE_EXECUTE_WRITECOPY is ordinary loader "
+          "context.")
+
+
+def _render_pe_directories(pe_record) -> None:
+    print(f"\n    {BOLD('Data Directories')}                             [--verbose only]")
+    if not pe_record.directories:
+        print("      (none read)")
+        return
+    rows = []
+    for descriptor in pe_record.directories:
+        if descriptor.present is None:
+            presence = "(undetermined)"
+        elif descriptor.present:
+            presence = "declared"
+        else:
+            presence = "absent"
+        value = "(unread)" if descriptor.value is None else f"0x{descriptor.value:x}"
+        size = "(unread)" if descriptor.size is None else f"0x{descriptor.size:x}"
+        rows.append((
+            str(descriptor.index), descriptor.name, presence,
+            f"{value}+{size}", descriptor.value_kind, descriptor.descriptor_state,
+            descriptor.capture_state or "(n/a)"))
+    name_w = column_width("Directory", [r[1] for r in rows],
+                           minimum=_PE_DIRECTORY_NAME_COLUMN_MIN_WIDTH)
+    value_w = column_width("Value+Size", [r[3] for r in rows], minimum=18)
+    state_w = column_width("Descriptor", [r[5] for r in rows], minimum=16)
+    print(f"      {'#':<3} {'Directory':<{name_w}}  {'Presence':<14}  {'Value+Size':<{value_w}}  "
+          f"{'Addressing':<11}  {'Descriptor':<{state_w}}  Capture")
+    for index, name, presence, value, kind, state, capture in rows:
+        print(f"      {index:<3} {name:<{name_w}}  {presence:<14}  {value:<{value_w}}  "
+              f"{kind:<11}  {state:<{state_w}}  {capture}")
+    print("      Value+Size is the descriptor's own declaration; Addressing says whether that "
+          "value is")
+    print("      an image RVA or a file offset. Descriptor is how much of the descriptor itself "
+          "was read.")
+
+
+def _render_pe_observations(pe_record) -> None:
+    print(f"\n    {BOLD('Consistency Checks')}                           [--verbose only]")
+    if not pe_record.observations:
+        print("      (none evaluated)")
+        return
+    for observation in pe_record.observations:
+        print(f"      {_pe_observation_line(pe_record, observation)}")
+        print(f"           evidence: {_pe_evidence_text(observation)}")
+
+
+def _pe_captured_text(acquisition) -> str:
+    """The `Captured` line, which is a byte count or the reason there is
+    none. `captured_bytes` is null for four different reasons, and naming
+    the wrong one is the same class of false provenance statement as
+    claiming a table is absent."""
+    captured = acquisition.captured_bytes
+    if captured is not None:
+        return f"0x{captured:x} bytes"
+    state = acquisition.segment_table
+    if state != "enumerated":
+        return f"(not resolved -- the segment table {_PE_TABLE_STATE_TEXT[state]})"
+    # The table enumerated whole and still could not account for the run
+    # that was read: `_capture_for`'s own invariant check refused it, and
+    # there is no table state to attribute that to.
+    return "(not resolved -- the segment table accounts for fewer bytes than were read)"
+
+
+def _render_pe_provenance(pe_record) -> None:
+    """The bytes behind everything above: what was asked for, what the
+    dump holds, and what was read. A staged acquisition stops when its
+    ladder is satisfied, so reading fewer bytes than were captured is the
+    normal outcome for a healthy image -- `Read Short` is the judgement
+    that fact supports, and is the one to read."""
+    acquisition = pe_record.acquisition
+    print(f"\n    {BOLD('Header Acquisition')}                           [--verbose only]")
+    print(f"      {'Requested':<18} 0x{acquisition.requested_bytes:x} bytes at the image base")
+    print(f"      {'Captured':<18} {_pe_captured_text(acquisition)}")
+    print(f"      {'Read':<18} 0x{acquisition.read_bytes:x} bytes "
+          f"(the stages asked for 0x{acquisition.read_target_bytes:x})")
+    short = acquisition.target_io_short
+    print(f"      {'Read Short':<18} "
+          f"{'(undetermined)' if short is None else ('yes' if short else 'no')}")
+    overlapping = acquisition.capture_overlapping
+    print(f"      {'Segment Table':<18} {acquisition.segment_table}"
+          f"{' (two segments claim one address)' if overlapping else ''}")
+    print(f"      {'Region Table':<18} {acquisition.region_table}")
+    # The consequence of the two lines above, said beside them rather
+    # than left for a reader to derive from the state tokens.
+    for line in _pe_table_loss_lines(acquisition):
+        print(f"      {' ' * 18} {line}")
+    print(f"      {'Stage':<18} requested {acquisition.requested_stage}, completed "
+          f"{acquisition.highest_completed_stage or '(none)'}")
+    stop = acquisition.bounded_stop
+    if stop is not None:
+        print(f"      {'Bounded Stop':<18} {stop['scope']} -- dumpex's own budget of "
+              f"{stop['budget_limit']} stopped the read at {stop['budget_consumed']}")
+    states = ", ".join(f"{name}={state or 'not in scope'}"
+                        for name, state in acquisition.components.items())
+    print(f"      {'Components':<18} {states}")
+    if acquisition.unexamined:
+        spans = ", ".join(f"{span['base_address']}+0x{span['size']:x}"
+                           for span in acquisition.unexamined)
+        print(f"      {'Unexamined':<18} {spans}")
+        print("      Unexamined names bytes nothing looked at -- neither intact nor damaged "
+              "there.")
+    identity = pe_record.module_identity
+    if identity["value"] is not None:
+        # The shortened marker sits outside the value, never inside it: a
+        # name ending in an ellipsis the image itself carries must not be
+        # indistinguishable from one dumpex cut short.
+        marker = " [shortened]" if identity["truncated"] else ""
+        source = _PE_SOURCE_TEXT.get(f"profile.source:{pe_record.source_kind}",
+                                      pe_record.source_kind)
+        print(f"      {'Named As':<18} {console_safe(identity['value'])}{marker} "
+              f"({identity['form']} from {source})")
 
 
 def _render_extended_peb(peb_extended: dict) -> None:

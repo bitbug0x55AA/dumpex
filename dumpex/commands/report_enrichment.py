@@ -64,7 +64,7 @@ from dumpex.output.records import (
     ReportExceptionEntry, ReportHandleCorrelation, ReportHandleSummary,
     ReportHandleTypeCount, ReportIatCorrelatedEntry, ReportIatCorrelation,
     ReportInstructionContext, ReportInstructionLead, ReportNeighborRegion,
-    ReportPeContext, ReportPeObservation,
+    ReportPeContext, PeObservationRecord,
     ReportProcessEnrichment, ReportStringContext, ReportStringContextEntry,
     ReportTokenCapability, StreamParserState, hex_address,
 )
@@ -1428,7 +1428,7 @@ def collect_pe_context(pe_cache: PeProfileCache) -> ReportPeContext:
     conflicts = correlation.conflicts() if correlation is not None else ()
     kept = conflicts[:MAX_PE_CONFLICTS]
     observations = tuple(
-        ReportPeObservation(
+        PeObservationRecord(
             name=observation.name, state="conflict", reason=observation.reason,
             sources=tuple(observation.sources),
             operands={key: value for key, value in observation.operands.items()})

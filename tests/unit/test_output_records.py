@@ -14,6 +14,7 @@ from dumpex.output.records import (
     MemoryDiffRecord, MEMORY_DIFF_ADDED, MEMORY_DIFF_REMOVED, MEMORY_DIFF_PROTECTION_CHANGED,
     ReportIocString, ReportThreadInfo, ReportRegionInfo,
     ImportEntryRecord, ProcessDiagnosticRecord, IatRecord, ProcessRecord,
+    ProcessPeRecord,
     HandleRecord, handle_name_display, HANDLE_NAME_STATUSES,
     HANDLE_NAME_STATUS_LABELS, HANDLE_RESERVED_NAME_LABELS,
     TriageCardRecord, TRIAGE_ANCHOR_TID, TRIAGE_ANCHOR_ADDRESS, TRIAGE_ANCHOR_STRING_HIT,
@@ -1293,7 +1294,8 @@ def _process_record(**overrides):
                   command_line=r'"C:\Samples\malware.exe" -k',
                   process_start_utc="2026-08-14 01:15:05 UTC",
                   image_base_address=hex_address(0x00007ff600010000),
-                  iat=_empty_iat(), identity_evidence={"diagnostics": []})
+                  iat=_empty_iat(), identity_evidence={"diagnostics": []},
+                  pe_image=ProcessPeRecord.uncollected("no_image_base"))
     kwargs.update(overrides)
     return ProcessRecord(**kwargs)
 

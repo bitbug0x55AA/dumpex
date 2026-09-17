@@ -19,6 +19,7 @@ from minidump.streams.SystemInfoStream import PROCESSOR_ARCHITECTURE
 from minidump.structures.peb import PEB_OFFSETS
 
 from dumpex.core.memory import read_region_spanning, stream_failure, va_range_captured_bytes
+from dumpex.core.pe_profile import PE_HEADER_READ_MAX
 from dumpex.core.pe_utils import parse_pe_header
 from dumpex.output.coverage import SourceState
 
@@ -370,12 +371,22 @@ class MainImagePeClaim:
     below, not just documented, since a constructor that silently
     accepted a self-contradictory combination (e.g. checked=True with
     pe_facts=None) would hand dumpex.core.pe_utils.parse_iat() a None it
-    cannot `.get()` from."""
+    cannot `.get()` from.
+
+    `header_bytes` is the exact run this claim was parsed from, retained
+    so a second consumer of the same header -- the canonical
+    dumpex.core.pe_profile collection --process builds for its `pe_image`
+    projection -- decodes those bytes again without reading the dump a
+    second time. It is bounded by MAIN_IMAGE_PE_READ_MAX, immutable, and
+    always exactly `captured_bytes` long: a buffer that disagreed with
+    its own length would let one consumer's facts rest on bytes another
+    consumer's provenance does not account for."""
     checked: bool
     valid: "bool | None"
     reason: "str | None"
     captured_bytes: int = 0
     pe_facts: "MainImagePeFacts | None" = None
+    header_bytes: bytes = b""
 
     def __post_init__(self):
         if self.checked:
@@ -390,6 +401,14 @@ class MainImagePeClaim:
                     "MainImagePeClaim(checked=False) requires captured_bytes == 0 and "
                     f"pe_facts == None, got captured_bytes={self.captured_bytes!r} "
                     f"pe_facts={self.pe_facts!r}")
+        if not isinstance(self.header_bytes, bytes):
+            raise ValueError(
+                f"MainImagePeClaim.header_bytes must be bytes, got "
+                f"{type(self.header_bytes).__name__}")
+        if len(self.header_bytes) != self.captured_bytes:
+            raise ValueError(
+                f"MainImagePeClaim.header_bytes must hold exactly captured_bytes "
+                f"({self.captured_bytes}) bytes, got {len(self.header_bytes)}")
 
 
 @dataclass(frozen=True)
@@ -584,11 +603,14 @@ def _build_module_claim(mf, peb_claim: PebClaim):
             len(candidates))
 
 
-MAIN_IMAGE_PE_READ_MAX = 4096   # bytes read at the normalized image base for
-                                 # structural PE validation -- matches
-                                 # dumpex.hunt.stomping.config.PE_VALIDATE_READ_MAX,
-                                 # the codebase's existing module-header read
-                                 # size convention.
+# Bytes read at the normalized image base for structural PE validation.
+# It is dumpex.core.pe_profile.PE_HEADER_READ_MAX itself, not a second
+# constant that happens to hold the same number: the canonical profile is
+# decoded from the run this budget produces, so a profile requesting a
+# different span would report that run as a short read of a longer
+# request. Both equal dumpex.hunt.stomping.config.PE_VALIDATE_READ_MAX,
+# the codebase's module-header read size convention.
+MAIN_IMAGE_PE_READ_MAX = PE_HEADER_READ_MAX
 
 
 def _build_main_image_pe_claim(mf, image_base: "int | None") -> MainImagePeClaim:
@@ -622,7 +644,7 @@ def _build_main_image_pe_claim(mf, image_base: "int | None") -> MainImagePeClaim
         is_pe32_plus=result["is_pe32_plus"],
         insufficient_data=result["insufficient_data"])
     return MainImagePeClaim(checked=True, valid=result["valid"], reason=result["reason"] or None,
-                             captured_bytes=len(data), pe_facts=facts)
+                             captured_bytes=len(data), pe_facts=facts, header_bytes=data)
 
 
 def build_process_identity_snapshot(mf) -> ProcessIdentitySnapshot:

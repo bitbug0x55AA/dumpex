@@ -408,3 +408,96 @@ def test_targeted_obfuscation_reads_the_requested_range_once(monkeypatch):
 
     assert len(reads) == 1, f"the requested range was read {len(reads)} times"
     assert reads[0] == (_TARGETED_BASE, size)
+
+# ── --process's main-image PE profile: one read, bounded records ─────────
+# The profile and its correlation consume the header the identity snapshot
+# already read, and every record they produce is bounded by the image's own
+# declared shape: at most _MAX_SECTIONS sections, exactly sixteen
+# descriptors, three observations per section and one per descriptor. An
+# image declaring the maximum section count, inside a dump with a large
+# region table, is the adversarial end of that -- it must stay linear and
+# must not cost a second read of the header.
+
+_PE_PERF_BASE = 0x00007ff600010000
+
+
+def _max_section_image():
+    from tests.unit.test_pe_profile import build_image
+
+    sections = [
+        {"name": b".s%03d" % i, "vaddr": 0x1000 + i * 0x1000, "vsize": 0x1000,
+         "rawptr": 0x400, "rawsize": 0x1000,
+         "chars": IMAGE_SCN_MEM_EXECUTE | IMAGE_SCN_MEM_READ}
+        for i in range(96)
+    ]
+    return build_image(sections=tuple(sections), image_base=_PE_PERF_BASE,
+                       size_of_image=0x2000, directories=[(0, 0), (0x2000, 40)])
+
+
+def _process_mf_with_many_regions(image, region_count=4096):
+    from tests.fixtures.fakes import MiscInfo, Peb
+    from tests.unit.test_process_cmd import _mf
+
+    mf = _mf(misc_info=MiscInfo(process_id=4242),
+             peb=Peb(_PE_PERF_BASE, r"C:\Samples\malware.exe"),
+             modules=[], memory={_PE_PERF_BASE: image})
+    regions = [
+        Region(0x10000 + i * 0x10000, 0x10000 + i * 0x10000, 0x1000,
+               "MEM_COMMIT", "PAGE_READWRITE", "MEM_PRIVATE")
+        for i in range(region_count)
+    ]
+    mf.memory_info = FakeStream(regions, "infos")
+    return mf
+
+
+def test_process_pe_profile_over_a_max_section_image_completes_within_time_budget():
+    from dumpex.commands.process import collect_process
+
+    mf = _process_mf_with_many_regions(_max_section_image())
+    start = time.time()
+    result = collect_process(mf)
+    elapsed = time.time() - start
+
+    assert elapsed < 5.0, f"--process took {elapsed:.1f}s over a 96-section image"
+    pe_image = result.records[0].pe_image
+    assert len(pe_image.sections) <= 96
+    assert len(pe_image.directories) == 16
+    # Three per section, one per descriptor, plus the ten image-level
+    # checks -- bounded by the image's own declared shape, never by the
+    # dump's size.
+    assert len(pe_image.observations) == 10 + 3 * len(pe_image.sections) + 16
+
+
+def test_process_pe_profile_costs_no_second_read_of_the_header():
+    """The identity snapshot's read is the profile's input: a per-section or
+    per-descriptor read would turn one bounded read into an unbounded walk."""
+    from dumpex.commands.process import collect_process
+
+    mf = _process_mf_with_many_regions(_max_section_image())
+    reads = []
+    inner = mf.get_reader()._buffered
+
+    class _CountingBufferedReader:
+        @property
+        def current_segment(self):
+            return inner.current_segment
+
+        @property
+        def current_position(self):
+            return inner.current_position
+
+        def move(self, address):
+            return inner.move(address)
+
+        def read(self, size):
+            reads.append((inner.current_position, size))
+            return inner.read(size)
+
+    class _Reader:
+        def get_buffered_reader(self):
+            return _CountingBufferedReader()
+
+    mf.get_reader = lambda: _Reader()
+    collect_process(mf)
+
+    assert len([r for r in reads if r[0] == _PE_PERF_BASE]) == 1, reads
