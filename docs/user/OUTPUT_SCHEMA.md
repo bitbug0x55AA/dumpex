@@ -646,7 +646,8 @@ directly — the report adds no PE parser of its own — and publishes the main
 image's identity (`machine`, `time_date_stamp`, `size_of_image`,
 `preferred_image_base`, `image_base`, `entry_point_va`, `section_count`) plus
 the correlation layer's `consistent_count` / `conflict_count` /
-`unavailable_count` tally. `observations` carries the retained `conflict`
+`unavailable_count` / `not_applicable_count` tally, one count per observation
+state. `observations` carries the retained `conflict`
 observations, each with its `name`, `reason`, `sources`, and `operands`. A
 structural conflict is a disagreement between two captured facts (a base that
 does not match a stripped image's declared base, a section that escapes
@@ -971,9 +972,9 @@ dump.
 | `sections` | each decoded section: RVA and extent, mapped address, declared R/W/X, live protections, capture state |
 | `directories` | all sixteen data-directory descriptors: value, addressing mode, size, presence, descriptor state, capture state |
 | `acquisition` | the stage ladder, the requested/captured/read byte counts, any attributed bounded stop, per-component states, the exact unexamined ranges, and how completely each of the dump's own tables could be walked (`segment_table`, `region_table`, `capture_overlapping`) |
-| `observations`, `observation_coverage` | every evaluated consistency check and a tally of the three states |
+| `observations`, `observation_coverage` | every consistency check the correlation produced and a tally of the four states |
 
-Three rules a consumer should read before branching on any of it:
+A few rules a consumer should read before branching on any of it:
 
 - **An observation is an observation.** A `conflict` is a disagreement between
   two captured facts — a declared image size the loader's own record
@@ -981,6 +982,17 @@ Three rules a consumer should read before branching on any of it:
   maliciousness claim. An `unavailable` is a question the captured evidence does
   not answer, and never a failure. There is no score, confidence, verdict, or
   ATT&CK field here.
+- **The two states that withhold an answer are not the same state.**
+  `unavailable` is evidence this dump does not carry — no second source to
+  compare an architecture against, a memory table that could not be walked, a
+  structure captured only in part. `not_applicable` is a comparison an
+  established fact leaves no subject for: a directory the header declares
+  absent, the Security directory's file offset (§2.5 — not part of the image
+  mapping), a zero `CheckSum` the image never populated, a `Machine` value that
+  fixes no optional-header width. A consumer measuring how much of the analysis
+  the dump could not support sums `unavailable` alone; folding
+  `not_applicable` into it reports an ordinary PE layout as unexamined
+  evidence. The `reason` token fixes which of the two an observation carries.
 - **This evidence is optional and cannot downgrade anything.** An unreadable
   header leaves `collected` false and every other process identity field exactly
   as the PEB, MiscInfo, and ModuleList claims established it. `pe_image` adds no

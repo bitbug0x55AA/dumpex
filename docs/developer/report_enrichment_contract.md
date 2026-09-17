@@ -212,7 +212,8 @@ it is never printed. Neither surface prints `kept:`/`cap:` when a section's own
 `included`/`total` are both zero (`_has_meaningful_counts`): `0 of 0` names no
 retention cap this run ever approached, and would duplicate whatever a more
 specific count in the section's own body already means (main-image PE
-context's own "N consistent, 0 conflict, N unavailable" line, for one).
+context's own "N consistent, 0 conflict, N unavailable, N not applicable"
+line, for one).
 
 ### Deduplicated string identity
 
@@ -399,9 +400,12 @@ consumes a canonical collector and adds no report-only PE or IAT parser:
 - `collect_pe_context` reuses `dumpex.core.pe_profile.collect_pe_image_profile`
   and `dumpex.core.pe_correlation.correlate_main_image` for the main image. It
   publishes the profile's own decoded identity and the correlation layer's
-  consistent/conflict/unavailable tally, and retains the `conflict`
+  tally -- one count per observation state -- and retains the `conflict`
   observations. A conflict is a disagreement between two captured facts; it is
-  never a finding, a score, or a verdict input.
+  never a finding, a score, or a verdict input. `unavailable` and
+  `not_applicable` are counted apart on both surfaces, because they are
+  different facts: evidence this dump does not carry, and a comparison an
+  established fact leaves no subject for (PE contract §8.1).
 - `collect_anchor_pe_context` places the card's anchor against the PE image that
   owns it. `classification` is `headers`, `code`, `data`, `import_iat`,
   `relocation`, `unmapped`, or `outside_image` inside the owning module;

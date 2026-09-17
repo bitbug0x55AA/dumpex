@@ -2579,7 +2579,8 @@ def _render_pe_context(pe_context: dict, verbose: bool = False,
     print(f"  {'Correlation':<20} "
           + DIM(f"{pe_context['consistent_count']} consistent  "
                 f"{pe_context['conflict_count']} conflict  "
-                f"{pe_context['unavailable_count']} unavailable"))
+                f"{pe_context['unavailable_count']} unavailable  "
+                f"{pe_context['not_applicable_count']} not applicable"))
     conflicts = pe_context["observations"]
     if conflicts:
         print("  " + BOLD("Structural conflicts (captured facts disagree)"))

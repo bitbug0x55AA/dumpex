@@ -1307,7 +1307,7 @@
       ]
     },
     "peObservation": {
-      "description": "Matches dumpex.output.records.PeObservationRecord.to_dict(). One dumpex.core.pe_correlation.Observation reduced to a wire record. `state` is the three-valued correlation result; `reason` the dumpex-authored token behind it; `sources` names the evidence evaluated; `operands` the exact scalar values compared. A `conflict` is a disagreement between two captured facts, never a maliciousness finding. `summary.pe_context.observations` retains only the `conflict` observations; `processRecord.pe_image.observations` carries every observation the correlation produced, in all three states.",
+      "description": "Matches dumpex.output.records.PeObservationRecord.to_dict(). One dumpex.core.pe_correlation.Observation reduced to a wire record. `state` is the correlation result; `reason` the dumpex-authored token behind it; `sources` names the evidence evaluated; `operands` the exact scalar values compared. A `conflict` is a disagreement between two captured facts, never a maliciousness finding. The two states that withhold an answer are distinct and must not be merged: `unavailable` is evidence the dump does not carry, `not_applicable` a comparison an established fact leaves no subject for (a directory the header declares absent, the Security directory's file offset, an unchecksummed header, a Machine that fixes no optional-header width). `summary.pe_context.observations` retains only the `conflict` observations; `processRecord.pe_image.observations` carries every observation the correlation produced, in all four states.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -1327,7 +1327,8 @@
           "enum": [
             "consistent",
             "conflict",
-            "unavailable"
+            "unavailable",
+            "not_applicable"
           ]
         },
         "reason": {
@@ -2138,7 +2139,7 @@
           ]
         },
         "relocation": {
-          "description": "The relocation facts the profile derived, reported individually and folded nowhere. `delta` is signed and is the distance from the preferred base to the actual one. Each field is independently null when that fact was not established: an unread Characteristics bit is not a false one.",
+          "description": "The relocation facts the profile derived, reported individually and folded nowhere. `delta` is signed and is the distance from the preferred base to the actual one. The four decoded facts are independently null when that fact was not established: an unread Characteristics bit is not a false one. `basereloc_descriptor_state` is the exception and is non-null whenever `collected` is true: BASERELOC is one of the sixteen descriptors a collected profile always carries, so how much of it was read is always an answer -- `unavailable` when nothing of it arrived, never absent.",
           "type": "object",
           "additionalProperties": false,
           "required": [
@@ -2248,14 +2249,15 @@
           ]
         },
         "observation_coverage": {
-          "description": "A plain tally of the observations the correlation produced. It is not a coverage status and not a limitation: it changes no exit code and no field coverage.",
+          "description": "A plain tally of the observations the correlation produced, one count per state. It is not a coverage status and not a limitation: it changes no exit code and no field coverage. `unavailable` is the size of the evidence gap; `not_applicable` is not part of it and is never folded into it.",
           "type": "object",
           "additionalProperties": false,
           "required": [
             "total",
             "consistent",
             "conflict",
-            "unavailable"
+            "unavailable",
+            "not_applicable"
           ],
           "properties": {
             "total": {
@@ -2271,6 +2273,10 @@
               "minimum": 0
             },
             "unavailable": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "not_applicable": {
               "type": "integer",
               "minimum": 0
             }
@@ -2556,6 +2562,9 @@
                   },
                   "unavailable": {
                     "const": 0
+                  },
+                  "not_applicable": {
+                    "const": 0
                   }
                 }
               },
@@ -2645,6 +2654,13 @@
               },
               "module_match": {
                 "type": "string"
+              },
+              "relocation": {
+                "properties": {
+                  "basereloc_descriptor_state": {
+                    "type": "string"
+                  }
+                }
               },
               "directories": {
                 "minItems": 16,
@@ -2811,6 +2827,9 @@
                     "const": 0
                   },
                   "unavailable": {
+                    "const": 0
+                  },
+                  "not_applicable": {
                     "const": 0
                   }
                 }
@@ -6122,7 +6141,7 @@
       }
     },
     "reportPeContext": {
-      "description": "Matches dumpex.output.records.ReportPeContext.to_dict(). The one process-wide PE projection of a --report run: the main image's identity (the canonical PeImageProfile's own decoded values) and the main-image correlation layer's tally and retained conflicts. `consistent_count`/`conflict_count`/`unavailable_count` tally every observation the correlation produced; `observations` carries only the retained conflicts. NOT expressed here (Python-only): when `section.total` is non-null it equals `conflict_count`, `observations` has exactly `section.included` items, and every retained observation has state `conflict`.",
+      "description": "Matches dumpex.output.records.ReportPeContext.to_dict(). The one process-wide PE projection of a --report run: the main image's identity (the canonical PeImageProfile's own decoded values) and the main-image correlation layer's tally and retained conflicts. `consistent_count`/`conflict_count`/`unavailable_count`/`not_applicable_count` tally every observation the correlation produced, one count per state; `observations` carries only the retained conflicts. NOT expressed here (Python-only): when `section.total` is non-null it equals `conflict_count`, `observations` has exactly `section.included` items, and every retained observation has state `conflict`.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -6141,6 +6160,7 @@
         "consistent_count",
         "conflict_count",
         "unavailable_count",
+        "not_applicable_count",
         "observations"
       ],
       "properties": {
@@ -6220,6 +6240,10 @@
           "minimum": 0
         },
         "unavailable_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_applicable_count": {
           "type": "integer",
           "minimum": 0
         },

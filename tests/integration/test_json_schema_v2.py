@@ -535,8 +535,18 @@ def test_process_pe_image_with_a_whole_profile_validates(validator):
     assert [s["name"] for s in pe_image["sections"]] == [".text", ".data"]
     assert pe_image["acquisition"]["requested_stage"] == "sections"
     assert len(pe_image["observations"]) == pe_image["observation_coverage"]["total"]
-    assert {o["state"] for o in pe_image["observations"]} <= {
-        "consistent", "conflict", "unavailable"}
+    states = {o["state"] for o in pe_image["observations"]}
+    assert states <= {"consistent", "conflict", "unavailable", "not_applicable"}
+    # A real run carries both kinds of withheld answer, so this document
+    # validates the new state end to end rather than only permitting it:
+    # the image declares most of its directories absent, and the dump
+    # carries no second source for its architecture.
+    assert {"unavailable", "not_applicable"} <= states
+    tally = pe_image["observation_coverage"]
+    for state in ("consistent", "conflict", "unavailable", "not_applicable"):
+        assert tally[state] == sum(
+            1 for o in pe_image["observations"] if o["state"] == state)
+    assert tally["not_applicable"] > 0
 
 
 def test_process_pe_image_uncollected_profile_validates(validator):
@@ -761,7 +771,7 @@ def _uncollected_pe_image():
                                    "readable_count": None, "unprojected_count": None},
             "module_match": None,
             "observation_coverage": {"total": 0, "consistent": 0, "conflict": 0,
-                                      "unavailable": 0},
+                                      "unavailable": 0, "not_applicable": 0},
             "sections": [], "directories": [], "observations": []}
 
 
@@ -3147,7 +3157,7 @@ def test_pe_context_fragment_valid_with_a_conflict_passes(pe_context_schema):
         "size_of_image": 0x4000, "entry_point_rva": 0x1000,
         "entry_point_va": "0x0000000140001000", "section_count": 2, "pe32_plus": True,
         "module_match": "resolved", "consistent_count": 5, "conflict_count": 1,
-        "unavailable_count": 2,
+        "unavailable_count": 2, "not_applicable_count": 3,
         "observations": [{"name": "size_vs_modulelist", "state": "conflict",
                           "reason": "size_contradicts_modulelist",
                           "sources": ["profile.optional_header", "module_list"],
@@ -3162,7 +3172,7 @@ def test_pe_context_fragment_rejects_an_unknown_observation_state(pe_context_sch
         "machine_name": None, "time_date_stamp": None, "size_of_image": None,
         "entry_point_rva": None, "entry_point_va": None, "section_count": None,
         "pe32_plus": None, "module_match": None, "consistent_count": 0,
-        "conflict_count": 0, "unavailable_count": 0,
+        "conflict_count": 0, "unavailable_count": 0, "not_applicable_count": 0,
         "observations": [{"name": "x", "state": "suspicious", "reason": "y",
                           "sources": [], "operands": {}}]}
     assert not pe_context_schema.is_valid(doc)

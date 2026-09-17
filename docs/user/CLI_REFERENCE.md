@@ -318,20 +318,38 @@ Consolidates PID, path/name, command line, start time, image base, source claims
 the main image's PE profile, IAT entries, and identity diagnostics.
 
 The `Main Image PE` block states the image's architecture and header format, its
-load address against the preferred base it was linked for, its declared size and
-section count, where execution begins, whether the loader's own module list
-registers it, how completely the header was read, any structural disagreement
-between two captured facts, and the checks that could not be answered because
-evidence the dump would have had to carry is missing or incomplete. `--verbose` adds:
+load address and the preferred base it was linked for as separate lines with the
+relocation answer drawn from them, its declared size and section count, where
+execution begins, whether the loader's own module list registers it, how
+completely the header was read, any structural disagreement between two captured
+facts, and the checks that could not be answered because evidence the dump would
+have had to carry is missing or incomplete.
+
+The block's consistency summary counts four states. A check is `consistent` or
+`conflicting` when the captured facts decided it, `unavailable` when the evidence
+needed is not in the dump, and `not applicable` when the image's own declarations
+leave the comparison no subject — a data directory the header declares absent,
+the Security directory's file offset, a header that carries no checksum. The two
+are counted and marked apart (`[??]` and `[--]`) so an ordinary PE layout is not
+presented as unexamined evidence.
+
+A `Scope` line states what the block does and does not establish: these are
+structural checks over this one image, and they do not establish that the process
+is benign. `--verbose` adds:
 
 - the section table with each section's declared R/W/X, the memory it is mapped
   over, and how much of it the dump captured;
 - all sixteen data-directory descriptors with their addressing mode and state;
+- the relocation evidence: the distance from the preferred base, what the header
+  declares about relocation, and how much of the base-relocation directory the
+  dump holds;
 - every consistency check, including the ones the captured evidence could not
   answer, each with the evidence it rested on;
-- the header acquisition's own byte provenance;
+- the header acquisition's own byte provenance, including how many bytes parsing
+  required, whether all of them were present, and — when they were not — whether
+  dumpex's own read budget or the dump itself is behind the shortfall;
 - `IAT Slot VA -> Resolved Target VA` entries;
-- identity verification states (`[OK]`, `[!!]`, `[--]`);
+- identity verification states (`[OK]`, `[!!]`, `[??]`);
 - extended PEB fields.
 
 `--json` carries the complete PE profile, every section and descriptor, and every

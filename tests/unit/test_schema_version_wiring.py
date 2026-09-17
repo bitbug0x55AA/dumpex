@@ -595,7 +595,8 @@ def _uncollected_pe_image() -> dict:
         "directory_summary": {"declared_count": None, "declared_count_raw": None,
                                "readable_count": None, "unprojected_count": None},
         "module_match": None,
-        "observation_coverage": {"total": 0, "consistent": 0, "conflict": 0, "unavailable": 0},
+        "observation_coverage": {"total": 0, "consistent": 0, "conflict": 0, "unavailable": 0,
+                                  "not_applicable": 0},
         "sections": [], "directories": [], "observations": [],
     }
 
@@ -610,6 +611,11 @@ def _collected_pe_image() -> dict:
         "collected": True, "unavailable_reason": None, "source_kind": "peb_image_base",
         "actual_base": "0x0000000000400000", "structural_state": "partial",
         "module_match": "unregistered",
+        # BASERELOC is one of the sixteen a collected profile always
+        # carries, so its state is an answer even when nothing of the
+        # descriptor arrived.
+        "relocation": dict(document["relocation"],
+                            basereloc_descriptor_state="unavailable"),
         "acquisition": {
             "requested_stage": "sections", "highest_completed_stage": "coff",
             "requested_bytes": 4096, "captured_bytes": 4096, "read_bytes": 64,
@@ -685,6 +691,52 @@ def test_the_schema_defines_the_pe_profiles_own_vocabularies():
     for field_name in ("segment_table", "region_table"):
         assert acquisition[field_name]["enum"] == [
             "absent", "failed", "enumerated", "lossy", "unreadable"]
+
+
+def test_the_schema_keeps_the_two_withheld_answers_apart():
+    """An observation that withholds an answer says which of the two it
+    is on the wire, not only on the console: a consumer counting the
+    evidence gap counts `unavailable` alone."""
+    schema = _load(CURRENT_SCHEMA)
+    assert schema["$defs"]["peObservation"]["properties"]["state"]["enum"] == [
+        "consistent", "conflict", "unavailable", "not_applicable"]
+
+    coverage = schema["$defs"]["processPeRecord"]["properties"]["observation_coverage"]
+    assert coverage["required"] == [
+        "total", "consistent", "conflict", "unavailable", "not_applicable"]
+    assert coverage["additionalProperties"] is False
+
+    context = schema["$defs"]["reportPeContext"]
+    for field_name in ("consistent_count", "conflict_count", "unavailable_count",
+                       "not_applicable_count"):
+        assert field_name in context["required"]
+        assert context["properties"][field_name] == {"type": "integer", "minimum": 0}
+
+
+def test_the_new_state_belongs_to_the_current_contract_alone():
+    """A document is validated against the version that produced it, so a
+    vocabulary added now must not appear in a frozen predecessor. v2.18's
+    observation shape is the one `--report` already shipped."""
+    previous = _load("dumpex-output-v2.18.schema.json")
+    states = previous["$defs"]["reportPeObservation"]["properties"]["state"]["enum"]
+    assert states == ["consistent", "conflict", "unavailable"]
+    assert "not_applicable_count" not in \
+        previous["$defs"]["reportPeContext"]["properties"]
+    assert "processPeRecord" not in previous["$defs"]
+
+
+def test_an_uncorrelated_profile_counts_nothing_in_any_state():
+    """Every count is pinned to zero, so a state added to the tally
+    cannot leave a correlation that did not run carrying a number."""
+    schema = _load(CURRENT_SCHEMA)["$defs"]["processPeRecord"]
+    for branch in schema["allOf"]:
+        else_branch = branch.get("else", {}).get("properties", {})
+        tally = else_branch.get("observation_coverage")
+        if tally is None:
+            continue
+        assert set(tally["properties"]) == {
+            "total", "consistent", "conflict", "unavailable", "not_applicable"}
+        assert all(entry == {"const": 0} for entry in tally["properties"].values())
 
 
 def test_the_observation_shape_is_shared_by_both_surfaces():
@@ -778,6 +830,30 @@ def test_a_collected_profile_must_name_what_produced_it(field):
     assert not validator.is_valid(document)
 
 
+def test_a_collected_profile_must_state_its_relocation_descriptor_state():
+    """BASERELOC is one of the sixteen descriptors a collected profile
+    always carries, so how much of it was read is always an answer. The
+    record layer refuses a null here, and the schema says the same thing:
+    a consumer must not be left a branch dumpex never produces."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    assert validator.is_valid(document)
+    document["relocation"]["basereloc_descriptor_state"] = None
+    assert not validator.is_valid(document)
+
+
+@pytest.mark.parametrize("field", [
+    "delta", "relocs_stripped", "dynamic_base", "basereloc_present",
+])
+def test_the_other_relocation_facts_stay_independently_nullable(field):
+    """Each of the four is a decoded field that may not have been read,
+    and an unread Characteristics bit is not a false one."""
+    validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
+    document = _collected_pe_image()
+    document["relocation"][field] = None
+    assert validator.is_valid(document)
+
+
 def test_a_collected_profile_carries_every_descriptor():
     validator = _validator_for(_load(CURRENT_SCHEMA), "#/$defs/processPeRecord")
     document = _collected_pe_image()
@@ -818,7 +894,7 @@ def test_a_correlation_that_ran_carries_its_observations():
         "name": "machine_vs_format", "state": "unavailable", "reason": "machine_null",
         "sources": ["profile.coff_header"], "operands": {}}]
     document["observation_coverage"] = {"total": 1, "consistent": 0, "conflict": 0,
-                                         "unavailable": 1}
+                                         "unavailable": 1, "not_applicable": 0}
     assert validator.is_valid(document)
 
 

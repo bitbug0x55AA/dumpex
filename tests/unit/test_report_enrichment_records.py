@@ -448,7 +448,8 @@ def _pe_context(*observations, status=ENRICHMENT_COMPLETE, conflict_count=None):
         machine_name="AMD64", time_date_stamp=1, size_of_image=0x4000,
         entry_point_rva=0x1000, entry_point_va="0x0000000140001000", section_count=2,
         pe32_plus=True, module_match="resolved", consistent_count=5,
-        conflict_count=conflict_count, unavailable_count=1, observations=observations)
+        conflict_count=conflict_count, unavailable_count=1, not_applicable_count=2,
+        observations=observations)
 
 
 def test_pe_context_total_must_be_the_conflict_count():

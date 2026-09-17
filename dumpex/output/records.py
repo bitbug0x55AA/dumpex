@@ -1938,7 +1938,7 @@ class ReportStringContext:
 # status, or the exit code, and every section carries its own
 # missing/partial/complete state like the Phase 1 sections above.
 
-PE_OBSERVATION_STATES = ("consistent", "conflict", "unavailable")
+PE_OBSERVATION_STATES = ("consistent", "conflict", "unavailable", "not_applicable")
 
 
 @dataclass(frozen=True)
@@ -1947,11 +1947,15 @@ class PeObservationRecord:
     wire record.
 
     ``name`` is one of the correlation layer's frozen observation names,
-    ``state`` its three-valued result, ``reason`` the dumpex-authored
-    token behind it. ``sources`` names the evidence actually evaluated and
-    ``operands`` the exact scalar values compared. A ``conflict`` here is a
-    disagreement between two captured facts, never a maliciousness
-    finding.
+    ``state`` its result, ``reason`` the dumpex-authored token behind it.
+    ``sources`` names the evidence actually evaluated and ``operands`` the
+    exact scalar values compared. A ``conflict`` here is a disagreement
+    between two captured facts, never a maliciousness finding.
+
+    The two states that withhold an answer stay apart: ``unavailable`` is
+    evidence the dump does not carry, ``not_applicable`` a comparison an
+    established fact leaves no subject for. A consumer counting the
+    evidence gap counts the first alone.
 
     This is the one wire shape a correlation observation has. `--report`'s
     `pe_context` retains the conflicts of the main-image correlation and
@@ -2002,10 +2006,11 @@ class ReportPeContext:
 
     The identity fields are the canonical
     :class:`dumpex.core.pe_profile.PeImageProfile`'s own decoded values.
-    ``consistent_count`` / ``conflict_count`` / ``unavailable_count`` tally
-    every observation the correlation produced; ``observations`` carries
-    only the retained conflicts, so ``section.total`` is the conflict
-    count and ``section.included`` is how many survived the cap."""
+    ``consistent_count`` / ``conflict_count`` / ``unavailable_count`` /
+    ``not_applicable_count`` tally every observation the correlation
+    produced, one count per state; ``observations`` carries only the
+    retained conflicts, so ``section.total`` is the conflict count and
+    ``section.included`` is how many survived the cap."""
     section:              EnrichmentSection
     image_base:           "str | None"
     preferred_image_base: "str | None"
@@ -2021,6 +2026,7 @@ class ReportPeContext:
     consistent_count:     int
     conflict_count:       int
     unavailable_count:    int
+    not_applicable_count: int
     observations:         tuple = ()
 
     def __post_init__(self):
@@ -2043,7 +2049,8 @@ class ReportPeContext:
             raise ValueError(
                 f"ReportPeContext.module_match must be None or one of "
                 f"{PE_MODULE_MATCH_STATES}, got {self.module_match!r}")
-        for field_name in ("consistent_count", "conflict_count", "unavailable_count"):
+        for field_name in ("consistent_count", "conflict_count", "unavailable_count",
+                            "not_applicable_count"):
             _require_nonneg_int(getattr(self, field_name), f"ReportPeContext.{field_name}")
         object.__setattr__(self, "observations", tuple(self.observations))
         if any(not isinstance(o, PeObservationRecord) for o in self.observations):
@@ -2075,6 +2082,7 @@ class ReportPeContext:
             "consistent_count":     self.consistent_count,
             "conflict_count":       self.conflict_count,
             "unavailable_count":    self.unavailable_count,
+            "not_applicable_count": self.not_applicable_count,
             "observations":         [o.to_dict() for o in self.observations],
         }
 
@@ -4144,6 +4152,11 @@ PROCESS_PE_TABLE_STATES = (
 # and found nothing.
 PROCESS_PE_UNUSABLE_TABLE_STATES = ("absent", "failed", "unreadable")
 
+# How a data directory's `value` addresses what it points at (PE contract
+# §2.5). Index 4 (Security) is a file offset into the on-disk image and
+# is not part of the mapping; every other index is an image RVA.
+PROCESS_PE_VALUE_KINDS = ("rva", "file_offset")
+
 # `dumpex.core.pe_profile.ModuleIdentity.form`.
 PROCESS_PE_IDENTITY_FORMS = ("path", "name")
 
@@ -4253,7 +4266,7 @@ class ProcessPeDirectoryRecord:
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("ProcessPeDirectoryRecord.name must be a non-empty string")
         _require_optional_nonneg_int(self.value, "ProcessPeDirectoryRecord.value")
-        if self.value_kind not in ("rva", "file_offset"):
+        if self.value_kind not in PROCESS_PE_VALUE_KINDS:
             raise ValueError(
                 f"ProcessPeDirectoryRecord.value_kind must be 'rva' or 'file_offset', "
                 f"got {self.value_kind!r}")
@@ -4770,6 +4783,16 @@ class ProcessPeRecord:
             if getattr(self, field_name) is None:
                 raise ValueError(
                     f"ProcessPeRecord.{field_name} must be set when a profile was collected")
+        # The BASERELOC descriptor is one of the sixteen a collected
+        # profile always carries, so how much of it was read is always an
+        # answer -- `unavailable` when nothing of it arrived, never a
+        # null. The other four relocation facts stay nullable: each is a
+        # field that may not have been decoded.
+        if self.relocation["basereloc_descriptor_state"] is None:
+            raise ValueError(
+                "ProcessPeRecord.relocation['basereloc_descriptor_state'] must be set when a "
+                "profile was collected -- every descriptor has a state, including one nothing "
+                "was read of")
 
     @classmethod
     def uncollected(cls, reason: str) -> "ProcessPeRecord":
@@ -4796,7 +4819,8 @@ class ProcessPeRecord:
             directory_summary={"declared_count": None, "declared_count_raw": None,
                                 "readable_count": None, "unprojected_count": None},
             module_match=None,
-            observation_coverage={"total": 0, "consistent": 0, "conflict": 0, "unavailable": 0})
+            observation_coverage={"total": 0, "consistent": 0, "conflict": 0,
+                                   "unavailable": 0, "not_applicable": 0})
 
     def _check_relocation(self) -> None:
         if not isinstance(self.relocation, dict):
@@ -4834,7 +4858,7 @@ class ProcessPeRecord:
     def _check_observation_coverage(self) -> None:
         if not isinstance(self.observation_coverage, dict):
             raise TypeError("ProcessPeRecord.observation_coverage must be a dict")
-        expected = ("total", "consistent", "conflict", "unavailable")
+        expected = ("total", "consistent", "conflict", "unavailable", "not_applicable")
         if tuple(self.observation_coverage) != expected:
             raise ValueError(
                 f"ProcessPeRecord.observation_coverage must carry exactly {expected} in that "
@@ -4842,9 +4866,9 @@ class ProcessPeRecord:
         for key, value in self.observation_coverage.items():
             _require_nonneg_int(value, f"ProcessPeRecord.observation_coverage[{key!r}]")
         tally = self.observation_coverage
-        if (tally["consistent"] + tally["conflict"] + tally["unavailable"]) != tally["total"]:
+        if sum(tally[state] for state in PE_OBSERVATION_STATES) != tally["total"]:
             raise ValueError(
-                "ProcessPeRecord.observation_coverage's three states must sum to its total")
+                "ProcessPeRecord.observation_coverage's four states must sum to its total")
 
     def to_dict(self) -> dict:
         return {

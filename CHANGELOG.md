@@ -13,14 +13,21 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
 - `--process` now reports the main image's PE profile. The console gains a
   `Main Image PE` block with the image's architecture and header format, its
-  load address against the preferred base it was linked for, its declared size
-  and section count, where execution begins, how completely the header was read,
-  and any structural disagreement between two captured facts.
+  load address and the preferred base it was linked for as separate facts
+  alongside whether relocation was required, its declared size and section
+  count, where execution begins, how completely the header was read, and any
+  structural disagreement between two captured facts. A `Scope` line states
+  what the block establishes: structural checks over this one image, which do
+  not establish that the process is benign.
 - `--process --verbose` adds the section table (declared R/W/X, the memory each
   section is mapped over, and how much of it the dump captured), all sixteen
-  data-directory descriptors, every consistency check with the evidence it
-  rested on — including the ones the captured evidence could not answer — and
-  the header acquisition's own byte provenance.
+  data-directory descriptors, the relocation evidence (the distance from the
+  preferred base, what the header declares, and how much of the
+  base-relocation directory the dump holds), every consistency check with the
+  evidence it rested on — including the ones the captured evidence could not
+  answer — and the header acquisition's own byte provenance, which measures the
+  read against the bytes parsing required rather than against the window that
+  was requested.
 - `--json` carries the complete profile, every section and descriptor, and every
   consistency observation in the new `pe_image` object on the process record,
   whether or not `--verbose` was given.
@@ -34,7 +41,8 @@ see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 - `--process` and `--report` now describe the main image through the same
   canonical PE profile and correlation collectors, under one shared read budget.
   The facts both surfaces publish for one dump are pinned equal by test rather
-  than by convention.
+  than by convention. `--report`'s `summary.pe_context` gains the matching
+  `not_applicable_count` beside its existing correlation counts.
 
 The console does not stop at counting what it could not check. Beside any
 conflict, it names the checks whose answer would have changed what an analyst
@@ -51,12 +59,18 @@ be produced is reported as such rather than as an empty tally of consistency
 checks, and an internal failure to build a profile is named as one rather than
 reported as an unreadable header.
 
-A PE consistency conflict is a disagreement between two captured facts, and an
-unevaluated check is a question the dump does not answer. Neither is a
-maliciousness verdict: no finding, score, confidence, verdict, coverage status,
-or exit code changes, existing `--process` fields and IAT meanings are
-unchanged, and an unreadable main image cannot downgrade the process identity
-evidence beside it.
+A PE consistency conflict is a disagreement between two captured facts, and a
+check that withholds an answer says which kind it is. A check is `unavailable`
+when the evidence it needed is not in the dump, and `not applicable` when the
+image's own declarations leave the comparison no subject — a data directory the
+header declares absent, the Security directory's file offset, a header with no
+checksum. The two are counted and marked apart on the console and in `--json`,
+so an ordinary PE layout is not reported as unexamined evidence.
+
+None of it is a maliciousness verdict: no finding, score, confidence, verdict,
+coverage status, or exit code changes, existing `--process` fields and IAT
+meanings are unchanged, and an unreadable main image cannot downgrade the
+process identity evidence beside it.
 
 ## 3.8.1 — Unreleased
 

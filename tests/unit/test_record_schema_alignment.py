@@ -109,7 +109,8 @@ _PE_IMAGE = ProcessPeRecord(
     directory_summary={"declared_count": 16, "declared_count_raw": 16, "readable_count": 16,
                         "unprojected_count": 0},
     module_match="resolved",
-    observation_coverage={"total": 1, "consistent": 1, "conflict": 0, "unavailable": 0},
+    observation_coverage={"total": 1, "consistent": 1, "conflict": 0, "unavailable": 0,
+                           "not_applicable": 0},
     sections=(_PE_SECTION,), directories=_PE_DIRECTORIES, observations=(_PE_OBSERVATION,))
 
 

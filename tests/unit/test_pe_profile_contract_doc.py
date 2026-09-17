@@ -2841,22 +2841,25 @@ def test_machine_format_table_covers_every_named_machine(doc):
         assert expected in _EXPECTED_FORMATS
 
 
-def test_an_unnamed_machine_makes_the_observation_unavailable(doc):
+def test_an_unnamed_machine_makes_the_observation_not_applicable(doc):
     """The expectation is this contract's own, so a machine it does not
-    name has no second operand -- not an agreement, and not a conflict."""
+    name leaves the comparison no expectation at all -- not an agreement,
+    not a conflict, and not a gap in the dump."""
     predicate, = [row[2] for row in _rows(
         _section(doc, "| Observation | Compares | Predicate |",
                  "#### 8.3.1 Operands"))
         if row[0] == "`machine_vs_format`"]
 
     assert predicate.startswith("`conflict` when §8.4 defines a width")
-    assert "§8.4 defining none leaves it undetermined" in predicate
+    assert "§8.4 defining none leaves the comparison no expectation" in predicate
+    assert "`not_applicable`" in predicate
 
     absence, = [row[3] for row in _rows(
         _section(doc, "| Observation | Answers from | Short-circuit |",
                  "Exactly two rows short-circuit"))
         if row[0] == "`machine_vs_format`"]
-    assert "§8.4 names no width for the value → `unavailable`" in absence
+    assert "Either operand `null` → `unavailable`" in absence
+    assert "§8.4 naming no width for an established value → `not_applicable`" in absence
 
     cases = {row[0]: (row[1], row[2]) for row in _rows(
         _section(doc, "| The `Machine` value | The expectation |",
@@ -3474,6 +3477,57 @@ def test_the_correlation_layer_is_additive_not_a_redefinition(doc):
     assert "scores nothing and emits no Finding" in section
     # §1.2's first rule: a missing source is a gap, never a conflict.
     assert "never a PE defect and never a `conflict`" in section
+
+
+def test_the_observation_tier_names_every_state_it_may_carry(doc):
+    """§1.1 is the first place a reader meets the observation vocabulary,
+    so a tier row short of a state teaches the model the rest of the
+    contract then contradicts."""
+    from dumpex.core.pe_correlation import ObservationState
+
+    tier, = [row for row in _rows(_section(doc, "### 1.1 Three tiers, never merged",
+                                            "### 1.2 Component states"))
+             if row[0] == "**Derived observation**"]
+    for state in ObservationState:
+        assert f"`{state.value}`" in tier[2], state.value
+
+    reading = _flat(_section(doc, "A derived observation uses **only established facts**",
+                             "### 1.2 Component states"))
+    assert "The fourth state is not a fourth answer to that predicate" in reading
+    assert "only `unavailable` measures what the dump does not carry" in reading
+
+
+def test_the_two_withheld_answers_are_defined_apart(doc):
+    """§8.1 is where a producer and a consumer both learn that an
+    evidence gap and a comparison with no subject are different facts."""
+    section = _flat(_section(doc, "### 8.1 What they are", "### 8.2 What they may never say"))
+
+    assert "`not_applicable`" in section
+    assert "the evidence needed is not in this dump" in section
+    assert "an established fact leaves the comparison no subject" in section
+    assert "The evidence gap is `unavailable` alone" in section
+
+
+def test_the_not_applicable_reasons_are_the_shipped_modules_own(doc):
+    """The contract names the four, and the module freezes them: a fifth
+    reason on either side without the other is a drift this catches."""
+    from dumpex.core.pe_correlation import NOT_APPLICABLE_REASONS
+
+    section = _flat(_section(doc, "### 8.1 What they are", "### 8.2 What they may never say"))
+    for phrase in ("the image declares the directory absent",
+                   "addressed by file offset",
+                   "zero `CheckSum`",
+                   "fixes no width for"):
+        assert phrase in section
+    assert len(NOT_APPLICABLE_REASONS) == 4
+
+
+def test_correlation_coverage_counts_the_two_apart(doc):
+    section = _flat(_section(doc, "#### 8.8.2 Correlation coverage",
+                             "#### 8.8.3 Size cross-checks"))
+    assert "one count per §8.1 state" in section
+    assert "counted separately" in section
+    assert "one number for both states" in section
 
 
 def test_correlation_coverage_is_not_a_status(doc):

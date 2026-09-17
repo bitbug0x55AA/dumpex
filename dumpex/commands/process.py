@@ -755,6 +755,7 @@ def _project_main_image_pe(profile, correlation, module_match: str, *,
             "consistent": tally.consistent if tally is not None else 0,
             "conflict": tally.conflict if tally is not None else 0,
             "unavailable": tally.unavailable if tally is not None else 0,
+            "not_applicable": tally.not_applicable if tally is not None else 0,
         },
         sections=_pe_section_records(profile, correlation),
         directories=_pe_directory_records(profile, correlation),
@@ -893,8 +894,14 @@ def render_process_console(record: ProcessRecord, coverage, *, verbose: bool = F
     if verbose and record.iat.entries:
         _render_iat_entries(record.iat.entries)
 
-    print(f"\n  {BOLD('Identity')}")
-    _print_diagnostics(record.identity_evidence.get("diagnostics") or [])
+    # A heading over nothing reads as output that was cut off, or as
+    # identity collection that failed without saying so. The identity
+    # checks themselves are `--verbose`, and they carry their own
+    # heading, so this one exists only for the diagnostics.
+    diagnostics = record.identity_evidence.get("diagnostics") or []
+    if diagnostics:
+        print(f"\n  {BOLD('Identity')}")
+        _print_diagnostics(diagnostics)
 
     if verbose:
         _render_identity_verification(record)
@@ -1013,9 +1020,15 @@ def _render_iat_entries(entries) -> None:
 # ModuleListStream has ordinary benign causes, and the coverage status,
 # the limitation codes and the exit code are all unchanged by anything
 # printed here.
+# One marker per meaning, across every check this console prints. The
+# two that withhold an answer are not the same answer: `[??]` is evidence
+# this dump does not carry, and `[--]` is a check the established facts
+# leave no subject for. Reading the second as the first turns an ordinary
+# PE layout into an evidence gap.
 _CHECK_OK = "[OK]"
 _CHECK_CONFLICT = "[!!]"
-_CHECK_UNAVAILABLE = "[--]"
+_CHECK_UNAVAILABLE = "[??]"
+_CHECK_NOT_APPLICABLE = "[--]"
 
 # Display names for §3.4's `selected_path_source`, so this block never
 # prints an internal source key at an analyst.
@@ -1161,15 +1174,21 @@ _PE_REASON_TEXT = {
     # base_vs_preferred
     "delta_recorded": "the load address and the preferred base are both recorded",
     "preferred_image_base_null": "the header's preferred ImageBase was not decoded",
-    # relocation_expected
+    # relocation_expected. The check weighs two header declarations
+    # against the two bases and nothing else, so these sentences stay at
+    # the declaration level: a declared directory is not captured
+    # relocation data, and saying it is would contradict the Relocation
+    # Evidence block, which is where how much of it the dump holds is
+    # reported.
     "zero_delta": "the image is loaded at its preferred base, so no relocation was needed",
     "relocation_delta_null": "the distance from the preferred base is not established",
     "relocation_conflict": "the image sits away from its preferred base although it declares "
-                           "relocations stripped, or carries no relocation directory",
+                           "relocations stripped, or declares no base-relocation directory",
     "relocation_undetermined": "the image sits away from its preferred base and the relocation "
                                "evidence needed to judge that is not captured",
-    "relocation_consistent": "the image sits away from its preferred base and carries the "
-                             "relocation data that allows it",
+    "relocation_consistent": "the image sits away from its preferred base, and the header's own "
+                             "declarations allow that -- relocations are not stripped and a "
+                             "base-relocation directory is declared",
     # machine_vs_format
     "machine_null": "the header's Machine was not decoded",
     "format_null": "the optional header's 32/64-bit format was not decoded",
@@ -1293,6 +1312,15 @@ _PE_OBSERVATION_MARKER = {
     "consistent": _CHECK_OK,
     "conflict": _CHECK_CONFLICT,
     "unavailable": _CHECK_UNAVAILABLE,
+    "not_applicable": _CHECK_NOT_APPLICABLE,
+}
+
+# The word that opens a withheld answer, so the row says which of the two
+# it is without the reader having to know the marker legend. A decided
+# observation opens with its own sentence and takes no qualifier.
+_PE_OBSERVATION_QUALIFIER = {
+    "unavailable": "unavailable",
+    "not_applicable": "not applicable",
 }
 
 # Why no profile exists, in the analyst's terms. `collection_failed` is
@@ -1338,6 +1366,66 @@ _PE_TABLE_CONSEQUENCE = {
 }
 
 
+# How completely one of the dump's own tables could be walked, as the
+# statement rather than the state token. `enumerated` is the healthy
+# outcome and still says what it means: the walk reached the end, whether
+# or not the table then carried anything.
+_PE_TABLE_WALK_TEXT = {
+    "absent": "not in this dump",
+    "failed": "in this dump, and yielded nothing usable",
+    "enumerated": "walked in full",
+    "lossy": "walked, with a descriptor dropped",
+    "unreadable": "could not be walked",
+}
+
+# The stage ladder's rungs (§6.1) as the structure each one ends at, so
+# the console says what was parsed instead of naming dumpex's own rung.
+_PE_STAGE_TEXT = {
+    "dos": "the DOS header",
+    "coff": "the COFF header",
+    "optional": "the optional header",
+    "sections": "the section table",
+}
+
+# The six header components (§1.2) as an analyst names them.
+_PE_COMPONENT_NAME = {
+    "dos_header": "DOS header",
+    "coff_header": "COFF header",
+    "optional_header": "optional header",
+    "directory_array": "directory array",
+    "directory_descriptors": "directory descriptors",
+    "section_table": "section table",
+}
+
+# What became of a component. `None` is the one that is not a state of
+# the component at all: the requested stage never covered it, so nothing
+# was asked of it and nothing came back.
+_PE_COMPONENT_STATE_TEXT = {
+    "complete": "read in full",
+    "partial": "read only in part",
+    "unavailable": "could not be read",
+    "malformed": "structurally defective",
+    "declared_absent": "declared absent by the image",
+    None: "outside the requested stage",
+}
+
+# A descriptor's own state (§4.3) and its addressing mode, as the console
+# says them. The wire keeps the tokens; a column is not the place to make
+# a reader translate one.
+_PE_DESCRIPTOR_STATE_TEXT = {
+    "complete": "complete",
+    "partial": "partial",
+    "unavailable": "unread",
+    "malformed": "malformed",
+    "declared_absent": "declared absent",
+}
+
+_PE_VALUE_KIND_TEXT = {
+    "rva": "image RVA",
+    "file_offset": "file offset",
+}
+
+
 def _pe_table_losses(acquisition) -> "tuple[str, ...]":
     """The tables that are not `enumerated`, in the fixed order they are
     declared."""
@@ -1373,6 +1461,18 @@ def _pe_table_loss_summary(acquisition, *, pointer: bool) -> "tuple[str, ...]":
         f"{_PE_TABLE_STATE_TEXT[getattr(acquisition, field_name)]}{suffix}"
         for field_name in _pe_table_losses(acquisition))
 
+
+# What every result in this block is, and is not, evidence of. Printed
+# unconditionally beside the tally: a block of agreeing structural checks
+# reads as a clean process to anyone who does not already know that the
+# checks only ever covered this one image's own headers, mapping, loader
+# record, and captured extent. It is a statement of scope, not a verdict,
+# a confidence, or an investigation policy. Pre-wrapped at a fixed width,
+# so the block is byte-identical on every terminal.
+_PE_SCOPE_LINES = (
+    f"{'Scope':<16} structural main-image checks only; this does not establish",
+    f"{'':<16} that the process is benign",
+)
 
 _PE_STRUCTURAL_STATE_TEXT = {
     "complete": "every header structure was read in full",
@@ -1460,11 +1560,15 @@ def _pe_observation_subject(pe_record, observation) -> str:
 
 def _pe_observation_line(pe_record, observation) -> str:
     """One observation as `[marker] subject: what the evidence says`,
-    unindented -- each caller adds its own. The dumpex-authored reason
-    token never reaches the console: it stays in `--json`, where a
-    consumer keys on it."""
+    unindented -- each caller adds its own. A withheld answer names which
+    of the two it is first. The dumpex-authored reason token never
+    reaches the console: it stays in `--json`, where a consumer keys on
+    it."""
     marker = _PE_OBSERVATION_MARKER[observation.state]
     text = _PE_REASON_TEXT.get(observation.reason, observation.reason)
+    qualifier = _PE_OBSERVATION_QUALIFIER.get(observation.state)
+    if qualifier is not None:
+        text = f"{qualifier} -- {text}"
     return f"{marker} {_pe_observation_subject(pe_record, observation)}: {text}"
 
 
@@ -1473,20 +1577,55 @@ def _pe_evidence_text(observation) -> str:
                       for source in observation.sources) or "(none recorded)"
 
 
-def _pe_base_line(pe_record) -> str:
-    """The actual base, and the preferred base it is measured against.
-    The two are different facts and are never collapsed into one."""
-    actual = pe_record.actual_base or "(unknown)"
-    preferred = pe_record.preferred_image_base
+def _pe_relocation_line(pe_record) -> str:
+    """Whether this image was relocated, as the conclusion drawn from the
+    two bases printed above it. The distance is stated beside the answer
+    and never in place of it: a reader deciding whether relocation applies
+    must not have to subtract two addresses to find out."""
     delta = pe_record.relocation["delta"]
-    if preferred is None:
-        return f"{actual} (preferred base not decoded)"
     if delta is None:
-        return f"{actual} (preferred {preferred})"
+        if pe_record.preferred_image_base is None:
+            return "undetermined -- the preferred base was not decoded"
+        return "undetermined -- the distance from the preferred base is not established"
     if delta == 0:
-        return f"{actual} (its preferred base)"
-    sign = "+" if delta > 0 else "-"
-    return f"{actual} (preferred {preferred}; relocated {sign}0x{abs(delta):x})"
+        return "not required -- loaded at the preferred base"
+    direction = "above" if delta > 0 else "below"
+    return (f"required -- loaded 0x{abs(delta):x} {direction} the preferred base")
+
+
+# What the image says about relocation beside the fact that it was (or
+# was not) relocated. Each line is one decoded fact, never a judgement
+# folded out of several: the consistency check above is where they are
+# weighed against each other.
+_PE_RELOCS_STRIPPED_TEXT = {
+    True: "the header declares relocations stripped",
+    False: "the header does not declare relocations stripped",
+    None: "(not decoded)",
+}
+
+_PE_DYNAMIC_BASE_TEXT = {
+    True: "the header opts in to being loaded anywhere",
+    False: "the header does not opt in to being loaded anywhere",
+    None: "(not decoded)",
+}
+
+_PE_BASERELOC_PRESENT_TEXT = {
+    True: "the image declares a base-relocation directory",
+    False: "the image declares no base-relocation directory",
+    None: "(not established)",
+}
+
+# How much of the base-relocation directory the dump actually holds --
+# the difference between an image that declares relocation data and one
+# whose relocation data was captured.
+_PE_RELOCATION_CAPTURE_TEXT = {
+    "complete": "the dump holds every byte the directory declares",
+    "partial": "the dump holds only part of what the directory declares",
+    "none": "the dump holds none of what the directory declares",
+    None: "(not established -- no capture claim was resolved)",
+}
+
+_PE_BASERELOC_INDEX = 5
 
 
 def _pe_architecture_line(pe_record) -> str:
@@ -1536,14 +1675,17 @@ def _pe_entry_point_line(entry_point) -> str:
 
 def _render_main_image_pe(pe_record, *, verbose: bool) -> None:
     """The default Main Image PE block, and -- under `--verbose` -- the
-    bounded section, descriptor, consistency, and provenance detail."""
+    bounded section, descriptor, relocation, consistency, and provenance
+    detail."""
     print(f"\n  {BOLD('Main Image PE')}")
     if not pe_record.collected:
         print(f"    {_PE_UNCOLLECTED_TEXT[pe_record.unavailable_reason]}")
         return
 
     print(f"    {'Architecture':<16} {_pe_architecture_line(pe_record)}")
-    print(f"    {'Image Base':<16} {_pe_base_line(pe_record)}")
+    print(f"    {'Actual Base':<16} {pe_record.actual_base or '(unknown)'}")
+    print(f"    {'Preferred Base':<16} {pe_record.preferred_image_base or '(not decoded)'}")
+    print(f"    {'Relocation':<16} {_pe_relocation_line(pe_record)}")
     print(f"    {'Image Size':<16} {_pe_extent_line(pe_record)}")
     print(f"    {'Entry Point':<16} {_pe_entry_point_line(pe_record.entry_point)}")
     print(f"    {'Loader Record':<16} {_PE_MODULE_MATCH_TEXT[pe_record.module_match]}")
@@ -1555,9 +1697,15 @@ def _render_main_image_pe(pe_record, *, verbose: bool) -> None:
         print(f"    {'Consistency':<16} not produced -- dumpex could not correlate this image "
               f"with the dump's memory evidence")
     else:
+        # Four counts, never three: an evidence gap and a check this
+        # image gives no subject are different facts, and summing them
+        # would report an ordinary PE layout as unexamined evidence.
         tally = pe_record.observation_coverage
         print(f"    {'Consistency':<16} {tally['consistent']} consistent, {tally['conflict']} "
-              f"conflicting, {tally['unavailable']} not evaluated")
+              f"conflicting, {tally['unavailable']} unavailable, "
+              f"{tally['not_applicable']} not applicable")
+    for line in _PE_SCOPE_LINES:
+        print(f"    {line}")
 
     # Conflicts first and unconditionally: a disagreement between two
     # captured facts is the stronger result, and an unevaluated check can
@@ -1570,7 +1718,7 @@ def _render_main_image_pe(pe_record, *, verbose: bool) -> None:
         print(f"    {_pe_observation_line(pe_record, observation)}")
     omitted = len(rows) - _PE_DEFAULT_OBSERVATION_ROWS
     if omitted > 0:
-        print(f"    ... and {omitted} further conflicting or unevaluated check(s) "
+        print(f"    ... and {omitted} further conflicting or unanswered check(s) "
               f"-- see --verbose")
     # Which of the dump's own tables is behind those unanswered checks,
     # and what happened to it. This keeps the gap attributed to the
@@ -1583,11 +1731,12 @@ def _render_main_image_pe(pe_record, *, verbose: bool) -> None:
     if verbose:
         _render_pe_sections(pe_record)
         _render_pe_directories(pe_record)
+        _render_pe_relocation_evidence(pe_record)
         _render_pe_observations(pe_record)
         _render_pe_provenance(pe_record)
     else:
-        print("    (use --verbose for the section table, the directory descriptors, and every "
-              "consistency check)")
+        print("    (use --verbose for the section table, the directory descriptors, the "
+              "relocation evidence, and every consistency check)")
 
 
 # Row counts here are structural, not arbitrary: a profile carries at
@@ -1650,21 +1799,55 @@ def _render_pe_directories(pe_record) -> None:
         size = "(unread)" if descriptor.size is None else f"0x{descriptor.size:x}"
         rows.append((
             str(descriptor.index), descriptor.name, presence,
-            f"{value}+{size}", descriptor.value_kind, descriptor.descriptor_state,
+            f"{value}+{size}", _PE_VALUE_KIND_TEXT[descriptor.value_kind],
+            _PE_DESCRIPTOR_STATE_TEXT[descriptor.descriptor_state],
             descriptor.capture_state or "(n/a)"))
     name_w = column_width("Directory", [r[1] for r in rows],
                            minimum=_PE_DIRECTORY_NAME_COLUMN_MIN_WIDTH)
     value_w = column_width("Value+Size", [r[3] for r in rows], minimum=18)
+    kind_w = column_width("Addressing", [r[4] for r in rows], minimum=11)
     state_w = column_width("Descriptor", [r[5] for r in rows], minimum=16)
     print(f"      {'#':<3} {'Directory':<{name_w}}  {'Presence':<14}  {'Value+Size':<{value_w}}  "
-          f"{'Addressing':<11}  {'Descriptor':<{state_w}}  Capture")
+          f"{'Addressing':<{kind_w}}  {'Descriptor':<{state_w}}  Capture")
     for index, name, presence, value, kind, state, capture in rows:
         print(f"      {index:<3} {name:<{name_w}}  {presence:<14}  {value:<{value_w}}  "
-              f"{kind:<11}  {state:<{state_w}}  {capture}")
+              f"{kind:<{kind_w}}  {state:<{state_w}}  {capture}")
     print("      Value+Size is the descriptor's own declaration; Addressing says whether that "
           "value is")
     print("      an image RVA or a file offset. Descriptor is how much of the descriptor itself "
           "was read.")
+
+
+def _pe_relocation_distance_text(delta) -> str:
+    if delta is None:
+        return "(not established)"
+    if delta == 0:
+        return "none -- loaded at the preferred base"
+    direction = "above" if delta > 0 else "below"
+    return f"0x{abs(delta):x} {direction} the preferred base"
+
+
+def _render_pe_relocation_evidence(pe_record) -> None:
+    """What the image declares about relocation, and how much of it the
+    dump holds. Each line is one decoded fact: whether the image was
+    relocated is the default block's `Relocation` line, and whether the
+    two agree is the `relocation evidence` consistency check -- neither
+    is re-derived here."""
+    relocation = pe_record.relocation
+    print(f"\n    {BOLD('Relocation Evidence')}                          [--verbose only]")
+    print(f"      {'Distance':<24} {_pe_relocation_distance_text(relocation['delta'])}")
+    print(f"      {'Stripped':<24} {_PE_RELOCS_STRIPPED_TEXT[relocation['relocs_stripped']]}")
+    print(f"      {'Dynamic base':<24} {_PE_DYNAMIC_BASE_TEXT[relocation['dynamic_base']]}")
+    print(f"      {'Directory':<24} "
+          f"{_PE_BASERELOC_PRESENT_TEXT[relocation['basereloc_present']]}")
+    print(f"      {'Descriptor':<24} "
+          f"{_PE_DESCRIPTOR_STATE_TEXT[relocation['basereloc_descriptor_state']]}")
+    # A capture claim about a directory the image does not declare would
+    # describe bytes the image never named.
+    descriptor = pe_record.directories[_PE_BASERELOC_INDEX]
+    if descriptor.present:
+        print(f"      {'Directory bytes':<24} "
+              f"{_PE_RELOCATION_CAPTURE_TEXT[descriptor.capture_state]}")
 
 
 def _render_pe_observations(pe_record) -> None:
@@ -1678,10 +1861,13 @@ def _render_pe_observations(pe_record) -> None:
 
 
 def _pe_captured_text(acquisition) -> str:
-    """The `Captured` line, which is a byte count or the reason there is
-    none. `captured_bytes` is null for four different reasons, and naming
-    the wrong one is the same class of false provenance statement as
-    claiming a table is absent."""
+    """The capture line, which is a byte count or the reason there is
+    none. It measures the requested window and nothing beyond it --
+    `captured_bytes` cannot exceed what was asked for -- so it is stated
+    as how much of that window the dump holds, never as how much of the
+    image the dump holds. `captured_bytes` is null for four different
+    reasons, and naming the wrong one is the same class of false
+    provenance statement as claiming a table is absent."""
     captured = acquisition.captured_bytes
     if captured is not None:
         return f"0x{captured:x} bytes"
@@ -1694,42 +1880,140 @@ def _pe_captured_text(acquisition) -> str:
     return "(not resolved -- the segment table accounts for fewer bytes than were read)"
 
 
+# Why the bytes parsing needed did not all arrive, once dumpex's own
+# budget is ruled out. The judgement that they did not is one fact and
+# the cause is another: bytes the dump never held and bytes it holds that
+# the read did not return have different remedies, and a line that named
+# only one of them would state the wrong one half the time.
+_PE_SHORTFALL_CAUSE = {
+    True: "the dump holds bytes this read did not return",
+    False: "the dump holds no more than was read",
+    None: "no segment table says which of the two applies",
+}
+
+# A budget is checked first and answers on its own: `target_io_short`
+# compares the read against the captured prefix, and a stopped read has
+# always taken every byte it asked for, so it is False in every
+# bounded-stop run. Reading that as an answer about the dump would blame
+# the dump for a limit of this tool -- the §6.2 rule inverted.
+#
+# Which budget fired decides how much may then be said. A byte budget
+# exonerates the dump outright: the window it asked for arrived whole,
+# and only dumpex's ceiling kept parsing from reaching further. A
+# read-count budget settles nothing of the kind -- a header spread across
+# enough captured segments costs one read per segment, so the layout this
+# dump carries can reach that limit as readily as a trickling reader can
+# -- and an `e_lfanew` stop is a fact about what the image declared. Only
+# the first may deny the dump a part in it.
+_PE_BUDGET_SHORTFALL_CAUSE = {
+    "pe_header_bytes": "dumpex's own byte budget stopped the read, not the dump",
+    "pe_header_read_operations": "dumpex's own read-count budget stopped the read",
+    "e_lfanew": "the image declares its PE header past dumpex's own budget",
+}
+
+_PE_BUDGET_SHORTFALL_DEFAULT = "one of dumpex's own budgets stopped the read"
+
+
+def _pe_required_bytes_lines(acquisition) -> "tuple[str, ...]":
+    """Whether parsing got every byte it asked for, and -- when it did
+    not -- what stands behind the shortfall. A staged acquisition asks
+    for far less than the window it requested, so this is the line that
+    says a structure was cut short; the byte counts above it are not a
+    comparison a reader should have to make."""
+    if acquisition.read_bytes >= acquisition.read_target_bytes:
+        return ("yes",)
+    shortfall = (f"no -- 0x{acquisition.read_bytes:x} of "
+                 f"0x{acquisition.read_target_bytes:x} bytes were read")
+    stop = acquisition.bounded_stop
+    if stop is not None:
+        return (shortfall, _PE_BUDGET_SHORTFALL_CAUSE.get(
+            stop["scope"], _PE_BUDGET_SHORTFALL_DEFAULT))
+    return (shortfall, _PE_SHORTFALL_CAUSE[acquisition.target_io_short])
+
+
+# Which of dumpex's own budgets ended the acquisition, as the sentence
+# that names it. The scope token is dumpex's own identifier and never
+# reaches the console; an unlisted scope falls back to a sentence that
+# still names no token, because the set of budgets is deliberately not
+# frozen by the profile contract (§6.2).
+_PE_BOUNDED_SCOPE_TEXT = {
+    "pe_header_bytes": "dumpex's own header byte budget stopped the read",
+    "pe_header_read_operations": "dumpex's own header read-count budget stopped the read",
+    "e_lfanew": "the declared PE header offset is past dumpex's own budget",
+}
+
+_PE_BOUNDED_SCOPE_DEFAULT = "one of dumpex's own budgets stopped the read"
+
+
+def _pe_bounded_stop_lines(stop: dict) -> "tuple[str, ...]":
+    """The budget that ended the acquisition, and its two numbers. The
+    numbers are stated apart from the sentence because `budget_consumed`
+    is above the limit for one scope and at it for the others, and one
+    sentence covering both would have to be vague about which."""
+    return (_PE_BOUNDED_SCOPE_TEXT.get(stop["scope"], _PE_BOUNDED_SCOPE_DEFAULT),
+            f"limit {stop['budget_limit']}, consumed {stop['budget_consumed']}")
+
+
+def _pe_parsing_line(acquisition) -> str:
+    """How far up the stage ladder the acquisition got, in the structures
+    a reader can point at rather than the ladder's own rung names."""
+    requested = _PE_STAGE_TEXT[acquisition.requested_stage]
+    completed = acquisition.highest_completed_stage
+    if completed is None:
+        return f"no structure completed; the read asked for {requested}"
+    if completed == acquisition.requested_stage:
+        return f"completed through {requested}, as requested"
+    return (f"completed through {_PE_STAGE_TEXT[completed]}; "
+            f"the read asked for {requested}")
+
+
+def _pe_component_lines(acquisition) -> "tuple[str, ...]":
+    """The six header components grouped by what became of each, in the
+    contract's own component order and with one group per line. A
+    component outside the requested stage is named as out of scope, never
+    as one that came back empty."""
+    grouped = {}
+    for name, state in acquisition.components.items():
+        grouped.setdefault(state, []).append(_PE_COMPONENT_NAME[name])
+    return tuple(
+        f"{_PE_COMPONENT_STATE_TEXT[state]}: {', '.join(names)}"
+        for state, names in grouped.items())
+
+
 def _render_pe_provenance(pe_record) -> None:
-    """The bytes behind everything above: what was asked for, what the
-    dump holds, and what was read. A staged acquisition stops when its
-    ladder is satisfied, so reading fewer bytes than were captured is the
-    normal outcome for a healthy image -- `Read Short` is the judgement
-    that fact supports, and is the one to read."""
+    """The bytes behind everything above: the window that was asked for,
+    how much of it the dump actually holds, and how much of it parsing
+    needed. A staged acquisition stops once its ladder is satisfied, so
+    needing far fewer bytes than the dump holds is the normal outcome for
+    a healthy image. What says a structure was cut short is `Required
+    bytes present`, never a comparison between the first two lines."""
     acquisition = pe_record.acquisition
     print(f"\n    {BOLD('Header Acquisition')}                           [--verbose only]")
-    print(f"      {'Requested':<18} 0x{acquisition.requested_bytes:x} bytes at the image base")
-    print(f"      {'Captured':<18} {_pe_captured_text(acquisition)}")
-    print(f"      {'Read':<18} 0x{acquisition.read_bytes:x} bytes "
-          f"(the stages asked for 0x{acquisition.read_target_bytes:x})")
-    short = acquisition.target_io_short
-    print(f"      {'Read Short':<18} "
-          f"{'(undetermined)' if short is None else ('yes' if short else 'no')}")
+    print(f"      {'Requested window':<24} 0x{acquisition.requested_bytes:x} bytes at the "
+          f"image base")
+    print(f"      {'Captured in that window':<24} {_pe_captured_text(acquisition)}")
+    print(f"      {'Required for parsing':<24} 0x{acquisition.read_target_bytes:x} bytes")
+    for index, line in enumerate(_pe_required_bytes_lines(acquisition)):
+        print(f"      {'Required bytes present' if index == 0 else '':<24} {line}")
     overlapping = acquisition.capture_overlapping
-    print(f"      {'Segment Table':<18} {acquisition.segment_table}"
+    print(f"      {'Segment table':<24} {_PE_TABLE_WALK_TEXT[acquisition.segment_table]}"
           f"{' (two segments claim one address)' if overlapping else ''}")
-    print(f"      {'Region Table':<18} {acquisition.region_table}")
+    print(f"      {'Region table':<24} {_PE_TABLE_WALK_TEXT[acquisition.region_table]}")
     # The consequence of the two lines above, said beside them rather
     # than left for a reader to derive from the state tokens.
     for line in _pe_table_loss_lines(acquisition):
-        print(f"      {' ' * 18} {line}")
-    print(f"      {'Stage':<18} requested {acquisition.requested_stage}, completed "
-          f"{acquisition.highest_completed_stage or '(none)'}")
+        print(f"      {' ' * 24} {line}")
+    print(f"      {'Parsing':<24} {_pe_parsing_line(acquisition)}")
     stop = acquisition.bounded_stop
     if stop is not None:
-        print(f"      {'Bounded Stop':<18} {stop['scope']} -- dumpex's own budget of "
-              f"{stop['budget_limit']} stopped the read at {stop['budget_consumed']}")
-    states = ", ".join(f"{name}={state or 'not in scope'}"
-                        for name, state in acquisition.components.items())
-    print(f"      {'Components':<18} {states}")
+        for index, line in enumerate(_pe_bounded_stop_lines(stop)):
+            print(f"      {'Bounded stop' if index == 0 else '':<24} {line}")
+    for index, line in enumerate(_pe_component_lines(acquisition)):
+        print(f"      {'Header components' if index == 0 else '':<24} {line}")
     if acquisition.unexamined:
         spans = ", ".join(f"{span['base_address']}+0x{span['size']:x}"
                            for span in acquisition.unexamined)
-        print(f"      {'Unexamined':<18} {spans}")
+        print(f"      {'Unexamined':<24} {spans}")
         print("      Unexamined names bytes nothing looked at -- neither intact nor damaged "
               "there.")
     identity = pe_record.module_identity
@@ -1740,7 +2024,7 @@ def _render_pe_provenance(pe_record) -> None:
         marker = " [shortened]" if identity["truncated"] else ""
         source = _PE_SOURCE_TEXT.get(f"profile.source:{pe_record.source_kind}",
                                       pe_record.source_kind)
-        print(f"      {'Named As':<18} {console_safe(identity['value'])}{marker} "
+        print(f"      {'Named as':<24} {console_safe(identity['value'])}{marker} "
               f"({identity['form']} from {source})")
 
 

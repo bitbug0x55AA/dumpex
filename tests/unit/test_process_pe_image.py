@@ -24,7 +24,8 @@ from dumpex.commands.process import (
     _PE_UNCOLLECTED_TEXT, _pe_captured_text, collect_process, render_process_console,
 )
 from dumpex.core.pe_correlation import OBSERVATION_NAMES, _REASONS
-from dumpex.core.pe_profile import DIRECTORY_NAMES, MAX_STRING_BYTES
+from dumpex.core.pe_profile import DIRECTORY_NAMES, MAX_E_LFANEW, MAX_STRING_BYTES
+from dumpex.commands import process as process_module
 from dumpex.output import records as records_module
 from dumpex.output.coverage import CoverageStatus, exit_code_for
 from tests.fixtures.fakes import MiscInfo, Module, Peb, Region, FakeStream
@@ -237,7 +238,7 @@ def test_no_image_base_leaves_the_profile_uncollected_with_its_own_reason():
     assert pe_record.observations == ()
     assert pe_record.acquisition is None
     assert pe_record.observation_coverage == {
-        "total": 0, "consistent": 0, "conflict": 0, "unavailable": 0}
+        "total": 0, "consistent": 0, "conflict": 0, "unavailable": 0, "not_applicable": 0}
 
 
 def test_an_image_base_with_nothing_captured_at_it_is_header_unreadable():
@@ -500,8 +501,10 @@ def test_every_observation_is_carried_in_every_state_and_the_tally_sums():
     tally = pe_record.observation_coverage
 
     assert len(pe_record.observations) == tally["total"]
-    assert tally["consistent"] + tally["conflict"] + tally["unavailable"] == tally["total"]
-    assert {o.state for o in pe_record.observations} >= {"consistent", "unavailable"}
+    assert sum(tally[state] for state in
+               ("consistent", "conflict", "unavailable", "not_applicable")) == tally["total"]
+    assert {o.state for o in pe_record.observations} >= {
+        "consistent", "unavailable", "not_applicable"}
     # The frozen checks, the identity triple, three per section and one per
     # descriptor -- the whole set, not a filtered one.
     assert {o.name for o in pe_record.observations} >= {
@@ -639,7 +642,6 @@ def test_the_default_console_states_the_image_in_one_block():
 
     assert "Main Image PE" in output
     assert "AMD64 / PE32+" in output
-    assert "0x00007ff600010000 (preferred 0x0000000140000000; relocated +0x7ff4c0010000)" in output
     assert "RVA 0x1000 -> 0x00007ff600011000" in output
     assert "use --verbose" in output
 
@@ -657,11 +659,11 @@ def test_an_uncollected_profile_says_which_of_the_two_reasons_applied():
     assert "could not be read" in _console(_dump(image=None))
 
 
-def test_the_verbose_console_adds_the_four_bounded_blocks():
+def test_the_verbose_console_adds_the_five_bounded_blocks():
     output = _console(_dump(image=_image(sections=(TEXT, DATA))), verbose=True)
 
-    for heading in ("Sections", "Data Directories", "Consistency Checks",
-                     "Header Acquisition"):
+    for heading in ("Sections", "Data Directories", "Relocation Evidence",
+                     "Consistency Checks", "Header Acquisition"):
         assert heading in output
     assert ".text" in output and ".data" in output
     assert "R-X" in output
@@ -670,14 +672,45 @@ def test_the_verbose_console_adds_the_four_bounded_blocks():
         assert name in output
 
 
+_INTERNAL_TOKENS = (
+    "profile.optional_header", "profile.source:peb_image_base",
+    "section_within_image_bound", "machine_no_independent_source",
+    "declared_absent", "dos_header=", "directory_descriptors=",
+    "requested sections", "file_offset", "not_applicable",
+    "pe_header_bytes", "pe_header_read_operations", "e_lfanew",
+)
+
+
 def test_the_console_never_prints_an_internal_token():
     """A reason token and an evidence token are `--json` vocabulary. The
     console renders the sentence an analyst reads instead."""
     output = _console(_dump(image=_image(sections=(TEXT, DATA))), verbose=True)
 
-    for token in ("profile.optional_header", "profile.source:peb_image_base",
-                   "section_within_image_bound", "machine_no_independent_source"):
+    for token in _INTERNAL_TOKENS:
         assert token not in output
+
+
+def _pe_block(output: str) -> str:
+    """The `Main Image PE` block alone -- the region §3.10.10's vocabulary
+    rule governs."""
+    return output.split("Main Image PE", 1)[1].split("Import Address Table", 1)[0]
+
+
+@pytest.mark.parametrize("image", [
+    pytest.param(lambda: _max_section_image(), id="byte_budget"),
+    pytest.param(lambda: _image(e_lfanew=MAX_E_LFANEW * 2), id="offset_budget"),
+])
+def test_a_bounded_stop_names_its_budget_without_naming_its_scope(image):
+    """A budget scope is dumpex's own identifier for its own limit -- the
+    most clearly internal string the provenance block has left."""
+    mf = _dump(image=image())
+    assert _pe(mf).acquisition.bounded_stop is not None
+
+    block = _pe_block(_console(mf, verbose=True))
+    stop = next(l for l in block.splitlines() if "Bounded stop" in l)
+    assert "dumpex's own" in stop or "past dumpex's own budget" in stop
+    for token in _INTERNAL_TOKENS:
+        assert token not in block
 
 
 def test_the_default_console_bounds_its_conflict_rows_and_counts_the_rest():
@@ -691,7 +724,7 @@ def test_the_default_console_bounds_its_conflict_rows_and_counts_the_rest():
 
     conflict_rows = [line for line in output.splitlines() if line.strip().startswith("[!!]")]
     assert len(conflict_rows) == _PE_DEFAULT_OBSERVATION_ROWS
-    assert "further conflicting or unevaluated check(s) -- see --verbose" in output
+    assert "further conflicting or unanswered check(s) -- see --verbose" in output
 
 
 def test_a_shortened_identity_marks_itself_outside_the_value():
@@ -700,7 +733,7 @@ def test_a_shortened_identity_marks_itself_outside_the_value():
     long_path = "C:\\" + "b" * (MAX_STRING_BYTES * 2) + ".exe"
     output = _console(_dump(image=_image(), image_path=long_path), verbose=True)
 
-    line = next(l for l in output.splitlines() if "Named As" in l)
+    line = next(l for l in output.splitlines() if "Named as" in l)
     assert line.rstrip().endswith("[shortened] (path from the PEB-reported image base)")
 
 
@@ -1003,7 +1036,7 @@ def test_no_reason_sentence_claims_an_absence_the_dump_did_not_establish():
 
 def test_the_captured_line_names_a_lossy_table_as_the_cause():
     output = _console(_split_segment_dump(lossy=True), verbose=True)
-    captured = next(l for l in output.splitlines() if "Captured" in l)
+    captured = next(l for l in output.splitlines() if "Captured in that window" in l)
 
     assert "segment table dropped a descriptor" in captured
     assert "no segment table" not in captured
@@ -1018,14 +1051,14 @@ def test_the_captured_line_names_an_unwalkable_table_as_the_cause():
     assert pe_record.collected is True
 
     output = _console(mf, verbose=True)
-    captured = next(l for l in output.splitlines() if "Captured" in l)
+    captured = next(l for l in output.splitlines() if "Captured in that window" in l)
     assert "could not be walked" in captured
     assert "no segment table" not in captured
 
 
 def test_the_captured_line_reports_a_byte_count_when_one_was_resolved():
     output = _console(_split_segment_dump(lossy=False), verbose=True)
-    captured = next(l for l in output.splitlines() if "Captured" in l)
+    captured = next(l for l in output.splitlines() if "Captured in that window" in l)
 
     assert "bytes" in captured and "not resolved" not in captured
 
@@ -1123,7 +1156,7 @@ def test_the_row_budget_is_shared_and_conflicts_are_never_displaced():
             if l.strip().startswith("[!!]") or l.strip().startswith("[--]")]
     conflicts = [l for l in rows if l.strip().startswith("[!!]")]
     assert len(conflicts) == _PE_DEFAULT_OBSERVATION_ROWS
-    assert "further conflicting or unevaluated check(s)" in output
+    assert "further conflicting or unanswered check(s)" in output
 
 
 def test_the_omitted_count_is_stable_across_runs():
@@ -1345,3 +1378,497 @@ def test_every_evidence_token_a_real_run_names_has_a_display_name():
 
     assert named
     assert named <= set(_PE_SOURCE_TEXT)
+
+
+# ── The two withheld answers are counted and rendered apart ─────────────
+# An `unavailable` check is evidence this dump does not carry; a
+# `not_applicable` one is a comparison the image's own declarations leave
+# no subject for. A console that reports both as unevaluated tells an
+# analyst that an ordinary PE layout is an incomplete analysis.
+
+
+def test_the_default_summary_counts_the_two_withheld_answers_apart():
+    output = _console(_dump(image=_image()))
+    line = next(l for l in output.splitlines() if "Consistency" in l)
+
+    assert "unavailable" in line and "not applicable" in line
+    assert "not evaluated" not in output
+
+
+def test_the_summary_counts_are_the_records_own_tally():
+    mf = _dump(image=_image())
+    tally = _pe(mf).observation_coverage
+    line = next(l for l in _console(mf).splitlines() if "Consistency" in l)
+
+    assert line.split("Consistency")[1].strip() == (
+        f"{tally['consistent']} consistent, {tally['conflict']} conflicting, "
+        f"{tally['unavailable']} unavailable, {tally['not_applicable']} not applicable")
+
+
+def test_a_withheld_check_says_which_of_the_two_it_is():
+    output = _console(_dump(image=_image()), verbose=True)
+
+    absent = next(l for l in output.splitlines() if "directory 0 (EXPORT)" in l)
+    assert absent.strip().startswith("[--]")
+    assert "not applicable -- the image declares this directory absent" in absent
+
+    security = next(l for l in output.splitlines() if "directory 4 (SECURITY)" in l)
+    assert security.strip().startswith("[--]")
+    assert "not applicable -- this directory is addressed by file offset" in security
+
+    architecture = next(l for l in output.splitlines()
+                        if "architecture vs. a second source" in l)
+    assert architecture.strip().startswith("[??]")
+    assert "unavailable -- the dump carries no second source" in architecture
+
+
+def test_a_routine_declaration_is_not_counted_as_an_evidence_gap():
+    """A whole image declaring most of its directories absent must leave
+    the gap count at the checks the dump really could not answer."""
+    pe_record = _pe(_dump(image=_image()))
+    tally = pe_record.observation_coverage
+
+    absent = [o for o in pe_record.observations
+              if o.reason in ("directory_declared_absent", "file_offset_semantics")]
+    assert absent
+    assert all(o.state == "not_applicable" for o in absent)
+    assert tally["unavailable"] < len(absent)
+
+
+# ── A heading is never printed over nothing ─────────────────────────────
+
+
+def test_no_identity_heading_is_printed_over_nothing():
+    """The identity checks are `--verbose` and carry their own heading, so
+    a default render with no identity diagnostic has nothing to put under
+    this one -- and an empty heading reads as output that was cut off."""
+    for verbose in (False, True):
+        output = _console(_dump(image=_image()), verbose=verbose)
+        assert "\n  Identity\n" not in output
+
+
+def test_an_identity_diagnostic_brings_its_heading_with_it():
+    modules = [Module(IMAGE_BASE, 0x5000, r"C:\Samples\other.exe")]
+    output = _console(_dump(image=_image(), modules=modules))
+
+    assert "\n  Identity\n" in output
+    assert "PROCESS_MODULE_IDENTITY_MISMATCH" in output or "disagrees with" in output
+
+
+# ── What the block is, and is not, evidence of ──────────────────────────
+
+
+def test_every_render_states_what_the_checks_do_not_establish():
+    """Agreeing structural checks read as a clean process to anyone who
+    does not already know the checks only covered this one image."""
+    for verbose in (False, True):
+        output = _console(_dump(image=_image()), verbose=verbose)
+        assert "structural main-image checks only" in output
+        assert "does not establish" in output and "is benign" in output
+
+
+def test_the_scope_note_survives_a_correlation_that_did_not_run(monkeypatch):
+    monkeypatch.setattr("dumpex.commands.process.correlate_main_image",
+                        _raise_correlation)
+    output = _console(_dump(image=_image()))
+
+    assert "not produced" in output
+    assert "structural main-image checks only" in output
+
+
+def _raise_correlation(*args, **kwargs):
+    raise ValueError("synthetic correlation failure")
+
+
+# ── The two bases, and the relocation answer drawn from them ────────────
+
+
+def test_the_two_bases_and_the_relocation_answer_are_separate_lines():
+    output = _console(_dump(image=_image()))
+
+    actual = next(l for l in output.splitlines() if "Actual Base" in l)
+    preferred = next(l for l in output.splitlines() if "Preferred Base" in l)
+    relocation = next(l for l in output.splitlines() if l.strip().startswith("Relocation"))
+    assert actual.split()[-1] == "0x00007ff600010000"
+    assert preferred.split()[-1] == "0x0000000140000000"
+    assert relocation.strip().startswith("Relocation       required --")
+
+
+def test_an_image_at_its_preferred_base_needed_no_relocation():
+    output = _console(_dump(image=_image(image_base=IMAGE_BASE)))
+
+    actual = next(l for l in output.splitlines() if "Actual Base" in l)
+    preferred = next(l for l in output.splitlines() if "Preferred Base" in l)
+    relocation = next(l for l in output.splitlines() if l.strip().startswith("Relocation"))
+    assert actual.split()[-1] == preferred.split()[-1] == "0x00007ff600010000"
+    assert "not required -- loaded at the preferred base" in relocation
+
+
+def test_a_relocated_image_declaring_a_relocation_directory_is_consistent():
+    """The relocated path with the declarations that allow it: the answer
+    is `required`, and the check that weighs it agrees rather than
+    conflicting."""
+    image = _image(directories=[(0, 0)] * 5 + [(0x2000, 0x40)])
+    mf = _dump(image=image)
+    pe_record = _pe(mf)
+    output = _console(mf, verbose=True)
+
+    assert pe_record.relocation["basereloc_present"] is True
+    assert _observation(pe_record, "relocation_expected").state == "consistent"
+    assert "required -- loaded 0x7ff4c0010000 above the preferred base" in output
+    evidence = next(l for l in output.splitlines() if "Directory " in l and "declares" in l)
+    assert "the image declares a base-relocation directory" in evidence
+
+
+def test_a_relocated_image_with_no_relocation_directory_conflicts():
+    mf = _dump(image=_image())
+    pe_record = _pe(mf)
+
+    assert pe_record.relocation["basereloc_present"] is False
+    assert _observation(pe_record, "relocation_expected").state == "conflict"
+    assert "relocation evidence" in _console(mf)
+
+
+def test_relocation_evidence_the_dump_does_not_carry_withholds_the_answer():
+    """The bases are decoded and the relocation evidence is not, so the
+    image is reported as relocated while the check that would judge it
+    stays a gap -- never a conflict, and never a clean result."""
+    mf = _dump(image=_image()[:0xD8])
+    pe_record = _pe(mf)
+    output = _console(mf, verbose=True)
+
+    assert pe_record.relocation["basereloc_present"] is None
+    observation = _observation(pe_record, "relocation_expected")
+    assert observation.state == "unavailable"
+    assert observation.reason == "relocation_undetermined"
+    assert "required -- loaded 0x7ff4c0010000 above the preferred base" in output
+    directory = next(l for l in output.splitlines()
+                     if l.strip().startswith("Directory ") and "not established" in l)
+    assert "(not established)" in directory
+
+
+def test_an_undecoded_preferred_base_leaves_the_relocation_answer_open():
+    output = _console(_dump(image=b"MZ"), verbose=True)
+
+    preferred = next(l for l in output.splitlines() if "Preferred Base" in l)
+    relocation = next(l for l in output.splitlines() if l.strip().startswith("Relocation"))
+    assert "(not decoded)" in preferred
+    assert "undetermined -- the preferred base was not decoded" in relocation
+
+
+def test_the_relocation_block_makes_no_capture_claim_about_an_absent_directory():
+    output = _console(_dump(image=_image()), verbose=True)
+    block = output.split("Relocation Evidence")[1].split("Consistency Checks")[0]
+
+    assert "the image declares no base-relocation directory" in block
+    assert "Directory bytes" not in block
+
+
+# ── The relocation check speaks for the declarations, not the bytes ─────
+# `relocation_expected` weighs the two bases against `relocs_stripped`
+# and `basereloc_present` -- declarations, all four of them. How much of
+# the directory the dump actually holds is the Relocation Evidence
+# block's `Directory bytes` line, and a consistency row that spoke for
+# both would contradict that line on the same screen.
+
+_BASERELOC_RVA = 0x2000
+_BASERELOC_SIZE = 0x40
+_DECLARES_BASERELOC = [(0, 0)] * 5 + [(_BASERELOC_RVA, _BASERELOC_SIZE)]
+
+
+def _basereloc_dump(captured_bytes: int):
+    """A relocated image declaring a base-relocation directory, with
+    `captured_bytes` of that directory's own content in the dump."""
+    memory = ({IMAGE_BASE + _BASERELOC_RVA: b"\x00" * captured_bytes}
+              if captured_bytes else None)
+    return _dump(image=_image(directories=_DECLARES_BASERELOC), memory=memory)
+
+
+@pytest.mark.parametrize("captured, capture_state, held", [
+    pytest.param(_BASERELOC_SIZE, "complete", "every byte", id="complete"),
+    pytest.param(_BASERELOC_SIZE // 2, "partial", "only part", id="partial"),
+    pytest.param(0, "none", "none", id="uncaptured"),
+])
+def test_the_relocation_row_claims_no_more_than_the_header_declares(
+        captured, capture_state, held):
+    """A declared directory is a declaration. Reading it as captured
+    relocation data would tell an analyst the relocation evidence was
+    verified in a dump that holds none of it."""
+    mf = _basereloc_dump(captured)
+    pe_record = _pe(mf)
+    descriptor = pe_record.directories[process_module._PE_BASERELOC_INDEX]
+    assert descriptor.capture_state == capture_state
+
+    observation = _observation(pe_record, "relocation_expected")
+    assert observation.state == "consistent"
+    assert set(observation.operands) == {
+        "relocation_delta", "relocs_stripped", "basereloc_present"}
+
+    output = _console(mf, verbose=True)
+    row = next(l for l in output.splitlines() if "relocation evidence:" in l)
+    assert "the header's own declarations allow that" in row
+    # The one line that speaks for the bytes says something else
+    # entirely, and it is the only line that may.
+    assert "the dump holds" not in row
+    assert f"the dump holds {held}" in next(
+        l for l in output.splitlines() if "Directory bytes" in l)
+
+
+def test_the_relocation_row_reads_the_same_whatever_the_dump_holds():
+    """The check is capture-independent by construction, so its row is
+    one sentence across all three capture states while the block that
+    does speak for the bytes says three different things."""
+    rows, held = set(), set()
+    for captured in (_BASERELOC_SIZE, _BASERELOC_SIZE // 2, 0):
+        lines = _console(_basereloc_dump(captured), verbose=True).splitlines()
+        rows.add(next(l for l in lines if "relocation evidence:" in l))
+        held.add(next(l for l in lines if "Directory bytes" in l))
+
+    assert len(rows) == 1
+    assert len(held) == 3
+
+
+# ── The header read is measured against what parsing needed ─────────────
+# A staged acquisition asks for a fraction of the window it requested, so
+# comparing the requested window with the bytes read would report every
+# healthy image as a partial read.
+
+
+def test_a_whole_header_read_is_not_reported_as_a_partial_one():
+    mf = _dump(image=_image())
+    acquisition = _pe(mf).acquisition
+    output = _console(mf, verbose=True)
+
+    assert acquisition.read_bytes >= acquisition.read_target_bytes
+    assert acquisition.requested_bytes > acquisition.read_target_bytes
+    lines = output.splitlines()
+    assert f"0x{acquisition.requested_bytes:x} bytes at the image base" in \
+        next(l for l in lines if "Requested window" in l)
+    assert f"0x{acquisition.read_target_bytes:x} bytes" in \
+        next(l for l in lines if "Required for parsing" in l)
+    assert next(l for l in lines if "Required bytes present" in l).split()[-1] == "yes"
+    assert "complete -- every header structure was read in full" in output
+
+
+def test_a_capture_short_of_what_parsing_needs_says_so():
+    """The partial fixture reads visibly differently, and agrees with the
+    structural state beside it."""
+    mf = _dump(image=_image()[:0xD8])
+    acquisition = _pe(mf).acquisition
+    output = _console(mf, verbose=True)
+
+    assert acquisition.read_bytes < acquisition.read_target_bytes
+    present = next(l for l in output.splitlines() if "Required bytes present" in l)
+    assert present.strip().endswith(
+        f"no -- 0x{acquisition.read_bytes:x} of 0x{acquisition.read_target_bytes:x} "
+        f"bytes were read")
+    assert "the dump holds no more than was read" in output
+    assert "unavailable -- a header structure could not be read at all" in output
+
+
+@pytest.mark.parametrize("short, cause", [
+    (True, "the dump holds bytes this read did not return"),
+    (False, "the dump holds no more than was read"),
+    (None, "no segment table says which of the two applies"),
+])
+def test_a_shortfall_names_which_of_the_two_causes_applies(short, cause):
+    """Bytes the dump never held and bytes it holds that the read did not
+    return have different remedies, so the line names which one it is."""
+    acquisition = dataclasses.replace(
+        _pe(_dump(image=_image())).acquisition,
+        read_bytes=0x10, read_target_bytes=0x1b0, target_io_short=short)
+
+    lines = process_module._pe_required_bytes_lines(acquisition)
+    assert lines[0] == "no -- 0x10 of 0x1b0 bytes were read"
+    assert lines[1] == cause
+
+
+# ── Investigator-facing vocabulary in the verbose blocks ────────────────
+
+
+def test_the_verbose_blocks_state_the_parse_and_the_components_in_words():
+    output = _console(_dump(image=_image()), verbose=True)
+
+    assert "completed through the section table, as requested" in output
+    assert ("read in full: DOS header, COFF header, optional header, directory array, "
+            "directory descriptors, section table") in output
+
+
+def test_a_stage_short_of_the_one_requested_names_both():
+    output = _console(_dump(image=_image()[:0xD8]), verbose=True)
+
+    assert "completed through the COFF header; the read asked for the section table" in output
+    assert "could not be read: directory array, directory descriptors, section table" in output
+
+
+def test_the_descriptor_table_states_its_columns_in_words():
+    output = _console(_dump(image=_image()), verbose=True)
+    row = next(l for l in output.splitlines() if "SECURITY" in l)
+
+    assert "file offset" in row
+    assert "declared absent" in row
+
+
+def test_every_console_vocabulary_table_is_closed_over_its_own_records():
+    """A state with no display entry would reach the console as its own
+    token, which is exactly what these tables exist to prevent."""
+    assert set(process_module._PE_TABLE_WALK_TEXT) == set(records_module.PROCESS_PE_TABLE_STATES)
+    assert set(process_module._PE_STAGE_TEXT) == set(records_module.PROCESS_PE_STAGES)
+    assert set(process_module._PE_COMPONENT_NAME) == set(records_module.PROCESS_PE_COMPONENTS)
+    assert set(process_module._PE_COMPONENT_STATE_TEXT) == \
+        set(records_module.PROCESS_PE_COMPONENT_STATES) | {None}
+    assert set(process_module._PE_DESCRIPTOR_STATE_TEXT) == \
+        set(records_module.PROCESS_PE_COMPONENT_STATES)
+    assert set(process_module._PE_RELOCATION_CAPTURE_TEXT) == \
+        set(records_module.PROCESS_PE_CAPTURE_STATES) | {None}
+    assert set(process_module._PE_OBSERVATION_MARKER) == set(records_module.PE_OBSERVATION_STATES)
+
+
+# ── A budget of dumpex's own is never reported as a truncated dump ─────
+# The requested window IS the byte budget, so a stopped read has always
+# captured every byte it asked for and `target_io_short` is false. Read
+# as an answer about the dump, that says the dump holds no more -- which
+# inverts the analyst's remedy: re-read the header, not re-collect.
+
+
+def _max_section_image() -> bytes:
+    """A whole image whose header structures end past the read budget:
+    96 sections at 40 bytes each puts the section table's last entry
+    beyond `PE_HEADER_READ_MAX`."""
+    sections = tuple(
+        {"name": b".s%03d" % index, "vaddr": 0x1000 + index * 0x1000, "vsize": 0x1000,
+         "rawptr": 0x400, "rawsize": 0x1000, "chars": 0x60000020}
+        for index in range(96))
+    return _image(sections=sections, size_of_image=0x62000)
+
+
+def test_a_budget_stop_does_not_blame_the_dump_for_the_shortfall():
+    mf = _dump(image=_max_section_image())
+    acquisition = _pe(mf).acquisition
+
+    # The preconditions that make the misreading possible: the whole
+    # window was captured, nothing failed to come back, and parsing
+    # still needed more than the budget allowed.
+    assert acquisition.bounded_stop["scope"] == "pe_header_bytes"
+    assert acquisition.read_bytes == acquisition.captured_bytes
+    assert acquisition.target_io_short is False
+    assert acquisition.read_bytes < acquisition.read_target_bytes
+
+    output = _console(mf, verbose=True)
+    present = next(l for l in output.splitlines() if "Required bytes present" in l)
+    assert present.strip().endswith(
+        f"no -- 0x{acquisition.read_bytes:x} of 0x{acquisition.read_target_bytes:x} "
+        f"bytes were read")
+    assert "dumpex's own byte budget stopped the read, not the dump" in output
+    assert "the dump holds no more than was read" not in output
+
+
+def _stopped_acquisition(scope: str, consumed: int = 4096):
+    return dataclasses.replace(
+        _pe(_dump(image=_image())).acquisition,
+        read_bytes=0x10, read_target_bytes=0x1b0, target_io_short=False,
+        bounded_stop={"scope": scope, "budget_limit": 4096, "budget_consumed": consumed})
+
+
+def test_the_budget_cause_wins_over_the_dump_causes():
+    """`target_io_short` answers a question about the dump, and a bounded
+    stop makes it `false` by construction -- so the budget is consulted
+    first rather than the two dump causes being reached at all."""
+    lines = process_module._pe_required_bytes_lines(
+        _stopped_acquisition("pe_header_bytes"))
+
+    assert lines[1] == "dumpex's own byte budget stopped the read, not the dump"
+    assert lines[1] not in process_module._PE_SHORTFALL_CAUSE.values()
+
+
+def test_only_the_byte_budget_denies_the_dump_a_part_in_the_shortfall():
+    """The byte budget is the one that settles it: the window it asked
+    for arrived whole. A read-count budget does not -- a header spread
+    across enough captured segments costs one read per segment, so this
+    dump's own layout can reach that limit -- and an `e_lfanew` stop is a
+    fact about what the image declared."""
+    byte_cause, = process_module._pe_required_bytes_lines(
+        _stopped_acquisition("pe_header_bytes"))[1:]
+    assert "not the dump" in byte_cause
+
+    for scope, consumed in (("pe_header_read_operations", 4096), ("e_lfanew", 8192)):
+        cause, = process_module._pe_required_bytes_lines(
+            _stopped_acquisition(scope, consumed))[1:]
+        assert "not the dump" not in cause, scope
+        assert scope not in cause, scope
+
+
+def test_the_budget_cause_table_is_closed_over_the_budgets_it_explains():
+    from dumpex.core.pe_profile import _BOUNDED_STOP_RELATIONS
+
+    assert set(process_module._PE_BUDGET_SHORTFALL_CAUSE) == set(_BOUNDED_STOP_RELATIONS)
+
+
+def test_an_unnamed_budget_scope_claims_nothing_about_the_dump():
+    cause, = process_module._pe_required_bytes_lines(
+        _stopped_acquisition("some_future_budget"))[1:]
+
+    assert cause == "one of dumpex's own budgets stopped the read"
+    assert "some_future_budget" not in cause
+
+
+def test_a_genuinely_short_capture_still_names_the_dump():
+    """The budget check must not swallow the case it was added beside."""
+    mf = _dump(image=_image()[:0xD8])
+    assert _pe(mf).acquisition.bounded_stop is None
+
+    assert "the dump holds no more than was read" in _console(mf, verbose=True)
+
+
+def test_the_capture_line_is_scoped_to_the_window_it_measures():
+    """`captured_bytes` cannot exceed the requested window, so the line
+    must not read as a statement about how much of the image is in the
+    dump -- the one block an analyst consults to decide whether
+    re-collecting would help."""
+    mf = _dump(image=_max_section_image())
+    acquisition = _pe(mf).acquisition
+    assert acquisition.captured_bytes == acquisition.requested_bytes
+
+    output = _console(mf, verbose=True)
+    assert f"{'Captured in that window':<24} 0x{acquisition.captured_bytes:x} bytes" in output
+    assert "Available in dump" not in output
+
+
+def test_the_bounded_stop_scope_table_is_closed_over_the_budgets_it_renders():
+    """A scope the profile layer validates and this console cannot name
+    would reach a reader as its own token."""
+    from dumpex.core.pe_profile import _BOUNDED_STOP_RELATIONS
+
+    assert set(process_module._PE_BOUNDED_SCOPE_TEXT) == set(_BOUNDED_STOP_RELATIONS)
+
+
+def test_an_unnamed_budget_scope_still_names_no_token():
+    """The set of budgets is deliberately not frozen by the profile
+    contract, so the fallback has to be safe rather than absent."""
+    lines = process_module._pe_bounded_stop_lines(
+        {"scope": "some_future_budget", "budget_limit": 8, "budget_consumed": 8})
+
+    assert "some_future_budget" not in lines[0]
+    assert lines[0] == "one of dumpex's own budgets stopped the read"
+    assert lines[1] == "limit 8, consumed 8"
+
+
+# ── The record is total where the console reads it ─────────────────────
+
+
+def test_a_collected_profile_must_state_its_relocation_descriptor_state():
+    """Every one of the sixteen descriptors has a state, including one
+    nothing was read of, so a collected profile that leaves this null
+    describes a descriptor that does not exist."""
+    pe_record = _pe(_dump(image=_image()))
+    assert pe_record.relocation["basereloc_descriptor_state"] is not None
+
+    with pytest.raises(ValueError, match="basereloc_descriptor_state"):
+        dataclasses.replace(
+            pe_record,
+            relocation=dict(pe_record.relocation, basereloc_descriptor_state=None))
+
+
+def test_the_addressing_mode_vocabulary_is_the_records_own():
+    assert set(process_module._PE_VALUE_KIND_TEXT) == \
+        set(records_module.PROCESS_PE_VALUE_KINDS)

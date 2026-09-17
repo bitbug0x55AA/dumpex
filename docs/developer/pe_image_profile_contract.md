@@ -104,7 +104,7 @@ Read alongside:
 | Tier | Owner | May contain | May never contain |
 |---|---|---|---|
 | **Raw profile** | `PeImageProfile` | Bytes actually read, decoded fields, per-component state, exact unexamined ranges | Any comparison, any interpretation, any severity |
-| **Derived observation** | Recon | `consistent` / `conflict` / `unavailable` over established facts (§8.3) | `trusted`, `malicious`, `DETECTED`, a score, a confidence |
+| **Derived observation** | Recon | `consistent` / `conflict` / `unavailable` / `not_applicable` over established facts (§8.1, §8.3) | `trusted`, `malicious`, `DETECTED`, a score, a confidence |
 | **Finding** | Hunt | A detection claim with its own evidence and coverage | A raw profile field re-read from memory a second time |
 
 A derived observation uses **only established facts**. When those facts
@@ -113,6 +113,13 @@ not, it is `unavailable`. §8.3's three-valued rule is that evaluation,
 and it governs every observation in §8.3 without exception — including
 the cases where one established fact settles a predicate on its own
 (§8.3.1).
+
+The fourth state is not a fourth answer to that predicate. §8.1's
+`not_applicable` says an established fact left the comparison no subject
+at all — a directory the header declares absent, the Security directory's
+file offset — so there was no predicate to evaluate. It is never an
+evidence gap, and the two are never summed: only `unavailable` measures
+what the dump does not carry.
 
 An uncaptured fact is therefore never on its own a `conflict`, and never
 on its own an `unavailable` either: what decides is whether the facts in
@@ -1866,9 +1873,24 @@ cached one.
 ### 8.1 What they are
 
 A consistency observation compares two **captured** facts and reports
-`consistent`, `conflict`, or `unavailable`. It is a Recon diagnostic in
-the sense the Recon contract already fixes: it can never change coverage
-status, can never change an exit code, and carries no verdict semantics.
+`consistent`, `conflict`, `unavailable`, or `not_applicable`. It is a
+Recon diagnostic in the sense the Recon contract already fixes: it can
+never change coverage status, can never change an exit code, and carries
+no verdict semantics.
+
+Two of the four withhold an answer, and they are never merged:
+
+| State | What it says |
+|---|---|
+| `unavailable` | the evidence needed is not in this dump — no second source to compare against, a memory table that could not be walked, a structure captured only in part |
+| `not_applicable` | an established fact leaves the comparison no subject — the image declares the directory absent, the Security directory is addressed by file offset (§2.5), a zero `CheckSum` the image never populated, a `Machine` §8.4 fixes no width for |
+
+The evidence gap is `unavailable` alone. Counting `not_applicable` as
+part of it reports an ordinary PE layout as unexamined evidence, which is
+the same class of error as presenting incomplete coverage as a clean
+result. The `reason` token fixes which of the two an observation carries:
+the four reasons above are `not_applicable` and no other reason is, so a
+producer cannot record one as the other.
 
 ### 8.2 What they may never say
 
@@ -1891,6 +1913,10 @@ Every one is evaluated over **established facts only**, three-valued:
 | determine it false | `consistent` |
 | do not determine it | `unavailable` |
 
+The fourth state sits outside that table, because it is not a result of
+the predicate at all: §8.1's `not_applicable` says the established facts
+leave no predicate to evaluate.
+
 "Determine" is the ordinary three-valued reading: a disjunction with one
 true operand is true whatever the other is, a conjunction with one false
 operand is false, and what neither settles is `unavailable`. So a
@@ -1903,7 +1929,7 @@ them itself.
 |---|---|---|
 | `base_vs_preferred` | `actual_base`, `preferred_image_base` | Never `conflict`. The delta is recorded, not flagged (§2.2). |
 | `relocation_expected` | `relocation_delta`, `relocs_stripped`, `basereloc_present` | `conflict` when `relocation_delta != 0` **and** (`relocs_stripped` is true **or** `basereloc_present` is false). |
-| `machine_vs_format` | `Machine`, `is_pe32_plus` | `conflict` when §8.4 defines a width for `Machine` and `is_pe32_plus` does not equal it. §8.4 defining none leaves it undetermined. |
+| `machine_vs_format` | `Machine`, `is_pe32_plus` | `conflict` when §8.4 defines a width for `Machine` and `is_pe32_plus` does not equal it. §8.4 defining none leaves the comparison no expectation, so it is `not_applicable`. |
 | `entry_point_in_section` | `AddressOfEntryPoint`, section table | `conflict` when the entry point is non-zero **and** lies outside every section's mapped interval. See §8.5. |
 | `size_vs_image_extent` | `SizeOfImage`, the image's captured extent | See §8.6. |
 
@@ -1913,7 +1939,7 @@ them itself.
 |---|---|---|---|
 | `base_vs_preferred` | Both bases | None — the predicate is constant-false | Either base `null` → `unavailable`: there is no delta to record |
 | `relocation_expected` | `relocation_delta`, then `relocs_stripped` and `basereloc_present` | `relocation_delta == 0` → `consistent` on the delta alone, since a conflict needs a non-zero one; either disjunct true → `conflict` without the other | Delta `null` → `unavailable`. Delta non-zero with both disjuncts undetermined, or one false and the other undetermined → `unavailable` |
-| `machine_vs_format` | `Machine`, `is_pe32_plus` | None. `EBC` relaxes the expectation to "either width" (§8.4); it does not remove the need for a width | Either operand `null`, or §8.4 names no width for the value → `unavailable` — `EBC` included |
+| `machine_vs_format` | `Machine`, `is_pe32_plus` | None. `EBC` relaxes the expectation to "either width" (§8.4); it does not remove the need for a width | Either operand `null` → `unavailable`. §8.4 naming no width for an established value → `not_applicable`; `EBC` is neither, and is `consistent` (§8.4) |
 | `entry_point_in_section` | `AddressOfEntryPoint`, then the section table | `AddressOfEntryPoint == 0` → `consistent` on the field alone (§8.5); inside a decoded section → `consistent` without the undecoded ones | Entry point `null` → `unavailable`. Non-zero and outside every *decoded* section, with the table `partial` or `unavailable` → `unavailable` (§8.5) |
 | `size_vs_image_extent` | `SizeOfImage`, the mapped extent, the captured extent | None | Any of the three missing → `unavailable` (§8.6.3's first two rows) |
 
@@ -2149,11 +2175,13 @@ descriptor, the entry point's memory-evidence context, and the identity
 comparisons that exist only where a second attributable source does.
 
 The layer is additive, not a redefinition. Every observation it adds is
-evaluated by §8.3's three-valued rule over established facts, may never
-say anything §8.2 forbids, and obeys §1.2's first rule: a missing
-ModuleList entry, a missing MemoryInfo region, a lossy region or segment
-table, and an unwritten page each yield `unavailable`, never a PE defect
-and never a `conflict`. The layer scores nothing and emits no Finding.
+evaluated by §8.3's three-valued rule over established facts — or, where
+an established fact leaves the comparison no subject, withheld as §8.1's
+`not_applicable` — may never say anything §8.2 forbids, and obeys §1.2's
+first rule: a missing ModuleList entry, a missing MemoryInfo region, a
+lossy region or segment table, and an unwritten page each yield
+`unavailable`, never a PE defect and never a `conflict`. The layer scores
+nothing and emits no Finding.
 
 #### 8.8.1 Evidence inputs
 
@@ -2177,11 +2205,15 @@ remedies.
 
 #### 8.8.2 Correlation coverage
 
-The layer reports a plain tally — how many observations were `consistent`,
-`conflict`, and `unavailable`. It is **not** a coverage status, **not** a
-`PROCESS_MAIN_IMAGE_*` limitation, and changes no exit code and no legacy
-`--process` field coverage. Until a public cutover contract adopts it, it
-is a diagnostic count.
+The layer reports a plain tally — one count per §8.1 state, plus the
+total. It is **not** a coverage status, **not** a `PROCESS_MAIN_IMAGE_*`
+limitation, and changes no exit code and no legacy `--process` field
+coverage. Until a public cutover contract adopts it, it is a diagnostic
+count.
+
+`unavailable` and `not_applicable` are counted separately and a consumer
+reporting the evidence gap reports the first alone. A surface that prints
+one number for both states is making the claim §8.1 forbids.
 
 #### 8.8.3 Size cross-checks
 
@@ -2237,14 +2269,16 @@ For each of the sixteen directory descriptors, in index order:
 
 | Field | Meaning |
 |---|---|
-| `directory_image_bound` | `conflict` when `[value, value + size)` is not inside `[0, SizeOfImage)`; `unavailable` for a `declared_absent`, presence-unknown, or `partial` descriptor |
+| `directory_image_bound` | `conflict` when `[value, value + size)` is not inside `[0, SizeOfImage)`; `not_applicable` for a `declared_absent` descriptor (the image states there is nothing at that index to bound); `unavailable` for a presence-unknown or `partial` one |
 | `containing_section_index` | the decoded section whose mapped interval holds `value`, or `null` |
 | `capture_state` | how much of `[actual_base + value, + size)` the dump wrote, or `null` |
 
 Index 4 (Security) is the exception §2.5 fixes: its `value` is a file
-offset, not an RVA. `directory_image_bound` for index 4 is `unavailable`
-with the file-offset reason, its `containing_section_index` is `null`,
-and it carries no capture claim — the certificate bytes are not part of
+offset, not an RVA. `directory_image_bound` for index 4 is
+`not_applicable` with the file-offset reason — an image-bound check over
+a value that is not an image address has no subject, and the dump is
+missing nothing — its `containing_section_index` is `null`, and it
+carries no capture claim, because the certificate bytes are not part of
 the image mapping.
 
 #### 8.8.6 Entry-point memory context
