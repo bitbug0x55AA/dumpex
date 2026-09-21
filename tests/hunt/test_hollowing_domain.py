@@ -771,6 +771,18 @@ def test_collect_signals_reports_mem_image_as_clean_not_as_an_anchor():
     assert mem_private == ()
 
 
+def test_collect_signals_still_fires_the_anchor_for_mem_mapped():
+    # A MEM_MAPPED image base is just as real an anomaly as MEM_PRIVATE
+    # (something WAS mapped, just not through the normal PE loader) and
+    # must still produce evidence -- the domain correction is that every
+    # consumer renders the OBSERVED type rather than asserting MEM_PRIVATE
+    # for it (see MemPrivateEvidence's own docstring).
+    mem_private, _, _, _ = memory_scan.collect_signals(
+        _context(region=_region(type="MEM_MAPPED")), (), modules_available=True)
+    assert len(mem_private) == 1
+    assert mem_private[0].region.type == "MEM_MAPPED"
+
+
 def test_collect_signals_does_not_fire_the_name_check_without_a_module_list():
     """`addr_to_module()` returns None both when the stream is missing and
     when the base genuinely isn't listed -- only `modules_available` can

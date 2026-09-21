@@ -7,6 +7,131 @@ For the current JSON contract, see
 [Output and Evidence Schema](docs/user/OUTPUT_SCHEMA.md). For compatibility history,
 see [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md).
 
+## 3.9.1 — Unreleased
+
+### Fixed
+
+- Module absence no longer implies private memory, across `--report`,
+  `--extract`, the `hollowing` hunter, and YARA's `PE_In_Private_Memory` rule.
+- `--report`'s injected-PE detection required only a bare `MZ` prefix and a
+  confirmed-unregistered address, which reported a structurally valid but
+  read-only, non-executable mapping (a resource-only PE mapped via
+  `MapViewOfFile`) as an injected PE. It now requires a structurally valid PE
+  header (full DOS/COFF/optional header and section table, not just an `MZ`
+  prefix) in a region that is either `MEM_PRIVATE` or carries live
+  executable protection — an MZ prefix that fails structural validation, or
+  a valid but benign mapped view, no longer produces a false `injected_pe`
+  finding, and no longer disappears silently from the console when it
+  doesn't. A region read to completion whose header still cannot be fully
+  parsed (its own declared offset falls past the region's own extent) is
+  now visible as a genuine coverage gap rather than a silent `complete`.
+- `--extract` applies the same correction: a bare `MZ` prefix no longer
+  warns "this looks like an injected PE" on its own. The stronger claim
+  now requires the same structurally-valid-header-in-confirmed-unregistered-
+  private-or-executable-memory bar `--report` uses, and the weaker claim
+  names the specific reason (module-backed, no covering MemoryInfo region,
+  structurally invalid, a capture-length gap, or a confirmed non-private/
+  non-executable mapping) instead of listing every possible cause at once.
+  `ModuleListStream` being absent now lowers `coverage.status` (and can move
+  the exit code from 0 to 3) instead of silently degrading the claim while
+  still reporting `complete`; `MemoryInfoListStream` does the same, but only
+  when module ownership does not already resolve the address (a known
+  module already settles the question regardless of memory type, so its
+  extraction is unaffected by `MemoryInfoListStream` being absent). A
+  present `MemoryInfoListStream` that simply does not cover the extracted
+  address stays diagnostic-only and does not move `coverage.status` or the
+  exit code, matching `--report`'s own long-standing `REPORT_REGION_NOT_FOUND`
+  precedent for the identical "no committed region found" condition.
+- `--report`'s `anchor_pe_context.classification` no longer collapses every
+  "no module owns this" anchor into `private`. It now distinguishes a
+  confirmed `MEM_PRIVATE` region (`private`), a confirmed `MEM_MAPPED`
+  region (`mapped`), a confirmed `MEM_IMAGE` region a module list confirms
+  is unregistered (`unregistered_image` — a manually mapped or stomped
+  module), a confirmed `MEM_IMAGE` region with no module list available to
+  check registration at all (`image_registration_unavailable` — a different
+  gap from confirmed-unregistered), and a region whose own type could not be
+  confirmed at all (`region_type_unavailable` — never asserted as `mapped`).
+- The `hollowing` hunter's structural-correlation text no longer asserts
+  `MEM_PRIVATE` for an image base that is actually `MEM_MAPPED`. The check
+  still fires for any non-`MEM_IMAGE` image base (a `MEM_MAPPED` image base
+  is just as real an anomaly), but every rendered fact, inference, and
+  verdict line now names the region's own observed type.
+- YARA's `PE_In_Private_Memory` rule (`--hunt yara`) no longer confirms a
+  detection from module-list absence alone. It now requires a confirmed
+  `MEM_PRIVATE` region exactly — the rule's own name makes that literal
+  promise — and reports `context_unverified` otherwise (still recorded, no
+  longer scored). The broader `private_or_unbacked`-scoped rules
+  (`Shellcode_Bootstrap_x64` and others) are unaffected: they keep their own,
+  deliberately wider "not backed by a known module" bar.
+- `--report-string`'s `summary.hits_private` counted every hit not attributed
+  to a resolved image module — including `MEM_MAPPED`, `MEM_IMAGE`, and
+  unresolvable-type hits — which read as a memory-type claim it never was.
+  The new `hits_mapped`/`hits_unregistered_image`/
+  `hits_image_registration_unavailable`/`hits_region_type_unavailable`
+  counters break that bucket down by the covering region's own observed
+  type, so a summary-only consumer no longer has to read every card to tell
+  a genuinely private hit from a mapped, unregistered-image, or unresolved
+  one; every hit still gets the same card it always did.
+- Within that same summary breakdown, an unresolvable region type (`Type`
+  parsed as `None`, which the minidump dependency can leave on an
+  unrecognized value) was silently counted toward confirmed `MEM_PRIVATE`
+  because it matched neither `MEM_MAPPED` nor `MEM_IMAGE`. It now has its own
+  `hits_region_type_unavailable` counter, so `hits_private` minus every
+  breakdown field is always genuinely confirmed `MEM_PRIVATE`.
+- `hits_unregistered_image` counted a `MEM_IMAGE` hit whenever no module
+  covered it — including when `ModuleListStream` was entirely absent, which
+  is "never checked", not "confirmed unregistered". It now requires a
+  present module list that genuinely does not cover the address; an absent
+  module list counts toward the new, explicitly weaker
+  `hits_image_registration_unavailable` instead, matching the distinction
+  `anchor_pe_context.classification` already draws between
+  `unregistered_image` and `image_registration_unavailable`.
+- `--extract`'s structural-PE-validation gap (`pe_header_state ==
+  "short_read"`) reported `coverage.status: complete`, even though the
+  identical gap already made `--report` report `partial`. It now reports
+  `partial` too, via the new `EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE`
+  limitation, matching `--report`'s own `REPORT_PE_HEADER_VALIDATION_INCOMPLETE`.
+- `--extract` required both `ModuleListStream` and `MemoryInfoListStream`
+  whenever an MZ header was detected, even when a known module already
+  confirmed the address was not an unregistered injected PE — penalizing an
+  already-resolved extraction for evidence its conclusion never depended on.
+  `MemoryInfoListStream` is now required only when module ownership does not
+  already settle the question.
+- `--report`'s `REPORT_PE_HEADER_VALIDATION_INCOMPLETE` and `--extract`'s new
+  `EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE` no longer assert the target
+  region was "read in full" — that claim was false whenever the underlying
+  raw read was ALSO short (a real case: `REGION_READ_TRUNCATED` and this
+  limitation can fire together, and neither's fixed text may contradict the
+  other by naming a specific cause).
+- A `ModuleListStream` that is present but parses to zero modules — a
+  CHECKED negative — no longer reports the same `registration: "unavailable"`
+  / `anchor_pe_context.classification: "image_registration_unavailable"` an
+  entirely absent stream reports. It now reports the confirmed
+  `"unregistered"` / `"unregistered_image"` answer, matching a non-empty
+  module list that simply does not cover the address.
+
+### Changed
+
+- Published output schema v2.20. `anchor_pe_context.classification` widens
+  from two to five values for the "no module owns this" case (see above).
+  `reportRegionInfo` gains `pe_header_state` (`ok`/`pe_invalid`/`short_read`),
+  bidirectionally enforced against `has_injected_pe` in both Python and the
+  schema. `extractRecord` gains the same `pe_header_state`. `hollowingDetails`
+  gains `region_type`, the image-base region's own observed MemoryInfo type.
+  `reportSummary` gains `hits_mapped`/`hits_unregistered_image`/
+  `hits_image_registration_unavailable`/`hits_region_type_unavailable` (see
+  above).
+  See [Output Schema Migration](docs/user/OUTPUT_MIGRATION.md) for the
+  field-level summary. Earlier schemas stay frozen, and documents produced
+  by earlier releases keep validating against their own version.
+  `coverage.status` and the exit code DO move for a real, narrow set of
+  documents — a `--report` card or `--extract` run whose injected-PE
+  determination depended on evidence the dump could not supply now reports
+  `partial`/3 where it previously reported `complete`/0 (see [Output Schema
+  Migration](docs/user/OUTPUT_MIGRATION.md)'s v2.20 row for the exact
+  triggers). `verdict`/`findings`/score move only in the direction this
+  release corrects: no result is ever newly promoted toward malicious.
+
 ## 3.9.0 — 2026-09-18
 
 ### Added

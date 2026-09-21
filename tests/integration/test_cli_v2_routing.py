@@ -193,6 +193,13 @@ def test_extract_json_produces_v2_shaped_document_with_artifact(monkeypatch, tmp
     try:
         mf = FakeMF()
         mf.filename = dump_path
+        # A module resolves the extracted address so the MZ-detected
+        # injected-PE evidence dependency (issue #216) does not itself
+        # become a coverage gap this test was never trying to explore --
+        # see test_extract_cmd.py's own missing-stream/no-covering-region
+        # scenarios for that.
+        mf.modules = FakeStream([Module(0x1000, 0x1000, r"C:\legit.dll")], "modules")
+        mf.memory_info = FakeStream([], "infos")
         import dumpex.commands.extract as extract_mod
         from tests.fixtures.fakes import mem_reader
         monkeypatch.setattr(extract_mod, "read_region",
@@ -286,6 +293,56 @@ def test_report_json_produces_v2_shaped_document_with_triage_card(monkeypatch, t
         assert records[0]["findings"] == ["rwx_private"]
         assert doc["result"]["summary"]["mode"] == "addr"
         assert "hunt" not in doc
+    finally:
+        os.remove(dump_path)
+
+
+def test_report_pe_header_validation_incomplete_exits_partial(monkeypatch, tmp_path, capsys):
+    # issue #216's domain correction: a triage card region read in FULL
+    # (no REGION_READ_TRUNCATED) whose header's own declared e_lfanew
+    # still falls past the region's own extent leaves has_injected_pe
+    # undetermined (pe_header_state == "short_read") -- this must surface
+    # as exit code 3 (EXIT_PARTIAL), not the 0 a fully-settled check gets,
+    # pinning the exit-code effect documented in OUTPUT_MIGRATION.md's
+    # v2.20 row rather than leaving it incidental to a lower-level test.
+    dump_path = _make_dump_file()
+    try:
+        import struct
+        data = bytearray(4096)
+        data[0:2] = b"MZ"
+        struct.pack_into("<I", data, 0x3C, 0x1000)
+
+        mf = FakeMF()
+        mf.filename = dump_path
+        mf.modules = FakeStream([], "modules")
+        mf.thread_info = FakeStream([], "infos")
+        mf.memory_info = FakeStream(
+            [Region(0x6100, 0x6100, 4096, "MEM_COMMIT", "PAGE_READONLY", "MEM_PRIVATE")], "infos")
+        import dumpex.commands.report as report_mod
+        import dumpex.core.memory as core_memory_mod
+        from tests.fixtures.fakes import mem_reader
+        reader = mem_reader({0x6100: bytes(data)})
+        monkeypatch.setattr(report_mod, "read_region", reader)
+        monkeypatch.setattr(core_memory_mod, "read_region", reader)
+        monkeypatch.setattr(cli, "open_dump", lambda path: mf)
+
+        out_json = str(tmp_path / "out.json")
+        monkeypatch.setattr(sys, "argv",
+                             ["dumpex", dump_path, "--report", "--report-addr", "0x6100",
+                              "--json", out_json])
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+        assert exc.value.code == 3
+        assert "structural PE parse" in capsys.readouterr().out
+
+        doc = json.loads(open(out_json, encoding="utf-8").read())
+        assert doc["result"]["coverage"]["status"] == "partial"
+        codes = {lim["code"] for lim in doc["result"]["coverage"]["limitations"]}
+        assert "REPORT_PE_HEADER_VALIDATION_INCOMPLETE" in codes
+        record = doc["result"]["data"]["records"][0]
+        assert record["region"]["pe_header_state"] == "short_read"
+        assert record["region"]["has_injected_pe"] is None
+        assert record["verdict"] == "CLEAN"   # never inferred malicious from an unknown
     finally:
         os.remove(dump_path)
 

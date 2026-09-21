@@ -174,6 +174,95 @@ def test_anchor_pe_context_classifies_a_private_region_anchor():
     assert context.registration == "unregistered"
 
 
+def test_anchor_pe_context_classifies_an_unregistered_mapped_region_as_mapped_not_private():
+    # A resource-only PE (or any file) mapped via MapViewOfFile has no
+    # module-list entry either, but MEM_MAPPED is not MEM_PRIVATE -- module
+    # absence alone must not assert "private" when the region's own type
+    # says otherwise.
+    mf = FakeMF()
+    mf.modules = FakeStream([Module(PE_IMAGE_BASE, 0x4000, "app.exe")], "modules")
+    mf.memory_info = FakeStream([Region(0x9100000, 0x9100000, 0x1000, "MEM_COMMIT",
+                                        "PAGE_READONLY", "MEM_MAPPED")], "infos")
+    mf._dumpex_stream_failures = {}
+    context = collect_anchor_pe_context(
+        _cache(mf), anchor_address=0x9100800,
+        region_evidence=RegionEvidence.from_dump(mf))
+    assert context.classification == "mapped"
+    assert context.registration == "unregistered"
+    assert context.region_type == "MEM_MAPPED"
+
+
+def test_anchor_pe_context_classifies_an_unregistered_image_region_as_unregistered_image():
+    # A manually mapped or stomped module: MEM_IMAGE, but no module-list
+    # entry -- the most suspicious of the four "no module owns this"
+    # states, and must not be folded into the benign-sounding "mapped".
+    mf = FakeMF()
+    mf.modules = FakeStream([Module(PE_IMAGE_BASE, 0x4000, "app.exe")], "modules")
+    mf.memory_info = FakeStream([Region(0x9200000, 0x9200000, 0x1000, "MEM_COMMIT",
+                                        "PAGE_EXECUTE_READWRITE", "MEM_IMAGE")], "infos")
+    mf._dumpex_stream_failures = {}
+    context = collect_anchor_pe_context(
+        _cache(mf), anchor_address=0x9200800,
+        region_evidence=RegionEvidence.from_dump(mf))
+    assert context.classification == "unregistered_image"
+    assert context.registration == "unregistered"
+    assert context.region_type == "MEM_IMAGE"
+
+
+def test_anchor_pe_context_does_not_confirm_unregistered_image_without_a_module_list():
+    # Same MEM_IMAGE region, but ModuleListStream itself is absent this
+    # time (no mf.modules at all) -- "no module owns this" here means
+    # "never checked", not "confirmed absent". Asserting
+    # unregistered_image would claim a module list was consulted and came
+    # back negative when none was ever consulted at all.
+    mf = FakeMF()
+    mf.memory_info = FakeStream([Region(0x9210000, 0x9210000, 0x1000, "MEM_COMMIT",
+                                        "PAGE_EXECUTE_READWRITE", "MEM_IMAGE")], "infos")
+    mf._dumpex_stream_failures = {}
+    context = collect_anchor_pe_context(
+        _cache(mf), anchor_address=0x9210800,
+        region_evidence=RegionEvidence.from_dump(mf))
+    assert context.classification == "image_registration_unavailable"
+    assert context.registration == "unavailable"
+    assert context.region_type == "MEM_IMAGE"
+
+
+def test_anchor_pe_context_present_but_empty_module_list_is_confirmed_unregistered():
+    # ModuleListStream present, parsed, zero modules in it -- a CHECKED
+    # negative (no module owns this address), not "never checked". Must
+    # get the SAME confirmed answer as the non-empty-but-non-covering
+    # module list above, never the weaker image_registration_unavailable
+    # an actually-absent stream produces -- an empty list and a missing
+    # stream are not the same fact.
+    mf = FakeMF()
+    mf.modules = FakeStream([], "modules")
+    mf.memory_info = FakeStream([Region(0x9220000, 0x9220000, 0x1000, "MEM_COMMIT",
+                                        "PAGE_EXECUTE_READWRITE", "MEM_IMAGE")], "infos")
+    mf._dumpex_stream_failures = {}
+    context = collect_anchor_pe_context(
+        _cache(mf), anchor_address=0x9220800,
+        region_evidence=RegionEvidence.from_dump(mf))
+    assert context.classification == "unregistered_image"
+    assert context.registration == "unregistered"
+    assert context.region_type == "MEM_IMAGE"
+
+
+def test_classify_anchor_never_asserts_mapped_for_an_unconfirmed_region_type():
+    # `region_type` is None when the parser object carried no such field at
+    # all, and a raw numeric string when it carried an enum value prot_str()
+    # has no name for -- both are genuine gaps, never license to assert the
+    # benign-sounding "mapped" for a type that was never actually observed.
+    from dumpex.commands.report_enrichment import _classify_anchor
+    from dumpex.core.va_location import VaLocation
+
+    for region_type in (None, "131072"):
+        loc = VaLocation(va=0x9300800, registration="unregistered",
+                         region_base=0x9300000, region_type=region_type)
+        classification, needed_profile = _classify_anchor(loc, profile=None)
+        assert classification == "region_type_unavailable"
+        assert needed_profile is False
+
+
 def test_anchor_pe_context_is_missing_when_nothing_places_the_anchor():
     mf = FakeMF()
     mf.modules = FakeStream([], "modules")

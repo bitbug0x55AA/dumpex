@@ -41,10 +41,14 @@ def injection_record(rwx=(), hidden_pe_validated=(), hidden_pe_unvalidated=(),
 
 def hollowing_record(image_base=None, mem_private_at_base=None, mz_header_present=None,
                       is_rwx_at_base=None, name_mismatch=None, status="DETECTED", lead_count=1):
+    # region_type is required exactly when mem_private_at_base is -- both
+    # describe the same image-base region, found or not.
+    region_type = None if mem_private_at_base is None else "MEM_PRIVATE"
     details = HollowingDetails(
         image_base=image_base, mem_private_at_base=mem_private_at_base,
         mz_header_present=mz_header_present, is_rwx_at_base=is_rwx_at_base,
-        peb_image_path=None, module_name=None, name_mismatch=name_mismatch)
+        peb_image_path=None, module_name=None, name_mismatch=name_mismatch,
+        region_type=region_type)
     detected = status == "DETECTED"
     return HunterRecord(
         hunter="hollowing", status=status, score=1 if detected else 0, max_score=1,

@@ -124,7 +124,7 @@ def _check_hollowing(exit_code, doc, body):
     # `scripts/update_hunt_cli_goldens.py` run made WHILE the duplication
     # is back fails before it can write a fixture baking it in.
     for title in ("Correlated structural hollowing indicators",
-                  "MEM_PRIVATE memory at the image base",
+                  "Non-MEM_IMAGE memory at the image base",
                   "RWX protection at the image base"):
         assert body.count(title) == 1, title
     # The raw image-base facts belong to the bounded --verbose evidence

@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
 
+from dumpex.core.pe_utils import has_executable_protection, is_private_memory_type
 from dumpex.output.coverage import CoverageReport
 
 
@@ -243,6 +244,12 @@ class ExtractRecord:
     bytes_read:              int         # len(data) -- equal to requested_size
                                           # whenever the read didn't come up short
     mz_header_detected:      bool        # data[:2] == b"MZ"
+    pe_header_state:  "str | None" = None   # "ok"/"pe_invalid"/"short_read" (v2.20, same
+                                             # vocabulary as ReportRegionInfo.pe_header_state);
+                                             # set exactly when a structural PE parse was
+                                             # attempted -- mz_header_detected True AND the
+                                             # extracted address is confirmed unregistered with
+                                             # a covering MemoryInfo region -- None otherwise
 
     def __post_init__(self):
         # Both non-null: collect_extract() only ever constructs this record
@@ -261,6 +268,16 @@ class ExtractRecord:
             raise ValueError(
                 f"ExtractRecord.bytes_read ({self.bytes_read}) must not exceed "
                 f"requested_size ({self.requested_size}) -- a read can come up short, never long")
+        if self.pe_header_state is not None:
+            if not self.mz_header_detected:
+                raise ValueError(
+                    "ExtractRecord.pe_header_state must be None when mz_header_detected is "
+                    "False -- no structural PE parse is ever attempted without a confirmed MZ "
+                    "prefix")
+            if self.pe_header_state not in _PE_HEADER_STATES:
+                raise ValueError(
+                    f"ExtractRecord.pe_header_state must be None or one of {_PE_HEADER_STATES}, "
+                    f"got {self.pe_header_state!r}")
 
     def to_dict(self) -> dict:
         return {
@@ -269,6 +286,7 @@ class ExtractRecord:
             "auto_sized":         self.auto_sized,
             "bytes_read":         self.bytes_read,
             "mz_header_detected": self.mz_header_detected,
+            "pe_header_state":    self.pe_header_state,
         }
 
 
@@ -780,6 +798,13 @@ class ReportThreadInfo:
         }
 
 
+# The same vocabulary dumpex.commands.process._classify_main_image_state
+# uses for the analogous main-image question -- "read_failed" has no
+# counterpart here because ReportRegionInfo already represents that case
+# as mz_header_detected=None, one level up.
+_PE_HEADER_STATES = ("ok", "pe_invalid", "short_read")
+
+
 @dataclass
 class ReportRegionInfo:
     """Resolved memory-region evidence for a triage-card target.
@@ -788,10 +813,28 @@ class ReportRegionInfo:
     module_context distinguishes resolved, confirmed unregistered, and unavailable
     module evidence. mz_header_detected is None when the header read failed.
 
-    has_injected_pe is true only for a confirmed MZ header in a confirmed
-    unregistered region; it is None whenever required header or module evidence
-    is unavailable. This prevents missing module data from becoming a false
-    positive and failed reads from becoming a false negative.
+    has_injected_pe is true only for a STRUCTURALLY VALID PE header (not a bare
+    'MZ' prefix) in a confirmed-unregistered region that is also MEM_PRIVATE or
+    executable; it is False for a confirmed-unregistered region carrying a valid
+    but read-only, non-executable, non-private mapping (a resource-only PE
+    legitimately has no module-list entry) and for a header that fails strict
+    validation outright; it is None whenever required header or module evidence
+    is unavailable, or a partial capture leaves structural validity itself
+    undetermined. Registration (module_context) and memory type (type/protect)
+    are independent facts here -- an unregistered address is never, by itself,
+    private memory.
+
+    pe_header_state (v2.20) is the structural-validity fact has_injected_pe's
+    own tri-state derivation rests on, made independently inspectable rather
+    than staying implicit in a producer's control flow: "ok" / "pe_invalid" /
+    "short_read" (the same vocabulary dumpex.commands.process._classify_main_
+    image_state uses), set exactly when mz_header_detected is True AND
+    module_context is confirmed unregistered -- the only case a structural PE
+    parse is ever attempted here -- and None otherwise. __post_init__ enforces
+    it bidirectionally against has_injected_pe: "ok" forces has_injected_pe to
+    equal (MEM_PRIVATE or executable), never leaving a dropped finding
+    (has_injected_pe=False for a validated private/executable region)
+    representable, and "short_read" forces has_injected_pe to None.
     """
     base_address:     str
     size:             int
@@ -811,6 +854,9 @@ class ReportRegionInfo:
                                     # suspicious above, kept as a separate field (not
                                     # reused) since ReportRegionInfo's own is_rwx_private
                                     # is already a distinct, MECE-dimension-specific bool.
+    pe_header_state:       "str | None" = None   # "ok" / "pe_invalid" / "short_read", or None
+                                                  # when no structural PE parse was attempted --
+                                                  # see class docstring
 
     def __post_init__(self):
         _require_hex_address(self.base_address, "ReportRegionInfo.base_address")
@@ -844,10 +890,6 @@ class ReportRegionInfo:
                 "ReportRegionInfo.has_injected_pe must be False when mz_header_detected is "
                 "False -- no MZ header means no injected-PE finding is possible")
         if self.mz_header_detected is True:
-            if self.module_context == MODULE_CONTEXT_UNREGISTERED and self.has_injected_pe is not True:
-                raise ValueError(
-                    "ReportRegionInfo.has_injected_pe must be True when an MZ header was found "
-                    "in a confirmed-unregistered region")
             if self.module_context == MODULE_CONTEXT_RESOLVED and self.has_injected_pe is not False:
                 raise ValueError(
                     "ReportRegionInfo.has_injected_pe must be False when an MZ header was found "
@@ -858,6 +900,51 @@ class ReportRegionInfo:
                     "ReportRegionInfo.has_injected_pe must be None when an MZ header was found "
                     "but module_context is unavailable -- cannot confirm whether it is actually "
                     "unregistered")
+            if self.module_context == MODULE_CONTEXT_UNREGISTERED:
+                # A structural PE parse always runs here -- pe_header_state
+                # is the record of what it found, and has_injected_pe is
+                # enforced BIDIRECTIONALLY against it: a producer bug that
+                # dropped a genuine finding (has_injected_pe=False for a
+                # validated private/executable region) is exactly as
+                # invalid as one that invented one, never just the latter.
+                if self.pe_header_state not in _PE_HEADER_STATES:
+                    raise ValueError(
+                        f"ReportRegionInfo.pe_header_state must be one of {_PE_HEADER_STATES} "
+                        "when an MZ header was found in a confirmed-unregistered region -- a "
+                        f"structural PE parse always runs there, got {self.pe_header_state!r}")
+                if self.pe_header_state == "short_read":
+                    if self.has_injected_pe is not None:
+                        raise ValueError(
+                            "ReportRegionInfo.has_injected_pe must be None when "
+                            "pe_header_state is 'short_read' -- a capture-length gap leaves "
+                            "structural validity genuinely undetermined")
+                else:
+                    # "ok" or "pe_invalid": structural validity IS settled,
+                    # so has_injected_pe must exactly equal "ok" AND
+                    # (MEM_PRIVATE or executable) -- the same predicates
+                    # the producer (_scan_content_range) uses, so this gate
+                    # can never be looser than what it enforces in either
+                    # direction.
+                    expected = (self.pe_header_state == "ok"
+                               and (is_private_memory_type(self.type)
+                                    or has_executable_protection(self.protect)))
+                    if self.has_injected_pe is not expected:
+                        raise ValueError(
+                            "ReportRegionInfo.has_injected_pe must be True exactly when "
+                            "pe_header_state is 'ok' and the region is MEM_PRIVATE or "
+                            f"executable -- got has_injected_pe={self.has_injected_pe!r} with "
+                            f"pe_header_state={self.pe_header_state!r}, type={self.type!r}, "
+                            f"protect={self.protect!r}")
+            elif self.pe_header_state is not None:
+                raise ValueError(
+                    "ReportRegionInfo.pe_header_state must be None when module_context is not "
+                    "confirmed unregistered -- no structural PE parse is ever attempted "
+                    "otherwise")
+        elif self.pe_header_state is not None:
+            raise ValueError(
+                "ReportRegionInfo.pe_header_state must be None when mz_header_detected is not "
+                "True -- no structural PE parse is ever attempted without a confirmed MZ "
+                "prefix")
 
     def to_dict(self) -> dict:
         return {
@@ -872,6 +959,7 @@ class ReportRegionInfo:
             "mz_header_detected":    self.mz_header_detected,
             "has_injected_pe":       self.has_injected_pe,
             "protection_suspicious": self.protection_suspicious,
+            "pe_header_state":       self.pe_header_state,
         }
 
 
@@ -2096,7 +2184,26 @@ ANCHOR_PE_CLASSIFICATIONS = (
     "unmapped",       # inside the image bound but no section covers the RVA
     "outside_image",  # the anchor is registered to a module but past SizeOfImage
     "module",         # inside a loaded module whose PE profile was not available to place it
-    "private",        # the anchor is in a committed region owned by no module
+    # The next five are all "no module owns this address", split by the
+    # region's own CONFIRMED type -- and, for MEM_IMAGE specifically, by
+    # whether registration itself was even checkable -- rather than
+    # collapsed into one "private" bucket (module absence alone never
+    # implies private memory) -- see
+    # dumpex.commands.report_enrichment._classify_anchor's own docstring
+    # for exactly which (region_type, registration) pair produces which.
+    "private",                # confirmed MEM_PRIVATE
+    "mapped",                 # confirmed MEM_MAPPED (e.g. a resource-only file view) --
+                              # added in schema v2.20
+    "unregistered_image",     # confirmed MEM_IMAGE AND confirmed unregistered (a module list
+                              # was available and genuinely does not cover this address) -- a
+                              # manually mapped or stomped module -- added in schema v2.20
+    "image_registration_unavailable",  # confirmed MEM_IMAGE, but no module list was available
+                                        # to check registration at all -- a DIFFERENT gap from
+                                        # "confirmed unregistered": the region's type is known,
+                                        # its registration status is not -- added in v2.20
+    "region_type_unavailable",  # the region's own type is None or an unrecognized/numeric
+                                # value -- a genuine gap, never asserted as "mapped" --
+                                # added in schema v2.20
     "unresolved",     # no module and no region place the anchor
 )
 
@@ -2109,9 +2216,14 @@ class ReportAnchorPeContext:
 
     ``classification`` says what kind of image location the anchor is --
     headers, code, data, import/IAT, relocation, unmapped, or, when no
-    module owns it, private or unresolved. ``protection_matches_declared``
-    compares the section's own R/W/X bits with the live region protection;
-    a mismatch is an observation an analyst follows up, never a verdict."""
+    module owns it, private, mapped, unregistered_image,
+    image_registration_unavailable, region_type_unavailable, or
+    unresolved -- see ``ANCHOR_PE_CLASSIFICATIONS`` for why those five "no
+    module owns this" states are kept distinct rather than collapsing to
+    one "private" bucket.
+    ``protection_matches_declared`` compares the section's own R/W/X bits
+    with the live region protection; a mismatch is an observation an
+    analyst follows up, never a verdict."""
     section:                     EnrichmentSection
     anchor_address:              str
     classification:              str
@@ -3539,6 +3651,13 @@ class HollowingDetails:
 
     ``image_base`` is ``None`` when the PEB is unavailable. Each tri-state
     check is ``None`` when it could not run, not a clean ``False`` result.
+
+    ``mem_private_at_base`` is true for ANY non-MEM_IMAGE type at the image
+    base, not just MEM_PRIVATE specifically (frozen wire name kept for
+    compatibility -- see docs/user/OUTPUT_MIGRATION.md's v2.20 entry):
+    ``region_type`` (added in v2.20) is where a consumer reads WHICH type it
+    actually was (``MEM_PRIVATE``, ``MEM_MAPPED``, ...), so a JSON reader is
+    never left inferring "private" from this boolean alone.
     """
     image_base:           "str | None"
     mem_private_at_base:  "bool | None"   # None if the image-base region wasn't found at all
@@ -3547,6 +3666,9 @@ class HollowingDetails:
     peb_image_path:       "str | None"
     module_name:          "str | None"    # None if no module was found at image_base
     name_mismatch:        "bool | None"   # None if module list itself was unavailable
+    region_type:          "str | None" = None   # the image-base region's own observed
+                                                 # MemoryInfo Type; None iff mem_private_at_base
+                                                 # is None (the region wasn't found at all)
 
     def __post_init__(self):
         _require_optional_hex_address(self.image_base, "HollowingDetails.image_base")
@@ -3556,6 +3678,11 @@ class HollowingDetails:
                 _require_bool(v, f"HollowingDetails.{f_name}")
         _require_optional_diff_str(self.peb_image_path, "HollowingDetails.peb_image_path")
         _require_optional_diff_str(self.module_name, "HollowingDetails.module_name")
+        _require_optional_diff_str(self.region_type, "HollowingDetails.region_type")
+        if (self.region_type is None) != (self.mem_private_at_base is None):
+            raise ValueError(
+                "HollowingDetails.region_type must be set exactly when mem_private_at_base "
+                "is -- both describe the same image-base region, found or not")
 
     def to_dict(self) -> dict:
         return {
@@ -3566,6 +3693,7 @@ class HollowingDetails:
             "peb_image_path":      self.peb_image_path,
             "module_name":         self.module_name,
             "name_mismatch":       self.name_mismatch,
+            "region_type":         self.region_type,
         }
 
 

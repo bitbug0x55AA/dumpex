@@ -106,12 +106,29 @@ TRUE_FREEZE = [
         "[*] Reading 0x10 bytes from 0x1000 ...\n",
     ),
     (
+        # issue #216's domain correction: a bare 'MZ' prefix, with no
+        # module/memory-type context available in this scenario (_run's
+        # own FakeMF() carries neither ModuleListStream nor
+        # MemoryInfoListStream), is no longer asserted as "this looks
+        # like an injected PE" -- see tests/unit/test_extract_cmd.py's
+        # own confirmed-vs-not-confirmed scenarios for when the stronger
+        # EXTRACT_INJECTED_PE_DETECTED claim IS warranted. Both missing
+        # streams are exactly the evidence this claim depends on, so
+        # coverage.status is now "partial" (exit code 3, not 0) rather
+        # than silently degrading the diagnostic while still reporting
+        # "complete".
         "mz_header_detected",
         "0x3000", "0x40", "out.bin",
         b"MZ" + b"\x90" * 62,
-        0,
+        3,
         "[*] Reading 0x40 bytes from 0x3000 ...\n"
-        "[!] MZ header detected — this looks like an injected PE!\n",
+        "  [~] ModuleListStream not present; cannot confirm whether the extracted address is "
+        "unregistered, so an MZ header there could not be confirmed as an injected PE\n"
+        "  [~] MemoryInfoListStream not present; cannot confirm the extracted address's memory "
+        "type or protection, so an MZ header there could not be confirmed as an injected PE\n"
+        "[!] MZ header detected in the extracted bytes — not independently confirmed as an "
+        "injected PE (ModuleListStream absent -- module ownership could not be checked; "
+        "MemoryInfoListStream absent -- memory type/protection could not be checked)\n",
     ),
 ]
 
@@ -139,7 +156,7 @@ def test_extract_compat_freeze(monkeypatch, tmp_path, capsys, name, extract_addr
 
     assert doc["meta"]["schema_version"] == SCHEMA_VERSION
     assert doc["result"]["kind"] == "extract"
-    assert doc["result"]["coverage"]["status"] == "complete"
+    assert doc["result"]["coverage"]["status"] == ("complete" if exit_code == 0 else "partial")
     rec = doc["result"]["data"]["records"][0]
     assert rec["requested_size"] == size
     assert rec["bytes_read"] == size

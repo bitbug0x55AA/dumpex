@@ -78,6 +78,28 @@ def test_no_module_list_leaves_registration_unavailable():
     assert loc.in_region
 
 
+def test_present_but_empty_module_list_is_confirmed_unregistered_not_unavailable():
+    # ModuleListStream present, parsed, zero modules in it -- a CHECKED
+    # negative, not "never checked". A caller that knows the stream itself
+    # is present (modules_available=True) must get REGISTRATION_UNREGISTERED
+    # here, the same answer an empty-but-truthy-unrelated-module case would
+    # get, never the weaker UNAVAILABLE an absent stream produces.
+    loc = resolve_va_location(0x2000800, modules=(), modules_available=True,
+                              region_views=[_region(0x2000000, 0x4000)])
+    assert loc.registration == REGISTRATION_UNREGISTERED
+    assert loc.in_region
+
+
+def test_modules_available_omitted_falls_back_to_module_list_truthiness():
+    # Without an explicit modules_available, an empty `modules` list cannot
+    # be told apart from an absent stream -- the fallback keeps the OLD,
+    # weaker UNAVAILABLE answer for callers that have not been updated to
+    # pass the real fact, rather than silently upgrading their confidence.
+    loc = resolve_va_location(0x2000800, modules=(),
+                              region_views=[_region(0x2000000, 0x4000)])
+    assert loc.registration == REGISTRATION_UNAVAILABLE
+
+
 def test_address_outside_every_region_and_module():
     loc = resolve_va_location(0xdead0000, modules=[Module(IMAGE_BASE, 0x1000, "a")],
                               region_views=[_region(0x2000000, 0x1000)])

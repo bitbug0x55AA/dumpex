@@ -255,7 +255,7 @@ _RECORDS = {
         base_address=_ADDR, size=0x1000, protect="PAGE_EXECUTE_READWRITE",
         type="MEM_PRIVATE", module_owner=None, file_offset=0x400, is_rwx_private=True,
         module_context=MODULE_CONTEXT_UNREGISTERED, mz_header_detected=True,
-        has_injected_pe=True, protection_suspicious=True),
+        has_injected_pe=True, protection_suspicious=True, pe_header_state="ok"),
     "reportIocString": lambda: ReportIocString(
         offset=16, address=_ADDR, encoding="ASCII", text="http://c2.example",
         is_network_pattern=True, context_hex="4d5a90000300", context_base_address=_ADDR,

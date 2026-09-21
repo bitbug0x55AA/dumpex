@@ -54,15 +54,22 @@ def test_classify_mem_private_is_confirmed_detection():
     assert ctx_value == "private"
 
 
-def test_classify_unregistered_is_confirmed_detection():
+def test_classify_unregistered_is_context_unverified_not_confirmed():
     # ModuleList IS available (so a negative answer means something) but no
-    # module covers this address, and MemoryInfo has no region for it either.
+    # module covers this address, and MemoryInfo has no region for it
+    # either -- "no module owns this" is not the same claim as "confirmed
+    # MEM_PRIVATE" (issue #216's domain correction), so this rule -- whose
+    # own name makes the narrower "private memory" promise -- must not
+    # confirm on registration absence alone. Still recorded, just not
+    # promoted to a confirmed detection; contrast classify_scoped_hit's
+    # own, deliberately wider UNREGISTERED-admits-detection semantics
+    # (test_yara_scope.py), which this fix does not touch.
     addr = 0x4000
     modules = [Module(0x9000, 0x1000, r"C:\Windows\System32\ntdll.dll")]
     suppressed, unverified, ctx_value = context.classify_pe_in_private_memory_hit(
         addr, modules, [], modules_available=True, mem_info_available=False)
     assert suppressed is False
-    assert unverified is False
+    assert unverified is True
     assert ctx_value == "unregistered"
 
 
@@ -95,6 +102,15 @@ def test_context_unverified_reason_unknown_only():
 def test_context_unverified_reason_other_only():
     reason = context.context_unverified_reason({"other"})
     assert reason == "region type is neither MEM_IMAGE nor MEM_PRIVATE, e.g. MEM_MAPPED"
+
+
+def test_context_unverified_reason_unregistered_only():
+    # Reachable only via classify_pe_in_private_memory_hit's own narrower
+    # bar (see that function's docstring) -- classify_scoped_hit never
+    # returns unverified=True for "unregistered".
+    reason = context.context_unverified_reason({"unregistered"})
+    assert reason == ("no module owns this address, but no MemoryInfo region covers it "
+                       "either to confirm MEM_PRIVATE")
 
 
 def test_context_unverified_reason_mixed():
@@ -202,4 +218,35 @@ def test_pe_hit_in_mem_mapped_region_is_context_unverified_end_to_end():
     assert len(f["matches"]) == 1
     assert f["matches"][0]["context_unverified"] is True
     assert f["matches"][0]["memory_context"] == "other"
+    assert "PE_In_Private_Memory" not in f["rules_hit"]
+
+
+@_needs_yara
+def test_pe_hit_unregistered_with_no_memory_info_is_context_unverified_end_to_end():
+    # ModuleList IS available (a module exists, just not at this address)
+    # but MemoryInfoListStream itself is entirely absent -- "no module
+    # owns this" without any region evidence to confirm MEM_PRIVATE. Same
+    # PE-shaped bytes as the private/mapped cases above; only the context
+    # differs -- and unlike the pre-#216 behavior, this must NOT score as
+    # a confirmed PE_In_Private_Memory detection (issue #216's domain
+    # correction, narrowed specifically for this rule's own name).
+    seg_va, seg_fo = 0xa0000, 0xa000
+    data = _pe_like_data()
+    with tempfile.TemporaryDirectory() as d:
+        _write_rule(d, "pe.yar", _PE_RULE)
+        seg = Segment(seg_va, seg_fo, len(data))
+
+        class MF(FakeMF):
+            memory_segments_64 = FakeStream([seg], "memory_segments")
+            memory_info          = None
+            modules               = FakeStream(
+                [Module(0x1000, 0x1000, r"C:\Windows\System32\ntdll.dll")], "modules")
+            _reader                = FakeReader({seg_va: data})
+        f = yara_hunt._hunt_yara(MF(), rules_dir=d, verbose=False)
+
+    assert f["score"] == 0
+    assert f["status"] == "INCONCLUSIVE"
+    assert len(f["matches"]) == 1
+    assert f["matches"][0]["context_unverified"] is True
+    assert f["matches"][0]["memory_context"] == "unregistered"
     assert "PE_In_Private_Memory" not in f["rules_hit"]

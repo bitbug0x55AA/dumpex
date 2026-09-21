@@ -275,9 +275,10 @@ def test_hollowing_details_to_dict():
     d = HollowingDetails(
         image_base="0x0000000140000000", mem_private_at_base=True, mz_header_present=True,
         is_rwx_at_base=True, peb_image_path=r"C:\a.exe", module_name="a.exe",
-        name_mismatch=False).to_dict()
+        name_mismatch=False, region_type="MEM_PRIVATE").to_dict()
     assert d["image_base"] == "0x0000000140000000"
     assert d["mem_private_at_base"] is True
+    assert d["region_type"] == "MEM_PRIVATE"
 
 
 def test_hollowing_details_allows_null_image_base_when_peb_missing():

@@ -3,13 +3,19 @@ import re
 import sys
 from pathlib import Path
 from dumpex.ui.colors import BOLD, DIM, RED, GREEN, YELLOW, CYAN, console_safe
-from dumpex.core.memory import read_region, _extract_strings_from_data, RegionReadError
+from dumpex.core.memory import (
+    read_region, _extract_strings_from_data, RegionReadError, addr_to_module, get_modules,
+    get_memory_regions, _get_region_at, prot_str,
+)
+from dumpex.core.pe_utils import has_executable_protection, is_private_memory_type, parse_pe_header
 from dumpex.core.safe_io import write_output_bytes, compute_bytes_summary
 from dumpex.output.records import (
     ExtractRecord, StringRecord, Artifact, Diagnostic, SEVERITY_WARNING, hex_address,
+    MODULE_CONTEXT_RESOLVED, MODULE_CONTEXT_UNREGISTERED, MODULE_CONTEXT_UNAVAILABLE,
 )
 from dumpex.output.coverage import (
-    SourceObservation, SourceState, CoverageLimitation, LimitationCode, build_coverage_report,
+    SourceObservation, SourceState, CoverageLimitation, LimitationCode, SourceRequirement,
+    build_coverage_report, observe_source,
 )
 from dumpex.output.command_result import CommandResult
 
@@ -20,6 +26,16 @@ class OutputWriteError(RuntimeError):
     RegionReadError so cmd_extract's own try/except reports "Write
     failed", not "Read failed", for a problem that has nothing to do with
     reading the dump."""
+
+
+def _module_context_for(mod, modules_available: bool) -> str:
+    """Same rule dumpex.commands.report._module_context_for applies --
+    duplicated here (a 3-line, private helper) rather than imported, since
+    report.py itself imports from this module (build_extract_artifact) and
+    the reverse import would be circular."""
+    if mod:
+        return MODULE_CONTEXT_RESOLVED
+    return MODULE_CONTEXT_UNREGISTERED if modules_available else MODULE_CONTEXT_UNAVAILABLE
 
 
 def _read_region_or_raise(mf, addr: int, size: int) -> bytes:
@@ -77,15 +93,125 @@ def collect_extract(mf, addr: int, size: int, output: "str | None",
         # having printed their own specific message.
         raise OutputWriteError(str(exc)) from exc
 
+    # A bare 'MZ' prefix is not, by itself, evidence of an injected PE --
+    # the same domain correction dumpex.commands.report applies to
+    # has_injected_pe. Only claim "injected PE" here when module ownership
+    # is CONFIRMED absent, the header structurally validates in full (not
+    # just its first two bytes), and the containing region is MEM_PRIVATE
+    # or carries executable protection -- the same MEM_PRIVATE-or-
+    # executable-protection test
+    # dumpex.hunt.injection.memory_scan.pe_hit_is_context_scoreable and
+    # dumpex.commands.report._scan_content_range both use. Anything weaker
+    # stays the honest, bare "MZ header detected" claim under the SAME
+    # code this command has always used, never the stronger one -- but
+    # WHICH weaker reason applies is tracked and named individually,
+    # rather than one sentence listing every possible cause at once, and
+    # the two streams this classification depends on (modules,
+    # memory_info) are declared as coverage sources so their absence
+    # lowers coverage.status instead of silently degrading the claim.
+    modules_available = bool(mf.modules)
+    mem_info_available = bool(mf.memory_info)
+    pe_sources = {}
+    pe_completeness_checks = []
+    module_context = None
+    region_type = region_protect = None
+    pe_header_state = None
+    confirmed_injected = False
+    if mz_detected:
+        modules = get_modules(mf) if modules_available else []
+        pe_sources["modules"] = observe_source("modules", present=modules_available, items=modules)
+        pe_completeness_checks.append(SourceRequirement(
+            "modules", absent_code=LimitationCode.EXTRACT_MODULE_CONTEXT_UNAVAILABLE))
+        module_context = _module_context_for(addr_to_module(addr, modules), modules_available)
+
+        # MemoryInfoListStream is only consulted -- and only required for
+        # completeness -- when module ownership does NOT already settle the
+        # question. A known module owning this address confirms it is not
+        # an unregistered injected PE regardless of the containing region's
+        # memory type, so a dump missing MemoryInfoListStream entirely is
+        # not a completeness gap for THIS extraction: nothing memory-type-
+        # dependent was left unanswered.
+        region = None
+        if module_context != MODULE_CONTEXT_RESOLVED:
+            regions = get_memory_regions(mf) if mem_info_available else []
+            pe_sources["memory_info"] = observe_source(
+                "memory_info", present=mem_info_available, items=regions)
+            pe_completeness_checks.append(SourceRequirement(
+                "memory_info", absent_code=LimitationCode.EXTRACT_MEMORY_INFO_UNAVAILABLE))
+            region = _get_region_at(addr, regions) if mem_info_available else None
+        region_type = prot_str(region.Type) if region is not None else None
+        region_protect = prot_str(region.Protect) if region is not None else None
+
+        # A present MemoryInfoListStream with no descriptor covering this
+        # address is deliberately NOT a coverage limitation -- it stays a
+        # diagnostic-only fact (see the reasons list below), matching
+        # dumpex.commands.report's own long-standing REPORT_REGION_NOT_FOUND
+        # precedent for the identical condition ("no committed region
+        # found" is loud on the console/diagnostics but never itself moves
+        # coverage.status there either). The two commands must not answer
+        # "is this a coverage gap" differently for the same dump condition.
+
+        if module_context == MODULE_CONTEXT_UNREGISTERED and region is not None:
+            pe = parse_pe_header(data)
+            if pe['valid']:
+                pe_header_state = "ok"
+                confirmed_injected = (is_private_memory_type(region_type)
+                                       or has_executable_protection(region_protect))
+            else:
+                pe_header_state = "short_read" if pe['insufficient_data'] else "pe_invalid"
+
     record = ExtractRecord(requested_address=hex_address(addr), requested_size=size,
                             auto_sized=auto_size, bytes_read=len(data),
-                            mz_header_detected=mz_detected)
+                            mz_header_detected=mz_detected, pe_header_state=pe_header_state)
     diagnostics = []
     if mz_detected:
-        diagnostics.append(Diagnostic(
-            severity=SEVERITY_WARNING,
-            message="MZ header detected — this looks like an injected PE!",
-            code="EXTRACT_MZ_HEADER_DETECTED"))
+        if confirmed_injected:
+            diagnostics.append(Diagnostic(
+                severity=SEVERITY_WARNING,
+                message=(f"Valid PE header detected at 0x{addr:x}, outside any loaded "
+                         f"module, in {region_type} memory (protect={region_protect}) — "
+                         f"possible injected PE"),
+                code="EXTRACT_INJECTED_PE_DETECTED"))
+        else:
+            # Each applicable deficit is named independently, on its own
+            # axis -- module ownership and memory type/protection are two
+            # separate questions, and a run missing BOTH (e.g. ModuleList
+            # absent AND MemoryInfo present-but-not-covering) must name
+            # both rather than stopping at whichever axis is checked
+            # first. The memory-type axis is only even relevant when a
+            # known module does NOT already settle the question --
+            # module_context == RESOLVED means region coverage was never
+            # consulted at all.
+            reasons = []
+            if not modules_available:
+                reasons.append("ModuleListStream absent -- module ownership could not be checked")
+            if module_context != MODULE_CONTEXT_RESOLVED:
+                if not mem_info_available:
+                    reasons.append(
+                        "MemoryInfoListStream absent -- memory type/protection could not be "
+                        "checked")
+                elif region_type is None:
+                    reasons.append("no MemoryInfo region covers this address")
+            if not reasons:
+                # Every axis that could have blocked confirmation is
+                # clear -- module_context is therefore RESOLVED, or
+                # (confirmed) UNREGISTERED with a region actually found.
+                if module_context == MODULE_CONTEXT_RESOLVED:
+                    reasons.append("a known module owns this address")
+                elif pe_header_state == "pe_invalid":
+                    reasons.append("the header failed structural PE validation")
+                elif pe_header_state == "short_read":
+                    reasons.append(
+                        "too little of the header was captured to structurally validate")
+                else:   # pe_header_state == "ok", but neither private nor executable
+                    reasons.append(
+                        f"the containing region ({region_type}, protect={region_protect}) is "
+                        f"neither MEM_PRIVATE nor executable")
+            diagnostics.append(Diagnostic(
+                severity=SEVERITY_WARNING,
+                message=("MZ header detected in the extracted bytes — not independently "
+                         "confirmed as an injected PE (" + "; ".join(reasons) + ")"),
+                code="EXTRACT_MZ_HEADER_DETECTED"))
 
     # Always PRESENT on this path -- collect_extract only ever returns
     # after a successful read (see cmd_extract's own try/except for the
@@ -98,14 +224,29 @@ def collect_extract(mf, addr: int, size: int, output: "str | None",
     # coverage as partial rather than silently reporting the truncated
     # read as a full success -- see LimitationCode.REGION_READ_TRUNCATED's
     # own docstring for why the byte counts live on the record, not here.
-    source = SourceObservation(name="requested_region", state=SourceState.PRESENT, record_count=1)
+    sources = {"requested_region": SourceObservation(
+        name="requested_region", state=SourceState.PRESENT, record_count=1)}
+    evaluation_sources = ["requested_region"]
     completeness_checks = ["requested_region"]
     if len(data) < size:
         completeness_checks.append(
             CoverageLimitation(code=LimitationCode.REGION_READ_TRUNCATED, source="requested_region"))
+    # A DIFFERENT gap from REGION_READ_TRUNCATED above: pe_header_state ==
+    # "short_read" means a structural PE parse over an MZ-prefixed
+    # candidate could not settle the question (a required header offset
+    # fell past what was actually examined) -- independent of whether the
+    # raw byte read itself came up short, mirroring dumpex.commands.report's
+    # own REPORT_PE_HEADER_VALIDATION_INCOMPLETE for the identical gap.
+    if pe_header_state == "short_read":
+        completeness_checks.append(CoverageLimitation(
+            code=LimitationCode.EXTRACT_PE_HEADER_VALIDATION_INCOMPLETE,
+            source="requested_region"))
+    sources.update(pe_sources)
+    evaluation_sources.extend(pe_sources)
+    completeness_checks.extend(pe_completeness_checks)
     coverage = build_coverage_report(
-        {"requested_region": source},
-        evaluation_sources=("requested_region",),
+        sources,
+        evaluation_sources=tuple(evaluation_sources),
         completeness_checks=completeness_checks,
     )
     # No output_path here -- artifacts[0].path is the one authoritative

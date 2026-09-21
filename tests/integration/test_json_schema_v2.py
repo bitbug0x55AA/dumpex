@@ -116,6 +116,18 @@ def schema():
 
 
 @pytest.fixture(scope="module")
+def schema_v2_19():
+    with schema_path("dumpex-output-v2.19.schema.json") as path, open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+@pytest.fixture(scope="module")
+def validator_v2_19(schema_v2_19):
+    jsonschema.Draft202012Validator.check_schema(schema_v2_19)
+    return jsonschema.Draft202012Validator(schema_v2_19)
+
+
+@pytest.fixture(scope="module")
 def schema_v2_9():
     with schema_path("dumpex-output-v2.9.schema.json") as path, open(path, encoding="utf-8") as fh:
         return json.load(fh)
@@ -1907,9 +1919,14 @@ def test_extract_full_envelope_with_mz_header_validates(validator, tmp_path):
     result = collect_extract(mf, 0x1000, 64, out_path, auto_size=False, force=True)
     doc = _validate(validator, result)
     assert doc["result"]["kind"] == "extract"
-    assert doc["result"]["coverage"]["status"] == "complete"
+    # This bare FakeMF() carries neither ModuleListStream nor
+    # MemoryInfoListStream -- since an MZ header was detected, both are
+    # now consulted to decide the injected-PE claim (issue #216), and
+    # their absence is a genuine coverage gap, not silently "complete".
+    assert doc["result"]["coverage"]["status"] == "partial"
     assert doc["artifacts"][0]["kind"] == "extracted_region"
     assert doc["diagnostics"]["warnings"][0]["code"] == "EXTRACT_MZ_HEADER_DETECTED"
+    assert doc["result"]["data"]["records"][0]["pe_header_state"] is None
 
 
 def test_extract_short_read_validates_with_region_read_truncated_limitation(validator, tmp_path):
@@ -2122,6 +2139,28 @@ def test_extract_record_null_requested_size_is_rejected_by_schema(validator):
         "requested_address": "0x0000000000001000", "requested_size": None,
         "auto_sized": False, "bytes_read": 16, "mz_header_detected": False}]
     assert not validator.is_valid(doc)
+
+
+def test_extract_record_pe_header_state_set_without_mz_header_is_rejected_by_schema(validator):
+    # v2.20's extractRecord allOf: pe_header_state must be null when
+    # mz_header_detected is false -- a structural PE parse is never
+    # attempted without a confirmed MZ prefix (mirrors reportRegionInfo's
+    # own identical conditional).
+    doc = _minimal_valid_doc(kind="extract")
+    doc["result"]["data"]["records"] = [{
+        "requested_address": "0x0000000000001000", "requested_size": 16,
+        "auto_sized": False, "bytes_read": 16, "mz_header_detected": False,
+        "pe_header_state": "ok"}]
+    assert not validator.is_valid(doc)
+
+
+def test_extract_record_pe_header_state_ok_without_mz_header_passes_when_null(validator):
+    doc = _minimal_valid_doc(kind="extract")
+    doc["result"]["data"]["records"] = [{
+        "requested_address": "0x0000000000001000", "requested_size": 16,
+        "auto_sized": False, "bytes_read": 16, "mz_header_detected": True,
+        "pe_header_state": "ok"}]
+    assert validator.is_valid(doc)
 
 
 def test_strings_kind_is_rejected_by_the_frozen_v2_1_schema(validator_v2_1):
@@ -2577,6 +2616,8 @@ def _minimal_valid_process_enrichment():
 def _minimal_valid_report_summary():
     return {"mode": "addr", "card_count": 1, "query_string": None, "query_tid": None,
             "query_addr": "0x1000", "total_hits": None, "hits_private": None,
+            "hits_mapped": None, "hits_unregistered_image": None,
+            "hits_image_registration_unavailable": None, "hits_region_type_unavailable": None,
             "hits_image": None, "image_hit_modules": [], "skipped_unreadable_regions": 0,
             "truncated_regions": 0, "clamped_regions": 0,
             "cards_skipped_for_budget": 0, "hits_skipped_for_budget": 0,
@@ -2628,6 +2669,99 @@ def _minimal_valid_report_doc():
 
 def test_minimal_valid_report_doc_passes_schema(validator):
     assert validator.is_valid(_minimal_valid_report_doc())
+
+
+# ── v2.20: anchor_pe_context.classification's widened "no module owns
+# this" vocabulary (mapped / unregistered_image / region_type_unavailable,
+# alongside the existing private / unresolved) ────────────────────────────
+
+def _anchor_pe_context(classification, **overrides):
+    context = {
+        "section": _minimal_valid_enrichment_section("anchor_pe_context", "card", cap=1),
+        "anchor_address": "0x0000000000001000",
+        "classification": classification,
+        "registration": "unregistered",
+        "module_owner": None, "module_owner_truncated": False,
+        "module_base": None, "module_rva": None,
+        "section_index": None, "section_name": None, "section_name_truncated": False,
+        "declared_readable": None, "declared_writable": None, "declared_executable": None,
+        "live_protection": None, "protection_matches_declared": None,
+        "region_base": "0x0000000009000000",
+        "region_type": "MEM_MAPPED",
+    }
+    context.update(overrides)
+    return context
+
+
+@pytest.mark.parametrize("classification,region_type", [
+    ("mapped", "MEM_MAPPED"),
+    ("unregistered_image", "MEM_IMAGE"),
+    ("image_registration_unavailable", "MEM_IMAGE"),
+    ("region_type_unavailable", None),
+])
+def test_widened_anchor_classification_values_pass_the_current_schema(
+        validator, classification, region_type):
+    doc = _report_doc_with_card(anchor_pe_context=_anchor_pe_context(
+        classification, region_type=region_type))
+    assert validator.is_valid(doc), sorted(validator.iter_errors(doc), key=str)
+
+
+@pytest.mark.parametrize("classification", [
+    "mapped", "unregistered_image", "image_registration_unavailable", "region_type_unavailable"])
+def test_widened_anchor_classification_values_are_rejected_by_the_frozen_v2_19_schema(
+        validator_v2_19, classification):
+    # v2.19's own classification enum only ever had private/unresolved for
+    # the "no module owns this" case -- this is the schema-version-bump
+    # boundary a v2.19-labeled archived document must still validate
+    # against, unchanged.
+    doc = _minimal_valid_report_doc()
+    doc["meta"]["schema_version"] = "2.19"
+    doc["result"]["data"]["records"][0]["anchor_pe_context"] = _anchor_pe_context(classification)
+    errors = list(validator_v2_19.iter_errors(doc))
+    assert errors, f"v2.19 schema unexpectedly accepted classification={classification!r}"
+
+
+# ── v2.20: reportRegionInfo.pe_header_state, enforced bidirectionally
+# against has_injected_pe (not just in Python -- see the schema's own
+# allOf conditionals for reportRegionInfo) ─────────────────────────────
+
+def _region_info(**overrides):
+    region = {
+        "base_address": "0x0000000000001000", "size": 4096, "protect": "PAGE_READONLY",
+        "type": "MEM_MAPPED", "module_owner": None, "file_offset": None,
+        "is_rwx_private": False, "module_context": "unregistered",
+        "mz_header_detected": True, "has_injected_pe": None,
+        "protection_suspicious": False, "pe_header_state": None,
+    }
+    region.update(overrides)
+    return region
+
+
+@pytest.mark.parametrize("region_overrides", [
+    dict(pe_header_state="short_read", has_injected_pe=None),
+    dict(pe_header_state="pe_invalid", has_injected_pe=False),
+    dict(pe_header_state="ok", has_injected_pe=False),   # MEM_MAPPED, PAGE_READONLY -> benign
+    dict(pe_header_state="ok", has_injected_pe=True, type="MEM_PRIVATE"),
+    dict(pe_header_state="ok", has_injected_pe=True, protect="PAGE_EXECUTE_READ"),
+])
+def test_valid_pe_header_state_has_injected_pe_pairs_pass_the_current_schema(
+        validator, region_overrides):
+    doc = _report_doc_with_card(region=_region_info(**region_overrides))
+    assert validator.is_valid(doc), sorted(validator.iter_errors(doc), key=str)
+
+
+@pytest.mark.parametrize("region_overrides", [
+    dict(pe_header_state=None),                                  # required when unregistered+MZ
+    dict(pe_header_state="short_read", has_injected_pe=False),   # short_read must be None
+    dict(pe_header_state="pe_invalid", has_injected_pe=True),    # pe_invalid must be False
+    dict(pe_header_state="ok", has_injected_pe=True),            # MEM_MAPPED/non-exec -> False
+    dict(pe_header_state="ok", has_injected_pe=False, type="MEM_PRIVATE"),   # dropped finding
+    dict(pe_header_state="ok", has_injected_pe=False, protect="PAGE_EXECUTE_READ"),
+])
+def test_invalid_pe_header_state_has_injected_pe_pairs_fail_the_current_schema(
+        validator, region_overrides):
+    doc = _report_doc_with_card(region=_region_info(**region_overrides))
+    assert not validator.is_valid(doc)
 
 
 # ── report enrichment: what the wire contract must REJECT ──────────────
@@ -2892,6 +3026,8 @@ def test_report_summary_string_mode_requires_non_null_query_string(validator):
     doc["result"]["summary"]["mode"] = "string"
     doc["result"]["summary"]["total_hits"] = 1
     doc["result"]["summary"]["hits_private"] = 1
+    doc["result"]["summary"]["hits_mapped"] = 0
+    doc["result"]["summary"]["hits_unregistered_image"] = 0
     doc["result"]["summary"]["hits_image"] = 0
     # query_string still None -- violates the mode == "string" allOf rule
     assert not validator.is_valid(doc)
@@ -2901,7 +3037,10 @@ def test_report_summary_string_mode_with_all_fields_set_passes(validator):
     doc = _minimal_valid_report_doc()
     doc["result"]["summary"] = {
         "mode": "string", "card_count": 1, "query_string": "needle", "query_tid": None,
-        "query_addr": None, "total_hits": 1, "hits_private": 1, "hits_image": 0,
+        "query_addr": None, "total_hits": 1, "hits_private": 1,
+        "hits_mapped": 0, "hits_unregistered_image": 0,
+        "hits_image_registration_unavailable": 0, "hits_region_type_unavailable": 0,
+        "hits_image": 0,
         "image_hit_modules": [], "skipped_unreadable_regions": 0,
         "truncated_regions": 0, "clamped_regions": 0,
         "cards_skipped_for_budget": 0,
@@ -3006,6 +3145,7 @@ def _minimal_valid_report_region(**overrides):
         "type": "MEM_PRIVATE", "module_owner": None, "file_offset": None,
         "is_rwx_private": False, "module_context": "unavailable",
         "mz_header_detected": None, "has_injected_pe": None, "protection_suspicious": False,
+        "pe_header_state": None,
     }
     base.update(overrides)
     return base
@@ -3033,9 +3173,13 @@ def test_report_region_info_mz_header_null_requires_null_has_injected_pe(validat
 
 
 def test_report_region_info_mz_header_true_unregistered_requires_injected_pe_true(validator):
+    # pe_header_state "ok" + the base region's default type MEM_PRIVATE:
+    # has_injected_pe=False here is a dropped finding, not a valid document
+    # (see the reportRegionInfo allOf conditionals added in v2.20).
     doc = _minimal_valid_report_doc()
     doc["result"]["data"]["records"][0]["region"] = _minimal_valid_report_region(
-        mz_header_detected=True, module_context="unregistered", has_injected_pe=False)
+        mz_header_detected=True, module_context="unregistered", has_injected_pe=False,
+        pe_header_state="ok")
     assert not validator.is_valid(doc)
 
 

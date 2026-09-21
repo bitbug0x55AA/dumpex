@@ -26,22 +26,38 @@ def classify_pe_in_private_memory_hit(addr, modules, regions, modules_available,
     found) with ModuleList missing is UNKNOWN, not a confirmed PRIVATE
     hit, and a region of some other type (e.g. MEM_MAPPED) is OTHER, not
     treated as either IMAGE or PRIVATE.
+
+    Deliberately requires ctx == PRIVATE exactly, NOT the broader
+    CONFIRMED_PRIVATE set classify_scoped_hit (below) uses: this rule's own
+    name is "PE_In_Private_Memory" -- a literal claim about MEM_PRIVATE --
+    and UNREGISTERED means MemoryInfo has no region for this address AT
+    ALL, not that it confirmed some OTHER type contradicting private
+    memory. "No evidence to the contrary" is not the same claim as
+    "confirmed private", and a rule that literally promises "private
+    memory" in its own name must not confirm on the former. The hit is
+    still recorded as context_unverified (an investigator should still see
+    it), just not promoted to a confirmed detection on registration
+    absence alone (see #216's own domain correction, applied here for the
+    one rule whose name makes the narrower promise; classify_scoped_hit's
+    broader "private_or_unbacked" rules keep their own, deliberately wider
+    UNREGISTERED-admits-detection semantics unchanged).
     """
     ctx = classify_memory_context(addr, modules, regions, modules_available, mem_info_available)
 
     if ctx == MemoryContext.IMAGE:
         return True, False, ctx.value
 
-    if ctx not in CONFIRMED_PRIVATE:
-        # OTHER or UNKNOWN — the address cannot be confidently classified
-        # as private memory. Still recorded as a hit (an investigator
-        # should see it) but must not, by itself, stand as a confirmed
-        # detection. Which of the two it is matters for the message shown
-        # later — UNKNOWN means neither context source could even be
-        # consulted, OTHER means MemoryInfo WAS consulted and resolved to
-        # some type that's neither MEM_IMAGE nor MEM_PRIVATE (e.g.
-        # MEM_MAPPED) — those are different findings and must not share
-        # one "no ModuleList/MemoryInfo" message.
+    if ctx != MemoryContext.PRIVATE:
+        # UNREGISTERED, OTHER, or UNKNOWN — the address cannot be
+        # confidently classified as MEM_PRIVATE. Still recorded as a hit
+        # (an investigator should see it) but must not, by itself, stand
+        # as a confirmed detection. UNREGISTERED means ModuleList confirmed
+        # no module owns this address but MemoryInfo has no region here at
+        # all to say what it actually is; OTHER means MemoryInfo WAS
+        # consulted and resolved to some type that's neither MEM_IMAGE nor
+        # MEM_PRIVATE (e.g. MEM_MAPPED); UNKNOWN means neither context
+        # source could even be consulted — three different findings that
+        # must not share one message.
         return False, True, ctx.value
 
     return False, False, ctx.value
@@ -149,12 +165,16 @@ def context_unverified_reason(contexts) -> str:
     """
     Build an accurate explanation for a set of MemoryContext values (see
     dumpex/hunt/_context.py) behind one or more context_unverified hits.
-    UNKNOWN and OTHER are different findings and must not share one
-    message: UNKNOWN means neither ModuleList nor MemoryInfo could
-    classify the address at all; OTHER means MemoryInfo WAS available and
-    resolved it to some type that's neither MEM_IMAGE nor MEM_PRIVATE
-    (e.g. MEM_MAPPED) — that's a materially different situation from
-    "no context available".
+    UNKNOWN, OTHER, and UNREGISTERED are different findings and must not
+    share one message: UNKNOWN means neither ModuleList nor MemoryInfo
+    could classify the address at all; OTHER means MemoryInfo WAS
+    available and resolved it to some type that's neither MEM_IMAGE nor
+    MEM_PRIVATE (e.g. MEM_MAPPED); UNREGISTERED (reachable here only from
+    classify_pe_in_private_memory_hit's own narrower confidence bar -- see
+    that function's docstring) means ModuleList confirmed no module owns
+    this address, but no MemoryInfo region covers it either, so MEM_PRIVATE
+    itself was never confirmed — each is a materially different situation
+    from "no context available".
     """
     contexts = set(contexts)
     parts = []
@@ -162,4 +182,7 @@ def context_unverified_reason(contexts) -> str:
         parts.append("no ModuleList/MemoryInfo available to classify")
     if "other" in contexts:
         parts.append("region type is neither MEM_IMAGE nor MEM_PRIVATE, e.g. MEM_MAPPED")
+    if "unregistered" in contexts:
+        parts.append("no module owns this address, but no MemoryInfo region covers it either "
+                      "to confirm MEM_PRIVATE")
     return "; ".join(parts) if parts else "context could not be verified"

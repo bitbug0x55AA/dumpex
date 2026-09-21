@@ -184,9 +184,10 @@ def test_hunter_record_details_shape_is_the_v2_wire_shape():
     assert details.peb_image_path == _IMAGE_PATH
     assert details.module_name == r"C:\Windows\System32\other.exe"
     assert details.name_mismatch is True
+    assert details.region_type == "MEM_PRIVATE"
     assert set(details.to_dict()) == {
         "image_base", "mem_private_at_base", "mz_header_present", "is_rwx_at_base",
-        "peb_image_path", "module_name", "name_mismatch"}
+        "peb_image_path", "module_name", "name_mismatch", "region_type"}
 
 
 def test_console_lines_contain_expected_sections():
@@ -457,7 +458,7 @@ def test_key_signals_order_puts_the_correlation_first_then_the_anchors():
     text = strip_ansi("\n".join(render_console_lines(report, verbose=False)))
     positions = [text.index(title) for title in (
         "Correlated structural hollowing indicators",
-        "MEM_PRIVATE memory at the image base",
+        "Non-MEM_IMAGE memory at the image base",
         "Missing/wiped MZ header at the image base",
         "RWX protection at the image base",
         "PEB image name vs module list")]
@@ -513,7 +514,7 @@ def test_each_check_is_rendered_exactly_once(verbose):
     report = _all_checks_report()
     text = strip_ansi("\n".join(render_console_lines(report, verbose=verbose)))
     for title in ("Correlated structural hollowing indicators",
-                  "MEM_PRIVATE memory at the image base",
+                  "Non-MEM_IMAGE memory at the image base",
                   "Missing/wiped MZ header at the image base",
                   "RWX protection at the image base",
                   "PEB image name vs module list"):
